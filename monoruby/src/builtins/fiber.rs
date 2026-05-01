@@ -90,7 +90,7 @@ fn fiber_yield_inline(
     let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
     if pos_num == 0 {
-        ir.inline(move |r#gen, _, _| {
+        ir.inline(move |r#gen, _, _, _| {
             // TODO: we must check if the parent fiber exits.
             monoasm! { &mut r#gen.jit,
                 movq rsi, (Value::nil().id());
@@ -100,7 +100,7 @@ fn fiber_yield_inline(
         state.load(ir, args, GP::Rsi);
     } else {
         state.write_back_recv_and_callargs(ir, callsite);
-        ir.inline(move |r#gen, _, _| {
+        ir.inline(move |r#gen, _, _, _| {
             // TODO: we must check if the parent fiber exits.
             monoasm! { &mut r#gen.jit,
                 lea rdi, [r14 - (jitgen::conv(args))];
@@ -111,7 +111,7 @@ fn fiber_yield_inline(
             }
         });
     }
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         let fiber_yield = r#gen.yield_fiber;
         monoasm! { &mut r#gen.jit,
             movq rdi, rbx;

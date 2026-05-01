@@ -1,13 +1,29 @@
 use super::*;
 
+/// Number of physical xmm registers in the JIT allocator pool
+/// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
+/// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
+/// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
+///
+/// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
+/// that nearly every F-mode allocation overflows into a spill slot
+/// — this exercises the LoadSpill / StoreSpill paths and the
+/// spill-aware AsmInst lowerings throughout the entire test suite.
+#[cfg(not(feature = "stress-spill-pool"))]
+pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 14;
+#[cfg(feature = "stress-spill-pool")]
+pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 2;
+
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
     /// Slot states.
     slots: Vec<LinkMode>,
     /// Liveness information.
     liveness: Vec<IsUsed>,
-    /// Information for xmm registers (xmm2 - xmm15).
-    xmm: [Vec<SlotId>; 14],
+    /// Information for VirtFPReg slots. Indices 0..14 map to physical
+    /// xmm2..xmm15; indices >= 14 are spilled (live on stack — at use
+    /// time the codegen swaps them with a scratch xmm).
+    xmm: Vec<Vec<SlotId>>,
     r15: Option<SlotId>,
     local_num: usize,
     /// xmm registers that must not be reused by `alloc_xmm` /
@@ -17,7 +33,7 @@ pub(crate) struct SlotState {
     /// that same xmm as a spill victim (e.g. demote its `Sf` slot to
     /// `S`) and hand the same physical register back, so the consumer
     /// ends up reading both operands from the same register.
-    pinned_xmm: Vec<Xmm>,
+    pinned_xmm: Vec<VirtFPReg>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -39,10 +55,7 @@ impl SlotState {
         let mut ctx = SlotState {
             slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
-            xmm: {
-                let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
-                v.try_into().unwrap()
-            },
+            xmm: (0..PHYS_XMM_POOL).map(|_| vec![]).collect(),
             r15: None,
             local_num,
             pinned_xmm: Vec::new(),
@@ -92,6 +105,15 @@ impl SlotState {
             }
         }
         ctx
+    }
+
+    /// Number of stack-spilled `VirtFPReg`s allocated for this frame.
+    /// Each consumes 8 bytes of stack space at codegen time. Used by
+    /// Phase 2 of the spill rollout (codegen-side swap-use-swap); kept
+    /// behind `allow(dead_code)` until then.
+    #[allow(dead_code)]
+    pub(in crate::codegen::jitgen) fn spill_count(&self) -> usize {
+        self.xmm.len().saturating_sub(PHYS_XMM_POOL)
     }
 
     pub(super) fn slots_len(&self) -> usize {
@@ -195,15 +217,38 @@ impl SlotState {
         &mut self.liveness[slot.0 as usize]
     }
 
-    fn xmm(&self, xmm: Xmm) -> &[SlotId] {
+    fn xmm(&self, xmm: VirtFPReg) -> &[SlotId] {
         &self.xmm[xmm.0 as usize]
     }
 
-    fn xmm_add(&mut self, slot: SlotId, xmm: Xmm) {
+    ///
+    /// Number of allocated spill slots (including the pool prefix).
+    /// Used by `gen_bridge` so the source state can grow its own
+    /// `xmm` vec up to the target's width before merge bridging.
+    ///
+    pub(super) fn xmm_len(&self) -> usize {
+        self.xmm.len()
+    }
+
+    ///
+    /// Pad `self.xmm` with empty slot lists until it reaches at least
+    /// *new_len*. The fresh entries correspond to spill slot ids that
+    /// were allocated by a sibling branch but not by us; merging at a
+    /// confluence point will route any `LinkMode::F(VirtFPReg(N))`
+    /// referencing them into a `gen_xmm_swap` / `xmm_move` against a
+    /// vacant binding, which `is_xmm_vacant` correctly reports.
+    ///
+    pub(super) fn grow_xmm_to(&mut self, new_len: usize) {
+        while self.xmm.len() < new_len {
+            self.xmm.push(vec![]);
+        }
+    }
+
+    fn xmm_add(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.xmm[xmm.0 as usize].push(slot);
     }
 
-    fn xmm_remove(&mut self, slot: SlotId, xmm: Xmm) {
+    fn xmm_remove(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.xmm[xmm.0 as usize].retain(|e| *e != slot);
     }
 
@@ -214,13 +259,13 @@ impl SlotState {
     /// without the pin, a later allocation in the same step can choose the
     /// freshly-loaded xmm as a spill victim and reuse it for an unrelated
     /// value.
-    pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: Xmm) {
+    pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: VirtFPReg) {
         if !self.pinned_xmm.contains(&xmm) {
             self.pinned_xmm.push(xmm);
         }
     }
 
-    pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: Xmm) {
+    pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: VirtFPReg) {
         if let Some(pos) = self.pinned_xmm.iter().position(|x| *x == xmm) {
             self.pinned_xmm.swap_remove(pos);
         }
@@ -239,20 +284,20 @@ impl SlotState {
     /// a real spill; use [`Self::alloc_xmm`] from a context that has access to
     /// `AsmIr`).
     ///
-    fn try_alloc_xmm_demote(&mut self) -> Option<Xmm> {
+    fn try_alloc_xmm_demote(&mut self) -> Option<VirtFPReg> {
         let pinned = &self.pinned_xmm;
         // Phase 0: a vacant xmm.
         for (i, xmm) in self.xmm.iter().enumerate() {
-            if pinned.contains(&Xmm(i as u16)) {
+            if pinned.contains(&VirtFPReg(i as usize)) {
                 continue;
             }
             if xmm.is_empty() {
-                return Some(Xmm(i as u16));
+                return Some(VirtFPReg(i as usize));
             }
         }
         // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
         for i in 0..self.xmm.len() {
-            if self.pinned_xmm.contains(&Xmm(i as u16)) {
+            if self.pinned_xmm.contains(&VirtFPReg(i as usize)) {
                 continue;
             }
             if self.xmm[i].is_empty() {
@@ -275,62 +320,31 @@ impl SlotState {
             for (s, g) in to_demote {
                 self.set_mode(s, LinkMode::S(g.into()));
             }
-            return Some(Xmm(i as u16));
+            return Some(VirtFPReg(i as usize));
         }
         None
     }
 
     ///
-    /// Allocate a new xmm register, spilling a victim if necessary.
+    /// Allocate a new VirtFPReg.
     ///
-    /// Tries Phase 0 (vacant) and Phase 1 (Sf-only demote) first. If both fail,
-    /// picks a victim xmm with the fewest `F` slots (cheapest to spill), emits
-    /// `xmm2stack` for each `F` slot, demotes every linked slot to `S`, and
-    /// returns the freed xmm. Always succeeds.
+    /// Tries Phase 0 (vacant phys) and Phase 1 (Sf-only demote) first. If both
+    /// fail, allocates a fresh spill slot — a `VirtFPReg(N)` where `N >=
+    /// PHYS_XMM_POOL`. The spill slot lives on the stack (the frame's
+    /// `stack_offset` grows by 8 bytes for each spill); at code generation,
+    /// any operation that uses such a `VirtFPReg` swaps a scratch xmm with
+    /// the stack slot to do its work.
     ///
-    fn alloc_xmm(&mut self, ir: &mut AsmIr) -> Xmm {
+    fn alloc_xmm(&mut self, _ir: &mut AsmIr) -> VirtFPReg {
         if let Some(x) = self.try_alloc_xmm_demote() {
             return x;
         }
-        // Phase 2: pick the xmm with the fewest F slots to minimise emit cost.
-        let victim_idx = (0..self.xmm.len())
-            .filter(|&i| !self.pinned_xmm.contains(&Xmm(i as u16)))
-            .min_by_key(|&i| {
-                self.xmm[i]
-                    .iter()
-                    .filter(|&&s| matches!(self.mode(s), LinkMode::F(_)))
-                    .count()
-            })
-            .expect("xmm vec is empty (every xmm is pinned)");
-        let xmm_v = Xmm(victim_idx as u16);
-        let slots: Vec<SlotId> = self.xmm[victim_idx].iter().copied().collect();
-        debug_assert!(!slots.is_empty());
-
-        // Emit xmm2stack for each F slot. Multiple F slots aliased to the
-        // same xmm hold the same f64 value; each still needs its own stack
-        // location populated (an asmir-side optimisation could batch these).
-        for &s in &slots {
-            if matches!(self.mode(s), LinkMode::F(_)) {
-                ir.xmm2stack(xmm_v, s);
-            }
-        }
-
-        let to_demote: Vec<(SlotId, Guarded)> = slots
-            .iter()
-            .map(|&s| {
-                let g = match self.mode(s) {
-                    LinkMode::F(_) => Guarded::Float,
-                    LinkMode::Sf(_, sg) => sg.into(),
-                    _ => unreachable!(),
-                };
-                (s, g)
-            })
-            .collect();
-        self.xmm[victim_idx].clear();
-        for (s, g) in to_demote {
-            self.set_mode(s, LinkMode::S(g));
-        }
-        xmm_v
+        // Phase 2: spill — append a new slot beyond the physical pool. The
+        // existing F / Sf bindings are left in place; the value lives on the
+        // stack and gets swapped in at use time.
+        let new_id = self.xmm.len();
+        self.xmm.push(vec![]);
+        VirtFPReg(new_id)
     }
 
     ///
@@ -414,7 +428,7 @@ impl SlotState {
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_F(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_F(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::F(xmm));
         self.xmm_add(slot, xmm);
@@ -424,7 +438,7 @@ impl SlotState {
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_Sf(&mut self, slot: SlotId, xmm: Xmm, guarded: SfGuarded) {
+    pub(super) fn set_Sf(&mut self, slot: SlotId, xmm: VirtFPReg, guarded: SfGuarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(xmm, guarded));
         self.xmm_add(slot, xmm);
@@ -434,7 +448,7 @@ impl SlotState {
     /// C -> F (may emit a victim spill if no xmm is free).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(super) fn set_new_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         let x = self.alloc_xmm(ir);
         self.set_F(slot, x);
         x
@@ -445,7 +459,7 @@ impl SlotState {
     /// an xmm — caller should fall back (e.g. leave the slot as `S`).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<Xmm> {
+    pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<VirtFPReg> {
         let x = self.try_alloc_xmm_demote()?;
         self.set_F(slot, x);
         Some(x)
@@ -455,7 +469,7 @@ impl SlotState {
     /// C -> Sf (may emit a victim spill if no xmm is free).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_new_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+    pub(super) fn set_new_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> VirtFPReg {
         let x = self.alloc_xmm(ir);
         self.set_Sf(slot, x, guarded);
         x
@@ -466,7 +480,7 @@ impl SlotState {
     /// an xmm.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<Xmm> {
+    pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<VirtFPReg> {
         let x = self.try_alloc_xmm_demote()?;
         self.set_Sf(slot, x, guarded);
         Some(x)
@@ -476,7 +490,7 @@ impl SlotState {
     /// F -> Sf
     ///
     #[allow(non_snake_case)]
-    pub(super) fn set_Sf_float(&mut self, slot: SlotId, xmm: Xmm) {
+    pub(super) fn set_Sf_float(&mut self, slot: SlotId, xmm: VirtFPReg) {
         self.set_Sf(slot, xmm, SfGuarded::Float)
     }
 }
@@ -505,7 +519,7 @@ impl SlotState {
     /// Link *slot* to a new xmm register (may emit a victim spill).
     ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn def_F(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_F(slot, xmm);
@@ -513,7 +527,7 @@ impl SlotState {
     }
 
     #[allow(non_snake_case)]
-    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: Xmm) -> Xmm {
+    pub(crate) fn def_F_with_xmm(&mut self, slot: SlotId, xmm: VirtFPReg) -> VirtFPReg {
         self.discard(slot);
         self.set_F(slot, xmm);
         xmm
@@ -524,7 +538,7 @@ impl SlotState {
     /// victim spill).
     ///
     #[allow(non_snake_case)]
-    fn def_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> Xmm {
+    fn def_Sf(&mut self, ir: &mut AsmIr, slot: SlotId, guarded: SfGuarded) -> VirtFPReg {
         let xmm = self.alloc_xmm(ir);
         self.discard(slot);
         self.set_Sf(slot, xmm, guarded);
@@ -532,7 +546,7 @@ impl SlotState {
     }
 
     #[allow(non_snake_case)]
-    pub(crate) fn def_Sf_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> Xmm {
+    pub(crate) fn def_Sf_float(&mut self, ir: &mut AsmIr, slot: SlotId) -> VirtFPReg {
         self.def_Sf(ir, slot, SfGuarded::Float)
     }
 
@@ -855,7 +869,7 @@ impl SlotState {
         assert!(self.r15.is_none());
     }
 
-    fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
+    fn is_xmm_vacant(&self, xmm: VirtFPReg) -> bool {
         self.xmm(xmm).is_empty()
     }
 
@@ -995,11 +1009,17 @@ impl AbstractFrame {
 
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         let mut b = UsingXmm::new();
-        self.xmm.iter().enumerate().for_each(|(i, v)| {
-            if !v.is_empty() {
-                b.set(i, true);
-            }
-        });
+        // Only physical pool slots need save/restore at call
+        // boundaries; spill slots already live on the stack.
+        self.xmm
+            .iter()
+            .enumerate()
+            .take(PHYS_XMM_POOL)
+            .for_each(|(i, v)| {
+                if !v.is_empty() {
+                    b.set(i, true);
+                }
+            });
         b
     }
 
@@ -1020,7 +1040,7 @@ impl AbstractFrame {
         WriteBack::new(xmm, literal, r15, vec![])
     }
 
-    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
+    fn xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg) {
         let mut guarded_l = None;
         let mut guarded_r = None;
         for link in self.slots.iter() {
@@ -1083,7 +1103,7 @@ impl AbstractFrame {
         });
     }
 
-    fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Xmm, Vec<SlotId>)> {
+    fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(VirtFPReg, Vec<SlotId>)> {
         self.xmm
             .iter()
             .enumerate()
@@ -1099,7 +1119,7 @@ impl AbstractFrame {
                     if v.is_empty() {
                         None
                     } else {
-                        Some((Xmm::new(i as u16), v))
+                        Some((VirtFPReg::new(i as usize), v))
                     }
                 }
             })
@@ -1182,11 +1202,11 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     /// mutation of the corresponding FPR lazily affects the stack slot.
     ///
-    F(Xmm),
+    F(VirtFPReg),
     ///
     /// On the stack slot and on the floating point register (xmm) which is read-only.
     ///
-    Sf(Xmm, SfGuarded),
+    Sf(VirtFPReg, SfGuarded),
     ///
     /// Concrete value (immediate / packed).
     ///
@@ -1500,7 +1520,7 @@ impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: Xmm, r: Xmm, guarded: SfGuarded) {
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: VirtFPReg, r: VirtFPReg, guarded: SfGuarded) {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
             ir.xmm_move(l, r);
@@ -1512,7 +1532,7 @@ impl AbstractFrame {
     ///
     /// Swap xmm registers `l` and `r`.
     ///
-    fn gen_xmm_swap(&mut self, ir: &mut AsmIr, l: Xmm, r: Xmm) {
+    fn gen_xmm_swap(&mut self, ir: &mut AsmIr, l: VirtFPReg, r: VirtFPReg) {
         self.xmm_swap(l, r);
         ir.push(AsmInst::XmmSwap(l, r));
     }

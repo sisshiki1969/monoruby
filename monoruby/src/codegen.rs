@@ -114,19 +114,55 @@ pub(crate) enum GP {
 }
 
 ///
-/// Floating point registers.
+/// Virtual floating-point register. The front-end (TraceIr → AsmIr)
+/// allocates these and stores them in `LinkMode::F` / `LinkMode::Sf`
+/// and inside `AsmInst` operands.
+///
+/// Encoding by id range:
+/// * `0..14` — pool-allocated phys: maps to `xmm{id+2}`
+///   (xmm2..xmm15).
+/// * `14..` — spill: lives on a stack slot (8 bytes per id) at the
+///   bottom of the local frame. The pre-codegen `expand_spills`
+///   pass rewrites every occurrence into a [`Self::SCRATCH_XMM_0`]
+///   / [`Self::SCRATCH_XMM_1`] marker surrounded by `LoadSpill` /
+///   `StoreSpill`, so the codegen lowering only ever sees ids it can
+///   encode.
+/// * `usize::MAX` / `usize::MAX - 1` — scratch markers for `xmm0` /
+///   `xmm1` (reserved as codegen-time scratch and never allocated
+///   by the pool).
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct Xmm(u16);
+pub(crate) struct VirtFPReg(pub(crate) usize);
 
-impl Xmm {
-    fn new(id: u16) -> Self {
+impl VirtFPReg {
+    /// Sentinel `VirtFPReg` that lowers to physical `xmm0`. Used by
+    /// the spill-expansion pass to represent the temporary scratch
+    /// register holding a spilled operand for the duration of one
+    /// AsmInst.
+    pub(crate) const SCRATCH_XMM_0: Self = Self(usize::MAX);
+    /// Sentinel `VirtFPReg` that lowers to physical `xmm1`.
+    pub(crate) const SCRATCH_XMM_1: Self = Self(usize::MAX - 1);
+
+    fn new(id: usize) -> Self {
         Self(id)
     }
 
+    /// Physical xmm number (`xmm0`..`xmm15`) that this VirtFPReg
+    /// encodes to. Pool ids `0..14` map to `xmm2..xmm15`; the two
+    /// scratch markers map to `xmm0` / `xmm1`. Any other id (= an
+    /// unresolved spill) panics — the pre-codegen `expand_spills`
+    /// pass should have rewritten it.
     pub fn enc(&self) -> u64 {
-        self.0 as u64 + 2
+        match self.0 {
+            x if x == Self::SCRATCH_XMM_0.0 => 0,
+            x if x == Self::SCRATCH_XMM_1.0 => 1,
+            x if x < 14 => x as u64 + 2,
+            x => panic!(
+                "VirtFPReg({}) reached code generation unresolved — spill expansion must run first",
+                x
+            ),
+        }
     }
 }
 
@@ -671,7 +707,7 @@ impl JitModule {
     ///
     fn vm_execute_gc(&mut self) {
         let raise = self.entry_raise.clone();
-        self.execute_gc_inner(None, &raise);
+        self.execute_gc_inner(None, &raise, 0);
     }
 
     ///
@@ -701,8 +737,8 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
-    fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
-        self.execute_gc_inner(Some(wb), error);
+    fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
+        self.execute_gc_inner(Some(wb), error, base);
     }
 }
 
@@ -1116,15 +1152,15 @@ impl Codegen {
     /// - R(*reg*): Value
     ///
     /// ### out
-    /// - xmm(*xmm*)
+    /// - xmm(*dst*)
     ///
     /// ### destroy
     /// - R(*reg*)
     ///
-    fn integer_val_to_f64(&mut self, reg: GP, xmm: Xmm) {
+    fn integer_val_to_f64(&mut self, reg: GP, dst: u64) {
         monoasm!(&mut self.jit,
             sarq R(reg as _), 1;
-            cvtsi2sdq xmm(xmm.enc()), R(reg as _);
+            cvtsi2sdq xmm(dst), R(reg as _);
         );
     }
 

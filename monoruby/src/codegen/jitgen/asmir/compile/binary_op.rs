@@ -259,25 +259,21 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_rem_if(
         &mut self,
-        lhs_xmm: Xmm,
-        rhs_xmm: Xmm,
-        dst_xmm: Xmm,
+        lhs_xmm: VirtFPReg,
+        rhs_xmm: VirtFPReg,
+        dst_xmm: VirtFPReg,
         using_xmm: UsingXmm,
+        base: usize,
     ) {
-        let lhs = lhs_xmm.enc();
-        let rhs = rhs_xmm.enc();
-        let dst = dst_xmm.enc();
         self.xmm_save(using_xmm);
+        self.load_xmm_into_xmm0(lhs_xmm, base);
+        self.load_xmm_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(lhs);
-            movq xmm1, xmm(rhs);
             movq rax, (rem_ff as u64);
             call rax;
         );
         self.xmm_restore(using_xmm);
-        monoasm!( &mut self.jit,
-            movq xmm(dst), xmm0;
-        );
+        self.store_xmm0_into_xmm(dst_xmm, base);
     }
 
     ///
@@ -299,16 +295,15 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_pow_if(
         &mut self,
-        lhs_xmm: Xmm,
-        rhs_xmm: Xmm,
+        lhs_xmm: VirtFPReg,
+        rhs_xmm: VirtFPReg,
         using_xmm: UsingXmm,
+        base: usize,
     ) {
-        let lhs = lhs_xmm.enc();
-        let rhs = rhs_xmm.enc();
         self.xmm_save(using_xmm);
+        self.load_xmm_into_xmm0(lhs_xmm, base);
+        self.load_xmm_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(lhs);
-            movq xmm1, xmm(rhs);
             movq rax, (pow_ff as u64);
             call rax;
         );
@@ -331,65 +326,90 @@ impl Codegen {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn float_binop(&mut self, kind: BinOpK, dst: Xmm, binary_xmm: (Xmm, Xmm)) {
+    ///
+    /// Lower `dst <- lhs op rhs` where each operand may be a
+    /// pool-allocated phys xmm or a stack-spilled `VirtFPReg`. The
+    /// strategy mirrors the pattern documented in the spill design:
+    ///
+    /// 1. Pick `work` xmm = phys `dst` or scratch `xmm0` (when `dst`
+    ///    is spilled).
+    /// 2. Get `rhs` into a phys reg = its own phys (when not
+    ///    spilled, and not aliasing `work` for non-commutative ops)
+    ///    or scratch `xmm1`.
+    /// 3. Load `lhs` into `work` (memory operand if spilled, plain
+    ///    `movq` if not, no-op if `lhs` already lives in `work`).
+    /// 4. Run the SSE op `work, rhs_reg` register-to-register so
+    ///    every kind (commutative or not) follows the same shape.
+    /// 5. Store-back `work` to the spill slot when `dst` was spilled.
+    ///
+    pub(super) fn float_binop(
+        &mut self,
+        kind: BinOpK,
+        dst: VirtFPReg,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        base_stack_offset: usize,
+    ) {
         let (l, r) = binary_xmm;
-        let lhs = l.enc();
-        let rhs = r.enc();
-        let ret = dst.enc();
+        let lhs_loc = xmm_loc(l, base_stack_offset);
+        let rhs_loc = xmm_loc(r, base_stack_offset);
+        let dst_loc = xmm_loc(dst, base_stack_offset);
+
+        // Step 1: pick `work` for `dst`.
+        let (work, dst_spill_off) = match dst_loc {
+            XmmLoc::Phys(p) => (p, None),
+            XmmLoc::Spill(off) => (0u64, Some(off)),
+        };
+        let commutative = matches!(kind, BinOpK::Add | BinOpK::Mul);
+
+        // Step 2: route `rhs` into a phys reg distinct from `work`
+        // for non-commutative kinds (otherwise the `op` would lose
+        // `lhs` after the mov in step 3). Scratch xmm1 is the
+        // fallback when `rhs` is spilled or the alias would clobber.
+        let rhs_phys = match rhs_loc {
+            XmmLoc::Phys(p) if p == work && !commutative => {
+                // Save rhs to xmm1 before we overwrite `work` with
+                // `lhs`.
+                monoasm!( &mut self.jit,
+                    movq xmm1, xmm(p);
+                );
+                1
+            }
+            XmmLoc::Phys(p) => p,
+            XmmLoc::Spill(off) => {
+                monoasm!( &mut self.jit,
+                    movq xmm1, [rbp - (off)];
+                );
+                1
+            }
+        };
+
+        // Step 3: load `lhs` into `work` (skip when already there).
+        let lhs_in_work = matches!(lhs_loc, XmmLoc::Phys(p) if p == work);
+        if !lhs_in_work {
+            match lhs_loc {
+                XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                    movq xmm(work), xmm(p);
+                ),
+                XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                    movq xmm(work), [rbp - (off)];
+                ),
+            }
+        }
+
+        // Step 4: run the op register-to-register.
         match kind {
-            BinOpK::Add => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        addsd xmm(ret), xmm(lhs);
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        addsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Sub => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        movq  xmm0, xmm(lhs);
-                        subsd xmm0, xmm(ret);
-                        movq  xmm(ret), xmm0;
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        subsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Mul => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        mulsd xmm(ret), xmm(lhs);
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        mulsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Div => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        movq  xmm0, xmm(lhs);
-                        divsd xmm0, xmm(ret);
-                        movq  xmm(ret), xmm0;
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        divsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
+            BinOpK::Add => monoasm!( &mut self.jit, addsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Sub => monoasm!( &mut self.jit, subsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Mul => monoasm!( &mut self.jit, mulsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Div => monoasm!( &mut self.jit, divsd xmm(work), xmm(rhs_phys); ),
             _ => unreachable!(),
+        }
+
+        // Step 5: store-back if `dst` was spilled.
+        if let Some(off) = dst_spill_off {
+            monoasm!( &mut self.jit,
+                movq [rbp - (off)], xmm(work);
+            );
         }
     }
 }
@@ -444,11 +464,32 @@ macro_rules! jit_cmp_opt_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(&mut self, binary_xmm: (Xmm, Xmm)) {
+    pub(super) fn cmp_float(
+        &mut self,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        base_stack_offset: usize,
+    ) {
         let (l, r) = binary_xmm;
-        monoasm! { &mut self.jit,
-            ucomisd xmm(l.enc()), xmm(r.enc());
-        };
+        let l_loc = xmm_loc(l, base_stack_offset);
+        let r_loc = xmm_loc(r, base_stack_offset);
+        // ucomisd's first operand must be an xmm register; the second
+        // can be xmm or memory. Pick the cheapest combination.
+        match (l_loc, r_loc) {
+            (XmmLoc::Phys(lp), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+                ucomisd xmm(lp), xmm(rp);
+            },
+            (XmmLoc::Phys(lp), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+                ucomisd xmm(lp), [rbp - (r_off)];
+            },
+            (XmmLoc::Spill(l_off), XmmLoc::Phys(rp)) => monoasm! { &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                ucomisd xmm0, xmm(rp);
+            },
+            (XmmLoc::Spill(l_off), XmmLoc::Spill(r_off)) => monoasm! { &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                ucomisd xmm0, [rbp - (r_off)];
+            },
+        }
     }
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
@@ -911,5 +952,72 @@ mod tests {
         run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) <= 0 then 1 else 0 end");
         run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) > 0 then 1 else 0 end");
         run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then 1 else 0 end");
+    }
+
+    /// Loop JIT spill stress. The right-associated multiplication chain
+    /// forces every left operand to remain live until the innermost
+    /// `s * t` is evaluated and the result bubbles back out — so all
+    /// 14 input variables (plus the running result) must occupy xmm
+    /// slots simultaneously. With PHYS_XMM_POOL = 14, that overflow
+    /// guarantees at least one `VirtFPReg(>=14)` allocation per
+    /// iteration, exercising LoadSpill/StoreSpill and the spill-aware
+    /// XmmBinOp memory-operand lowering. The hot `for` loop hits the
+    /// loop-JIT threshold at iteration 16 (test mode).
+    #[test]
+    fn loop_jit_spill_stress() {
+        run_test(
+            r##"
+            r = 0.0
+            for i in 0..50
+              f = i * 1.1
+              g = i * 0.9
+              h = i * 1.3
+              j = i * 0.7
+              k = i * 1.5
+              l = i * 0.5
+              m = i * 1.7
+              n = i * 0.3
+              o = i * 1.9
+              p = i * 0.1
+              q = i * 2.1
+              s = i * 0.2
+              t = i * 2.3
+              u = i * 0.4
+              r += f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+            end
+            r
+            "##,
+        );
+    }
+
+    /// Method JIT spill stress. Same nested-multiplication shape as
+    /// `loop_jit_spill_stress`, but wrapped in a method body so the
+    /// spill region lives inside the method's frame (not the loop
+    /// frame). 25× call repetition inside `run_test` exceeds the
+    /// method-JIT threshold (5 in test mode).
+    #[test]
+    fn method_jit_spill_stress() {
+        run_test(
+            r##"
+            def calc(i)
+              f = i * 1.1
+              g = i * 0.9
+              h = i * 1.3
+              j = i * 0.7
+              k = i * 1.5
+              l = i * 0.5
+              m = i * 1.7
+              n = i * 0.3
+              o = i * 1.9
+              p = i * 0.1
+              q = i * 2.1
+              s = i * 0.2
+              t = i * 2.3
+              u = i * 0.4
+              f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+            end
+            calc(7)
+            "##,
+        );
     }
 }

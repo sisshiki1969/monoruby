@@ -325,7 +325,7 @@ fn array_size(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         r#gen.get_array_length();
         monoasm! { &mut r#gen.jit,
             salq  rax, 1;
@@ -370,7 +370,7 @@ fn array_clone(
     state.load(ir, callsite.recv, GP::Rdi);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, (array_dup);
             call rax;
@@ -831,7 +831,7 @@ fn array_shl(
     state.load(ir, args, GP::Rsi);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm!( &mut r#gen.jit,
             movq rax, (ary_shl);
             call rax;

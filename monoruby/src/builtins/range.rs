@@ -82,7 +82,7 @@ fn range_begin(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (crate::rvalue::RANGE_START_OFFSET as i32)];
         }
@@ -124,7 +124,7 @@ fn range_end(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (crate::rvalue::RANGE_END_OFFSET as i32)];
         }
@@ -226,7 +226,7 @@ fn range_exclude_end(
         return true;
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _| {
+    ir.inline(move |r#gen, _, _, _| {
         monoasm! { &mut r#gen.jit,
             movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
             shlq rax, 3;

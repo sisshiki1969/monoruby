@@ -252,7 +252,7 @@ fn kernel_nil(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _| {
+        ir.inline(|r#gen, _, _, _| {
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rsi, (TRUE_VALUE);
@@ -299,7 +299,7 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _| {
+        ir.inline(|r#gen, _, _, _| {
             let exit = r#gen.jit.label();
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
@@ -1633,84 +1633,6 @@ fn read_memory(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(ary)
 }
 
-/*///
-/// - ____max(f1:Float, f2:Float) -> Float
-///
-#[monoruby_builtin]
-fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
-    Ok(Value::float(f64::max(f1, f2)))
-}
-
-///
-/// - ____min(f1:Float, f2:Float) -> Float
-///
-#[monoruby_builtin]
-fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let f1 = lfp.arg(0).coerce_to_f64(vm, globals)?;
-    let f2 = lfp.arg(1).coerce_to_f64(vm, globals)?;
-    Ok(Value::float(f64::min(f1, f2)))
-}
-
-fn inline_max(
-    bb: &mut BBContext,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
-    _: ClassId,
-) -> bool {
-    let CallSiteInfo {
-        args, dst, pos_num, ..
-    } = *callsite;
-    if !callsite.is_simple() || pos_num != 2 {
-        return false;
-    }
-    let deopt = ir.new_deopt(bb);
-    let f1 = bb.fetch_float_for_xmm(ir, args, deopt).enc();
-    let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
-    if let Some(dst) = dst {
-        let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _, _| {
-            monoasm!( &mut gen.jit,
-                movq xmm(fret), xmm(f1);
-                maxsd xmm(fret), xmm(f2);
-            );
-        });
-    }
-    true
-}
-
-fn inline_min(
-    bb: &mut BBContext,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    _: &Store,
-    callsite: &CallSiteInfo,
-    _: ClassId,
-) -> bool {
-    let CallSiteInfo {
-        args, dst, pos_num, ..
-    } = *callsite;
-    if !callsite.is_simple() || pos_num != 2 {
-        return false;
-    }
-    let deopt = ir.new_deopt(bb);
-    let f1 = bb.fetch_float_for_xmm(ir, args, deopt).enc();
-    let f2 = bb.fetch_float_for_xmm(ir, args + 1usize, deopt).enc();
-    if let Some(dst) = dst {
-        let fret = bb.xmm_write_enc(dst);
-        ir.inline(move |gen, _, _| {
-            monoasm!( &mut gen.jit,
-                movq xmm(fret), xmm(f1);
-                minsd xmm(fret), xmm(f2);
-            );
-        });
-    }
-    true
-}*/
-
 ///
 /// Object#send
 ///
@@ -1815,7 +1737,7 @@ pub fn object_send(
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     let callid = callsite.id;
-    ir.inline(move |r#gen, store, labels| {
+    ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
         r#gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
     });

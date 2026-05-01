@@ -9,6 +9,31 @@ mod init_method;
 mod method_call;
 mod variables;
 
+///
+/// Location where a `VirtFPReg`'s value lives at code-generation
+/// time. `Phys(N)` means physical `xmm{N}` directly usable in
+/// `monoasm! { ... xmm(N) ... }`; `Spill(off)` means the 8-byte slot
+/// at `[rbp - off]`. Spill-aware codegen lowerings build per-operand
+/// asm based on this — e.g. `addsd xmm, mem` when the rhs operand is
+/// spilled, instead of forcing a scratch load.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) enum XmmLoc {
+    Phys(u64),
+    Spill(i32),
+}
+
+pub(super) fn xmm_loc(virt: VirtFPReg, base_stack_offset: usize) -> XmmLoc {
+    let pool = super::state::PHYS_XMM_POOL;
+    if virt.0 < pool {
+        XmmLoc::Phys(virt.0 as u64 + 2)
+    } else {
+        let n = virt.0 - pool;
+        let off = (base_stack_offset as i32) - 24 + 8 * (n as i32);
+        XmmLoc::Spill(off)
+    }
+}
+
 extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
     rvalue.extend_ivar(heap_len);
 }
@@ -35,8 +60,35 @@ impl Codegen {
                     .sourcemap
                     .push((i, self.jit.get_current() - frame.start_codepos));
             }
-            AsmInst::Init { info } => {
-                self.init_func(&info);
+            AsmInst::Init {
+                info,
+                prologue_offset,
+            } => {
+                self.init_func(&info, prologue_offset.unwrap_concrete());
+            }
+            AsmInst::LoopJitRspBump { offset } => {
+                let bytes = offset.unwrap_concrete();
+                if bytes > 0 {
+                    monoasm! { &mut self.jit,
+                        subq rsp, (bytes as i32);
+                    }
+                }
+            }
+            AsmInst::LoadSpill {
+                scratch,
+                rbp_offset,
+            } => {
+                monoasm!( &mut self.jit,
+                    movq xmm(scratch.enc()), [rbp - (rbp_offset)];
+                );
+            }
+            AsmInst::StoreSpill {
+                scratch,
+                rbp_offset,
+            } => {
+                monoasm!( &mut self.jit,
+                    movq [rbp - (rbp_offset)], xmm(scratch.enc());
+                );
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -153,44 +205,89 @@ impl Codegen {
                 );
             }
 
-            AsmInst::XmmMove(l, r) => self.xmm_mov(l, r),
-            AsmInst::XmmSwap(l, r) => self.xmm_swap(l, r),
+            AsmInst::XmmMove(src, dst) => {
+                self.emit_xmm_move(src, dst, frame.base_stack_offset);
+            }
+            AsmInst::XmmSwap(l, r) => {
+                self.emit_xmm_swap(l, r, frame.base_stack_offset);
+            }
             AsmInst::XmmBinOp {
                 kind,
                 binary_xmm,
                 dst,
-            } => self.float_binop(kind, dst, binary_xmm),
+            } => self.float_binop(kind, dst, binary_xmm, frame.base_stack_offset),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                    monoasm!( &mut self.jit,
-                        xorps xmm(dst.enc()), [rip + imm];
-                    );
+                    match xmm_loc(dst, frame.base_stack_offset) {
+                        XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                            xorps xmm(p), [rip + imm];
+                        ),
+                        XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                            movq  xmm0, [rbp - (off)];
+                            xorps xmm0, [rip + imm];
+                            movq  [rbp - (off)], xmm0;
+                        ),
+                    }
                 }
                 UnOpK::Pos => {}
                 _ => unreachable!(),
             },
 
             AsmInst::F64ToXmm(f, x) => {
-                let f = self.jit.const_f64(f);
-                monoasm!( &mut self.jit,
-                    movq  xmm(x.enc()), [rip + f];
-                );
+                let f_const = self.jit.const_f64(f);
+                match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f_const];
+                    ),
+                    XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f_const];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
             }
             AsmInst::FixnumToXmm(r, x) => {
-                self.integer_val_to_f64(r, x);
+                let (work, spill_off) = match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => (p, None),
+                    XmmLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.integer_val_to_f64(r, work);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
             }
             AsmInst::FloatToXmm(reg, x, deopt) => {
-                self.float_to_f64(reg, x, &labels[deopt]);
+                let (work, spill_off) = match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => (p, None),
+                    XmmLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.float_to_f64(reg, work, &labels[deopt]);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
             }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
                 monoasm! {&mut self.jit,
                     movq [rbp - (rbp_local(r))], (Value::integer(i).id());
-                    movq xmm(x.enc()), [rip + f];
+                }
+                match xmm_loc(x, frame.base_stack_offset) {
+                    XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f];
+                    ),
+                    XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f];
+                        movq [rbp - (off)], xmm0;
+                    ),
                 }
             }
-            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &[slots]),
+            AsmInst::XmmToStack(x, slots) => {
+                self.xmm_to_stack(x, &[slots], frame.base_stack_offset);
+            }
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
@@ -267,11 +364,11 @@ impl Codegen {
             AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
             AsmInst::ExecGc { write_back, error } => {
                 let error = &labels[error];
-                self.jit_execute_gc(&write_back, error)
+                self.jit_execute_gc(&write_back, error, frame.base_stack_offset)
             }
             AsmInst::CheckStack { write_back, error } => {
                 let error = &labels[error];
-                self.jit_check_stack(&write_back, error);
+                self.jit_check_stack(&write_back, error, frame.base_stack_offset);
             }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
@@ -294,10 +391,10 @@ impl Codegen {
                 self.block_break();
             }
             AsmInst::MethodRetSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset);
+                self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset);
+                self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
             AsmInst::Raise => {
                 let raise = self.entry_raise();
@@ -500,7 +597,7 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
-                self.cmp_float((lhs, rhs));
+                self.cmp_float((lhs, rhs), frame.base_stack_offset);
                 self.setflag_float(kind);
             }
             AsmInst::FloatCmpBr {
@@ -511,7 +608,7 @@ impl Codegen {
                 branch_dest,
             } => {
                 let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float((lhs, rhs));
+                self.cmp_float((lhs, rhs), frame.base_stack_offset);
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
@@ -582,11 +679,11 @@ impl Codegen {
 
             AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
-                self.load_dyn_var_specialized(offset, reg);
+                self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
             }
             AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
-                self.store_dyn_var_specialized(offset, dst, src);
+                self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
 
             AsmInst::LoadIVarHeap {
@@ -830,25 +927,24 @@ impl Codegen {
                 using_xmm,
             } => self.defined_cvar(dst, name, using_xmm),
 
-            AsmInst::Inline(proc) => (proc.proc)(self, store, labels),
+            AsmInst::Inline(proc) => {
+                (proc.proc)(self, store, labels, frame.base_stack_offset)
+            }
             AsmInst::CFunc_F_F {
                 f,
                 src,
                 dst,
                 using_xmm,
             } => {
-                let fsrc = src.enc();
-                let fret = dst.enc();
+                let base = frame.base_stack_offset;
                 self.xmm_save(using_xmm);
+                self.load_xmm_into_xmm0(src, base);
                 monoasm!( &mut self.jit,
-                    movq xmm0, xmm(fsrc);
                     movq rax, (f);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(fret), xmm0;
-                );
+                self.store_xmm0_into_xmm(dst, base);
             }
             AsmInst::CFunc_FF_F {
                 f,
@@ -857,20 +953,20 @@ impl Codegen {
                 dst,
                 using_xmm,
             } => {
-                let flhs = lhs.enc();
-                let frhs = rhs.enc();
-                let fret = dst.enc();
+                let base = frame.base_stack_offset;
                 self.xmm_save(using_xmm);
+                // Load both args into xmm0/xmm1 (the SysV ABI passes
+                // f64 args in xmm0, xmm1, ...). Pool ids resolve to
+                // xmm2..xmm15, so a Phys source can never alias the
+                // scratch register we're writing into.
+                self.load_xmm_into_xmm0(lhs, base);
+                self.load_xmm_into_xmm1(rhs, base);
                 monoasm!( &mut self.jit,
-                    movq xmm0, xmm(flhs);
-                    movq xmm1, xmm(frhs);
                     movq rax, (f);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq xmm(fret), xmm0;
-                );
+                self.store_xmm0_into_xmm(dst, base);
             }
         }
     }
@@ -1088,6 +1184,67 @@ impl Codegen {
             movq rax, (crate::runtime::jit_generic_set_arguments);
             call rax;
             addq rsp, (offset);
+        }
+    }
+
+    ///
+    /// Spill-aware xmm-to-xmm move. Each operand may live in a phys
+    /// xmm or a spill slot; we emit the cheapest form for each
+    /// combination and avoid the round-trip through xmm0 that the
+    /// generic `expand_spills` wrapping would otherwise produce.
+    ///
+    fn emit_xmm_move(&mut self, src: VirtFPReg, dst: VirtFPReg, base: usize) {
+        if src == dst {
+            return;
+        }
+        match (xmm_loc(src, base), xmm_loc(dst, base)) {
+            (XmmLoc::Phys(s), XmmLoc::Phys(d)) => monoasm!( &mut self.jit,
+                movq xmm(d), xmm(s);
+            ),
+            (XmmLoc::Phys(s), XmmLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                movq [rbp - (d_off)], xmm(s);
+            ),
+            (XmmLoc::Spill(s_off), XmmLoc::Phys(d)) => monoasm!( &mut self.jit,
+                movq xmm(d), [rbp - (s_off)];
+            ),
+            (XmmLoc::Spill(s_off), XmmLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (s_off)];
+                movq [rbp - (d_off)], xmm0;
+            ),
+        }
+    }
+
+    ///
+    /// Spill-aware xmm swap. When both operands are spilled we swap
+    /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
+    /// nothing in the surrounding code's GP state is disturbed).
+    ///
+    fn emit_xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg, base: usize) {
+        if l == r {
+            return;
+        }
+        match (xmm_loc(l, base), xmm_loc(r, base)) {
+            (XmmLoc::Phys(lp), XmmLoc::Phys(rp)) => monoasm!( &mut self.jit,
+                movq xmm0, xmm(lp);
+                movq xmm(lp), xmm(rp);
+                movq xmm(rp), xmm0;
+            ),
+            (XmmLoc::Phys(lp), XmmLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (r_off)];
+                movq [rbp - (r_off)], xmm(lp);
+                movq xmm(lp), xmm0;
+            ),
+            (XmmLoc::Spill(l_off), XmmLoc::Phys(rp)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                movq [rbp - (l_off)], xmm(rp);
+                movq xmm(rp), xmm0;
+            ),
+            (XmmLoc::Spill(l_off), XmmLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (l_off)];
+                movq xmm1, [rbp - (r_off)];
+                movq [rbp - (r_off)], xmm0;
+                movq [rbp - (l_off)], xmm1;
+            ),
         }
     }
 }

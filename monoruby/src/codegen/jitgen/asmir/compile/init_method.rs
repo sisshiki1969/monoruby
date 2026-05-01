@@ -4,21 +4,22 @@ impl Codegen {
     ///
     /// Initialize function stack frame.
     ///
-    /// ### stack pointer adjustment
-    /// - `fn_info`.`stack_offset` * 16
+    /// `prologue_bytes` is the resolved stack-pointer adjustment in
+    /// bytes — derived by [`super::super::context::JitContext::resolve_dyn_var_offsets`]
+    /// from the frame's recorded `stack_offset`. `fn_info.stack_offset`
+    /// is the static bytecodegen-time hint (in 16-byte units) and is
+    /// no longer consulted here; future spill slots that grow the
+    /// frame size feed through `prologue_bytes` automatically.
     ///
-    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo) {
+    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, prologue_bytes: usize) {
         let FnInitInfo {
-            reg_num,
-            arg_num,
-            stack_offset,
-            ..
+            reg_num, arg_num, ..
         } = *fn_info;
 
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, (stack_offset * 16);
+            subq rsp, (prologue_bytes as i32);
         );
 
         let l1 = self.jit.label();

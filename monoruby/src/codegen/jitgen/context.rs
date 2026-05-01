@@ -4,6 +4,71 @@
 
 use super::*;
 
+///
+/// Unique identifier for a specialized method / block frame within a
+/// single JIT compilation. Used by [`AsmInst::LoadDynVarSpecialized`] /
+/// [`AsmInst::StoreDynVarSpecialized`] hints to defer concrete stack
+/// offset computation until after every frame's size is finalized.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SpecializedId(pub(super) usize);
+
+///
+/// Per-frame stack-size pair recorded in
+/// [`JitContext::specialized_frame_sizes`]. `total` is the dynamic
+/// `stack_offset` at pop time (`base` plus any JIT-managed spill);
+/// `base` is the immutable value snapshotted at frame creation. The
+/// difference is what the Loop-JIT-side rsp bump consumes.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FrameSizes {
+    pub(super) total: usize,
+    pub(super) base: usize,
+}
+
+///
+/// Walk every `AsmIr` reachable from `asm_info` (main inst stream,
+/// inline / outline bridges, and recursively the
+/// `specialized_methods`) and return the maximum `VirtFPReg.0` seen
+/// in any `xmm` operand. `None` if no `VirtFPReg` is referenced.
+///
+pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
+    let mut max: Option<usize> = None;
+    let mut bump = |id: usize| {
+        max = Some(match max {
+            Some(m) if m >= id => m,
+            _ => id,
+        });
+    };
+    for (_, ir) in &asm_info.ir {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for (ir, _, _) in &asm_info.outline_bridges {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for (ir, _) in asm_info.inline_bridges.values() {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for SpecializeInfo { info, .. } in &asm_info.specialized_methods {
+        if let Some(id) = max_virt_fpreg_id(info) {
+            bump(id);
+        }
+    }
+    max
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
@@ -125,6 +190,33 @@ pub(super) struct AsmInfo {
     pub(super) specialized_methods: Vec<SpecializeInfo>,
 
     ///
+    /// For `JitType::Loop`, the bytes the JIT itself adds to `rsp`
+    /// at loop entry (matching the `addq rsp, _` emitted at every
+    /// side-exit handler). Populated by the pre-codegen resolve
+    /// pass; `0` for non-Loop frames or Loop frames with no
+    /// JIT-managed spill space.
+    ///
+    pub(super) loop_jit_spill_bytes: usize,
+
+    ///
+    /// Identifier of the [`JitStackFrame`] that owns this `AsmInfo`.
+    /// Set by [`JitContext::push_frame`]. Used by `expand_spills` to
+    /// look up the frame's `base_stack_offset` from
+    /// [`JitContext::specialized_frame_sizes`] when resolving spill
+    /// slot offsets.
+    ///
+    pub(super) specialized_id: SpecializedId,
+
+    ///
+    /// Snapshot of the frame's immutable `base_stack_offset` taken
+    /// at `pop_frame`. Lets codegen-side spill-aware lowerings (e.g.
+    /// `XmmBinOp`) compute the rbp-relative offset of a spilled
+    /// `VirtFPReg` directly without re-querying
+    /// [`JitContext::specialized_frame_sizes`].
+    ///
+    pub(super) base_stack_offset: usize,
+
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
@@ -148,6 +240,9 @@ impl AsmInfo {
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
             specialized_methods: vec![],
+            loop_jit_spill_bytes: 0,
+            specialized_id: SpecializedId(usize::MAX),
+            base_stack_offset: 0,
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
@@ -201,6 +296,30 @@ impl AsmInfo {
         src_bb: Option<BasicBlockId>,
     ) -> Option<(AsmIr, Option<BasicBlockId>)> {
         self.inline_bridges.remove(&src_bb)
+    }
+
+    // pre-codegen rewrite helpers
+
+    pub(super) fn iter_ir_mut(
+        &mut self,
+    ) -> std::slice::IterMut<'_, (Option<BasicBlockId>, AsmIr)> {
+        self.ir.iter_mut()
+    }
+
+    pub(super) fn iter_outline_bridges_mut(
+        &mut self,
+    ) -> std::slice::IterMut<'_, (AsmIr, JitLabel, BasicBlockId)> {
+        self.outline_bridges.iter_mut()
+    }
+
+    pub(super) fn iter_inline_bridges_mut(
+        &mut self,
+    ) -> std::collections::hash_map::ValuesMut<'_, Option<BasicBlockId>, (AsmIr, Option<BasicBlockId>)> {
+        self.inline_bridges.values_mut()
+    }
+
+    pub(super) fn iter_specialized_methods_mut(&mut self) -> std::slice::IterMut<'_, SpecializeInfo> {
+        self.specialized_methods.iter_mut()
     }
 }
 
@@ -257,9 +376,32 @@ pub(super) struct JitStackFrame {
     return_context: HashMap<usize, ReturnState>,
 
     ///
-    /// Machine stack offset for this frame.
+    /// Machine stack offset for this frame. May be temporarily bumped
+    /// by [`JitContext::specialized_compile`] for the duration of a
+    /// nested specialized call (`+= using_xmm.offset()` then `-=`),
+    /// so this is the *dynamic* value at any moment. The base value
+    /// is preserved in [`Self::base_stack_offset`].
     ///
     stack_offset: usize,
+
+    ///
+    /// Initial (immutable) value of [`Self::stack_offset`] at frame
+    /// creation. The dynamic field gets `+=`/`-=` adjustments inside
+    /// `specialized_compile`; this snapshot lets emit-time helpers
+    /// recover the bump (`stack_offset - base_stack_offset`) that
+    /// [`JitContext::specialized_frame_sizes`] alone does not capture.
+    ///
+    base_stack_offset: usize,
+
+    ///
+    /// Unique identifier assigned by [`JitContext::push_frame`]. After
+    /// the frame is popped via [`JitContext::pop_frame`], the
+    /// finalised `stack_offset` is recorded in
+    /// [`JitContext::specialized_frame_sizes`] under this id and used
+    /// by the pre-codegen pass to resolve `DynVarOffset::Hint`
+    /// hints into concrete byte offsets.
+    ///
+    specialized_id: SpecializedId,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -325,6 +467,9 @@ impl JitStackFrame {
                 inline_bridges: HashMap::default(),
                 ivar_heap_accessed: false,
                 specialized_methods: vec![],
+                loop_jit_spill_bytes: 0,
+                specialized_id: SpecializedId(usize::MAX),
+                base_stack_offset: 0,
                 sourcemap: vec![],
                 start_codepos: 0,
             },
@@ -338,6 +483,9 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset,
+            base_stack_offset: stack_offset,
+            // Sentinel — overwritten by [`JitContext::push_frame`].
+            specialized_id: SpecializedId(usize::MAX),
         }
     }
 
@@ -354,6 +502,12 @@ impl JitStackFrame {
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
             stack_offset: self.stack_offset,
+            base_stack_offset: self.base_stack_offset,
+            // Preserve the source frame's id — the dup is used by
+            // [`JitContext::loop_analysis`] which performs read-only
+            // walks over a snapshot of the stack and never reaches
+            // the codegen resolve pass, so id reuse is safe.
+            specialized_id: self.specialized_id,
         }
     }
 
@@ -405,6 +559,23 @@ pub(crate) struct JitContext<'a> {
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
     stack_frame: Vec<JitStackFrame>,
+
+    ///
+    /// Counter for handing out fresh [`SpecializedId`]s to frames as
+    /// they are pushed. Monotonic across the whole compilation.
+    ///
+    next_specialized_id: usize,
+
+    ///
+    /// Map from each frame's [`SpecializedId`] to its finalised
+    /// stack-size pair (`total` = base + spill, `base` = invariant
+    /// from frame creation). Populated when [`Self::pop_frame`] hands
+    /// the frame back to the caller. Read by
+    /// [`Self::resolve_dyn_var_offsets`] before code generation:
+    /// `total` resolves DynVar / chain hints and method-JIT
+    /// prologues, `total - base` resolves Loop-JIT rsp bumps.
+    ///
+    specialized_frame_sizes: HashMap<SpecializedId, FrameSizes>,
 }
 
 impl<'a> JitContext<'a> {
@@ -420,6 +591,8 @@ impl<'a> JitContext<'a> {
             class_version,
             inline_method_cache: vec![],
             stack_frame,
+            next_specialized_id: 0,
+            specialized_frame_sizes: HashMap::default(),
         }
     }
 
@@ -432,6 +605,11 @@ impl<'a> JitContext<'a> {
             class_version: self.class_version,
             inline_method_cache: vec![],
             stack_frame,
+            // The cloned context emits AsmIr only for analysis (it is
+            // never codegen'd), so the id counter / size map can stay
+            // empty — the resolve pass never runs against this ir.
+            next_specialized_id: 0,
+            specialized_frame_sizes: HashMap::default(),
         }
     }
 
@@ -522,12 +700,71 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len() - 1
     }
 
-    pub(super) fn push_frame(&mut self, frame: JitStackFrame) {
+    pub(super) fn push_frame(&mut self, mut frame: JitStackFrame) {
+        // Hand out a fresh id; codegen-mode contexts use this to wire
+        // every frame into [`Self::specialized_frame_sizes`] when the
+        // frame is popped. Loop-analysis contexts never codegen, so
+        // they reuse the cloned id from `JitStackFrame::dup`.
+        if frame.specialized_id.0 == usize::MAX {
+            frame.specialized_id = SpecializedId(self.next_specialized_id);
+            self.next_specialized_id += 1;
+        }
+        // Mirror onto AsmInfo so `expand_spills` can look up the
+        // frame's base_stack_offset from `specialized_frame_sizes`
+        // by reading the AsmInfo alone.
+        frame.asm_info.specialized_id = frame.specialized_id;
         self.stack_frame.push(frame);
     }
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
-        self.stack_frame.pop().unwrap()
+        let mut frame = self.stack_frame.pop().unwrap();
+        // Grow `stack_offset` by the JIT-owned spill region — every
+        // `VirtFPReg(N)` with `N >= PHYS_XMM_POOL` claims 8 bytes
+        // at the top of the frame's local area. Walk the
+        // freshly-finalised AsmIr to find the max id used; this
+        // works regardless of which `AbstractFrame` branch produced
+        // the alloc (the per-state allocator counter is local to
+        // each branch, but the resulting AsmInst is committed once
+        // and we can find the same value by scanning).
+        let spill_count = max_virt_fpreg_id(&frame.asm_info)
+            .map(|m| (m + 1).saturating_sub(super::state::PHYS_XMM_POOL))
+            .unwrap_or(0);
+        // Each spill slot is 8 bytes; round the spill region up to a
+        // 16-byte multiple so that any external `call` (e.g. into
+        // Rust runtime helpers that emit movapd) keeps a 16-byte
+        // aligned rsp under the SysV x86-64 ABI.
+        let spill_bytes = (spill_count * 8 + 15) & !15;
+        frame.stack_offset += spill_bytes;
+        // Record the finalised frame sizes for the resolve pass.
+        // After this point, `frame.stack_offset` will not be modified
+        // (the `+=`/`-=` adjustments inside `specialized_compile`
+        // are always paired around the recursive `traceir_to_asmir`
+        // call), so this snapshot is the canonical pair for the id.
+        self.specialized_frame_sizes.insert(
+            frame.specialized_id,
+            FrameSizes {
+                total: frame.stack_offset,
+                base: frame.base_stack_offset,
+            },
+        );
+        // Stamp the JIT-owned spill bytes onto the AsmInfo so that
+        // `side_exit_with_label` can emit the matching `addq rsp, _`
+        // without re-walking the AsmIr. Method / specialized frames
+        // restore rsp implicitly via `leave; ret`, so we leave it
+        // at `0` for them.
+        if matches!(frame.asm_info.jit_type, JitType::Loop(_)) {
+            frame.asm_info.loop_jit_spill_bytes =
+                frame.stack_offset - frame.base_stack_offset;
+        }
+        // Mirror `base_stack_offset` onto the AsmInfo so that
+        // codegen-side spill-aware lowerings can compute spill slot
+        // offsets directly.
+        frame.asm_info.base_stack_offset = frame.base_stack_offset;
+        frame
+    }
+
+    pub(super) fn current_frame_id(&self) -> SpecializedId {
+        self.current_frame().specialized_id
     }
 
     ///
@@ -653,12 +890,6 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    fn calc_stack_offset(&self, begin: usize, end: usize) -> usize {
-        self.stack_frame[begin..end]
-            .iter()
-            .fold(0, |acc, f| acc + f.stack_offset)
-    }
-
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
             let iseq_id = f.iseq_id();
@@ -668,35 +899,259 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    pub(super) fn outer_stack_offset(
+    ///
+    /// Hint variant of stack-offset computation for `LoadDynVar` /
+    /// `StoreDynVar`. Returns the chain of [`SpecializedId`]s for
+    /// frames `[outer..current)` together with `extra` — the sum
+    /// of the dynamic `stack_offset - base_stack_offset` per frame
+    /// at *this* AsmIr emission time. The pre-codegen resolve pass
+    /// computes `sum(map[id]) + extra`. The boolean mirrors the
+    /// `not_captured` flag from `state.outer_no_capture_guard`.
+    ///
+    pub(super) fn outer_specialized_ids(
         &self,
         state: &AbstractState,
         outer: usize,
-    ) -> Option<(usize, bool)> {
+    ) -> Option<(Vec<SpecializedId>, usize, bool)> {
         let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
-        let offset = self.calc_stack_offset(outer, self.stack_frame.len() - 1);
-        Some((offset, not_captured))
+        let end = self.stack_frame.len() - 1;
+        let chain = &self.stack_frame[outer..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra, not_captured))
     }
 
-    pub(super) fn method_caller_stack_offset(&self) -> Option<usize> {
+    ///
+    /// Resolve a `DynVarOffset::Hint` chain by summing the recorded
+    /// frame `total` sizes. Used by [`Self::resolve_dyn_var_offsets`].
+    ///
+    pub(super) fn resolve_specialized_id_chain(&self, ids: &[SpecializedId]) -> usize {
+        ids.iter()
+            .map(|id| self.frame_sizes_or_panic(*id).total)
+            .sum()
+    }
+
+    fn frame_sizes_or_panic(&self, id: SpecializedId) -> FrameSizes {
+        *self.specialized_frame_sizes.get(&id).unwrap_or_else(|| {
+            panic!(
+                "frame-size hint references {:?} but no frame sizes were recorded",
+                id
+            )
+        })
+    }
+
+    ///
+    /// Walk every `AsmIr` reachable from `asm_info` (the main inst
+    /// stream, inline / outline bridges, and recursively the
+    /// `specialized_methods`) and rewrite each
+    /// `DynVarOffset::Hint(...)` into `DynVarOffset::Concrete(...)`
+    /// using [`Self::specialized_frame_sizes`]. Must be called after
+    /// every frame has been popped (so the size map is fully
+    /// populated) and before `gen_machine_code` runs — code
+    /// generation [`unwrap_concrete`s](DynVarOffset::unwrap_concrete)
+    /// each hint and would panic otherwise.
+    ///
+    pub(super) fn resolve_dyn_var_offsets(&self, asm_info: &mut AsmInfo) {
+        for (_, ir) in asm_info.iter_ir_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for (ir, _, _) in asm_info.iter_outline_bridges_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for (ir, _) in asm_info.iter_inline_bridges_mut() {
+            for inst in ir.inst_iter_mut() {
+                self.resolve_dyn_var_offset_in(inst);
+            }
+        }
+        for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
+            self.resolve_dyn_var_offsets(info);
+        }
+    }
+
+    ///
+    /// Pre-codegen pass: rewrite every AsmInst whose operands include
+    /// a spilled `VirtFPReg` (`id >= PHYS_XMM_POOL`) into a
+    /// `LoadSpill` + modified-inst + `StoreSpill` triplet, where the
+    /// modified inst's operand is replaced with a scratch xmm marker
+    /// (`SCRATCH_XMM_0` / `SCRATCH_XMM_1`). Recurses into
+    /// `specialized_methods`. Must run before `gen_machine_code` so
+    /// that the codegen lowering only sees ids it can encode.
+    ///
+    /// One AsmInst can have at most two simultaneously-spilled
+    /// operands today; a third would require a third scratch xmm
+    /// outside the (xmm0, xmm1) pair, which the panic flags.
+    ///
+    pub(super) fn expand_spills(&self, asm_info: &mut AsmInfo) {
+        let id = asm_info.specialized_id;
+        let base = match self.specialized_frame_sizes.get(&id) {
+            Some(sizes) => sizes.base,
+            // No size recorded yet (e.g. loop-analysis dummy ctx) —
+            // nothing to expand.
+            None => return,
+        };
+        let pool = super::state::PHYS_XMM_POOL;
+        let resolver = move |virt: VirtFPReg| -> i32 {
+            // Spill slot for `VirtFPReg(N)` (N >= pool) lives at
+            //     [rbp - locals_size - 8 - 8 * (N - pool)]
+            // where `locals_size = base - 32` (the original prologue
+            // subq before `pop_frame`'s spill growth bumped
+            // `total = base + 8 * spill_count`).
+            let n = virt.0 - pool;
+            (base as i32) - 24 + 8 * n as i32
+        };
+        let take = |insts: Vec<AsmInst>| -> Vec<AsmInst> {
+            let mut out = Vec::with_capacity(insts.len());
+            for mut inst in insts {
+                let scratches = [VirtFPReg::SCRATCH_XMM_0, VirtFPReg::SCRATCH_XMM_1];
+                let mut spilled: Vec<(VirtFPReg, i32)> = vec![];
+                for op in inst.xmm_operands_mut() {
+                    if op.0 >= pool {
+                        let scratch_idx = spilled.len();
+                        if scratch_idx >= scratches.len() {
+                            panic!(
+                                "expand_spills: AsmInst {:?} has more than {} simultaneously \
+                                 spilled VirtFPReg operands",
+                                inst,
+                                scratches.len()
+                            );
+                        }
+                        let off = resolver(*op);
+                        let scratch = scratches[scratch_idx];
+                        spilled.push((scratch, off));
+                        *op = scratch;
+                    }
+                }
+                // Pre-loads first: every spilled operand may be
+                // read.
+                for (scratch, off) in &spilled {
+                    out.push(AsmInst::LoadSpill {
+                        scratch: *scratch,
+                        rbp_offset: *off,
+                    });
+                }
+                out.push(inst);
+                // Post-stores: write back any modification. If the
+                // operand was read-only the store is wasted but
+                // harmless (writes the same value back). Spills are
+                // expected to be rare so the overhead is acceptable.
+                for (scratch, off) in &spilled {
+                    out.push(AsmInst::StoreSpill {
+                        scratch: *scratch,
+                        rbp_offset: *off,
+                    });
+                }
+            }
+            out
+        };
+        for (_, ir) in asm_info.iter_ir_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for (ir, _, _) in asm_info.iter_outline_bridges_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for (ir, _) in asm_info.iter_inline_bridges_mut() {
+            let taken = ir.take_inst();
+            ir.replace_inst(take(taken));
+        }
+        for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
+            self.expand_spills(info);
+        }
+    }
+
+    fn resolve_dyn_var_offset_in(&self, inst: &mut AsmInst) {
+        match inst {
+            AsmInst::LoadDynVarSpecialized { offset, .. }
+            | AsmInst::StoreDynVarSpecialized { offset, .. }
+            | AsmInst::MethodRetSpecialized {
+                rbp_offset: offset, ..
+            }
+            | AsmInst::BlockBreakSpecialized {
+                rbp_offset: offset, ..
+            } => {
+                if let DynVarOffset::Hint { ids, extra } = offset {
+                    let resolved = self.resolve_specialized_id_chain(ids) + *extra;
+                    *offset = DynVarOffset::Concrete(resolved);
+                }
+            }
+            AsmInst::Init {
+                prologue_offset, ..
+            } => {
+                if let PrologueOffset::Hint(id) = prologue_offset {
+                    let sizes = self.frame_sizes_or_panic(*id);
+                    // The recorded `total` includes the iseq's
+                    // bookkeeping `+ 16` and the `CONTINUATION_FRAME_SIZE`
+                    // (= 16). The prologue subtracts only the locals area,
+                    // so subtract the 32-byte overhead. Spill slots that
+                    // grow `total` flow through automatically.
+                    let prologue_bytes = sizes.total - (CONTINUATION_FRAME_SIZE + 16);
+                    *prologue_offset = PrologueOffset::Concrete(prologue_bytes);
+                }
+            }
+            AsmInst::LoopJitRspBump { offset } => {
+                if let LoopRspOffset::Hint(id) = offset {
+                    let sizes = self.frame_sizes_or_panic(*id);
+                    // Loop JIT lives inside an invoker-owned
+                    // prologue, so the JIT-managed bump is exactly
+                    // the spill region grown on top of `base`.
+                    *offset = LoopRspOffset::Concrete(sizes.total - sizes.base);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ///
+    /// Hint-form chain of [`SpecializedId`]s between the method
+    /// caller and the current frame. Returns `(ids, extra)` where
+    /// `extra` is the live `stack_offset - base_stack_offset` sum
+    /// captured at AsmIr emission time — see
+    /// [`Self::outer_specialized_ids`] for the rationale.
+    ///
+    pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(self.calc_stack_offset(begin, end))
+        let chain = &self.stack_frame[begin..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra))
     }
 
-    pub(super) fn iter_caller_stack_offset(&self) -> Option<usize> {
+    ///
+    /// Hint-form chain of [`SpecializedId`]s between the iter caller
+    /// and the current frame. Returns `(ids, extra)` — see
+    /// [`Self::method_caller_specialized_ids`].
+    ///
+    pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
         }
-        Some(self.calc_stack_offset(begin, end))
+        let chain = &self.stack_frame[begin..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((ids, extra))
     }
 
     pub(super) fn get_pc(&self, i: BcIndex) -> BytecodePtr {

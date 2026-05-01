@@ -30,6 +30,11 @@ deopt = ["jit-log", "dump-bc", "dump-traceir"]
 gc-log = []
 gc-debug = []
 gc-stress = []
+# Force PHYS_XMM_POOL down to 2 so almost every Float-resident slot
+# becomes a spilled VirtFPReg. Used in CI to stress-test the spill
+# code paths (LoadSpill / StoreSpill, spill-aware AsmInst lowerings,
+# 16-byte spill-region alignment).
+stress-spill-pool = []
 profile = ["dump-bc", "dump-traceir"]
 perf = []
 emit-cfg = ["dump-bc", "dump-traceir"]

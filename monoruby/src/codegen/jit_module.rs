@@ -235,7 +235,12 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
-    pub(super) fn execute_gc_inner(&mut self, wb: Option<&jitgen::WriteBack>, error: &DestLabel) {
+    pub(super) fn execute_gc_inner(
+        &mut self,
+        wb: Option<&jitgen::WriteBack>,
+        error: &DestLabel,
+        base: usize,
+    ) {
         let alloc_flag = self.alloc_flag.clone();
         let gc = self.jit.label();
         let exit = self.jit.label();
@@ -249,7 +254,7 @@ impl JitModule {
         self.jit.select_page(1);
         self.jit.bind_label(gc);
         if let Some(wb) = wb {
-            self.gen_write_back(wb);
+            self.gen_write_back(wb, base);
         }
         monoasm! { &mut self.jit,
             call exec_gc;
@@ -260,7 +265,7 @@ impl JitModule {
         self.jit.select_page(0);
     }
 
-    pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel) {
+    pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());
         monoasm! { &mut self.jit,
@@ -269,7 +274,7 @@ impl JitModule {
         }
         self.jit.select_page(1);
         self.jit.bind_label(overflow);
-        self.gen_write_back(wb);
+        self.gen_write_back(wb, base);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rax, (stack_overflow);

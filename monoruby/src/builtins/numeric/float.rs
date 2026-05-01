@@ -204,13 +204,15 @@ fn float_toi(
         return false;
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
-    let fsrc = state.load_xmm(ir, recv).enc();
+    let fsrc = state.load_xmm(ir, recv);
     let deopt = ir.new_deopt(state);
     if let Some(dst) = dst {
-        ir.inline(move |r#gen, _, labels| {
+        ir.inline(move |r#gen, _, labels, base| {
             let deopt = &labels[deopt];
+            // Load fsrc into xmm0 (handles both pool and spill).
+            r#gen.load_xmm_into_xmm0(fsrc, base);
             monoasm! { &mut r#gen.jit,
-                cvttsd2siq rdi, xmm(fsrc);
+                cvttsd2siq rdi, xmm0;
                 addq  rdi, rdi;
                 jo    deopt;
                 orq   rdi, 1;

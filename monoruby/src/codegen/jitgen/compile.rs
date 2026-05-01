@@ -35,6 +35,15 @@ impl<'a> JitContext<'a> {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
             ir.push(AsmInst::Preparation);
+            // Loop JIT runs inside an existing invoker / interpreter
+            // frame, so its prologue isn't JIT-emitted. Any
+            // JIT-managed spill space (e.g. future VirtFPReg spill
+            // slots) needs its own `subq rsp, _` here, paired with
+            // an `addq rsp, _` of the same value at every deopt /
+            // side-exit handler. The size is resolved by the
+            // pre-codegen pass from this frame's
+            // `stack_offset - base_stack_offset`.
+            ir.loop_jit_rsp_bump(LoopRspOffset::Hint(self.current_frame_id()));
         };
 
         //assert!(self.ir.is_empty());
@@ -148,7 +157,10 @@ impl<'a> JitContext<'a> {
         match trace_ir {
             TraceIr::InitMethod(info) => {
                 assert!(!self.is_loop());
-                ir.push(AsmInst::Init { info });
+                ir.push(AsmInst::Init {
+                    info,
+                    prologue_offset: PrologueOffset::Hint(self.current_frame_id()),
+                });
                 ir.push(AsmInst::Preparation);
             }
             TraceIr::LoopStart { .. } => {
@@ -614,8 +626,13 @@ impl<'a> JitContext<'a> {
             TraceIr::MethodRet(ret) => {
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some(rbp_offset) = self.method_caller_stack_offset() {
-                    ir.push(AsmInst::MethodRetSpecialized { rbp_offset });
+                if let Some((spec_ids, extra)) = self.method_caller_specialized_ids() {
+                    ir.push(AsmInst::MethodRetSpecialized {
+                        rbp_offset: DynVarOffset::Hint {
+                            ids: spec_ids,
+                            extra,
+                        },
+                    });
                 } else {
                     ir.push(AsmInst::MethodRet(pc));
                 }
@@ -626,8 +643,13 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some(rbp_offset) = self.iter_caller_stack_offset() {
-                    ir.push(AsmInst::BlockBreakSpecialized { rbp_offset });
+                if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids() {
+                    ir.push(AsmInst::BlockBreakSpecialized {
+                        rbp_offset: DynVarOffset::Hint {
+                            ids: spec_ids,
+                            extra,
+                        },
+                    });
                 } else {
                     ir.push(AsmInst::BlockBreak(pc));
                 }

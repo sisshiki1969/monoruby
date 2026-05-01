@@ -539,7 +539,7 @@ fn integer_succ(
 
     let deopt = ir.new_deopt(state);
     state.load(ir, recv, GP::Rdi);
-    ir.inline(move |r#gen, _, labels| {
+    ir.inline(move |r#gen, _, labels, _| {
         let deopt = &labels[deopt];
         monoasm! { &mut r#gen.jit,
             addq  rdi, 2;
@@ -588,12 +588,14 @@ fn integer_tof(
         // `sarq` / `cvtsi2sdq` below produce NaN, and the caller sees
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
-        let fret = state.def_F(ir, ret).enc();
-        ir.inline(move |r#gen, _, _| {
+        let fret = state.def_F(ir, ret);
+        ir.inline(move |r#gen, _, _, base| {
+            // Convert into xmm0, then store into fret (pool or spill).
             monoasm! { &mut r#gen.jit,
                 sarq  rdi, 1;
-                cvtsi2sdq xmm(fret), rdi;
+                cvtsi2sdq xmm0, rdi;
             }
+            r#gen.store_xmm0_into_xmm(fret, base);
         });
     }
     true
@@ -886,17 +888,17 @@ fn integer_shr(
         let rhs = rhs.get();
         if rhs >= 0 {
             // n >> k (k >= 0): right shift
-            ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(rhs.min(64) as u8));
+            ir.inline(move |r#gen, _, _, _| r#gen.gen_shr_imm(rhs.min(64) as u8));
         } else {
             // n >> -k: equivalent to n << k
             let k = (-rhs) as u64;
             if k < 64 {
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt]));
+                ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt]));
             } else {
                 // shift too large for inline, deopt
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels| {
+                ir.inline(move |r#gen, _, labels, _| {
                     let deopt = &labels[deopt];
                     monoasm!( &mut r#gen.jit,
                         cmpq rdi, (Value::i32(0).id());
@@ -909,7 +911,7 @@ fn integer_shr(
     } else {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels| r#gen.gen_shr(&labels[deopt]));
+        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -961,15 +963,15 @@ fn integer_shl(
         if rhs >= 0 && rhs < 64 {
             // n << k (0 <= k < 64): left shift
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels| r#gen.gen_shl_rhs_imm(rhs as u8, &labels[deopt]));
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_rhs_imm(rhs as u8, &labels[deopt]));
         } else if rhs < 0 {
             // n << -k: equivalent to n >> k
             let k = (-rhs) as u64;
-            ir.inline(move |r#gen, _, _| r#gen.gen_shr_imm(k.min(64) as u8));
+            ir.inline(move |r#gen, _, _, _| r#gen.gen_shr_imm(k.min(64) as u8));
         } else {
             // rhs >= 64: deopt (overflow for non-zero lhs)
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels| {
+            ir.inline(move |r#gen, _, labels, _| {
                 let deopt = &labels[deopt];
                 monoasm!( &mut r#gen.jit,
                     cmpq rdi, (Value::i32(0).id());
@@ -981,11 +983,11 @@ fn integer_shl(
     } else if let Some(lhs) = state.is_fixnum_literal(recv) {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
+        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
     } else {
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels| r#gen.gen_shl(&labels[deopt]));
+        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -1055,7 +1057,7 @@ fn integer_rem_int_rhs(
         if rhs_val > 0 && (rhs_val as u64).is_power_of_two() {
             state.load_fixnum(ir, recv, GP::Rdi);
             let mask = rhs_val * 2 - 1;
-            ir.inline(move |r#gen, _, _| {
+            ir.inline(move |r#gen, _, _, _| {
                 if let Ok(imm32) = i32::try_from(mask) {
                     let imm = imm32 as i64;
                     monoasm!( &mut r#gen.jit,
@@ -1076,7 +1078,7 @@ fn integer_rem_int_rhs(
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
     let deopt = ir.new_deopt(state);
-    ir.inline(move |r#gen, _, labels| r#gen.gen_int_rem(&labels[deopt]));
+    ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_rem(&labels[deopt]));
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }
@@ -1107,7 +1109,9 @@ fn integer_rem_float_rhs(
     };
     let dst_xmm = state.def_F(ir, dst);
     let using_xmm = state.get_using_xmm();
-    ir.inline(move |r#gen, _, _| r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm));
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
+    });
     true
 }
 
@@ -1170,7 +1174,7 @@ fn integer_pow_int_rhs(
     state.load_fixnum(ir, args, GP::Rsi);
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
-    ir.inline(move |r#gen, _, labels| r#gen.gen_int_pow(using_xmm, &labels[error]));
+    ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_pow(using_xmm, &labels[error]));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -1200,7 +1204,7 @@ fn integer_pow_float_rhs(
     let lhs_xmm = state.load_xmm_fixnum(ir, recv);
     let rhs_xmm = state.load_xmm(ir, args);
     let using_xmm = state.get_using_xmm();
-    ir.inline(move |r#gen, _, _| r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm));
+    ir.inline(move |r#gen, _, _, base| r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -1261,7 +1265,7 @@ fn integer_bitop_inline(
     } else {
         state.load(ir, recv, GP::Rdi);
         state.load_fixnum(ir, args, GP::Rsi);
-        ir.inline(move |r#gen, _, _| emit_rr(r#gen));
+        ir.inline(move |r#gen, _, _, _| emit_rr(r#gen));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -1282,9 +1286,9 @@ fn emit_bitop_imm(
 ) {
     let tagged = Value::from(imm).id() as i64;
     if i32::try_from(tagged).is_ok() {
-        ir.inline(move |r#gen, _, _| emit_imm(r#gen, tagged));
+        ir.inline(move |r#gen, _, _, _| emit_imm(r#gen, tagged));
     } else {
-        ir.inline(move |r#gen, _, _| {
+        ir.inline(move |r#gen, _, _, _| {
             monoasm!( &mut r#gen.jit,
                 movq rsi, (tagged);
             );

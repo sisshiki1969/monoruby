@@ -5,7 +5,7 @@ use super::*;
 mod compile;
 
 pub(super) struct InlineProcedure {
-    proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels)>,
+    proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,
 }
 
 impl std::fmt::Debug for InlineProcedure {
@@ -103,6 +103,22 @@ impl AsmIr {
         if self.codegen_mode {
             self.inst.push(inst);
         }
+    }
+
+    pub(super) fn inst_iter_mut(&mut self) -> std::slice::IterMut<'_, AsmInst> {
+        self.inst.iter_mut()
+    }
+
+    pub(super) fn inst_iter(&self) -> std::slice::Iter<'_, AsmInst> {
+        self.inst.iter()
+    }
+
+    pub(super) fn take_inst(&mut self) -> Vec<AsmInst> {
+        std::mem::take(&mut self.inst)
+    }
+
+    pub(super) fn replace_inst(&mut self, inst: Vec<AsmInst>) {
+        self.inst = inst;
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -206,6 +222,10 @@ impl AsmIr {
         self.push(AsmInst::RegSub(r, i));
     }
 
+    pub(super) fn loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) {
+        self.push(AsmInst::LoopJitRspBump { offset });
+    }
+
     /// movq [rsp + (ofs)], R(r);
     pub(super) fn reg2rsp_offset(&mut self, r: GP, ofs: i32) {
         self.push(AsmInst::RegToRSPOffset(r, ofs));
@@ -235,7 +255,7 @@ impl AsmIr {
         self.push(AsmInst::StackToReg(SlotId::self_(), dst));
     }
 
-    pub(super) fn xmm_move(&mut self, src: Xmm, dst: Xmm) {
+    pub(super) fn xmm_move(&mut self, src: VirtFPReg, dst: VirtFPReg) {
         self.push(AsmInst::XmmMove(src, dst));
     }
 
@@ -248,7 +268,7 @@ impl AsmIr {
     /// ### destroy
     /// - rcx
     ///
-    pub fn xmm2stack(&mut self, xmm: Xmm, reg: SlotId) {
+    pub fn xmm2stack(&mut self, xmm: VirtFPReg, reg: SlotId) {
         self.push(AsmInst::XmmToStack(xmm, reg));
     }
 
@@ -276,7 +296,7 @@ impl AsmIr {
     /// ### destroy
     /// - R(*reg*)
     ///
-    pub fn fixnum2xmm(&mut self, reg: GP, x: Xmm) {
+    pub fn fixnum2xmm(&mut self, reg: GP, x: VirtFPReg) {
         self.push(AsmInst::FixnumToXmm(reg, x));
     }
 
@@ -299,21 +319,21 @@ impl AsmIr {
     ///
     /// - rax, rdi
     ///
-    pub fn float_to_xmm(&mut self, reg: GP, x: Xmm, deopt: AsmDeopt) {
+    pub fn float_to_xmm(&mut self, reg: GP, x: VirtFPReg, deopt: AsmDeopt) {
         self.push(AsmInst::FloatToXmm(reg, x, deopt));
     }
 
     ///
-    /// Move *f*(f64) to Xmm(*x*).
+    /// Move *f*(f64) to VirtFPReg(*x*).
     ///
-    pub fn f64_to_xmm(&mut self, f: f64, x: Xmm) {
+    pub fn f64_to_xmm(&mut self, f: f64, x: VirtFPReg) {
         self.push(AsmInst::F64ToXmm(f, x));
     }
 
     ///
-    /// Move *i*(i63) to the stack *slot* and Xmm(*x*).
+    /// Move *i*(i63) to the stack *slot* and VirtFPReg(*x*).
     ///
-    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: Xmm) {
+    pub fn i64_to_stack_and_xmm(&mut self, i: i64, slot: SlotId, x: VirtFPReg) {
         self.push(AsmInst::I64ToBoth(i, slot, x));
     }
 
@@ -527,7 +547,7 @@ impl AsmIr {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: Xmm, rhs: Xmm, dst: Xmm) {
+    pub(super) fn xmm_binop(&mut self, kind: BinOpK, lhs: VirtFPReg, rhs: VirtFPReg, dst: VirtFPReg) {
         self.push(AsmInst::XmmBinOp {
             kind,
             binary_xmm: (lhs, rhs),
@@ -572,7 +592,7 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        binary_xmm: (Xmm, Xmm),
+        binary_xmm: (VirtFPReg, VirtFPReg),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
@@ -623,7 +643,7 @@ impl AsmIr {
 
     pub(crate) fn inline(
         &mut self,
-        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels) + 'static,
+        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels, usize) + 'static,
     ) {
         self.inst
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
@@ -631,6 +651,113 @@ impl AsmIr {
 
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
+    }
+}
+
+///
+/// Chain-based stack offset hint reused by every AsmInst that needs
+/// "sum of frame sizes between frame A and frame B" — DynVar
+/// access ([`AsmInst::LoadDynVarSpecialized`] /
+/// [`AsmInst::StoreDynVarSpecialized`]) and specialized return /
+/// break ([`AsmInst::MethodRetSpecialized`] /
+/// [`AsmInst::BlockBreakSpecialized`]).
+///
+/// Pass 1 emits `Hint { ids, extra }`:
+///
+/// * `ids` — the chain of [`SpecializedId`]s. Resolved at the
+///   pre-codegen pass into `sum(map[id])` — the frame *base* sizes.
+/// * `extra` — bytes captured at AsmIr emission time that the
+///   per-frame map cannot reproduce after pop. Currently this is
+///   the cumulative `using_xmm.offset()` bump applied by every
+///   active specialized call up the chain (each call temporarily
+///   `+=`s its `using_xmm.offset()` to the caller frame's
+///   `stack_offset`; we capture `current - base` for every frame in
+///   the chain and sum the differences). Once
+///   [`JitContext::specialized_compile`] stops doing the dynamic
+///   `+=`/`-=` (e.g. when VirtFPReg-aware spill replaces
+///   `using_xmm`), `extra` will be 0.
+///
+/// The pre-codegen resolve pass rewrites each `Hint` into
+/// `Concrete(sum(map[id]) + extra)`. Code generation asserts
+/// `Concrete(_)` and panics on a stray `Hint`.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum DynVarOffset {
+    Hint {
+        ids: Vec<super::context::SpecializedId>,
+        extra: usize,
+    },
+    Concrete(usize),
+}
+
+impl DynVarOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            DynVarOffset::Concrete(o) => *o,
+            DynVarOffset::Hint { ids, extra } => panic!(
+                "DynVarOffset::Hint(ids={:?}, extra={}) reached code generation — resolve pass did not run",
+                ids, extra
+            ),
+        }
+    }
+}
+
+///
+/// Bytes the JIT prologue should subtract from `rsp` for a frame.
+///
+/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`].
+/// The pre-codegen resolve pass derives the byte count from the
+/// frame's recorded `stack_offset` once it is finalised (so that
+/// future spill slots growing the frame size feed through to the
+/// prologue subq automatically). Code generation asserts
+/// `Concrete(_)`.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum PrologueOffset {
+    Hint(super::context::SpecializedId),
+    Concrete(usize),
+}
+
+impl PrologueOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            PrologueOffset::Concrete(o) => *o,
+            PrologueOffset::Hint(id) => panic!(
+                "PrologueOffset::Hint({:?}) reached code generation — resolve pass did not run",
+                id
+            ),
+        }
+    }
+}
+
+///
+/// Bytes the Loop JIT entry should subtract from `rsp` (and the
+/// matching side-exit handler should add back). Only the bytes that
+/// the JIT itself owns — the invoker / interpreter prologue is left
+/// untouched, so this captures the JIT-managed spill slots that sit
+/// on top of the surrounding interpreter frame.
+///
+/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`].
+/// The pre-codegen resolve pass derives the byte count as
+/// `stack_offset - base_stack_offset` of that frame, so any future
+/// VirtFPReg spill space added to the frame's recorded size flows
+/// through to the JIT-emitted bump automatically.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum LoopRspOffset {
+    Hint(super::context::SpecializedId),
+    Concrete(usize),
+}
+
+impl LoopRspOffset {
+    pub(crate) fn unwrap_concrete(&self) -> usize {
+        match self {
+            LoopRspOffset::Concrete(o) => *o,
+            LoopRspOffset::Hint(id) => panic!(
+                "LoopRspOffset::Hint({:?}) reached code generation — resolve pass did not run",
+                id
+            ),
+        }
     }
 }
 
@@ -662,28 +789,28 @@ pub(super) enum AsmInst {
     /// movq [rsp + (ofs)], (i);
     U64ToRSPOffset(u64, i32),
 
-    XmmMove(Xmm, Xmm),
-    XmmSwap(Xmm, Xmm),
+    XmmMove(VirtFPReg, VirtFPReg),
+    XmmSwap(VirtFPReg, VirtFPReg),
     XmmBinOp {
         kind: BinOpK,
-        binary_xmm: (Xmm, Xmm),
-        dst: Xmm,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        dst: VirtFPReg,
     },
     XmmUnOp {
         kind: UnOpK,
-        dst: Xmm,
+        dst: VirtFPReg,
     },
 
     ///
     /// Move f64 to xmm.
     ///
-    F64ToXmm(f64, Xmm),
+    F64ToXmm(f64, VirtFPReg),
     ///
-    /// Move *i*(i63) to the stack slot *reg* and Xmm(*x*).
+    /// Move *i*(i63) to the stack slot *reg* and VirtFPReg(*x*).
     ///
-    I64ToBoth(i64, SlotId, Xmm),
+    I64ToBoth(i64, SlotId, VirtFPReg),
     ///
-    /// Generate convert code from Xmm to Both.
+    /// Generate convert code from VirtFPReg to Both.
     ///
     /// ### out
     /// - rax: Value
@@ -691,7 +818,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - rcx
     ///
-    XmmToStack(Xmm, SlotId),
+    XmmToStack(VirtFPReg, SlotId),
     ///
     /// Move Value *v* to stack slot *reg*.
     ///
@@ -726,7 +853,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    NumToXmm(GP, Xmm, AsmDeopt),*/
+    NumToXmm(GP, VirtFPReg, AsmDeopt),*/
     ///
     /// Convert Fixnum to f64.
     ///
@@ -739,7 +866,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - R(*reg*)
     ///
-    FixnumToXmm(GP, Xmm),
+    FixnumToXmm(GP, VirtFPReg),
     ///
     /// Float guard and unboxing.
     ///
@@ -759,7 +886,7 @@ pub(super) enum AsmInst {
     ///
     /// - rax, rdi
     ///
-    FloatToXmm(GP, Xmm, AsmDeopt),
+    FloatToXmm(GP, VirtFPReg, AsmDeopt),
 
     ///
     /// Class version guard for JIT.
@@ -796,10 +923,16 @@ pub(super) enum AsmInst {
     BlockBreak(BytecodePtr),
     MethodRet(BytecodePtr),
     BlockBreakSpecialized {
-        rbp_offset: usize,
+        /// Bytes between the current rbp and the iter caller's rbp.
+        /// Emitted as `DynVarOffset::Hint(...)` and resolved before
+        /// code generation — see [`DynVarOffset`].
+        rbp_offset: DynVarOffset,
     },
     MethodRetSpecialized {
-        rbp_offset: usize,
+        /// Bytes between the current rbp and the method caller's
+        /// rbp. Emitted as `DynVarOffset::Hint(...)` and resolved
+        /// before code generation — see [`DynVarOffset`].
+        rbp_offset: DynVarOffset,
     },
     Raise,
     Retry(BytecodePtr),
@@ -826,14 +959,59 @@ pub(super) enum AsmInst {
 
     Preparation,
     ///
+    /// Loop JIT entry rsp bump. Emits `subq rsp, X` where `X` is the
+    /// JIT-managed spill region for this Loop frame (the existing
+    /// invoker / interpreter prologue is left untouched). The
+    /// matching `addq rsp, X` is emitted by `side_exit_with_label`
+    /// at every deopt / loop-natural-exit handler, using the same
+    /// resolved value (carried through `AsmInfo::loop_jit_spill_bytes`).
+    ///
+    LoopJitRspBump {
+        offset: LoopRspOffset,
+    },
+    ///
+    /// Load a spilled `VirtFPReg`'s 8-byte value from its stack slot
+    /// into a scratch xmm. Emitted by the pre-codegen `expand_spills`
+    /// pass before any AsmInst that reads the spilled operand.
+    ///
+    /// `scratch` is `VirtFPReg::SCRATCH_XMM_0` or
+    /// `VirtFPReg::SCRATCH_XMM_1` (the two reserved scratch xmms,
+    /// which are not allocated by the pool). `rbp_offset` is the
+    /// positive byte distance from `rbp` to the spill slot;
+    /// codegen emits `movq xmm(scratch.enc()), [rbp - rbp_offset]`.
+    ///
+    LoadSpill {
+        scratch: VirtFPReg,
+        rbp_offset: i32,
+    },
+    ///
+    /// Store a scratch xmm back into a spilled `VirtFPReg`'s stack
+    /// slot. Emitted by `expand_spills` after any AsmInst that
+    /// writes to the spilled operand. `scratch` and `rbp_offset`
+    /// follow the same convention as `LoadSpill`; codegen emits
+    /// `movq [rbp - rbp_offset], xmm(scratch.enc())`.
+    ///
+    StoreSpill {
+        scratch: VirtFPReg,
+        rbp_offset: i32,
+    },
+    ///
     /// Initialize function frame.
     ///
     /// ### stack pointer adjustment
-    /// - `fn_info`.`stack_offset` * 16
+    /// - `prologue_offset` bytes (resolved before code generation)
     ///
     Init {
         info: FnInitInfo,
-        //not_captured: bool,
+        ///
+        /// Byte count for the prologue `subq rsp, _`. Emitted as
+        /// `PrologueOffset::Hint(current_frame_id)` and rewritten
+        /// to `PrologueOffset::Concrete(_)` by the resolve pass once
+        /// the frame's final `stack_offset` is known. `info.stack_offset`
+        /// is retained for non-JIT callers; the JIT codegen uses this
+        /// field instead.
+        ///
+        prologue_offset: PrologueOffset,
     },
     ///
     /// Deoptimize and fallback to interpreter.
@@ -972,16 +1150,16 @@ pub(super) enum AsmInst {
     #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,
-        src: Xmm,
-        dst: Xmm,
+        src: VirtFPReg,
+        dst: VirtFPReg,
         using_xmm: UsingXmm,
     },
     #[allow(non_camel_case_types)]
     CFunc_FF_F {
         f: extern "C" fn(f64, f64) -> f64,
-        lhs: Xmm,
-        rhs: Xmm,
-        dst: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
+        dst: VirtFPReg,
         using_xmm: UsingXmm,
     },
     ///
@@ -1054,13 +1232,13 @@ pub(super) enum AsmInst {
     },
     FloatCmp {
         kind: CmpKind,
-        lhs: Xmm,
-        rhs: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
     },
     FloatCmpBr {
         kind: CmpKind,
-        lhs: Xmm,
-        rhs: Xmm,
+        lhs: VirtFPReg,
+        rhs: VirtFPReg,
         brkind: BrKind,
         branch_dest: JitLabel,
     },
@@ -1303,8 +1481,11 @@ pub(super) enum AsmInst {
     },
     /// rax = DynVar(src)
     LoadDynVarSpecialized {
-        /// machine stack offset in bytes
-        offset: usize,
+        /// Machine stack offset in bytes. Emitted as a
+        /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
+        /// resolve pass replaces it with `DynVarOffset::Concrete(_)`
+        /// once every frame's final size is known.
+        offset: DynVarOffset,
         reg: SlotId,
     },
     /// DynVar(dst) = src
@@ -1314,8 +1495,9 @@ pub(super) enum AsmInst {
     },
     /// DynVar(dst) = src
     StoreDynVarSpecialized {
-        /// machine stack offset in bytes
-        offset: usize,
+        /// Machine stack offset in bytes — see
+        /// [`AsmInst::LoadDynVarSpecialized`].
+        offset: DynVarOffset,
         dst: SlotId,
         src: GP,
     },
@@ -1453,6 +1635,64 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
+    ///
+    /// Enumerate every `VirtFPReg` operand referenced by this
+    /// instruction (in any role — read, write, or read-write).
+    /// Used by `pop_frame` to compute the frame's max
+    /// `VirtFPReg` id (and thus the stack-spill region size) and
+    /// — once Phase 2's codegen-side spill expansion lands — to
+    /// detect operands that need swap-load-swap-store.
+    ///
+    pub(super) fn xmm_operands(&self) -> Vec<VirtFPReg> {
+        match self {
+            Self::XmmMove(a, b) | Self::XmmSwap(a, b) => vec![*a, *b],
+            Self::XmmBinOp {
+                binary_xmm: (l, r),
+                dst,
+                ..
+            } => vec![*l, *r, *dst],
+            Self::XmmUnOp { dst, .. } => vec![*dst],
+            Self::F64ToXmm(_, x) => vec![*x],
+            Self::I64ToBoth(_, _, x) => vec![*x],
+            Self::XmmToStack(x, _) => vec![*x],
+            Self::FixnumToXmm(_, x) => vec![*x],
+            Self::FloatToXmm(_, x, _) => vec![*x],
+            Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
+            Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
+            Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::FloatCmpBr { lhs, rhs, .. } => vec![*lhs, *rhs],
+            _ => vec![],
+        }
+    }
+
+    ///
+    /// Mutable view of every `VirtFPReg` operand in this instruction.
+    /// Used by `expand_spills` to rewrite spilled operands into
+    /// scratch xmm markers in place.
+    ///
+    pub(super) fn xmm_operands_mut(&mut self) -> Vec<&mut VirtFPReg> {
+        match self {
+            // The variants below resolve spilled operands themselves
+            // in their codegen lowerings (using x86 memory operands
+            // and dedicated scratch paths), so their operands stay
+            // raw through `expand_spills`.
+            Self::XmmMove(_, _)
+            | Self::XmmSwap(_, _)
+            | Self::XmmBinOp { .. }
+            | Self::XmmUnOp { .. }
+            | Self::F64ToXmm(_, _)
+            | Self::FixnumToXmm(_, _)
+            | Self::FloatToXmm(_, _, _)
+            | Self::I64ToBoth(_, _, _)
+            | Self::XmmToStack(_, _)
+            | Self::CFunc_F_F { .. }
+            | Self::CFunc_FF_F { .. }
+            | Self::FloatCmp { .. }
+            | Self::FloatCmpBr { .. } => vec![],
+            _ => vec![],
+        }
+    }
+
     #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
     #[allow(dead_code)]
@@ -1549,11 +1789,13 @@ impl Codegen {
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
+        let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+        let base = frame.base_stack_offset;
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone());
+                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes, base);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -1562,14 +1804,20 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(pc, &t.1, label.clone());
+                        self.gen_deopt_with_label(
+                            pc,
+                            &t.1,
+                            label.clone(),
+                            loop_jit_spill_bytes,
+                            base,
+                        );
                         deopt_table.insert(t, label.clone());
                         label
                     }
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.gen_handle_error(pc, wb, label.clone());
+                    self.gen_handle_error(pc, wb, label.clone(), base);
                     label
                 }
                 _ => unreachable!("unexpected {side_exit:?}"),
