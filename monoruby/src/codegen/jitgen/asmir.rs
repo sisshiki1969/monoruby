@@ -1647,11 +1647,12 @@ impl Codegen {
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
+        let is_loop_jit = frame.is_loop_jit();
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone());
+                    self.gen_evict_with_label(pc, &wb, label.clone(), is_loop_jit);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -1660,7 +1661,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(pc, &t.1, label.clone());
+                        self.gen_deopt_with_label(pc, &t.1, label.clone(), is_loop_jit);
                         deopt_table.insert(t, label.clone());
                         label
                     }

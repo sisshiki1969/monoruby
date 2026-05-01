@@ -167,6 +167,10 @@ impl AsmInfo {
         matches!(self.jit_type, JitType::Specialized { .. })
     }
 
+    pub(super) fn is_loop_jit(&self) -> bool {
+        matches!(self.jit_type, JitType::Loop(_))
+    }
+
     #[cfg(any(feature = "emit-asm", feature = "jit-log"))]
     pub(super) fn specialize_level(&self) -> usize {
         self.specialize_level
@@ -623,12 +627,15 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
-        let frame = self.stack_frame.pop().unwrap();
-        // Record the finalised frame size for the resolve pass. After
-        // this point, `frame.stack_offset` will not be modified
-        // (the `+=`/`-=` adjustments inside `specialized_compile`
-        // are always paired around the recursive `traceir_to_asmir`
-        // call), so this write is the canonical size for the id.
+        let mut frame = self.stack_frame.pop().unwrap();
+        // STRESS TEST: bump every frame's recorded `stack_offset` by
+        // 16. For `Entry` / `Specialized`, the matching prologue
+        // `subq rsp, _` automatically grows via `PrologueOffset::Hint`;
+        // for `Loop`, the prologue is owned by the invoker so the
+        // JIT instead emits `subq rsp, 16` at its loop-entry hook
+        // and `addq rsp, 16` at every side-exit (see `traceir_to_asmir`
+        // and `side_exit_with_label`).
+        frame.stack_offset += 16;
         self.specialized_frame_sizes
             .insert(frame.specialized_id, frame.stack_offset);
         frame

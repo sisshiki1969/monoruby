@@ -745,15 +745,27 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_deopt_with_label(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) {
-        self.side_exit_with_label(pc, wb, entry, false)
+    fn gen_deopt_with_label(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        entry: DestLabel,
+        is_loop_jit: bool,
+    ) {
+        self.side_exit_with_label(pc, wb, entry, false, is_loop_jit)
     }
 
     ///
     /// Get *DestLabel* for fallback to interpreter by immediate eviction.
     ///
-    fn gen_evict_with_label(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) {
-        self.side_exit_with_label(pc, wb, entry, true)
+    fn gen_evict_with_label(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        entry: DestLabel,
+        is_loop_jit: bool,
+    ) {
+        self.side_exit_with_label(pc, wb, entry, true, is_loop_jit)
     }
 
     ///
@@ -768,10 +780,21 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
+        is_loop_jit: bool,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
+        // STRESS TEST: undo the +16 rsp bump that Loop JIT applied
+        // at its entry (see `traceir_to_asmir`'s `ir.reg_sub(GP::Rsp,
+        // 16)` for Loop-typed frames). Other JIT types restore rsp
+        // implicitly via their `leave; ret` epilogue, so the
+        // adjustment is Loop-specific.
+        if is_loop_jit {
+            monoasm!( &mut self.jit,
+                addq rsp, 16;
+            );
+        }
         self.gen_write_back_for_deopt(wb);
         monoasm!( &mut self.jit,
             movq r13, (pc.as_ptr());

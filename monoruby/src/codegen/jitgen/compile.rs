@@ -35,6 +35,13 @@ impl<'a> JitContext<'a> {
             ir.self2reg(GP::Rdi);
             ir.push(AsmInst::GuardClass(GP::Rdi, self.self_class(), deopt));
             ir.push(AsmInst::Preparation);
+            // STRESS TEST: bump rsp by 16 at Loop JIT entry to mirror
+            // the +16 stress applied to the recorded frame size in
+            // `pop_frame`. Each side-exit / deopt path restores it
+            // (see `side_exit_with_label`'s `addq rsp, 16` for
+            // Loop-typed frames). Future VirtFPReg spill replaces
+            // this hardcoded 16 with the resolved spill size.
+            ir.reg_sub(GP::Rsp, 16);
         };
 
         //assert!(self.ir.is_empty());
