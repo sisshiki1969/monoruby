@@ -208,6 +208,15 @@ pub(super) struct AsmInfo {
     pub(super) specialized_id: SpecializedId,
 
     ///
+    /// Snapshot of the frame's immutable `base_stack_offset` taken
+    /// at `pop_frame`. Lets codegen-side spill-aware lowerings (e.g.
+    /// `XmmBinOp`) compute the rbp-relative offset of a spilled
+    /// `VirtFPReg` directly without re-querying
+    /// [`JitContext::specialized_frame_sizes`].
+    ///
+    pub(super) base_stack_offset: usize,
+
+    ///
     /// Source map for bytecode index and machine code position.
     ///
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
@@ -233,6 +242,7 @@ impl AsmInfo {
             specialized_methods: vec![],
             loop_jit_spill_bytes: 0,
             specialized_id: SpecializedId(usize::MAX),
+            base_stack_offset: 0,
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
@@ -459,6 +469,7 @@ impl JitStackFrame {
                 specialized_methods: vec![],
                 loop_jit_spill_bytes: 0,
                 specialized_id: SpecializedId(usize::MAX),
+                base_stack_offset: 0,
                 sourcemap: vec![],
                 start_codepos: 0,
             },
@@ -740,6 +751,10 @@ impl<'a> JitContext<'a> {
             frame.asm_info.loop_jit_spill_bytes =
                 frame.stack_offset - frame.base_stack_offset;
         }
+        // Mirror `base_stack_offset` onto the AsmInfo so that
+        // codegen-side spill-aware lowerings can compute spill slot
+        // offsets directly.
+        frame.asm_info.base_stack_offset = frame.base_stack_offset;
         frame
     }
 

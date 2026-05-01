@@ -978,11 +978,17 @@ impl AbstractFrame {
 
     pub(crate) fn get_using_xmm(&self) -> UsingXmm {
         let mut b = UsingXmm::new();
-        self.xmm.iter().enumerate().for_each(|(i, v)| {
-            if !v.is_empty() {
-                b.set(i, true);
-            }
-        });
+        // Only physical pool slots need save/restore at call
+        // boundaries; spill slots already live on the stack.
+        self.xmm
+            .iter()
+            .enumerate()
+            .take(PHYS_XMM_POOL)
+            .for_each(|(i, v)| {
+                if !v.is_empty() {
+                    b.set(i, true);
+                }
+            });
         b
     }
 

@@ -331,69 +331,122 @@ impl Codegen {
     /// - caller save registers
     /// - stack
     ///
-    pub(super) fn float_binop(&mut self, kind: BinOpK, dst: VirtFPReg, binary_xmm: (VirtFPReg, VirtFPReg)) {
+    ///
+    /// Lower `dst <- lhs op rhs` where each operand may be a
+    /// pool-allocated phys xmm or a stack-spilled `VirtFPReg`. The
+    /// strategy mirrors the pattern documented in the spill design:
+    ///
+    /// 1. Pick `work` xmm = phys `dst` or scratch `xmm0` (when `dst`
+    ///    is spilled).
+    /// 2. Get `rhs` into a phys reg = its own phys (when not
+    ///    spilled, and not aliasing `work` for non-commutative ops)
+    ///    or scratch `xmm1`.
+    /// 3. Load `lhs` into `work` (memory operand if spilled, plain
+    ///    `movq` if not, no-op if `lhs` already lives in `work`).
+    /// 4. Run the SSE op `work, rhs_reg` register-to-register so
+    ///    every kind (commutative or not) follows the same shape.
+    /// 5. Store-back `work` to the spill slot when `dst` was spilled.
+    ///
+    pub(super) fn float_binop(
+        &mut self,
+        kind: BinOpK,
+        dst: VirtFPReg,
+        binary_xmm: (VirtFPReg, VirtFPReg),
+        base_stack_offset: usize,
+    ) {
         let (l, r) = binary_xmm;
-        let lhs = l.enc();
-        let rhs = r.enc();
-        let ret = dst.enc();
+        let lhs_loc = xmm_loc(l, base_stack_offset);
+        let rhs_loc = xmm_loc(r, base_stack_offset);
+        let dst_loc = xmm_loc(dst, base_stack_offset);
+
+        // Step 1: pick `work` for `dst`.
+        let (work, dst_spill_off) = match dst_loc {
+            XmmLoc::Phys(p) => (p, None),
+            XmmLoc::Spill(off) => (0u64, Some(off)),
+        };
+        let commutative = matches!(kind, BinOpK::Add | BinOpK::Mul);
+
+        // Step 2: route `rhs` into a phys reg distinct from `work`
+        // for non-commutative kinds (otherwise the `op` would lose
+        // `lhs` after the mov in step 3). Scratch xmm1 is the
+        // fallback when `rhs` is spilled or the alias would clobber.
+        let rhs_phys = match rhs_loc {
+            XmmLoc::Phys(p) if p == work && !commutative => {
+                // Save rhs to xmm1 before we overwrite `work` with
+                // `lhs`.
+                monoasm!( &mut self.jit,
+                    movq xmm1, xmm(p);
+                );
+                1
+            }
+            XmmLoc::Phys(p) => p,
+            XmmLoc::Spill(off) => {
+                monoasm!( &mut self.jit,
+                    movq xmm1, [rbp - (off)];
+                );
+                1
+            }
+        };
+
+        // Step 3: load `lhs` into `work` (skip when already there).
+        let lhs_in_work = matches!(lhs_loc, XmmLoc::Phys(p) if p == work);
+        if !lhs_in_work {
+            match lhs_loc {
+                XmmLoc::Phys(p) => monoasm!( &mut self.jit,
+                    movq xmm(work), xmm(p);
+                ),
+                XmmLoc::Spill(off) => monoasm!( &mut self.jit,
+                    movq xmm(work), [rbp - (off)];
+                ),
+            }
+        }
+
+        // Step 4: run the op register-to-register.
         match kind {
-            BinOpK::Add => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        addsd xmm(ret), xmm(lhs);
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        addsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Sub => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        movq  xmm0, xmm(lhs);
-                        subsd xmm0, xmm(ret);
-                        movq  xmm(ret), xmm0;
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        subsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Mul => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        mulsd xmm(ret), xmm(lhs);
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        mulsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
-            BinOpK::Div => {
-                if ret == rhs {
-                    monoasm!( &mut self.jit,
-                        movq  xmm0, xmm(lhs);
-                        divsd xmm0, xmm(ret);
-                        movq  xmm(ret), xmm0;
-                    );
-                } else {
-                    self.xmm_mov(l, dst);
-                    monoasm!( &mut self.jit,
-                        divsd xmm(ret), xmm(rhs);
-                    );
-                }
-            }
+            BinOpK::Add => monoasm!( &mut self.jit, addsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Sub => monoasm!( &mut self.jit, subsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Mul => monoasm!( &mut self.jit, mulsd xmm(work), xmm(rhs_phys); ),
+            BinOpK::Div => monoasm!( &mut self.jit, divsd xmm(work), xmm(rhs_phys); ),
             _ => unreachable!(),
+        }
+
+        // Step 5: store-back if `dst` was spilled.
+        if let Some(off) = dst_spill_off {
+            monoasm!( &mut self.jit,
+                movq [rbp - (off)], xmm(work);
+            );
         }
     }
 }
 
+///
+/// Location where a `VirtFPReg`'s value lives at code-generation
+/// time. `Phys(N)` means physical `xmm{N}` directly usable in
+/// `monoasm! { ... xmm(N) ... }`; `Spill(off)` means the 8-byte slot
+/// at `[rbp - off]`. Spill-aware codegen lowerings build per-operand
+/// asm based on this — for instance an `addsd xmm, mem` form when
+/// the rhs operand is spilled, instead of forcing a scratch load.
+///
+#[derive(Debug, Clone, Copy)]
+pub(super) enum XmmLoc {
+    Phys(u64),
+    #[allow(dead_code)]
+    Spill(i32),
+}
+
+pub(super) fn xmm_loc(virt: VirtFPReg, base_stack_offset: usize) -> XmmLoc {
+    let pool = super::super::super::state::PHYS_XMM_POOL;
+    if virt.0 < pool {
+        XmmLoc::Phys(virt.0 as u64 + 2)
+    } else {
+        let n = virt.0 - pool;
+        let off = (base_stack_offset as i32) - 24 + 8 * (n as i32);
+        XmmLoc::Spill(off)
+    }
+}
+
+///
+/// Location where a `VirtFPReg`'s value lives at code-generation
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {

@@ -1673,11 +1673,11 @@ impl AsmInst {
     pub(super) fn xmm_operands_mut(&mut self) -> Vec<&mut VirtFPReg> {
         match self {
             Self::XmmMove(a, b) | Self::XmmSwap(a, b) => vec![a, b],
-            Self::XmmBinOp {
-                binary_xmm: (l, r),
-                dst,
-                ..
-            } => vec![l, r, dst],
+            // XmmBinOp resolves spilled operands itself in
+            // `Codegen::float_binop` (using x86 memory operands and
+            // a dedicated scratch path), so its operands stay raw
+            // through `expand_spills`.
+            Self::XmmBinOp { .. } => vec![],
             Self::XmmUnOp { dst, .. } => vec![dst],
             Self::F64ToXmm(_, x) => vec![x],
             Self::I64ToBoth(_, _, x) => vec![x],

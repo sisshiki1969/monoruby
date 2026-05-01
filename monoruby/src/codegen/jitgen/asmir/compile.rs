@@ -186,7 +186,7 @@ impl Codegen {
                 kind,
                 binary_xmm,
                 dst,
-            } => self.float_binop(kind, dst, binary_xmm),
+            } => self.float_binop(kind, dst, binary_xmm, frame.base_stack_offset),
             AsmInst::XmmUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
