@@ -4,8 +4,7 @@ use super::*;
 /// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
 /// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
 /// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
-// STRESS: 2.
-pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 2;
+pub(in crate::codegen::jitgen) const PHYS_XMM_POOL: usize = 14;
 
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
