@@ -8,6 +8,7 @@ mod slot;
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 use slot::SfGuarded;
+pub(in crate::codegen::jitgen) use slot::PHYS_XMM_POOL;
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]

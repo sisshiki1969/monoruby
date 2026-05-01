@@ -26,6 +26,49 @@ pub(super) struct FrameSizes {
     pub(super) base: usize,
 }
 
+///
+/// Walk every `AsmIr` reachable from `asm_info` (main inst stream,
+/// inline / outline bridges, and recursively the
+/// `specialized_methods`) and return the maximum `VirtFPReg.0` seen
+/// in any `xmm` operand. `None` if no `VirtFPReg` is referenced.
+///
+pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
+    let mut max: Option<usize> = None;
+    let mut bump = |id: usize| {
+        max = Some(match max {
+            Some(m) if m >= id => m,
+            _ => id,
+        });
+    };
+    for (_, ir) in &asm_info.ir {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for (ir, _, _) in &asm_info.outline_bridges {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for (ir, _) in asm_info.inline_bridges.values() {
+        for inst in ir.inst_iter() {
+            for v in inst.xmm_operands() {
+                bump(v.0);
+            }
+        }
+    }
+    for SpecializeInfo { info, .. } in &asm_info.specialized_methods {
+        if let Some(id) = max_virt_fpreg_id(info) {
+            bump(id);
+        }
+    }
+    max
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
@@ -649,6 +692,18 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         let mut frame = self.stack_frame.pop().unwrap();
+        // Grow `stack_offset` by the JIT-owned spill region — every
+        // `VirtFPReg(N)` with `N >= PHYS_XMM_POOL` claims 8 bytes
+        // at the top of the frame's local area. Walk the
+        // freshly-finalised AsmIr to find the max id used; this
+        // works regardless of which `AbstractFrame` branch produced
+        // the alloc (the per-state allocator counter is local to
+        // each branch, but the resulting AsmInst is committed once
+        // and we can find the same value by scanning).
+        let spill_count = max_virt_fpreg_id(&frame.asm_info)
+            .map(|m| (m + 1).saturating_sub(super::state::PHYS_XMM_POOL))
+            .unwrap_or(0);
+        frame.stack_offset += spill_count * 8;
         // Record the finalised frame sizes for the resolve pass.
         // After this point, `frame.stack_offset` will not be modified
         // (the `+=`/`-=` adjustments inside `specialized_compile`

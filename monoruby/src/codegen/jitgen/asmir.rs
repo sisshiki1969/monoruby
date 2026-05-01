@@ -109,6 +109,10 @@ impl AsmIr {
         self.inst.iter_mut()
     }
 
+    pub(super) fn inst_iter(&self) -> std::slice::Iter<'_, AsmInst> {
+        self.inst.iter()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.inst.is_empty()
     }
@@ -1597,6 +1601,36 @@ pub(super) enum AsmInst {
 }
 
 impl AsmInst {
+    ///
+    /// Enumerate every `VirtFPReg` operand referenced by this
+    /// instruction (in any role — read, write, or read-write).
+    /// Used by `pop_frame` to compute the frame's max
+    /// `VirtFPReg` id (and thus the stack-spill region size) and
+    /// — once Phase 2's codegen-side spill expansion lands — to
+    /// detect operands that need swap-load-swap-store.
+    ///
+    pub(super) fn xmm_operands(&self) -> Vec<VirtFPReg> {
+        match self {
+            Self::XmmMove(a, b) | Self::XmmSwap(a, b) => vec![*a, *b],
+            Self::XmmBinOp {
+                binary_xmm: (l, r),
+                dst,
+                ..
+            } => vec![*l, *r, *dst],
+            Self::XmmUnOp { dst, .. } => vec![*dst],
+            Self::F64ToXmm(_, x) => vec![*x],
+            Self::I64ToBoth(_, _, x) => vec![*x],
+            Self::XmmToStack(x, _) => vec![*x],
+            Self::FixnumToXmm(_, x) => vec![*x],
+            Self::FloatToXmm(_, x, _) => vec![*x],
+            Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
+            Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
+            Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::FloatCmpBr { lhs, rhs, .. } => vec![*lhs, *rhs],
+            _ => vec![],
+        }
+    }
+
     #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
     #[allow(dead_code)]
