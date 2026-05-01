@@ -1,0 +1,1 @@
+cargo install --path monoruby && monoruby ../doom/bin/doom

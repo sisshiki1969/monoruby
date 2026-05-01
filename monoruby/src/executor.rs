@@ -1,3 +1,5 @@
+use crate::codegen::runtime::_dump_stacktrace;
+
 use super::*;
 
 pub mod coerce;
@@ -32,9 +34,8 @@ where
 {
     let vm_ptr = vm as *mut Executor;
     let globals_ptr = globals as *mut Globals;
-    let closure = std::panic::AssertUnwindSafe(move || unsafe {
-        f(&mut *vm_ptr, &mut *globals_ptr)
-    });
+    let closure =
+        std::panic::AssertUnwindSafe(move || unsafe { f(&mut *vm_ptr, &mut *globals_ptr) });
     match std::panic::catch_unwind(closure) {
         Ok(r) => Some(r),
         Err(payload) => {
@@ -53,6 +54,7 @@ where
                 "rust panic caught at extern \"C\" boundary in {}: {}",
                 site, msg
             )));
+            _dump_stacktrace(vm, globals);
             None
         }
     }
@@ -703,8 +705,7 @@ impl Executor {
             {
                 check_constant_visibility(globals, defining, constant)?;
             }
-            let (val, _) =
-                self.get_constant_superclass_with_class(globals, module, constant)?;
+            let (val, _) = self.get_constant_superclass_with_class(globals, module, constant)?;
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
         let module = globals[parent].get_module();
@@ -745,7 +746,8 @@ impl Executor {
             // runtime context is the receiver but the lexical scope is the
             // block's enclosing scope. Mirror `find_constant` / `def`'s use
             // of the iseq-recorded lexical context.
-            self.definition_func_id(globals).lexical_class(&globals.store)
+            self.definition_func_id(globals)
+                .lexical_class(&globals.store)
         } else {
             let parent = prefix.remove(0);
             let current_func = self.method_func_id();
@@ -763,7 +765,11 @@ impl Executor {
         // `rb_const_set_visibility`: the same wording (and same `$stderr`
         // delivery) used by `Module#const_set` so mspec's `complain`
         // matcher catches both code-paths.
-        if globals.store.get_constant_noautoload(parent, name).is_some() {
+        if globals
+            .store
+            .get_constant_noautoload(parent, name)
+            .is_some()
+        {
             let parent_name = globals.store[parent]
                 .get_name()
                 .unwrap_or_default()

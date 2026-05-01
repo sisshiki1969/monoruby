@@ -38,14 +38,14 @@ extern "C" fn vm_check_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
-) -> Value {
+) -> Option<Value> {
     crate::executor::catch_panic_extern_c(vm, globals, "vm_check_constant", |vm, globals| {
         if let Some(cache) = &globals.store[site_id].cache {
             let base_class = globals.store[site_id]
                 .base
                 .map(|base| unsafe { vm.get_slot(base) }.unwrap());
             if cache.version == const_version && cache.base_class == base_class {
-                return cache.value;
+                return Some(cache.value);
             };
         }
         match vm.find_constant(globals, site_id) {
@@ -55,12 +55,12 @@ extern "C" fn vm_check_constant(
                     base_class,
                     value,
                 });
-                value
+                Some(value)
             }
-            Err(_) => Value::nil(),
+            Err(_) => Some(Value::nil()),
         }
     })
-    .unwrap_or_else(Value::nil)
+    .unwrap_or(None)
 }
 
 impl Codegen {
@@ -107,6 +107,7 @@ impl Codegen {
             movq rax, (vm_check_constant);
             call rax;
         };
+        self.vm_handle_error();
         monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };

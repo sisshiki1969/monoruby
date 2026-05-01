@@ -16,14 +16,17 @@ pub(super) extern "C" fn find_method(
     callid: CallSiteId,
     recv: Value,
 ) -> Option<FuncId> {
-    if let Some(func_name) = globals[callid].name {
-        let is_func_call = globals[callid].is_func_call();
-        vm.find_method(globals, recv, func_name, is_func_call)
-    } else {
-        find_super(vm, globals)
-    }
-    .map_err(|err| vm.set_error(err))
-    .ok()
+    catch_panic_extern_c(vm, globals, "find_method", |vm, globals| {
+        if let Some(func_name) = globals[callid].name {
+            let is_func_call = globals[callid].is_func_call();
+            vm.find_method(globals, recv, func_name, is_func_call)
+        } else {
+            find_super(vm, globals)
+        }
+        .map_err(|err| vm.set_error(err))
+        .ok()
+    })
+    .unwrap_or(None)
 }
 
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
