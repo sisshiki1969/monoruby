@@ -1681,10 +1681,10 @@ impl AsmInst {
             | Self::XmmBinOp { .. }
             | Self::F64ToXmm(_, _)
             | Self::FixnumToXmm(_, _)
-            | Self::FloatToXmm(_, _, _) => vec![],
+            | Self::FloatToXmm(_, _, _)
+            | Self::XmmToStack(_, _) => vec![],
             Self::XmmUnOp { dst, .. } => vec![dst],
             Self::I64ToBoth(_, _, x) => vec![x],
-            Self::XmmToStack(x, _) => vec![x],
             Self::CFunc_F_F { src, dst, .. } => vec![src, dst],
             Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![lhs, rhs, dst],
             Self::FloatCmp { lhs, rhs, .. } => vec![lhs, rhs],
@@ -1790,11 +1790,12 @@ impl Codegen {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+        let base = frame.base_stack_offset;
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes);
+                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes, base);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -1803,14 +1804,20 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(pc, &t.1, label.clone(), loop_jit_spill_bytes);
+                        self.gen_deopt_with_label(
+                            pc,
+                            &t.1,
+                            label.clone(),
+                            loop_jit_spill_bytes,
+                            base,
+                        );
                         deopt_table.insert(t, label.clone());
                         label
                     }
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.gen_handle_error(pc, wb, label.clone());
+                    self.gen_handle_error(pc, wb, label.clone(), base);
                     label
                 }
                 _ => unreachable!("unexpected {side_exit:?}"),

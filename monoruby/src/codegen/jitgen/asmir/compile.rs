@@ -270,7 +270,9 @@ impl Codegen {
                     movq xmm(x.enc()), [rip + f];
                 }
             }
-            AsmInst::XmmToStack(x, slots) => self.xmm_to_stack(x, &[slots]),
+            AsmInst::XmmToStack(x, slots) => {
+                self.xmm_to_stack(x, &[slots], frame.base_stack_offset);
+            }
             AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
@@ -347,11 +349,11 @@ impl Codegen {
             AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
             AsmInst::ExecGc { write_back, error } => {
                 let error = &labels[error];
-                self.jit_execute_gc(&write_back, error)
+                self.jit_execute_gc(&write_back, error, frame.base_stack_offset)
             }
             AsmInst::CheckStack { write_back, error } => {
                 let error = &labels[error];
-                self.jit_check_stack(&write_back, error);
+                self.jit_check_stack(&write_back, error, frame.base_stack_offset);
             }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();

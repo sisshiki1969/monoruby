@@ -541,7 +541,10 @@ impl JitModule {
     }
 
     ///
-    /// Convert xmm to stack slots *v*.
+    /// Convert xmm to stack slots *v*. Spill-aware: when *xmm* is
+    /// pool-resident the value is moved into xmm0 directly; when it
+    /// is spilled it is loaded from `[rbp - spill_off]` into xmm0
+    /// before the call to f64_to_val.
     ///
     /// ### out
     /// - rax: Value
@@ -549,15 +552,15 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
-    fn xmm_to_stack(&mut self, xmm: VirtFPReg, v: &[SlotId]) {
+    fn xmm_to_stack(&mut self, xmm: VirtFPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", xmm, v);
+        self.load_xmm_into_xmm0(xmm, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(xmm.enc());
             call f64_to_val;
         );
         for reg in v {
@@ -565,21 +568,43 @@ impl JitModule {
         }
     }
 
-    fn xmm_to_stack2(&mut self, xmm: VirtFPReg, v: &[SlotId]) {
+    fn xmm_to_stack2(&mut self, xmm: VirtFPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("      wb: {:?}->{:?}", xmm, v);
+        self.load_xmm_into_xmm0(xmm, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
-            movq xmm0, xmm(xmm.enc());
             call f64_to_val;
         );
         for reg in v {
             monoasm! { &mut self.jit,
                 movq [r14 - (conv(*reg))], rax;
             }
+        }
+    }
+
+    ///
+    /// Move a `VirtFPReg` value into xmm0, choosing the cheapest
+    /// instruction based on whether the operand is in the phys pool
+    /// or a spill slot. Used by call-trampoline preludes (xmm_to_stack
+    /// and CFunc_*) where the helper expects its argument in xmm0.
+    ///
+    fn load_xmm_into_xmm0(&mut self, xmm: VirtFPReg, base: usize) {
+        let pool = state::PHYS_XMM_POOL;
+        if xmm.0 < pool {
+            let p = xmm.0 as u64 + 2;
+            monoasm!( &mut self.jit,
+                movq xmm0, xmm(p);
+            );
+        } else {
+            let n = xmm.0 - pool;
+            let off = (base as i32) - 24 + 8 * (n as i32);
+            monoasm!( &mut self.jit,
+                movq xmm0, [rbp - (off)];
+            );
         }
     }
 
@@ -663,9 +688,9 @@ impl JitModule {
     ///
     /// - rax, rcx
     ///
-    pub(super) fn gen_write_back(&mut self, wb: &WriteBack) {
+    pub(super) fn gen_write_back(&mut self, wb: &WriteBack, base: usize) {
         for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack(*xmm, v);
+            self.xmm_to_stack(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, (*v).into());
@@ -691,9 +716,9 @@ impl JitModule {
     ///
     /// - rax, rcx
     ///
-    pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack) {
+    pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
         for (xmm, v) in &wb.xmm {
-            self.xmm_to_stack2(*xmm, v);
+            self.xmm_to_stack2(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, (*v).into());
@@ -710,14 +735,14 @@ impl JitModule {
 }
 
 impl Codegen {
-    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel) {
+    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         monoasm!( &mut self.jit,
         entry:
         );
-        self.gen_write_back_for_deopt(&wb);
+        self.gen_write_back_for_deopt(&wb, base);
         monoasm!( &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
             jmp  raise;
@@ -737,8 +762,9 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
+        base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, loop_jit_spill_bytes)
+        self.side_exit_with_label(pc, wb, entry, false, loop_jit_spill_bytes, base)
     }
 
     ///
@@ -750,8 +776,9 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
+        base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, true, loop_jit_spill_bytes)
+        self.side_exit_with_label(pc, wb, entry, true, loop_jit_spill_bytes, base)
     }
 
     ///
@@ -767,6 +794,7 @@ impl Codegen {
         entry: DestLabel,
         _is_evict: bool,
         loop_jit_spill_bytes: usize,
+        base: usize,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -782,7 +810,7 @@ impl Codegen {
                 addq rsp, (loop_jit_spill_bytes as i32);
             );
         }
-        self.gen_write_back_for_deopt(wb);
+        self.gen_write_back_for_deopt(wb, base);
         monoasm!( &mut self.jit,
             movq r13, (pc.as_ptr());
         );
