@@ -729,7 +729,12 @@ impl<'a> JitContext<'a> {
         let spill_count = max_virt_fpreg_id(&frame.asm_info)
             .map(|m| (m + 1).saturating_sub(super::state::PHYS_XMM_POOL))
             .unwrap_or(0);
-        frame.stack_offset += spill_count * 8;
+        // Each spill slot is 8 bytes; round the spill region up to a
+        // 16-byte multiple so that any external `call` (e.g. into
+        // Rust runtime helpers that emit movapd) keeps a 16-byte
+        // aligned rsp under the SysV x86-64 ABI.
+        let spill_bytes = (spill_count * 8 + 15) & !15;
+        frame.stack_offset += spill_bytes;
         // Record the finalised frame sizes for the resolve pass.
         // After this point, `frame.stack_offset` will not be modified
         // (the `+=`/`-=` adjustments inside `specialized_compile`

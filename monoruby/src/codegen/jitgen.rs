@@ -499,12 +499,40 @@ impl JitModule {
     ///
     /// swap xmm(*l*) and xmm(*r*).
     ///
+    /// `l` / `r` may have been rewritten by `expand_spills` into
+    /// scratch markers (`SCRATCH_XMM_0` = xmm0, `SCRATCH_XMM_1` =
+    /// xmm1). Picking xmm0 unconditionally as the swap-temporary
+    /// would clobber the operand when it _is_ xmm0; in the
+    /// (rare) case where both operands land in xmm0/xmm1 we fall
+    /// back to a stack-resident scratch slot in the red zone.
+    ///
     fn xmm_swap(&mut self, l: VirtFPReg, r: VirtFPReg) {
-        monoasm!( &mut self.jit,
-            movq  xmm0, xmm(l.enc());
-            movq  xmm(l.enc()), xmm(r.enc());
-            movq  xmm(r.enc()), xmm0;
-        );
+        let l_enc = l.enc();
+        let r_enc = r.enc();
+        if l_enc == r_enc {
+            return;
+        }
+        if l_enc != 0 && r_enc != 0 {
+            monoasm!( &mut self.jit,
+                movq xmm0, xmm(l_enc);
+                movq xmm(l_enc), xmm(r_enc);
+                movq xmm(r_enc), xmm0;
+            );
+        } else if l_enc != 1 && r_enc != 1 {
+            monoasm!( &mut self.jit,
+                movq xmm1, xmm(l_enc);
+                movq xmm(l_enc), xmm(r_enc);
+                movq xmm(r_enc), xmm1;
+            );
+        } else {
+            // Both operands occupy xmm0 / xmm1; use a red-zone
+            // memory slot as the swap temporary.
+            monoasm!( &mut self.jit,
+                movq [rsp - 8], xmm(l_enc);
+                movq xmm(l_enc), xmm(r_enc);
+                movq xmm(r_enc), [rsp - 8];
+            );
+        }
     }
 
     pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
