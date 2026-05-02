@@ -113,6 +113,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "grep_v", grep_v, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
@@ -2573,6 +2574,46 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             while i < self_val.as_array().len() {
                 let v = self_val.as_array()[i];
                 if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    let mapped = vm.invoke_block(globals, &bh, &[v])?;
+                    res.push(mapped);
+                }
+                i += 1;
+            }
+            res
+        }
+    };
+    Ok(Value::array_from_vec(ary))
+}
+
+/// #### Enumerable#grep_v
+///
+/// - grep_v(pattern) -> [object]
+/// - grep_v(pattern) {|item| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep_v.html]
+#[monoruby_builtin]
+fn grep_v(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let ary: Vec<_> = match lfp.block() {
+        None => {
+            let mut res = vec![];
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if !cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                    res.push(v)
+                }
+                i += 1;
+            }
+            res
+        }
+        Some(bh) => {
+            let bh = vm.get_block_data(globals, bh)?;
+            let mut res = vec![];
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let v = self_val.as_array()[i];
+                if !cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
                     let mapped = vm.invoke_block(globals, &bh, &[v])?;
                     res.push(mapped);
                 }

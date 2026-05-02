@@ -57,6 +57,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "divide", divide, 0);
     globals.define_builtin_func(SET_CLASS, "reset", reset, 0);
     globals.define_builtin_func(SET_CLASS, "hash", set_hash, 0);
+    globals.define_builtin_func(SET_CLASS, "compare_by_identity", set_compare_by_identity, 0);
 }
 
 /// Create a new empty Set (a Hash with class SET_CLASS).
@@ -1319,6 +1320,17 @@ fn set_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         combined ^= hasher.finish();
     }
     Ok(Value::integer(combined as i64))
+}
+
+#[monoruby_builtin]
+fn set_compare_by_identity(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().as_hash().compare_by_identity(vm, globals)?;
+    Ok(lfp.self_val())
 }
 
 #[cfg(test)]
