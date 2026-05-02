@@ -260,6 +260,10 @@ pub struct ArgList {
     pub delegate_block: bool,
     /// has splat argument
     pub splat: bool,
+    /// true when the ArgList was produced from a bare block (`{ ... }`)
+    /// with no positional or keyword arguments and no parentheses.
+    /// Used by `super { block }` to distinguish from `super() { block }`.
+    pub bare_block: bool,
 }
 
 impl ArgList {
@@ -283,6 +287,7 @@ impl ArgList {
             forwarding: false,
             delegate_block: false,
             splat: false,
+            bare_block: false,
         }
     }
 
@@ -295,6 +300,7 @@ impl ArgList {
             forwarding: false,
             delegate_block: false,
             splat: false,
+            bare_block: true,
         }
     }
 }

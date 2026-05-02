@@ -22,7 +22,13 @@ impl<'a> BytecodeGen<'a> {
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSite> {
-        if let Some(arglist) = arglist {
+        if let Some(mut arglist) = arglist {
+            if arglist.bare_block && arglist.block.is_some() {
+                // `super { block }` — forward all positional/keyword args
+                // from the enclosing method but use the explicit block.
+                let block_node = *arglist.block.take().unwrap();
+                return self.handle_super_forward_with_block(block_node, dst, loc);
+            }
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)
         } else {
             Ok(self.handle_super_forward(dst, loc))
@@ -210,6 +216,89 @@ impl<'a> BytecodeGen<'a> {
             dst,
             true,
         )
+    }
+
+    fn handle_super_forward_with_block(
+        &mut self,
+        block_node: Node,
+        dst: Option<BcReg>,
+        loc: Loc,
+    ) -> Result<CallSite> {
+        let (_, mother_args, outer) = self.mother.clone();
+        let pos_len = mother_args.total_positional_args();
+        let splat_pos = if let Some(rest_pos) = mother_args.is_rest() {
+            vec![rest_pos as usize]
+        } else {
+            vec![]
+        };
+        let pos_start = if outer == 0 {
+            BcLocal(0).into()
+        } else {
+            let args = self.sp().into();
+            for i in 0..pos_len {
+                let dst = self.push().into();
+                let src = BcLocal(i as _).into();
+                self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
+            }
+            args
+        };
+        let kw_list = &mother_args.kw_names;
+        let kw = if kw_list.is_empty() && mother_args.kw_rest.is_none() {
+            None
+        } else {
+            let kw_start = if outer == 0 {
+                BcLocal(pos_len as u16).into()
+            } else {
+                self.sp().into()
+            };
+
+            let mut kw_args = indexmap::IndexMap::<IdentId, usize>::default();
+            for (i, name) in kw_list.iter().enumerate() {
+                kw_args.insert(*name, i);
+                if outer != 0 {
+                    let dst = self.push().into();
+                    let src = BcLocal((pos_len + i) as u16).into();
+                    self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
+                }
+            }
+
+            let hash_splat_pos = if let Some(kw_rest) = mother_args.kw_rest {
+                let kw_rest = if outer == 0 {
+                    BcLocal(kw_rest.0 - 1).into()
+                } else {
+                    self.load_dynvar(kw_rest, outer, loc)
+                };
+                vec![kw_rest]
+            } else {
+                vec![]
+            };
+            Some(KeywordArgs {
+                kw_start,
+                kw_args,
+                hash_splat_pos,
+            })
+        };
+
+        let block_arg = self.sp().into();
+        let block_fid = self.block_arg(block_node, loc)?;
+        let block_arg = if block_arg == self.sp().into() {
+            None
+        } else {
+            Some(block_arg)
+        };
+
+        Ok(CallSite::new(
+            None,
+            pos_len,
+            kw,
+            splat_pos,
+            block_fid,
+            block_arg,
+            pos_start,
+            BcReg::Self_,
+            dst,
+            true,
+        ))
     }
 
     fn load_dynvar(&mut self, slot_id: SlotId, outer: usize, loc: Loc) -> BcReg {
