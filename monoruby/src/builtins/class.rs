@@ -314,7 +314,6 @@ pub(super) fn gen_class_new_inline(
         dst,
         ..
     } = *callsite;
-    state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
     let using_xmm = state.get_using_xmm();

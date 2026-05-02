@@ -1733,7 +1733,6 @@ pub fn object_send(
     }
 
     state.write_back_recv_and_callargs(ir, callsite);
-    state.writeback_acc(ir);
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     let callid = callsite.id;

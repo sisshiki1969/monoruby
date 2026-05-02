@@ -10,7 +10,6 @@ pub(crate) struct SlotState {
     /// xmm2..xmm15; indices >= 14 are spilled (live on stack — at use
     /// time the codegen swaps them with a scratch xmm).
     vfpr: Vec<Vec<SlotId>>,
-    r15: Option<SlotId>,
     local_num: usize,
     /// xmm registers that must not be reused by `alloc_xmm` /
     /// `try_alloc_xmm_demote`. Used by callers that have just produced
@@ -42,7 +41,6 @@ impl SlotState {
             slots: vec![default; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             vfpr: (0..PHYS_XMM_POOL).map(|_| vec![]).collect(),
-            r15: None,
             local_num,
             pinned_vfpr: Vec::new(),
         };
@@ -97,10 +95,6 @@ impl SlotState {
         self.slots.len()
     }
 
-    pub(super) fn no_r15(&self) -> bool {
-        self.r15.is_none()
-    }
-
     pub(super) fn equiv(&self, other: &Self) -> bool {
         assert_eq!(self.slots.len(), other.slots.len());
         self.slots
@@ -134,7 +128,7 @@ impl SlotState {
                         self.set_Sf(slot, x, SfGuarded::Float);
                     }
                 }
-                LinkMode::G(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                     unreachable!("use_float {:?}", self.mode(slot));
                 }
             };
@@ -332,10 +326,6 @@ impl SlotState {
             LinkMode::Sf(xmm, _) | LinkMode::F(xmm) => {
                 assert!(self.xmm(xmm).contains(&slot));
                 self.xmm_remove(slot, xmm);
-            }
-            LinkMode::G(_) => {
-                assert_eq!(self.r15, Some(slot));
-                self.r15 = None;
             }
             LinkMode::C(_) => {}
             LinkMode::S(_) => {}
@@ -552,23 +542,6 @@ impl SlotState {
     }
 
     ///
-    /// Link *slot* to the accumulator.
-    ///
-    #[allow(non_snake_case)]
-    pub(crate) fn def_G(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: impl Into<Option<SlotId>>,
-        guarded: Guarded,
-    ) {
-        if let Some(slot) = slot.into() {
-            self.discard(slot);
-            self.writeback_acc(ir);
-            self.set_mode(slot, LinkMode::G(guarded));
-            self.r15 = Some(slot);
-        }
-    }
-
     // APIs for 'use'
 
     /// used as f64 with no conversion
@@ -598,13 +571,6 @@ impl SlotState {
             LinkMode::C(v) => {
                 ir.lit2stack(v.into(), slot);
             }
-            LinkMode::G(guarded) => {
-                // G -> S
-                ir.acc2stack(slot);
-                assert_eq!(self.r15, Some(slot));
-                self.r15 = None;
-                self.set_mode(slot, LinkMode::S(guarded));
-            }
             LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => {}
             LinkMode::V | LinkMode::None => {
                 eprintln!("{:?}", self);
@@ -629,9 +595,6 @@ impl SlotState {
             }
             LinkMode::C(v) => {
                 ir.lit2stack(v.into(), slot);
-            }
-            LinkMode::G(_) => {
-                ir.acc2stack(slot);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {}
             LinkMode::V => {
@@ -817,41 +780,16 @@ impl SlotState {
         }
     }
 
-    pub(super) fn on_reg(&self, slot: SlotId) -> Option<GP> {
-        if self.is_r15(slot) {
-            Some(GP::R15)
-        } else {
-            None
-        }
+    pub(super) fn on_reg(&self, _slot: SlotId) -> Option<GP> {
+        None
     }
 
-    pub(in crate::codegen::jitgen) fn on_reg_or(&self, slot: SlotId, optb: GP) -> GP {
-        if self.is_r15(slot) { GP::R15 } else { optb }
-    }
-
-    ///
-    ///
-    /// Write back acc(`r15``) to the stack slot.
-    ///
-    /// The slot is set to LinkMode::Stack.
-    ///
-    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.r15 {
-            let guarded = self.guarded(slot);
-            self.set_mode(slot, LinkMode::S(guarded));
-            self.r15 = None;
-            ir.acc2stack(slot);
-        }
-        assert!(!self.slots.iter().any(|link| matches!(link, LinkMode::G(_))));
-        assert!(self.r15.is_none());
+    pub(in crate::codegen::jitgen) fn on_reg_or(&self, _slot: SlotId, optb: GP) -> GP {
+        optb
     }
 
     fn is_xmm_vacant(&self, xmm: FPReg) -> bool {
         self.xmm(xmm).is_empty()
-    }
-
-    fn is_r15(&self, slot: SlotId) -> bool {
-        self.r15 == Some(slot)
     }
 }
 
@@ -890,11 +828,6 @@ impl SlotState {
             LinkMode::C(v) => {
                 self.def_C(dst, v);
             }
-            LinkMode::G(guarded) => {
-                ir.reg2stack(GP::R15, src);
-                self.set_S_with_guard(src, guarded);
-                self.def_G(ir, dst, guarded)
-            }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("copy_slot() {:?} {:?}: {:?}", src, self.mode(src), self);
             }
@@ -925,7 +858,7 @@ impl AbstractFrame {
         }
         let class_guarded = Guarded::from_class(class);
         match &mut self.slots[slot.0 as usize] {
-            LinkMode::S(guarded) | LinkMode::G(guarded) => {
+            LinkMode::S(guarded) => {
                 if class_guarded == *guarded {
                     return;
                 } else if *guarded == Guarded::Value {
@@ -1003,18 +936,14 @@ impl AbstractFrame {
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        WriteBack::new(vec![], literal, self.r15, void)
+        WriteBack::new(vec![], literal, void)
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let xmm = self.wb_xmm(f);
         let literal = self.wb_literal(f);
-        let r15 = match self.r15 {
-            Some(slot) if f(slot) => Some(slot),
-            _ => None,
-        };
-        WriteBack::new(xmm, literal, r15, vec![])
+        WriteBack::new(xmm, literal, vec![])
     }
 
     fn xmm_swap(&mut self, l: FPReg, r: FPReg) {
@@ -1073,7 +1002,6 @@ impl AbstractFrame {
             }
             LinkMode::S(_)
             | LinkMode::C(_)
-            | LinkMode::G(_)
             | LinkMode::V
             | LinkMode::MaybeNone
             | LinkMode::None => {}
@@ -1171,10 +1099,6 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     S(Guarded),
     ///
-    /// On the general-purpose register (r15).
-    ///
-    G(Guarded),
-    ///
     /// On the floating point register (xmm).
     ///
     /// mutation of the corresponding FPR lazily affects the stack slot.
@@ -1205,7 +1129,7 @@ impl LinkMode {
 
     fn guarded(&self) -> Guarded {
         match self {
-            LinkMode::S(guarded) | LinkMode::G(guarded) => *guarded,
+            LinkMode::S(guarded) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value((*v).into()),
@@ -1410,7 +1334,7 @@ impl AbstractFrame {
                     self.to_sf(ir, slot, l, r, guarded);
                 }
             }
-            (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
+            (LinkMode::F(_), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
             }
             (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
@@ -1432,18 +1356,6 @@ impl AbstractFrame {
                 } else {
                     let tmp = self.set_new_Sf(slot, SfGuarded::Float);
                     ir.float_to_fpr(GP::Rax, tmp, deopt);
-                    self.gen_xmm_swap(ir, x, tmp);
-                }
-            }
-            (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
-                // G -> Sf
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
-                if self.is_xmm_vacant(x) {
-                    ir.float_to_fpr(GP::R15, x, deopt);
-                    self.set_Sf_float(slot, x);
-                } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
-                    ir.float_to_fpr(GP::R15, tmp, deopt);
                     self.gen_xmm_swap(ir, x, tmp);
                 }
             }

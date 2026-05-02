@@ -259,8 +259,9 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            self.def_G(ir, dst, guarded);
-            ir.push(AsmInst::RegToAcc(src));
+            self.discard(dst);
+            ir.reg2stack(src, dst);
+            self.set_S_with_guard(dst, guarded);
         }
     }
 
