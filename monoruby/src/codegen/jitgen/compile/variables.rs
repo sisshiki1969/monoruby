@@ -11,7 +11,6 @@ impl<'a> JitContext<'a> {
     ) {
         assert!(!self_class.is_always_frozen());
         state.discard(dst);
-        state.writeback_acc(ir);
         ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {

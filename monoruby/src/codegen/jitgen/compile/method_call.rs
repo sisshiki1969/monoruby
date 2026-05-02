@@ -340,7 +340,6 @@ impl<'a> JitContext<'a> {
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
-        state.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -374,7 +373,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if recv_class.is_always_frozen() {
             if dst.is_some() {
                 ir.lit2reg(Value::nil(), GP::Rax);
@@ -474,7 +472,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if inline {
             ir.push(AsmInst::LoadStructSlotInline { slot_index });
         } else {
@@ -714,7 +711,6 @@ impl AbstractState {
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -758,7 +754,6 @@ impl AbstractState {
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -779,7 +774,6 @@ impl AbstractState {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
-        self.writeback_acc(ir);
         let using_xmm = self.get_using_xmm();
         let error = ir.new_error(self);
         let evict = ir.new_evict();

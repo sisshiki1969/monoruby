@@ -113,16 +113,15 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 }
 
 ///
-/// The struct holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
+/// The struct holds information for writing back Value's in xmm registers to the corresponding stack slots.
 ///
-/// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
+/// Currently supports `literal`s and `xmm` registers.
 ///
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     fpr: Vec<(FPReg, Vec<SlotId>)>,
     literal: Vec<(Immediate, SlotId)>,
     void: Vec<SlotId>,
-    r15: Option<SlotId>,
 }
 
 impl Hash for WriteBack {
@@ -138,9 +137,6 @@ impl Hash for WriteBack {
             slot.hash(state);
         }
         for slot in &self.void {
-            slot.hash(state);
-        }
-        if let Some(slot) = self.r15 {
             slot.hash(state);
         }
     }
@@ -161,9 +157,6 @@ impl std::fmt::Debug for WriteBack {
         for slot in &self.void {
             s.push_str(&format!(" nil->{:?}", slot));
         }
-        if let Some(slot) = self.r15 {
-            s.push_str(&format!(" R15->{:?}", slot));
-        }
         write!(f, "WriteBack({})", s)
     }
 }
@@ -172,15 +165,9 @@ impl WriteBack {
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Immediate, SlotId)>,
-        r15: Option<SlotId>,
         void: Vec<SlotId>,
     ) -> Self {
-        Self {
-            fpr,
-            literal,
-            r15,
-            void,
-        }
+        Self { fpr, literal, void }
     }
 }
 
@@ -731,11 +718,6 @@ impl JitModule {
         for slot in &wb.void {
             self.literal_to_stack(*slot, Value::nil());
         }
-        if let Some(slot) = wb.r15 {
-            monoasm! { self,
-                movq [rbp - (rbp_local(slot))], r15;
-            }
-        }
     }
 
     ///
@@ -758,11 +740,6 @@ impl JitModule {
         }
         for slot in &wb.void {
             self.literal_to_stack2(*slot, Value::nil());
-        }
-        if let Some(slot) = wb.r15 {
-            monoasm! { self,
-                movq [r14 - (conv(slot))], r15;
-            }
         }
     }
 }

@@ -95,21 +95,10 @@ impl Codegen {
                 let label = frame.resolve_label(&mut self.jit, label);
                 self.jit.bind_label(label);
             }
-            AsmInst::AccToStack(slot) => {
-                self.store_r15(slot);
-            }
-            AsmInst::RegToAcc(r) => {
-                if r != GP::R15 {
-                    let r = r as u64;
-                    monoasm!( &mut self.jit,
-                        movq r15, R(r);
-                    );
-                }
-            }
             AsmInst::RegToStack(r, slot) => {
                 let r = r as u64;
                 monoasm!( &mut self.jit,
-                    movq [rbp - (rbp_local(slot))], R(r);
+                    movq [r14 - (conv(slot))], R(r);
                 );
             }
             AsmInst::StackToReg(slot, r) => {

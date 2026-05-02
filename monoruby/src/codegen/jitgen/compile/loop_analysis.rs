@@ -73,14 +73,6 @@ impl<'a> JitContext<'a> {
                 }
             }
         }
-        if let Some(backedge) = &mut backedge {
-            for i in backedge.all_regs() {
-                if let LinkMode::G(_) = backedge.mode(i) {
-                    let g = backedge.guarded(i);
-                    backedge.set_S_with_guard(i, g);
-                }
-            }
-        }
         #[cfg(feature = "jit-debug")]
         eprintln!(
             "analyse_end: {loop_start:?}->{loop_end:?} {}",

@@ -14,28 +14,16 @@ impl AbstractFrame {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::F(fpr) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
                 // F -> Sf
                 ir.fpr2stack(fpr, slot);
                 ir.reg_move(GP::Rax, dst);
                 self.set_Sf_float(slot, fpr);
             }
             LinkMode::C(v) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
                 ir.lit2reg(v.into(), dst);
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
                 ir.stack2reg(slot, dst);
-            }
-            LinkMode::G(_) => {
-                ir.reg_move(GP::R15, dst);
             }
             LinkMode::MaybeNone => {
                 ir.stack2reg(slot, dst);
@@ -105,14 +93,6 @@ impl AbstractFrame {
                 ir.fixnum2fpr(GP::Rdi, x);
                 x
             }
-            LinkMode::G(_) => {
-                // G -> Sf
-                ir.reg2stack(GP::R15, slot);
-                self.guard_fixnum(ir, slot, GP::R15);
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                ir.fixnum2fpr(GP::R15, x);
-                x
-            }
             LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_xmm_fixnum() {:?}", self.mode(slot));
@@ -137,13 +117,6 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_fpr(GP::Rdi, x, deopt);
-                x
-            }
-            LinkMode::G(_) => {
-                // -> Sf
-                let x = self.set_new_Sf(slot, SfGuarded::Float);
-                ir.reg2stack(GP::R15, slot);
-                ir.float_to_fpr(GP::R15, x, deopt);
                 x
             }
             LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
@@ -195,16 +168,8 @@ impl AbstractFrame {
         slot: SlotId,
         ofs: i32,
     ) {
-        match self.mode(slot) {
-            LinkMode::G(_) => {
-                self.use_as_value(slot);
-                ir.reg2rsp_offset(GP::R15, ofs);
-            }
-            _ => {
-                self.load(ir, slot, GP::Rax);
-                ir.reg2rsp_offset(GP::Rax, ofs);
-            }
-        }
+        self.load(ir, slot, GP::Rax);
+        ir.reg2rsp_offset(GP::Rax, ofs);
     }
 
     pub(in crate::codegen::jitgen) fn fetch_rest_for_callee(
