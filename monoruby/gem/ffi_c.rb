@@ -371,6 +371,9 @@ module FFI
     def read_string(length = nil)
       length ? get_bytes(0, length) : get_string(0)
     end
+    def read_string_to_null
+      get_string(0)
+    end
 
     def write_int8(v);   put_int8(0, v);   end
     def write_uint8(v);  put_uint8(0, v);  end
@@ -395,6 +398,9 @@ module FFI
       put_bytes(0, str, start, length)
     end
     def write_string(str, length = str.bytesize)
+      put_bytes(0, str, 0, length)
+    end
+    def write_string_length(str, length)
       put_bytes(0, str, 0, length)
     end
 
