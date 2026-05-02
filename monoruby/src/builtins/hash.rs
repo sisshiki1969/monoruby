@@ -31,6 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
     globals.define_builtin_funcs(HASH_CLASS, "collect", &["map"], map, 0);
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
+    globals.define_builtin_func(HASH_CLASS, "reverse_each", reverse_each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
     globals.define_builtin_funcs(HASH_CLASS, "select", &["filter"], select, 0);
@@ -909,6 +910,36 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let data = vm.get_block_data(globals, bh)?;
     let _iter_guard = hash.iter_guard();
     for (k, v) in hash.iter() {
+        vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#reverse_each
+///
+/// - reverse_each {|key, value| ... } -> self
+/// - reverse_each -> Enumerator
+///
+#[monoruby_builtin]
+fn reverse_each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let bh = match lfp.block() {
+        None => {
+            let id = IdentId::get_id("reverse_each");
+            return hash_to_sized_enum(vm, id, lfp, pc);
+        }
+        Some(block) => block,
+    };
+    let hash = lfp.self_val().as_hash();
+    let data = vm.get_block_data(globals, bh)?;
+    let _iter_guard = hash.iter_guard();
+    let entries: Vec<(Value, Value)> = hash.iter().collect();
+    for (k, v) in entries.into_iter().rev() {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
     Ok(lfp.self_val())

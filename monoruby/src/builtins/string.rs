@@ -17,10 +17,11 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
         &["encoding", "capacity"],
-        false,
+        true,
     );
     globals.store[STRING_CLASS].set_alloc_func(string_alloc_func);
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
+    globals.define_builtin_func_with(STRING_CLASS, "initialize", string_initialize, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "hash", hash, 0);
@@ -195,11 +196,54 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    if class_id != STRING_CLASS {
+        let obj = super::class::call_alloc_func(globals, class_id)?;
+        let args: Vec<Value> = (0..lfp.args_count(10))
+            .filter_map(|i| lfp.try_arg(i))
+            .collect();
+        let (positional, kw) = if let Some(last) = args.last()
+            && let Some(h) = last.try_hash_ty()
+            && !h.is_empty()
+        {
+            (&args[..args.len() - 1], Some(h))
+        } else {
+            (&args[..], None)
+        };
+        vm.invoke_method_inner(
+            globals,
+            IdentId::INITIALIZE,
+            obj,
+            positional,
+            lfp.block(),
+            kw,
+        )?;
+        return Ok(obj);
+    }
     let s = match lfp.try_arg(0) {
         Some(string) => string.coerce_to_string(vm, globals)?,
         None => "".to_string(),
     };
     Ok(Value::string(s))
+}
+
+///
+/// ### String#initialize
+///
+/// - initialize(string = "") -> String
+///
+#[monoruby_builtin]
+fn string_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if let Some(arg) = lfp.try_arg(0) {
+        let s = arg.coerce_to_string(vm, globals)?;
+        lfp.self_val().replace_str(&s);
+    }
+    Ok(lfp.self_val())
 }
 
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s

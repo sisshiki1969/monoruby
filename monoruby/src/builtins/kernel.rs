@@ -95,6 +95,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
