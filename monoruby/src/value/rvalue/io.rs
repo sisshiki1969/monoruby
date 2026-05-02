@@ -21,6 +21,7 @@ pub struct FileDescriptor {
     name: String,
 }
 
+
 #[derive(Debug)]
 pub struct PopenDescriptor {
     child: std::process::Child,
@@ -152,8 +153,13 @@ impl IoInner {
     }
 
     pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
-        // SAFETY: fd is a valid file descriptor obtained from pipe().
-        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        // SAFETY: fd is a valid file descriptor obtained from pipe() or
+        // IO.new(fd). We dup the fd so this IoInner owns a separate
+        // descriptor, avoiding double-close when the caller also holds
+        // the original fd (e.g. File.new(f.fileno, autoclose: false)).
+        let new_fd = unsafe { libc::dup(fd) };
+        assert!(new_fd >= 0, "dup({}) failed", fd);
+        let file = unsafe { std::fs::File::from_raw_fd(new_fd) };
         Self::File(Rc::new(FileDescriptor {
             reader: std::io::BufReader::new(file),
             name,
