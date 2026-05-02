@@ -1036,11 +1036,17 @@ impl Executor {
             DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
         };
         Codegen::check_bop_redefine(self.cfp());
+        let visibility = if name == IdentId::INITIALIZE || name == IdentId::get_id("initialize_copy")
+        {
+            Visibility::Private
+        } else {
+            cref.visibility
+        };
         if cref.module_function {
             self.add_method(globals, class_id, name, func, Visibility::Private)?;
-            self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
+            self.add_singleton_method(globals, class_id, name, func, visibility)?;
         } else {
-            self.add_method(globals, class_id, name, func, cref.visibility)?;
+            self.add_method(globals, class_id, name, func, visibility)?;
         }
         Ok(Value::nil())
     }

@@ -394,6 +394,9 @@ impl Store {
             result.source_info,
             true,
         )?;
+        if let Some(info) = self.iseq_mut(fid) {
+            info.lexical_context.push(OBJECT_CLASS);
+        }
         Ok(fid)
     }
 

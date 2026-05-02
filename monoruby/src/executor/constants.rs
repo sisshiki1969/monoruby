@@ -181,6 +181,20 @@ impl Executor {
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
             return Ok(v);
         }
+        // Search the runtime class_context stack (block-form class_eval).
+        if let Some(frame) = self.lexical_class.last() {
+            for cref in frame.iter().rev() {
+                let class_id = match cref.context {
+                    DefinitionContext::Class(class_id) => class_id,
+                    DefinitionContext::Receiver(_) => continue,
+                };
+                if let Some(state) = globals.store.get_constant(class_id, name) {
+                    if let ConstStateKind::Loaded(v) = &state.kind {
+                        return Ok(*v);
+                    }
+                }
+            }
+        }
         // For superclass fallback, prefer the frame's lexical class if the
         // frame has its own lexical_context (i.e. string eval), otherwise
         // use the enclosing method's lexical class.
