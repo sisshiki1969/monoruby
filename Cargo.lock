@@ -1231,6 +1231,7 @@ dependencies = [
  "tempfile",
  "unicode-general-category",
  "unicode-normalization",
+ "unicode-segmentation",
 ]
 
 [[package]]

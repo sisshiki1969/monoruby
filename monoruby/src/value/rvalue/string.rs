@@ -933,6 +933,14 @@ impl RStringInner {
         Ok(())
     }
 
+    /// Append raw bytes without any encoding validation. Used by
+    /// `String#append_as_bytes` where deliberately producing
+    /// "broken" sequences in the receiver's encoding is permitted.
+    pub fn extend_from_slice_no_validate(&mut self, slice: &[u8]) {
+        self.content.extend_from_slice(slice);
+        self.cr.set(CodeRange::Unknown);
+    }
+
     pub fn repeat(&self, len: usize) -> RStringInner {
         let ty = self.ty;
         let vec = self.content.repeat(len);
