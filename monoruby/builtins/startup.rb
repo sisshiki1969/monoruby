@@ -1,6 +1,3 @@
-RUBY_PLATFORM = "x86_64-linux"
-RUBY_PATCHLEVEL = 0
-
 require 'rbconfig'
 
 class BasicObject

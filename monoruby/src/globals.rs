@@ -255,20 +255,69 @@ impl Globals {
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
-        let val = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]",));
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
-        let val = Value::string_from_str("ruby");
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
 
         let version_path = dirs::home_dir()
             .unwrap()
             .join(".monoruby")
             .join("ruby_version");
         let ruby_version = std::fs::read_to_string(&version_path).unwrap();
+        let ruby_version = ruby_version.trim().to_string();
 
-        let val = Value::string_from_str(&ruby_version.trim());
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
-        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+        // Build all the top-level RUBY_* String constants up-front.
+        // CRuby exposes these as frozen Strings; ruby/spec
+        // (`core/builtin_constants`) asserts both `is_a?(String)` and
+        // `frozen?` for every one of them.
+        let mut ruby_description = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]"));
+        let mut ruby_engine = Value::string_from_str("ruby");
+        let mut ruby_version_val = Value::string_from_str(&ruby_version);
+        let mut ruby_engine_version = Value::string_from_str(&ruby_version);
+        let mut ruby_platform = Value::string_from_str("x86_64-linux");
+        let mut ruby_copyright = Value::string_from_str(
+            "ruby - Copyright (C) 1993-2025 Yukihiro Matsumoto",
+        );
+        let mut ruby_release_date = Value::string_from_str("2025-12-25");
+        let mut ruby_revision = Value::string_from_str("monoruby");
+        let ruby_patchlevel = Value::integer(0);
+
+        for v in [
+            &mut ruby_description,
+            &mut ruby_engine,
+            &mut ruby_version_val,
+            &mut ruby_engine_version,
+            &mut ruby_platform,
+            &mut ruby_copyright,
+            &mut ruby_release_date,
+            &mut ruby_revision,
+        ] {
+            v.set_frozen();
+        }
+
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", ruby_description);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", ruby_engine);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", ruby_version_val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", ruby_engine_version);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_PLATFORM", ruby_platform);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_COPYRIGHT", ruby_copyright);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_RELEASE_DATE", ruby_release_date);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_REVISION", ruby_revision);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_PATCHLEVEL", ruby_patchlevel);
+
+        // Ruby 4.0+ exposes a `Ruby` module mirroring every RUBY_*
+        // constant under a non-prefixed name. The mirror constants
+        // must share *object identity* with the top-level ones — the
+        // spec uses `equal?`. (This was introduced in 4.0; for older
+        // Rubies the module simply doesn't exist.)
+        let ruby_mod = globals.define_toplevel_module("Ruby");
+        let ruby_mod_id = ruby_mod.id();
+        globals.set_constant_by_str(ruby_mod_id, "VERSION", ruby_version_val);
+        globals.set_constant_by_str(ruby_mod_id, "PATCHLEVEL", ruby_patchlevel);
+        globals.set_constant_by_str(ruby_mod_id, "DESCRIPTION", ruby_description);
+        globals.set_constant_by_str(ruby_mod_id, "ENGINE", ruby_engine);
+        globals.set_constant_by_str(ruby_mod_id, "ENGINE_VERSION", ruby_engine_version);
+        globals.set_constant_by_str(ruby_mod_id, "PLATFORM", ruby_platform);
+        globals.set_constant_by_str(ruby_mod_id, "COPYRIGHT", ruby_copyright);
+        globals.set_constant_by_str(ruby_mod_id, "RELEASE_DATE", ruby_release_date);
+        globals.set_constant_by_str(ruby_mod_id, "REVISION", ruby_revision);
 
         globals
     }
@@ -704,5 +753,55 @@ impl Globals {
         rand::distr::StandardUniform: rand::prelude::Distribution<T>,
     {
         self.random.random()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn ruby_constants_are_strings() {
+        run_test(r#"RUBY_VERSION.is_a?(String)"#);
+        run_test(r#"RUBY_DESCRIPTION.is_a?(String)"#);
+        run_test(r#"RUBY_ENGINE.is_a?(String)"#);
+        run_test(r#"RUBY_ENGINE_VERSION.is_a?(String)"#);
+        run_test(r#"RUBY_PLATFORM.is_a?(String)"#);
+        run_test(r#"RUBY_COPYRIGHT.is_a?(String)"#);
+        run_test(r#"RUBY_RELEASE_DATE.is_a?(String)"#);
+        run_test(r#"RUBY_REVISION.is_a?(String)"#);
+        run_test(r#"RUBY_PATCHLEVEL.is_a?(Integer)"#);
+    }
+
+    #[test]
+    fn ruby_string_constants_are_frozen() {
+        // ruby/spec asserts every String-typed RUBY_* constant
+        // returns true from `.frozen?`.
+        run_test(r#"RUBY_VERSION.frozen?"#);
+        run_test(r#"RUBY_DESCRIPTION.frozen?"#);
+        run_test(r#"RUBY_ENGINE.frozen?"#);
+        run_test(r#"RUBY_ENGINE_VERSION.frozen?"#);
+        run_test(r#"RUBY_PLATFORM.frozen?"#);
+        run_test(r#"RUBY_COPYRIGHT.frozen?"#);
+        run_test(r#"RUBY_RELEASE_DATE.frozen?"#);
+        run_test(r#"RUBY_REVISION.frozen?"#);
+    }
+
+    #[test]
+    fn ruby_module_mirrors_constants() {
+        // Ruby 4.0+ exposes a `Ruby` module that mirrors every
+        // RUBY_* constant under a non-prefixed name. The mirrors
+        // must share *object identity* with the top-level pair, so
+        // `equal?` (not just `==`) succeeds.
+        run_test(r#"Ruby.is_a?(Module)"#);
+        run_test(r#"Ruby::VERSION.equal?(RUBY_VERSION)"#);
+        run_test(r#"Ruby::DESCRIPTION.equal?(RUBY_DESCRIPTION)"#);
+        run_test(r#"Ruby::ENGINE.equal?(RUBY_ENGINE)"#);
+        run_test(r#"Ruby::ENGINE_VERSION.equal?(RUBY_ENGINE_VERSION)"#);
+        run_test(r#"Ruby::PLATFORM.equal?(RUBY_PLATFORM)"#);
+        run_test(r#"Ruby::COPYRIGHT.equal?(RUBY_COPYRIGHT)"#);
+        run_test(r#"Ruby::RELEASE_DATE.equal?(RUBY_RELEASE_DATE)"#);
+        run_test(r#"Ruby::REVISION.equal?(RUBY_REVISION)"#);
+        run_test(r#"Ruby::PATCHLEVEL.equal?(RUBY_PATCHLEVEL)"#);
     }
 }
