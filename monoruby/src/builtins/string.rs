@@ -7535,6 +7535,62 @@ mod tests {
     }
 
     #[test]
+    fn string_split_empty_sep_with_limit() {
+        // sep "" + negative limit: yields every character and a
+        // trailing empty element (CRuby parity), with and without a
+        // block.
+        run_tests(&[
+            r##""abcde".split("", -1)"##,
+            r##""abcde".split("", -3)"##,
+            // Block form returns self; capture yielded chars in an
+            // array so the test result reflects what the block saw.
+            r##"a = []; "abcde".split("", -1) {|c| a << c }; a"##,
+            r##"a = []; "abc".split("", -2) {|c| a << c }; [a, "abc".split("", -2) {}]"##,
+            // sep "" + limit ≤ string length: take (limit-1) chars,
+            // last element is the remainder.
+            r##""abcde".split("", 3)"##,
+            r##""abcde".split("", 1)"##,
+            r##""abcde".split("", 5)"##,
+            r##"a = []; "abcde".split("", 3) {|c| a << c }; a"##,
+            r##"a = []; "hello".split("", 2) {|c| a << c }; [a, "hello".split("", 2) {}]"##,
+        ]);
+    }
+
+    #[test]
+    fn string_split_with_block() {
+        // Non-empty plain-String separator with block: block runs
+        // once per piece and the call returns self (CRuby ≥ 1.9).
+        run_tests(&[
+            r##"a = []; "a,b,c,,,".split(",") {|p| a << p }; a"##,
+            r##"a = []; "a,b,c,,,".split(",", -1) {|p| a << p }; a"##,
+            r##"a = []; "a,b,c".split(",") {|p| a << p }; "a,b,c".split(",") {}"##,
+            // Whitespace splitter with block (sep = " ")
+            r##"a = []; "  hello  world  ".split(" ") {|p| a << p }; a"##,
+        ]);
+    }
+
+    #[test]
+    fn string_split_to_str_with_block() {
+        // sep that is neither String nor Regexp but defines #to_str
+        // must be coerced before splitting; the block then runs on
+        // the resulting pieces.
+        run_test_with_prelude(
+            r##"a = []; "a,b,c".split(o) {|p| a << p }; a"##,
+            r##"class C; def to_str; ","; end; end; o = C.new"##,
+        );
+        run_test_with_prelude(
+            r##"a = []; "a,b,c,,".split(o, -1) {|p| a << p }; a"##,
+            r##"class C; def to_str; ","; end; end; o = C.new"##,
+        );
+        // The call should return self (the receiver), not the array,
+        // when a block is given.
+        run_test_with_prelude(
+            r##""a,b,c".split(o) {|_| }"##,
+            r##"class C; def to_str; ","; end; end; o = C.new"##,
+        );
+    }
+
+    #[test]
     fn string_sub_gsub_to_str_coercion() {
         // String#sub and String#gsub should call to_str on pattern argument
         run_test_with_prelude(
