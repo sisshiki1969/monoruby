@@ -107,7 +107,7 @@ async function loadCsv(path) {
         labels: rows.map(r => r.timestamp),
         datasets: [{
           label: cat + ' pass rate (%)',
-          data: rows.map(r => parseFloat(r.pass_rate)),
+          data: rows.map(r => Math.max(0, parseFloat(r.pass_rate))),
           borderColor: '#1565c0',
           backgroundColor: 'rgba(21,101,192,0.15)',
           tension: 0.15,
