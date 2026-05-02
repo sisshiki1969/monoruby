@@ -78,6 +78,7 @@ module Enumerable
       ifnone.call
     end
   end
+  alias detect find
 
   def filter
     return self.to_enum(:filter) unless block_given?
