@@ -528,6 +528,17 @@ impl MonorubyErr {
         b: crate::value::Encoding,
     ) -> MonorubyErr {
         let msg = format!("incompatible character encodings: {} and {}", a.name(), b.name());
+        Self::encoding_compatibility_error_with_store(store, msg)
+    }
+
+    /// Build an `Encoding::CompatibilityError` with a free-form
+    /// message. Used by call sites whose phrasing doesn't match the
+    /// "A and B" template (e.g. "incompatible encoding with this
+    /// operation: ISO-8859-1").
+    pub(crate) fn encoding_compatibility_error_with_store(
+        store: &Store,
+        msg: String,
+    ) -> MonorubyErr {
         if let Some(enc_const) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING) {
             if let Some(compat_const) = store.get_constant_noautoload(
                 enc_const.as_class_id(),

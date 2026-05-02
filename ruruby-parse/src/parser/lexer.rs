@@ -705,12 +705,18 @@ impl<'a> Lexer<'a> {
     /// Read number literal.
     fn read_number_literal(&mut self, ch: char) -> Result<Token, LexerErr> {
         if ch == '0' {
-            if self.consume('x') {
+            if self.consume('x') || self.consume('X') {
                 return self.read_hex_number();
-            } else if self.consume('o') {
+            } else if self.consume('o') || self.consume('O') {
                 return self.read_octal_number();
-            } else if self.consume('b') {
+            } else if self.consume('b') || self.consume('B') {
                 return self.read_bin_number();
+            } else if self.consume('d') || self.consume('D') {
+                return self.read_decimal_number();
+            } else if matches!(self.peek(), Some(c) if ('0'..='7').contains(&c) || c == '_') {
+                // Bare leading `0` followed by an octal digit (or `_`)
+                // parses as octal: `0777` == `0_777` == 0o777 == 511.
+                return self.read_octal_number();
             }
         };
         let mut s = ch.to_string();
@@ -833,6 +839,9 @@ impl<'a> Lexer<'a> {
 
     /// Read octal number.
     fn read_octal_number(&mut self) -> Result<Token, LexerErr> {
+        // Allow leading `_` separators between the base prefix (or the
+        // bare leading `0`) and the first digit, e.g. `0_777`.
+        while self.consume('_') {}
         let mut val = match self.peek() {
             Some(ch @ '0'..='7') => ch as u64 - '0' as u64,
             Some(_) => {
@@ -850,6 +859,25 @@ impl<'a> Lexer<'a> {
             self.get()?;
         }
         Ok(self.new_numlit(val as i64))
+    }
+
+    /// Read decimal number with explicit `0d`/`0D` prefix.
+    fn read_decimal_number(&mut self) -> Result<Token, LexerErr> {
+        let start_pos = self.pos;
+        match self.peek() {
+            Some(ch) if ch.is_ascii_digit() => {}
+            Some(_) => return Err(self.error_unexpected(self.pos)),
+            None => return Err(Self::error_eof(self.pos)),
+        }
+        while self.consume_numeric().is_some() || self.consume('_') {}
+        let s = &self.code[start_pos..self.pos];
+        match BigInt::parse_bytes(s.as_bytes(), 10) {
+            Some(b) => match b.to_i64() {
+                Some(i) => Ok(self.new_numlit(i)),
+                None => Ok(self.new_bignumlit(b)),
+            },
+            None => Err(Self::error_parse("Invalid decimal number literal.", self.pos)),
+        }
     }
 
     /// Read binary number.

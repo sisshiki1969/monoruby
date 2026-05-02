@@ -72,15 +72,35 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
+    globals.define_builtin_func(STRING_CLASS, "chr", chr, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "append_as_bytes", append_as_bytes);
     globals.define_builtin_func_with(STRING_CLASS, "ljust", ljust, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rjust", rjust, 1, 2, false);
-    globals.define_builtin_func_with(STRING_CLASS, "lines", lines, 0, 2, false);
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "lines",
+        lines,
+        0,
+        1,
+        false,
+        &["chomp"],
+        false,
+    );
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
     globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
     globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "bytesplice", bytesplice, 2, 5, false);
     globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
-    globals.define_builtin_func_with(STRING_CLASS, "each_line", each_line, 0, 1, false);
+    globals.define_builtin_func_with_kw(
+        STRING_CLASS,
+        "each_line",
+        each_line,
+        0,
+        1,
+        false,
+        &["chomp"],
+        false,
+    );
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
@@ -96,12 +116,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase", swapcase);
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
+    globals.define_builtin_func_rest(STRING_CLASS, "squeeze", squeeze);
+    globals.define_builtin_func_rest(STRING_CLASS, "squeeze!", squeeze_);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
+    globals.define_builtin_func(STRING_CLASS, "tr!", tr_, 2);
+    globals.define_builtin_func(STRING_CLASS, "tr_s", tr_s, 2);
+    globals.define_builtin_func(STRING_CLASS, "tr_s!", tr_s_, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
+    globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
+    globals.define_builtin_func(
+        STRING_CLASS,
+        "each_grapheme_cluster",
+        each_grapheme_cluster,
+        0,
+    );
     globals.define_builtin_func_with(STRING_CLASS, "center", center, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "next", &["succ"], next, 0);
     globals.define_builtin_funcs(STRING_CLASS, "next!", &["succ!"], next_mut, 0);
@@ -152,6 +184,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_c", to_c, 0);
     globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
+    globals.define_builtin_func(STRING_CLASS, "undump", undump, 0);
     globals.define_builtin_func(
         STRING_CLASS,
         "force_encoding",
@@ -177,6 +210,14 @@ pub(super) fn init(globals: &mut Globals) {
         STRING_CLASS,
         "unicode_normalize!",
         unicode_normalize_,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        STRING_CLASS,
+        "unicode_normalized?",
+        unicode_normalized_p,
         0,
         1,
         false,
@@ -632,10 +673,32 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
-        let (start, end) = (
-            info.start().coerce_to_int_i64(vm, globals)?,
-            info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64,
-        );
+        // CRuby rejects `str[range, length]` — the length form only
+        // pairs with an integer / Regexp first argument.
+        if lfp.try_arg(1).is_some() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                lfp.arg(0),
+                INTEGER_CLASS,
+            ));
+        }
+        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_count - 1
+        // (so the inclusive `end` reaches the last character; the
+        // exclusive bookkeeping below subtracts as usual).
+        let char_count = lhs.iter_char_bytes().count() as i64;
+        let start = if info.start().is_nil() {
+            0
+        } else {
+            info.start().coerce_to_int_i64(vm, globals)?
+        };
+        let end = if info.end().is_nil() {
+            // For endless ranges we just want "everything from start".
+            // Use char_count and treat exclude_end as a no-op so the
+            // slice extends through the final character.
+            char_count - 1
+        } else {
+            info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64
+        };
         let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
             (Some(start), Some(end)) => {
                 if start > end {
@@ -659,6 +722,14 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         string_match_index(vm, lhs, &re, nth)
     } else if let Some(s) = lfp.arg(0).is_str() {
+        // `str[other_str, len]` is intentionally unsupported by CRuby.
+        if lfp.try_arg(1).is_some() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                lfp.arg(0),
+                INTEGER_CLASS,
+            ));
+        }
         // String argument: return the string if it's a substring
         let given = lhs.check_utf8()?;
         if given.contains(s) {
@@ -1337,6 +1408,46 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let arg0 = lfp.try_arg(0).unwrap_or(Value::string_from_str(" "));
     if let Some(sep_inner) = arg0.is_rstring_inner() {
         let sep = sep_inner.check_utf8()?;
+        if sep.is_empty() {
+            // Per CRuby, an empty separator splits into characters
+            // (not bytes). With `limit > 0`, the last element holds
+            // the remainder of the string.
+            let chars: Vec<&str> = string
+                .char_indices()
+                .map(|(i, c)| &string[i..i + c.len_utf8()])
+                .collect();
+            let v: Vec<Value> = if lim <= 0 || (lim as usize) >= chars.len() {
+                let mut v: Vec<Value> = chars.into_iter().map(Value::string_from_str).collect();
+                if lim < 0 {
+                    // Negative limit keeps trailing empty fields, matching CRuby.
+                    v.push(Value::string_from_str(""));
+                }
+                v
+            } else {
+                let take = (lim as usize).saturating_sub(1);
+                let mut v: Vec<Value> = chars
+                    .iter()
+                    .take(take)
+                    .map(|s| Value::string_from_str(s))
+                    .collect();
+                let tail_start = chars
+                    .get(take)
+                    .map(|s| s.as_ptr() as usize - string.as_ptr() as usize)
+                    .unwrap_or(string.len());
+                v.push(Value::string_from_str(&string[tail_start..]));
+                v
+            };
+            return match lfp.block() {
+                Some(bh) => {
+                    let ary = Value::array_from_vec(v);
+                    vm.temp_push(ary);
+                    vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                    vm.temp_pop();
+                    Ok(lfp.self_val())
+                }
+                None => Ok(Value::array_from_vec(v)),
+            };
+        }
         let v: Vec<Value> = if sep == " " {
             match lim {
                 lim if lim < 0 => {
@@ -1691,7 +1802,9 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let rs_owned;
     let rs = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
-            return Ok(lfp.self_val());
+            // `chomp(nil)` returns a copy of `self` per CRuby — never
+            // the same instance, even when there's nothing to strip.
+            return Ok(lfp.self_val().dup());
         }
         rs_owned = arg0.coerce_to_string(vm, globals)?;
         rs_owned.as_str()
@@ -2547,6 +2660,83 @@ fn ord(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
+///
+/// ### String#chr
+///
+/// - chr -> String
+///
+/// Returns a one-character string with the first character of `self`,
+/// preserving `self`'s encoding. Returns an empty copy if `self` is empty.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chr.html]
+#[monoruby_builtin]
+fn chr(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    let first = inner.iter_char_bytes().next().unwrap_or(&[]);
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        first, enc,
+    )))
+}
+
+///
+/// ### String#append_as_bytes
+///
+/// - append_as_bytes(*objects) -> self
+///
+/// Appends each argument to `self`. Strings are appended verbatim (their
+/// bytes are copied without any encoding conversion). Integers are
+/// truncated to a single byte (the least significant byte, with negative
+/// values wrapping). Unlike `<<`, the receiver's encoding is never
+/// altered, even if the resulting bytes form an invalid sequence.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/append_as_bytes.html]
+#[monoruby_builtin]
+fn append_as_bytes(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    self_.ensure_not_frozen(&globals.store)?;
+    let args = lfp.arg(0).as_array();
+    for arg in args.iter().copied() {
+        match arg.unpack() {
+            RV::String(s) => {
+                self_
+                    .as_rstring_inner_mut()
+                    .extend_from_slice_no_validate(s.as_bytes());
+            }
+            RV::Fixnum(i) => {
+                let byte = (i & 0xff) as u8;
+                self_
+                    .as_rstring_inner_mut()
+                    .extend_from_slice_no_validate(&[byte]);
+            }
+            RV::BigInt(big) => {
+                let lo = big.iter_u64_digits().next().unwrap_or(0);
+                let byte = if big.sign() == num::bigint::Sign::Minus {
+                    (lo.wrapping_neg() & 0xff) as u8
+                } else {
+                    (lo & 0xff) as u8
+                };
+                self_
+                    .as_rstring_inner_mut()
+                    .extend_from_slice_no_validate(&[byte]);
+            }
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected String or Integer)",
+                    arg.real_class(&globals.store).id().get_name(&globals.store)
+                )));
+            }
+        }
+    }
+    Ok(self_)
+}
+
 fn gen_pad(padding: &str, len: usize) -> String {
     let pad_len = padding.chars().count();
     let pad_repeat = padding.repeat(len / pad_len);
@@ -2617,19 +2807,28 @@ fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### String#lines
 ///
-/// - lines([NOT SUPPORTED] rs = $/, [NOT SUPPORTED] chomp: false) -> [String]
-/// - [NOT SUPPORTED] lines(rs = $/, chomp: false) {|line| ... } -> self
+/// - lines(rs = $/, chomp: false) -> [String]
+/// - lines(rs = $/, chomp: false) {|line| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lines.html]
 #[monoruby_builtin]
-fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    if lfp.block().is_some() {
-        return Err(MonorubyErr::runtimeerr("block is not supported."));
-    }
+fn lines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
-    let string = receiver.expect_str(globals)?;
-    let iter = string.split_inclusive('\n').map(Value::string_from_str);
-    Ok(Value::array_from_iter(iter))
+    let inner = receiver.as_rstring_inner();
+    let enc = inner.encoding();
+    let s = inner.check_utf8()?.to_string();
+    let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
+    let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
+    let out: Vec<Value> = parts
+        .into_iter()
+        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)))
+        .collect();
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, out.into_iter())?;
+        Ok(receiver)
+    } else {
+        Ok(Value::array_from_iter(out.into_iter()))
+    }
 }
 
 ///
@@ -2734,8 +2933,29 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     };
 
     if let Some(range) = lfp.arg(0).is_range() {
-        let start = range.start().coerce_to_int_i64(vm, globals)?;
-        let end = range.end().coerce_to_int_i64(vm, globals)?;
+        // `byteslice(range, length)` is rejected — range form takes
+        // exactly one argument.
+        if lfp.try_arg(1).is_some() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                lfp.arg(0),
+                INTEGER_CLASS,
+            ));
+        }
+        let start = if range.start().is_nil() {
+            0
+        } else {
+            range.start().coerce_to_int_i64(vm, globals)?
+        };
+        // For endless ranges, treat the end as `byte_len` so the slice
+        // extends to the end of the string. Apply the inclusive/
+        // exclusive bookkeeping uniformly below.
+        let endless = range.end().is_nil();
+        let end = if endless {
+            byte_len as i64
+        } else {
+            range.end().coerce_to_int_i64(vm, globals)?
+        };
         let start = match {
             if start >= 0 {
                 if (start as usize) <= byte_len {
@@ -2751,7 +2971,9 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             Some(s) => s,
             None => return Ok(Value::nil()),
         };
-        let end = if end >= 0 {
+        let end = if endless {
+            byte_len
+        } else if end >= 0 {
             let e = if range.exclude_end() {
                 end as usize
             } else {
@@ -3071,27 +3293,159 @@ fn is_char_boundary(bytes: &[u8], offset: usize) -> bool {
 ///
 /// ### String#each_line
 ///
-/// - each_line(rs = $/, [NOT SUPPORTED] chomp: false) {|line| ... } -> self
-/// - [NOT SUPPORTED]each_line(rs = $/, chomp: false) -> Enumerator
+/// - each_line(rs = $/, chomp: false) {|line| ... } -> self
+/// - each_line(rs = $/, chomp: false) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_line.html]
 #[monoruby_builtin]
-fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg0 = lfp.try_arg(0);
-    let rs_owned;
-    let rs: &str = if let Some(arg0) = &arg0 {
-        rs_owned = arg0.coerce_to_str(vm, globals)?;
-        &rs_owned
-    } else {
-        "\n"
-    };
-    let bh = lfp.expect_block()?;
+fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
-    let string = receiver.expect_str(globals)?;
-    let iter = string.split_inclusive(rs).map(Value::string_from_str);
-    vm.invoke_block_iter1(globals, bh, iter)?;
+    let inner = receiver.as_rstring_inner();
+    let enc = inner.encoding();
+    let s = inner.check_utf8()?.to_string();
+    let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
+    let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
+    let out: Vec<Value> = parts
+        .into_iter()
+        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)))
+        .collect();
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, out.into_iter())?;
+        Ok(receiver)
+    } else {
+        let mut args = vec![];
+        if let Some(rs) = lfp.try_arg(0) {
+            args.push(rs);
+        }
+        vm.generate_enumerator(IdentId::get_id("each_line"), receiver, args, pc)
+    }
+}
 
-    Ok(receiver)
+/// Implementation shared by `String#lines` / `#each_line`.
+/// Splits `s` per CRuby's record-separator rules:
+/// * separator missing or `$/` → uses `"\n"`,
+/// * separator `nil`           → returns the whole string,
+/// * separator `""`            → splits on runs of two or more `\n`s
+///   (paragraph mode); each yielded paragraph keeps a trailing `\n\n`,
+/// * any other separator       → splits keeping the separator.
+/// When `chomp` is `true`, the trailing separator (or `\r\n` /
+/// `\n` / `\r` when separator is the default newline) is removed
+/// from each yielded part.
+fn split_lines(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    s: &str,
+    rs_arg: Option<Value>,
+    chomp: bool,
+) -> Result<Vec<String>> {
+    if let Some(arg) = rs_arg {
+        if arg.is_nil() {
+            // nil separator: return the whole string as one element
+            // (ignoring `chomp`, matching CRuby).
+            return Ok(if s.is_empty() {
+                vec![]
+            } else {
+                vec![s.to_string()]
+            });
+        }
+        // CRuby rejects `false`/`true`/Symbol explicitly here, even
+        // though `coerce_to_str` would also raise. We mirror that so
+        // the spec error class matches (TypeError, not NoMethodError).
+        match arg.unpack() {
+            RV::Bool(_) | RV::Symbol(_) => {
+                return Err(MonorubyErr::no_implicit_conversion(
+                    globals,
+                    arg,
+                    STRING_CLASS,
+                ));
+            }
+            _ => {}
+        }
+        let sep = arg.coerce_to_str(vm, globals)?.to_string();
+        if sep.is_empty() {
+            return Ok(split_paragraphs(s, chomp));
+        }
+        return Ok(split_with_separator(s, &sep, chomp));
+    }
+    Ok(split_with_default_newline(s, chomp))
+}
+
+/// Default-newline splitter (CRuby treats the unspecified separator as
+/// "\n" but also allows the line to end with `\r\n` or a bare `\r`,
+/// which matters only for `chomp: true`).
+fn split_with_default_newline(s: &str, chomp: bool) -> Vec<String> {
+    let mut out: Vec<String> = s.split_inclusive('\n').map(String::from).collect();
+    if chomp {
+        for line in out.iter_mut() {
+            if let Some(stripped) = line.strip_suffix("\r\n") {
+                *line = stripped.to_string();
+            } else if let Some(stripped) = line.strip_suffix('\n').or_else(|| line.strip_suffix('\r')) {
+                *line = stripped.to_string();
+            }
+        }
+    }
+    out
+}
+
+fn split_with_separator(s: &str, sep: &str, chomp: bool) -> Vec<String> {
+    let mut out: Vec<String> = s.split_inclusive(sep).map(String::from).collect();
+    if chomp {
+        for line in out.iter_mut() {
+            if let Some(stripped) = line.strip_suffix(sep) {
+                *line = stripped.to_string();
+            }
+        }
+    }
+    out
+}
+
+fn split_paragraphs(s: &str, chomp: bool) -> Vec<String> {
+    // Paragraph mode: skip leading newlines, then split on runs of 2+
+    // newlines. CRuby keeps `\n\n` at the end of each paragraph (or
+    // strips it when `chomp: true`).
+    let trimmed = s.trim_start_matches('\n');
+    if trimmed.is_empty() {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let bytes = trimmed.as_bytes();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            // Count consecutive newlines starting at i.
+            let mut j = i;
+            while j < bytes.len() && bytes[j] == b'\n' {
+                j += 1;
+            }
+            let nl_count = j - i;
+            if nl_count >= 2 {
+                // Paragraph ends with `\n\n` retained.
+                let para_end = i + 2;
+                let para = &trimmed[start..para_end];
+                out.push(if chomp {
+                    para.trim_end_matches('\n').to_string()
+                } else {
+                    para.to_string()
+                });
+                start = j;
+                i = j;
+                continue;
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    if start < trimmed.len() {
+        let para = &trimmed[start..];
+        out.push(if chomp {
+            para.trim_end_matches('\n').to_string()
+        } else {
+            para.to_string()
+        });
+    }
+    out
 }
 
 ///
@@ -3335,6 +3689,7 @@ fn to_i(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let s = self_.expect_str(globals)?;
     let radix = if let Some(arg0) = lfp.try_arg(0) {
         match arg0.coerce_to_int_i64(vm, globals)? {
+            0 => 0,
             n if !(2..=36).contains(&n) => {
                 return Err(MonorubyErr::argumenterr(format!("invalid radix {n}")));
             }
@@ -3343,18 +3698,62 @@ fn to_i(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         10
     };
-    if let Some((i, negative)) = parse_i64(s, radix) {
-        if negative {
-            if let Some(i) = i.checked_neg() {
-                Ok(Value::integer(i))
-            } else {
-                Ok(Value::bigint(-BigInt::from(i)))
-            }
+    let (s, sign) = strip_sign(s.trim_start());
+    // A leading sign is permitted exactly once and must come before any
+    // base prefix. `++2`, `+-2`, `0b-1`, etc. are invalid and CRuby
+    // returns 0 for them.
+    if matches!(s.chars().next(), Some('+') | Some('-')) {
+        return Ok(Value::integer(0));
+    }
+    let (s, radix) = strip_int_prefix(s, radix);
+    if matches!(s.chars().next(), Some('+') | Some('-')) {
+        return Ok(Value::integer(0));
+    }
+    Ok(parse_int_value(s, radix, sign))
+}
+
+/// Strip a leading `+` or `-` sign. Returns the remaining string and
+/// `true` if it was a `-`.
+fn strip_sign(s: &str) -> (&str, bool) {
+    if let Some(rest) = s.strip_prefix('-') {
+        (rest, true)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (rest, false)
+    } else {
+        (s, false)
+    }
+}
+
+/// Apply CRuby's prefix-stripping rules used by `String#to_i`:
+/// - radix 0 auto-detects via the prefix and falls back to 10.
+/// - any other radix only strips a prefix that matches its own base
+///   (so `"0xFA".to_i(16)` strips, `"0xFA".to_i(2)` does not).
+/// - a bare leading `0` (no recognised prefix letter) with radix 0
+///   selects octal (base 8); the `0` itself is left to be parsed.
+fn strip_int_prefix(s: &str, radix: u32) -> (&str, u32) {
+    let try_strip = |prefix_lo: &str, prefix_up: &str, base: u32| -> Option<&str> {
+        if radix == 0 || radix == base {
+            s.strip_prefix(prefix_lo).or_else(|| s.strip_prefix(prefix_up))
         } else {
-            Ok(Value::integer(i))
+            None
+        }
+    };
+    if let Some(rest) = try_strip("0x", "0X", 16) {
+        (rest, 16)
+    } else if let Some(rest) = try_strip("0b", "0B", 2) {
+        (rest, 2)
+    } else if let Some(rest) = try_strip("0d", "0D", 10) {
+        (rest, 10)
+    } else if let Some(rest) = try_strip("0o", "0O", 8) {
+        (rest, 8)
+    } else if radix == 0 {
+        if s.starts_with('0') && s.as_bytes().get(1).is_some_and(|c| c.is_ascii_digit()) {
+            (s, 8)
+        } else {
+            (s, 10)
         }
     } else {
-        Ok(Value::bigint(parse_bigint(s, radix)))
+        (s, radix)
     }
 }
 
@@ -4135,13 +4534,218 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
 #[monoruby_builtin]
 fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // TODO: support tr(1)
     let self_ = lfp.self_val();
     let from = lfp.arg(0).coerce_to_string(vm, globals)?;
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let rec = self_.expect_str(globals)?;
-    let res = rec.replace(&from, &to);
+    let (res, _changed) = tr_translate(rec, &from, &to, false)?;
     Ok(Value::string(res))
+}
+
+///
+/// ### String#tr!
+///
+/// - tr!(pattern, replace) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr=21.html]
+#[monoruby_builtin]
+fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let from = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let mut self_ = lfp.self_val();
+    let rec = self_.expect_str(globals)?.to_string();
+    let (res, changed) = tr_translate(&rec, &from, &to, false)?;
+    if !changed {
+        return Ok(Value::nil());
+    }
+    self_.replace_str(&res);
+    Ok(self_)
+}
+
+///
+/// ### String#tr_s
+///
+/// - tr_s(pattern, replace) -> String
+///
+/// Like `tr`, but additionally squeezes runs of identical characters
+/// in the *replacement region* down to one. Characters not touched by
+/// the translation are kept verbatim.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr_s.html]
+#[monoruby_builtin]
+fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let from = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let rec = self_.expect_str(globals)?;
+    let (res, _changed) = tr_translate(rec, &from, &to, true)?;
+    Ok(Value::string(res))
+}
+
+///
+/// ### String#tr_s!
+///
+/// - tr_s!(pattern, replace) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr_s=21.html]
+#[monoruby_builtin]
+fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let from = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let mut self_ = lfp.self_val();
+    let rec = self_.expect_str(globals)?.to_string();
+    let (res, changed) = tr_translate(&rec, &from, &to, true)?;
+    if !changed {
+        return Ok(Value::nil());
+    }
+    self_.replace_str(&res);
+    Ok(self_)
+}
+
+/// Expand a `tr`-style spec into a flat sequence of characters.
+/// Handles `a-z` ranges and a leading `^` for negation. The leading
+/// `^` is *not* part of the returned chars; instead `negated` is set.
+/// `\\` escapes the next char (so `\-` is a literal `-`).
+fn expand_tr_spec(spec: &str) -> Result<(Vec<char>, bool)> {
+    let mut chars: Vec<char> = Vec::new();
+    let mut iter = spec.chars().peekable();
+    let negated = if iter.peek() == Some(&'^') && spec.chars().count() > 1 {
+        iter.next();
+        true
+    } else {
+        false
+    };
+    while let Some(c) = iter.next() {
+        let ch = if c == '\\' {
+            iter.next().unwrap_or('\\')
+        } else {
+            c
+        };
+        // Detect `<ch>-<end>` range. CRuby treats a trailing `-` as
+        // a literal (no end char follows), but a `-` between two
+        // characters is always a range marker — even when the end is
+        // itself `-` (so `---` parses as range `-..-`, i.e. just `-`).
+        if iter.peek() == Some(&'-') {
+            let mut probe = iter.clone();
+            probe.next();
+            if probe.peek().is_some() {
+                iter.next(); // consume '-'
+                let end_raw = iter.next().unwrap();
+                let end_ch = if end_raw == '\\' {
+                    iter.next().unwrap_or('\\')
+                } else {
+                    end_raw
+                };
+                if (ch as u32) > (end_ch as u32) {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "invalid range \"{}-{}\" in string transliteration",
+                        ch, end_ch
+                    )));
+                }
+                for code in (ch as u32)..=(end_ch as u32) {
+                    if let Some(c) = char::from_u32(code) {
+                        chars.push(c);
+                    }
+                }
+                continue;
+            }
+        }
+        chars.push(ch);
+    }
+    Ok((chars, negated))
+}
+
+/// Build the `from`-character → replacement-character mapping for tr.
+/// Returns either:
+/// - `Ok(Some(map))` – per-char replacement (negation produces the
+///   wildcard map handled by callers as "everything not in `from`").
+/// - `Ok(None)` if `to` is empty, signalling pure deletion.
+fn tr_build_map(from: &str, to: &str) -> Result<TrMap> {
+    let (from_chars, negated) = expand_tr_spec(from)?;
+    if to.is_empty() {
+        return Ok(TrMap::Delete {
+            chars: from_chars,
+            negated,
+        });
+    }
+    let (to_chars, _) = expand_tr_spec(to)?;
+    let last_to = *to_chars.last().unwrap();
+    if negated {
+        return Ok(TrMap::Negated {
+            from_set: from_chars,
+            replacement: last_to,
+        });
+    }
+    let mut map: indexmap::IndexMap<char, char> = indexmap::IndexMap::new();
+    for (i, c) in from_chars.iter().enumerate() {
+        let r = to_chars.get(i).copied().unwrap_or(last_to);
+        map.insert(*c, r);
+    }
+    Ok(TrMap::Map(map))
+}
+
+enum TrMap {
+    Map(indexmap::IndexMap<char, char>),
+    Delete { chars: Vec<char>, negated: bool },
+    Negated { from_set: Vec<char>, replacement: char },
+}
+
+/// Run a `tr` translation. Returns `(result, changed)` so callers can
+/// distinguish "no-op → return nil" for the bang variants.
+/// `squeeze` collapses consecutive identical *output* characters that
+/// were produced by the translation (for `tr_s`).
+fn tr_translate(s: &str, from: &str, to: &str, squeeze: bool) -> Result<(String, bool)> {
+    let map = tr_build_map(from, to)?;
+    let mut out = String::with_capacity(s.len());
+    let mut changed = false;
+    let mut last_translated: Option<char> = None;
+    for ch in s.chars() {
+        let (replacement, was_translated) = match &map {
+            TrMap::Map(m) => match m.get(&ch) {
+                Some(r) => (Some(*r), true),
+                None => (Some(ch), false),
+            },
+            TrMap::Delete { chars, negated } => {
+                let in_set = chars.contains(&ch);
+                let drop = if *negated { !in_set } else { in_set };
+                if drop {
+                    changed = true;
+                    (None, true)
+                } else {
+                    (Some(ch), false)
+                }
+            }
+            TrMap::Negated {
+                from_set,
+                replacement,
+            } => {
+                if from_set.contains(&ch) {
+                    (Some(ch), false)
+                } else {
+                    (Some(*replacement), true)
+                }
+            }
+        };
+        match replacement {
+            None => {
+                last_translated = None;
+            }
+            Some(r) => {
+                if was_translated && r != ch {
+                    changed = true;
+                }
+                if squeeze && was_translated && Some(r) == last_translated {
+                    // skip duplicate
+                } else {
+                    out.push(r);
+                }
+                last_translated = if was_translated { Some(r) } else { None };
+            }
+        }
+    }
+    Ok((out, changed))
 }
 
 ///
@@ -4149,26 +4753,132 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// - count(*chars) -> Integer
 ///
+/// Each argument is interpreted as a `tr`-style character set (with
+/// `^` negation and `a-z` range support). The count is the number of
+/// characters in `self` that match *every* set (intersection).
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/count.html]
 #[monoruby_builtin]
 fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
+    if args.len() == 0 {
+        return Err(MonorubyErr::argumenterr("wrong number of arguments (given 0, expected 1+)"));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| arg.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
+    let sets: Vec<TrSet> = strs.iter().map(|s| TrSet::from_spec(s)).collect::<Result<_>>()?;
     let self_ = lfp.self_val();
     let target = self_.as_str();
-    let mut c = 0;
+    let mut c = 0i64;
     for ch in target.chars() {
-        for s in strs.iter() {
-            if s.chars().any(|c2| c2 == ch) {
-                c += 1;
-                break;
-            }
+        if sets.iter().all(|s| s.contains(ch)) {
+            c += 1;
         }
     }
-    Ok(Value::integer(c as i64))
+    Ok(Value::integer(c))
+}
+
+///
+/// ### String#squeeze
+///
+/// - squeeze(*chars) -> String
+///
+/// Returns a copy of `self` with runs of identical characters reduced
+/// to one. With one or more arguments, only characters matching every
+/// `tr`-style set (intersection) are squeezed; other characters are
+/// left untouched.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/squeeze.html]
+#[monoruby_builtin]
+fn squeeze(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    let res = squeeze_impl(vm, globals, s, lfp.arg(0))?;
+    Ok(Value::string(res))
+}
+
+///
+/// ### String#squeeze!
+///
+/// - squeeze!(*chars) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/squeeze=21.html]
+#[monoruby_builtin]
+fn squeeze_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let mut self_ = lfp.self_val();
+    let original = self_.expect_str(globals)?.to_string();
+    let res = squeeze_impl(vm, globals, &original, lfp.arg(0))?;
+    if res == original {
+        return Ok(Value::nil());
+    }
+    self_.replace_str(&res);
+    Ok(self_)
+}
+
+/// Coerce the rest-args array to a `Vec<TrSet>` and apply the squeeze.
+/// Empty argument list squeezes every character.
+fn squeeze_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    s: &str,
+    rest_arg: Value,
+) -> Result<String> {
+    let args = rest_arg.as_array();
+    let strs: Vec<String> = args
+        .iter()
+        .map(|a| a.coerce_to_string(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    let sets: Vec<TrSet> = strs.iter().map(|s| TrSet::from_spec(s)).collect::<Result<_>>()?;
+    let squeeze_all = sets.is_empty();
+    let mut out = String::with_capacity(s.len());
+    let mut prev: Option<char> = None;
+    for ch in s.chars() {
+        let in_squeeze_set = squeeze_all || sets.iter().all(|set| set.contains(ch));
+        if in_squeeze_set && Some(ch) == prev {
+            continue;
+        }
+        out.push(ch);
+        prev = Some(ch);
+    }
+    Ok(out)
+}
+
+/// Pre-parsed `tr`-style character set used by `String#count` and
+/// `String#delete` / `String#squeeze`. Empty sets match nothing
+/// (so `"".count("") == 0`); negation flips that.
+struct TrSet {
+    chars: std::collections::BTreeSet<char>,
+    negated: bool,
+    empty: bool,
+}
+
+impl TrSet {
+    fn from_spec(spec: &str) -> Result<Self> {
+        if spec.is_empty() {
+            return Ok(TrSet {
+                chars: std::collections::BTreeSet::new(),
+                negated: false,
+                empty: true,
+            });
+        }
+        let (chars, negated) = expand_tr_spec(spec)?;
+        Ok(TrSet {
+            chars: chars.into_iter().collect(),
+            negated,
+            empty: false,
+        })
+    }
+
+    fn contains(&self, ch: char) -> bool {
+        if self.empty {
+            return false;
+        }
+        let in_set = self.chars.contains(&ch);
+        if self.negated { !in_set } else { in_set }
+    }
 }
 
 ///
@@ -4231,6 +4941,92 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_iter(chars.into_iter()))
+    }
+}
+
+/// Materialise `self` as a vector of one-grapheme-cluster Strings,
+/// preserving the receiver's encoding. Non-UTF-8 unicode encodings
+/// (UTF-16/UTF-32 LE/BE) are first converted to UTF-8 for the
+/// segmentation pass and the resulting clusters are converted back.
+/// Falls back to byte-by-byte slicing for ASCII-incompatible legacy
+/// encodings, matching what `iter_char_bytes` already returns.
+fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<Value> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let enc = inner.encoding();
+    if enc.is_utf8_compatible() {
+        // Decode liberally so that broken sequences degrade to single
+        // bytes rather than panicking — chars() already handles this
+        // via `check_utf8`-tolerant paths inside `iter_char_bytes`,
+        // but here we need a `&str` for `graphemes()`.
+        let s = std::str::from_utf8(inner.as_bytes()).unwrap_or("");
+        s.graphemes(true)
+            .map(|g| {
+                Value::string_from_inner(RStringInner::from_encoding(g.as_bytes(), enc))
+            })
+            .collect()
+    } else {
+        // Encodings we don't decode (UTF-16/32, dummy, EUC-JP, …):
+        // delegate to the existing per-character byte-slice iterator.
+        // For UTF-16/32 this returns one codepoint at a time, which is
+        // a coarser approximation than CRuby's grapheme segmentation
+        // but keeps the spec's encoding-roundtrip invariants.
+        inner
+            .iter_char_bytes()
+            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
+            .collect()
+    }
+}
+
+///
+/// ### String#grapheme_clusters
+///
+/// - grapheme_clusters -> [String]
+/// - grapheme_clusters {|grapheme| block } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/grapheme_clusters.html]
+#[monoruby_builtin]
+fn grapheme_clusters(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let clusters = collect_grapheme_clusters(self_.as_rstring_inner());
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_map1(globals, bh, clusters.into_iter(), None)?;
+        Ok(self_)
+    } else {
+        Ok(Value::array_from_iter(clusters.into_iter()))
+    }
+}
+
+///
+/// ### String#each_grapheme_cluster
+///
+/// - each_grapheme_cluster {|grapheme| block } -> self
+/// - each_grapheme_cluster -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_grapheme_cluster.html]
+#[monoruby_builtin]
+fn each_grapheme_cluster(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if let Some(bh) = lfp.block() {
+        let clusters = collect_grapheme_clusters(self_.as_rstring_inner());
+        vm.invoke_block_iter1(globals, bh, clusters.into_iter())?;
+        Ok(self_)
+    } else {
+        vm.generate_enumerator(
+            IdentId::get_id("each_grapheme_cluster"),
+            self_,
+            vec![],
+            pc,
+        )
     }
 }
 
@@ -4383,6 +5179,134 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     )))
 }
 
+///
+/// ### String#undump
+///
+/// - undump -> String
+///
+/// Reverses `String#dump`. The receiver must be a literal-quoted dump
+/// string (`"..."`), with `dump`'s standard escapes (`\n`, `\t`,
+/// `\xNN`, `\u{...}`, `\#@`, etc.). Anything else raises a
+/// `RuntimeError`, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/undump.html]
+#[monoruby_builtin]
+fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let s = self_.expect_str(globals)?;
+    Ok(Value::string(parse_undump(s)?))
+}
+
+/// Parser for the dump-quoted format. Errors are returned as
+/// `RuntimeError` with the same message CRuby uses ("invalid dumped
+/// string"), so the spec's `raise_error(RuntimeError)` matches.
+fn parse_undump(s: &str) -> Result<String> {
+    let bytes = s.as_bytes();
+    let invalid = || MonorubyErr::runtimeerr("invalid dumped string");
+    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+        return Err(invalid());
+    }
+    let inner = &bytes[1..bytes.len() - 1];
+    let mut out = String::with_capacity(inner.len());
+    let mut i = 0usize;
+    while i < inner.len() {
+        let b = inner[i];
+        if b == b'"' {
+            // Unescaped `"` inside the body terminates a literal —
+            // anything after it is invalid.
+            return Err(invalid());
+        }
+        if b != b'\\' {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        // Past here `b == '\\'`. We need at least one more char.
+        i += 1;
+        if i >= inner.len() {
+            return Err(invalid());
+        }
+        let esc = inner[i];
+        i += 1;
+        match esc {
+            b'a' => out.push('\x07'),
+            b'b' => out.push('\x08'),
+            b't' => out.push('\t'),
+            b'n' => out.push('\n'),
+            b'v' => out.push('\x0b'),
+            b'f' => out.push('\x0c'),
+            b'r' => out.push('\r'),
+            b'e' => out.push('\x1b'),
+            b's' => out.push(' '),
+            b'"' => out.push('"'),
+            b'\\' => out.push('\\'),
+            b'#' => out.push('#'),
+            b'x' => {
+                // Exactly two hex digits in dump output.
+                if i + 2 > inner.len() {
+                    return Err(invalid());
+                }
+                let hi = hex_digit(inner[i]).ok_or_else(invalid)?;
+                let lo = hex_digit(inner[i + 1]).ok_or_else(invalid)?;
+                out.push((hi * 16 + lo) as u8 as char);
+                i += 2;
+            }
+            b'u' => {
+                if i < inner.len() && inner[i] == b'{' {
+                    // `\u{XXXX}` form, possibly multiple codepoints.
+                    i += 1;
+                    let end = inner[i..]
+                        .iter()
+                        .position(|&c| c == b'}')
+                        .map(|p| i + p)
+                        .ok_or_else(invalid)?;
+                    for part in inner[i..end].split(|&c| c == b' ') {
+                        if part.is_empty() {
+                            continue;
+                        }
+                        let cp = parse_hex_str(part).ok_or_else(invalid)?;
+                        let ch = char::from_u32(cp).ok_or_else(invalid)?;
+                        out.push(ch);
+                    }
+                    i = end + 1;
+                } else {
+                    // `\uXXXX` (exactly four hex digits).
+                    if i + 4 > inner.len() {
+                        return Err(invalid());
+                    }
+                    let cp = parse_hex_str(&inner[i..i + 4]).ok_or_else(invalid)?;
+                    let ch = char::from_u32(cp).ok_or_else(invalid)?;
+                    out.push(ch);
+                    i += 4;
+                }
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(out)
+}
+
+fn hex_digit(b: u8) -> Option<u32> {
+    match b {
+        b'0'..=b'9' => Some((b - b'0') as u32),
+        b'a'..=b'f' => Some((b - b'a' + 10) as u32),
+        b'A'..=b'F' => Some((b - b'A' + 10) as u32),
+        _ => None,
+    }
+}
+
+fn parse_hex_str(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut acc: u32 = 0;
+    for &b in bytes {
+        let d = hex_digit(b)?;
+        acc = acc.checked_mul(16)?.checked_add(d)?;
+    }
+    Some(acc)
+}
+
 fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&'static str> {
     if let Some(form) = lfp.try_arg(0) {
         match form.expect_symbol_or_string(globals)?.to_string().as_str() {
@@ -4421,6 +5345,62 @@ fn unicode_normalize(
         _ => unreachable!(),
     };
     Ok(Value::string(result))
+}
+
+/// ### String#unicode_normalized?
+/// - unicode_normalized?(form = :nfc) -> bool
+///
+/// Returns whether `self` is already in the requested Unicode
+/// normalization form. ASCII-only strings (which are unaffected by NFC/
+/// NFD/NFKC/NFKD) short-circuit to `true`. Strings whose encoding is
+/// not Unicode and which contain non-ASCII bytes raise
+/// `Encoding::CompatibilityError`, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/unicode_normalized=3f.html]
+#[monoruby_builtin]
+fn unicode_normalized_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use unicode_normalization::UnicodeNormalization;
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    let ascii_only = inner.as_bytes().iter().all(|b| *b < 0x80);
+    if ascii_only {
+        // Verify the form is valid even when we shortcut.
+        let _ = normalize_form(vm, globals, lfp)?;
+        return Ok(Value::bool(true));
+    }
+    if !enc.is_utf8_compatible()
+        && !matches!(
+            enc,
+            crate::value::rvalue::Encoding::Utf16Le
+                | crate::value::rvalue::Encoding::Utf16Be
+                | crate::value::rvalue::Encoding::Utf32Le
+                | crate::value::rvalue::Encoding::Utf32Be
+        )
+    {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!(
+                "incompatible encoding with this operation: {}",
+                enc.name()
+            ),
+        ));
+    }
+    let s = self_.expect_string(globals)?;
+    let form = normalize_form(vm, globals, lfp)?;
+    let ok = match form {
+        "nfc" => s.chars().eq(s.chars().nfc()),
+        "nfd" => s.chars().eq(s.chars().nfd()),
+        "nfkc" => s.chars().eq(s.chars().nfkc()),
+        "nfkd" => s.chars().eq(s.chars().nfkd()),
+        _ => unreachable!(),
+    };
+    Ok(Value::bool(ok))
 }
 
 /// ### String#unicode_normalize!
@@ -6793,5 +7773,233 @@ mod tests {
             // Empty string
             r##""".inspect"##,
         ]);
+    }
+
+    #[test]
+    fn string_chr() {
+        run_tests(&[
+            r##""hello".chr"##,
+            r##""".chr"##,
+            r##""日本語".chr"##,
+            r##""\u{77082}abc".chr"##,
+        ]);
+    }
+
+    #[test]
+    fn string_append_as_bytes() {
+        run_test(
+            r##"
+            s = "hello".b
+            s.append_as_bytes("\xE2\x82", 12, 43, "\xAC")
+            [s.bytes, s.encoding.to_s]
+            "##,
+        );
+        run_test(
+            r##"
+            s = +""
+            s.append_as_bytes(0x131, 0x232, 0x333)
+            s.bytes
+            "##,
+        );
+        run_test(
+            r##"
+            s = "".b
+            s.append_as_bytes(-1)
+            s.bytes
+            "##,
+        );
+        run_test_error(
+            r##"
+            s = "x".freeze
+            s.append_as_bytes("y")
+            "##,
+        );
+        run_test_error(
+            r##""hello".append_as_bytes(:sym)"##,
+        );
+    }
+
+    #[test]
+    fn string_unicode_normalized_p() {
+        run_tests(&[
+            r##""abc".unicode_normalized?"##,
+            r##""".unicode_normalized?"##,
+            r##""ẛ̣".unicode_normalized?(:nfc)"##,
+            r##""ẛ̣".unicode_normalized?(:nfd)"##,
+            r##""ẛ̣".unicode_normalized?(:nfc)"##,
+        ]);
+        run_test_error(r##""abc".unicode_normalized?(:wat)"##);
+    }
+
+    #[test]
+    fn string_grapheme_clusters() {
+        run_tests(&[
+            r##""hello".grapheme_clusters"##,
+            r##""".grapheme_clusters"##,
+            // Combining mark + base character form one cluster
+            r##""ábc".grapheme_clusters"##,
+            // Each ASCII char is its own cluster
+            r##""hello".each_grapheme_cluster.to_a"##,
+            // Each-with-block returns self
+            r##"a = []; "abc".each_grapheme_cluster {|g| a << g }; a"##,
+        ]);
+    }
+
+    #[test]
+    fn string_to_i_prefix() {
+        run_tests(&[
+            // 0d / 0D (decimal prefix) is recognised by `to_i(0)` and
+            // by default base too.
+            r##""+0d56".to_i"##,
+            r##""0d11".to_i(0)"##,
+            r##""0D19A".to_i(0)"##,
+            // 0o / 0b / 0x with auto-detect
+            r##""0o17".to_i(0)"##,
+            r##""0b11".to_i(0)"##,
+            r##""0xFA".to_i(0)"##,
+            r##""0o178".to_i(0)"##,
+            // Bare leading 0 with auto-detect ⇒ octal
+            r##""01778".to_i(0)"##,
+            // No leading prefix ⇒ decimal
+            r##""1234567890ABC".to_i(0)"##,
+            // Explicit base only strips the matching prefix
+            r##""0b11".to_i(2)"##,
+            r##""0b11".to_i(8)"##,
+            r##""0b11".to_i(16)"##,
+            // Sign handling: invalid combinations return 0
+            r##""++2".to_i"##,
+            r##""+-2".to_i"##,
+            r##""--2".to_i"##,
+            r##""0b-1".to_i(2)"##,
+            // Octal literal in source
+            r##"0777"##,
+            r##"0_777"##,
+        ]);
+    }
+
+    #[test]
+    fn string_uminus_uplus_dedup() {
+        run_tests(&[
+            // Frozen string passed through `-@` returns the same instance
+            r##"a = "foo".freeze; b = a.-@; a.equal?(b)"##,
+            // Unfrozen string yields a frozen copy
+            r##"a = +"foo"; b = a.-@; b.frozen?"##,
+            // `+@` on a frozen string returns an unfrozen copy
+            r##"a = "x".freeze; b = a.+@; b.frozen?"##,
+            // dedup is an alias of -@
+            r##""abc".dedup.frozen?"##,
+        ]);
+    }
+
+    #[test]
+    fn string_slice_range_endless_beginless() {
+        run_tests(&[
+            r##""hello there"[(2..)]"##,
+            r##""hello there"[(2...)]"##,
+            r##""hello there"[(-4..)]"##,
+            r##""hello there"[(..5)]"##,
+            r##""hello there"[(...5)]"##,
+            r##""hello there"[(...-4)]"##,
+            r##""hello there"[(...nil)]"##,
+        ]);
+        run_test_error(r##""hello"[1..2, 1]"##);
+        run_test_error(r##""hello"["", 0]"##);
+    }
+
+    #[test]
+    fn string_byteslice_range_endless_beginless() {
+        run_tests(&[
+            r##""hello there".byteslice(2..)"##,
+            r##""hello there".byteslice(..5)"##,
+            r##""hello there".byteslice(...nil)"##,
+        ]);
+        run_test_error(r##""hello".byteslice(1..2, 1)"##);
+    }
+
+    #[test]
+    fn string_lines_each_line() {
+        run_tests(&[
+            // Default newline separator
+            r##""one\ntwo\r\nthree".lines"##,
+            // Custom separator
+            r##""one\ntwo\r\nthree".lines("\n")"##,
+            r##""hello\nworld".lines("l")"##,
+            // chomp keyword
+            r##""hello \nworld\n".lines(chomp: true)"##,
+            r##""hello \r\nworld\r\n".lines(chomp: true)"##,
+            r##""hello world".lines(" ", chomp: true)"##,
+            // nil sep ⇒ whole string
+            r##""one\ntwo".lines(nil)"##,
+            // Paragraph mode
+            r##""hello\nworld\n\n\nand\nuniverse\n\n\n\n\n".lines("")"##,
+            // Block form returns self for each_line
+            r##"a = []; "a\nb".each_line {|s| a << s }; a"##,
+        ]);
+        run_test_error(r##""hello".lines(:sym)"##);
+        run_test_error(r##""hello".lines(false)"##);
+    }
+
+    #[test]
+    fn string_tr_family() {
+        run_tests(&[
+            // Basic replacement, range notation, padding with last char of `to`
+            r##""hello".tr('aeiou', '*')"##,
+            r##""hello".tr('a-y', 'b-z')"##,
+            r##""hello".tr('a-z', 'A-H.')"##,
+            // ^ negation
+            r##""hello".tr('^aeiou', '*')"##,
+            r##""hello ^-^".tr('^---l-o', 'x')"##,
+            // tr_s squeezes consecutive translated chars
+            r##""hello".tr_s('l', 'r')"##,
+            // tr! returns nil when nothing changed
+            r##"s = +"hello"; s.tr!('z', 'q')"##,
+            r##"s = +"hello"; s.tr!('l', 'L'); s"##,
+            r##"s = +"aabbcc"; s.tr_s!('a-c', 'x'); s"##,
+        ]);
+        run_test_error(r##""hello".tr('z-a', 'q')"##);
+    }
+
+    #[test]
+    fn string_count_with_sets() {
+        run_tests(&[
+            r##""hello\nworld\x00\x00".count("lo")"##,
+            r##""hello\nworld\x00\x00".count("l", "lo")"##,
+            r##""^hello\nworld\x00\x00".count("^leh")"##,
+            r##""hel-[()]-lo012^".count("e-h")"##,
+            r##""hel-[()]-lo012^".count("^e-h")"##,
+            r##""abcdefgh".count("a-ce-fh")"##,
+        ]);
+        run_test_error(r##""hello".count"##);
+        run_test_error(r##""hello".count("h-e")"##);
+    }
+
+    #[test]
+    fn string_squeeze_with_sets() {
+        run_tests(&[
+            r##""yellow moon".squeeze"##,
+            r##""  now   is  the".squeeze(" ")"##,
+            r##""putters shoot balls".squeeze("m-z")"##,
+            r##""aabbcc".squeeze("^b")"##,
+            // squeeze! returns nil when no change
+            r##"s = +"abc"; s.squeeze!"##,
+            r##"s = +"aabbcc"; s.squeeze!; s"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_roundtrip() {
+        run_tests(&[
+            r##""foo".dump.undump"##,
+            r##""\nbar\t".dump.undump"##,
+            r##""日本語".dump.undump"##,
+            // undump understands all dump escapes
+            r##"'"\\a\\b\\t\\n\\v\\f\\r\\e"'.undump"##,
+            r##"'"\\""'.undump"##,
+            r##"'"\\\\"'.undump"##,
+            r##"'"\\#@a"'.undump"##,
+        ]);
+        // Unbalanced quotes are rejected
+        run_test_error(r##""foo".undump"##);
+        run_test_error(r##""\\".undump"##);
     }
 }

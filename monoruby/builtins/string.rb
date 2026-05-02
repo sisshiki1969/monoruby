@@ -55,26 +55,6 @@ class String
     self
   end
 
-  def squeeze(*args)
-    if args.empty?
-      gsub(/(.)\1+/, '\1')
-    else
-      chars_to_squeeze = args.join
-      escaped = chars_to_squeeze.gsub(/[\\\[\]\-\^]/) { |c| "\\#{c}" }
-      gsub(/([#{escaped}])\1+/, '\1')
-    end
-  end
-
-  def squeeze!(*args)
-    result = squeeze(*args)
-    if result == self
-      nil
-    else
-      replace(result)
-      self
-    end
-  end
-
   def delete_suffix(suffix)
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
     if end_with?(s)
@@ -174,11 +154,12 @@ class String
   end
 
   def +@
-    self
+    frozen? ? dup : self
   end
   def -@
-    self
+    frozen? ? self : dup.freeze
   end
+  alias_method :dedup, :-@
 
   def encode(*args, **opts)
     if opts[:xml] == :attr
