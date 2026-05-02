@@ -17,6 +17,12 @@ impl std::ops::DerefMut for ExceptionInner {
     }
 }
 
+impl alloc::GC<RValue> for ExceptionInner {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.0.mark(alloc);
+    }
+}
+
 impl ExceptionInner {
     pub fn new(err: MonorubyErr) -> Self {
         ExceptionInner(err)

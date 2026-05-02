@@ -47,6 +47,40 @@ impl MonorubyErr {
         }
     }
 
+    ///
+    /// Mark every `Value` reachable from this error so the GC keeps
+    /// them alive while the error is in flight (held by `Executor`'s
+    /// pending exception slot or wrapped in a heap-allocated
+    /// `ExceptionInner`). Most error kinds carry only metadata
+    /// (class ids, identifier symbols, paths), but a few smuggle
+    /// real `Value`s — the relevant variants are dispatched
+    /// explicitly so that adding a new error kind that owns a
+    /// `Value` will not silently regress.
+    ///
+    pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<crate::value::RValue>) {
+        use alloc::GC;
+        match &self.kind {
+            // Packed `Value::id()` of the receiver that triggered the
+            // NoMethodError (set by `MonorubyErr::no_method_for_*`).
+            MonorubyErrKind::NotMethod(Some(id)) => {
+                Value::from_u64(*id).mark(alloc);
+            }
+            // Receiver / key Values (packed) for KeyError.
+            MonorubyErrKind::Key(Some((recv, key))) => {
+                Value::from_u64(*recv).mark(alloc);
+                Value::from_u64(*key).mark(alloc);
+            }
+            // Non-local return: carries the return value and the
+            // captured frame pointer it must return to.
+            MonorubyErrKind::MethodReturn(v, lfp) => {
+                v.mark(alloc);
+                lfp.mark(alloc);
+            }
+            // The remaining kinds carry no `Value` payload.
+            _ => {}
+        }
+    }
+
     pub fn kind(&self) -> &MonorubyErrKind {
         &self.kind
     }
