@@ -4,7 +4,7 @@ set -e
 cargo llvm-cov clean --workspace
 cargo llvm-cov nextest --features stress-spill-pool --no-report
 
-cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg -- --version > /dev/null
+cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --features gc-stress --features stress-spill-pool -- --version > /dev/null
 MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
 
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
@@ -12,7 +12,7 @@ ruby --yjit benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 
 # Build instrumented binary via cargo llvm-cov run
-cargo llvm-cov run --no-report --features stress-spill-pool -- --version > /dev/null
+cargo llvm-cov run --no-report --features stress-spill-pool --features gc-stress -- --version > /dev/null
 
 $MONORUBY benchmark/tarai.rb > monoruby.log
 ruby --yjit benchmark/tarai.rb > ruby.log
