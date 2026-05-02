@@ -676,14 +676,14 @@ impl alloc::GC<RValue> for RValue {
                 ObjTy::HASH => self.as_hashmap().mark(alloc),
                 ObjTy::REGEXP => {}
                 ObjTy::IO => {}
-                ObjTy::EXCEPTION => {}
+                ObjTy::EXCEPTION => self.as_exception().mark(alloc),
                 ObjTy::METHOD => self.as_method().mark(alloc),
                 ObjTy::FIBER => self.as_fiber().mark(alloc),
                 ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjTy::GENERATOR => self.as_generator().mark(alloc),
                 ObjTy::BINDING => self.as_binding().mark(alloc),
                 ObjTy::UMETHOD => {}
-                ObjTy::MATCHDATA => {}
+                ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
                 ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
@@ -1711,6 +1711,10 @@ impl RValue {
 
     pub(super) unsafe fn as_exception_mut(&mut self) -> &mut ExceptionInner {
         unsafe { &mut self.kind.exception }
+    }
+
+    pub(super) unsafe fn as_matchdata(&self) -> &MatchDataInner {
+        unsafe { &self.kind.matchdata }
     }
 
     pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {

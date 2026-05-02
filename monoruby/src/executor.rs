@@ -145,6 +145,25 @@ impl alloc::GC<RValue> for Executor {
             inner_cfp.lfp().mark(alloc);
             cfp = inner_cfp.prev();
         }
+        // `instance_eval` / `instance_exec` install a
+        // `DefinitionContext::Receiver(Value)` entry on the lexical
+        // class stack so subsequent `def` defines a singleton method
+        // on that receiver. The Value lives only here until the eval
+        // returns — without marking it, a GC during the eval body can
+        // free it.
+        for crefs in &self.lexical_class {
+            for cref in crefs {
+                if let DefinitionContext::Receiver(v) = cref.context {
+                    v.mark(alloc);
+                }
+            }
+        }
+        // Pending error: `MonorubyErrKind` variants carry packed Values
+        // (`NotMethod`, `Key`) or full `(Value, Lfp)` for non-local
+        // returns. See `MonorubyErr::mark`.
+        if let Some(err) = &self.exception {
+            err.mark(alloc);
+        }
     }
 }
 
