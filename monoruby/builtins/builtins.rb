@@ -546,3 +546,60 @@ module FileTest
     File.zero?(path)
   end
 end
+
+module ObjectSpace
+  class WeakMap
+    include Enumerable
+
+    def initialize
+      @store = {}
+    end
+
+    def []=(key, value)
+      @store[key] = value
+    end
+
+    def [](key)
+      @store[key]
+    end
+
+    def key?(key)
+      @store.key?(key)
+    end
+
+    def include?(key)
+      @store.key?(key)
+    end
+
+    def delete(key)
+      @store.delete(key)
+    end
+
+    def keys
+      @store.keys
+    end
+
+    def values
+      @store.values
+    end
+
+    def each_pair(&block)
+      @store.each_pair(&block)
+      self
+    end
+    alias each each_pair
+
+    def size
+      @store.size
+    end
+    alias length size
+  end
+
+  def self.define_finalizer(obj, aproc = nil, &block)
+    obj
+  end
+
+  def self.undefine_finalizer(obj)
+    obj
+  end
+end

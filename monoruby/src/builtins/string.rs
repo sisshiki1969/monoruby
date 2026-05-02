@@ -98,6 +98,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
+    globals.define_builtin_func(STRING_CLASS, "tr!", tr_, 2);
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
@@ -4219,6 +4220,26 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let rec = self_.expect_str(globals)?;
     let res = rec.replace(&from, &to);
     Ok(Value::string(res))
+}
+
+///
+/// ### String#tr!
+///
+/// - tr!(pattern, replacement) -> self | nil
+///
+#[monoruby_builtin]
+fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let from = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let rec = self_.expect_str(globals)?;
+    let res = rec.replace(&from, &to);
+    if res == rec {
+        Ok(Value::nil())
+    } else {
+        self_.replace_str(&res);
+        Ok(self_)
+    }
 }
 
 ///

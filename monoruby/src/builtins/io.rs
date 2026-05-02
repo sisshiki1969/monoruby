@@ -34,6 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
+    globals.define_builtin_func(IO_CLASS, "path", io_path, 0);
     globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
     globals.define_builtin_func(IO_CLASS, "to_i", io_fileno, 0);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
@@ -939,6 +940,22 @@ fn io_fileno(
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     Ok(Value::integer(fd as i64))
+}
+
+///
+/// ### IO#path
+///
+/// Raises IOError for plain IO objects (only File has a meaningful path).
+/// This matches CRuby behavior where IO#path is not defined but
+/// Logger 1.7.0 rescues IOError to detect its absence.
+#[monoruby_builtin]
+fn io_path(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Err(MonorubyErr::ioerr("not opened for reading".to_string()))
 }
 
 ///
