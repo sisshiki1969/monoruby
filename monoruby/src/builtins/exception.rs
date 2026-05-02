@@ -7,13 +7,15 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let exception_class =
         globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS, ObjTy::EXCEPTION);
-    globals.define_builtin_class_funcs_with(
+    globals.define_builtin_class_funcs_with_kw(
         EXCEPTION_CLASS,
         "new",
         &["exception"],
         exception_new,
         0,
         0,
+        true,
+        &[],
         true,
     );
 
@@ -206,13 +208,22 @@ fn exception_new(
     let class_id = lfp.self_val().expect_class(globals)?.id();
     let obj = Value::new_exception_from("".to_string(), class_id);
 
+    let kw_args = if let Some(kw) = lfp.try_arg(1)
+        && let Some(kw) = kw.try_hash_ty()
+        && !kw.is_empty()
+    {
+        Some(kw)
+    } else {
+        None
+    };
+
     vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
         obj,
         &lfp.arg(0).as_array(),
         lfp.block(),
-        None,
+        kw_args,
     )?;
 
     Ok(obj)

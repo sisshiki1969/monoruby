@@ -2210,24 +2210,40 @@ fn string_index(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let char_pos = if let Some(arg1) = lfp.try_arg(1) {
+    let start_char = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_int_i64(vm, globals)?
     } else {
         0
     };
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
-    let char_pos = match given.conv_char_index(char_pos)? {
+    let char_pos = match given.conv_char_index(start_char)? {
         Some(pos) => pos,
         None => return Ok(Value::nil()),
     };
 
     let s = given.check_utf8()?;
     let char_len = s.chars().count();
+
+    if let Some(needle) = lfp.arg(0).is_str() {
+        // String argument: literal substring search (not regex)
+        if needle.is_empty() {
+            return Ok(Value::integer(char_pos as i64));
+        }
+        for (ci, (bi, _)) in s.char_indices().enumerate() {
+            if ci < char_pos {
+                continue;
+            }
+            if s[bi..].starts_with(needle) {
+                return Ok(Value::integer(ci as i64));
+            }
+        }
+        return Ok(Value::nil());
+    }
+
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     if char_pos == char_len {
-        // At end of string, only empty-width matches are possible
         return match re.captures("", vm)? {
             Some(captures) if captures.get(0).unwrap().range().is_empty() => {
                 Ok(Value::integer(char_pos as i64))
@@ -2451,8 +2467,6 @@ fn string_rindex(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
-
     let s = given.check_utf8()?;
     let char_len = s.chars().count();
 
@@ -2465,6 +2479,28 @@ fn string_rindex(
     } else {
         char_len
     };
+
+    if let Some(needle) = lfp.arg(0).is_str() {
+        // String argument: literal substring search (not regex)
+        if needle.is_empty() {
+            return Ok(Value::integer(max_char_pos.min(char_len) as i64));
+        }
+        let mut last_found: Option<usize> = None;
+        for (char_pos, (byte_pos, _)) in s.char_indices().enumerate() {
+            if char_pos > max_char_pos {
+                break;
+            }
+            if s[byte_pos..].starts_with(needle) {
+                last_found = Some(char_pos);
+            }
+        }
+        return Ok(match last_found {
+            Some(pos) => Value::integer(pos as i64),
+            None => Value::nil(),
+        });
+    }
+
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let mut last_byte_pos = match re.captures_from_pos(s, 0, vm)? {
         None => {
@@ -2503,13 +2539,10 @@ fn string_rindex(
             }
         }
     }
-    // Handle match at end of string (e.g. zero-width match past last char_indices entry)
-    // Check if the pattern can match empty at the end of string
     if char_len <= max_char_pos {
         if last_byte_pos == s.len() {
             last_char_pos = Some(char_len);
         } else if last_byte_pos < s.len() {
-            // Try to find a zero-width match at the end of string
             if let Ok(Some(captures)) = re.captures("", vm) {
                 if captures.get(0).unwrap().range().is_empty() {
                     last_char_pos = Some(char_len);

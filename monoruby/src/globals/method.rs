@@ -695,6 +695,33 @@ impl Globals {
         )
     }
 
+    pub(crate) fn define_builtin_class_funcs_with_kw(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw_names: &[&str],
+        kw_rest: bool,
+    ) -> FuncId {
+        let class_id = self.store.get_metaclass(class_id).id();
+        self.new_builtin_fns(
+            class_id,
+            name,
+            alias,
+            address,
+            Visibility::Public,
+            min,
+            max,
+            rest,
+            kw_names,
+            kw_rest,
+        )
+    }
+
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
         class_id: ClassId,

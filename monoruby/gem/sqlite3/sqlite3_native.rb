@@ -519,10 +519,11 @@ module SQLite3
     end
 
     def reset!
-      return if @closed
+      return self if @closed
       FFIBridge.sqlite3_reset(@stmt)
       FFIBridge.sqlite3_clear_bindings(@stmt)
       @done = false
+      self
     end
 
     def bind_param(index, value)
