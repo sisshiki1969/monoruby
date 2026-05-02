@@ -9,7 +9,7 @@ GEM_BASE = "/opt/rbenv/versions/3.3.6/lib/ruby/gems/3.3.0/gems"
 class Regexp
   alias_method :__monoruby_match_q, :match?
   def match?(obj, pos = 0)
-    obj = obj.to_s if obj.is_a?(Symbol)
+    obj = obj.to_s unless obj.is_a?(String)
     __monoruby_match_q(obj, pos)
   end
 end
@@ -103,16 +103,16 @@ end
   ["activerecord-8.1.1", "lib"],
   ["activemodel-8.1.1", "lib"],
   ["activesupport-8.1.1", "lib"],
-  ["i18n-1.14.7", "lib"],
+  ["i18n-1.14.8", "lib"],
   ["tzinfo-2.0.6", "lib"],
-  ["concurrent-ruby-1.3.5", "lib/concurrent-ruby"],
+  ["concurrent-ruby-1.3.6", "lib/concurrent-ruby"],
   ["minitest-5.26.2", "lib"],
   ["bigdecimal-3.3.1", "lib"],
   ["mutex_m-0.3.0", "lib"],
   ["base64-0.3.0", "lib"],
   ["benchmark-0.3.0", "lib"],
   ["connection_pool-3.0.2", "lib"],
-  ["drb-2.2.3", "lib"],
+  ["drb-2.2.0", "lib"],
   ["logger-1.7.0", "lib"],
   ["securerandom-0.4.1", "lib"],
   ["timeout-0.5.0", "lib"],
@@ -138,8 +138,60 @@ puts "Loading active_record..."
 require "active_record"
 puts "OK: active_record loaded"
 
+# BUG WORKAROUND: monoruby's Hash lookup with custom hash/eql? fails to find
+# already-frozen objects in the deduplication registry, causing FrozenError when
+# deduplicate is called a second time on an already-frozen object.
+ActiveRecord::ConnectionAdapters::Deduplicable.module_eval do
+  def deduplicate
+    return self if frozen?
+    self.class.registry[self] ||= deduplicated
+  end
+  alias :-@ :deduplicate
+end
+
+# BUG WORKAROUND: monoruby constant resolution doesn't walk up lexical nesting
+# correctly for method bodies. Type.default_value in TypeMap#lookup can't find
+# ActiveRecord::Type from within ActiveRecord::Type::TypeMap.
+ActiveRecord::Type::TypeMap.class_eval do
+  def lookup(lookup_key)
+    fetch(lookup_key) { ActiveRecord::Type.default_value }
+  end
+end
+
+# BUG WORKAROUND: monoruby does not implement ruby2_keywords semantics.
+# AR's Migration#method_missing uses ruby2_keywords to forward kwargs through
+# *arguments splat. Patch both method_missing implementations to use explicit
+# **kwargs instead.
+ActiveRecord::Migration.class_eval do
+  # BUG WORKAROUND: monoruby has a yield-target resolution bug when
+  # yield inside a super-block goes through nested yield wrappers
+  # (say_with_time -> Benchmark.realtime { result = yield }).
+  # Flatten the nesting by inlining say_with_time here.
+  def say_with_time(message)
+    say(message)
+    result = yield
+    say "%.4fs" % 0.0, :subitem
+    say("#{result} rows", :subitem) if result.is_a?(Integer)
+    result
+  end
+
+  def method_missing(method, *arguments, **kwargs, &block)
+    say_with_time "#{method}(#{arguments.map(&:inspect).join(", ")})" do
+      return super unless execution_strategy.respond_to?(method)
+      execution_strategy.send(method, *arguments, **kwargs, &block)
+    end
+  end
+end
+ActiveRecord::Migration::DefaultStrategy.class_eval do
+  private
+  def method_missing(method, *args, **kwargs, &block)
+    connection.send(method, *args, **kwargs, &block)
+  end
+end
+
 ActiveRecord::Base.establish_connection adapter: "sqlite3", database: ":memory:"
 puts "OK: connection established"
+
 
 ActiveRecord::Schema.define do
   create_table :posts, force: true do |t|
@@ -157,5 +209,20 @@ end
 post = Post.create!(title: "hello", body: "world", upvotes: 10)
 puts "OK: created post id=#{post.id}"
 
-fetched = Post.find(post.id)
+# BUG WORKAROUND: monoruby constant resolution in class_eval'd code
+# can't find Relation from within ActiveRecord::Relation::QueryMethods.
+# Re-evaluate the clause accessor methods with fully-qualified constants.
+ActiveRecord::Relation.class_eval do
+  def where_clause
+    @values.fetch(:where, ActiveRecord::Relation::WhereClause.empty)
+  end
+  def having_clause
+    @values.fetch(:having, ActiveRecord::Relation::WhereClause.empty)
+  end
+  def from_clause
+    @values.fetch(:from, ActiveRecord::Relation::FromClause.empty)
+  end
+end
+
+fetched = Post.where(id: post.id).first
 puts "OK: fetched post title=#{fetched.title}"

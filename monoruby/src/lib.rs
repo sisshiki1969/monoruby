@@ -36,7 +36,7 @@ pub use id_table::{IdentId, IdentName};
 use monoruby_attr::*;
 
 const STRING_INLINE_CAP: usize = 32;
-const MAX_STACK_SIZE: usize = 64 * 1024; // 256 KiB
+const MAX_STACK_SIZE: usize = 256 * 1024; // 256 KiB
 const CONTINUATION_FRAME_SIZE: usize = 16;
 
 type RubyMap<K, V> = rubymap::RubyMap<K, V, Executor, Globals, MonorubyErr>;

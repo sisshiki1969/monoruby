@@ -66,6 +66,8 @@ module OpenSSL
   end
 
   module Cipher
+    class CipherError < OpenSSLError; end
+
     class Cipher
       def initialize(*); end
       def encrypt; self; end
