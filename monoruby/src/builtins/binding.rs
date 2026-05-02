@@ -9,6 +9,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[BINDING_CLASS].clear_alloc_func();
     globals.define_builtin_func(BINDING_CLASS, "local_variables", local_variables, 0);
     globals.define_builtin_func(BINDING_CLASS, "source_location", source_location, 0);
+    globals.define_builtin_func(BINDING_CLASS, "receiver", receiver, 0);
+}
+
+///
+/// ### Binding#receiver
+///
+/// - receiver -> Object
+///
+/// Returns the receiver (`self`) of the frame the binding captured.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/receiver.html]
+#[monoruby_builtin]
+fn receiver(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(lfp.self_val().as_binding_inner().self_val())
 }
 
 #[monoruby_builtin]

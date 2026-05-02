@@ -2437,7 +2437,7 @@ fn public(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     change_visi(vm, globals, lfp.self_val(), arg, Visibility::Public)
 }
 
-fn change_visi(
+pub(super) fn change_visi(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
