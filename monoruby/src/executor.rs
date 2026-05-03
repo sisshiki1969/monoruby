@@ -257,6 +257,13 @@ impl Executor {
         self.temp_stack.pop().unwrap()
     }
 
+    /// Read a Value previously pushed onto the temp stack. The bit pattern
+    /// remains a valid heap pointer as long as the Value is still in the
+    /// temp stack (i.e. it has not yet been popped/cleared).
+    pub fn temp_at(&self, idx: usize) -> Value {
+        self.temp_stack[idx]
+    }
+
     pub fn temp_array_push(&mut self, v: Value) {
         self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
