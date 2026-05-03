@@ -2,6 +2,30 @@ use super::*;
 use crate::value::IntegerBase;
 
 
+/// Apply integer precision: pad digits with leading zeros to at
+/// least `prec` digits. Special-case: precision 0 with value 0
+/// yields the empty string (matches CRuby `%.0d` % 0 == "").
+fn apply_int_precision(s: &str, precision: Option<usize>) -> String {
+    let prec = match precision {
+        Some(p) => p,
+        None => return s.to_string(),
+    };
+    let (sign, digits) = if let Some(rest) = s.strip_prefix('-') {
+        ("-", rest)
+    } else {
+        ("", s)
+    };
+    if prec == 0 && digits == "0" {
+        return sign.to_string();
+    }
+    if digits.len() >= prec {
+        return s.to_string();
+    }
+    let pad = prec - digits.len();
+    let zeros: String = std::iter::repeat('0').take(pad).collect();
+    format!("{}{}{}", sign, zeros, digits)
+}
+
 /// Apply width padding to a string, with left or right alignment.
 fn apply_width(s: &str, width: usize, left_align: bool, pad: char) -> String {
     if s.len() >= width {
@@ -15,34 +39,86 @@ fn apply_width(s: &str, width: usize, left_align: bool, pad: char) -> String {
     }
 }
 
-fn coerce_to_char(val: Value) -> Result<char> {
+fn coerce_to_char(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<Option<char>> {
     match val.unpack() {
         RV::Fixnum(i) => {
             if let Ok(u) = u32::try_from(i) {
                 if let Some(c) = char::from_u32(u) {
-                    return Ok(c);
+                    return Ok(Some(c));
                 }
             }
-            Err(MonorubyErr::argumenterr("invalid character"))
+            Err(MonorubyErr::rangeerr(format!("{i} out of char range")))
         }
         RV::Float(f) => {
             let f = f.trunc();
             if 0.0 <= f && f <= u32::MAX as f64 {
                 if let Some(c) = char::from_u32(f as u32) {
-                    return Ok(c);
+                    return Ok(Some(c));
                 }
             }
-            Err(MonorubyErr::argumenterr("invalid character"))
+            Err(MonorubyErr::rangeerr("float out of char range"))
         }
         RV::String(s) => {
             let s = s.check_utf8()?;
-            if s.chars().count() != 1 {
-                Err(MonorubyErr::argumenterr("%c requires a character"))
+            // Empty string -> empty output (no character).
+            // Multi-char string -> use only the first character.
+            Ok(s.chars().next())
+        }
+        _ => {
+            // Try Integer coercion first via to_int (matches CRuby's
+            // "no implicit conversion of X into Integer" error).
+            if let Some(func_id) = globals.check_method(val, IdentId::TO_INT) {
+                let result = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
+                if let RV::Fixnum(i) = result.unpack() {
+                    if let Ok(u) = u32::try_from(i) {
+                        if let Some(c) = char::from_u32(u) {
+                            return Ok(Some(c));
+                        }
+                    }
+                    return Err(MonorubyErr::rangeerr(format!("{i} out of char range")));
+                }
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Integer ({}#to_int gives {})",
+                    val.get_real_class_name(&globals.store),
+                    val.get_real_class_name(&globals.store),
+                    result.get_real_class_name(&globals.store),
+                )));
+            }
+            // Then try String coercion via to_str.
+            if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
+                let result = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
+                if let RV::String(s) = result.unpack() {
+                    let s = s.check_utf8()?;
+                    return Ok(s.chars().next());
+                }
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to String ({}#to_str gives {})",
+                    val.get_real_class_name(&globals.store),
+                    val.get_real_class_name(&globals.store),
+                    result.get_real_class_name(&globals.store),
+                )));
+            }
+            // CRuby uses two slightly different message templates:
+            //   "no implicit conversion from nil to integer"  (nil)
+            //   "no implicit conversion of <Class> into Integer" (others)
+            // Match both so the spec regex (`/of nil into Integer/` is
+            // accepted as `from nil to integer` by mspec's
+            // `raise_consistent_error`) matches CRuby exactly.
+            if val.is_nil() {
+                Err(MonorubyErr::typeerr(
+                    "no implicit conversion from nil to integer",
+                ))
             } else {
-                Ok(s.chars().next().unwrap())
+                let class_name = val.get_real_class_name(&globals.store);
+                Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion of {class_name} into Integer"
+                )))
             }
         }
-        _ => Err(MonorubyErr::argumenterr("invalid character")),
     }
 }
 
@@ -689,8 +765,10 @@ impl Executor {
             // Specifier
             let format = match ch {
                 'c' => {
-                    let c = coerce_to_char(val)?;
-                    let s = format!("{}", c);
+                    let s = match coerce_to_char(self, globals, val)? {
+                        Some(c) => format!("{}", c),
+                        None => String::new(),
+                    };
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 's' => {
@@ -706,22 +784,13 @@ impl Executor {
                     let s = val.inspect(&globals.store);
                     apply_width(&s, width, minus_flag, ' ')
                 }
-                'd' | 'i' => {
+                'd' | 'i' | 'u' => {
                     let ival = val.coerce_to_integer(self, globals)?;
                     let s = match ival {
                         IntegerBase::Fixnum(v) => format!("{}", v),
                         IntegerBase::BigInt(v) => format!("{}", v),
                     };
-                    format_integer_with_flags(
-                        &s, width, zero_flag, minus_flag, plus_flag, space_flag,
-                    )
-                }
-                'u' => {
-                    let ival = val.coerce_to_integer(self, globals)?;
-                    let s = match ival {
-                        IntegerBase::Fixnum(v) => format!("{}", v),
-                        IntegerBase::BigInt(v) => format!("{}", v),
-                    };
+                    let s = apply_int_precision(&s, precision);
                     format_integer_with_flags(
                         &s, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -744,6 +813,7 @@ impl Executor {
                                 IntegerBase::Fixnum(v) => format!("{:b}", v),
                                 IntegerBase::BigInt(v) => format!("{:b}", v),
                             };
+                            let digits = apply_int_precision(&digits, precision);
                             let is_zero = digits == "0";
                             let prefix = if hash_flag && !is_zero {
                                 if ch == 'B' { "0B" } else { "0b" }
@@ -769,6 +839,7 @@ impl Executor {
                                 IntegerBase::Fixnum(v) => format!("{:o}", v),
                                 IntegerBase::BigInt(v) => format!("{:o}", v),
                             };
+                            let digits = apply_int_precision(&digits, precision);
                             let prefix = if hash_flag {
                                 if digits.starts_with('0') { "" } else { "0" }
                             } else {
@@ -811,6 +882,7 @@ impl Executor {
                                     }
                                 }
                             };
+                            let digits = apply_int_precision(&digits, precision);
                             let is_zero = digits == "0";
                             let prefix = if hash_flag && !is_zero {
                                 if ch == 'X' { "0X" } else { "0x" }
@@ -827,7 +899,13 @@ impl Executor {
                 'f' => {
                     let f = val.coerce_to_float(self, globals)?;
                     let prec = precision.unwrap_or(6);
-                    let s = format!("{:.p$}", f.abs(), p = prec);
+                    let s = if f.is_infinite() {
+                        "Inf".to_string()
+                    } else if f.is_nan() {
+                        "NaN".to_string()
+                    } else {
+                        format!("{:.p$}", f.abs(), p = prec)
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -835,7 +913,11 @@ impl Executor {
                 'e' | 'E' => {
                     let f = val.coerce_to_float(self, globals)?;
                     let prec = precision.unwrap_or(6);
-                    let s = if ch == 'E' {
+                    let s = if f.is_infinite() {
+                        "Inf".to_string()
+                    } else if f.is_nan() {
+                        "NaN".to_string()
+                    } else if ch == 'E' {
                         normalize_sci_exponent(&format!("{:.p$E}", f.abs(), p = prec))
                     } else {
                         normalize_sci_exponent(&format!("{:.p$e}", f.abs(), p = prec))

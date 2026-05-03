@@ -125,6 +125,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
+    globals.define_private_builtin_func_with(STRING_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
     globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
@@ -185,6 +186,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "undump", undump, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "scrub", scrub, 0, 1, false);
+    globals.define_builtin_func_with(STRING_CLASS, "scrub!", scrub_, 0, 1, false);
     globals.define_builtin_func(
         STRING_CLASS,
         "force_encoding",
@@ -715,12 +718,21 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let nth = if let Some(i) = lfp.try_arg(1) {
-            i.coerce_to_int_i64(vm, globals)?
+        // Second arg may be an Integer (group number) or a String/Symbol
+        // (named capture group).
+        if let Some(arg1) = lfp.try_arg(1) {
+            if let Some(name) = arg1.is_str() {
+                return string_match_named(vm, lhs, &re, name);
+            }
+            if let Some(sym) = arg1.try_symbol() {
+                let name = sym.get_name();
+                return string_match_named(vm, lhs, &re, &name);
+            }
+            let nth = arg1.coerce_to_int_i64(vm, globals)?;
+            string_match_index(vm, lhs, &re, nth)
         } else {
-            0
-        };
-        string_match_index(vm, lhs, &re, nth)
+            string_match_index(vm, lhs, &re, 0)
+        }
     } else if let Some(s) = lfp.arg(0).is_str() {
         // `str[other_str, len]` is intentionally unsupported by CRuby.
         if lfp.try_arg(1).is_some() {
@@ -813,6 +825,32 @@ fn string_match_index(
             }
         }
     }
+}
+
+fn string_match_named(
+    vm: &mut Executor,
+    s: &RStringInner,
+    re: &RegexpInner,
+    name: &str,
+) -> Result<Value> {
+    let members = re.get_group_members(name);
+    if members.is_empty() {
+        return Err(MonorubyErr::indexerr(format!(
+            "undefined group name reference: {name}"
+        )));
+    }
+    let lhs = s.check_utf8()?;
+    let captures = match re.captures(lhs, vm)? {
+        None => return Ok(Value::nil()),
+        Some(c) => c,
+    };
+    // Pick the rightmost matched group sharing the name (matches CRuby).
+    for &idx in members.iter().rev() {
+        if let Some(Some(m)) = captures.iter().nth(idx as usize) {
+            return Ok(Value::string_from_str(m.as_str()));
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1417,9 +1455,15 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 .map(|(i, c)| &string[i..i + c.len_utf8()])
                 .collect();
             let v: Vec<Value> = if lim <= 0 || (lim as usize) >= chars.len() {
+                let lim_pos = if lim > 0 { Some(lim as usize) } else { None };
+                let chars_len = chars.len();
                 let mut v: Vec<Value> = chars.into_iter().map(Value::string_from_str).collect();
-                if lim < 0 {
-                    // Negative limit keeps trailing empty fields, matching CRuby.
+                // Trailing empty field is added when:
+                //   * lim is negative, or
+                //   * lim is positive and strictly greater than the
+                //     number of characters (so we still have "room"
+                //     in the limit).
+                if lim < 0 || matches!(lim_pos, Some(l) if l > chars_len) {
                     v.push(Value::string_from_str(""));
                 }
                 v
@@ -4917,6 +4961,24 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val())
 }
 
+/// String#initialize
+///
+/// - initialize -> self
+/// - initialize(other) -> self
+///
+/// Private; called by `Class#new` and `BasicObject#send(:initialize, ...)`.
+/// With no argument, returns self unchanged. With one argument, replaces
+/// self's bytes with the bytes of `other`.
+#[monoruby_builtin]
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(other) = lfp.try_arg(0) {
+        lfp.self_val().ensure_string_mutable(vm, globals)?;
+        let s = other.coerce_to_string(vm, globals)?;
+        lfp.self_val().replace_str(&s);
+    }
+    Ok(lfp.self_val())
+}
+
 ///
 /// ### String#chars
 ///
@@ -5194,30 +5256,181 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
-    Ok(Value::string(parse_undump(s)?))
+    let bytes = parse_undump(s)?;
+    // The dumped form is always ASCII-compatible. If the resulting
+    // bytes happen to be valid UTF-8, return UTF-8; otherwise return
+    // the bytes tagged as US-ASCII (so encoding survives the round
+    // trip and `valid_encoding?` reports correctly).
+    let enc = if std::str::from_utf8(&bytes).is_ok() {
+        Encoding::Utf8
+    } else {
+        Encoding::Utf8
+    };
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        &bytes, enc,
+    )))
+}
+
+///
+/// ### String#scrub
+///
+/// - scrub -> String
+/// - scrub(repl) -> String
+///
+/// Returns a copy of `self` with each invalid byte sequence replaced
+/// by `repl` (default `"\u{FFFD}"` for Unicode-aware encodings, `"?"`
+/// for ASCII-only encodings).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub.html]
+#[monoruby_builtin]
+fn scrub(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let repl = scrub_replacement(globals, lfp, inner.encoding())?;
+    Ok(Value::string_from_inner(scrub_inner(inner, &repl)?))
+}
+
+///
+/// ### String#scrub!
+///
+/// - scrub! -> self
+/// - scrub!(repl) -> self
+///
+/// In-place variant of `String#scrub`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub=21.html]
+#[monoruby_builtin]
+fn scrub_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let repl = scrub_replacement(globals, lfp, inner.encoding())?;
+    let scrubbed = scrub_inner(inner, &repl)?;
+    *self_.as_rstring_inner_mut() = scrubbed;
+    Ok(self_)
+}
+
+fn scrub_replacement(
+    globals: &mut Globals,
+    lfp: Lfp,
+    self_enc: Encoding,
+) -> Result<RStringInner> {
+    if let Some(arg) = lfp.try_arg(0) {
+        if arg.is_nil() {
+            return Ok(default_scrub_replacement(self_enc));
+        }
+        let r_value = arg.expect_str(globals)?;
+        // Take a copy to avoid borrowing issues across `arg`.
+        let _ = r_value;
+        let r_inner = arg.as_rstring_inner();
+        let r_enc = r_inner.encoding();
+        if !r_inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(
+                "replacement must be a valid byte sequence",
+            ));
+        }
+        if r_enc != self_enc && !(r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible()) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "incompatible character encodings: {} and {}",
+                self_enc.name(),
+                r_enc.name(),
+            )));
+        }
+        Ok(RStringInner::from_encoding(r_inner.as_bytes(), self_enc))
+    } else {
+        Ok(default_scrub_replacement(self_enc))
+    }
+}
+
+fn default_scrub_replacement(enc: Encoding) -> RStringInner {
+    match enc {
+        Encoding::Utf8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::Utf8),
+        _ => RStringInner::from_encoding(b"?", enc),
+    }
+}
+
+fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner> {
+    let bytes = inner.as_bytes();
+    let enc = inner.encoding();
+    if inner.is_valid_encoding() {
+        return Ok(RStringInner::from_encoding(bytes, enc));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    match enc {
+        Encoding::Utf8 => scrub_utf8(bytes, repl.as_bytes(), &mut out),
+        Encoding::UsAscii => {
+            for &b in bytes {
+                if b < 0x80 {
+                    out.push(b);
+                } else {
+                    out.extend_from_slice(repl.as_bytes());
+                }
+            }
+        }
+        _ => out.extend_from_slice(bytes),
+    }
+    Ok(RStringInner::from_encoding(&out, enc))
+}
+
+fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
+    // Walk the byte stream, replacing each "maximal subpart" of an
+    // ill-formed sequence with a single replacement (matches the
+    // Unicode/CRuby definition of `scrub`).
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(rest) => {
+                out.extend_from_slice(rest.as_bytes());
+                return;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    out.extend_from_slice(&bytes[i..i + valid_up_to]);
+                    i += valid_up_to;
+                }
+                let bad_len = e.error_len().unwrap_or(bytes.len() - i);
+                out.extend_from_slice(repl);
+                i += bad_len;
+            }
+        }
+    }
 }
 
 /// Parser for the dump-quoted format. Errors are returned as
-/// `RuntimeError` with the same message CRuby uses ("invalid dumped
-/// string"), so the spec's `raise_error(RuntimeError)` matches.
-fn parse_undump(s: &str) -> Result<String> {
+/// `RuntimeError` with messages that match CRuby's variants, so the
+/// spec's `raise_error(RuntimeError, /.../)` matches the right kind.
+fn parse_undump(s: &str) -> Result<Vec<u8>> {
     let bytes = s.as_bytes();
     let invalid = || MonorubyErr::runtimeerr("invalid dumped string");
-    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+    let unterminated = || MonorubyErr::runtimeerr("unterminated dumped string");
+    let bad_hex = || MonorubyErr::runtimeerr("invalid hex escape");
+    let bad_unicode = || MonorubyErr::runtimeerr("invalid Unicode escape");
+    let null_byte = || MonorubyErr::runtimeerr("string contains null byte");
+    let non_ascii = || MonorubyErr::runtimeerr("non-ASCII character detected");
+    if bytes.len() < 2 || bytes[0] != b'"' {
         return Err(invalid());
     }
+    if bytes[bytes.len() - 1] != b'"' {
+        return Err(unterminated());
+    }
     let inner = &bytes[1..bytes.len() - 1];
-    let mut out = String::with_capacity(inner.len());
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
     let mut i = 0usize;
     while i < inner.len() {
         let b = inner[i];
+        if b == 0 {
+            return Err(null_byte());
+        }
+        if b >= 0x80 {
+            return Err(non_ascii());
+        }
         if b == b'"' {
             // Unescaped `"` inside the body terminates a literal —
             // anything after it is invalid.
             return Err(invalid());
         }
         if b != b'\\' {
-            out.push(b as char);
+            out.push(b);
             i += 1;
             continue;
         }
@@ -5229,26 +5442,28 @@ fn parse_undump(s: &str) -> Result<String> {
         let esc = inner[i];
         i += 1;
         match esc {
-            b'a' => out.push('\x07'),
-            b'b' => out.push('\x08'),
-            b't' => out.push('\t'),
-            b'n' => out.push('\n'),
-            b'v' => out.push('\x0b'),
-            b'f' => out.push('\x0c'),
-            b'r' => out.push('\r'),
-            b'e' => out.push('\x1b'),
-            b's' => out.push(' '),
-            b'"' => out.push('"'),
-            b'\\' => out.push('\\'),
-            b'#' => out.push('#'),
+            b'a' => out.push(0x07),
+            b'b' => out.push(0x08),
+            b't' => out.push(b'\t'),
+            b'n' => out.push(b'\n'),
+            b'v' => out.push(0x0b),
+            b'f' => out.push(0x0c),
+            b'r' => out.push(b'\r'),
+            b'e' => out.push(0x1b),
+            b's' => out.push(b' '),
+            b'"' => out.push(b'"'),
+            b'\\' => out.push(b'\\'),
+            b'#' => out.push(b'#'),
             b'x' => {
-                // Exactly two hex digits in dump output.
+                // Exactly two hex digits in dump output. Push the raw
+                // byte (this can produce non-UTF-8 bytes intentionally,
+                // matching CRuby's `"\xNN".dump.undump` round-trip).
                 if i + 2 > inner.len() {
-                    return Err(invalid());
+                    return Err(bad_hex());
                 }
-                let hi = hex_digit(inner[i]).ok_or_else(invalid)?;
-                let lo = hex_digit(inner[i + 1]).ok_or_else(invalid)?;
-                out.push((hi * 16 + lo) as u8 as char);
+                let hi = hex_digit(inner[i]).ok_or_else(bad_hex)?;
+                let lo = hex_digit(inner[i + 1]).ok_or_else(bad_hex)?;
+                out.push((hi * 16 + lo) as u8);
                 i += 2;
             }
             b'u' => {
@@ -5259,24 +5474,26 @@ fn parse_undump(s: &str) -> Result<String> {
                         .iter()
                         .position(|&c| c == b'}')
                         .map(|p| i + p)
-                        .ok_or_else(invalid)?;
+                        .ok_or_else(bad_unicode)?;
                     for part in inner[i..end].split(|&c| c == b' ') {
                         if part.is_empty() {
                             continue;
                         }
-                        let cp = parse_hex_str(part).ok_or_else(invalid)?;
-                        let ch = char::from_u32(cp).ok_or_else(invalid)?;
-                        out.push(ch);
+                        let cp = parse_hex_str(part).ok_or_else(bad_unicode)?;
+                        let ch = char::from_u32(cp).ok_or_else(bad_unicode)?;
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     }
                     i = end + 1;
                 } else {
                     // `\uXXXX` (exactly four hex digits).
                     if i + 4 > inner.len() {
-                        return Err(invalid());
+                        return Err(bad_unicode());
                     }
-                    let cp = parse_hex_str(&inner[i..i + 4]).ok_or_else(invalid)?;
-                    let ch = char::from_u32(cp).ok_or_else(invalid)?;
-                    out.push(ch);
+                    let cp = parse_hex_str(&inner[i..i + 4]).ok_or_else(bad_unicode)?;
+                    let ch = char::from_u32(cp).ok_or_else(bad_unicode)?;
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     i += 4;
                 }
             }
@@ -8057,5 +8274,250 @@ mod tests {
         // Unbalanced quotes are rejected
         run_test_error(r##""foo".undump"##);
         run_test_error(r##""\\".undump"##);
+    }
+
+    #[test]
+    fn string_unpack_directive_message() {
+        // Unknown directive in unpack reports "unknown unpack directive ..."
+        // (not the pack form). Verified by raising and capturing the message.
+        run_tests(&[
+            r##"begin; "abcdefgh".unpack("a K"); rescue ArgumentError => e; e.message; end"##,
+            r##"begin; "abcdefgh".unpack("a 0"); rescue ArgumentError => e; e.message; end"##,
+            // pack still says "unknown pack directive"
+            r##"begin; [1].pack("K"); rescue ArgumentError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_pads_with_nil() {
+        // Past the end of the source, unpack pads with nil for each
+        // element still requested (CRuby behavior).
+        run_tests(&[
+            r##""".unpack("C3")"##,
+            r##""".unpack("S3")"##,
+            r##""".unpack("L3")"##,
+            r##""".unpack("Q3")"##,
+            r##""".unpack("D3")"##,
+            r##""".unpack("F3")"##,
+            r##""\x01".unpack("C3")"##,
+            r##""\x01\x02\x03".unpack("L2")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_q_msb() {
+        // Q / J unpack must preserve the full u64 range — values with
+        // the high bit set must come back positive, not as a negative
+        // i64 reinterpretation.
+        run_tests(&[
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q<")"##,
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q>")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("Q")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("J")"##,
+            // q (signed) still wraps to the negative value
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("q")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_format() {
+        // %c accepts integers, strings (first char), and any object
+        // whose to_int / to_str returns the right type.
+        run_tests(&[
+            r##""%c" % 97"##,
+            r##""%c" % "a""##,
+            r##""%c" % "abc""##,
+            r##""%c" % """##,
+            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
+            r##"begin; "%c" % [[]]; rescue TypeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_coerces_to_int() {
+        // %c with an arbitrary object: to_int is tried first. If it
+        // returns an Integer, that codepoint is used.
+        run_test_with_prelude(
+            r##""%c" % MyInt.new"##,
+            r##"
+                class MyInt
+                  def to_int; 90; end
+                end
+            "##,
+        );
+        // to_int may also return a value pointing at a non-ASCII
+        // codepoint — the result is the corresponding character.
+        run_test_with_prelude(
+            r##""%c" % HiroChar.new"##,
+            r##"
+                class HiroChar
+                  def to_int; 0x3042; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_c_coerces_to_str() {
+        // %c with an arbitrary object that responds only to to_str:
+        // the returned String's first char becomes the output.
+        run_test_with_prelude(
+            r##""%c" % MyStr.new"##,
+            r##"
+                class MyStr
+                  def to_str; "abc"; end
+                end
+            "##,
+        );
+        run_test_with_prelude(
+            r##""%c" % EmptyStr.new"##,
+            r##"
+                class EmptyStr
+                  def to_str; ""; end
+                end
+            "##,
+        );
+        // A class without to_int / to_str / Integer-like behavior
+        // raises TypeError mentioning Integer (the first conversion
+        // tried).
+        run_test_with_prelude(
+            r##"begin; "%c" % Plain.new; rescue TypeError => e; e.message =~ /Integer/ ? "ok" : e.message; end"##,
+            r##"
+                class Plain; end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_int_precision() {
+        // d / i / u / b / B / o / x / X all honor precision; precision 0
+        // applied to value 0 yields the empty string.
+        run_tests(&[
+            r##""%.0d" % 0"##,
+            r##""%.0i" % 0"##,
+            r##""%.0u" % 0"##,
+            r##""%.5d" % 12"##,
+            r##""%.5d" % -12"##,
+            r##""%.5d" % 0"##,
+            r##""%.6b" % 10"##,
+            r##""%.6B" % 10"##,
+            r##""%.5o" % 87"##,
+            r##""%.5x" % 196"##,
+            r##""%.5X" % 196"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_inf_nan() {
+        // %f / %e / %E / %g / %G surface "Inf" / "NaN" instead of Rust's
+        // lowercase "inf".
+        run_tests(&[
+            r##""%f" % Float::INFINITY"##,
+            r##""%f" % (-Float::INFINITY)"##,
+            r##""%f" % Float::NAN"##,
+            r##""%e" % Float::INFINITY"##,
+            r##""%E" % Float::INFINITY"##,
+            r##""%g" % Float::INFINITY"##,
+            r##""%G" % (-Float::INFINITY)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_default() {
+        // scrub with no argument replaces invalid UTF-8 with U+FFFD.
+        run_tests(&[
+            r##""foo".scrub"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub"##,
+            // An incomplete multi-byte sequence at the end is one
+            // "subpart" — one replacement, not one per byte.
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub"##,
+            // Already-valid string is returned as a copy with the same
+            // bytes and encoding.
+            r##""abcあ".scrub"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_custom_replacement() {
+        run_tests(&[
+            r##""foo".scrub("*")"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub("*")"##,
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub("*")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_bang() {
+        // scrub! mutates self.
+        run_tests(&[
+            r##"s = +"foo"; s.scrub!; s"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); s = +("abc" + x81); s.scrub!("*"); s"##,
+        ]);
+    }
+
+    #[test]
+    fn string_initialize_replaces() {
+        // initialize is a private method and replaces self when
+        // called via send.
+        run_tests(&[
+            r##"s = +"hello"; s.send(:initialize, "world"); s"##,
+            r##"s = +"hello"; s.send(:initialize); s"##,
+            r##"String.private_instance_methods.include?(:initialize)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_index_named_capture() {
+        // String#[regex, name] returns the named-capture match.
+        run_tests(&[
+            r##""hello"[/(?<x>l+)/, "x"]"##,
+            r##""hello"[/(?<x>l+)/, :x]"##,
+            r##""hello"[/(?<x>z+)/, "x"]"##,
+            // Numeric group still works.
+            r##""hello"[/(l+)/, 1]"##,
+            r##""hello"[/(l+)/, 0]"##,
+            // Unknown name raises IndexError.
+            r##"begin; "hello"[/(?<x>l+)/, "y"]; rescue IndexError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_x_byte() {
+        // \xNN in a dumped string must yield the raw byte, not a
+        // UTF-8 widening of the codepoint.
+        run_tests(&[
+            r##""\"\\x80\"".undump.bytes"##,
+            r##""\"\\xFF\"".undump.bytes"##,
+            r##""\"\\x00\"".undump.bytes"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_error_messages() {
+        // Each malformed undump input maps to a specific message
+        // CRuby's specs match against.
+        run_tests(&[
+            r##"begin; '"foo'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\x"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\u"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"foo\0\"".undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"あ\"".undump; rescue RuntimeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_split_empty_separator_limit() {
+        // With an empty separator, lim > char_count appends a
+        // trailing empty field.
+        run_tests(&[
+            r##""hi!".split("")"##,
+            r##""hi!".split("", -1)"##,
+            r##""hi!".split("", 0)"##,
+            r##""hi!".split("", 1)"##,
+            r##""hi!".split("", 2)"##,
+            r##""hi!".split("", 3)"##,
+            r##""hi!".split("", 4)"##,
+            r##""hi!".split("", 5)"##,
+        ]);
     }
 }
