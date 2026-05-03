@@ -8334,6 +8334,61 @@ mod tests {
     }
 
     #[test]
+    fn string_modulo_c_coerces_to_int() {
+        // %c with an arbitrary object: to_int is tried first. If it
+        // returns an Integer, that codepoint is used.
+        run_test_with_prelude(
+            r##""%c" % MyInt.new"##,
+            r##"
+                class MyInt
+                  def to_int; 90; end
+                end
+            "##,
+        );
+        // to_int may also return a value pointing at a non-ASCII
+        // codepoint — the result is the corresponding character.
+        run_test_with_prelude(
+            r##""%c" % HiroChar.new"##,
+            r##"
+                class HiroChar
+                  def to_int; 0x3042; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_c_coerces_to_str() {
+        // %c with an arbitrary object that responds only to to_str:
+        // the returned String's first char becomes the output.
+        run_test_with_prelude(
+            r##""%c" % MyStr.new"##,
+            r##"
+                class MyStr
+                  def to_str; "abc"; end
+                end
+            "##,
+        );
+        run_test_with_prelude(
+            r##""%c" % EmptyStr.new"##,
+            r##"
+                class EmptyStr
+                  def to_str; ""; end
+                end
+            "##,
+        );
+        // A class without to_int / to_str / Integer-like behavior
+        // raises TypeError mentioning Integer (the first conversion
+        // tried).
+        run_test_with_prelude(
+            r##"begin; "%c" % Plain.new; rescue TypeError => e; e.message =~ /Integer/ ? "ok" : e.message; end"##,
+            r##"
+                class Plain; end
+            "##,
+        );
+    }
+
+    #[test]
     fn string_modulo_int_precision() {
         // d / i / u / b / B / o / x / X all honor precision; precision 0
         // applied to value 0 yields the empty string.

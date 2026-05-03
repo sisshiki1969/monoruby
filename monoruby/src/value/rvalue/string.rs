@@ -1314,4 +1314,111 @@ mod encoding_tests {
             None
         );
     }
+
+    // ---------- Non-UTF-8 / error-path coverage ----------
+
+    #[test]
+    fn to_str_errors_on_invalid_utf8_in_utf8_string() {
+        // UTF-8-tagged bytes containing an invalid sequence: `to_str`
+        // returns Err with the "invalid byte sequence: ..." prefix.
+        let s = RStringInner::from_encoding(b"abc\xFFdef", Encoding::Utf8);
+        let err = s.to_str().unwrap_err();
+        let msg = err.message();
+        assert!(
+            msg.starts_with("invalid byte sequence:"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn to_str_escapes_high_bytes_for_binary_encoding() {
+        // Non-UTF-8 encodings always succeed; high bytes come back as
+        // `\xHH` literal in the resulting string.
+        let s = RStringInner::from_encoding(b"a\xFFb", Encoding::Ascii8);
+        assert_eq!(s.to_str().unwrap().as_ref(), r"a\xFFb");
+
+        let utf16 = RStringInner::from_encoding(&[0x00, 0xD8], Encoding::Utf16Le);
+        // 0x00 stays ASCII-printable; 0xD8 escapes.
+        assert_eq!(utf16.to_str().unwrap().as_ref(), "\x00\\xD8");
+    }
+
+    #[test]
+    fn extend_errors_on_incompatible_encodings() {
+        // UTF-8 (with non-ASCII content) + UTF-16LE → no compatible
+        // encoding → RuntimeError mentioning both encoding names.
+        let mut a = RStringInner::from_encoding("あ".as_bytes(), Encoding::Utf8);
+        let b = RStringInner::from_encoding(&[0x61, 0x00], Encoding::Utf16Le);
+        let err = a.extend(&b).unwrap_err();
+        let msg = err.message();
+        assert!(msg.contains("incompatible character encodings"), "{msg}");
+        assert!(msg.contains("UTF-8"), "{msg}");
+        assert!(msg.contains("UTF-16LE"), "{msg}");
+    }
+
+    #[test]
+    fn extend_compatible_seven_bit_and_other() {
+        // Pure-ASCII operand is compatible with any ASCII-compatible
+        // encoding (Shift_JIS in this case) — append succeeds and the
+        // result keeps the receiver's encoding.
+        let mut a = RStringInner::from_encoding(b"\x82\xa0", Encoding::Sjis(0));
+        let b = RStringInner::from_str("xy");
+        a.extend(&b).unwrap();
+        assert_eq!(a.encoding(), Encoding::Sjis(0));
+        assert_eq!(a.as_bytes(), b"\x82\xa0xy");
+    }
+
+    #[test]
+    fn byte_to_char_index_errors_on_invalid_utf8_bytes() {
+        // `byte_to_char_index` walks `check_utf8()`, which fails on
+        // any byte sequence that isn't valid UTF-8 — here a Shift_JIS
+        // string whose high bytes are not valid UTF-8 starters.
+        let s = RStringInner::from_encoding(b"\x82\xa0", Encoding::Sjis(0));
+        assert!(s.byte_to_char_index(0).is_err());
+
+        // Same for an explicitly-broken UTF-8 string.
+        let s = RStringInner::from_encoding(b"abc\xFF", Encoding::Utf8);
+        assert!(s.byte_to_char_index(3).is_err());
+    }
+
+    #[test]
+    fn byte_to_char_index_errors_off_char_boundary() {
+        // UTF-8 valid string ("aあb"). `あ` occupies bytes 1..4. A
+        // byte position pointing into the middle of `あ` is rejected.
+        let s = RStringInner::from_str("aあb");
+        assert_eq!(s.byte_to_char_index(0).unwrap(), 0);
+        assert_eq!(s.byte_to_char_index(1).unwrap(), 1);
+        assert_eq!(s.byte_to_char_index(4).unwrap(), 2);
+        assert!(s.byte_to_char_index(2).is_err());
+        assert!(s.byte_to_char_index(3).is_err());
+        // Out-of-range byte position also errors.
+        assert!(s.byte_to_char_index(99).is_err());
+    }
+
+    #[test]
+    fn utf8_escape_bytes_escapes_invalid_sequences() {
+        // Walk a buffer with one valid prefix, an invalid byte, and
+        // another valid suffix. The escape function should pass valid
+        // chars through and emit `\xHH` for the invalid byte.
+        let mut out = String::new();
+        utf8_escape_bytes(&mut out, b"a\xFFb", |s, c| s.push(c));
+        assert_eq!(out, "a\\xFFb");
+
+        // All-invalid bytes get one `\xHH` per byte.
+        let mut out = String::new();
+        utf8_escape_bytes(&mut out, &[0xC0, 0xC1, 0xF5], |s, c| s.push(c));
+        assert_eq!(out, "\\xC0\\xC1\\xF5");
+
+        // The `escape_fn` callback receives valid chars verbatim — we
+        // route control chars through `ascii_escape` to verify the
+        // callback is actually called per-codepoint, not per-byte.
+        let mut out = String::new();
+        utf8_escape_bytes(&mut out, "あ\x07".as_bytes(), |s, c| {
+            if c.is_ascii() {
+                ascii_escape(s, c as u8);
+            } else {
+                s.push(c);
+            }
+        });
+        assert_eq!(out, "あ\\a");
+    }
 }
