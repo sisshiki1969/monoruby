@@ -27,6 +27,11 @@ impl ConstVisibility {
 pub(crate) struct ConstState {
     pub kind: ConstStateKind,
     pub visibility: ConstVisibility,
+    /// Set by `Module#deprecate_constant`. When true, every read of
+    /// the constant emits a `warning: constant <Name> is deprecated`
+    /// message via `Kernel#warn` (so it honours `Warning[:deprecated]`
+    /// and any custom `Warning.warn` override).
+    pub deprecated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +83,7 @@ impl ConstState {
         Self {
             kind: ConstStateKind::Loaded(value),
             visibility: ConstVisibility::Public,
+            deprecated: false,
         }
     }
 
@@ -85,6 +91,7 @@ impl ConstState {
         Self {
             kind: ConstStateKind::Autoload(AutoloadEntry::new(path)),
             visibility: ConstVisibility::Public,
+            deprecated: false,
         }
     }
 
@@ -113,6 +120,14 @@ impl ConstState {
 
     pub(crate) fn set_public(&mut self) {
         self.visibility = ConstVisibility::Public;
+    }
+
+    pub(crate) fn is_deprecated(&self) -> bool {
+        self.deprecated
+    }
+
+    pub(crate) fn set_deprecated(&mut self) {
+        self.deprecated = true;
     }
 }
 
@@ -241,17 +256,21 @@ impl ClassInfoTable {
         name: IdentId,
         val: Value,
     ) {
-        // Preserve the previous visibility if we're overwriting an existing
-        // entry, so that `M::X = 1; private_constant :X; M::X = 2` keeps :X
-        // private. New entries default to public via `ConstState::loaded`.
-        let prev_visibility = self[class_id]
+        // Preserve the previous visibility / deprecation flags if we're
+        // overwriting an existing entry, so that `M::X = 1;
+        // private_constant :X; M::X = 2` keeps :X private (and likewise
+        // for `deprecate_constant`). New entries default to public and
+        // non-deprecated via `ConstState::loaded`.
+        let (prev_visibility, prev_deprecated) = self[class_id]
             .constants
             .get(&name)
-            .map(|s| s.visibility);
+            .map(|s| (Some(s.visibility), s.deprecated))
+            .unwrap_or((None, false));
         let mut new_state = ConstState::loaded(val);
         if let Some(vis) = prev_visibility {
             new_state.visibility = vis;
         }
+        new_state.deprecated = prev_deprecated;
         let prev = self[class_id].constants.insert(name, new_state);
         if prev.as_ref().is_some_and(|s| s.is_loaded())
             && WARNING.load(std::sync::atomic::Ordering::Relaxed) >= 1

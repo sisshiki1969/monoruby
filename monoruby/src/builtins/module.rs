@@ -196,6 +196,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "included_modules", included_modules, 0);
     globals.define_builtin_func_rest(MODULE_CLASS, "public_constant", public_constant);
     globals.define_builtin_func_rest(MODULE_CLASS, "private_constant", private_constant);
+    globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
+    globals.define_private_builtin_func_rest(MODULE_CLASS, "ruby2_keywords", ruby2_keywords);
     // `used_refinements` (both class and instance forms) is mocked in
     // Ruby — see `Module#used_refinements` / `Module.used_refinements`
     // in `builtins/startup.rb`. Both return `[]` since refinements
@@ -494,6 +496,20 @@ fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     };
 
     if let Some(writable) = legacy_writable {
+        // CRuby emits "boolean argument is obsoleted" when $VERBOSE is
+        // true (i.e. ruby -W2). $VERBOSE defaults to nil/false; only
+        // `true` triggers the warning, matching CRuby's `rb_warning`
+        // gating used here.
+        if globals
+            .get_gvar(IdentId::get_id("$VERBOSE"))
+            .is_some_and(|v| v == Value::bool(true))
+        {
+            crate::value::emit_verbose_warning(
+                vm,
+                globals,
+                "boolean argument is obsoleted",
+            )?;
+        }
         let arg_name = args[0].coerce_to_symbol_or_string(vm, globals)?;
         let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
         ary.push(Value::symbol(method_name));
@@ -1404,6 +1420,18 @@ fn remove_const(
 ) -> Result<Value> {
     let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let module = lfp.self_val().as_class().id();
+    // CRuby 3.4+ emits the deprecation warning when removing a
+    // deprecated constant (matches `remove_const` reading the slot
+    // before deleting it). The message uses the receiver's full
+    // qualified name even for anonymous modules.
+    if globals
+        .store
+        .get_constant(module, name)
+        .is_some_and(|s| s.is_deprecated())
+    {
+        let qualified = format!("{}::{}", module.get_name(&globals.store), name);
+        crate::value::emit_deprecated_constant_warning(vm, globals, &qualified)?;
+    }
     globals
         .remove_constant(module, name)
         .ok_or(MonorubyErr::uninitialized_constant(name))
@@ -1439,7 +1467,11 @@ fn define_method(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class_id();
+    let self_val = lfp.self_val();
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
+    }
+    let class_id = self_val.as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
@@ -1468,8 +1500,43 @@ fn define_method(
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
-    vm.add_public_method(globals, class_id, name, func_id)?;
+    let visibility = define_method_visibility(vm, class_id, name);
+    vm.add_method(globals, class_id, name, func_id, visibility)?;
     Ok(Value::symbol(name))
+}
+
+/// Compute the visibility for a `define_method` call.
+///
+/// `:initialize` (and the other "special private" names) is forced
+/// private to match `def initialize`. Otherwise CRuby uses the current
+/// lexical visibility *only* when `define_method` is called from inside
+/// the target module's own body — i.e. when the lexical class equals
+/// the receiver. Cross-class `klass.send(:define_method, ...)` always
+/// installs a public method, regardless of any `private`/`protected`
+/// in the calling scope.
+fn define_method_visibility(vm: &Executor, target: ClassId, name: IdentId) -> Visibility {
+    if is_special_private_method_name(name) {
+        return Visibility::Private;
+    }
+    if vm.context_class_id() == target {
+        vm.context_visibility()
+    } else {
+        Visibility::Public
+    }
+}
+
+/// Names that CRuby always installs as private even when called from a
+/// public scope: the `initialize` family plus `respond_to_missing?`.
+/// `def`, `define_method`, and `alias_method` all consult this list.
+fn is_special_private_method_name(name: IdentId) -> bool {
+    matches!(
+        name.get_name().as_str(),
+        "initialize"
+            | "initialize_copy"
+            | "initialize_clone"
+            | "initialize_dup"
+            | "respond_to_missing?"
+    )
 }
 
 ///
@@ -2368,6 +2435,86 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
         }
     }
     Ok(lfp.self_val())
+}
+
+///
+/// ### Module#deprecate_constant
+///
+/// - deprecate_constant(*name) -> self
+///
+/// Marks each named constant as deprecated. Subsequent reads of those
+/// constants emit a `warning: constant ...::Name is deprecated` warning
+/// (subject to `Warning[:deprecated]`). Each name must be a constant
+/// defined directly on the receiver; otherwise `NameError` is raised.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/deprecate_constant.html]
+#[monoruby_builtin]
+fn deprecate_constant(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    // Validate every name first so a partial failure does not leave the
+    // class in an inconsistent state — matching CRuby and the behaviour
+    // of `private_constant` / `public_constant`.
+    let mut names = Vec::with_capacity(args.len());
+    for arg in args.iter() {
+        let name = arg.expect_symbol_or_string(globals)?;
+        if !globals.store[class_id].has_own_constant(name) {
+            return Err(MonorubyErr::nameerr(format!(
+                "constant {}::{} not defined",
+                class_id.get_name(&globals.store),
+                name
+            )));
+        }
+        names.push(name);
+    }
+    for name in names {
+        globals.store[class_id].set_constant_deprecated(name);
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Module#ruby2_keywords
+///
+/// - ruby2_keywords(*method_names) -> nil
+///
+/// monoruby does not implement the ruby2_keywords flag mechanism, so
+/// the marking itself is a no-op. We still validate the arguments —
+/// each must coerce to a Symbol/String (TypeError otherwise) and
+/// reference a method defined directly on the receiver (NameError
+/// otherwise) — so that callers relying on the validation contract
+/// (e.g. specs in `core/module/ruby2_keywords_spec.rb`) behave
+/// correctly.
+#[monoruby_builtin]
+fn ruby2_keywords(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array();
+    for arg in args.iter() {
+        // expect_symbol_or_string accepts Symbol and String (and rejects
+        // anything else with TypeError "<obj> is not a symbol nor a
+        // string"). We don't honour `to_str` here — CRuby's
+        // `ruby2_keywords` is also strict about Symbol/String only.
+        let name = arg.expect_symbol_or_string(globals)?;
+        if globals.store[class_id].has_own_method(name) {
+            continue;
+        }
+        return Err(MonorubyErr::nameerr(format!(
+            "undefined method '{}' for class '{}'",
+            name,
+            class_id.get_name(&globals.store)
+        )));
+    }
+    Ok(Value::nil())
 }
 
 /// True when `s` parses as `(::)?CONST(::CONST)*` where each `CONST`
@@ -5217,6 +5364,236 @@ mod tests {
             m.set_temporary_name("temp")
             m.set_temporary_name(nil)
             m.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_returns_self() {
+        run_test(
+            r#"
+            m = Module.new
+            m.const_set(:X, 1)
+            m.deprecate_constant(:X).equal?(m)
+            "#,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_undefined_name_raises() {
+        run_test_error(
+            r#"
+            Module.new.deprecate_constant(:UNDEFINED)
+            "#,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_emits_warning_when_warning_deprecated_true() {
+        // The warning should reach $stderr.write. We capture stderr by
+        // pointing $stderr at a String-with-write stub and asserting on
+        // the captured message.
+        run_test(
+            r##"
+            old_dep = Warning[:deprecated]
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              Warning[:deprecated] = true
+              m = Module.new
+              m.const_set(:X, 1)
+              m.deprecate_constant(:X)
+              m::X
+            ensure
+              Warning[:deprecated] = old_dep
+              $stderr = old_stderr
+            end
+            captured =~ /warning: constant .+::X is deprecated/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_silent_when_warning_deprecated_false() {
+        run_test(
+            r##"
+            old_dep = Warning[:deprecated]
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              Warning[:deprecated] = false
+              m = Module.new
+              m.const_set(:X, 1)
+              m.deprecate_constant(:X)
+              m::X
+            ensure
+              Warning[:deprecated] = old_dep
+              $stderr = old_stderr
+            end
+            captured.empty?
+            "##,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_accepts_multiple_names_as_strings_and_symbols() {
+        run_test(
+            r#"
+            m = Module.new
+            m.const_set(:X, 1)
+            m.const_set(:Y, 2)
+            m.deprecate_constant("X", :Y)
+            [m::X, m::Y]
+            "#,
+        );
+    }
+
+    #[test]
+    fn deprecate_constant_warns_when_removed() {
+        // CRuby ≥3.4: `remove_const` on a deprecated constant fires
+        // the deprecation warning before the slot is deleted.
+        run_test(
+            r##"
+            old_dep = Warning[:deprecated]
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              Warning[:deprecated] = true
+              m = Module.new
+              m.const_set(:X, 1)
+              m.deprecate_constant(:X)
+              m.module_eval { remove_const :X }
+            ensure
+              Warning[:deprecated] = old_dep
+              $stderr = old_stderr
+            end
+            captured =~ /warning: constant .+::X is deprecated/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_undefined_method_raises_nameerror() {
+        run_test_error(
+            r#"
+            Class.new { ruby2_keywords :missing_method }
+            "#,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_non_symbol_string_raises_typeerror() {
+        run_test_error(
+            r#"
+            Class.new { ruby2_keywords Object.new }
+            "#,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_accepts_symbol_for_existing_method() {
+        // No-op call returning nil; should not raise.
+        run_test(
+            r#"
+            c = Class.new { def foo(*a); a; end; ruby2_keywords :foo }
+            c.new.foo(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_accepts_string_for_existing_method() {
+        run_test(
+            r#"
+            c = Class.new { def foo(*a); a; end; ruby2_keywords "foo" }
+            c.new.foo(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_visibility_inherits_from_class_body() {
+        // Inside the class body the current visibility wins.
+        run_test(
+            r#"
+            klass = Class.new do
+              define_method(:bar) { :bar }
+              private
+              define_method(:baz) { :baz }
+            end
+            [klass.public_method_defined?(:bar), klass.private_method_defined?(:baz)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_visibility_default_public_when_cross_class() {
+        // Calling via `send` from a different class always installs
+        // public, even if the *caller's* lexical visibility is private.
+        run_test(
+            r#"
+            klass = Class.new
+            Class.new do
+              klass.send(:define_method, :bar) { :bar }
+              private
+              klass.send(:define_method, :baz) { :baz }
+            end
+            [
+              klass.public_method_defined?(:bar),
+              klass.public_method_defined?(:baz),
+              klass.private_method_defined?(:baz),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_initialize_is_private() {
+        // Even called from a public scope, `:initialize` is private.
+        run_test(
+            r#"
+            klass = Class.new do
+              define_method(:initialize) { }
+            end
+            [
+              klass.private_method_defined?(:initialize),
+              klass.public_method_defined?(:initialize),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_on_frozen_module_raises_frozenerror() {
+        run_test_error(
+            r#"
+            Class.new { freeze; define_method(:foo) {} }
+            "#,
+        );
+    }
+
+    #[test]
+    fn attr_boolean_argument_returns_method_names() {
+        // The legacy `attr name, true|false` form returns the list of
+        // installed reader/writer names. Stronger CRuby-vs-monoruby
+        // comparison of the emitted-warning text is covered by the
+        // `core/module/attr_spec.rb` ruby/spec suite (which uses
+        // mspec's `complain` matcher).
+        run_test(
+            r#"
+            c = Class.new
+            r1 = c.send(:attr, :foo, true)
+            r2 = c.send(:attr, :bar, false)
+            r1 + r2
             "#,
         );
     }
