@@ -457,16 +457,24 @@ impl RStringInner {
     }
 
     pub fn inspect(&self) -> String {
-        if self.ty.is_utf8_compatible() {
-            let mut res = String::with_capacity(self.len());
-            utf8_escape_bytes(&mut res, self.as_bytes(), utf8_inspect);
-            res
-        } else {
-            let mut res = String::with_capacity(self.len());
-            for c in self.as_bytes() {
-                ascii_escape(&mut res, *c);
+        match self.ty {
+            Encoding::Utf8 => {
+                let mut res = String::with_capacity(self.len());
+                utf8_inspect_with_lookahead(&mut res, self.as_bytes(), true);
+                res
             }
-            res
+            Encoding::UsAscii => {
+                let mut res = String::with_capacity(self.len());
+                utf8_inspect_with_lookahead(&mut res, self.as_bytes(), false);
+                res
+            }
+            _ => {
+                let mut res = String::with_capacity(self.len());
+                for c in self.as_bytes() {
+                    ascii_escape(&mut res, *c);
+                }
+                res
+            }
         }
     }
 
@@ -484,6 +492,15 @@ fn utf8_escape(s: &mut String, ch: char) {
 }
 
 fn utf8_inspect(s: &mut String, ch: char) {
+    utf8_inspect_with_next(s, ch, '\0', true);
+}
+
+/// Render a single character for `String#inspect`. `next_ch` is the
+/// following character (or `'\0'` if there is none); used to escape
+/// `#` when followed by `$`, `@`, or `{`. `is_utf8` switches the
+/// escape style for ASCII control characters: UTF-8 strings use the
+/// `\uNNNN` form, while US-ASCII / binary strings use `\xNN`.
+fn utf8_inspect_with_next(s: &mut String, ch: char, next_ch: char, is_utf8: bool) {
     if ch.is_ascii() {
         let b = ch as u8;
         match b {
@@ -497,14 +514,57 @@ fn utf8_inspect(s: &mut String, ch: char) {
             b'\x07' => s.push_str("\\a"),
             b'\x1b' => s.push_str("\\e"),
             b'\x0b' => s.push_str("\\v"),
+            b'#' if matches!(next_ch, '$' | '@' | '{') => s.push_str("\\#"),
             c if c.is_ascii_graphic() || c == b' ' => s.push(c as char),
-            // Other ASCII control chars use \uNNNN in UTF-8 strings
-            _ => s.push_str(&format!("\\u{:0>4X}", b)),
+            _ => {
+                if is_utf8 {
+                    s.push_str(&format!("\\u{:0>4X}", b));
+                } else {
+                    s.push_str(&format!("\\x{:0>2X}", b));
+                }
+            }
         }
     } else if printable::is_printable(ch) {
         s.push(ch);
     } else {
-        s.push_str(&format!("\\u{{{:0>4X}}}", ch as u32));
+        s.push_str(&format!("\\u{{{:X}}}", ch as u32));
+    }
+}
+
+/// Like `utf8_escape_bytes(..., utf8_inspect)` but threads the next
+/// character through so `utf8_inspect_with_next` can decide whether to
+/// escape `#` as `\#` (when followed by `$`, `@`, `{`).
+fn utf8_inspect_with_lookahead(res: &mut String, bytes: &[u8], is_utf8: bool) {
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(valid) => {
+                let chars: Vec<char> = valid.chars().collect();
+                for (idx, &c) in chars.iter().enumerate() {
+                    let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                    utf8_inspect_with_next(res, c, next_ch, is_utf8);
+                }
+                break;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid =
+                        std::str::from_utf8(&bytes[i..i + valid_up_to]).unwrap_or("");
+                    let chars: Vec<char> = valid.chars().collect();
+                    for (idx, &c) in chars.iter().enumerate() {
+                        let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                        utf8_inspect_with_next(res, c, next_ch, is_utf8);
+                    }
+                    i += valid_up_to;
+                }
+                let bad_len = e.error_len().unwrap_or(bytes.len() - i);
+                for &b in &bytes[i..i + bad_len] {
+                    res.push_str(&format!("\\x{:0>2X}", b));
+                }
+                i += bad_len;
+            }
+        }
     }
 }
 

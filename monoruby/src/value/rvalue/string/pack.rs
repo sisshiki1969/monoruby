@@ -108,7 +108,7 @@ impl<'a> ByteIter<'a> {
 }
 
 pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value> {
-    let mut template = parse_template(template)?;
+    let mut template = parse_template(template, true)?;
     if once {
         template.truncate(1);
     }
@@ -118,6 +118,11 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
 
     macro_rules! unpack {
         ($size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
+            unpack!($size, $type, $repeat, $big_endian, |i: $type| Value::integer(
+                i as i64
+            ))
+        };
+        ($size: expr, $type: ident, $repeat: expr, $big_endian: expr, $to_value: expr) => {
             if let Some(repeat) = $repeat {
                 for _ in 0..repeat {
                     if let Some(chunk) = b.next_chunk::<$size>() {
@@ -126,12 +131,9 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                         } else {
                             $type::from_ne_bytes(chunk.clone())
                         };
-                        ary.push(Value::integer(i as i64));
+                        ary.push(($to_value)(i));
                     } else {
-                        break;
-                    }
-                    if b.is_empty() {
-                        break;
+                        ary.push(Value::nil());
                     }
                 }
             } else {
@@ -141,7 +143,7 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                     } else {
                         $type::from_ne_bytes(chunk.clone())
                     };
-                    ary.push(Value::integer(i as i64));
+                    ary.push(($to_value)(i));
                 }
             }
         };
@@ -152,7 +154,9 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
         let endian = matches!(template.endian, Endianness::Big);
         match template.template {
             Template::I64 => unpack!(8, i64, repeat, endian),
-            Template::U64 => unpack!(8, u64, repeat, endian),
+            Template::U64 => unpack!(8, u64, repeat, endian, |i: u64| {
+                Value::integer_from_u64(i)
+            }),
             Template::I32 => unpack!(4, i32, repeat, endian),
             Template::U32 => unpack!(4, u32, repeat, endian),
             Template::I16 => unpack!(2, i16, repeat, endian),
@@ -170,10 +174,7 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                             };
                             ary.push(Value::float(f));
                         } else {
-                            break;
-                        }
-                        if b.is_empty() {
-                            break;
+                            ary.push(Value::nil());
                         }
                     }
                 } else {
@@ -198,10 +199,7 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                             };
                             ary.push(Value::float(f));
                         } else {
-                            break;
-                        }
-                        if b.is_empty() {
-                            break;
+                            ary.push(Value::nil());
                         }
                     }
                 } else {
@@ -472,7 +470,7 @@ pub(crate) fn pack(
     template: &str,
     buffer: Option<Value>,
 ) -> Result<Value> {
-    let template = parse_template(template)?;
+    let template = parse_template(template, false)?;
     // Validate buffer: keyword if provided.
     if let Some(buf_val) = buffer {
         buf_val.ensure_not_frozen(&globals.store)?;
@@ -920,7 +918,7 @@ pub(crate) fn pack(
     }
 }
 
-fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
+fn parse_template(template: &str, is_unpack: bool) -> Result<Vec<TemplateNode>> {
     let mut temp = vec![];
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
@@ -979,8 +977,9 @@ fn parse_template(template: &str) -> Result<Vec<TemplateNode>> {
             'p' => (Template::Pointer, Endianness::Little),
             'P' => (Template::PointerFixed, Endianness::Little),
             _ => {
+                let kind = if is_unpack { "unpack" } else { "pack" };
                 return Err(MonorubyErr::argumenterr(format!(
-                    "unknown pack directive '{ch}' in '{template}'",
+                    "unknown {kind} directive '{ch}' in '{template}'",
                 )));
             }
         };
