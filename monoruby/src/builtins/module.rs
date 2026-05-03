@@ -134,6 +134,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_private_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
+    globals.define_builtin_func(
+        MODULE_CLASS,
+        "undefined_instance_methods",
+        undefined_instance_methods,
+        0,
+    );
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     // `public_instance_method` is identical to `instance_method` except it
     // raises NameError when the resolved method is private or protected.
@@ -1437,7 +1443,12 @@ fn define_method(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            globals.define_proc_method(proc)
+            let fid = globals.define_proc_method(proc);
+            // A method defined via `define_method` enforces strict arity
+            // (no destructuring of a single Array argument, ArgumentError
+            // on count mismatch), unlike the underlying Proc.
+            globals.store[fid].set_method_style();
+            fid
         } else if let Some(method) = method.is_method() {
             method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
@@ -1451,7 +1462,9 @@ fn define_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(globals, bh, pc)?;
-        globals.define_proc_method(proc)
+        let fid = globals.define_proc_method(proc);
+        globals.store[fid].set_method_style();
+        fid
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
@@ -1479,6 +1492,27 @@ fn instance_methods(
     } else {
         globals.store.get_method_names_inherit(class_id, false)
     }))
+}
+
+///
+/// ### Module#undefined_instance_methods
+///
+/// - undefined_instance_methods -> [Symbol]
+///
+/// Returns the list of method names that have been undefined on this
+/// module/class itself via `undef_method`. Inherited undefs aren't
+/// included.
+#[monoruby_builtin]
+fn undefined_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::array_from_vec(
+        globals.store.get_undefined_instance_methods(class_id),
+    ))
 }
 
 ///
@@ -2336,6 +2370,24 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
     Ok(lfp.self_val())
 }
 
+/// True when `s` parses as `(::)?CONST(::CONST)*` where each `CONST`
+/// matches `[A-Z][A-Za-z0-9_]*`. Used by `set_temporary_name` to reject
+/// names that would shadow real constant lookups.
+fn is_constant_path(s: &str) -> bool {
+    let body = s.strip_prefix("::").unwrap_or(s);
+    if body.is_empty() {
+        return false;
+    }
+    body.split("::").all(|seg| {
+        let mut chars = seg.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_uppercase() => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
 #[monoruby_builtin]
 fn set_temporary_name(
@@ -2346,11 +2398,29 @@ fn set_temporary_name(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name_val = lfp.arg(0);
+    // CRuby refuses to rename a module that already has a permanent
+    // (constant-bound) name; the check runs before nil/string handling
+    // so even `set_temporary_name(nil)` on `Object` raises.
+    if globals.store[class_id].is_name_permanent() {
+        return Err(MonorubyErr::runtimeerr("can't change permanent name"));
+    }
     if name_val.is_nil() {
         globals.store[class_id].clear_name();
     } else {
         let name = name_val.coerce_to_string(vm, globals)?;
-        globals.store[class_id].set_name(name);
+        if name.is_empty() {
+            return Err(MonorubyErr::argumenterr("empty class/module name"));
+        }
+        // Reject anything that *looks* like a syntactically valid
+        // constant or constant path so introspection tools that resolve
+        // `A::B` aren't confused. We accept anything that wouldn't
+        // round-trip as a constant ("a::B", "A::b", "A::B::", "Template['x']").
+        if is_constant_path(&name) {
+            return Err(MonorubyErr::argumenterr(
+                "the temporary name must not be a constant path to avoid confusion",
+            ));
+        }
+        globals.store[class_id].set_temporary_name(name);
     }
     Ok(lfp.self_val())
 }
@@ -4917,6 +4987,236 @@ mod tests {
         run_test_error(
             r#"
             Class.new.class_eval("nil", "f", 1, :extra)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_strict_arity_too_few() {
+        // A method defined from a Proc/block enforces method-style
+        // arity, so calling with fewer args than the block declares
+        // raises ArgumentError instead of filling missing params with
+        // nil (the proc-style behaviour).
+        run_test_error(
+            r#"
+            class C
+              define_method(:m) { |a, b| [a, b] }
+            end
+            C.new.m(1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_strict_arity_too_many() {
+        // Likewise, extra arguments are rejected.
+        run_test_error(
+            r#"
+            class C
+              define_method(:m) { |a| a }
+            end
+            C.new.m(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_no_destructure_single_array() {
+        // Block-style auto-destructuring of a single Array argument
+        // must not happen for define_method bodies — the array is
+        // passed through as one value.
+        run_test(
+            r#"
+            class C
+              define_method(:m) { |a| a }
+            end
+            C.new.m([1, 2])
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_rest_arity() {
+        // Rest params on a method-style body still accept any extra
+        // positional args without ArgumentError.
+        run_test(
+            r#"
+            class C
+              define_method(:m) { |a, b, *c| [a, b, c] }
+            end
+            C.new.m(1, 2, 3, 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_proc_unaffected() {
+        // The original Proc passed to define_method keeps its
+        // block-style behaviour when invoked directly — only the
+        // wrapper installed as a method becomes strict. Calling the
+        // original proc with one arg fills `b` with nil; the method
+        // would raise ArgumentError instead (covered by
+        // `define_method_strict_arity_too_few`).
+        run_test(
+            r#"
+            p = Proc.new { |a, b| [a, b] }
+            Class.new do
+              define_method(:m, p)
+            end
+            p.call(1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_returns_undef_names() {
+        // `undef_method` marks the slot Undefined; the new builtin
+        // surfaces those names.
+        run_test(
+            r#"
+            class P
+              def foo; end
+              def bar; end
+              undef_method :foo
+            end
+            P.undefined_instance_methods.sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_empty_when_none() {
+        run_test(
+            r#"
+            class C
+              def foo; end
+            end
+            C.undefined_instance_methods
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_only_self() {
+        // Inherited undefs are NOT included — only entries on the
+        // class's own method table count.
+        run_test(
+            r#"
+            class P
+              def foo; end
+              undef_method :foo
+            end
+            class C < P
+            end
+            C.undefined_instance_methods
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_empty_string_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_constant_name_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("Object")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_constant_path_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("A::B")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_leading_colons_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("::A")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_permanent_module_raises() {
+        // Built-in / constant-bound classes are permanent and refuse
+        // a temporary rename.
+        run_test_error(
+            r#"
+            Object.set_temporary_name("fake")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_accepts_non_constant_strings() {
+        // Strings that don't parse as a constant or constant path are
+        // accepted: lowercase initial, embedded non-identifier
+        // characters, lowercase second segment, trailing `::`, etc.
+        run_test(
+            r#"
+            m = Module.new
+            results = []
+            results << m.set_temporary_name("name").name
+            results << m.set_temporary_name("Template['foo.rb']").name
+            results << m.set_temporary_name("a::B").name
+            results << m.set_temporary_name("A::b").name
+            results << m.set_temporary_name("A::B::").name
+            results << m.set_temporary_name("A=").name
+            results
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_bare_leaf_for_anonymous_parent() {
+        // When the parent chain contains an anonymous module, an
+        // explicit `set_temporary_name` call on a leaf still returns
+        // the bare name (no `#<Module:0x..>::leaf` rendering).
+        run_test(
+            r#"
+            m = Module.new
+            module m::N; end
+            m::N.set_temporary_name("fake_name")
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_anonymous_nested_module_is_not_permanent() {
+        // A module assigned through an anonymous parent isn't itself
+        // permanent: `set_temporary_name` succeeds on it.
+        run_test(
+            r#"
+            m = Module.new
+            module m::N; end
+            m::N.set_temporary_name("ok")
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_nil_clears_name() {
+        run_test(
+            r#"
+            m = Module.new
+            m.set_temporary_name("temp")
+            m.set_temporary_name(nil)
+            m.name
             "#,
         );
     }

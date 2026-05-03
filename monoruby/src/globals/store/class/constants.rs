@@ -266,6 +266,14 @@ impl ClassInfoTable {
                 // ancestors are rendered using their inspect form during the
                 // walk (see `get_parents`).
                 self[klass.id()].set_name(name.to_string());
+                // The new module is permanently named only if its parent
+                // is itself permanent (so the full chain back to a
+                // top-level constant is reachable). Otherwise the leaf
+                // name is "borrowed" through an anonymous ancestor and
+                // CRuby still allows `set_temporary_name` on it.
+                let parent_permanent =
+                    class_id == OBJECT_CLASS || self[class_id].is_name_permanent();
+                self[klass.id()].set_name_permanent(parent_permanent);
             }
         }
     }
