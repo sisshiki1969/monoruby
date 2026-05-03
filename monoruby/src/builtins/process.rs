@@ -34,6 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     // Signal module
     let signal = globals.define_toplevel_module("Signal").id();
     globals.define_builtin_module_func(signal, "list", signal_list, 0);
+    globals.define_builtin_module_func(signal, "signame", signal_signame, 1);
 }
 
 ///
@@ -319,7 +320,6 @@ fn signal_name_to_number(name: &str) -> Option<i32> {
         "PIPE" => 13,
         "ALRM" => 14,
         "TERM" => 15,
-        "STKFLT" => 16,
         "CLD" | "CHLD" => 17,
         "CONT" => 18,
         "STOP" => 19,
@@ -361,7 +361,11 @@ fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
     let signum = if let Some(i) = sig_arg.try_fixnum() {
         i as i32
     } else {
-        let s = sig_arg.coerce_to_str(vm, globals)?;
+        let s = if let Some(sym) = sig_arg.try_symbol() {
+            sym.get_name().to_string()
+        } else {
+            sig_arg.coerce_to_str(vm, globals)?
+        };
         match signal_name_to_number(&s) {
             Some(n) => n,
             None => {
@@ -413,7 +417,6 @@ fn signal_list(
         ("PIPE", 13),
         ("ALRM", 14),
         ("TERM", 15),
-        ("STKFLT", 16),
         ("CLD", 17),
         ("CHLD", 17),
         ("CONT", 18),
@@ -442,6 +445,67 @@ fn signal_list(
         )?;
     }
     Ok(Value::hash(map))
+}
+
+/// Return the canonical name (without "SIG" prefix) for a signal number,
+/// or None if the number does not correspond to a known signal. When
+/// multiple aliases share a number, the value returned is what CRuby uses
+/// (e.g. 6 -> "ABRT", 17 -> "CHLD", 29 -> "IO").
+fn signal_number_to_name(num: i64) -> Option<&'static str> {
+    Some(match num {
+        0 => "EXIT",
+        1 => "HUP",
+        2 => "INT",
+        3 => "QUIT",
+        4 => "ILL",
+        5 => "TRAP",
+        6 => "ABRT",
+        7 => "BUS",
+        8 => "FPE",
+        9 => "KILL",
+        10 => "USR1",
+        11 => "SEGV",
+        12 => "USR2",
+        13 => "PIPE",
+        14 => "ALRM",
+        15 => "TERM",
+        17 => "CHLD",
+        18 => "CONT",
+        19 => "STOP",
+        20 => "TSTP",
+        21 => "TTIN",
+        22 => "TTOU",
+        23 => "URG",
+        24 => "XCPU",
+        25 => "XFSZ",
+        26 => "VTALRM",
+        27 => "PROF",
+        28 => "WINCH",
+        29 => "IO",
+        30 => "PWR",
+        31 => "SYS",
+        _ => return None,
+    })
+}
+
+///
+/// ### Signal.signame
+///
+/// - signame(signo) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Signal/m/signame.html]
+#[monoruby_builtin]
+fn signal_signame(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let num = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    Ok(match signal_number_to_name(num) {
+        Some(name) => Value::string_from_str(name),
+        None => Value::nil(),
+    })
 }
 
 #[cfg(test)]
@@ -542,6 +606,105 @@ mod tests {
             [$?.signaled?, $?.termsig]
             "#,
         );
+    }
+
+    #[test]
+    fn process_kill_with_symbol() {
+        run_test(
+            r#"
+            pid = fork { sleep 5 }
+            Process.kill(:KILL, pid)
+            Process.wait(pid)
+            [$?.signaled?, $?.termsig]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_all_valid_numbers() {
+        // Cover every signal number 0..=31. The result is compared against
+        // CRuby, so each canonical name (ABRT not IOT for 6, CHLD not CLD
+        // for 17, IO not POLL for 29) is verified implicitly. 16 is the
+        // only gap in the range and returns nil.
+        run_test(r#"(0..31).map { |n| Signal.signame(n) }"#);
+    }
+
+    #[test]
+    fn signal_signame_invalid_returns_nil() {
+        // Numbers outside the known range — including the 16 gap, the
+        // boundary value 32, and large negative/positive values — all
+        // return nil rather than raising.
+        run_test(
+            r#"
+            [-1_000_000, -100, -1, 16, 32, 100, 1_000_000].map { |n|
+              Signal.signame(n)
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_to_int_coercion() {
+        // Float and custom objects responding to #to_int are accepted via
+        // implicit Integer coercion (matches CRuby's rb_to_int semantics).
+        run_test(
+            r#"
+            class X
+              def to_int; 6; end
+            end
+            [Signal.signame(1.5), Signal.signame(0.0), Signal.signame(X.new)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_typeerror_cases() {
+        // Values that aren't Integer and don't respond to #to_int raise
+        // TypeError. The exact message text differs between CRuby and
+        // monoruby (e.g. "into" vs "to"), so this test only checks the
+        // exception class. Each rescue is at the top level rather than
+        // inside a block, since `.map { rescue }` interacts poorly with
+        // JIT warmup for builtin methods that raise.
+        run_test(
+            r#"
+            def t(x)
+              begin
+                Signal.signame(x)
+                :ok
+              rescue TypeError
+                :typeerr
+              end
+            end
+            [t("hello"), t(:HUP), t(nil), t(Object.new), t([1])]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_to_int_returns_non_integer() {
+        // When #to_int is defined but returns a non-Integer, CRuby raises
+        // TypeError ("can't convert X to Integer (X#to_int gives Y)").
+        run_test(
+            r#"
+            class Bad
+              def to_int; "not an int"; end
+            end
+            def call_signame(x)
+              begin
+                Signal.signame(x)
+                :ok
+              rescue TypeError
+                :typeerr
+              end
+            end
+            call_signame(Bad.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_list_no_stkflt() {
+        run_test(r#"Signal.list.key?("STKFLT")"#);
     }
 
     #[test]
