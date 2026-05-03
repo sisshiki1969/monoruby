@@ -1992,11 +1992,11 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
+    // The receiver is the array we sort in place; it is already rooted
+    // through `lfp`, so the merge buffer used inside `sort_inner` only
+    // ever holds bit-copies of elements that the receiver still owns.
     let ary = lfp.self_val().as_array();
-    let gc_enabled = Globals::gc_enable(false);
-    let res = sort_inner(vm, globals, lfp, ary);
-    Globals::gc_enable(gc_enabled);
-    res
+    sort_inner(vm, globals, lfp, ary)
 }
 
 ///
@@ -2008,10 +2008,14 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `ary` is a freshly-allocated Array that is not yet referenced from
+    // any GC root. Push it onto the temp_stack before sorting so that the
+    // RValue (and transitively its merge-buffer copies) survives any GC
+    // triggered from the comparator block.
     let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    let gc_enabled = Globals::gc_enable(false);
+    vm.temp_push(ary.into());
     let res = sort_inner(vm, globals, lfp, ary);
-    Globals::gc_enable(gc_enabled);
+    vm.temp_pop();
     res
 }
 
@@ -2027,28 +2031,28 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     if let Some(bh) = lfp.block() {
         lfp.self_val().ensure_not_frozen(&globals.store)?;
         let data = vm.get_block_data(globals, bh)?;
-        // Collect (key, value) pairs. Re-read array each iteration to
-        // tolerate mutations during block execution.
-        let mut pairs: Vec<(Value, Value)> = vec![];
-        let mut i = 0;
-        loop {
-            let ary = lfp.self_val().as_array();
-            if i >= ary.len() {
-                break;
-            }
-            let elem = ary[i];
-            let key = vm.invoke_block(globals, &data, &[elem])?;
-            pairs.push((key, elem));
-            i += 1;
+        // Collect alternating (key, elem) pairs onto the temp_stack so the
+        // freshly-allocated keys returned from the block stay reachable
+        // through GC, both during the collection loop and during the sort
+        // (the comparator itself dispatches back into Ruby for non-Integer
+        // results, which can also trigger GC).
+        let base = vm.temp_len();
+        let collect_res = sort_by_collect_pairs(vm, globals, &data, lfp.self_val());
+        if let Err(e) = collect_res {
+            vm.temp_clear(base);
+            return Err(e);
         }
-        // Sort the collected pairs by key.
-        let gc_enabled = Globals::gc_enable(false);
+        let n = (vm.temp_len() - base) / 2;
+        // Snapshot keys as bit patterns; they remain valid as long as we
+        // do not pop the temp_stack entries that hold the same Values.
+        let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
+        let mut indices: Vec<usize> = (0..n).collect();
         let mut err = None;
-        pairs.sort_by(|a, b| {
+        indices.sort_by(|&a, &b| {
             if err.is_some() {
                 return std::cmp::Ordering::Equal;
             }
-            match Executor::compare_values(vm, globals, a.0, b.0) {
+            match Executor::compare_values(vm, globals, keys[a], keys[b]) {
                 Ok(o) => o,
                 Err(e) => {
                     err = Some(e);
@@ -2056,20 +2060,45 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
                 }
             }
         });
-        Globals::gc_enable(gc_enabled);
         if let Some(e) = err {
+            vm.temp_clear(base);
             return Err(e);
         }
-        // Write sorted values back to the array.
+        // Read elems back in sorted order from the temp_stack (still rooted)
+        // and write them to the receiver, then drop the temp entries.
+        let sorted_elems: Vec<Value> =
+            indices.iter().map(|&i| vm.temp_at(base + i * 2 + 1)).collect();
         let mut ary = lfp.self_val().as_array();
         ary.truncate(0);
-        for (_, val) in pairs {
-            ary.push(val);
+        for v in sorted_elems {
+            ary.push(v);
         }
+        vm.temp_clear(base);
         Ok(ary.into())
     } else {
         vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
     }
+}
+
+fn sort_by_collect_pairs(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    data: &ProcData,
+    self_val: Value,
+) -> Result<()> {
+    let mut i = 0;
+    loop {
+        let ary = self_val.as_array();
+        if i >= ary.len() {
+            break;
+        }
+        let elem = ary[i];
+        let key = vm.invoke_block(globals, data, &[elem])?;
+        vm.temp_push(key);
+        vm.temp_push(elem);
+        i += 1;
+    }
+    Ok(())
 }
 
 ///
@@ -2083,17 +2112,44 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
-            let lhs = vm.invoke_block(globals, &data, &[lhs])?;
-            let rhs = vm.invoke_block(globals, &data, &[rhs])?;
-            Executor::compare_values(vm, globals, lhs, rhs)
-        };
-        let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-        let gc_enabled = Globals::gc_enable(false);
-        let res = executor::op::sort_by(&mut ary, f);
-        Globals::gc_enable(gc_enabled);
-        res?;
-        Ok(ary.into())
+        // Same temp_stack-rooting strategy as Array#sort_by!: keep keys
+        // and elems alive across block invocations and the comparator.
+        // Also fixes a latent semantic issue with the previous impl, which
+        // re-evaluated the block for both sides on every comparison.
+        let base = vm.temp_len();
+        let collect_res = sort_by_collect_pairs(vm, globals, &data, lfp.self_val());
+        if let Err(e) = collect_res {
+            vm.temp_clear(base);
+            return Err(e);
+        }
+        let n = (vm.temp_len() - base) / 2;
+        let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
+        let mut indices: Vec<usize> = (0..n).collect();
+        let mut err = None;
+        indices.sort_by(|&a, &b| {
+            if err.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            match Executor::compare_values(vm, globals, keys[a], keys[b]) {
+                Ok(o) => o,
+                Err(e) => {
+                    err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
+        if let Some(e) = err {
+            vm.temp_clear(base);
+            return Err(e);
+        }
+        let sorted_elems: Vec<Value> =
+            indices.iter().map(|&i| vm.temp_at(base + i * 2 + 1)).collect();
+        // Allocate the result Array while temp_stack still holds the
+        // elements; only after the new Array owns them do we drop the
+        // temp_stack rooting.
+        let result = Value::array_from_vec(sorted_elems);
+        vm.temp_clear(base);
+        Ok(result)
     } else {
         vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![], pc)
     }
@@ -2319,42 +2375,61 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/group_by.html]
 #[monoruby_builtin]
 fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    fn inner(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        data: &ProcData,
-        self_val: Value,
-        map: &mut RubyMap<Value, Value>,
-    ) -> Result<()> {
-        let mut i = 0;
-        while i < self_val.as_array().len() {
-            let elem = self_val.as_array()[i];
-            let key = vm.invoke_block(globals, &data, &[elem])?;
-            map.entry(key, vm, globals)?
-                .and_modify(|v: &mut Value| v.as_array().push(elem))
-                .or_insert(Value::array1(elem));
-            i += 1;
-        }
-        Ok(())
-    }
     let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut map = RubyMap::default();
-        let gc_enabled = Globals::gc_enable(false);
-        let res = inner(vm, globals, &data, self_val, &mut map);
-        Globals::gc_enable(gc_enabled);
+        // Root the result Hash on the temp_stack before doing any block
+        // invocations so that GC can reach it (and transitively all the
+        // grouped elements) regardless of what the user's block does.
+        let h_val = Value::hash(RubyMap::default());
+        vm.temp_push(h_val);
+        let res = group_by_inner(vm, globals, &data, self_val, h_val);
+        let result = vm.temp_pop();
         res?;
-        /*for elem in ary.iter() {
-            let key = vm.invoke_block(globals, &data, &[*elem]);
-            map.entry(HashKey(key?))
-                .and_modify(|v: &mut Value| v.as_array().push(*elem))
-                .or_insert(Value::array1(*elem));
-        }*/
-        Ok(Value::hash(map))
+        Ok(result)
     } else {
         vm.generate_enumerator(IdentId::get_id("group_by"), lfp.self_val(), vec![], pc)
     }
+}
+
+fn group_by_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    data: &ProcData,
+    self_val: Value,
+    h_val: Value,
+) -> Result<()> {
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
+        let key = vm.invoke_block(globals, data, &[elem])?;
+        // The key returned by the block is held only in this Rust local
+        // and is freshly allocated for many types; root it before the
+        // hash get/insert calls, both of which dispatch back into Ruby
+        // (via `hash` / `eql?`) and may trigger GC.
+        vm.temp_push(key);
+        let lookup_res = h_val.as_hash().get(key, vm, globals);
+        let step_res = match lookup_res {
+            Ok(Some(existing)) => {
+                existing.as_array().push(elem);
+                Ok(())
+            }
+            Ok(None) => {
+                // Root the freshly-allocated bucket array until the Hash
+                // adopts it.
+                let new_arr = Value::array1(elem);
+                vm.temp_push(new_arr);
+                let r = h_val.as_hash().insert(key, new_arr, vm, globals);
+                vm.temp_pop();
+                r
+            }
+            Err(e) => Err(e),
+        };
+        vm.temp_pop();
+        step_res?;
+        i += 1;
+    }
+    Ok(())
 }
 
 /*///
@@ -4302,6 +4377,47 @@ mod tests {
         run_test(
             r##"
             [*(1..6)].group_by {|i| i%3}
+        "##,
+        );
+        // GC-rooting regression: when keys and bucket arrays returned by
+        // the block are heap-allocated, every block invocation can
+        // trigger a collection (under `--features gc-stress`). Previously
+        // the partial result Hash was held only in a Rust local and the
+        // builtin worked around it by disabling GC; the rooted version
+        // must keep both the Hash and freshly-allocated bucket arrays
+        // alive throughout.
+        run_test(
+            r##"
+            (1..50).to_a.group_by { |i| "k#{i % 7}" }
+        "##,
+        );
+    }
+
+    #[test]
+    fn sort_by_heap_keys() {
+        // GC-rooting regression: each `to_s` call returns a freshly
+        // allocated heap String. Under `--features gc-stress` the old
+        // `pairs: Vec<(Value, Value)>` collection loop would let GC
+        // reclaim earlier keys before sorting saw them.
+        run_test(
+            r##"
+            (1..50).to_a.sort_by { |i| i.to_s }
+        "##,
+        );
+        run_test(
+            r##"
+            ary = (1..50).to_a
+            ary.sort_by! { |i| (i * 31).to_s }
+            ary
+        "##,
+        );
+        // sort with comparator block where the block also allocates;
+        // exercises the temp_push of the freshly-built copy in
+        // Array#sort.
+        run_test(
+            r##"
+            ary = (1..30).to_a.shuffle(random: Random.new(42))
+            ary.sort { |a, b| a.to_s <=> b.to_s }
         "##,
         );
     }
