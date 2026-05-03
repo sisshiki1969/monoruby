@@ -757,14 +757,14 @@ impl Executor {
             {
                 check_constant_visibility(globals, defining, constant)?;
             }
-            let (val, _) = self.get_constant_superclass_with_class(globals, module, constant)?;
+            let val = self.get_qualified_constant_with_missing(globals, module, constant)?;
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
         let module = globals[parent].get_module();
         if let Some(defining) = Self::probe_constant_superclass_with_class(globals, module, name) {
             check_constant_visibility(globals, defining, name)?;
         }
-        let (v, _) = self.get_constant_superclass_with_class(globals, module, name)?;
+        let v = self.get_qualified_constant_with_missing(globals, module, name)?;
         Ok((v, base))
     }
 

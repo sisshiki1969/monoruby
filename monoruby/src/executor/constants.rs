@@ -174,6 +174,34 @@ impl Executor {
         Err(MonorubyErr::uninitialized_constant(name))
     }
 
+    /// Walk the ancestor chain of *module* to find *name*; if missing, fall
+    /// back to `module.const_missing(name)` so user-defined hooks fire for
+    /// qualified `Foo::Bar` access (matching CRuby's `rb_const_get`).
+    pub(crate) fn get_qualified_constant_with_missing(
+        &mut self,
+        globals: &mut Globals,
+        module: Module,
+        name: IdentId,
+    ) -> Result<Value> {
+        if let Some(v) = self.get_constant_superclass(globals, module, name)? {
+            return Ok(v);
+        }
+        match self.invoke_method_inner(
+            globals,
+            IdentId::get_id("const_missing"),
+            module.as_val(),
+            &[Value::symbol(name)],
+            None,
+            None,
+        ) {
+            Ok(v) => Ok(v),
+            Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
+                Err(MonorubyErr::nameerr_with_name(e.message, name))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     pub(super) fn search_constant_checked(
         &mut self,
         globals: &mut Globals,
@@ -219,7 +247,26 @@ impl Executor {
                 }
             }
         }
-        Err(MonorubyErr::uninitialized_constant(name))
+        // CRuby invokes `const_missing` on the innermost lexical class when
+        // unqualified constant lookup fails; user-defined hooks (e.g.
+        // `Delegator.const_missing` delegating to `::Object.const_get`) can
+        // resolve the reference. The default `Module#const_missing` raises
+        // NameError, preserving the previous behaviour for classes without
+        // a custom hook.
+        match self.invoke_method_inner(
+            globals,
+            IdentId::get_id("const_missing"),
+            module.as_val(),
+            &[Value::symbol(name)],
+            None,
+            None,
+        ) {
+            Ok(v) => Ok(v),
+            Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
+                Err(MonorubyErr::nameerr_with_name(e.message, name))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Non-triggering probe of a constant directly on `class_id` —
