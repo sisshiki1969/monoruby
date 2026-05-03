@@ -134,6 +134,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(MODULE_CLASS, "extend_object", extend_object, 1);
     globals.define_builtin_func_rest(MODULE_CLASS, "prepend", prepend);
     globals.define_private_builtin_func(MODULE_CLASS, "prepend_features", prepend_features, 1);
+    globals.define_builtin_func(
+        MODULE_CLASS,
+        "undefined_instance_methods",
+        undefined_instance_methods,
+        0,
+    );
     globals.define_builtin_func(MODULE_CLASS, "instance_method", instance_method, 1);
     // `public_instance_method` is identical to `instance_method` except it
     // raises NameError when the resolved method is private or protected.
@@ -1437,7 +1443,12 @@ fn define_method(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            globals.define_proc_method(proc)
+            let fid = globals.define_proc_method(proc);
+            // A method defined via `define_method` enforces strict arity
+            // (no destructuring of a single Array argument, ArgumentError
+            // on count mismatch), unlike the underlying Proc.
+            globals.store[fid].set_method_style();
+            fid
         } else if let Some(method) = method.is_method() {
             method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
@@ -1451,7 +1462,9 @@ fn define_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(globals, bh, pc)?;
-        globals.define_proc_method(proc)
+        let fid = globals.define_proc_method(proc);
+        globals.store[fid].set_method_style();
+        fid
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
@@ -1479,6 +1492,27 @@ fn instance_methods(
     } else {
         globals.store.get_method_names_inherit(class_id, false)
     }))
+}
+
+///
+/// ### Module#undefined_instance_methods
+///
+/// - undefined_instance_methods -> [Symbol]
+///
+/// Returns the list of method names that have been undefined on this
+/// module/class itself via `undef_method`. Inherited undefs aren't
+/// included.
+#[monoruby_builtin]
+fn undefined_instance_methods(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(Value::array_from_vec(
+        globals.store.get_undefined_instance_methods(class_id),
+    ))
 }
 
 ///
@@ -2336,6 +2370,24 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
     Ok(lfp.self_val())
 }
 
+/// True when `s` parses as `(::)?CONST(::CONST)*` where each `CONST`
+/// matches `[A-Z][A-Za-z0-9_]*`. Used by `set_temporary_name` to reject
+/// names that would shadow real constant lookups.
+fn is_constant_path(s: &str) -> bool {
+    let body = s.strip_prefix("::").unwrap_or(s);
+    if body.is_empty() {
+        return false;
+    }
+    body.split("::").all(|seg| {
+        let mut chars = seg.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_uppercase() => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/set_temporary_name.html]
 #[monoruby_builtin]
 fn set_temporary_name(
@@ -2346,11 +2398,29 @@ fn set_temporary_name(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let name_val = lfp.arg(0);
+    // CRuby refuses to rename a module that already has a permanent
+    // (constant-bound) name; the check runs before nil/string handling
+    // so even `set_temporary_name(nil)` on `Object` raises.
+    if globals.store[class_id].is_name_permanent() {
+        return Err(MonorubyErr::runtimeerr("can't change permanent name"));
+    }
     if name_val.is_nil() {
         globals.store[class_id].clear_name();
     } else {
         let name = name_val.coerce_to_string(vm, globals)?;
-        globals.store[class_id].set_name(name);
+        if name.is_empty() {
+            return Err(MonorubyErr::argumenterr("empty class/module name"));
+        }
+        // Reject anything that *looks* like a syntactically valid
+        // constant or constant path so introspection tools that resolve
+        // `A::B` aren't confused. We accept anything that wouldn't
+        // round-trip as a constant ("a::B", "A::b", "A::B::", "Template['x']").
+        if is_constant_path(&name) {
+            return Err(MonorubyErr::argumenterr(
+                "the temporary name must not be a constant path to avoid confusion",
+            ));
+        }
+        globals.store[class_id].set_temporary_name(name);
     }
     Ok(lfp.self_val())
 }
