@@ -35,6 +35,7 @@ pub(super) fn init(globals: &mut Globals) {
     let system_exit_id = system_exit.id();
     globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
     globals.define_builtin_func(system_exit_id, "status", system_exit_status, 0);
+    globals.define_builtin_func(system_exit_id, "success?", system_exit_success_p, 0);
 
     globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
@@ -511,6 +512,10 @@ fn system_exit_status(
 ///
 /// - new(status = 0, error_message = "") -> SystemExit
 ///
+/// `status` may be an Integer (used as exit status), `true` (status 0),
+/// `false` (status 1), or `nil` (status 0, default message). Any other
+/// value is treated as the message and the status defaults to 0.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
 fn system_exit_new(
@@ -520,16 +525,32 @@ fn system_exit_new(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
-    let name = class_id.get_name(&globals.store);
-    let (status, msg) = if let Some(arg0) = lfp.try_arg(0) {
-        let status = arg0.coerce_to_int_i64(vm, globals)?;
-        if let Some(arg1) = lfp.try_arg(1) {
-            (status, arg1.coerce_to_str(vm, globals)?)
-        } else {
-            (status, name.clone())
+    let default_msg = class_id.get_name(&globals.store);
+    // Determine `status` from arg0 and whether arg0 should also act as the
+    // message (only when it's not Integer / Bool / nil).
+    let (status, arg0_as_msg) = if let Some(arg0) = lfp.try_arg(0) {
+        match arg0.unpack() {
+            RV::Bool(true) => (0, None),
+            RV::Bool(false) => (1, None),
+            RV::Nil => (0, None),
+            RV::Fixnum(_) | RV::BigInt(_) => (arg0.coerce_to_int_i64(vm, globals)?, None),
+            _ => (0, Some(arg0)),
         }
     } else {
-        (0, name.clone())
+        (0, None)
+    };
+    // Resolve the message: arg1 takes precedence; otherwise arg0 (if it
+    // wasn't an Integer/Bool); otherwise the class name.
+    let msg = if let Some(arg1) = lfp.try_arg(1) {
+        if arg1.is_nil() {
+            default_msg.clone()
+        } else {
+            arg1.coerce_to_str(vm, globals)?
+        }
+    } else if let Some(arg0) = arg0_as_msg {
+        arg0.coerce_to_str(vm, globals)?
+    } else {
+        default_msg.clone()
     };
     let ex = Value::new_exception_from(msg, class_id);
     globals
@@ -538,6 +559,30 @@ fn system_exit_new(
         .unwrap();
 
     Ok(ex)
+}
+
+///
+/// ### SystemExit#success?
+///
+/// - success? -> bool
+///
+/// Returns `true` if the exit status is 0.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/i/success=3f.html]
+#[monoruby_builtin]
+fn system_exit_success_p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let status = globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/status"))
+        .and_then(|v| v.try_fixnum())
+        .unwrap_or(0);
+    Ok(Value::bool(status == 0))
 }
 
 /// ### Exception#cause
@@ -606,6 +651,41 @@ mod tests {
             r#"
          SystemExit.new(15, "woo").status
         "#,
+        );
+    }
+
+    #[test]
+    fn system_exit_initialize_dispatch() {
+        run_test(
+            r#"
+            [
+              [SystemExit.new.status, SystemExit.new.message],
+              [SystemExit.new(0).status, SystemExit.new(0).message],
+              [SystemExit.new(7).status, SystemExit.new(7).message],
+              [SystemExit.new("msg").status, SystemExit.new("msg").message],
+              [SystemExit.new(true).status, SystemExit.new(true).message],
+              [SystemExit.new(false).status, SystemExit.new(false).message],
+              [SystemExit.new(nil).status, SystemExit.new(nil).message],
+              [SystemExit.new(3, "x").status, SystemExit.new(3, "x").message],
+              [SystemExit.new(true, "y").status, SystemExit.new(true, "y").message],
+              [SystemExit.new(2, nil).status, SystemExit.new(2, nil).message],
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn system_exit_success_p() {
+        run_test(
+            r#"
+            [
+              SystemExit.new.success?,
+              SystemExit.new(0).success?,
+              SystemExit.new(1).success?,
+              SystemExit.new(true).success?,
+              SystemExit.new(false).success?,
+            ]
+            "#,
         );
     }
 
