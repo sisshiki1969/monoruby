@@ -125,6 +125,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
+    globals.define_private_builtin_func_with(STRING_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
     globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
@@ -185,6 +186,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(STRING_CLASS, "dump", dump, 0);
     globals.define_builtin_func(STRING_CLASS, "undump", undump, 0);
+    globals.define_builtin_func_with(STRING_CLASS, "scrub", scrub, 0, 1, false);
+    globals.define_builtin_func_with(STRING_CLASS, "scrub!", scrub_, 0, 1, false);
     globals.define_builtin_func(
         STRING_CLASS,
         "force_encoding",
@@ -571,19 +574,21 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
-    if let Some(hash) = arg.try_hash_ty() {
-        let format_str = vm.format_by_hash(globals, self_.as_str(), hash)?;
-        let res = Value::string(format_str);
-        Ok(res)
+    let arguments = if arg.try_hash_ty().is_some() {
+        // A single Hash argument is the named-reference source; we
+        // pass it through `format_by_args` (which understands both
+        // `%{name}` and `%<name>spec`) by wrapping it in a single-
+        // element argument list. Older `format_by_hash` only supported
+        // `%{name}`, so this also unifies the two code paths.
+        vec![arg]
     } else {
-        let arguments = match arg.try_array_ty() {
+        match arg.try_array_ty() {
             Some(ary) => ary.to_vec(),
             None => vec![arg],
-        };
-        let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
-        let res = Value::string(format_str);
-        Ok(res)
-    }
+        }
+    };
+    let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
+    Ok(Value::string(format_str))
 }
 
 ///
@@ -715,12 +720,21 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             &lhs[r], enc,
         )))
     } else if let Some(re) = lfp.arg(0).is_regex() {
-        let nth = if let Some(i) = lfp.try_arg(1) {
-            i.coerce_to_int_i64(vm, globals)?
+        // Second arg may be an Integer (group number) or a String/Symbol
+        // (named capture group).
+        if let Some(arg1) = lfp.try_arg(1) {
+            if let Some(name) = arg1.is_str() {
+                return string_match_named(vm, lhs, &re, name);
+            }
+            if let Some(sym) = arg1.try_symbol() {
+                let name = sym.get_name();
+                return string_match_named(vm, lhs, &re, &name);
+            }
+            let nth = arg1.coerce_to_int_i64(vm, globals)?;
+            string_match_index(vm, lhs, &re, nth)
         } else {
-            0
-        };
-        string_match_index(vm, lhs, &re, nth)
+            string_match_index(vm, lhs, &re, 0)
+        }
     } else if let Some(s) = lfp.arg(0).is_str() {
         // `str[other_str, len]` is intentionally unsupported by CRuby.
         if lfp.try_arg(1).is_some() {
@@ -813,6 +827,32 @@ fn string_match_index(
             }
         }
     }
+}
+
+fn string_match_named(
+    vm: &mut Executor,
+    s: &RStringInner,
+    re: &RegexpInner,
+    name: &str,
+) -> Result<Value> {
+    let members = re.get_group_members(name);
+    if members.is_empty() {
+        return Err(MonorubyErr::indexerr(format!(
+            "undefined group name reference: {name}"
+        )));
+    }
+    let lhs = s.check_utf8()?;
+    let captures = match re.captures(lhs, vm)? {
+        None => return Ok(Value::nil()),
+        Some(c) => c,
+    };
+    // Pick the rightmost matched group sharing the name (matches CRuby).
+    for &idx in members.iter().rev() {
+        if let Some(Some(m)) = captures.iter().nth(idx as usize) {
+            return Ok(Value::string_from_str(m.as_str()));
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -1298,19 +1338,44 @@ fn check_encoding_compat(
         && !(self_enc.is_utf8_compatible() && arg_enc.is_utf8_compatible())
         && !(self_bytes.is_ascii() || arg_inner.as_bytes().is_ascii())
     {
-        let enc_class = super::encoding::encoding_class(globals);
-        let compat_err_class = globals
-            .store
-            .get_constant_noautoload(enc_class, IdentId::get_id("CompatibilityError"))
-            .map(|v| v.as_class_id());
-        let msg = format!(
-            "incompatible character encodings: {:?} and {:?}",
-            self_enc, arg_enc,
-        );
-        return Err(match compat_err_class {
-            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
-            None => MonorubyErr::runtimeerr(msg),
-        });
+        return Err(MonorubyErr::incompatible_encoding(
+            &globals.store,
+            self_enc,
+            arg_enc,
+        ));
+    }
+    Ok(())
+}
+
+/// Variant of `check_encoding_compat` that takes the inner of `self`
+/// directly. Mirrors `RStringInner::compatible_encoding` so empty and
+/// 7-bit strings are treated as compatible everywhere.
+fn check_string_encoding_compat(
+    self_inner: &RStringInner,
+    arg_inner: &RStringInner,
+    globals: &Globals,
+) -> Result<()> {
+    if self_inner.compatible_encoding(arg_inner).is_some() {
+        return Ok(());
+    }
+    Err(MonorubyErr::incompatible_encoding(
+        &globals.store,
+        self_inner.encoding(),
+        arg_inner.encoding(),
+    ))
+}
+
+/// Check that `pattern` (a String, Regexp, or anything else passed
+/// through unchanged) is encoding-compatible with `self`. For
+/// non-string non-regexp args, defers all checking to whatever later
+/// call would convert them.
+fn check_pattern_encoding_compat(
+    self_inner: &RStringInner,
+    pattern: Value,
+    globals: &Globals,
+) -> Result<()> {
+    if let Some(arg_inner) = pattern.is_rstring_inner() {
+        return check_string_encoding_compat(self_inner, &arg_inner, globals);
     }
     Ok(())
 }
@@ -1324,10 +1389,13 @@ fn check_encoding_compat(
 #[monoruby_builtin]
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    let self_inner = self_.as_rstring_inner();
+    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
+        check_string_encoding_compat(self_inner, &arg_inner, globals)?;
+    }
     let string = self_.expect_str(globals)?;
     let substr_s = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let b = string.contains(substr_s.as_str());
-    Ok(Value::bool(b))
+    Ok(Value::bool(string.contains(substr_s.as_str())))
 }
 
 ///
@@ -1417,9 +1485,15 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 .map(|(i, c)| &string[i..i + c.len_utf8()])
                 .collect();
             let v: Vec<Value> = if lim <= 0 || (lim as usize) >= chars.len() {
+                let lim_pos = if lim > 0 { Some(lim as usize) } else { None };
+                let chars_len = chars.len();
                 let mut v: Vec<Value> = chars.into_iter().map(Value::string_from_str).collect();
-                if lim < 0 {
-                    // Negative limit keeps trailing empty fields, matching CRuby.
+                // Trailing empty field is added when:
+                //   * lim is negative, or
+                //   * lim is positive and strictly greater than the
+                //     number of characters (so we still have "room"
+                //     in the limit).
+                if lim < 0 || matches!(lim_pos, Some(l) if l > chars_len) {
                     v.push(Value::string_from_str(""));
                 }
                 v
@@ -2125,8 +2199,9 @@ fn gsub_main(
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
+                let self_enc = self_val.as_rstring_inner().encoding();
                 let given = self_val.expect_str(globals)?;
-                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), given, bh)
+                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), given, bh, Some(self_enc))
             }
         }
     }
@@ -2286,6 +2361,9 @@ fn string_index(
     };
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
+        check_string_encoding_compat(&given, &arg_inner, globals)?;
+    }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let char_pos = match given.conv_char_index(char_pos)? {
@@ -2325,9 +2403,10 @@ fn string_index(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/byteindex.html]
 #[monoruby_builtin]
 fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
     let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
         let offset = arg1.coerce_to_int_i64(vm, globals)?;
@@ -2381,9 +2460,10 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/byterindex.html]
 #[monoruby_builtin]
 fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
     let bytesize = haystack.len();
 
@@ -2520,6 +2600,9 @@ fn string_rindex(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
+        check_string_encoding_compat(&given, &arg_inner, globals)?;
+    }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let s = given.check_utf8()?;
@@ -4917,6 +5000,24 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val())
 }
 
+/// String#initialize
+///
+/// - initialize -> self
+/// - initialize(other) -> self
+///
+/// Private; called by `Class#new` and `BasicObject#send(:initialize, ...)`.
+/// With no argument, returns self unchanged. With one argument, replaces
+/// self's bytes with the bytes of `other`.
+#[monoruby_builtin]
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(other) = lfp.try_arg(0) {
+        lfp.self_val().ensure_string_mutable(vm, globals)?;
+        let s = other.coerce_to_string(vm, globals)?;
+        lfp.self_val().replace_str(&s);
+    }
+    Ok(lfp.self_val())
+}
+
 ///
 /// ### String#chars
 ///
@@ -5062,9 +5163,15 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/center.html]
 #[monoruby_builtin]
 fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let self_inner = lhs.as_rstring_inner();
     let arg1 = lfp.try_arg(1);
     let padding_owned;
     let padding = if let Some(arg) = &arg1 {
+        // Pad string must be encoding-compatible with self.
+        if let Some(arg_inner) = arg.is_rstring_inner() {
+            check_string_encoding_compat(self_inner, &arg_inner, globals)?;
+        }
         padding_owned = arg.coerce_to_string(vm, globals)?;
         padding_owned.as_str()
     } else {
@@ -5073,7 +5180,6 @@ fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if padding.is_empty() {
         return Err(MonorubyErr::argumenterr("Zero width padding."));
     };
-    let lhs = lfp.self_val();
     let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let str_len = lhs.as_str().chars().count();
     if width <= 0 || width as usize <= str_len {
@@ -5194,30 +5300,266 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
-    Ok(Value::string(parse_undump(s)?))
+    let bytes = parse_undump(s)?;
+    // The dumped form is always ASCII-compatible. If the resulting
+    // bytes happen to be valid UTF-8, return UTF-8; otherwise return
+    // the bytes tagged as US-ASCII (so encoding survives the round
+    // trip and `valid_encoding?` reports correctly).
+    let enc = if std::str::from_utf8(&bytes).is_ok() {
+        Encoding::Utf8
+    } else {
+        Encoding::Utf8
+    };
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        &bytes, enc,
+    )))
+}
+
+///
+/// ### String#scrub
+///
+/// - scrub -> String
+/// - scrub(repl) -> String
+/// - scrub {|bad| ... } -> String
+///
+/// Returns a copy of `self` with each invalid byte sequence replaced
+/// by `repl` (default `"\u{FFFD}"` for Unicode-aware encodings, `"?"`
+/// for ASCII-only encodings). If a block is given, it is yielded
+/// the offending bytes (as a String tagged with `self`'s encoding)
+/// and the block's return value is used as the replacement.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub.html]
+#[monoruby_builtin]
+fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let scrubbed = if let Some(bh) = lfp.block() {
+        scrub_inner_with_block(vm, globals, inner, bh)?
+    } else {
+        let repl = scrub_replacement(globals, lfp, inner.encoding())?;
+        scrub_inner(inner, &repl)?
+    };
+    Ok(Value::string_from_inner(scrubbed))
+}
+
+///
+/// ### String#scrub!
+///
+/// - scrub! -> self
+/// - scrub!(repl) -> self
+/// - scrub! {|bad| ... } -> self
+///
+/// In-place variant of `String#scrub`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub=21.html]
+#[monoruby_builtin]
+fn scrub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    let scrubbed = if let Some(bh) = lfp.block() {
+        scrub_inner_with_block(vm, globals, inner, bh)?
+    } else {
+        let repl = scrub_replacement(globals, lfp, inner.encoding())?;
+        scrub_inner(inner, &repl)?
+    };
+    *self_.as_rstring_inner_mut() = scrubbed;
+    Ok(self_)
+}
+
+fn scrub_replacement(
+    globals: &mut Globals,
+    lfp: Lfp,
+    self_enc: Encoding,
+) -> Result<RStringInner> {
+    if let Some(arg) = lfp.try_arg(0) {
+        if arg.is_nil() {
+            return Ok(default_scrub_replacement(self_enc));
+        }
+        let r_value = arg.expect_str(globals)?;
+        // Take a copy to avoid borrowing issues across `arg`.
+        let _ = r_value;
+        let r_inner = arg.as_rstring_inner();
+        let r_enc = r_inner.encoding();
+        if !r_inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(
+                "replacement must be a valid byte sequence",
+            ));
+        }
+        if r_enc != self_enc && !(r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible()) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "incompatible character encodings: {} and {}",
+                self_enc.name(),
+                r_enc.name(),
+            )));
+        }
+        Ok(RStringInner::from_encoding(r_inner.as_bytes(), self_enc))
+    } else {
+        Ok(default_scrub_replacement(self_enc))
+    }
+}
+
+fn default_scrub_replacement(enc: Encoding) -> RStringInner {
+    match enc {
+        Encoding::Utf8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::Utf8),
+        _ => RStringInner::from_encoding(b"?", enc),
+    }
+}
+
+fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner> {
+    let bytes = inner.as_bytes();
+    let enc = inner.encoding();
+    if inner.is_valid_encoding() {
+        return Ok(RStringInner::from_encoding(bytes, enc));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    match enc {
+        Encoding::Utf8 => scrub_utf8(bytes, repl.as_bytes(), &mut out),
+        Encoding::UsAscii => {
+            for &b in bytes {
+                if b < 0x80 {
+                    out.push(b);
+                } else {
+                    out.extend_from_slice(repl.as_bytes());
+                }
+            }
+        }
+        _ => out.extend_from_slice(bytes),
+    }
+    Ok(RStringInner::from_encoding(&out, enc))
+}
+
+/// Block-form scrub. For each "maximal subpart" of an ill-formed
+/// sequence, yield the offending bytes (as a String in self's
+/// encoding) to the block and use the block's return value as the
+/// replacement. The block's return value must be a String; CRuby
+/// raises `Encoding::CompatibilityError` if the result's encoding
+/// can't merge with `self`'s.
+fn scrub_inner_with_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    inner: &RStringInner,
+    bh: BlockHandler,
+) -> Result<RStringInner> {
+    let bytes = inner.as_bytes();
+    let enc = inner.encoding();
+    if inner.is_valid_encoding() {
+        return Ok(RStringInner::from_encoding(bytes, enc));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let data = vm.get_block_data(globals, bh)?;
+    match enc {
+        Encoding::Utf8 => {
+            let mut i = 0;
+            while i < bytes.len() {
+                match std::str::from_utf8(&bytes[i..]) {
+                    Ok(rest) => {
+                        out.extend_from_slice(rest.as_bytes());
+                        break;
+                    }
+                    Err(e) => {
+                        let valid_up_to = e.valid_up_to();
+                        if valid_up_to > 0 {
+                            out.extend_from_slice(&bytes[i..i + valid_up_to]);
+                            i += valid_up_to;
+                        }
+                        let bad_len = e.error_len().unwrap_or(bytes.len() - i);
+                        let bad_slice = &bytes[i..i + bad_len];
+                        let bad_arg = Value::string_from_inner(
+                            RStringInner::from_encoding(bad_slice, enc),
+                        );
+                        let result = vm.invoke_block(globals, &data, &[bad_arg])?;
+                        let result_inner = result.is_rstring_inner().ok_or_else(|| {
+                            MonorubyErr::typeerr(
+                                "scrub block must return a String",
+                            )
+                        })?;
+                        out.extend_from_slice(result_inner.as_bytes());
+                        i += bad_len;
+                    }
+                }
+            }
+        }
+        Encoding::UsAscii => {
+            for (idx, &b) in bytes.iter().enumerate() {
+                if b < 0x80 {
+                    out.push(b);
+                } else {
+                    let bad_arg = Value::string_from_inner(
+                        RStringInner::from_encoding(&bytes[idx..idx + 1], enc),
+                    );
+                    let result = vm.invoke_block(globals, &data, &[bad_arg])?;
+                    let result_inner = result.is_rstring_inner().ok_or_else(|| {
+                        MonorubyErr::typeerr("scrub block must return a String")
+                    })?;
+                    out.extend_from_slice(result_inner.as_bytes());
+                }
+            }
+        }
+        _ => out.extend_from_slice(bytes),
+    }
+    Ok(RStringInner::from_encoding(&out, enc))
+}
+
+fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
+    // Walk the byte stream, replacing each "maximal subpart" of an
+    // ill-formed sequence with a single replacement (matches the
+    // Unicode/CRuby definition of `scrub`).
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(rest) => {
+                out.extend_from_slice(rest.as_bytes());
+                return;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    out.extend_from_slice(&bytes[i..i + valid_up_to]);
+                    i += valid_up_to;
+                }
+                let bad_len = e.error_len().unwrap_or(bytes.len() - i);
+                out.extend_from_slice(repl);
+                i += bad_len;
+            }
+        }
+    }
 }
 
 /// Parser for the dump-quoted format. Errors are returned as
-/// `RuntimeError` with the same message CRuby uses ("invalid dumped
-/// string"), so the spec's `raise_error(RuntimeError)` matches.
-fn parse_undump(s: &str) -> Result<String> {
+/// `RuntimeError` with messages that match CRuby's variants, so the
+/// spec's `raise_error(RuntimeError, /.../)` matches the right kind.
+fn parse_undump(s: &str) -> Result<Vec<u8>> {
     let bytes = s.as_bytes();
     let invalid = || MonorubyErr::runtimeerr("invalid dumped string");
-    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+    let unterminated = || MonorubyErr::runtimeerr("unterminated dumped string");
+    let bad_hex = || MonorubyErr::runtimeerr("invalid hex escape");
+    let bad_unicode = || MonorubyErr::runtimeerr("invalid Unicode escape");
+    let null_byte = || MonorubyErr::runtimeerr("string contains null byte");
+    let non_ascii = || MonorubyErr::runtimeerr("non-ASCII character detected");
+    if bytes.len() < 2 || bytes[0] != b'"' {
         return Err(invalid());
     }
+    if bytes[bytes.len() - 1] != b'"' {
+        return Err(unterminated());
+    }
     let inner = &bytes[1..bytes.len() - 1];
-    let mut out = String::with_capacity(inner.len());
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
     let mut i = 0usize;
     while i < inner.len() {
         let b = inner[i];
+        if b == 0 {
+            return Err(null_byte());
+        }
+        if b >= 0x80 {
+            return Err(non_ascii());
+        }
         if b == b'"' {
             // Unescaped `"` inside the body terminates a literal —
             // anything after it is invalid.
             return Err(invalid());
         }
         if b != b'\\' {
-            out.push(b as char);
+            out.push(b);
             i += 1;
             continue;
         }
@@ -5229,26 +5571,28 @@ fn parse_undump(s: &str) -> Result<String> {
         let esc = inner[i];
         i += 1;
         match esc {
-            b'a' => out.push('\x07'),
-            b'b' => out.push('\x08'),
-            b't' => out.push('\t'),
-            b'n' => out.push('\n'),
-            b'v' => out.push('\x0b'),
-            b'f' => out.push('\x0c'),
-            b'r' => out.push('\r'),
-            b'e' => out.push('\x1b'),
-            b's' => out.push(' '),
-            b'"' => out.push('"'),
-            b'\\' => out.push('\\'),
-            b'#' => out.push('#'),
+            b'a' => out.push(0x07),
+            b'b' => out.push(0x08),
+            b't' => out.push(b'\t'),
+            b'n' => out.push(b'\n'),
+            b'v' => out.push(0x0b),
+            b'f' => out.push(0x0c),
+            b'r' => out.push(b'\r'),
+            b'e' => out.push(0x1b),
+            b's' => out.push(b' '),
+            b'"' => out.push(b'"'),
+            b'\\' => out.push(b'\\'),
+            b'#' => out.push(b'#'),
             b'x' => {
-                // Exactly two hex digits in dump output.
+                // Exactly two hex digits in dump output. Push the raw
+                // byte (this can produce non-UTF-8 bytes intentionally,
+                // matching CRuby's `"\xNN".dump.undump` round-trip).
                 if i + 2 > inner.len() {
-                    return Err(invalid());
+                    return Err(bad_hex());
                 }
-                let hi = hex_digit(inner[i]).ok_or_else(invalid)?;
-                let lo = hex_digit(inner[i + 1]).ok_or_else(invalid)?;
-                out.push((hi * 16 + lo) as u8 as char);
+                let hi = hex_digit(inner[i]).ok_or_else(bad_hex)?;
+                let lo = hex_digit(inner[i + 1]).ok_or_else(bad_hex)?;
+                out.push((hi * 16 + lo) as u8);
                 i += 2;
             }
             b'u' => {
@@ -5259,24 +5603,26 @@ fn parse_undump(s: &str) -> Result<String> {
                         .iter()
                         .position(|&c| c == b'}')
                         .map(|p| i + p)
-                        .ok_or_else(invalid)?;
+                        .ok_or_else(bad_unicode)?;
                     for part in inner[i..end].split(|&c| c == b' ') {
                         if part.is_empty() {
                             continue;
                         }
-                        let cp = parse_hex_str(part).ok_or_else(invalid)?;
-                        let ch = char::from_u32(cp).ok_or_else(invalid)?;
-                        out.push(ch);
+                        let cp = parse_hex_str(part).ok_or_else(bad_unicode)?;
+                        let ch = char::from_u32(cp).ok_or_else(bad_unicode)?;
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     }
                     i = end + 1;
                 } else {
                     // `\uXXXX` (exactly four hex digits).
                     if i + 4 > inner.len() {
-                        return Err(invalid());
+                        return Err(bad_unicode());
                     }
-                    let cp = parse_hex_str(&inner[i..i + 4]).ok_or_else(invalid)?;
-                    let ch = char::from_u32(cp).ok_or_else(invalid)?;
-                    out.push(ch);
+                    let cp = parse_hex_str(&inner[i..i + 4]).ok_or_else(bad_unicode)?;
+                    let ch = char::from_u32(cp).ok_or_else(bad_unicode)?;
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                     i += 4;
                 }
             }
@@ -8057,5 +8403,445 @@ mod tests {
         // Unbalanced quotes are rejected
         run_test_error(r##""foo".undump"##);
         run_test_error(r##""\\".undump"##);
+    }
+
+    #[test]
+    fn string_unpack_directive_message() {
+        // Unknown directive in unpack reports "unknown unpack directive ..."
+        // (not the pack form). Verified by raising and capturing the message.
+        run_tests(&[
+            r##"begin; "abcdefgh".unpack("a K"); rescue ArgumentError => e; e.message; end"##,
+            r##"begin; "abcdefgh".unpack("a 0"); rescue ArgumentError => e; e.message; end"##,
+            // pack still says "unknown pack directive"
+            r##"begin; [1].pack("K"); rescue ArgumentError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_pads_with_nil() {
+        // Past the end of the source, unpack pads with nil for each
+        // element still requested (CRuby behavior).
+        run_tests(&[
+            r##""".unpack("C3")"##,
+            r##""".unpack("S3")"##,
+            r##""".unpack("L3")"##,
+            r##""".unpack("Q3")"##,
+            r##""".unpack("D3")"##,
+            r##""".unpack("F3")"##,
+            r##""\x01".unpack("C3")"##,
+            r##""\x01\x02\x03".unpack("L2")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_q_msb() {
+        // Q / J unpack must preserve the full u64 range — values with
+        // the high bit set must come back positive, not as a negative
+        // i64 reinterpretation.
+        run_tests(&[
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q<")"##,
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q>")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("Q")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("J")"##,
+            // q (signed) still wraps to the negative value
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("q")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_format() {
+        // %c accepts integers, strings (first char), and any object
+        // whose to_int / to_str returns the right type.
+        run_tests(&[
+            r##""%c" % 97"##,
+            r##""%c" % "a""##,
+            r##""%c" % "abc""##,
+            r##""%c" % """##,
+            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
+            r##"begin; "%c" % [[]]; rescue TypeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_coerces_to_int() {
+        // %c with an arbitrary object: to_int is tried first. If it
+        // returns an Integer, that codepoint is used.
+        run_test_with_prelude(
+            r##""%c" % MyInt.new"##,
+            r##"
+                class MyInt
+                  def to_int; 90; end
+                end
+            "##,
+        );
+        // to_int may also return a value pointing at a non-ASCII
+        // codepoint — the result is the corresponding character.
+        run_test_with_prelude(
+            r##""%c" % HiroChar.new"##,
+            r##"
+                class HiroChar
+                  def to_int; 0x3042; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_c_coerces_to_str() {
+        // %c with an arbitrary object that responds only to to_str:
+        // the returned String's first char becomes the output.
+        run_test_with_prelude(
+            r##""%c" % MyStr.new"##,
+            r##"
+                class MyStr
+                  def to_str; "abc"; end
+                end
+            "##,
+        );
+        run_test_with_prelude(
+            r##""%c" % EmptyStr.new"##,
+            r##"
+                class EmptyStr
+                  def to_str; ""; end
+                end
+            "##,
+        );
+        // A class without to_int / to_str / Integer-like behavior
+        // raises TypeError mentioning Integer (the first conversion
+        // tried).
+        run_test_with_prelude(
+            r##"begin; "%c" % Plain.new; rescue TypeError => e; e.message =~ /Integer/ ? "ok" : e.message; end"##,
+            r##"
+                class Plain; end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_int_precision() {
+        // d / i / u / b / B / o / x / X all honor precision; precision 0
+        // applied to value 0 yields the empty string.
+        run_tests(&[
+            r##""%.0d" % 0"##,
+            r##""%.0i" % 0"##,
+            r##""%.0u" % 0"##,
+            r##""%.5d" % 12"##,
+            r##""%.5d" % -12"##,
+            r##""%.5d" % 0"##,
+            r##""%.6b" % 10"##,
+            r##""%.6B" % 10"##,
+            r##""%.5o" % 87"##,
+            r##""%.5x" % 196"##,
+            r##""%.5X" % 196"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_inf_nan() {
+        // %f / %e / %E / %g / %G surface "Inf" / "NaN" instead of Rust's
+        // lowercase "inf".
+        run_tests(&[
+            r##""%f" % Float::INFINITY"##,
+            r##""%f" % (-Float::INFINITY)"##,
+            r##""%f" % Float::NAN"##,
+            r##""%e" % Float::INFINITY"##,
+            r##""%E" % Float::INFINITY"##,
+            r##""%g" % Float::INFINITY"##,
+            r##""%G" % (-Float::INFINITY)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_default() {
+        // scrub with no argument replaces invalid UTF-8 with U+FFFD.
+        run_tests(&[
+            r##""foo".scrub"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub"##,
+            // An incomplete multi-byte sequence at the end is one
+            // "subpart" — one replacement, not one per byte.
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub"##,
+            // Already-valid string is returned as a copy with the same
+            // bytes and encoding.
+            r##""abcあ".scrub"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_custom_replacement() {
+        run_tests(&[
+            r##""foo".scrub("*")"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub("*")"##,
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub("*")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_bang() {
+        // scrub! mutates self.
+        run_tests(&[
+            r##"s = +"foo"; s.scrub!; s"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); s = +("abc" + x81); s.scrub!("*"); s"##,
+        ]);
+    }
+
+    #[test]
+    fn string_initialize_replaces() {
+        // initialize is a private method and replaces self when
+        // called via send.
+        run_tests(&[
+            r##"s = +"hello"; s.send(:initialize, "world"); s"##,
+            r##"s = +"hello"; s.send(:initialize); s"##,
+            r##"String.private_instance_methods.include?(:initialize)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_index_named_capture() {
+        // String#[regex, name] returns the named-capture match.
+        run_tests(&[
+            r##""hello"[/(?<x>l+)/, "x"]"##,
+            r##""hello"[/(?<x>l+)/, :x]"##,
+            r##""hello"[/(?<x>z+)/, "x"]"##,
+            // Numeric group still works.
+            r##""hello"[/(l+)/, 1]"##,
+            r##""hello"[/(l+)/, 0]"##,
+            // Unknown name raises IndexError.
+            r##"begin; "hello"[/(?<x>l+)/, "y"]; rescue IndexError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_x_byte() {
+        // \xNN in a dumped string must yield the raw byte, not a
+        // UTF-8 widening of the codepoint.
+        run_tests(&[
+            r##""\"\\x80\"".undump.bytes"##,
+            r##""\"\\xFF\"".undump.bytes"##,
+            r##""\"\\x00\"".undump.bytes"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_error_messages() {
+        // Each malformed undump input maps to a specific message
+        // CRuby's specs match against.
+        run_tests(&[
+            r##"begin; '"foo'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\x"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\u"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"foo\0\"".undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"あ\"".undump; rescue RuntimeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_split_empty_separator_limit() {
+        // With an empty separator, lim > char_count appends a
+        // trailing empty field.
+        run_tests(&[
+            r##""hi!".split("")"##,
+            r##""hi!".split("", -1)"##,
+            r##""hi!".split("", 0)"##,
+            r##""hi!".split("", 1)"##,
+            r##""hi!".split("", 2)"##,
+            r##""hi!".split("", 3)"##,
+            r##""hi!".split("", 4)"##,
+            r##""hi!".split("", 5)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_named_reference() {
+        // %<name>type — named arg with a type spec. The token may
+        // appear at any position within the spec.
+        run_tests(&[
+            r##""%<foo>d" % {foo: 123}"##,
+            r##""%+20.10<foo>f" % {foo: 10.952}"##,
+            r##""%+15<foo>.5f" % {foo: 10.952}"##,
+            r##""%+<foo>15.5f" % {foo: 10.952}"##,
+            r##""%<foo>+15.5f" % {foo: 10.952}"##,
+        ]);
+        // %{name} — named arg, to_s only. Width / precision still work.
+        run_tests(&[
+            r##""%{foo}" % {foo: 123}"##,
+            r##""%{foo}d" % {foo: 123}"##,
+            r##""%-20.5{foo}" % {foo: "123456789"}"##,
+        ]);
+        // Missing key raises KeyError.
+        run_tests(&[
+            r##"begin; "%{foo}" % {bar: 1}; rescue KeyError => e; e.message; end"##,
+            r##"begin; "%<foo>d" % {bar: 1}; rescue KeyError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_block_form() {
+        run_tests(&[
+            // Block sees the offending bytes and its return value
+            // becomes the replacement.
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub { |b| "<#{b.unpack("H*")[0]}>" }"##,
+            // Multi-byte invalid sequence at the end → one block call.
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub { |b| "*" }"##,
+            // Block-form scrub! mutates self.
+            r##"xE3x80 = [0xE3, 0x80].pack("CC").force_encoding("utf-8"); s = +xE3x80; s.scrub! { |b| "<#{b.unpack("H*")[0]}>" }; s"##,
+            // Valid string returns a copy unchanged (block not invoked).
+            r##""abcあ".scrub { |b| "X" }"##,
+        ]);
+    }
+
+    #[test]
+    fn string_encoding_compat_errors() {
+        // Methods that compare strings should raise
+        // Encoding::CompatibilityError when the encodings can't merge.
+        run_tests(&[
+            // include?
+            r##"begin; a = "abc"; b = "abc".dup.force_encoding("UTF-16LE"); a.include?(b); rescue Encoding::CompatibilityError => e; "raised"; end"##,
+            // index
+            r##"begin; a = "abc"; b = "abc".dup.force_encoding("UTF-16LE"); a.index(b); rescue Encoding::CompatibilityError => e; "raised"; end"##,
+            // rindex
+            r##"begin; a = "abc"; b = "abc".dup.force_encoding("UTF-16LE"); a.rindex(b); rescue Encoding::CompatibilityError => e; "raised"; end"##,
+            // center pad string
+            r##"begin; a = "abc"; pad = "x".dup.force_encoding("UTF-16LE"); a.center(10, pad); rescue Encoding::CompatibilityError => e; "raised"; end"##,
+        ]);
+    }
+
+    #[test]
+    fn encoding_canonical_name() {
+        // Shift_JIS keeps its underscore; most others use hyphens.
+        run_tests(&[
+            r#"Encoding::SHIFT_JIS.name"#,
+            r#"Encoding::SHIFT_JIS.to_s"#,
+            r#"Encoding::EUC_JP.name"#,
+            r#"Encoding::US_ASCII.name"#,
+            r#"Encoding::UTF_8.name"#,
+            r#"Encoding::ISO_8859_1.name"#,
+            r#"Encoding::ISO_2022_JP.name"#,
+            r#"Encoding::Windows_1252.name"#,
+            r#"Encoding::Big5.name"#,
+        ]);
+    }
+
+    #[test]
+    fn encoding_canonical_alias_identity() {
+        // Constants whose canonical name differs from the Ruby
+        // identifier (e.g. `Shift_JIS` vs `SHIFT_JIS`) must resolve
+        // to the same Value, so `==` / `equal?` against an encoding
+        // pulled out of a String agrees with the user-facing constant.
+        run_tests(&[
+            r#"Encoding::SHIFT_JIS.equal?(Encoding::Shift_JIS)"#,
+            // `0x8140.chr(Encoding::SHIFT_JIS).encoding` and
+            // `Encoding::SHIFT_JIS` are the same object.
+            r#"0x8140.chr(Encoding::SHIFT_JIS).encoding.equal?(Encoding::SHIFT_JIS)"#,
+            r#"0x8140.chr(Encoding::Shift_JIS).encoding == Encoding::SHIFT_JIS"#,
+        ]);
+    }
+
+    #[test]
+    fn string_sub_gsub_pattern_coercion() {
+        // The pattern argument to `sub` / `gsub` (and the block / hash
+        // variants) accepts a Regexp, a String (treated as a literal
+        // pattern), or any object whose `to_str` returns a String.
+        // All four forms exercise the shared `with_coerced_regexp`
+        // helper.
+        run_test_with_prelude(
+            r##"[
+                # Replacement-string form.
+                "hello".sub("l", "L"),
+                "hello".sub(P.new, "L"),
+                "hello".sub(/l/, "L"),
+                "hello".gsub("l", "L"),
+                "hello".gsub(P.new, "L"),
+                "hello".gsub(/l/, "L"),
+                # Block form.
+                "hello".sub("l") { |m| m.upcase },
+                "hello".sub(P.new) { |m| m.upcase },
+                "hello".sub(/l/) { |m| m.upcase },
+                "hello".gsub("l") { |m| m.upcase },
+                "hello".gsub(P.new) { |m| m.upcase },
+                "hello".gsub(/l/) { |m| m.upcase },
+                # Hash form.
+                "hello".sub("l", "l" => "L"),
+                "hello".sub(P.new, "l" => "L"),
+                "hello".sub(/l/, "l" => "L"),
+                "hello".gsub("l", "l" => "L"),
+                "hello".gsub(P.new, "l" => "L"),
+                "hello".gsub(/l/, "l" => "L"),
+            ]"##,
+            r##"
+                class P
+                  def to_str; "l"; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_format_errors() {
+        // Each error path inside `format_by_args` (`coerce.rs`)
+        // raises an exception. Use `rescue => e; e.message` to compare
+        // monoruby's wording against CRuby's.
+        run_tests(&[
+            // Incomplete spec — `%` at end of format.
+            r##"begin; "%" % []; rescue => e; e.message; end"##,
+            // Trailing escape — `%{name without closing brace.
+            r##"begin; "%{foo" % {foo: 1}; rescue => e; e.message; end"##,
+            // Trailing escape — `%<name>` without closing `>`.
+            r##"begin; "%<foo" % {foo: 1}; rescue => e; e.message; end"##,
+            // Too few arguments for a positional spec.
+            r##"begin; "%d" % []; rescue => e; e.message; end"##,
+            // Unknown directive char.
+            r##"begin; "%Q" % 1; rescue => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_coerce_failures() {
+        // `coerce_to_char` inside coerce.rs. Each of these exercises
+        // one error arm. We only assert that *some* exception was
+        // raised (the exception class differs between monoruby and
+        // CRuby for some of these — e.g. CRuby's ArgumentError vs our
+        // RangeError for `%c % -1`).
+        // (1) Integer out of valid char range.
+        run_tests(&[
+            r##"begin; "%c" % 0x110000; rescue => e; "raised"; end"##,
+            r##"begin; "%c" % -1; rescue => e; "raised"; end"##,
+        ]);
+        // (2) Float out of valid char range.
+        run_tests(&[
+            r##"begin; "%c" % 1.0e30; rescue => e; "raised"; end"##,
+            r##"begin; "%c" % (-1.5); rescue => e; "raised"; end"##,
+        ]);
+        // (3) `to_int` returns a non-Integer.
+        run_test_with_prelude(
+            r##"begin; "%c" % BadInt.new; rescue TypeError => e; "raised"; end"##,
+            r##"
+                class BadInt
+                  def to_int; "not an integer"; end
+                end
+            "##,
+        );
+        // (4) nil → TypeError "no implicit conversion from nil to integer".
+        run_tests(&[
+            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
+        ]);
+        // (5) Object with neither to_int nor to_str → TypeError
+        // mentioning Integer.
+        run_tests(&[
+            r##"begin; "%c" % Object.new; rescue TypeError => e; e.message =~ /Integer/ ? "ok" : e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_sub_gsub_pattern_invalid_type() {
+        // Anything that isn't a Regexp / String / responds_to(:to_str)
+        // raises TypeError. CRuby's wording is
+        // "no implicit conversion of X into String" — match the kind
+        // (regexp-vs-string) at least.
+        run_tests(&[
+            r##"begin; "abc".sub(123, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".gsub(123, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".sub(:l, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".gsub(nil, "x"); rescue TypeError => e; "raised"; end"##,
+        ]);
     }
 }

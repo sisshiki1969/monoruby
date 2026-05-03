@@ -655,7 +655,14 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let mut out: Vec<u8> = Vec::new();
         let mut enc = sep_enc;
         array_join(
-            vm, globals, lhs, &sep_bytes, sep_enc, &mut visited, &mut out, &mut enc,
+            vm,
+            globals,
+            lhs,
+            &sep_bytes,
+            sep_enc,
+            &mut visited,
+            &mut out,
+            &mut enc,
         )?;
         Ok(Value::string_from_inner(RStringInner::from_encoding(
             &out, enc,

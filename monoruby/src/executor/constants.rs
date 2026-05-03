@@ -31,7 +31,18 @@ impl Executor {
         let feature = match globals.get_constant(class_id, name) {
             None => return Ok(None),
             Some(state) => match &state.kind {
-                ConstStateKind::Loaded(v) => return Ok(Some(*v)),
+                ConstStateKind::Loaded(v) => {
+                    let v = *v;
+                    let deprecated = state.is_deprecated();
+                    if deprecated {
+                        let qualified =
+                            format!("{}::{}", class_id.get_name(&globals.store), name);
+                        crate::value::emit_deprecated_constant_warning(
+                            self, globals, &qualified,
+                        )?;
+                    }
+                    return Ok(Some(v));
+                }
                 ConstStateKind::Autoload(entry) => match entry.state {
                     // Same-thread re-entry while the autoload's own
                     // require is in flight: behave as "not yet

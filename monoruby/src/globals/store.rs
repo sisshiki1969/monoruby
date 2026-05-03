@@ -268,7 +268,13 @@ impl Store {
     pub(crate) fn get_class_name(&self, class: ClassId) -> String {
         let class_obj = self.classes[class].get_module();
         match self.classes[class].get_name() {
-            Some(_) => {
+            Some(name) => {
+                // A name set explicitly via `Module#set_temporary_name`
+                // overrides parent-chain rendering — CRuby returns the
+                // bare leaf string, not `#<Module:0x..>::leaf`.
+                if self.classes[class].is_name_explicit_temporary() {
+                    return name.to_string();
+                }
                 let v: Vec<_> = self.classes.get_parents(class).into_iter().rev().collect();
                 v.join("::")
             }

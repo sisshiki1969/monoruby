@@ -215,6 +215,21 @@ pub struct ClassInfo {
     ///
     name_value: Option<Value>,
     ///
+    /// True when `name` was assigned via constant binding (a "permanent
+    /// name"). False for anonymous modules and for modules whose name
+    /// was set via `Module#set_temporary_name`. Used to enforce
+    /// `set_temporary_name`'s restriction that permanent names cannot
+    /// be replaced.
+    ///
+    name_permanent: bool,
+    ///
+    /// True when `name` was assigned via `Module#set_temporary_name`.
+    /// In that case `Module#name` returns the leaf string verbatim
+    /// instead of prefixing it with the (possibly anonymous) parent
+    /// chain — matching CRuby's behavior.
+    ///
+    name_explicit_temporary: bool,
+    ///
     /// the parent class of this class.
     ///
     parent: Option<ClassId>,
@@ -330,6 +345,8 @@ impl ClassInfo {
         Self {
             name: None,
             name_value: None,
+            name_permanent: false,
+            name_explicit_temporary: false,
             parent: None,
             object: None,
             methods: HashMap::default(),
@@ -346,6 +363,8 @@ impl ClassInfo {
         Self {
             name: None,
             name_value: None,
+            name_permanent: false,
+            name_explicit_temporary: false,
             parent: None,
             object: None,
             methods: HashMap::default(),
@@ -399,11 +418,38 @@ impl ClassInfo {
         // Invalidate any cached frozen name Value so the next call to
         // `Module#name` rebuilds it from the current `name`.
         self.name_value = None;
+        self.name_permanent = true;
+        self.name_explicit_temporary = false;
+    }
+
+    /// Set a non-permanent (temporary) name. Distinguished from
+    /// `set_name` so `set_temporary_name` round-trips correctly and a
+    /// later constant assignment can still promote the module to a
+    /// permanent name.
+    pub(crate) fn set_temporary_name(&mut self, name: String) {
+        self.name = Some(name);
+        self.name_value = None;
+        self.name_permanent = false;
+        self.name_explicit_temporary = true;
     }
 
     pub(crate) fn clear_name(&mut self) {
         self.name = None;
         self.name_value = None;
+        self.name_permanent = false;
+        self.name_explicit_temporary = false;
+    }
+
+    pub(crate) fn is_name_explicit_temporary(&self) -> bool {
+        self.name_explicit_temporary
+    }
+
+    pub(crate) fn is_name_permanent(&self) -> bool {
+        self.name_permanent
+    }
+
+    pub(crate) fn set_name_permanent(&mut self, permanent: bool) {
+        self.name_permanent = permanent;
     }
 
     pub(crate) fn get_name(&self) -> Option<&str> {
@@ -466,6 +512,15 @@ impl ClassInfo {
     pub(crate) fn set_constant_public(&mut self, name: IdentId) {
         if let Some(state) = self.constants.get_mut(&name) {
             state.set_public();
+        }
+    }
+
+    /// Marks the constant `name` as deprecated so that subsequent reads
+    /// trigger a "constant ... is deprecated" warning. Caller must
+    /// verify that `name` exists.
+    pub(crate) fn set_constant_deprecated(&mut self, name: IdentId) {
+        if let Some(state) = self.constants.get_mut(&name) {
+            state.set_deprecated();
         }
     }
 
@@ -827,6 +882,23 @@ impl ClassInfoTable {
             .collect()
     }
 
+    /// Names of methods explicitly undefined on *class_id* itself (via
+    /// `undef_method`), regardless of whether the name was originally
+    /// defined here or only inherited.
+    pub(crate) fn get_undefined_instance_methods(&self, class_id: ClassId) -> Vec<Value> {
+        self[class_id]
+            .methods
+            .iter()
+            .filter_map(|(name, entry)| {
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    Some(Value::symbol(*name))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     ///
     /// Get public and protected method names in the class of *class_id* and its ancesters.
     ///
@@ -1005,8 +1077,17 @@ impl ClassInfoTable {
         } else {
             None
         };
+        // A class/module is "permanently" named only if its leaf name was
+        // assigned and the surrounding lexical parent is itself
+        // permanent (so the full qualified name is reachable from a
+        // top-level constant). `Object` itself counts as permanent.
+        let parent_permanent = match parent {
+            Some(p) => p == OBJECT_CLASS || self[p].is_name_permanent(),
+            None => false,
+        };
         self[class_id].object = Some(class_obj.as_class());
         self[class_id].name = name.map(|id| id.to_string());
+        self[class_id].name_permanent = name.is_some() && parent_permanent;
         self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
         self[class_id].alloc_func = inherited_alloc;

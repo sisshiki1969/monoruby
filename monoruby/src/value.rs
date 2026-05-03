@@ -1249,6 +1249,91 @@ pub(crate) fn emit_chilled_string_mutation_warning(
 }
 
 ///
+/// Emit a `warning: <msg>` line on Ruby-level `$stderr`. Used by
+/// builtins that need to surface verbose-only warnings (e.g.
+/// `Module#attr` with a boolean argument). The caller is responsible
+/// for the `$VERBOSE`/`Warning[:...]` gating; this helper just formats
+/// the message and writes it through `$stderr.write` so mspec's
+/// `should complain` matcher catches the output.
+///
+pub(crate) fn emit_verbose_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    msg: &str,
+) -> Result<()> {
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    let line = format!("warning: {msg}\n");
+    let msg_val = Value::string(line);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[msg_val],
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
+///
+/// Emit the CRuby-compatible "constant ... is deprecated" warning when
+/// reading a constant marked via `Module#deprecate_constant`. Gated by
+/// `Warning[:deprecated]`; writes to Ruby-level `$stderr` so mspec's
+/// `should complain` matcher captures it. `qualified_name` is the full
+/// `OwnerName::ConstantName` path that CRuby includes in the message.
+///
+pub(crate) fn emit_deprecated_constant_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    qualified_name: &str,
+) -> Result<()> {
+    // Check Warning[:deprecated]. If the Warning module isn't loaded
+    // yet (during bootstrap) we silently skip — CRuby behaves the same.
+    let warning_val = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
+    let dep = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("[]"),
+        warning_val,
+        &[dep_sym],
+        None,
+        None,
+    )?;
+    if dep.is_nil() || dep == Value::bool(false) {
+        return Ok(());
+    }
+
+    let msg = format!("warning: constant {qualified_name} is deprecated\n");
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    let msg_val = Value::string(msg);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[msg_val],
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
+///
 /// Render a symbol as its Ruby inspect form (`:name` or `:"escaped name"`).
 ///
 /// Simple names — identifiers, operators, `$gv`/`@iv`/`@@cv` — are emitted
