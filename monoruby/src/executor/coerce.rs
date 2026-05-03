@@ -523,7 +523,7 @@ fn try_consume_angle_named(
     }
     if j >= flen {
         return Err(MonorubyErr::argumenterr(
-            "malformed format string - missing '>'",
+            "malformed name - unmatched parenthesis",
         ));
     }
     let hash =
@@ -841,7 +841,7 @@ impl Executor {
                 }
                 if j >= flen {
                     return Err(MonorubyErr::argumenterr(
-                        "malformed format string - missing '}'",
+                        "malformed name - unmatched parenthesis",
                     ));
                 }
                 if named_val.is_some() {
@@ -1098,7 +1098,7 @@ impl Executor {
                             Some(c) => key.push(c),
                             None => {
                                 return Err(MonorubyErr::argumenterr(
-                                    "malformed format string - missing '}'",
+                                    "malformed name - unmatched parenthesis",
                                 ));
                             }
                         }

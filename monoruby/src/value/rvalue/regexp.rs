@@ -327,6 +327,34 @@ fn escape_unescaped_slashes(src: &str) -> String {
 // Utility methods
 
 impl RegexpInner {
+    /// Resolve `re_val` to a `RegexpInner` and run `f` on it. Accepts:
+    ///   - an existing `Regexp` (used in place);
+    ///   - a `String` (treated as a regexp source, escaped via
+    ///     `from_escaped`);
+    ///   - any other object that responds to `to_str` (the returned
+    ///     String is then treated as a regexp source).
+    /// All `replace_*` entry points share this dispatch — keep it in
+    /// one place so the to_str-coercion semantics stay consistent.
+    fn with_coerced_regexp<R>(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        re_val: Value,
+        f: impl FnOnce(&RegexpInner, &mut Executor, &mut Globals) -> Result<R>,
+    ) -> Result<R> {
+        if let Some(re) = re_val.is_regex() {
+            return f(&re, vm, globals);
+        }
+        let s_owned;
+        let s: &str = if let Some(s) = re_val.is_str() {
+            s
+        } else {
+            s_owned = re_val.coerce_to_str(vm, globals)?;
+            &s_owned
+        };
+        let re = Self::from_escaped(s)?;
+        f(&re, vm, globals)
+    }
+
     /// Replaces the leftmost-first match with `replace`.
     pub(crate) fn replace_one(
         vm: &mut Executor,
@@ -335,17 +363,9 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
-        if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(s)?;
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, _| {
             re.replace_once(vm, given, replace)
-        } else if let Some(re) = re_val.is_regex() {
-            re.replace_once(vm, given, replace)
-        } else {
-            // Try to_str coercion
-            let coerced = re_val.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            re.replace_once(vm, given, replace)
-        }
+        })
         .map(|(s, c)| (s, c.is_some()))
     }
 
@@ -356,13 +376,7 @@ impl RegexpInner {
         given: &str,
         bh: BlockHandler,
     ) -> Result<(String, bool)> {
-        fn replace_(
-            vm: &mut Executor,
-            globals: &mut Globals,
-            re: &RegexpInner,
-            given: &str,
-            bh: BlockHandler,
-        ) -> Result<(String, bool)> {
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
                 None => Ok((given.to_string(), false)),
                 Some(captures) => {
@@ -376,19 +390,7 @@ impl RegexpInner {
                     Ok((res, true))
                 }
             }
-        }
-
-        if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, bh)
-        } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, bh)
-        } else {
-            // Try to_str coercion
-            let coerced = re_val.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            replace_(vm, globals, &re, given, bh)
-        }
+        })
     }
 
     /// Replaces all non-overlapping matches in `given` string with `replace`.
@@ -399,17 +401,9 @@ impl RegexpInner {
         given: &str,
         replace: &str,
     ) -> Result<(String, bool)> {
-        if let Some(s) = regexp.is_str() {
-            let re = Self::from_escaped(s)?;
+        Self::with_coerced_regexp(vm, globals, regexp, |re, vm, _| {
             re.replace_repeat(vm, given, replace)
-        } else if let Some(re) = regexp.is_regex() {
-            re.replace_repeat(vm, given, replace)
-        } else {
-            // Try to_str coercion
-            let coerced = regexp.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            re.replace_repeat(vm, given, replace)
-        }
+        })
     }
 
     /// Replaces all non-overlapping matches in `given` string with `replace`.
@@ -421,14 +415,7 @@ impl RegexpInner {
         bh: BlockHandler,
         self_enc: Option<crate::value::Encoding>,
     ) -> Result<(String, bool)> {
-        fn replace_(
-            vm: &mut Executor,
-            globals: &mut Globals,
-            re: &RegexpInner,
-            given: &str,
-            bh: BlockHandler,
-            self_enc: Option<crate::value::Encoding>,
-        ) -> Result<(String, bool)> {
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             let mut range = vec![];
             let data = vm.get_block_data(globals, bh)?;
 
@@ -469,19 +456,7 @@ impl RegexpInner {
             }
 
             Ok((res, !is_empty))
-        }
-
-        if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, bh, self_enc)
-        } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, bh, self_enc)
-        } else {
-            // Try to_str coercion
-            let coerced = re_val.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            replace_(vm, globals, &re, given, bh, self_enc)
-        }
+        })
     }
 
     /// Replaces the first match in `given` string using hash lookup.
@@ -495,13 +470,7 @@ impl RegexpInner {
         given: &str,
         hash_val: Value,
     ) -> Result<(String, bool)> {
-        fn replace_(
-            vm: &mut Executor,
-            globals: &mut Globals,
-            re: &RegexpInner,
-            given: &str,
-            hash_val: Value,
-        ) -> Result<(String, bool)> {
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
                 None => Ok((given.to_string(), false)),
                 Some(captures) => {
@@ -514,18 +483,7 @@ impl RegexpInner {
                     Ok((res, true))
                 }
             }
-        }
-
-        if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, hash_val)
-        } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, hash_val)
-        } else {
-            let coerced = re_val.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            replace_(vm, globals, &re, given, hash_val)
-        }
+        })
     }
 
     /// Replaces all non-overlapping matches in `given` string using hash lookup.
@@ -536,13 +494,7 @@ impl RegexpInner {
         given: &str,
         hash_val: Value,
     ) -> Result<(String, bool)> {
-        fn replace_(
-            vm: &mut Executor,
-            globals: &mut Globals,
-            re: &RegexpInner,
-            given: &str,
-            hash_val: Value,
-        ) -> Result<(String, bool)> {
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             let mut range = vec![];
 
             vm.clear_capture_special_variables();
@@ -566,18 +518,7 @@ impl RegexpInner {
             }
 
             Ok((res, !is_empty))
-        }
-
-        if let Some(s) = re_val.is_str() {
-            let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, hash_val)
-        } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, hash_val)
-        } else {
-            let coerced = re_val.coerce_to_str(vm, globals)?;
-            let re = Self::from_escaped(&coerced)?;
-            replace_(vm, globals, &re, given, hash_val)
-        }
+        })
     }
 
     pub(crate) fn match_one(

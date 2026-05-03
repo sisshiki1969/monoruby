@@ -8735,4 +8735,113 @@ mod tests {
             r#"0x8140.chr(Encoding::Shift_JIS).encoding == Encoding::SHIFT_JIS"#,
         ]);
     }
+
+    #[test]
+    fn string_sub_gsub_pattern_coercion() {
+        // The pattern argument to `sub` / `gsub` (and the block / hash
+        // variants) accepts a Regexp, a String (treated as a literal
+        // pattern), or any object whose `to_str` returns a String.
+        // All four forms exercise the shared `with_coerced_regexp`
+        // helper.
+        run_test_with_prelude(
+            r##"[
+                # Replacement-string form.
+                "hello".sub("l", "L"),
+                "hello".sub(P.new, "L"),
+                "hello".sub(/l/, "L"),
+                "hello".gsub("l", "L"),
+                "hello".gsub(P.new, "L"),
+                "hello".gsub(/l/, "L"),
+                # Block form.
+                "hello".sub("l") { |m| m.upcase },
+                "hello".sub(P.new) { |m| m.upcase },
+                "hello".sub(/l/) { |m| m.upcase },
+                "hello".gsub("l") { |m| m.upcase },
+                "hello".gsub(P.new) { |m| m.upcase },
+                "hello".gsub(/l/) { |m| m.upcase },
+                # Hash form.
+                "hello".sub("l", "l" => "L"),
+                "hello".sub(P.new, "l" => "L"),
+                "hello".sub(/l/, "l" => "L"),
+                "hello".gsub("l", "l" => "L"),
+                "hello".gsub(P.new, "l" => "L"),
+                "hello".gsub(/l/, "l" => "L"),
+            ]"##,
+            r##"
+                class P
+                  def to_str; "l"; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_modulo_format_errors() {
+        // Each error path inside `format_by_args` (`coerce.rs`)
+        // raises an exception. Use `rescue => e; e.message` to compare
+        // monoruby's wording against CRuby's.
+        run_tests(&[
+            // Incomplete spec — `%` at end of format.
+            r##"begin; "%" % []; rescue => e; e.message; end"##,
+            // Trailing escape — `%{name without closing brace.
+            r##"begin; "%{foo" % {foo: 1}; rescue => e; e.message; end"##,
+            // Trailing escape — `%<name>` without closing `>`.
+            r##"begin; "%<foo" % {foo: 1}; rescue => e; e.message; end"##,
+            // Too few arguments for a positional spec.
+            r##"begin; "%d" % []; rescue => e; e.message; end"##,
+            // Unknown directive char.
+            r##"begin; "%Q" % 1; rescue => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_coerce_failures() {
+        // `coerce_to_char` inside coerce.rs. Each of these exercises
+        // one error arm. We only assert that *some* exception was
+        // raised (the exception class differs between monoruby and
+        // CRuby for some of these — e.g. CRuby's ArgumentError vs our
+        // RangeError for `%c % -1`).
+        // (1) Integer out of valid char range.
+        run_tests(&[
+            r##"begin; "%c" % 0x110000; rescue => e; "raised"; end"##,
+            r##"begin; "%c" % -1; rescue => e; "raised"; end"##,
+        ]);
+        // (2) Float out of valid char range.
+        run_tests(&[
+            r##"begin; "%c" % 1.0e30; rescue => e; "raised"; end"##,
+            r##"begin; "%c" % (-1.5); rescue => e; "raised"; end"##,
+        ]);
+        // (3) `to_int` returns a non-Integer.
+        run_test_with_prelude(
+            r##"begin; "%c" % BadInt.new; rescue TypeError => e; "raised"; end"##,
+            r##"
+                class BadInt
+                  def to_int; "not an integer"; end
+                end
+            "##,
+        );
+        // (4) nil → TypeError "no implicit conversion from nil to integer".
+        run_tests(&[
+            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
+        ]);
+        // (5) Object with neither to_int nor to_str → TypeError
+        // mentioning Integer.
+        run_tests(&[
+            r##"begin; "%c" % Object.new; rescue TypeError => e; e.message =~ /Integer/ ? "ok" : e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_sub_gsub_pattern_invalid_type() {
+        // Anything that isn't a Regexp / String / responds_to(:to_str)
+        // raises TypeError. CRuby's wording is
+        // "no implicit conversion of X into String" — match the kind
+        // (regexp-vs-string) at least.
+        run_tests(&[
+            r##"begin; "abc".sub(123, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".gsub(123, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".sub(:l, "x"); rescue TypeError => e; "raised"; end"##,
+            r##"begin; "abc".gsub(nil, "x"); rescue TypeError => e; "raised"; end"##,
+        ]);
+    }
 }
