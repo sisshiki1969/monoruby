@@ -38,85 +38,6 @@ fn apply_width(s: &str, width: usize, left_align: bool, pad: char) -> String {
     }
 }
 
-fn coerce_to_char(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<Option<char>> {
-    match val.unpack() {
-        RV::Fixnum(i) => {
-            if let Ok(u) = u32::try_from(i) {
-                if let Some(c) = char::from_u32(u) {
-                    return Ok(Some(c));
-                }
-            }
-            Err(MonorubyErr::rangeerr(format!("{i} out of char range")))
-        }
-        RV::Float(f) => {
-            let f = f.trunc();
-            if 0.0 <= f && f <= u32::MAX as f64 {
-                if let Some(c) = char::from_u32(f as u32) {
-                    return Ok(Some(c));
-                }
-            }
-            Err(MonorubyErr::rangeerr("float out of char range"))
-        }
-        RV::String(s) => {
-            let s = s.check_utf8()?;
-            // Empty string -> empty output (no character).
-            // Multi-char string -> use only the first character.
-            Ok(s.chars().next())
-        }
-        _ => {
-            // Try Integer coercion first via to_int (matches CRuby's
-            // "no implicit conversion of X into Integer" error).
-            if let Some(func_id) = globals.check_method(val, IdentId::TO_INT) {
-                let result = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
-                if let RV::Fixnum(i) = result.unpack() {
-                    if let Ok(u) = u32::try_from(i) {
-                        if let Some(c) = char::from_u32(u) {
-                            return Ok(Some(c));
-                        }
-                    }
-                    return Err(MonorubyErr::rangeerr(format!("{i} out of char range")));
-                }
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Integer ({}#to_int gives {})",
-                    val.get_real_class_name(&globals.store),
-                    val.get_real_class_name(&globals.store),
-                    result.get_real_class_name(&globals.store),
-                )));
-            }
-            // Then try String coercion via to_str.
-            if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
-                let result = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
-                if let RV::String(s) = result.unpack() {
-                    let s = s.check_utf8()?;
-                    return Ok(s.chars().next());
-                }
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to String ({}#to_str gives {})",
-                    val.get_real_class_name(&globals.store),
-                    val.get_real_class_name(&globals.store),
-                    result.get_real_class_name(&globals.store),
-                )));
-            }
-            // CRuby uses two slightly different message templates:
-            //   "no implicit conversion from nil to integer"  (nil)
-            //   "no implicit conversion of <Class> into Integer" (others)
-            // Match both so the spec regex (`/of nil into Integer/` is
-            // accepted as `from nil to integer` by mspec's
-            // `raise_consistent_error`) matches CRuby exactly.
-            if val.is_nil() {
-                Err(MonorubyErr::typeerr(
-                    "no implicit conversion from nil to integer",
-                ))
-            } else {
-                let class_name = val.get_real_class_name(&globals.store);
-                Err(MonorubyErr::typeerr(format!(
-                    "no implicit conversion of {class_name} into Integer"
-                )))
-            }
-        }
-    }
-}
-
 /// Format an integer string with sign/space/zero/width flags.
 fn format_integer_with_flags(
     s: &str,
@@ -903,7 +824,7 @@ impl Executor {
             // Specifier
             let format = match ch {
                 'c' => {
-                    let s = match coerce_to_char(self, globals, val)? {
+                    let s = match val.coerce_to_char(self, globals)? {
                         Some(c) => format!("{}", c),
                         None => String::new(),
                     };
