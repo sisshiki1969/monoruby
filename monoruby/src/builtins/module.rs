@@ -4990,4 +4990,234 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn define_method_strict_arity_too_few() {
+        // A method defined from a Proc/block enforces method-style
+        // arity, so calling with fewer args than the block declares
+        // raises ArgumentError instead of filling missing params with
+        // nil (the proc-style behaviour).
+        run_test_error(
+            r#"
+            class C
+              define_method(:m) { |a, b| [a, b] }
+            end
+            C.new.m(1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_strict_arity_too_many() {
+        // Likewise, extra arguments are rejected.
+        run_test_error(
+            r#"
+            class C
+              define_method(:m) { |a| a }
+            end
+            C.new.m(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_no_destructure_single_array() {
+        // Block-style auto-destructuring of a single Array argument
+        // must not happen for define_method bodies — the array is
+        // passed through as one value.
+        run_test(
+            r#"
+            class C
+              define_method(:m) { |a| a }
+            end
+            C.new.m([1, 2])
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_rest_arity() {
+        // Rest params on a method-style body still accept any extra
+        // positional args without ArgumentError.
+        run_test(
+            r#"
+            class C
+              define_method(:m) { |a, b, *c| [a, b, c] }
+            end
+            C.new.m(1, 2, 3, 4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_proc_unaffected() {
+        // The original Proc passed to define_method keeps its
+        // block-style behaviour when invoked directly — only the
+        // wrapper installed as a method becomes strict. Calling the
+        // original proc with one arg fills `b` with nil; the method
+        // would raise ArgumentError instead (covered by
+        // `define_method_strict_arity_too_few`).
+        run_test(
+            r#"
+            p = Proc.new { |a, b| [a, b] }
+            Class.new do
+              define_method(:m, p)
+            end
+            p.call(1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_returns_undef_names() {
+        // `undef_method` marks the slot Undefined; the new builtin
+        // surfaces those names.
+        run_test(
+            r#"
+            class P
+              def foo; end
+              def bar; end
+              undef_method :foo
+            end
+            P.undefined_instance_methods.sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_empty_when_none() {
+        run_test(
+            r#"
+            class C
+              def foo; end
+            end
+            C.undefined_instance_methods
+            "#,
+        );
+    }
+
+    #[test]
+    fn undefined_instance_methods_only_self() {
+        // Inherited undefs are NOT included — only entries on the
+        // class's own method table count.
+        run_test(
+            r#"
+            class P
+              def foo; end
+              undef_method :foo
+            end
+            class C < P
+            end
+            C.undefined_instance_methods
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_empty_string_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_constant_name_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("Object")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_constant_path_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("A::B")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_leading_colons_raises() {
+        run_test_error(
+            r#"
+            Module.new.set_temporary_name("::A")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_permanent_module_raises() {
+        // Built-in / constant-bound classes are permanent and refuse
+        // a temporary rename.
+        run_test_error(
+            r#"
+            Object.set_temporary_name("fake")
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_accepts_non_constant_strings() {
+        // Strings that don't parse as a constant or constant path are
+        // accepted: lowercase initial, embedded non-identifier
+        // characters, lowercase second segment, trailing `::`, etc.
+        run_test(
+            r#"
+            m = Module.new
+            results = []
+            results << m.set_temporary_name("name").name
+            results << m.set_temporary_name("Template['foo.rb']").name
+            results << m.set_temporary_name("a::B").name
+            results << m.set_temporary_name("A::b").name
+            results << m.set_temporary_name("A::B::").name
+            results << m.set_temporary_name("A=").name
+            results
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_bare_leaf_for_anonymous_parent() {
+        // When the parent chain contains an anonymous module, an
+        // explicit `set_temporary_name` call on a leaf still returns
+        // the bare name (no `#<Module:0x..>::leaf` rendering).
+        run_test(
+            r#"
+            m = Module.new
+            module m::N; end
+            m::N.set_temporary_name("fake_name")
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_anonymous_nested_module_is_not_permanent() {
+        // A module assigned through an anonymous parent isn't itself
+        // permanent: `set_temporary_name` succeeds on it.
+        run_test(
+            r#"
+            m = Module.new
+            module m::N; end
+            m::N.set_temporary_name("ok")
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_nil_clears_name() {
+        run_test(
+            r#"
+            m = Module.new
+            m.set_temporary_name("temp")
+            m.set_temporary_name(nil)
+            m.name
+            "#,
+        );
+    }
 }
