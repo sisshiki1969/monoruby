@@ -186,6 +186,18 @@ impl Executor {
         if let Some(v) = self.get_constant_superclass(globals, module, name)? {
             return Ok(v);
         }
+        self.invoke_const_missing(globals, module, name)
+    }
+
+    /// Invoke `module.const_missing(name)` and rewrap a NameError so its
+    /// `name` attribute is preserved across `raise ex_obj` (which otherwise
+    /// rebuilds the error and drops the constructor-set name).
+    fn invoke_const_missing(
+        &mut self,
+        globals: &mut Globals,
+        module: Module,
+        name: IdentId,
+    ) -> Result<Value> {
         match self.invoke_method_inner(
             globals,
             IdentId::get_id("const_missing"),
@@ -253,20 +265,7 @@ impl Executor {
         // resolve the reference. The default `Module#const_missing` raises
         // NameError, preserving the previous behaviour for classes without
         // a custom hook.
-        match self.invoke_method_inner(
-            globals,
-            IdentId::get_id("const_missing"),
-            module.as_val(),
-            &[Value::symbol(name)],
-            None,
-            None,
-        ) {
-            Ok(v) => Ok(v),
-            Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
-                Err(MonorubyErr::nameerr_with_name(e.message, name))
-            }
-            Err(e) => Err(e),
-        }
+        self.invoke_const_missing(globals, module, name)
     }
 
     /// Non-triggering probe of a constant directly on `class_id` —
