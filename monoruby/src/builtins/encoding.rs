@@ -12,6 +12,26 @@ pub(super) fn encoding_class(globals: &Globals) -> ClassId {
         .as_class_id()
 }
 
+/// Map a constant-style encoding name (`SHIFT_JIS`, `EUC_JP`,
+/// `Windows_1252`, …) to the canonical CRuby name (`Shift_JIS`,
+/// `EUC-JP`, `Windows-1252`). Most encodings just translate
+/// underscores to hyphens; a handful (Shift_JIS, eucJP-ms, …) need
+/// explicit overrides because CRuby uses mixed-case or keeps
+/// underscores.
+pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
+    match name {
+        // Underscore-preserving / mixed-case names CRuby exposes.
+        "SHIFT_JIS" | "Shift_JIS" => "Shift_JIS",
+        "EUCJP_MS" => "eucJP-ms",
+        // Defaults: replace `_` with `-`. The `match` returns
+        // `&'static str`, but the input is also `&'static str` from
+        // the call site (a literal name in the constant table). The
+        // wildcard arm uses a `Box::leak` trick at startup time —
+        // the encoding table is initialized once.
+        _ => Box::leak(name.replace('_', "-").into_boxed_str()),
+    }
+}
+
 pub(super) fn init_encoding(globals: &mut Globals) {
     let enc = globals.define_class_under_obj("Encoding");
     let val = Value::object(enc.id());
@@ -126,13 +146,14 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "MacTurkish",
         "MacUkraine",
     ] {
+        let canonical = canonical_encoding_name(name);
         let val = Value::object(enc.id());
         globals
             .store
             .set_ivar(
                 val,
                 IdentId::_NAME,
-                Value::string_from_str(&format!("#<Encoding:{}>", name.replace('_', "-"))),
+                Value::string_from_str(&format!("#<Encoding:{}>", canonical)),
             )
             .unwrap();
         globals
@@ -140,7 +161,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
             .set_ivar(
                 val,
                 IdentId::_ENCODING,
-                Value::string_from_str(&name.replace('_', "-")),
+                Value::string_from_str(canonical),
             )
             .unwrap();
         globals.set_constant_by_str(enc.id(), name, val);

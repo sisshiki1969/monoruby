@@ -419,6 +419,7 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         bh: BlockHandler,
+        self_enc: Option<crate::value::Encoding>,
     ) -> Result<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
@@ -426,6 +427,7 @@ impl RegexpInner {
             re: &RegexpInner,
             given: &str,
             bh: BlockHandler,
+            self_enc: Option<crate::value::Encoding>,
         ) -> Result<(String, bool)> {
             let mut range = vec![];
             let data = vm.get_block_data(globals, bh)?;
@@ -439,6 +441,21 @@ impl RegexpInner {
                 let matched = Value::string_from_str(matched_str);
                 vm.save_capture_special_variables(&cap, given);
                 let result = vm.invoke_block(globals, &data, &[matched])?;
+                // CRuby raises Encoding::CompatibilityError if the
+                // block returned a String whose encoding can't merge
+                // with self's. Check before stringifying.
+                if let Some(enc) = self_enc {
+                    if let Some(repl_inner) = result.is_rstring_inner() {
+                        let dummy = crate::value::RStringInner::from_encoding(b"", enc);
+                        if dummy.compatible_encoding(&repl_inner).is_none() {
+                            return Err(MonorubyErr::incompatible_encoding(
+                                &globals.store,
+                                enc,
+                                repl_inner.encoding(),
+                            ));
+                        }
+                    }
+                }
                 let replace = block_result_to_string(vm, globals, result)?;
 
                 range.push((m.range(), replace));
@@ -456,14 +473,14 @@ impl RegexpInner {
 
         if let Some(s) = re_val.is_str() {
             let re = Self::from_escaped(s)?;
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, &re, given, bh, self_enc)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, &re, given, bh, self_enc)
         } else {
             // Try to_str coercion
             let coerced = re_val.coerce_to_str(vm, globals)?;
             let re = Self::from_escaped(&coerced)?;
-            replace_(vm, globals, &re, given, bh)
+            replace_(vm, globals, &re, given, bh, self_enc)
         }
     }
 
