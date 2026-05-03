@@ -499,6 +499,79 @@ fn format_int_with_prefix(
     }
 }
 
+/// If `fchars[*i]` is `<`, parse `<name>` and look the value up in
+/// the named-arg hash (cached in `cache`); advances `*i` to one past
+/// the closing `>`. Otherwise leaves `*i` untouched and returns
+/// `Ok(None)`.
+fn try_consume_angle_named(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arguments: &[Value],
+    cache: &mut Option<Option<Hashmap>>,
+    fchars: &[char],
+    i: &mut usize,
+    flen: usize,
+) -> Result<Option<Value>> {
+    if *i >= flen || fchars[*i] != '<' {
+        return Ok(None);
+    }
+    let mut j = *i + 1;
+    let mut key = String::new();
+    while j < flen && fchars[j] != '>' {
+        key.push(fchars[j]);
+        j += 1;
+    }
+    if j >= flen {
+        return Err(MonorubyErr::argumenterr(
+            "malformed name - unmatched parenthesis",
+        ));
+    }
+    let hash =
+        get_named_hash_helper(arguments, cache).ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
+    let key_val = Value::symbol_from_str(&key);
+    let val = hash_lookup_or_keyerror(vm, globals, &hash, key_val, key.as_str(), '<')?;
+    *i = j + 1;
+    Ok(Some(val))
+}
+
+/// Snapshot of the closure used for named-hash caching; needed when
+/// the inline closure version isn't reachable from a free function.
+fn get_named_hash_helper(
+    arguments: &[Value],
+    cache: &mut Option<Option<Hashmap>>,
+) -> Option<Hashmap> {
+    if cache.is_none() {
+        let h = arguments.last().and_then(|v| v.try_hash_ty());
+        *cache = Some(h);
+    }
+    cache.unwrap()
+}
+
+/// Look `key` up in `hash`; raise CRuby's `KeyError` if absent (and
+/// the hash has no default that would substitute `nil`). `bracket`
+/// is `'{' | '<'` and selects the matching CRuby message format
+/// (`key{name} not found` for `%{name}`, `key<name> not found` for
+/// `%<name>spec`).
+fn hash_lookup_or_keyerror(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: &Hashmap,
+    key_val: Value,
+    key_name: &str,
+    bracket: char,
+) -> Result<Value> {
+    if let Some(v) = hash.get(key_val, vm, globals)? {
+        return Ok(v);
+    }
+    let (open, close) = match bracket {
+        '<' => ('<', '>'),
+        _ => ('{', '}'),
+    };
+    let msg = format!("key{}{}{} not found", open, key_name, close);
+    let receiver: Value = (*hash).into();
+    Err(MonorubyErr::keyerr_with(msg, receiver, key_val))
+}
+
 impl Executor {
     pub(crate) fn format_by_args(
         &mut self,
@@ -542,52 +615,17 @@ impl Executor {
                 continue;
             }
 
-            // Check for %{name} — named reference (to_s only, no format specifier)
-            if fchars[i] == '{' {
-                i += 1; // skip '{'
-                let mut key = String::new();
-                while i < flen && fchars[i] != '}' {
-                    key.push(fchars[i]);
-                    i += 1;
-                }
-                if i >= flen {
-                    return Err(MonorubyErr::argumenterr(
-                        "malformed format string - missing '}'",
-                    ));
-                }
-                i += 1; // skip '}'
-                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
-                    MonorubyErr::argumenterr("one hash required")
-                })?;
-                let key_val = Value::symbol_from_str(&key);
-                let val = hash.get(key_val, self, globals)?.unwrap_or(Value::nil());
-                format_str += &val.coerce_to_s(self, globals)?;
-                continue;
-            }
-
-            // Check for %<name>spec — named reference with format specifier
-            let named_val = if fchars[i] == '<' {
-                i += 1; // skip '<'
-                let mut key = String::new();
-                while i < flen && fchars[i] != '>' {
-                    key.push(fchars[i]);
-                    i += 1;
-                }
-                if i >= flen {
-                    return Err(MonorubyErr::argumenterr(
-                        "malformed format string - missing '>'",
-                    ));
-                }
-                i += 1; // skip '>'
-                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
-                    MonorubyErr::argumenterr("one hash required")
-                })?;
-                let key_val = Value::symbol_from_str(&key);
-                let val = hash.get(key_val, self, globals)?.unwrap_or(Value::nil());
-                Some(val)
-            } else {
-                None
-            };
+            // `%<name>spec` and `%{name}` — named references. The
+            // `<name>` token may appear anywhere within the spec
+            // (`%<x>d`, `%+15<x>.5f`, `%<x>+15.5f`, `%-15.5<x>f`),
+            // so we accept it before flags, between flags and width,
+            // between width and precision, and just before the type
+            // char (handled inline below). The `{name}` token is the
+            // to_s-only form and may be preceded by flags / width /
+            // precision (e.g. `%-20.5{foo}`); we recognize it where
+            // the type char would be expected.
+            let mut named_val =
+                try_consume_angle_named(self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen)?;
 
             // Check for positional argument: non-zero digit(s) followed by '$'
             let positional_arg = if named_val.is_none()
@@ -648,6 +686,20 @@ impl Executor {
                     ));
                 }
                 ch = fchars[i];
+                // `<name>` may appear between flag chars.
+                if ch == '<' {
+                    if let Some(v) = try_consume_angle_named(
+                        self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                    )? {
+                        named_val = Some(v);
+                        if i >= flen {
+                            return Err(MonorubyErr::argumenterr(
+                                "Invalid termination of format string",
+                            ));
+                        }
+                        ch = fchars[i];
+                    }
+                }
             }
             // Left-align overrides zero-fill
             if minus_flag {
@@ -691,6 +743,20 @@ impl Executor {
                     width = width.checked_mul(10).and_then(|w| w.checked_add(ch as usize - '0' as usize))
                         .ok_or_else(|| MonorubyErr::argumenterr("width too big"))?;
                     i += 1;
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
+            // `<name>` may appear between width and precision.
+            if ch == '<' {
+                if let Some(v) = try_consume_angle_named(
+                    self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                )? {
+                    named_val = Some(v);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
                             "Invalid termination of format string",
@@ -747,6 +813,56 @@ impl Executor {
                     }
                 }
                 precision = Some(prec);
+            }
+            // `<name>` may appear between precision and the type char.
+            if ch == '<' {
+                if let Some(v) = try_consume_angle_named(
+                    self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                )? {
+                    named_val = Some(v);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
+            // `{name}` is the to_s-only form. Equivalent to `%s` after
+            // `to_s` coercion, but uses the named hash to look the
+            // value up. Width and precision (already parsed) still
+            // apply.
+            if ch == '{' {
+                let mut key = String::new();
+                let mut j = i + 1;
+                while j < flen && fchars[j] != '}' {
+                    key.push(fchars[j]);
+                    j += 1;
+                }
+                if j >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "malformed name - unmatched parenthesis",
+                    ));
+                }
+                if named_val.is_some() {
+                    return Err(MonorubyErr::argumenterr(
+                        "named<name> after named{name}",
+                    ));
+                }
+                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
+                    MonorubyErr::argumenterr("one hash required")
+                })?;
+                let key_val = Value::symbol_from_str(&key);
+                let val = hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;
+                let mut s = val.coerce_to_s(self, globals)?;
+                if let Some(prec) = precision {
+                    if s.chars().count() > prec {
+                        s = s.chars().take(prec).collect();
+                    }
+                }
+                format_str += &apply_width(&s, width, minus_flag, ' ');
+                i = j + 1;
+                continue;
             }
             // Determine val: positional, named, or sequential
             let val = if let Some(v) = positional_arg {
@@ -982,7 +1098,7 @@ impl Executor {
                             Some(c) => key.push(c),
                             None => {
                                 return Err(MonorubyErr::argumenterr(
-                                    "malformed format string - missing '}'",
+                                    "malformed name - unmatched parenthesis",
                                 ));
                             }
                         }

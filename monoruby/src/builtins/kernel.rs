@@ -677,20 +677,26 @@ fn kernel_integer(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg0 = lfp.arg(0);
+    // Optional second argument: explicit `base` (0 = autodetect from
+    // the string's prefix; 2..=36 = forced base, with the prefix
+    // optional — `Integer("0x42", 16)` is ok but `("0x42", 10)` errors).
+    let base = if let Some(b) = lfp.try_arg(1) {
+        let b = b.coerce_to_int_i64(vm, globals)?;
+        if b < 0 || b > 36 || b == 1 {
+            return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
+        }
+        Some(b as u32)
+    } else {
+        None
+    };
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
         RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
-        RV::String(b) => match b.check_utf8()?.parse::<i64>() {
-            Ok(num) => return Ok(Value::integer(num)),
-            Err(_) => {
-                let s = arg0.to_s(&globals.store);
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid value for Integer(): {}",
-                    s
-                )));
-            }
-        },
+        RV::String(b) => {
+            let s = b.check_utf8()?;
+            return parse_kernel_integer(s, base.unwrap_or(0));
+        }
         _ => {}
     };
     // Try to_int coercion
@@ -727,6 +733,269 @@ fn kernel_integer(
     )))
 }
 
+/// Parse `s` as an integer literal the way `Kernel#Integer(s, base)`
+/// does. `base` may be 0 (auto-detect from a `0x`/`0b`/`0o`/`0d`
+/// prefix or a leading `0`) or a value in `2..=36`. Returns the same
+/// `ArgumentError` shape CRuby produces (the message embeds the
+/// original input, quoted).
+fn parse_kernel_integer(s: &str, given_base: u32) -> Result<Value> {
+    let raw = s;
+    let invalid = || {
+        MonorubyErr::argumenterr(format!("invalid value for Integer(): \"{}\"", raw))
+    };
+    // CRuby trims leading/trailing whitespace.
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(invalid());
+    }
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    // Sign.
+    let neg = match bytes[i] {
+        b'+' => {
+            i += 1;
+            false
+        }
+        b'-' => {
+            i += 1;
+            true
+        }
+        _ => false,
+    };
+    if i >= bytes.len() {
+        return Err(invalid());
+    }
+    // Prefix detection. When `given_base == 0`, infer from the prefix
+    // (or a leading `0` ⇒ octal). When `given_base != 0`, accept a
+    // matching prefix and reject a conflicting one.
+    let (effective_base, mut digits_start) = detect_base(&bytes[i..], given_base, &invalid)?;
+    digits_start += i;
+    let digits = &bytes[digits_start..];
+    if digits.is_empty() {
+        return Err(invalid());
+    }
+    // Walk digits, allowing underscore as a digit-separator (must
+    // appear strictly between two digit characters).
+    let mut acc_str = String::with_capacity(digits.len());
+    let mut prev_was_digit = false;
+    for (idx, &b) in digits.iter().enumerate() {
+        if b == b'_' {
+            // `_` is illegal at the start, at the end, or right after
+            // another `_`.
+            if !prev_was_digit || idx + 1 == digits.len() {
+                return Err(invalid());
+            }
+            prev_was_digit = false;
+            continue;
+        }
+        if !is_digit_for_base(b, effective_base) {
+            return Err(invalid());
+        }
+        acc_str.push(b as char);
+        prev_was_digit = true;
+    }
+    if acc_str.is_empty() {
+        return Err(invalid());
+    }
+    // Try i64 first; fall back to BigInt for values that overflow.
+    if let Ok(n) = i64::from_str_radix(&acc_str, effective_base) {
+        let signed = if neg { -n } else { n };
+        return Ok(Value::integer(signed));
+    }
+    let big = num::BigInt::parse_bytes(acc_str.as_bytes(), effective_base).ok_or_else(invalid)?;
+    let signed = if neg { -big } else { big };
+    Ok(Value::bigint(signed))
+}
+
+fn detect_base(
+    bytes: &[u8],
+    given_base: u32,
+    invalid: &dyn Fn() -> MonorubyErr,
+) -> Result<(u32, usize)> {
+    // Look at the leading two bytes for `0X`-style prefixes.
+    let prefix_base = if bytes.len() >= 2 && bytes[0] == b'0' {
+        match bytes[1] {
+            b'x' | b'X' => Some((16, 2)),
+            b'b' | b'B' => Some((2, 2)),
+            b'o' | b'O' => Some((8, 2)),
+            b'd' | b'D' => Some((10, 2)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    match (given_base, prefix_base) {
+        (0, Some((b, off))) => Ok((b, off)),
+        // Leading `0` followed by digit(s) → octal under autodetect.
+        (0, None) if bytes.len() >= 2 && bytes[0] == b'0' && bytes[1].is_ascii_digit() => {
+            Ok((8, 1))
+        }
+        (0, None) => Ok((10, 0)),
+        (b, Some((pb, off))) if b == pb => Ok((b, off)),
+        (_, Some(_)) => Err(invalid()),
+        (b, None) => Ok((b, 0)),
+    }
+}
+
+fn is_digit_for_base(b: u8, base: u32) -> bool {
+    let d = match b {
+        b'0'..=b'9' => (b - b'0') as u32,
+        b'a'..=b'z' => (b - b'a' + 10) as u32,
+        b'A'..=b'Z' => (b - b'A' + 10) as u32,
+        _ => return false,
+    };
+    d < base
+}
+
+/// Parse `s` as `Kernel#Float(s)` does. Handles:
+///   - Optional leading/trailing whitespace, sign.
+///   - Optional `0x`/`0X` prefix → hex float
+///     (`0xH.HHHpEXP`, with `p`/`P` mandatory if there's a fraction).
+///   - Decimal float `D.D[eE][+-]?D` with `_` allowed only between
+///     two digit characters.
+///   - Trailing characters / underscores at boundaries / consecutive
+///     underscores / `nan` / `inf` are rejected (CRuby behavior).
+///
+/// On any structural problem returns `ArgumentError("invalid value
+/// for Float(): \"...\"")` with the original input quoted.
+fn parse_kernel_float(s: &str) -> Result<Value> {
+    let raw = s;
+    let invalid = || {
+        MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", raw))
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(invalid());
+    }
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    let neg = match bytes[i] {
+        b'+' => {
+            i += 1;
+            false
+        }
+        b'-' => {
+            i += 1;
+            true
+        }
+        _ => false,
+    };
+    if i >= bytes.len() {
+        return Err(invalid());
+    }
+    // Hex prefix branch.
+    if bytes.len() >= i + 2 && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+        let payload = strip_underscores(&bytes[i + 2..], &invalid)?;
+        let f = parse_hex_float(&payload).ok_or_else(invalid)?;
+        return Ok(Value::float(if neg { -f } else { f }));
+    }
+    // Decimal branch.
+    let payload = strip_underscores(&bytes[i..], &invalid)?;
+    let s = std::str::from_utf8(&payload).map_err(|_| invalid())?;
+    // Reject CRuby-rejected forms that Rust's parser would accept.
+    if s.is_empty()
+        || s == "."
+        || s.eq_ignore_ascii_case("nan")
+        || s.eq_ignore_ascii_case("inf")
+        || s.eq_ignore_ascii_case("infinity")
+    {
+        return Err(invalid());
+    }
+    // CRuby allows a trailing `.` (e.g. `"10."`) but Rust's `f64::from_str`
+    // does too, so no special handling needed.
+    let f: f64 = s.parse().map_err(|_| invalid())?;
+    if !f.is_finite() {
+        return Err(invalid());
+    }
+    Ok(Value::float(if neg { -f } else { f }))
+}
+
+/// Strip underscores from a digit run, validating that each `_` sits
+/// strictly between two digit (or hex-digit / `.`/`p`/`e`) characters.
+fn strip_underscores(
+    bytes: &[u8],
+    invalid: &dyn Fn() -> MonorubyErr,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let is_alnum = |b: u8| b.is_ascii_alphanumeric();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'_' {
+            let prev_ok = i > 0 && is_alnum(bytes[i - 1]);
+            let next_ok = i + 1 < bytes.len() && is_alnum(bytes[i + 1]);
+            if !prev_ok || !next_ok {
+                return Err(invalid());
+            }
+            continue;
+        }
+        out.push(b);
+    }
+    Ok(out)
+}
+
+/// Parse a hex float of the form `H.HHH[pE]` (e.g. `0xA`, `0xA.B`,
+/// `0x1.8p+3`). The leading `0x` has already been consumed.
+fn parse_hex_float(bytes: &[u8]) -> Option<f64> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let s = std::str::from_utf8(bytes).ok()?;
+    let (mantissa_part, exp_part) = match s.find(|c: char| c == 'p' || c == 'P') {
+        Some(idx) => (&s[..idx], Some(&s[idx + 1..])),
+        None => (s, None),
+    };
+    if mantissa_part.is_empty() {
+        return None;
+    }
+    let (int_part, frac_part) = match mantissa_part.find('.') {
+        Some(idx) => (&mantissa_part[..idx], Some(&mantissa_part[idx + 1..])),
+        None => (mantissa_part, None),
+    };
+    if int_part.is_empty() && frac_part.map(|f| f.is_empty()).unwrap_or(true) {
+        return None;
+    }
+    if !int_part.is_empty() && !int_part.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    if let Some(f) = frac_part {
+        if !f.is_empty() && !f.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+    }
+    let mut value: f64 = 0.0;
+    for b in int_part.bytes() {
+        value = value * 16.0 + hex_digit_value(b)? as f64;
+    }
+    if let Some(frac) = frac_part {
+        let mut scale = 1.0 / 16.0;
+        for b in frac.bytes() {
+            value += hex_digit_value(b)? as f64 * scale;
+            scale /= 16.0;
+        }
+    }
+    if let Some(e) = exp_part {
+        let (esign, edigits) = match e.as_bytes().first() {
+            Some(&b'+') => (1.0, &e[1..]),
+            Some(&b'-') => (-1.0, &e[1..]),
+            _ => (1.0, e),
+        };
+        if edigits.is_empty() || !edigits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let exp: i32 = edigits.parse().ok()?;
+        value *= 2f64.powi(exp * esign as i32);
+    }
+    Some(value)
+}
+
+fn hex_digit_value(b: u8) -> Option<u32> {
+    match b {
+        b'0'..=b'9' => Some((b - b'0') as u32),
+        b'a'..=b'f' => Some((b - b'a' + 10) as u32),
+        b'A'..=b'F' => Some((b - b'A' + 10) as u32),
+        _ => None,
+    }
+}
+
 ///
 /// ### Kernel.#Float
 ///
@@ -747,13 +1016,7 @@ fn kernel_float(
         RV::Float(num) => return Ok(Value::float(num)),
         RV::String(b) => {
             let s = b.to_str()?;
-            let (f, err) = parse_f64(&s);
-            if err {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid value for Float(): {s}"
-                )));
-            }
-            return Ok(Value::float(f));
+            return parse_kernel_float(&s);
         }
         _ => {}
     };
@@ -2953,6 +3216,65 @@ mod tests {
             r#"Integer(o)"#,
             r#"class C; def to_int; 42; end; end; o = C.new"#,
         );
+    }
+
+    #[test]
+    fn kernel_integer_prefixed_strings() {
+        // Hex / oct / bin / decimal prefixes via autodetect (base 0).
+        run_tests(&[
+            r#"Integer("0x42")"#,
+            r#"Integer("0X42")"#,
+            r#"Integer("0b101")"#,
+            r#"Integer("0B101")"#,
+            r#"Integer("0o17")"#,
+            r#"Integer("0O17")"#,
+            r#"Integer("0d42")"#,
+            r#"Integer("042")"#,    // leading 0 → octal
+            r#"Integer("42")"#,
+            r#"Integer("-0x42")"#,
+            r#"Integer(" +0x42 ")"#, // whitespace tolerated
+            r#"Integer("1_000_000")"#,
+            // Explicit base.
+            r#"Integer("42", 16)"#,
+            r#"Integer("42", 8)"#,
+            r#"Integer("0x42", 16)"#, // matching prefix is OK
+            // Invalid forms surface ArgumentError; capture the message
+            // to verify the quoted-input wording.
+            r#"begin; Integer("0x"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Integer("12abc"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Integer("0xZZ"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Integer("__1"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Integer("1__1"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Integer("0x42", 10); rescue ArgumentError => e; e.message; end"#,
+        ]);
+    }
+
+    #[test]
+    fn kernel_float_hex_and_underscore() {
+        // Hex floats.
+        run_tests(&[
+            r#"Float("0xA")"#,
+            r#"Float("0X1f")"#,
+            r#"Float("0xA.B")"#,
+            r#"Float("0xA.Bp3")"#,
+            r#"Float("0x1.8p+3")"#,
+            // Decimal with underscores between digits.
+            r#"Float("10_1_0.5_5_5")"#,
+            r#"Float("1.5e1_0")"#,
+            // Whitespace and sign.
+            r#"Float(" -1.5 ")"#,
+        ]);
+        // Forms CRuby rejects.
+        run_tests(&[
+            r#"begin; Float(""); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("nan"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("inf"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("10__10"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("_1.0"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("1.0_"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("0b1"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Float("10e10.5"); rescue ArgumentError => e; e.message; end"#,
+        ]);
     }
 
     #[test]
