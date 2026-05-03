@@ -623,6 +623,19 @@ impl<'a> JitContext<'a> {
         let mut return_context = frame.detach_return_context();
         let return_state = return_context.remove(&pos);
         self.merge_return_context(return_context);
+        // If the iseq has rescue/ensure handlers, the abstract
+        // interpreter's BB graph doesn't include the rescue PCs as
+        // successors, so the computed return state only reflects the
+        // happy path. Letting Const-folding fire (or letting the
+        // Const ret survive into `def_rax2acc_return`) would
+        // overwrite the rescue path's actual return value with the
+        // happy-path constant. See issue #405.
+        let return_state = return_state.map(|mut s| {
+            if self.store[iseq_id].has_exception_handler() {
+                s.taint_for_unmodeled_rescue();
+            }
+            s
+        });
         if let Some(result) = &return_state {
             if let Some(v) = result.const_folded() {
                 #[cfg(feature = "jit-debug")]
@@ -949,5 +962,99 @@ impl AbstractState {
             ir.push(AsmInst::SetArguments { callid, callee_fid });
             ir.handle_error(error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    /// Regression test for issue #405. After JIT compilation of a block
+    /// passed to `Array#map`, calls inside the block that raise and are
+    /// caught by an inner `rescue` used to silently take the happy path's
+    /// return value: the abstract interpreter never visited the rescue BB
+    /// (no incoming edge), so the block's return state collapsed to
+    /// `Const(<happy-path literal>)`, which `def_rax2acc_return` then wrote
+    /// directly into the destination slot — discarding the actual `rax`
+    /// produced by the rescue path.
+    ///
+    /// Each subtest below exercises a different "happy path" return shape
+    /// (literal symbol, `nil`, different class) and confirms the rescue
+    /// path's value reaches the caller after the JIT compiles the block.
+    #[test]
+    fn rescue_inside_map_block_returns_rescue_value() {
+        run_test(
+            r#"
+            def boom; raise "no"; end
+            def test; [1].map { begin; boom; :no_rescue; rescue; :rescued; end }; end
+            30.times { test }
+            test
+            "#,
+        );
+    }
+
+    #[test]
+    fn rescue_inside_map_block_with_nil_happy_path() {
+        run_test(
+            r#"
+            def boom; raise "no"; end
+            def test; [1].map { begin; boom; nil; rescue; :rescued; end }; end
+            30.times { test }
+            test
+            "#,
+        );
+    }
+
+    #[test]
+    fn rescue_inside_map_block_different_classes() {
+        // Happy path returns Symbol; rescue returns String. The pre-fix
+        // bug also baked in the Symbol's class, so even with a Value
+        // fallback we want to confirm the actual rescue String comes back.
+        run_test(
+            r#"
+            def boom; raise "no"; end
+            def test; [1].map { begin; boom; :sym_path; rescue; "string_path"; end }; end
+            30.times { test }
+            test
+            "#,
+        );
+    }
+
+    #[test]
+    fn rescue_inside_select_block_uses_rescue_value() {
+        // `select` keeps elements whose block returns truthy. Pre-fix the
+        // baked-in `true` from the happy path made `select` keep the
+        // element even though the rescue returned `false`.
+        run_test(
+            r#"
+            def boom; raise "no"; end
+            def test; [1].select { begin; boom; true; rescue; false; end }; end
+            30.times { test }
+            test
+            "#,
+        );
+    }
+
+    #[test]
+    fn rescue_inside_map_block_typeerror_dispatch() {
+        // The original surfacing case from PR #404: dispatching multiple
+        // values into a builtin that may raise TypeError, and rescuing the
+        // TypeError inside the .map block.
+        run_test(
+            r#"
+            def t(x)
+              [x].map do |v|
+                begin
+                  Signal.signame(v)
+                  :ok
+                rescue TypeError
+                  :typeerr
+                end
+              end
+            end
+            30.times { t("hello"); t(:HUP); t(nil); t(0) }
+            [t("hello"), t(:HUP), t(nil), t(0)]
+            "#,
+        );
     }
 }

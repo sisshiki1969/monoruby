@@ -405,6 +405,16 @@ impl ReturnState {
         self.invariants.side_effect_guard = false;
     }
 
+    /// Forget what the abstract interpreter inferred about the return
+    /// value and side effects. Used when the iseq has rescue/ensure
+    /// handlers that the BB graph doesn't model — the actual return
+    /// could come from any rescue path the interpreter never visited
+    /// (see issue #405).
+    pub(in crate::codegen::jitgen) fn taint_for_unmodeled_rescue(&mut self) {
+        self.ret = ReturnValue::Value;
+        self.invariants.side_effect_guard = false;
+    }
+
     fn return_class(&self) -> Option<ClassId> {
         match self.ret {
             ReturnValue::Const(v) => Some(v.class()),
@@ -465,7 +475,13 @@ struct Invariants {
 
 impl Invariants {
     fn new_entry(cc: &JitContext) -> Self {
-        let side_effect_guard = cc.iseq().no_ensure();
+        // `rescue` is also a control-flow side effect: an exception
+        // raised in the protected range diverts control to the rescue
+        // body, which the abstract interpreter doesn't model (its BB
+        // graph has no edge into the rescue handler). Treat any
+        // exception handler — `rescue` or `ensure` — as breaking the
+        // side-effect guard. See issue #405.
+        let side_effect_guard = !cc.iseq().has_exception_handler();
         Self {
             class_version_guard: false,
             no_capture_guard: true,
@@ -483,7 +499,9 @@ impl Invariants {
     }
 
     fn new_specialized(cc: &JitContext) -> Self {
-        let side_effect_guard = cc.iseq().no_ensure();
+        // See `new_entry` for why we widen the guard from `no_ensure`
+        // to `!has_exception_handler` (issue #405).
+        let side_effect_guard = !cc.iseq().has_exception_handler();
         Self {
             class_version_guard: false,
             // specialized methods and blocks are always guarded frame capture.
@@ -496,5 +514,68 @@ impl Invariants {
         self.class_version_guard &= other.class_version_guard;
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::Immediate;
+
+    /// `taint_for_unmodeled_rescue` must downgrade `Const`/`Class` to
+    /// `Value` so `def_rax2acc_return` falls into the `ReturnValue::Value`
+    /// branch and uses `rax`, AND clear `side_effect_guard` so the earlier
+    /// `const_folded()` short-circuit cannot fire either. Both halves are
+    /// load-bearing for the issue #405 fix.
+    #[test]
+    fn taint_for_unmodeled_rescue_drops_const_and_side_effect_guard() {
+        let mut s = ReturnState {
+            ret: ReturnValue::Const(Immediate::nil()),
+            invariants: Invariants {
+                class_version_guard: true,
+                no_capture_guard: true,
+                side_effect_guard: true,
+            },
+        };
+        // Pre-condition: const-folding would fire.
+        assert!(s.const_folded().is_some());
+        s.taint_for_unmodeled_rescue();
+        // Post-condition: ret is `Value` and const-folding is suppressed.
+        assert!(matches!(s.ret, ReturnValue::Value));
+        assert!(!s.invariants.side_effect_guard);
+        assert!(s.const_folded().is_none());
+    }
+
+    /// `Class(c)` is also unsafe — the rescue path may return a different
+    /// class — so it must be downgraded to `Value` too.
+    #[test]
+    fn taint_for_unmodeled_rescue_downgrades_class() {
+        let mut s = ReturnState {
+            ret: ReturnValue::Class(crate::SYMBOL_CLASS),
+            invariants: Invariants {
+                class_version_guard: true,
+                no_capture_guard: true,
+                side_effect_guard: true,
+            },
+        };
+        s.taint_for_unmodeled_rescue();
+        assert!(matches!(s.ret, ReturnValue::Value));
+    }
+
+    /// Already-tainted (`Value` ret with cleared side-effect guard) is a
+    /// fixed point — the helper is idempotent.
+    #[test]
+    fn taint_for_unmodeled_rescue_is_idempotent() {
+        let mut s = ReturnState {
+            ret: ReturnValue::Value,
+            invariants: Invariants {
+                class_version_guard: true,
+                no_capture_guard: true,
+                side_effect_guard: false,
+            },
+        };
+        s.taint_for_unmodeled_rescue();
+        assert!(matches!(s.ret, ReturnValue::Value));
+        assert!(!s.invariants.side_effect_guard);
     }
 }
