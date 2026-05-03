@@ -8275,4 +8275,194 @@ mod tests {
         run_test_error(r##""foo".undump"##);
         run_test_error(r##""\\".undump"##);
     }
+
+    #[test]
+    fn string_unpack_directive_message() {
+        // Unknown directive in unpack reports "unknown unpack directive ..."
+        // (not the pack form). Verified by raising and capturing the message.
+        run_tests(&[
+            r##"begin; "abcdefgh".unpack("a K"); rescue ArgumentError => e; e.message; end"##,
+            r##"begin; "abcdefgh".unpack("a 0"); rescue ArgumentError => e; e.message; end"##,
+            // pack still says "unknown pack directive"
+            r##"begin; [1].pack("K"); rescue ArgumentError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_pads_with_nil() {
+        // Past the end of the source, unpack pads with nil for each
+        // element still requested (CRuby behavior).
+        run_tests(&[
+            r##""".unpack("C3")"##,
+            r##""".unpack("S3")"##,
+            r##""".unpack("L3")"##,
+            r##""".unpack("Q3")"##,
+            r##""".unpack("D3")"##,
+            r##""".unpack("F3")"##,
+            r##""\x01".unpack("C3")"##,
+            r##""\x01\x02\x03".unpack("L2")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_unpack_q_msb() {
+        // Q / J unpack must preserve the full u64 range — values with
+        // the high bit set must come back positive, not as a negative
+        // i64 reinterpretation.
+        run_tests(&[
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q<")"##,
+            r##""\xFE\xDC\xBA\x98\x76\x54\x32\x10".unpack("Q>")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("Q")"##,
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("J")"##,
+            // q (signed) still wraps to the negative value
+            r##""\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF".unpack("q")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_c_format() {
+        // %c accepts integers, strings (first char), and any object
+        // whose to_int / to_str returns the right type.
+        run_tests(&[
+            r##""%c" % 97"##,
+            r##""%c" % "a""##,
+            r##""%c" % "abc""##,
+            r##""%c" % """##,
+            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
+            r##"begin; "%c" % [[]]; rescue TypeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_int_precision() {
+        // d / i / u / b / B / o / x / X all honor precision; precision 0
+        // applied to value 0 yields the empty string.
+        run_tests(&[
+            r##""%.0d" % 0"##,
+            r##""%.0i" % 0"##,
+            r##""%.0u" % 0"##,
+            r##""%.5d" % 12"##,
+            r##""%.5d" % -12"##,
+            r##""%.5d" % 0"##,
+            r##""%.6b" % 10"##,
+            r##""%.6B" % 10"##,
+            r##""%.5o" % 87"##,
+            r##""%.5x" % 196"##,
+            r##""%.5X" % 196"##,
+        ]);
+    }
+
+    #[test]
+    fn string_modulo_inf_nan() {
+        // %f / %e / %E / %g / %G surface "Inf" / "NaN" instead of Rust's
+        // lowercase "inf".
+        run_tests(&[
+            r##""%f" % Float::INFINITY"##,
+            r##""%f" % (-Float::INFINITY)"##,
+            r##""%f" % Float::NAN"##,
+            r##""%e" % Float::INFINITY"##,
+            r##""%E" % Float::INFINITY"##,
+            r##""%g" % Float::INFINITY"##,
+            r##""%G" % (-Float::INFINITY)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_default() {
+        // scrub with no argument replaces invalid UTF-8 with U+FFFD.
+        run_tests(&[
+            r##""foo".scrub"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub"##,
+            // An incomplete multi-byte sequence at the end is one
+            // "subpart" — one replacement, not one per byte.
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub"##,
+            // Already-valid string is returned as a copy with the same
+            // bytes and encoding.
+            r##""abcあ".scrub"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_custom_replacement() {
+        run_tests(&[
+            r##""foo".scrub("*")"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc" + x81).scrub("*")"##,
+            r##"[0xE3, 0x80].pack("CC").force_encoding("utf-8").scrub("*")"##,
+        ]);
+    }
+
+    #[test]
+    fn string_scrub_bang() {
+        // scrub! mutates self.
+        run_tests(&[
+            r##"s = +"foo"; s.scrub!; s"##,
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); s = +("abc" + x81); s.scrub!("*"); s"##,
+        ]);
+    }
+
+    #[test]
+    fn string_initialize_replaces() {
+        // initialize is a private method and replaces self when
+        // called via send.
+        run_tests(&[
+            r##"s = +"hello"; s.send(:initialize, "world"); s"##,
+            r##"s = +"hello"; s.send(:initialize); s"##,
+            r##"String.private_instance_methods.include?(:initialize)"##,
+        ]);
+    }
+
+    #[test]
+    fn string_index_named_capture() {
+        // String#[regex, name] returns the named-capture match.
+        run_tests(&[
+            r##""hello"[/(?<x>l+)/, "x"]"##,
+            r##""hello"[/(?<x>l+)/, :x]"##,
+            r##""hello"[/(?<x>z+)/, "x"]"##,
+            // Numeric group still works.
+            r##""hello"[/(l+)/, 1]"##,
+            r##""hello"[/(l+)/, 0]"##,
+            // Unknown name raises IndexError.
+            r##"begin; "hello"[/(?<x>l+)/, "y"]; rescue IndexError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_x_byte() {
+        // \xNN in a dumped string must yield the raw byte, not a
+        // UTF-8 widening of the codepoint.
+        run_tests(&[
+            r##""\"\\x80\"".undump.bytes"##,
+            r##""\"\\xFF\"".undump.bytes"##,
+            r##""\"\\x00\"".undump.bytes"##,
+        ]);
+    }
+
+    #[test]
+    fn string_undump_error_messages() {
+        // Each malformed undump input maps to a specific message
+        // CRuby's specs match against.
+        run_tests(&[
+            r##"begin; '"foo'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\x"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; '"\u"'.undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"foo\0\"".undump; rescue RuntimeError => e; e.message; end"##,
+            r##"begin; "\"あ\"".undump; rescue RuntimeError => e; e.message; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_split_empty_separator_limit() {
+        // With an empty separator, lim > char_count appends a
+        // trailing empty field.
+        run_tests(&[
+            r##""hi!".split("")"##,
+            r##""hi!".split("", -1)"##,
+            r##""hi!".split("", 0)"##,
+            r##""hi!".split("", 1)"##,
+            r##""hi!".split("", 2)"##,
+            r##""hi!".split("", 3)"##,
+            r##""hi!".split("", 4)"##,
+            r##""hi!".split("", 5)"##,
+        ]);
+    }
 }

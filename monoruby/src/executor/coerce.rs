@@ -102,10 +102,22 @@ fn coerce_to_char(
                     result.get_real_class_name(&globals.store),
                 )));
             }
-            let class_name = val.get_real_class_name(&globals.store);
-            Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {class_name} into Integer"
-            )))
+            // CRuby uses two slightly different message templates:
+            //   "no implicit conversion from nil to integer"  (nil)
+            //   "no implicit conversion of <Class> into Integer" (others)
+            // Match both so the spec regex (`/of nil into Integer/` is
+            // accepted as `from nil to integer` by mspec's
+            // `raise_consistent_error`) matches CRuby exactly.
+            if val.is_nil() {
+                Err(MonorubyErr::typeerr(
+                    "no implicit conversion from nil to integer",
+                ))
+            } else {
+                let class_name = val.get_real_class_name(&globals.store);
+                Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion of {class_name} into Integer"
+                )))
+            }
         }
     }
 }
