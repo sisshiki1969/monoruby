@@ -8720,4 +8720,19 @@ mod tests {
             r#"Encoding::Big5.name"#,
         ]);
     }
+
+    #[test]
+    fn encoding_canonical_alias_identity() {
+        // Constants whose canonical name differs from the Ruby
+        // identifier (e.g. `Shift_JIS` vs `SHIFT_JIS`) must resolve
+        // to the same Value, so `==` / `equal?` against an encoding
+        // pulled out of a String agrees with the user-facing constant.
+        run_tests(&[
+            r#"Encoding::SHIFT_JIS.equal?(Encoding::Shift_JIS)"#,
+            // `0x8140.chr(Encoding::SHIFT_JIS).encoding` and
+            // `Encoding::SHIFT_JIS` are the same object.
+            r#"0x8140.chr(Encoding::SHIFT_JIS).encoding.equal?(Encoding::SHIFT_JIS)"#,
+            r#"0x8140.chr(Encoding::Shift_JIS).encoding == Encoding::SHIFT_JIS"#,
+        ]);
+    }
 }

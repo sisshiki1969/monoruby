@@ -147,24 +147,50 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "MacUkraine",
     ] {
         let canonical = canonical_encoding_name(name);
-        let val = Value::object(enc.id());
-        globals
+        // If a constant with the same canonical name has already been
+        // registered (for example, `Shift_JIS` registered before
+        // `SHIFT_JIS` — both canonicalise to "Shift_JIS"), reuse its
+        // Value so `Encoding::SHIFT_JIS.equal?(Encoding::Shift_JIS)`
+        // is `true`.
+        let val = if let Some(existing) = globals
             .store
-            .set_ivar(
-                val,
-                IdentId::_NAME,
-                Value::string_from_str(&format!("#<Encoding:{}>", canonical)),
-            )
-            .unwrap();
-        globals
-            .store
-            .set_ivar(
-                val,
-                IdentId::_ENCODING,
-                Value::string_from_str(canonical),
-            )
-            .unwrap();
+            .get_constant_noautoload(enc.id(), IdentId::get_id(canonical))
+        {
+            existing
+        } else {
+            let val = Value::object(enc.id());
+            globals
+                .store
+                .set_ivar(
+                    val,
+                    IdentId::_NAME,
+                    Value::string_from_str(&format!("#<Encoding:{}>", canonical)),
+                )
+                .unwrap();
+            globals
+                .store
+                .set_ivar(
+                    val,
+                    IdentId::_ENCODING,
+                    Value::string_from_str(canonical),
+                )
+                .unwrap();
+            val
+        };
         globals.set_constant_by_str(enc.id(), name, val);
+        // Also expose the canonical-cased constant if the input name
+        // differs (e.g. registering `SHIFT_JIS` should make
+        // `Encoding::Shift_JIS` resolve to the same Value too). Skip
+        // when the canonical-cased constant has already been seen so
+        // we don't trip the "already initialized" warning.
+        if canonical != name
+            && globals
+                .store
+                .get_constant_noautoload(enc.id(), IdentId::get_id(canonical))
+                .is_none()
+        {
+            globals.set_constant_by_str(enc.id(), canonical, val);
+        }
     }
 
     // Aliases that share their underlying Value with another
