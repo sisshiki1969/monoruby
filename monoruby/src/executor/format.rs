@@ -1,7 +1,6 @@
 use super::*;
 use crate::value::IntegerBase;
 
-
 /// Apply integer precision: pad digits with leading zeros to at
 /// least `prec` digits. Special-case: precision 0 with value 0
 /// yields the empty string (matches CRuby `%.0d` % 0 == "").
@@ -39,11 +38,7 @@ fn apply_width(s: &str, width: usize, left_align: bool, pad: char) -> String {
     }
 }
 
-fn coerce_to_char(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    val: Value,
-) -> Result<Option<char>> {
+fn coerce_to_char(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<Option<char>> {
     match val.unpack() {
         RV::Fixnum(i) => {
             if let Ok(u) = u32::try_from(i) {
@@ -526,8 +521,8 @@ fn try_consume_angle_named(
             "malformed name - unmatched parenthesis",
         ));
     }
-    let hash =
-        get_named_hash_helper(arguments, cache).ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
+    let hash = get_named_hash_helper(arguments, cache)
+        .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
     let key_val = Value::symbol_from_str(&key);
     let val = hash_lookup_or_keyerror(vm, globals, &hash, key_val, key.as_str(), '<')?;
     *i = j + 1;
@@ -624,8 +619,15 @@ impl Executor {
             // to_s-only form and may be preceded by flags / width /
             // precision (e.g. `%-20.5{foo}`); we recognize it where
             // the type char would be expected.
-            let mut named_val =
-                try_consume_angle_named(self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen)?;
+            let mut named_val = try_consume_angle_named(
+                self,
+                globals,
+                arguments,
+                &mut named_hash_cache,
+                &fchars,
+                &mut i,
+                flen,
+            )?;
 
             // Check for positional argument: non-zero digit(s) followed by '$'
             let positional_arg = if named_val.is_none()
@@ -689,7 +691,13 @@ impl Executor {
                 // `<name>` may appear between flag chars.
                 if ch == '<' {
                     if let Some(v) = try_consume_angle_named(
-                        self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                        self,
+                        globals,
+                        arguments,
+                        &mut named_hash_cache,
+                        &fchars,
+                        &mut i,
+                        flen,
                     )? {
                         named_val = Some(v);
                         if i >= flen {
@@ -740,7 +748,9 @@ impl Executor {
                 ch = fchars[i];
             } else {
                 while ch.is_ascii_digit() {
-                    width = width.checked_mul(10).and_then(|w| w.checked_add(ch as usize - '0' as usize))
+                    width = width
+                        .checked_mul(10)
+                        .and_then(|w| w.checked_add(ch as usize - '0' as usize))
                         .ok_or_else(|| MonorubyErr::argumenterr("width too big"))?;
                     i += 1;
                     if i >= flen {
@@ -754,7 +764,13 @@ impl Executor {
             // `<name>` may appear between width and precision.
             if ch == '<' {
                 if let Some(v) = try_consume_angle_named(
-                    self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                    self,
+                    globals,
+                    arguments,
+                    &mut named_hash_cache,
+                    &fchars,
+                    &mut i,
+                    flen,
                 )? {
                     named_val = Some(v);
                     if i >= flen {
@@ -801,7 +817,9 @@ impl Executor {
                     ch = fchars[i];
                 } else {
                     while ch.is_ascii_digit() {
-                        prec = prec.checked_mul(10).and_then(|p| p.checked_add(ch as usize - '0' as usize))
+                        prec = prec
+                            .checked_mul(10)
+                            .and_then(|p| p.checked_add(ch as usize - '0' as usize))
                             .ok_or_else(|| MonorubyErr::argumenterr("precision too big"))?;
                         i += 1;
                         if i >= flen {
@@ -817,7 +835,13 @@ impl Executor {
             // `<name>` may appear between precision and the type char.
             if ch == '<' {
                 if let Some(v) = try_consume_angle_named(
-                    self, globals, arguments, &mut named_hash_cache, &fchars, &mut i, flen,
+                    self,
+                    globals,
+                    arguments,
+                    &mut named_hash_cache,
+                    &fchars,
+                    &mut i,
+                    flen,
                 )? {
                     named_val = Some(v);
                     if i >= flen {
@@ -845,15 +869,13 @@ impl Executor {
                     ));
                 }
                 if named_val.is_some() {
-                    return Err(MonorubyErr::argumenterr(
-                        "named<name> after named{name}",
-                    ));
+                    return Err(MonorubyErr::argumenterr("named<name> after named{name}"));
                 }
-                let hash = get_named_hash(arguments, &mut named_hash_cache).ok_or_else(|| {
-                    MonorubyErr::argumenterr("one hash required")
-                })?;
+                let hash = get_named_hash(arguments, &mut named_hash_cache)
+                    .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
                 let key_val = Value::symbol_from_str(&key);
-                let val = hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;
+                let val =
+                    hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;
                 let mut s = val.coerce_to_s(self, globals)?;
                 if let Some(prec) = precision {
                     if s.chars().count() > prec {
@@ -1069,52 +1091,6 @@ impl Executor {
             format_str += &format;
         }
 
-        Ok(format_str)
-    }
-
-    pub(crate) fn format_by_hash(
-        &mut self,
-        globals: &mut Globals,
-        self_str: &str,
-        hash: Hashmap,
-    ) -> Result<String> {
-        let mut format_str = String::new();
-        let mut chars = self_str.chars();
-        while let Some(ch) = chars.next() {
-            if ch != '%' {
-                format_str.push(ch);
-                continue;
-            }
-            match chars.next() {
-                Some('%') => {
-                    format_str.push('%');
-                    continue;
-                }
-                Some('{') => {
-                    let mut key = String::new();
-                    loop {
-                        match chars.next() {
-                            Some('}') => break,
-                            Some(c) => key.push(c),
-                            None => {
-                                return Err(MonorubyErr::argumenterr(
-                                    "malformed name - unmatched parenthesis",
-                                ));
-                            }
-                        }
-                    }
-                    let key_val = Value::symbol_from_str(&key);
-                    let val = hash.get(key_val, self, globals)?.unwrap_or(Value::nil());
-                    format_str += &val.to_s(&globals.store);
-                }
-                ch => {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "malformed format string - %{}",
-                        ch.unwrap_or(' ')
-                    )));
-                }
-            }
-        }
         Ok(format_str)
     }
 }

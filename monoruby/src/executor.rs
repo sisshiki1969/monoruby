@@ -2,8 +2,8 @@ use crate::codegen::runtime::_dump_stacktrace;
 
 use super::*;
 
-pub mod coerce;
 mod constants;
+pub mod format;
 pub mod frame;
 pub mod inline;
 pub mod op;
