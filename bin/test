@@ -61,7 +61,7 @@ rm *.log
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in basicobject true false nil integer float comparable math; do
+  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct; do
     echo "=== core/$cat ==="
     ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done

@@ -239,10 +239,7 @@ impl Encoding {
     /// `ArgumentError` matching CRuby.
     pub fn try_from_str(s: &str) -> Result<Self> {
         // Normalize: uppercase, replace '-' / '.' with '_'.
-        let normalized = s
-            .to_uppercase()
-            .replace('-', "_")
-            .replace('.', "_");
+        let normalized = s.to_uppercase().replace('-', "_").replace('.', "_");
         match normalized.as_str() {
             "UTF_8" | "UTF8" | "CP65001" => Ok(Encoding::Utf8),
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
@@ -270,10 +267,12 @@ impl Encoding {
             "ISO_8859_15" | "ISO8859_15" | "LATIN9" => Ok(Encoding::Iso8859(15)),
             "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Iso8859(16)),
 
-            "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932"
-            | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
-            "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" | "ISO_2022_JP"
-            | "ISO2022_JP" => Ok(Encoding::Sjis(0)),
+            "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932" | "STATELESS_ISO_2022_JP" => {
+                Ok(Encoding::EucJp)
+            }
+            "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" | "ISO_2022_JP" | "ISO2022_JP" => {
+                Ok(Encoding::Sjis(0))
+            }
             "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Ok(Encoding::Sjis(1)),
 
             // Other byte-oriented encodings without native support
@@ -281,20 +280,18 @@ impl Encoding {
             // (consistent with monoruby's prior behaviour). Includes
             // dummy encodings that Ruby exposes by name for round-
             // trip purposes (UTF-7, Emacs-Mule, CP50220/CP50221).
-            "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252"
-            | "CP1252" | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254"
-            | "WINDOWS_1255" | "CP1255" | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257"
-            | "CP1257" | "WINDOWS_1258" | "CP1258" | "IBM437" | "CP437" | "IBM737"
-            | "CP737" | "IBM775" | "CP775" | "IBM850" | "CP850" | "IBM852" | "CP852"
-            | "IBM855" | "CP855" | "IBM857" | "CP857" | "IBM860" | "CP860" | "IBM861"
-            | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863" | "IBM864" | "CP864"
+            "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252" | "CP1252"
+            | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254" | "WINDOWS_1255" | "CP1255"
+            | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257" | "CP1257" | "WINDOWS_1258" | "CP1258"
+            | "IBM437" | "CP437" | "IBM737" | "CP737" | "IBM775" | "CP775" | "IBM850" | "CP850"
+            | "IBM852" | "CP852" | "IBM855" | "CP855" | "IBM857" | "CP857" | "IBM860" | "CP860"
+            | "IBM861" | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863" | "IBM864" | "CP864"
             | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869" | "CP869" | "KOI8_R"
             | "KOI8_U" | "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
-            | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW"
-            | "EUCTW" | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" | "UTF_7"
-            | "EMACS_MULE" | "CP50220" | "CP50221" | "GB12345" | "MACCYRILLIC"
-            | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
-            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW" | "EUCTW"
+            | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" | "UTF_7" | "EMACS_MULE" | "CP50220"
+            | "CP50221" | "GB12345" | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
+            | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -491,10 +488,6 @@ fn utf8_escape(s: &mut String, ch: char) {
     }
 }
 
-fn utf8_inspect(s: &mut String, ch: char) {
-    utf8_inspect_with_next(s, ch, '\0', true);
-}
-
 /// Render a single character for `String#inspect`. `next_ch` is the
 /// following character (or `'\0'` if there is none); used to escape
 /// `#` when followed by `$`, `@`, or `{`. `is_utf8` switches the
@@ -549,8 +542,7 @@ fn utf8_inspect_with_lookahead(res: &mut String, bytes: &[u8], is_utf8: bool) {
             Err(e) => {
                 let valid_up_to = e.valid_up_to();
                 if valid_up_to > 0 {
-                    let valid =
-                        std::str::from_utf8(&bytes[i..i + valid_up_to]).unwrap_or("");
+                    let valid = std::str::from_utf8(&bytes[i..i + valid_up_to]).unwrap_or("");
                     let chars: Vec<char> = valid.chars().collect();
                     for (idx, &c) in chars.iter().enumerate() {
                         let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
@@ -611,7 +603,8 @@ fn utf8_escape_bytes(res: &mut String, bytes: &[u8], escape_fn: fn(&mut String, 
                 // Process valid UTF-8 prefix
                 if valid_up_to > 0 {
                     // SAFETY: from_utf8 confirmed these bytes are valid UTF-8.
-                    let valid_str = unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
+                    let valid_str =
+                        unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
                     for c in valid_str.chars() {
                         escape_fn(res, c);
                     }
@@ -695,10 +688,7 @@ impl RStringInner {
             // in UTF-8" rule).
             Encoding::Utf8 => {
                 if std::str::from_utf8(&self.content).is_ok() {
-                    self.content
-                        .iter()
-                        .filter(|&&b| (b & 0xC0) != 0x80)
-                        .count()
+                    self.content.iter().filter(|&&b| (b & 0xC0) != 0x80).count()
                 } else {
                     self.iter_char_bytes().count()
                 }
@@ -972,9 +962,9 @@ impl RStringInner {
         if other.is_empty() {
             return Ok(());
         }
-        let result_enc = self.compatible_encoding(other).ok_or_else(|| {
-            MonorubyErr::incompatible_encoding(store, self.ty, other.ty)
-        })?;
+        let result_enc = self
+            .compatible_encoding(other)
+            .ok_or_else(|| MonorubyErr::incompatible_encoding(store, self.ty, other.ty))?;
         self.content.extend_from_slice(&other.content);
         self.ty = result_enc;
         self.cr.set(CodeRange::Unknown);
@@ -1064,20 +1054,47 @@ mod encoding_tests {
         assert_eq!(Encoding::try_from_str("utf-8").unwrap(), Encoding::Utf8);
         assert_eq!(Encoding::try_from_str("UTF8").unwrap(), Encoding::Utf8);
         assert_eq!(Encoding::try_from_str("BINARY").unwrap(), Encoding::Ascii8);
-        assert_eq!(Encoding::try_from_str("ASCII-8BIT").unwrap(), Encoding::Ascii8);
-        assert_eq!(Encoding::try_from_str("US-ASCII").unwrap(), Encoding::UsAscii);
+        assert_eq!(
+            Encoding::try_from_str("ASCII-8BIT").unwrap(),
+            Encoding::Ascii8
+        );
+        assert_eq!(
+            Encoding::try_from_str("US-ASCII").unwrap(),
+            Encoding::UsAscii
+        );
         // ISO-8859-N round-trips through `_` and `-` separators.
-        assert_eq!(Encoding::try_from_str("ISO-8859-1").unwrap(), Encoding::Iso8859(1));
-        assert_eq!(Encoding::try_from_str("ISO_8859_15").unwrap(), Encoding::Iso8859(15));
-        assert_eq!(Encoding::try_from_str("LATIN1").unwrap(), Encoding::Iso8859(1));
+        assert_eq!(
+            Encoding::try_from_str("ISO-8859-1").unwrap(),
+            Encoding::Iso8859(1)
+        );
+        assert_eq!(
+            Encoding::try_from_str("ISO_8859_15").unwrap(),
+            Encoding::Iso8859(15)
+        );
+        assert_eq!(
+            Encoding::try_from_str("LATIN1").unwrap(),
+            Encoding::Iso8859(1)
+        );
         // UTF-16 / UTF-32 family.
-        assert_eq!(Encoding::try_from_str("UTF-16LE").unwrap(), Encoding::Utf16Le);
-        assert_eq!(Encoding::try_from_str("UTF-16BE").unwrap(), Encoding::Utf16Be);
+        assert_eq!(
+            Encoding::try_from_str("UTF-16LE").unwrap(),
+            Encoding::Utf16Le
+        );
+        assert_eq!(
+            Encoding::try_from_str("UTF-16BE").unwrap(),
+            Encoding::Utf16Be
+        );
         assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Utf32Le);
         // Japanese.
         assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
-        assert_eq!(Encoding::try_from_str("Shift_JIS").unwrap(), Encoding::Sjis(0));
-        assert_eq!(Encoding::try_from_str("Windows-31J").unwrap(), Encoding::Sjis(1));
+        assert_eq!(
+            Encoding::try_from_str("Shift_JIS").unwrap(),
+            Encoding::Sjis(0)
+        );
+        assert_eq!(
+            Encoding::try_from_str("Windows-31J").unwrap(),
+            Encoding::Sjis(1)
+        );
         assert_eq!(Encoding::try_from_str("CP932").unwrap(), Encoding::Sjis(1));
         // Pseudo-encoding names map to UTF-8.
         assert_eq!(Encoding::try_from_str("LOCALE").unwrap(), Encoding::Utf8);
@@ -1172,7 +1189,10 @@ mod encoding_tests {
     fn classify_utf16_byte_count_parity() {
         // UTF-16 needs even byte count to validate.
         assert_eq!(Encoding::Utf16Le.classify(&[0x61, 0x00]), CodeRange::Valid);
-        assert_eq!(Encoding::Utf16Le.classify(&[0x61, 0x00, 0x62]), CodeRange::Broken);
+        assert_eq!(
+            Encoding::Utf16Le.classify(&[0x61, 0x00, 0x62]),
+            CodeRange::Broken
+        );
         assert_eq!(Encoding::Utf16Be.classify(&[0x00, 0x61]), CodeRange::Valid);
     }
 
@@ -1182,7 +1202,10 @@ mod encoding_tests {
             Encoding::Utf32Le.classify(&[0x61, 0x00, 0x00, 0x00]),
             CodeRange::Valid
         );
-        assert_eq!(Encoding::Utf32Le.classify(&[0x61, 0x00, 0x00]), CodeRange::Broken);
+        assert_eq!(
+            Encoding::Utf32Le.classify(&[0x61, 0x00, 0x00]),
+            CodeRange::Broken
+        );
     }
 
     #[test]
