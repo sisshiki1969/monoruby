@@ -2009,14 +2009,15 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // `ary` is a freshly-allocated Array that is not yet referenced from
-    // any GC root. Push it onto the temp_stack before sorting so that the
+    // any GC root. Push it onto the temp_stack inside a scope so that the
     // RValue (and transitively its merge-buffer copies) survives any GC
-    // triggered from the comparator block.
+    // triggered from the comparator block, and is automatically dropped
+    // when this builtin returns or unwinds.
     let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    vm.temp_push(ary.into());
-    let res = sort_inner(vm, globals, lfp, ary);
-    vm.temp_pop();
-    res
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(ary.into());
+        sort_inner(vm, globals, lfp, ary)
+    })
 }
 
 ///
@@ -2035,46 +2036,45 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         // freshly-allocated keys returned from the block stay reachable
         // through GC, both during the collection loop and during the sort
         // (the comparator itself dispatches back into Ruby for non-Integer
-        // results, which can also trigger GC).
-        let base = vm.temp_len();
-        let collect_res = sort_by_collect_pairs(vm, globals, &data, lfp.self_val());
-        if let Err(e) = collect_res {
-            vm.temp_clear(base);
-            return Err(e);
-        }
-        let n = (vm.temp_len() - base) / 2;
-        // Snapshot keys as bit patterns; they remain valid as long as we
-        // do not pop the temp_stack entries that hold the same Values.
-        let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
-        let mut indices: Vec<usize> = (0..n).collect();
-        let mut err = None;
-        indices.sort_by(|&a, &b| {
-            if err.is_some() {
-                return std::cmp::Ordering::Equal;
-            }
-            match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                Ok(o) => o,
-                Err(e) => {
-                    err = Some(e);
-                    std::cmp::Ordering::Equal
+        // results, which can also trigger GC). `with_temp_scope` rolls
+        // those entries back regardless of how we exit.
+        vm.with_temp_scope(|vm| {
+            let base = vm.temp_len();
+            sort_by_collect_pairs(vm, globals, &data, lfp.self_val())?;
+            let n = (vm.temp_len() - base) / 2;
+            // Snapshot keys as bit patterns; they remain valid as long as
+            // we do not drop the scope holding the underlying Values.
+            let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
+            let mut indices: Vec<usize> = (0..n).collect();
+            let mut err = None;
+            indices.sort_by(|&a, &b| {
+                if err.is_some() {
+                    return std::cmp::Ordering::Equal;
                 }
+                match Executor::compare_values(vm, globals, keys[a], keys[b]) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        err = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                }
+            });
+            if let Some(e) = err {
+                return Err(e);
             }
-        });
-        if let Some(e) = err {
-            vm.temp_clear(base);
-            return Err(e);
-        }
-        // Read elems back in sorted order from the temp_stack (still rooted)
-        // and write them to the receiver, then drop the temp entries.
-        let sorted_elems: Vec<Value> =
-            indices.iter().map(|&i| vm.temp_at(base + i * 2 + 1)).collect();
-        let mut ary = lfp.self_val().as_array();
-        ary.truncate(0);
-        for v in sorted_elems {
-            ary.push(v);
-        }
-        vm.temp_clear(base);
-        Ok(ary.into())
+            // Read elems back in sorted order from the temp_stack (still
+            // rooted) and write them to the receiver.
+            let sorted_elems: Vec<Value> = indices
+                .iter()
+                .map(|&i| vm.temp_at(base + i * 2 + 1))
+                .collect();
+            let mut ary = lfp.self_val().as_array();
+            ary.truncate(0);
+            for v in sorted_elems {
+                ary.push(v);
+            }
+            Ok(ary.into())
+        })
     } else {
         vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
     }
@@ -2116,40 +2116,37 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         // and elems alive across block invocations and the comparator.
         // Also fixes a latent semantic issue with the previous impl, which
         // re-evaluated the block for both sides on every comparison.
-        let base = vm.temp_len();
-        let collect_res = sort_by_collect_pairs(vm, globals, &data, lfp.self_val());
-        if let Err(e) = collect_res {
-            vm.temp_clear(base);
-            return Err(e);
-        }
-        let n = (vm.temp_len() - base) / 2;
-        let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
-        let mut indices: Vec<usize> = (0..n).collect();
-        let mut err = None;
-        indices.sort_by(|&a, &b| {
-            if err.is_some() {
-                return std::cmp::Ordering::Equal;
-            }
-            match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                Ok(o) => o,
-                Err(e) => {
-                    err = Some(e);
-                    std::cmp::Ordering::Equal
+        vm.with_temp_scope(|vm| {
+            let base = vm.temp_len();
+            sort_by_collect_pairs(vm, globals, &data, lfp.self_val())?;
+            let n = (vm.temp_len() - base) / 2;
+            let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
+            let mut indices: Vec<usize> = (0..n).collect();
+            let mut err = None;
+            indices.sort_by(|&a, &b| {
+                if err.is_some() {
+                    return std::cmp::Ordering::Equal;
                 }
+                match Executor::compare_values(vm, globals, keys[a], keys[b]) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        err = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                }
+            });
+            if let Some(e) = err {
+                return Err(e);
             }
-        });
-        if let Some(e) = err {
-            vm.temp_clear(base);
-            return Err(e);
-        }
-        let sorted_elems: Vec<Value> =
-            indices.iter().map(|&i| vm.temp_at(base + i * 2 + 1)).collect();
-        // Allocate the result Array while temp_stack still holds the
-        // elements; only after the new Array owns them do we drop the
-        // temp_stack rooting.
-        let result = Value::array_from_vec(sorted_elems);
-        vm.temp_clear(base);
-        Ok(result)
+            let sorted_elems: Vec<Value> = indices
+                .iter()
+                .map(|&i| vm.temp_at(base + i * 2 + 1))
+                .collect();
+            // The new Array RValue is allocated while the temp_stack scope
+            // is still live, so any GC triggered by the allocation can
+            // still see the sorted elements through it.
+            Ok(Value::array_from_vec(sorted_elems))
+        })
     } else {
         vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![], pc)
     }
@@ -2381,12 +2378,13 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         // Root the result Hash on the temp_stack before doing any block
         // invocations so that GC can reach it (and transitively all the
         // grouped elements) regardless of what the user's block does.
-        let h_val = Value::hash(RubyMap::default());
-        vm.temp_push(h_val);
-        let res = group_by_inner(vm, globals, &data, self_val, h_val);
-        let result = vm.temp_pop();
-        res?;
-        Ok(result)
+        // `with_temp_scope` rolls the entry back on success or error.
+        vm.with_temp_scope(|vm| {
+            let h_val = Value::hash(RubyMap::default());
+            vm.temp_push(h_val);
+            group_by_inner(vm, globals, &data, self_val, h_val)?;
+            Ok(h_val)
+        })
     } else {
         vm.generate_enumerator(IdentId::get_id("group_by"), lfp.self_val(), vec![], pc)
     }
@@ -2404,29 +2402,25 @@ fn group_by_inner(
         let elem = self_val.as_array()[i];
         let key = vm.invoke_block(globals, data, &[elem])?;
         // The key returned by the block is held only in this Rust local
-        // and is freshly allocated for many types; root it before the
-        // hash get/insert calls, both of which dispatch back into Ruby
-        // (via `hash` / `eql?`) and may trigger GC.
-        vm.temp_push(key);
-        let lookup_res = h_val.as_hash().get(key, vm, globals);
-        let step_res = match lookup_res {
-            Ok(Some(existing)) => {
-                existing.as_array().push(elem);
-                Ok(())
+        // and is freshly allocated for many types; root it (and the
+        // freshly-allocated bucket array, when needed) before the hash
+        // get/insert calls, both of which dispatch back into Ruby (via
+        // `hash` / `eql?`) and may trigger GC. `with_temp_scope` rolls
+        // both back regardless of how the iteration ends.
+        vm.with_temp_scope(|vm| -> Result<()> {
+            vm.temp_push(key);
+            match h_val.as_hash().get(key, vm, globals)? {
+                Some(existing) => {
+                    existing.as_array().push(elem);
+                }
+                None => {
+                    let new_arr = Value::array1(elem);
+                    vm.temp_push(new_arr);
+                    h_val.as_hash().insert(key, new_arr, vm, globals)?;
+                }
             }
-            Ok(None) => {
-                // Root the freshly-allocated bucket array until the Hash
-                // adopts it.
-                let new_arr = Value::array1(elem);
-                vm.temp_push(new_arr);
-                let r = h_val.as_hash().insert(key, new_arr, vm, globals);
-                vm.temp_pop();
-                r
-            }
-            Err(e) => Err(e),
-        };
-        vm.temp_pop();
-        step_res?;
+            Ok(())
+        })?;
         i += 1;
     }
     Ok(())
