@@ -621,20 +621,83 @@ mod tests {
     }
 
     #[test]
-    fn signal_signame() {
+    fn signal_signame_all_valid_numbers() {
+        // Cover every signal number 0..=31. The result is compared against
+        // CRuby, so each canonical name (ABRT not IOT for 6, CHLD not CLD
+        // for 17, IO not POLL for 29) is verified implicitly. 16 is the
+        // only gap in the range and returns nil.
+        run_test(r#"(0..31).map { |n| Signal.signame(n) }"#);
+    }
+
+    #[test]
+    fn signal_signame_invalid_returns_nil() {
+        // Numbers outside the known range — including the 16 gap, the
+        // boundary value 32, and large negative/positive values — all
+        // return nil rather than raising.
         run_test(
             r#"
-            [
-              Signal.signame(0),
-              Signal.signame(1),
-              Signal.signame(6),    # ABRT (canonical, not IOT)
-              Signal.signame(9),
-              Signal.signame(17),   # CHLD (canonical, not CLD)
-              Signal.signame(29),   # IO (canonical, not POLL)
-              Signal.signame(-1),
-              Signal.signame(100),
-              Signal.signame(16),   # STKFLT not exposed
-            ]
+            [-1_000_000, -100, -1, 16, 32, 100, 1_000_000].map { |n|
+              Signal.signame(n)
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_to_int_coercion() {
+        // Float and custom objects responding to #to_int are accepted via
+        // implicit Integer coercion (matches CRuby's rb_to_int semantics).
+        run_test(
+            r#"
+            class X
+              def to_int; 6; end
+            end
+            [Signal.signame(1.5), Signal.signame(0.0), Signal.signame(X.new)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_typeerror_cases() {
+        // Values that aren't Integer and don't respond to #to_int raise
+        // TypeError. The exact message text differs between CRuby and
+        // monoruby (e.g. "into" vs "to"), so this test only checks the
+        // exception class. Each rescue is at the top level rather than
+        // inside a block, since `.map { rescue }` interacts poorly with
+        // JIT warmup for builtin methods that raise.
+        run_test(
+            r#"
+            def t(x)
+              begin
+                Signal.signame(x)
+                :ok
+              rescue TypeError
+                :typeerr
+              end
+            end
+            [t("hello"), t(:HUP), t(nil), t(Object.new), t([1])]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_signame_to_int_returns_non_integer() {
+        // When #to_int is defined but returns a non-Integer, CRuby raises
+        // TypeError ("can't convert X to Integer (X#to_int gives Y)").
+        run_test(
+            r#"
+            class Bad
+              def to_int; "not an int"; end
+            end
+            def call_signame(x)
+              begin
+                Signal.signame(x)
+                :ok
+              rescue TypeError
+                :typeerr
+              end
+            end
+            call_signame(Bad.new)
             "#,
         );
     }
