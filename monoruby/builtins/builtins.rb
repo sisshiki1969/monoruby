@@ -315,15 +315,6 @@ class Hash
   end
 end
 
-class Module
-  def ruby2_keywords(*)
-    # no-op for compatibility
-  end
-
-  def deprecate_constant(*)
-    self
-  end
-end
 
 class File
   class Stat

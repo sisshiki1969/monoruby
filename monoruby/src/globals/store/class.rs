@@ -515,6 +515,15 @@ impl ClassInfo {
         }
     }
 
+    /// Marks the constant `name` as deprecated so that subsequent reads
+    /// trigger a "constant ... is deprecated" warning. Caller must
+    /// verify that `name` exists.
+    pub(crate) fn set_constant_deprecated(&mut self, name: IdentId) {
+        if let Some(state) = self.constants.get_mut(&name) {
+            state.set_deprecated();
+        }
+    }
+
     pub(crate) fn instance_ty(&self) -> Option<ObjTy> {
         self.instance_ty
     }
