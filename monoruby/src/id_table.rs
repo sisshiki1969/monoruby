@@ -247,6 +247,10 @@ impl IdentId {
     pub const SINGLETON_METHOD_UNDEFINED: IdentId = id!(73);
     pub const TO_INT: IdentId = id!(74);
     pub const TO_F: IdentId = id!(75);
+    pub const INITIALIZE_COPY: IdentId = id!(76);
+    pub const INITIALIZE_CLONE: IdentId = id!(77);
+    pub const INITIALIZE_DUP: IdentId = id!(78);
+    pub const RESPOND_TO_MISSING_: IdentId = id!(79);
 }
 
 impl IdentId {
@@ -437,6 +441,10 @@ impl IdentifierTable {
         table.set_id("singleton_method_undefined", IdentId::SINGLETON_METHOD_UNDEFINED);
         table.set_id("to_int", IdentId::TO_INT);
         table.set_id("to_f", IdentId::TO_F);
+        table.set_id("initialize_copy", IdentId::INITIALIZE_COPY);
+        table.set_id("initialize_clone", IdentId::INITIALIZE_CLONE);
+        table.set_id("initialize_dup", IdentId::INITIALIZE_DUP);
+        table.set_id("respond_to_missing?", IdentId::RESPOND_TO_MISSING_);
         table
     }
 

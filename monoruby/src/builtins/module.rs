@@ -1530,12 +1530,12 @@ fn define_method_visibility(vm: &Executor, target: ClassId, name: IdentId) -> Vi
 /// `def`, `define_method`, and `alias_method` all consult this list.
 fn is_special_private_method_name(name: IdentId) -> bool {
     matches!(
-        name.get_name().as_str(),
-        "initialize"
-            | "initialize_copy"
-            | "initialize_clone"
-            | "initialize_dup"
-            | "respond_to_missing?"
+        name,
+        IdentId::INITIALIZE
+            | IdentId::INITIALIZE_COPY
+            | IdentId::INITIALIZE_CLONE
+            | IdentId::INITIALIZE_DUP
+            | IdentId::RESPOND_TO_MISSING_
     )
 }
 
