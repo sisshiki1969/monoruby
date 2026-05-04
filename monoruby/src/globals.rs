@@ -1,4 +1,5 @@
-use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
+use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
+use ruruby_parse::Parser;
 use std::io::{BufWriter, Stdout, stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ pub(crate) struct ExternalContext {
     )>,
 }
 
-impl ruruby_parse::LocalsContext for ExternalContext {
+impl crate::ast::LocalsContext for ExternalContext {
     fn find_lvar(&self, name: &str) -> Option<usize> {
         let id = IdentId::get_id(name);
         for (outer, scope) in self.scope.iter().enumerate() {

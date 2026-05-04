@@ -1,5 +1,4 @@
-use ruruby_parse::CmpKind;
-
+use crate::ast::CmpKind;
 use crate::bytecodegen::{BinOpK, UnOpK};
 
 use super::*;

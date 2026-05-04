@@ -10,7 +10,8 @@ pub mod op;
 pub use codegen::*;
 pub use frame::*;
 pub use op::*;
-use ruruby_parse::{Loc, SourceInfoRef};
+
+use crate::ast::{Loc, SourceInfoRef};
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr) -> Option<Value>;

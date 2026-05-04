@@ -15,7 +15,8 @@ use crate::{
     builtins::TimeInner,
 };
 use num::{BigInt, FromPrimitive};
-use ruruby_parse::{Node, NodeKind};
+
+use crate::ast::{Node, NodeKind};
 
 pub mod numeric;
 pub mod rvalue;
@@ -2701,7 +2702,7 @@ impl Value {
     }
 
     fn from_ast_inner(node: &Node, vm: &mut Executor, globals: &mut Globals) -> Value {
-        use ruruby_parse::NReal;
+        use crate::ast::NReal;
 
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
@@ -2790,11 +2791,11 @@ impl Value {
                 }
                 Value::hash(map)
             }
-            NodeKind::BinOp(ruruby_parse::BinOp::Div, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Div, box lhs, box rhs) => {
                 // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
                 match (&lhs.kind, &rhs.kind) {
                     (NodeKind::Integer(n), NodeKind::Integer(d)) => Value::rational(*n, *d),
-                    (NodeKind::UnOp(ruruby_parse::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
+                    (NodeKind::UnOp(crate::ast::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
                         if let NodeKind::Integer(n) = &inner.kind {
                             Value::rational(-n, *d)
                         } else {
@@ -2804,7 +2805,7 @@ impl Value {
                     _ => unreachable!("{:?}", node.kind),
                 }
             }
-            NodeKind::BinOp(ruruby_parse::BinOp::Add, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Add, box lhs, box rhs) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(Real::try_from(globals, lhs).unwrap(), im.clone())
@@ -2812,7 +2813,7 @@ impl Value {
                     unreachable!()
                 }
             }
-            NodeKind::BinOp(ruruby_parse::BinOp::Sub, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Sub, box lhs, box rhs) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(
@@ -2828,7 +2829,7 @@ impl Value {
     }
 
     pub(crate) fn from_const_ast(node: &Node) -> Value {
-        use ruruby_parse::NReal;
+        use crate::ast::NReal;
         match &node.kind {
             NodeKind::Integer(num) => Value::integer(*num),
             NodeKind::Bignum(num) => Value::bigint(num.clone()),

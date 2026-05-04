@@ -5,9 +5,9 @@ use super::*;
 use num::BigInt;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
-use ruruby_parse::Loc;
-use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
+
+use crate::ast::{Loc, SourceInfoRef};
 
 pub use array::*;
 pub use binding::*;
