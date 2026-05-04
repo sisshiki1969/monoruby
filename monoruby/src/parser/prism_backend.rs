@@ -116,17 +116,6 @@ fn build_prism_options(
     opts
 }
 
-#[derive(Debug)]
-enum LowerError {
-    /// Prism parsed the source successfully but the lowerer hit a
-    /// node it does not handle. The `Loc` points back at the
-    /// offending node (or `Loc::default()` when raised from a
-    /// helper that doesn't have one in scope) so the caller can
-    /// surface a useful "line N" frame instead of always pointing
-    /// at line 1.
-    Unsupported(&'static str, Loc),
-}
-
 /// Result of lowering the `block` slot on a Prism call/super node.
 enum CallBlock {
     /// A block literal (`{ ... }` / `do ... end`) or a `&expr`
@@ -164,7 +153,7 @@ fn try_prism_inner(
         }));
     }
 
-    let mut lowerer = Lowerer::new(code.as_bytes(), path_display);
+    let mut lowerer = Lowerer::new(code.as_bytes(), path_display, source_info.clone());
     lowerer.line_offset = line_offset;
     if let Some(seed) = seed_lvars {
         // For `binding.eval`, monoruby preloads a `LvarCollector`
@@ -173,28 +162,12 @@ fn try_prism_inner(
         // Prism side too.
         lowerer.lvars = seed;
     }
-    let body = match lowerer.lower_top(&result.node()) {
-        Ok(body) => body,
-        Err(LowerError::Unsupported(kind, err_loc)) => {
-            // Prism parsed the source but our lowerer has no
-            // handler for one of the produced nodes. Surface this
-            // as a Ruby-level `FatalError` (carrying the same
-            // source-location frame a SyntaxError would) instead
-            // of `panic!`-ing — the host process keeps running and
-            // the script gets a normal exception, while the
-            // FatalError kind still propagates through `rescue`
-            // handlers without being silently swallowed.
-            return Err(MonorubyErr::fatal_with_loc(
-                format!(
-                    "prism lowerer hit an unsupported node `{kind}` while parsing {} \
-                     — add a handler in monoruby/src/parser/prism_backend.rs",
-                    source_info.path.display(),
-                ),
-                err_loc,
-                source_info,
-            ));
-        }
-    };
+    // The lowerer raises `MonorubyErr::fatal_with_loc(...)` directly
+    // when it hits a node it doesn't handle (see `unsupported_node`),
+    // so we just propagate the error here. Prism parsed the file
+    // fine, so a `SyntaxError` would be misleading; the FatalError
+    // kind ensures it surfaces past Ruby `rescue` handlers.
+    let body = lowerer.lower_top(&result.node())?;
     let lvar_collector = lowerer.into_lvars();
 
     Ok(ParseResult {
@@ -209,6 +182,12 @@ struct Lowerer<'pr> {
     source: &'pr [u8],
     /// The path of the file we're lowering. Inlined for `__FILE__`.
     path: String,
+    /// Shared source-info handle used to seed the location frame on
+    /// any `MonorubyErr` we raise from the lowerer (so users get a
+    /// `<path>:<line>` prefix and a code-pointing arrow). The
+    /// caller in `try_prism_inner` builds this once and stores it
+    /// here as well as on the `ParseResult`.
+    source_info: SourceInfoRef,
     /// 0 for ordinary file parses; for `eval(_, _, _, lineno)` and
     /// `binding.eval` this is `lineno - 1`. Added to every
     /// `__LINE__` literal so the inlined value matches the host
@@ -218,10 +197,11 @@ struct Lowerer<'pr> {
 }
 
 impl<'pr> Lowerer<'pr> {
-    fn new(source: &'pr [u8], path: String) -> Self {
+    fn new(source: &'pr [u8], path: String, source_info: SourceInfoRef) -> Self {
         Self {
             source,
             path,
+            source_info,
             line_offset: 0,
             lvars: LvarCollector::new(),
         }
@@ -231,18 +211,51 @@ impl<'pr> Lowerer<'pr> {
         self.lvars
     }
 
+    /// Build the canonical "prism lowerer hit an unsupported node"
+    /// FatalError for a given node-kind tag and source location.
+    /// Carries the lowerer's `SourceInfoRef` so the host's error
+    /// formatter can print the usual `<path>:<line>` prefix and an
+    /// arrow under the offending span.
+    fn unsupported_node(&self, kind: &'static str, loc: Loc) -> MonorubyErr {
+        MonorubyErr::fatal_with_loc(
+            format!(
+                "prism lowerer hit an unsupported node `{kind}` while parsing {} \
+                 — add a handler in monoruby/src/parser/prism_backend.rs",
+                self.source_info.path.display(),
+            ),
+            loc,
+            self.source_info.clone(),
+        )
+    }
+
+    /// Convenience wrapper around `unsupported_node` that takes a
+    /// raw Prism node and pulls its `node_kind_name` + location for
+    /// you. Use this from the catch-all arms of every
+    /// dispatch-style match.
+    fn unsupported(&self, context: &'static str, node: &prism::Node<'_>) -> MonorubyErr {
+        let kind = node_kind_name(node);
+        if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
+            if kind == "<other>" {
+                eprintln!("[prism] unsupported {context} node: <other> // {node:?}");
+            } else {
+                eprintln!("[prism] unsupported {context} node: {kind}");
+            }
+        }
+        self.unsupported_node(kind, location_to_loc(&node.location()))
+    }
+
     /// Top-level entry: lowers a `ProgramNode` to a `CompStmt`.
-    fn lower_top(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+    fn lower_top(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         match node {
             prism::Node::ProgramNode { .. } => {
                 let program: ProgramNode<'_> = node.as_program_node().unwrap();
                 self.lower_program(&program)
             }
-            other => Err(unsupported("top", other)),
+            other => Err(self.unsupported("top", other)),
         }
     }
 
-    fn lower_program(&mut self, node: &ProgramNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_program(&mut self, node: &ProgramNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         // Pre-populate the local variable table from Prism's per-scope
         // locals list so the resulting AST matches what ruruby-parse
@@ -256,7 +269,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn collect_locals(&mut self, locals: &ConstantList<'pr>) -> Result<(), LowerError> {
+    fn collect_locals(&mut self, locals: &ConstantList<'pr>) -> Result<(), MonorubyErr> {
         for id in locals.iter() {
             let name = constant_name(&id)?;
             self.lvars.insert(&name);
@@ -267,11 +280,11 @@ impl<'pr> Lowerer<'pr> {
     fn lower_statements_into_vec(
         &mut self,
         node: &StatementsNode<'pr>,
-    ) -> Result<Vec<Node>, LowerError> {
+    ) -> Result<Vec<Node>, MonorubyErr> {
         node.body().iter().map(|n| self.lower_node(&n)).collect()
     }
 
-    fn lower_node(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+    fn lower_node(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         Ok(match node {
             prism::Node::NilNode { .. } => Node {
@@ -637,7 +650,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOperatorWriteNode { .. } => {
                 let n = node.as_index_operator_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
+                    return Err(self.unsupported_node(
                         "indexed op-assign with block argument",
                         loc,
                     ));
@@ -652,7 +665,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOrWriteNode { .. } => {
                 let n = node.as_index_or_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
+                    return Err(self.unsupported_node(
                         "indexed ||= with block argument",
                         loc,
                     ));
@@ -667,7 +680,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexAndWriteNode { .. } => {
                 let n = node.as_index_and_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
+                    return Err(self.unsupported_node(
                         "indexed &&= with block argument",
                         loc,
                     ));
@@ -840,10 +853,10 @@ impl<'pr> Lowerer<'pr> {
                         let mt = index.as_multi_target_node().unwrap();
                         let mt_loc = location_to_loc(&index.location());
                         if mt.rest().is_some() {
-                            return Err(LowerError::Unsupported("for index with splat", mt_loc));
+                            return Err(self.unsupported_node("for index with splat", mt_loc));
                         }
                         if mt.rights().iter().next().is_some() {
-                            return Err(LowerError::Unsupported(
+                            return Err(self.unsupported_node(
                                 "for index with post element",
                                 mt_loc,
                             ));
@@ -859,13 +872,13 @@ impl<'pr> Lowerer<'pr> {
                                     ));
                                 }
                                 other => {
-                                    return Err(unsupported("for index target", &other));
+                                    return Err(self.unsupported("for index target", &other));
                                 }
                             }
                         }
                         out
                     }
-                    other => return Err(unsupported("for index", &other)),
+                    other => return Err(self.unsupported("for index", &other)),
                 };
                 let iter = self.lower_node(&n.collection())?;
                 let body_loc = match n.statements() {
@@ -1012,7 +1025,7 @@ impl<'pr> Lowerer<'pr> {
                         }
                         // `case ... in pattern` arms (CaseMatchNode)
                         // produce `InNode`s instead; not supported here.
-                        other => return Err(unsupported("case branch", &other)),
+                        other => return Err(self.unsupported("case branch", &other)),
                     }
                 }
                 let else_branch = match n.else_clause() {
@@ -1176,7 +1189,7 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
-            other => return Err(unsupported("expression", other)),
+            other => return Err(self.unsupported("expression", other)),
         })
     }
 
@@ -1265,7 +1278,7 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_local_var_read(&self, node: &LocalVariableReadNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_local_var_read(&self, node: &LocalVariableReadNode<'pr>) -> Result<Node, MonorubyErr> {
         let name = constant_name(&node.name())?;
         Ok(Node {
             kind: NodeKind::LocalVar(node.depth() as usize, name),
@@ -1276,7 +1289,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_local_var_write(
         &mut self,
         node: &LocalVariableWriteNode<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let name = constant_name(&node.name())?;
         let depth = node.depth() as usize;
         let target = Node {
@@ -1294,7 +1307,7 @@ impl<'pr> Lowerer<'pr> {
         &mut self,
         stmts: Option<&StatementsNode<'pr>>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         match stmts {
             Some(s) => Ok(Node {
                 kind: NodeKind::CompStmt(self.lower_statements_into_vec(s)?),
@@ -1307,7 +1320,7 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_if(&mut self, node: &IfNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_if(&mut self, node: &IfNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
@@ -1323,7 +1336,7 @@ impl<'pr> Lowerer<'pr> {
                         location_to_loc(&else_node.location()),
                     )?
                 }
-                other => return Err(unsupported("if subsequent", &other)),
+                other => return Err(self.unsupported("if subsequent", &other)),
             },
             None => Node {
                 kind: NodeKind::Nil,
@@ -1340,7 +1353,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_unless(&mut self, node: &UnlessNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_unless(&mut self, node: &UnlessNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
@@ -1368,7 +1381,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_while(&mut self, node: &WhileNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_while(&mut self, node: &WhileNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
@@ -1403,7 +1416,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_until(&mut self, node: &UntilNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_until(&mut self, node: &UntilNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
@@ -1432,7 +1445,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_array(&mut self, node: &ArrayNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_array(&mut self, node: &ArrayNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let mut elements: Vec<Node> = Vec::new();
         let mut all_const = true;
@@ -1449,7 +1462,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_hash(&mut self, node: &HashNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_hash(&mut self, node: &HashNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let mut pairs: Vec<(Node, Node)> = Vec::new();
         let mut splat: Vec<Node> = Vec::new();
@@ -1472,7 +1485,7 @@ impl<'pr> Lowerer<'pr> {
                     };
                     splat.push(inner);
                 }
-                other => return Err(unsupported("hash element", &other)),
+                other => return Err(self.unsupported("hash element", &other)),
             }
         }
         Ok(Node {
@@ -1481,7 +1494,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_range(&mut self, node: &RangeNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_range(&mut self, node: &RangeNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let start = match node.left() {
             Some(n) => Some(self.lower_node(&n)?),
@@ -1524,7 +1537,7 @@ impl<'pr> Lowerer<'pr> {
         &mut self,
         body: Option<prism::Node<'pr>>,
         loc: Loc,
-    ) -> Result<BlockInfo, LowerError> {
+    ) -> Result<BlockInfo, MonorubyErr> {
         let saved = std::mem::take(&mut self.lvars);
         // ruruby's class / module body has a specific `Begin { body }`
         // shape that bytecodegen depends on:
@@ -1589,7 +1602,7 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_class(&mut self, node: &ClassNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_class(&mut self, node: &ClassNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let (base, name) = self.split_class_path(&node.constant_path())?;
         let superclass = match node.superclass() {
@@ -1621,7 +1634,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_module(&mut self, node: &ModuleNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_module(&mut self, node: &ModuleNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let (base, name) = self.split_class_path(&node.constant_path())?;
         let saved = std::mem::take(&mut self.lvars);
@@ -1651,7 +1664,7 @@ impl<'pr> Lowerer<'pr> {
     fn split_class_path(
         &mut self,
         path: &prism::Node<'pr>,
-    ) -> Result<(Option<Box<Node>>, String), LowerError> {
+    ) -> Result<(Option<Box<Node>>, String), MonorubyErr> {
         match path {
             prism::Node::ConstantReadNode { .. } => {
                 let n = path.as_constant_read_node().unwrap();
@@ -1662,7 +1675,7 @@ impl<'pr> Lowerer<'pr> {
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
                     None => {
-                        return Err(LowerError::Unsupported(
+                        return Err(self.unsupported_node(
                             "class path missing name",
                             location_to_loc(&path.location()),
                         ));
@@ -1678,13 +1691,18 @@ impl<'pr> Lowerer<'pr> {
                         // fall back to a regular value lowering;
                         // bytecodegen accepts any expression as the
                         // class's base scope.
-                        match self.lower_const_chain(&parent) {
-                            Ok(node) => Some(Box::new(node)),
-                            Err(LowerError::Unsupported(
-                                "non-constant constant path prefix",
-                                _,
-                            )) => Some(Box::new(self.lower_node(&parent)?)),
-                            Err(e) => return Err(e),
+                        let parent_loc = location_to_loc(&parent.location());
+                        match self.collect_const_chain(&parent)? {
+                            Some(chain) => Some(Box::new(Node {
+                                kind: NodeKind::Const {
+                                    toplevel: chain.toplevel,
+                                    parent: chain.parent,
+                                    prefix: chain.prefix,
+                                    name: chain.name,
+                                },
+                                loc: parent_loc,
+                            })),
+                            None => Some(Box::new(self.lower_node(&parent)?)),
                         }
                     }
                     // `class ::Foo; end`: matches the ruruby backend,
@@ -1696,11 +1714,11 @@ impl<'pr> Lowerer<'pr> {
                 };
                 Ok((base, name))
             }
-            other => Err(unsupported("class path", other)),
+            other => Err(self.unsupported("class path", other)),
         }
     }
 
-    fn lower_constant_read(&self, node: &ConstantReadNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_constant_read(&self, node: &ConstantReadNode<'pr>) -> Result<Node, MonorubyErr> {
         Ok(Node {
             kind: NodeKind::Const {
                 toplevel: false,
@@ -1712,7 +1730,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_constant_path(&mut self, node: &ConstantPathNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_constant_path(&mut self, node: &ConstantPathNode<'pr>) -> Result<Node, MonorubyErr> {
         self.lower_const_chain(&node.as_node())
     }
 
@@ -1723,9 +1741,18 @@ impl<'pr> Lowerer<'pr> {
     /// rooted at `::` flatten with `toplevel: true`. Chains rooted at
     /// a non-constant expression (e.g. `expr::C`) become
     /// `parent: Some(<lowered expr>)`.
-    fn lower_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+    /// Lower a `ConstantReadNode` / `ConstantPathNode` into the
+    /// `Const { toplevel, parent, prefix, name }` shape ruruby uses
+    /// for constant references. The Prism grammar guarantees every
+    /// caller that types this signature receives a constant path
+    /// node, so a non-constant root would be a parser bug — we
+    /// surface that as a FatalError rather than silently returning a
+    /// non-Const node.
+    fn lower_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let chain = self.collect_const_chain(node)?;
+        let chain = self.collect_const_chain(node)?.ok_or_else(|| {
+            self.unsupported_node("non-constant constant path prefix", loc)
+        })?;
         Ok(Node {
             kind: NodeKind::Const {
                 toplevel: chain.toplevel,
@@ -1737,75 +1764,72 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn collect_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<ConstChain, LowerError> {
+    /// `Ok(Some(_))` — chain successfully assembled (purely
+    /// constant, or rooted in a value expression that we lowered
+    /// into `parent`). `Ok(None)` — the input itself isn't a
+    /// constant node, so a caller in a place that *also* accepts
+    /// arbitrary expressions (e.g. `class expr::C` base, or `m::Foo`
+    /// in a write target) should fall back to a regular value
+    /// lowering.
+    fn collect_const_chain(
+        &mut self,
+        node: &prism::Node<'pr>,
+    ) -> Result<Option<ConstChain>, MonorubyErr> {
         match node {
             prism::Node::ConstantReadNode { .. } => {
                 let n = node.as_constant_read_node().unwrap();
-                Ok(ConstChain {
+                Ok(Some(ConstChain {
                     toplevel: false,
                     parent: None,
                     prefix: vec![],
                     name: constant_name(&n.name())?,
-                })
+                }))
             }
             prism::Node::ConstantPathNode { .. } => {
                 let n = node.as_constant_path_node().unwrap();
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
                     None => {
-                        return Err(LowerError::Unsupported(
+                        return Err(self.unsupported_node(
                             "constant path missing name",
                             location_to_loc(&node.location()),
                         ));
                     }
                 };
                 match n.parent() {
-                    None => Ok(ConstChain {
+                    None => Ok(Some(ConstChain {
                         toplevel: true,
                         parent: None,
                         prefix: vec![],
                         name,
-                    }),
-                    Some(p) => match self.collect_const_chain(&p) {
-                        Ok(mut inner) => {
-                            if inner.parent.is_some() {
-                                // Already rooted in a non-constant
-                                // expression — push our leaf into the
-                                // prefix, keep the same parent.
-                                inner.prefix.push(std::mem::take(&mut inner.name));
-                                inner.name = name;
-                                Ok(inner)
-                            } else {
-                                // Pure constant chain: slide the inner
-                                // leaf into the prefix and replace it
-                                // with `name`.
-                                inner.prefix.push(std::mem::take(&mut inner.name));
-                                inner.name = name;
-                                Ok(inner)
-                            }
+                    })),
+                    Some(p) => match self.collect_const_chain(&p)? {
+                        Some(mut inner) => {
+                            // Slide the inner leaf into `prefix`,
+                            // replace with `name`. Same mutation in
+                            // both the pure-constant case and the
+                            // already-non-const-rooted case.
+                            inner.prefix.push(std::mem::take(&mut inner.name));
+                            inner.name = name;
+                            Ok(Some(inner))
                         }
-                        // Non-constant parent: lower the parent as a
-                        // value expression and root the chain on it.
-                        Err(LowerError::Unsupported("non-constant constant path prefix", _)) => {
+                        // Non-constant parent: lower it as a value
+                        // expression and root the chain on it.
+                        None => {
                             let parent_node = self.lower_node(&p)?;
-                            Ok(ConstChain {
+                            Ok(Some(ConstChain {
                                 toplevel: false,
                                 parent: Some(Box::new(parent_node)),
                                 prefix: vec![],
                                 name,
-                            })
+                            }))
                         }
-                        Err(e) => Err(e),
                     },
                 }
             }
-            // Treat anything else as a non-constant prefix; the caller
-            // (the `ConstantPathNode` arm above) recovers and lowers it
-            // as a value expression.
-            _ => Err(LowerError::Unsupported(
-                "non-constant constant path prefix",
-                location_to_loc(&node.location()),
-            )),
+            // Anything else: signal "not a constant chain" so the
+            // caller falls back to a value lowering.
+            _ => Ok(None),
         }
     }
 
@@ -1824,7 +1848,7 @@ impl<'pr> Lowerer<'pr> {
         kind: fn(String) -> NodeKind,
         name: &ConstantId<'pr>,
         loc: &Location<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         Ok(Node {
             kind: kind(constant_name(name)?),
             loc: location_to_loc(loc),
@@ -1838,7 +1862,7 @@ impl<'pr> Lowerer<'pr> {
         name_loc: &Location<'pr>,
         value: &prism::Node<'pr>,
         full_loc: &Location<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let target = Node {
             kind: kind(constant_name(name)?),
             loc: location_to_loc(name_loc),
@@ -1869,7 +1893,7 @@ impl<'pr> Lowerer<'pr> {
     /// anonymous-& form (`foo(&)`) is reported separately via
     /// [`CallBlock::Delegate`] so the caller can flip
     /// `arglist.delegate_block`.
-    fn lower_call_block(&mut self, block_node: &prism::Node<'pr>) -> Result<CallBlock, LowerError> {
+    fn lower_call_block(&mut self, block_node: &prism::Node<'pr>) -> Result<CallBlock, MonorubyErr> {
         match block_node {
             prism::Node::BlockNode { .. } => {
                 let bn = block_node.as_block_node().unwrap();
@@ -1884,7 +1908,7 @@ impl<'pr> Lowerer<'pr> {
                     None => Ok(CallBlock::Delegate),
                 }
             }
-            other => Err(unsupported("call block", other)),
+            other => Err(self.unsupported("call block", other)),
         }
     }
 
@@ -1901,7 +1925,7 @@ impl<'pr> Lowerer<'pr> {
         kw_args: &mut Vec<(String, Node)>,
         hash_splat: &mut Vec<Node>,
         forwarding: &mut bool,
-    ) -> Result<(), LowerError> {
+    ) -> Result<(), MonorubyErr> {
         match n {
             // `g(...)` — forward the enclosing method's args.
             prism::Node::ForwardingArgumentsNode { .. } => {
@@ -1967,7 +1991,7 @@ impl<'pr> Lowerer<'pr> {
                                 };
                                 inner_splat.push(inner);
                             }
-                            other => return Err(unsupported("kwarg element", &other)),
+                            other => return Err(self.unsupported("kwarg element", &other)),
                         }
                     }
                     hash_splat.push(Node {
@@ -1985,14 +2009,14 @@ impl<'pr> Lowerer<'pr> {
                             let bytes = s.unescaped();
                             let key_loc = location_to_loc(&key.location());
                             if bytes.is_empty() {
-                                return Err(LowerError::Unsupported(
+                                return Err(self.unsupported_node(
                                     "empty keyword arg name",
                                     key_loc,
                                 ));
                             }
                             let name =
                                 std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
-                                    LowerError::Unsupported("non-utf8 keyword arg name", key_loc)
+                                    self.unsupported_node("non-utf8 keyword arg name", key_loc)
                                 })?;
                             let value = self.lower_node(&assoc.value())?;
                             kw_args.push((name, value));
@@ -2008,7 +2032,7 @@ impl<'pr> Lowerer<'pr> {
                             };
                             hash_splat.push(inner);
                         }
-                        other => return Err(unsupported("kwarg element", &other)),
+                        other => return Err(self.unsupported("kwarg element", &other)),
                     }
                 }
             }
@@ -2031,9 +2055,9 @@ impl<'pr> Lowerer<'pr> {
         read_name: &ConstantId<'pr>,
         safe_nav: bool,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let recv =
-            receiver.ok_or(LowerError::Unsupported("attr op-assign without receiver", loc))?;
+            receiver.ok_or(self.unsupported_node("attr op-assign without receiver", loc))?;
         let receiver_node = self.lower_node(recv)?;
         let method = constant_name(read_name)?;
         Ok(Node {
@@ -2057,9 +2081,9 @@ impl<'pr> Lowerer<'pr> {
         receiver: Option<&prism::Node<'pr>>,
         args: Option<&prism::ArgumentsNode<'pr>>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let recv =
-            receiver.ok_or(LowerError::Unsupported("index target without receiver", loc))?;
+            receiver.ok_or(self.unsupported_node("index target without receiver", loc))?;
         let base = self.lower_node(recv)?;
         let mut index: Vec<Node> = Vec::new();
         if let Some(a) = args {
@@ -2087,10 +2111,10 @@ impl<'pr> Lowerer<'pr> {
         op_id: &ConstantId<'pr>,
         value: &prism::Node<'pr>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let op_name = constant_name(op_id)?;
         let op = binop_from_name(&op_name)
-            .ok_or(LowerError::Unsupported("unknown op-assign operator", loc))?;
+            .ok_or(self.unsupported_node("unknown op-assign operator", loc))?;
         let value = self.lower_node(value)?;
         Ok(Node {
             kind: NodeKind::AssignOp(op, Box::new(target), Box::new(value)),
@@ -2109,7 +2133,7 @@ impl<'pr> Lowerer<'pr> {
         target: Node,
         value: &prism::Node<'pr>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let value = self.lower_node(value)?;
         let assign = Node {
             kind: NodeKind::MulAssign(vec![target.clone()], vec![value]),
@@ -2130,7 +2154,7 @@ impl<'pr> Lowerer<'pr> {
     /// multi-RHS form `[1, 2]`. `a, b = [1, 2]` -> explicit -> single-
     /// element RHS `[Array([1,2])]`. Any non-array RHS (`a, b = c`)
     /// goes in unwrapped as a single-element RHS.
-    fn lower_multi_write(&mut self, node: &MultiWriteNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_multi_write(&mut self, node: &MultiWriteNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let mut lhs: Vec<Node> = Vec::new();
         for n in node.lefts().iter() {
@@ -2170,7 +2194,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: rest_loc,
                     });
                 }
-                other => return Err(unsupported("multi-write rest", &other)),
+                other => return Err(self.unsupported("multi-write rest", &other)),
             }
         }
         for n in node.rights().iter() {
@@ -2230,7 +2254,7 @@ impl<'pr> Lowerer<'pr> {
     /// `Local/Instance/Global/ClassVar/Const` shapes ruruby's parser
     /// would have produced for the LHS. Used by both `MultiWriteNode`
     /// and the rescue-target lowerer.
-    fn lower_assign_target(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+    fn lower_assign_target(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         Ok(match node {
             prism::Node::LocalVariableTargetNode { .. } => {
@@ -2276,7 +2300,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexTargetNode { .. } => {
                 let n = node.as_index_target_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
+                    return Err(self.unsupported_node(
                         "index target with block argument",
                         loc,
                     ));
@@ -2292,7 +2316,7 @@ impl<'pr> Lowerer<'pr> {
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
                     None => {
-                        return Err(LowerError::Unsupported(
+                        return Err(self.unsupported_node(
                             "constant path target missing name",
                             loc,
                         ));
@@ -2306,9 +2330,14 @@ impl<'pr> Lowerer<'pr> {
                         name,
                     },
                     Some(p) => {
-                        let mut inner = self.collect_const_chain(&p)?;
+                        let mut inner = self.collect_const_chain(&p)?.ok_or_else(|| {
+                            self.unsupported_node(
+                                "non-constant constant path target prefix",
+                                location_to_loc(&p.location()),
+                            )
+                        })?;
                         if inner.parent.is_some() {
-                            return Err(LowerError::Unsupported(
+                            return Err(self.unsupported_node(
                                 "constant path target nested under non-constant parent",
                                 loc,
                             ));
@@ -2356,11 +2385,11 @@ impl<'pr> Lowerer<'pr> {
             }
             // Nested destructure (`((a, b), c) = ...`) needs its own
             // per-shape lowering. Defer.
-            other => return Err(unsupported("assign target", &other)),
+            other => return Err(self.unsupported("assign target", &other)),
         })
     }
 
-    fn lower_begin(&mut self, node: &BeginNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_begin(&mut self, node: &BeginNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let body_loc = match node.statements() {
             Some(s) => location_to_loc(&s.location()),
@@ -2421,7 +2450,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_rescue_entry(
         &mut self,
         node: &RescueNode<'pr>,
-    ) -> Result<ruruby_parse::RescueEntry, LowerError> {
+    ) -> Result<ruruby_parse::RescueEntry, MonorubyErr> {
         let mut exception_list: Vec<Node> = Vec::new();
         for ex in node.exceptions().iter() {
             exception_list.push(self.lower_node(&ex)?);
@@ -2455,7 +2484,7 @@ impl<'pr> Lowerer<'pr> {
         &mut self,
         node: &StatementsNode<'pr>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let mut stmts = self.lower_statements_into_vec(node)?;
         Ok(match stmts.len() {
             0 => Node {
@@ -2473,7 +2502,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_interpolated_string(
         &mut self,
         node: &InterpolatedStringNode<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let parts = self.lower_interp_parts(node.parts())?;
         Ok(Node {
@@ -2490,7 +2519,7 @@ impl<'pr> Lowerer<'pr> {
     ///   `Nil`, or `CompStmt` depending on statement count
     /// - `EmbeddedVariableNode` (`#@x`, `#$x`) — forward the inner
     ///   variable read directly
-    fn lower_interp_parts(&mut self, parts: prism::NodeList<'pr>) -> Result<Vec<Node>, LowerError> {
+    fn lower_interp_parts(&mut self, parts: prism::NodeList<'pr>) -> Result<Vec<Node>, MonorubyErr> {
         let mut out: Vec<Node> = Vec::new();
         for part in parts.iter() {
             match part {
@@ -2535,7 +2564,7 @@ impl<'pr> Lowerer<'pr> {
                 prism::Node::InterpolatedStringNode { .. } => {
                     out.push(self.lower_node(&part)?);
                 }
-                other => return Err(unsupported("interpolation part", &other)),
+                other => return Err(self.unsupported("interpolation part", &other)),
             }
         }
         Ok(out)
@@ -2546,7 +2575,7 @@ impl<'pr> Lowerer<'pr> {
     /// ruruby uses `Imaginary(NReal)` for the integer / float cases
     /// and a separate `RImaginary(BigInt, BigInt)` when the inner
     /// part is a rational.
-    fn lower_imaginary(&self, numeric: &prism::Node<'pr>, loc: Loc) -> Result<Node, LowerError> {
+    fn lower_imaginary(&self, numeric: &prism::Node<'pr>, loc: Loc) -> Result<Node, MonorubyErr> {
         match numeric {
             prism::Node::IntegerNode { .. } => {
                 let inner = numeric.as_integer_node().unwrap();
@@ -2584,11 +2613,11 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 })
             }
-            other => Err(unsupported("imaginary numeric", other)),
+            other => Err(self.unsupported("imaginary numeric", other)),
         }
     }
 
-    fn lower_regex(&self, node: &RegularExpressionNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_regex(&self, node: &RegularExpressionNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let part = Node {
             kind: regex_body_to_string(node.unescaped(), loc)?,
@@ -2604,7 +2633,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_interpolated_regex(
         &mut self,
         node: &InterpolatedRegularExpressionNode<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let parts = self.lower_interp_parts(node.parts())?;
         let flags = regex_flags_from_closing(&node.closing_loc());
@@ -2629,7 +2658,7 @@ impl<'pr> Lowerer<'pr> {
         &mut self,
         args: Option<prism::ArgumentsNode<'pr>>,
         loc: Loc,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<Node, MonorubyErr> {
         let mut values: Vec<Node> = Vec::new();
         if let Some(arglist) = args {
             for arg in arglist.arguments().iter() {
@@ -2639,7 +2668,7 @@ impl<'pr> Lowerer<'pr> {
         Ok(jump_value_node(values, loc))
     }
 
-    fn lower_return(&mut self, node: &ReturnNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_return(&mut self, node: &ReturnNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let mut values: Vec<Node> = Vec::new();
         if let Some(arglist) = node.arguments() {
@@ -2654,7 +2683,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let name = constant_name(&node.name())?;
         let target = Node {
@@ -2679,7 +2708,7 @@ impl<'pr> Lowerer<'pr> {
     /// to mirror what ruruby-parse produces — bytecodegen relies on
     /// every method body being a `Begin` so `return` / `rescue` /
     /// `ensure` see a uniform structure.
-    fn lower_def(&mut self, node: &DefNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_def(&mut self, node: &DefNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let name = constant_name(&node.name())?;
 
@@ -2695,7 +2724,7 @@ impl<'pr> Lowerer<'pr> {
 
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
                 // Parameters first so the LvarCollector's special
                 // fields (kw / kwrest / block / forwarding_param) get
                 // populated through the proper insert helpers; then
@@ -2756,18 +2785,18 @@ impl<'pr> Lowerer<'pr> {
     /// CallNode. Lowers to `Lambda(BlockInfo)` — bytecodegen treats
     /// the same Lambda node as either a method-call block or a free
     /// proc depending on how it's used.
-    fn lower_lambda(&mut self, node: &LambdaNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_lambda(&mut self, node: &LambdaNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
                 let params = match node.parameters() {
                     None => Vec::new(),
                     Some(p) => match p {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
                             if bp.locals().iter().next().is_some() {
-                                return Err(LowerError::Unsupported(
+                                return Err(this.unsupported_node(
                                     "lambda shadow locals",
                                     location_to_loc(&p.location()),
                                 ));
@@ -2785,7 +2814,7 @@ impl<'pr> Lowerer<'pr> {
                             let pn = p.as_parameters_node().unwrap();
                             this.lower_parameters(&pn)?
                         }
-                        other => return Err(unsupported("lambda parameters", &other)),
+                        other => return Err(this.unsupported("lambda parameters", &other)),
                     },
                 };
                 this.collect_locals(&node.locals())?;
@@ -2819,7 +2848,7 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_block(&mut self, node: &BlockNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_block(&mut self, node: &BlockNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         // Block scope owns its own LvarCollector. Save the outer one
         // and install a fresh table for the block body. The body
@@ -2827,7 +2856,7 @@ impl<'pr> Lowerer<'pr> {
         // partially-built block scope into the outer lowerer.
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
                 // Parameters first (see comment on the def-node lowerer for
                 // why), then top up the rest from `node.locals()`.
                 let params = match node.parameters() {
@@ -2836,7 +2865,7 @@ impl<'pr> Lowerer<'pr> {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
                             if bp.locals().iter().next().is_some() {
-                                return Err(LowerError::Unsupported(
+                                return Err(this.unsupported_node(
                                     "block shadow locals",
                                     location_to_loc(&p.location()),
                                 ));
@@ -2873,7 +2902,7 @@ impl<'pr> Lowerer<'pr> {
                             }
                             out
                         }
-                        other => return Err(unsupported("block parameters", &other)),
+                        other => return Err(this.unsupported("block parameters", &other)),
                     },
                 };
                 this.collect_locals(&node.locals())?;
@@ -2919,7 +2948,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_parameters(
         &mut self,
         params: &ParametersNode<'pr>,
-    ) -> Result<Vec<ruruby_parse::FormalParam>, LowerError> {
+    ) -> Result<Vec<ruruby_parse::FormalParam>, MonorubyErr> {
         let mut out: Vec<ruruby_parse::FormalParam> = Vec::new();
 
         // Required positional: `def f(a, b)` -> Param("a"), Param("b")
@@ -2945,13 +2974,13 @@ impl<'pr> Lowerer<'pr> {
                     let mt = n.as_multi_target_node().unwrap();
                     let mt_loc = location_to_loc(&n.location());
                     if mt.rest().is_some() {
-                        return Err(LowerError::Unsupported(
+                        return Err(self.unsupported_node(
                             "destructure param with splat",
                             mt_loc,
                         ));
                     }
                     if mt.rights().iter().next().is_some() {
-                        return Err(LowerError::Unsupported(
+                        return Err(self.unsupported_node(
                             "destructure param with post element",
                             mt_loc,
                         ));
@@ -2966,12 +2995,12 @@ impl<'pr> Lowerer<'pr> {
                                 destruct.push((name, location_to_loc(&inner.location())));
                             }
                             other => {
-                                return Err(unsupported("destructure param leaf", &other));
+                                return Err(self.unsupported("destructure param leaf", &other));
                             }
                         }
                     }
                     if destruct.is_empty() {
-                        return Err(LowerError::Unsupported("empty destructure param", mt_loc));
+                        return Err(self.unsupported_node("empty destructure param", mt_loc));
                     }
                     // Match ruruby's loc-merging convention so
                     // bytecodegen reports matching source spans.
@@ -2985,7 +3014,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: merged,
                     });
                 }
-                other => return Err(unsupported("required param", &other)),
+                other => return Err(self.unsupported("required param", &other)),
             }
         }
 
@@ -3002,7 +3031,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                other => return Err(unsupported("optional param", &other)),
+                other => return Err(self.unsupported("optional param", &other)),
             }
         }
 
@@ -3036,7 +3065,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&rest.location()),
                     });
                 }
-                other => return Err(unsupported("rest param", &other)),
+                other => return Err(self.unsupported("rest param", &other)),
             }
         }
 
@@ -3052,7 +3081,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                other => return Err(unsupported("post param", &other)),
+                other => return Err(self.unsupported("post param", &other)),
             }
         }
 
@@ -3080,7 +3109,7 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                other => return Err(unsupported("keyword param", &other)),
+                other => return Err(self.unsupported("keyword param", &other)),
             }
         }
 
@@ -3126,7 +3155,7 @@ impl<'pr> Lowerer<'pr> {
                         loc,
                     });
                 }
-                other => return Err(unsupported("keyword rest param", &other)),
+                other => return Err(self.unsupported("keyword rest param", &other)),
             }
         }
 
@@ -3149,7 +3178,7 @@ impl<'pr> Lowerer<'pr> {
         Ok(out)
     }
 
-    fn lower_call(&mut self, node: &prism::CallNode<'pr>, loc: Loc) -> Result<Node, LowerError> {
+    fn lower_call(&mut self, node: &prism::CallNode<'pr>, loc: Loc) -> Result<Node, MonorubyErr> {
         let receiver_opt = node.receiver();
         let name_bytes = node.name().as_slice();
         let method = std::str::from_utf8(name_bytes)
@@ -3364,7 +3393,7 @@ fn jump_value_node(values: Vec<Node>, loc: Loc) -> Node {
 /// `Symbol("$foo")`-shape ruruby uses for `NodeKind::AliasMethod`
 /// operands, including the `$`/`$1`/`$~` etc. prefixes that
 /// bytecodegen later pattern-matches to pick `AliasGvar`.
-fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, LowerError> {
+fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, MonorubyErr> {
     let loc = location_to_loc(&node.location());
     let bytes = node.location().as_slice();
     match std::str::from_utf8(bytes) {
@@ -3372,7 +3401,9 @@ fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, LowerError> {
             kind: NodeKind::Symbol(s.to_owned()),
             loc,
         }),
-        Err(_) => Err(LowerError::Unsupported("non-utf8 global variable name", Loc::default())),
+        Err(_) => Err(MonorubyErr::fatal(
+            "prism lowerer: non-utf8 global variable name",
+        )),
     }
 }
 
@@ -3393,11 +3424,11 @@ fn is_constant_literal(kind: &NodeKind) -> bool {
     )
 }
 
-fn constant_name(id: &ConstantId<'_>) -> Result<String, LowerError> {
+fn constant_name(id: &ConstantId<'_>) -> Result<String, MonorubyErr> {
     let bytes = id.as_slice();
     std::str::from_utf8(bytes)
         .map(str::to_owned)
-        .map_err(|_| LowerError::Unsupported("non-utf8 identifier", Loc::default()))
+        .map_err(|_| MonorubyErr::fatal("prism lowerer: non-utf8 identifier"))
 }
 
 /// 1-based line number of `offset` in `source`, used to inline
@@ -3422,10 +3453,10 @@ fn prism_integer_to_bigint(value: &prism::Integer<'_>) -> num::BigInt {
 /// Convert the byte body of a regex literal (Prism's `unescaped()`)
 /// into the `NodeKind::String(...)` part used inside ruruby's
 /// `RegExp` parts list.
-fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, LowerError> {
+fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, MonorubyErr> {
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(NodeKind::String(s.to_owned())),
-        Err(_) => Err(LowerError::Unsupported("non-utf8 regex literal", Loc::default())),
+        Err(_) => Err(MonorubyErr::fatal("prism lowerer: non-utf8 regex literal")),
     }
 }
 
@@ -3494,20 +3525,6 @@ fn location_to_loc(loc: &Location<'_>) -> Loc {
     let start = loc.start_offset();
     let end = loc.end_offset();
     Loc(start, end.saturating_sub(1).max(start))
-}
-
-fn unsupported(context: &'static str, node: &prism::Node<'_>) -> LowerError {
-    let kind = node_kind_name(node);
-    if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-        if kind == "<other>" {
-            // Surface the precise Prism type name when we hit the
-            // node_kind_name catch-all so it's easy to extend.
-            eprintln!("[prism] unsupported {context} node: <other> // {node:?}");
-        } else {
-            eprintln!("[prism] unsupported {context} node: {kind}");
-        }
-    }
-    LowerError::Unsupported(kind, location_to_loc(&node.location()))
 }
 
 fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
