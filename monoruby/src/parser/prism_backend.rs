@@ -14,14 +14,16 @@
 use std::path::PathBuf;
 
 use ruby_prism::{
-    self as prism, ArrayNode, ConstantId, ConstantList, FloatNode, HashNode, IfNode, IntegerNode,
-    LocalVariableReadNode, LocalVariableWriteNode, Location, ProgramNode, RangeNode,
-    StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
+    self as prism, ArrayNode, BlockNode, ClassNode, ConstantId, ConstantList, ConstantPathNode,
+    ConstantReadNode, ConstantWriteNode, DefNode, FloatNode, HashNode, IfNode, IntegerNode,
+    LocalVariableReadNode, LocalVariableWriteNode, Location, ModuleNode, ParametersNode,
+    ProgramNode, RangeNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
+    WhileNode,
 };
 
 use crate::ast::{
-    BinOp, CmpKind, Loc, LocalsContext, LvarCollector, Node, NodeKind, ParseResult, SourceInfoRef,
-    UnOp,
+    BinOp, BlockInfo, CmpKind, Loc, LocalsContext, LvarCollector, Node, NodeKind, ParamKind,
+    ParseResult, SourceInfoRef, UnOp,
 };
 use crate::globals::MonorubyErr;
 
@@ -279,6 +281,22 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::Splat(Box::new(expr)),
                     loc,
                 }
+            }
+            prism::Node::DefNode { .. } => self.lower_def(&node.as_def_node().unwrap())?,
+            prism::Node::ClassNode { .. } => {
+                self.lower_class(&node.as_class_node().unwrap())?
+            }
+            prism::Node::ModuleNode { .. } => {
+                self.lower_module(&node.as_module_node().unwrap())?
+            }
+            prism::Node::ConstantReadNode { .. } => {
+                self.lower_constant_read(&node.as_constant_read_node().unwrap())?
+            }
+            prism::Node::ConstantPathNode { .. } => {
+                self.lower_constant_path(&node.as_constant_path_node().unwrap())?
+            }
+            prism::Node::ConstantWriteNode { .. } => {
+                self.lower_constant_write(&node.as_constant_write_node().unwrap())?
             }
             prism::Node::AndNode { .. } => {
                 let inner = node.as_and_node().unwrap();
@@ -604,6 +622,407 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
+    /// Lower the body of a class / module / class-shovel definition,
+    /// returning a fully-built `BlockInfo` with the body wrapped in
+    /// the implicit `Begin { rescue: [], else_: None, ensure: None }`
+    /// envelope ruruby-parse produces.
+    fn lower_class_body(
+        &mut self,
+        body: Option<prism::Node<'pr>>,
+        loc: Loc,
+    ) -> Result<BlockInfo, LowerError> {
+        let saved = std::mem::take(&mut self.lvars);
+        let body_res = match body {
+            Some(b) => self.lower_node(&b),
+            None => Ok(Node {
+                kind: NodeKind::Nil,
+                loc,
+            }),
+        };
+        match body_res {
+            Ok(body_inner) => {
+                let body = Node {
+                    kind: NodeKind::Begin {
+                        body: Box::new(body_inner),
+                        rescue: vec![],
+                        else_: None,
+                        ensure: None,
+                    },
+                    loc,
+                };
+                let class_lvars = std::mem::replace(&mut self.lvars, saved);
+                Ok(BlockInfo {
+                    params: vec![],
+                    body: Box::new(body),
+                    lvar: class_lvars,
+                    loc,
+                })
+            }
+            Err(e) => {
+                self.lvars = saved;
+                Err(e)
+            }
+        }
+    }
+
+    fn lower_class(&mut self, node: &ClassNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let (base, name) = self.split_class_path(&node.constant_path())?;
+        let superclass = match node.superclass() {
+            Some(s) => Some(Box::new(self.lower_node(&s)?)),
+            None => None,
+        };
+        // The class body's `locals` list lives on the ClassNode itself
+        // (Prism scopes it to the class definition). Seed the lowerer
+        // with those before lowering the body.
+        let saved = std::mem::take(&mut self.lvars);
+        if let Err(e) = self.collect_locals(&node.locals()) {
+            self.lvars = saved;
+            return Err(e);
+        }
+        let info_res = self.lower_class_body(node.body(), loc);
+        // `lower_class_body` already swapped lvars back — restore the
+        // outer scope from `saved` here regardless of outcome.
+        self.lvars = saved;
+        let info = info_res?;
+        Ok(Node {
+            kind: NodeKind::ClassDef {
+                base,
+                name,
+                superclass,
+                info: Box::new(info),
+                is_module: false,
+            },
+            loc,
+        })
+    }
+
+    fn lower_module(&mut self, node: &ModuleNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let (base, name) = self.split_class_path(&node.constant_path())?;
+        let saved = std::mem::take(&mut self.lvars);
+        if let Err(e) = self.collect_locals(&node.locals()) {
+            self.lvars = saved;
+            return Err(e);
+        }
+        let info_res = self.lower_class_body(node.body(), loc);
+        self.lvars = saved;
+        let info = info_res?;
+        Ok(Node {
+            kind: NodeKind::ClassDef {
+                base,
+                name,
+                superclass: None,
+                info: Box::new(info),
+                is_module: true,
+            },
+            loc,
+        })
+    }
+
+    /// Splits the class/module's `constant_path` into ruruby's
+    /// `(base: Option<Box<Node>>, name: String)` form.
+    /// `class A; end` => `(None, "A")`. `class M::N::A; end` =>
+    /// `(Some(Const{prefix:["M"], name:"N"}), "A")`.
+    fn split_class_path(
+        &self,
+        path: &prism::Node<'pr>,
+    ) -> Result<(Option<Box<Node>>, String), LowerError> {
+        match path {
+            prism::Node::ConstantReadNode { .. } => {
+                let n = path.as_constant_read_node().unwrap();
+                Ok((None, constant_name(&n.name())?))
+            }
+            prism::Node::ConstantPathNode { .. } => {
+                let n = path.as_constant_path_node().unwrap();
+                let name = match n.name() {
+                    Some(id) => constant_name(&id)?,
+                    None => return Err(LowerError::Unsupported("class path missing name")),
+                };
+                let base = match n.parent() {
+                    Some(parent) => Some(Box::new(self.lower_const_chain(&parent)?)),
+                    // `class ::Foo; end`: ruruby would set toplevel:true on
+                    // the resulting Const but ClassDef has no such field;
+                    // mark unsupported until we wire the toplevel base in.
+                    None => return Err(LowerError::Unsupported("toplevel class path")),
+                };
+                Ok((base, name))
+            }
+            other => Err(unsupported("class path", other)),
+        }
+    }
+
+    fn lower_constant_read(&self, node: &ConstantReadNode<'pr>) -> Result<Node, LowerError> {
+        Ok(Node {
+            kind: NodeKind::Const {
+                toplevel: false,
+                parent: None,
+                prefix: vec![],
+                name: constant_name(&node.name())?,
+            },
+            loc: location_to_loc(&node.location()),
+        })
+    }
+
+    fn lower_constant_path(&self, node: &ConstantPathNode<'pr>) -> Result<Node, LowerError> {
+        self.lower_const_chain(&node.as_node())
+    }
+
+    /// Flatten a `ConstantPathNode` chain (or the leaf `ConstantReadNode`
+    /// it terminates on) into ruruby's `Const { toplevel, parent,
+    /// prefix, name }` representation. Pure constant-only chains like
+    /// `A::B::C` flatten into `prefix: ["A", "B"], name: "C"`. Chains
+    /// rooted at `::` flatten with `toplevel: true`. Chains rooted at
+    /// an arbitrary expression (e.g. `expr::C`) are not yet supported
+    /// here — they fall back to ruruby.
+    fn lower_const_chain(&self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let chain = self.collect_const_chain(node)?;
+        Ok(Node {
+            kind: NodeKind::Const {
+                toplevel: chain.toplevel,
+                parent: chain.parent,
+                prefix: chain.prefix,
+                name: chain.name,
+            },
+            loc,
+        })
+    }
+
+    fn collect_const_chain(&self, node: &prism::Node<'pr>) -> Result<ConstChain, LowerError> {
+        match node {
+            prism::Node::ConstantReadNode { .. } => {
+                let n = node.as_constant_read_node().unwrap();
+                Ok(ConstChain {
+                    toplevel: false,
+                    parent: None,
+                    prefix: vec![],
+                    name: constant_name(&n.name())?,
+                })
+            }
+            prism::Node::ConstantPathNode { .. } => {
+                let n = node.as_constant_path_node().unwrap();
+                let name = match n.name() {
+                    Some(id) => constant_name(&id)?,
+                    None => return Err(LowerError::Unsupported("constant path missing name")),
+                };
+                match n.parent() {
+                    None => Ok(ConstChain {
+                        toplevel: true,
+                        parent: None,
+                        prefix: vec![],
+                        name,
+                    }),
+                    Some(p) => {
+                        let mut inner = self.collect_const_chain(&p)?;
+                        if inner.parent.is_some() {
+                            return Err(LowerError::Unsupported(
+                                "constant path nested under non-constant parent",
+                            ));
+                        }
+                        // Slide the inner chain's leaf name into the
+                        // prefix and put `name` in its place. After
+                        // the swap, `inner` describes the same chain
+                        // one level deeper.
+                        inner.prefix.push(std::mem::take(&mut inner.name));
+                        inner.name = name;
+                        Ok(inner)
+                    }
+                }
+            }
+            // Non-constant prefix expressions are handled by ruruby.
+            _ => Err(LowerError::Unsupported("non-constant constant path prefix")),
+        }
+    }
+
+    fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let name = constant_name(&node.name())?;
+        let target = Node {
+            kind: NodeKind::Const {
+                toplevel: false,
+                parent: None,
+                prefix: vec![],
+                name,
+            },
+            loc: location_to_loc(&node.name_loc()),
+        };
+        let value = self.lower_node(&node.value())?;
+        Ok(Node {
+            kind: NodeKind::MulAssign(vec![target], vec![value]),
+            loc,
+        })
+    }
+
+    /// Lowers a top-level `def name(params) ... end` into ruruby's
+    /// `MethodDef(name, BlockInfo)` shape. The method body is wrapped
+    /// in an implicit `Begin { rescue: [], else_: None, ensure: None }`
+    /// to mirror what ruruby-parse produces — bytecodegen relies on
+    /// every method body being a `Begin` so `return` / `rescue` /
+    /// `ensure` see a uniform structure.
+    fn lower_def(&mut self, node: &DefNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let name = constant_name(&node.name())?;
+
+        if node.receiver().is_some() {
+            // `def self.foo` / `def obj.foo` — needs SingletonMethodDef
+            // and is not yet handled.
+            return Err(LowerError::Unsupported("singleton method def"));
+        }
+
+        let saved = std::mem::take(&mut self.lvars);
+        let result =
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+                this.collect_locals(&node.locals())?;
+                let params = match node.parameters() {
+                    Some(p) => this.lower_parameters(&p)?,
+                    None => Vec::new(),
+                };
+                let body_inner = match node.body() {
+                    Some(b) => this.lower_node(&b)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                };
+                let body = Node {
+                    kind: NodeKind::Begin {
+                        body: Box::new(body_inner),
+                        rescue: vec![],
+                        else_: None,
+                        ensure: None,
+                    },
+                    loc,
+                };
+                Ok((params, body))
+            })(self);
+
+        match result {
+            Ok((params, body)) => {
+                let method_lvars = std::mem::replace(&mut self.lvars, saved);
+                Ok(Node {
+                    kind: NodeKind::MethodDef(
+                        name,
+                        Box::new(BlockInfo {
+                            params,
+                            body: Box::new(body),
+                            lvar: method_lvars,
+                            loc,
+                        }),
+                    ),
+                    loc,
+                })
+            }
+            Err(e) => {
+                self.lvars = saved;
+                Err(e)
+            }
+        }
+    }
+
+    /// Lowers `BlockNode` (the literal `{ ... }` / `do ... end` attached
+    /// to a method call) into the `Lambda(BlockInfo)` shape ruruby uses
+    /// for `arglist.block`.
+    fn lower_block(&mut self, node: &BlockNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        // Block scope owns its own LvarCollector. Save the outer one
+        // and install a fresh table for the block body. The body
+        // lowering is wrapped so an error inside it doesn't leak the
+        // partially-built block scope into the outer lowerer.
+        let saved = std::mem::take(&mut self.lvars);
+        let result = (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+            this.collect_locals(&node.locals())?;
+            let params = match node.parameters() {
+                None => Vec::new(),
+                Some(p) => match p {
+                    prism::Node::BlockParametersNode { .. } => {
+                        let bp = p.as_block_parameters_node().unwrap();
+                        if bp.locals().iter().next().is_some() {
+                            return Err(LowerError::Unsupported("block shadow locals"));
+                        }
+                        match bp.parameters() {
+                            Some(pn) => this.lower_parameters(&pn)?,
+                            None => Vec::new(),
+                        }
+                    }
+                    other => return Err(unsupported("block parameters", &other)),
+                },
+            };
+            let body = match node.body() {
+                Some(b) => this.lower_node(&b)?,
+                None => Node {
+                    kind: NodeKind::Nil,
+                    loc,
+                },
+            };
+            Ok((params, body))
+        })(self);
+
+        match result {
+            Ok((params, body)) => {
+                let block_lvars = std::mem::replace(&mut self.lvars, saved);
+                Ok(Node {
+                    kind: NodeKind::Lambda(Box::new(BlockInfo {
+                        params,
+                        body: Box::new(body),
+                        lvar: block_lvars,
+                        loc,
+                    })),
+                    loc,
+                })
+            }
+            Err(e) => {
+                self.lvars = saved;
+                Err(e)
+            }
+        }
+    }
+
+    /// Lowers a `ParametersNode` (the typed parameter cluster shared by
+    /// method definitions and block parameters) into ruruby's flat
+    /// `Vec<FormalParam>`.
+    fn lower_parameters(
+        &mut self,
+        params: &ParametersNode<'pr>,
+    ) -> Result<Vec<ruruby_parse::FormalParam>, LowerError> {
+        let mut out: Vec<ruruby_parse::FormalParam> = Vec::new();
+
+        for n in params.requireds().iter() {
+            match n {
+                prism::Node::RequiredParameterNode { .. } => {
+                    let inner = n.as_required_parameter_node().unwrap();
+                    let name = constant_name(&inner.name())?;
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Param(name),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                other => return Err(unsupported("required param", &other)),
+            }
+        }
+
+        if params.optionals().iter().next().is_some() {
+            return Err(LowerError::Unsupported("optional parameter"));
+        }
+        if params.rest().is_some() {
+            return Err(LowerError::Unsupported("rest parameter"));
+        }
+        if params.posts().iter().next().is_some() {
+            return Err(LowerError::Unsupported("post parameter"));
+        }
+        if params.keywords().iter().next().is_some() {
+            return Err(LowerError::Unsupported("keyword parameter"));
+        }
+        if params.keyword_rest().is_some() {
+            return Err(LowerError::Unsupported("keyword rest parameter"));
+        }
+        if params.block().is_some() {
+            return Err(LowerError::Unsupported("block parameter"));
+        }
+
+        Ok(out)
+    }
+
     fn lower_call(
         &mut self,
         node: &prism::CallNode<'pr>,
@@ -621,15 +1040,25 @@ impl<'pr> Lowerer<'pr> {
                 args.push(self.lower_node(&n)?);
             }
         }
-        if node.block().is_some() {
-            return Err(LowerError::Unsupported("CallNode with block"));
-        }
+        let block = match node.block() {
+            None => None,
+            Some(block_node) => match block_node {
+                prism::Node::BlockNode { .. } => {
+                    let bn = block_node.as_block_node().unwrap();
+                    Some(Box::new(self.lower_block(&bn)?))
+                }
+                // BlockArgumentNode (`&proc`) and other forms are not
+                // supported yet — fall back so monoruby still runs.
+                other => return Err(unsupported("call block", &other)),
+            },
+        };
 
         // 0-arg "method" calls of the form `-x`, `+x`, `~x`, `!x` are
         // really unary operators in our IR. Detect them before the
         // binop fast path so they don't get mistaken for a 1-arg
-        // arithmetic call.
-        if let Some(recv) = receiver_opt.as_ref()
+        // arithmetic call. (UnOp / BinOp shapes never carry a block.)
+        if block.is_none()
+            && let Some(recv) = receiver_opt.as_ref()
             && args.is_empty()
             && let Some(op) = unop_from_name(&method)
         {
@@ -642,7 +1071,8 @@ impl<'pr> Lowerer<'pr> {
 
         // Binary operators come back from Prism as a `CallNode` with a
         // one-element arg list and the operator as the method name.
-        if let Some(recv) = receiver_opt.as_ref()
+        if block.is_none()
+            && let Some(recv) = receiver_opt.as_ref()
             && args.len() == 1
             && let Some(op) = binop_from_name(&method)
         {
@@ -656,6 +1086,7 @@ impl<'pr> Lowerer<'pr> {
 
         let mut arglist = ruruby_parse::ArgList::default();
         arglist.args = args;
+        arglist.block = block;
 
         Ok(match receiver_opt {
             Some(recv) => {
@@ -680,6 +1111,16 @@ impl<'pr> Lowerer<'pr> {
             },
         })
     }
+}
+
+/// Intermediate, owned representation of a constant-path chain used
+/// while flattening Prism's recursive `ConstantPathNode` into the
+/// flat `prefix` / `name` shape ruruby expects.
+struct ConstChain {
+    toplevel: bool,
+    parent: Option<Box<Node>>,
+    prefix: Vec<String>,
+    name: String,
 }
 
 /// Conservative test for "this expression has no side effects and
