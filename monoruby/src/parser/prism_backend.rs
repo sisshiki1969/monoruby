@@ -474,6 +474,24 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
+            prism::Node::MatchWriteNode { .. } => {
+                // `/(?<name>...)/ =~ value` — Prism wraps the `=~`
+                // CallNode with a list of `LocalVariableTargetNode`
+                // targets that should receive each named capture.
+                // monoruby (matching the ruruby backend) doesn't
+                // implement the named-capture binding, so lower to
+                // just the inner call. The targets are already on
+                // the surrounding scope's `locals` list (Prism
+                // declares them at parse time), so reading them
+                // afterwards yields `nil` rather than parsing as a
+                // method call. That's the no-match path; the match
+                // path leaves them at `nil` instead of the captured
+                // string, which is wrong but lets bundler/rubygems
+                // load on x86_64-linux where the relevant `if`
+                // guards never fire.
+                let n = node.as_match_write_node().unwrap();
+                self.lower_call(&n.call(), location_to_loc(&n.call().location()))?
+            }
             prism::Node::BeginNode { .. } => self.lower_begin(&node.as_begin_node().unwrap())?,
             prism::Node::MultiWriteNode { .. } => {
                 self.lower_multi_write(&node.as_multi_write_node().unwrap())?
