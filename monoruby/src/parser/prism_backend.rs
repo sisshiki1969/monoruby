@@ -14,12 +14,13 @@
 use std::path::PathBuf;
 
 use ruby_prism::{
-    self as prism, ArrayNode, BlockNode, ClassNode, ConstantId, ConstantList, ConstantPathNode,
-    ConstantReadNode, ConstantWriteNode, DefNode, FloatNode, GlobalVariableReadNode,
-    GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
-    InstanceVariableWriteNode, IntegerNode, LocalVariableReadNode, LocalVariableWriteNode,
-    Location, ModuleNode, ParametersNode, ProgramNode, RangeNode, ReturnNode, StatementsNode,
-    StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
+    self as prism, ArrayNode, BeginNode, BlockNode, ClassNode, ConstantId, ConstantList,
+    ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode,
+    GlobalVariableReadNode, GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
+    InstanceVariableWriteNode, IntegerNode, InterpolatedStringNode, LocalVariableReadNode,
+    LocalVariableWriteNode, Location, ModuleNode, ParametersNode, ProgramNode, RangeNode,
+    RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
+    WhileNode,
 };
 
 use crate::ast::{
@@ -301,6 +302,12 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::ReturnNode { .. } => {
                 self.lower_return(&node.as_return_node().unwrap())?
+            }
+            prism::Node::InterpolatedStringNode { .. } => {
+                self.lower_interpolated_string(&node.as_interpolated_string_node().unwrap())?
+            }
+            prism::Node::BeginNode { .. } => {
+                self.lower_begin(&node.as_begin_node().unwrap())?
             }
             prism::Node::InstanceVariableReadNode { .. } => {
                 let n = node.as_instance_variable_read_node().unwrap();
@@ -905,6 +912,212 @@ impl<'pr> Lowerer<'pr> {
         Ok(Node {
             kind: NodeKind::MulAssign(vec![target], vec![value]),
             loc: location_to_loc(full_loc),
+        })
+    }
+
+    /// `"foo #{expr} bar #@x"` -> `InterporatedString([String("foo "),
+    /// <expr>, String(" bar "), InstanceVar("@x")])`. ruruby drops
+    /// embed wrappers entirely: a single-statement `#{...}` inlines
+    /// the expression directly, multi-statement `#{a; b}` collapses
+    /// into a `CompStmt`. `#@x` / `#$x` / `#@@x` short-form embeds
+    /// arrive as `EmbeddedVariableNode`s that we forward to
+    /// `lower_node` (which already knows how to lower the variable).
+    /// Lowers `begin ... rescue ... else ... ensure ... end` to
+    /// ruruby's `Begin { body, rescue, else_, ensure }`. Prism stores
+    /// the `rescue` chain as a singly-linked list via
+    /// `RescueNode::subsequent`; we walk it and collect each clause
+    /// into a `RescueEntry`.
+    fn lower_begin(&mut self, node: &BeginNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let body_loc = match node.statements() {
+            Some(s) => location_to_loc(&s.location()),
+            None => loc,
+        };
+        let body = match node.statements() {
+            Some(s) => self.lower_statements_compact(&s, body_loc)?,
+            None => Node {
+                kind: NodeKind::Nil,
+                loc: body_loc,
+            },
+        };
+
+        let mut rescue_entries: Vec<ruruby_parse::RescueEntry> = Vec::new();
+        if let Some(first) = node.rescue_clause() {
+            let mut current = first;
+            loop {
+                rescue_entries.push(self.lower_rescue_entry(&current)?);
+                match current.subsequent() {
+                    Some(next) => current = next,
+                    None => break,
+                }
+            }
+        }
+
+        let else_ = match node.else_clause() {
+            Some(e) => {
+                let inner = e.statements();
+                Some(Box::new(self.lower_optional_statements(
+                    inner.as_ref(),
+                    location_to_loc(&e.location()),
+                )?))
+            }
+            None => None,
+        };
+        let ensure = match node.ensure_clause() {
+            Some(e) => {
+                let inner = e.statements();
+                Some(Box::new(self.lower_optional_statements(
+                    inner.as_ref(),
+                    location_to_loc(&e.location()),
+                )?))
+            }
+            None => None,
+        };
+
+        Ok(Node {
+            kind: NodeKind::Begin {
+                body: Box::new(body),
+                rescue: rescue_entries,
+                else_,
+                ensure,
+            },
+            loc,
+        })
+    }
+
+    fn lower_rescue_entry(
+        &mut self,
+        node: &RescueNode<'pr>,
+    ) -> Result<ruruby_parse::RescueEntry, LowerError> {
+        let mut exception_list: Vec<Node> = Vec::new();
+        for ex in node.exceptions().iter() {
+            exception_list.push(self.lower_node(&ex)?);
+        }
+        let assign = match node.reference() {
+            Some(ref_node) => Some(Box::new(self.lower_rescue_target(&ref_node)?)),
+            None => None,
+        };
+        let body_loc = match node.statements() {
+            Some(s) => location_to_loc(&s.location()),
+            None => location_to_loc(&node.location()),
+        };
+        let body = match node.statements() {
+            Some(s) => self.lower_statements_compact(&s, body_loc)?,
+            None => Node {
+                kind: NodeKind::Nil,
+                loc: body_loc,
+            },
+        };
+        Ok(ruruby_parse::RescueEntry {
+            exception_list,
+            assign,
+            body: Box::new(body),
+        })
+    }
+
+    /// `rescue ... => target`. The target is one of: a local var (the
+    /// usual `=> e`), an instance / class / global var, or a constant.
+    /// Prism uses `*TargetNode` variants for the bare-name cases that
+    /// only make sense as assignment LHS.
+    fn lower_rescue_target(
+        &self,
+        node: &prism::Node<'pr>,
+    ) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        Ok(match node {
+            prism::Node::LocalVariableTargetNode { .. } => {
+                let n = node.as_local_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::InstanceVariableTargetNode { .. } => {
+                let n = node.as_instance_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::GlobalVariableTargetNode { .. } => {
+                let n = node.as_global_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            other => return Err(unsupported("rescue target", &other)),
+        })
+    }
+
+    /// Lower a `StatementsNode` body so that single-statement bodies
+    /// inline as the bare expression (matching ruruby's convention)
+    /// and multi-statement bodies become a `CompStmt`.
+    fn lower_statements_compact(
+        &mut self,
+        node: &StatementsNode<'pr>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let mut stmts = self.lower_statements_into_vec(node)?;
+        Ok(match stmts.len() {
+            0 => Node {
+                kind: NodeKind::Nil,
+                loc,
+            },
+            1 => stmts.pop().unwrap(),
+            _ => Node {
+                kind: NodeKind::CompStmt(stmts),
+                loc,
+            },
+        })
+    }
+
+    fn lower_interpolated_string(
+        &mut self,
+        node: &InterpolatedStringNode<'pr>,
+    ) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let mut parts: Vec<Node> = Vec::new();
+        for part in node.parts().iter() {
+            match part {
+                prism::Node::StringNode { .. } => {
+                    parts.push(self.lower_string(&part.as_string_node().unwrap()));
+                }
+                prism::Node::EmbeddedStatementsNode { .. } => {
+                    let inner = part.as_embedded_statements_node().unwrap();
+                    let part_loc = location_to_loc(&inner.location());
+                    let lowered = match inner.statements() {
+                        None => Node {
+                            kind: NodeKind::Nil,
+                            loc: part_loc,
+                        },
+                        Some(s) => {
+                            let mut stmts = self.lower_statements_into_vec(&s)?;
+                            match stmts.len() {
+                                0 => Node {
+                                    kind: NodeKind::Nil,
+                                    loc: part_loc,
+                                },
+                                1 => stmts.pop().unwrap(),
+                                _ => Node {
+                                    kind: NodeKind::CompStmt(stmts),
+                                    loc: part_loc,
+                                },
+                            }
+                        }
+                    };
+                    parts.push(lowered);
+                }
+                prism::Node::EmbeddedVariableNode { .. } => {
+                    let inner = part.as_embedded_variable_node().unwrap();
+                    parts.push(self.lower_node(&inner.variable())?);
+                }
+                other => return Err(unsupported("interpolation part", &other)),
+            }
+        }
+        Ok(Node {
+            kind: NodeKind::InterporatedString(parts),
+            loc,
         })
     }
 
