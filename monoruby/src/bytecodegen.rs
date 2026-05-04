@@ -1,9 +1,9 @@
 use super::*;
-use num::{BigInt, ToPrimitive};
-use ruruby_parse::{
+use crate::ast::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };
+use num::{BigInt, ToPrimitive};
 
 mod binary;
 mod defined;

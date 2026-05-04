@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use monoasm_macro::monoasm;
 use paste::paste;
-use ruruby_parse::CmpKind;
+
+use crate::ast::CmpKind;
 
 use crate::{
     bytecodegen::{BcIndex, UnOpK},

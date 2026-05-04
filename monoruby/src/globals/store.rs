@@ -1,7 +1,7 @@
 use inline::InlineTable;
 use monoasm::DestLabel;
-use ruruby_parse::{LvarCollector, ParseResult};
 
+use crate::ast::{LvarCollector, ParseResult};
 use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
 
 use super::*;

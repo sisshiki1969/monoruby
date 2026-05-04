@@ -1,4 +1,4 @@
-use ruruby_parse::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
+use crate::ast::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
 
 use super::*;
 

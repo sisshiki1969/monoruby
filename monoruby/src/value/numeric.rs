@@ -1,7 +1,8 @@
 use num::{Integer, Signed, ToPrimitive, Zero};
 use paste::paste;
 use rubymap::RubyEql;
-use ruruby_parse::NReal;
+
+use crate::ast::NReal;
 
 use super::*;
 
