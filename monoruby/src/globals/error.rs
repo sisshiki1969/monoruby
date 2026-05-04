@@ -32,7 +32,7 @@ impl MonorubyErr {
         }
     }
 
-    fn new_with_loc(
+    pub(crate) fn new_with_loc(
         kind: MonorubyErrKind,
         msg: String,
         loc: Loc,
@@ -701,6 +701,28 @@ impl MonorubyErr {
     /// `rescue` handlers without being caught.
     pub fn fatal(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Fatal, msg)
+    }
+
+    /// Like [`MonorubyErr::fatal`] but seeds the error's trace with a
+    /// single source-location frame so the interpreter's "where did
+    /// it happen?" formatter has something to print. Used by the
+    /// Prism backend when its lowerer hits a node it can't yet
+    /// translate — Prism parsed the file fine, so a regular
+    /// `SyntaxError` would be misleading, but we still want the
+    /// usual "<path>:<line>" prefix on stderr instead of bare
+    /// `location not defined.`.
+    pub fn fatal_with_loc(
+        msg: impl ToString,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Fatal,
+            msg.to_string(),
+            loc,
+            sourceinfo,
+            None,
+        )
     }
 
     /// Convenience: is this error a fatal (panic-caught) one?
