@@ -3005,7 +3005,7 @@ impl<'pr> Lowerer<'pr> {
                         receiver: Box::new(receiver_node),
                         method,
                         arglist: Box::new(arglist),
-                        safe_nav: false,
+                        safe_nav: node.is_safe_navigation(),
                     },
                     loc,
                 }
