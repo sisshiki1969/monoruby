@@ -793,18 +793,28 @@ impl<'pr> Lowerer<'pr> {
                 // `super` (no parens) — forwards the enclosing
                 // method's arguments. ruruby uses `Super(None)` for
                 // exactly this case. A literal block can still be
-                // attached (`super { ... }`); we don't model that
-                // yet, so fall back if one is present.
+                // attached (`super { ... }`); ruruby models that as
+                // `Super(Some(ArgList { args: [], block: Some(...) }))`
+                // — empty positional args + a block — and bytecodegen
+                // treats empty-args as the forwarding case
+                // regardless of the block slot.
                 let n = node.as_forwarding_super_node().unwrap();
-                if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
-                        "forwarding super with literal block",
-                    ));
-                }
-                Node {
-                    kind: NodeKind::Super(None),
-                    loc,
-                }
+                let kind = match n.block() {
+                    None => NodeKind::Super(None),
+                    Some(block_node) => {
+                        // ForwardingSuperNode.block() is the
+                        // typed `BlockNode` (literal `{ ... }` /
+                        // `do ... end`); a `BlockArgumentNode`
+                        // (`super(&blk)`) goes through the regular
+                        // SuperNode path. So we can hand it
+                        // straight to `lower_block`.
+                        let body = self.lower_block(&block_node)?;
+                        let mut arglist = ruruby_parse::ArgList::default();
+                        arglist.block = Some(Box::new(body));
+                        NodeKind::Super(Some(Box::new(arglist)))
+                    }
+                };
+                Node { kind, loc }
             }
             prism::Node::YieldNode { .. } => {
                 let n = node.as_yield_node().unwrap();
