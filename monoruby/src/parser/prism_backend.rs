@@ -2323,9 +2323,34 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
-            // Nested destructure (`((a, b), c) = ...`) and call /
-            // attribute targets (`a.foo = x`) need their own per-
-            // shape lowering. Defer.
+            prism::Node::CallTargetNode { .. } => {
+                // `recv.attr = value` form embedded in a multi-write
+                // (`obj.x, obj.y = 1, 2`). Prism normalises this to
+                // a `CallTargetNode { receiver, name }` whose `name`
+                // is the *setter* identifier (`x=`); ruruby instead
+                // produces a getter-shaped `MethodCall { receiver,
+                // method, arglist: empty, safe_nav }` carrying just
+                // the reader (`x`). Bytecodegen pattern-matches that
+                // exact shape in `eval_lvalue` and emits the
+                // corresponding `attr=` setter call when the
+                // assignment runs — so we strip the trailing `=`
+                // here.
+                let n = node.as_call_target_node().unwrap();
+                let receiver = self.lower_node(&n.receiver())?;
+                let raw = constant_name(&n.name())?;
+                let method = raw.strip_suffix('=').unwrap_or(&raw).to_owned();
+                Node {
+                    kind: NodeKind::MethodCall {
+                        receiver: Box::new(receiver),
+                        method,
+                        arglist: Box::new(ruruby_parse::ArgList::default()),
+                        safe_nav: n.is_safe_navigation(),
+                    },
+                    loc,
+                }
+            }
+            // Nested destructure (`((a, b), c) = ...`) needs its own
+            // per-shape lowering. Defer.
             other => return Err(unsupported("assign target", &other)),
         })
     }
