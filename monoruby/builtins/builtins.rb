@@ -507,7 +507,7 @@ end
 
 class File
   def self.zero?(path)
-    s = File.size(path) rescue return false
+    s = (File.size(path) rescue return false)
     s == 0
   end
 
