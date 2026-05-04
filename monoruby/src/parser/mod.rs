@@ -1,9 +1,10 @@
 //! Parser entry-point abstraction.
 //!
 //! All parsing in monoruby flows through this module. The default
-//! backend is `ruruby-parse` (the original parser); setting the
-//! `MONORUBY_PARSER=prism` environment variable selects the
-//! Prism-backed lowerer instead.
+//! backend is the Prism-based lowerer (with automatic fallback to
+//! ruruby for nodes the lowerer doesn't yet handle); setting the
+//! `MONORUBY_PARSER=ruruby` environment variable forces the original
+//! `ruruby-parse` backend instead.
 //!
 //! The module presents the same three entry points the rest of the
 //! crate previously called on `ruruby_parse::Parser` directly:
@@ -26,13 +27,15 @@ pub enum Backend {
     Prism,
 }
 
-/// Pick the parser backend at runtime. Defaults to `Ruruby`; setting
-/// the env var `MONORUBY_PARSER=prism` switches to the Prism lowerer
-/// (still a work-in-progress; many constructs are `unimplemented!`).
+/// Pick the parser backend at runtime. Defaults to `Prism` (with
+/// transparent ruruby fallback for unimplemented nodes); setting
+/// `MONORUBY_PARSER=ruruby` forces the legacy ruruby-parse backend.
+/// `MONORUBY_PARSER=prism` is accepted for symmetry but is the
+/// default.
 pub fn default_backend() -> Backend {
     match std::env::var("MONORUBY_PARSER").ok().as_deref() {
-        Some("prism") => Backend::Prism,
-        _ => Backend::Ruruby,
+        Some("ruruby") => Backend::Ruruby,
+        _ => Backend::Prism,
     }
 }
 
