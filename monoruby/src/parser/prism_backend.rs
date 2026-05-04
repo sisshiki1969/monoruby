@@ -1238,6 +1238,25 @@ impl<'pr> Lowerer<'pr> {
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
         let body = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        // bytecodegen's `gen_while_begin_postfix` (do-while semantics —
+        // run body once before testing the condition) is only selected
+        // when the body is `NodeKind::Begin { .. }`. Prism's
+        // `is_begin_modifier()` already tells us we're in
+        // `begin...end while cond` form, so wrap the body to match
+        // ruruby's shape and unblock that path.
+        let body = if node.is_begin_modifier() {
+            Node {
+                kind: NodeKind::Begin {
+                    body: Box::new(body),
+                    rescue: vec![],
+                    else_: None,
+                    ensure: None,
+                },
+                loc,
+            }
+        } else {
+            body
+        };
         Ok(Node {
             kind: NodeKind::While {
                 cond: Box::new(cond),
@@ -1254,6 +1273,19 @@ impl<'pr> Lowerer<'pr> {
         let cond = self.lower_node(&node.predicate())?;
         let stmts = node.statements();
         let body = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        let body = if node.is_begin_modifier() {
+            Node {
+                kind: NodeKind::Begin {
+                    body: Box::new(body),
+                    rescue: vec![],
+                    else_: None,
+                    ensure: None,
+                },
+                loc,
+            }
+        } else {
+            body
+        };
         Ok(Node {
             kind: NodeKind::While {
                 cond: Box::new(cond),
@@ -1324,12 +1356,17 @@ impl<'pr> Lowerer<'pr> {
             Some(n) => Some(self.lower_node(&n)?),
             None => None,
         };
-        let is_const = match (&start, &end) {
-            (Some(s), Some(e)) => {
-                is_constant_literal(&s.kind) && is_constant_literal(&e.kind)
-            }
-            _ => false,
-        };
+        // Match ruruby's narrower constness check (`is_integer &&
+        // is_integer`, where `is_integer` covers Integer + Bignum).
+        // Pre-folding heterogeneous-type ranges like `9155.."s"` would
+        // silently swallow the runtime ArgumentError CRuby raises.
+        let is_const = matches!(
+            (start.as_ref().map(|n| &n.kind), end.as_ref().map(|n| &n.kind)),
+            (
+                Some(NodeKind::Integer(_) | NodeKind::Bignum(_)),
+                Some(NodeKind::Integer(_) | NodeKind::Bignum(_)),
+            ),
+        );
         Ok(Node {
             kind: NodeKind::Range {
                 start: Box::new(start),
