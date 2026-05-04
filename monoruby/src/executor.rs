@@ -350,9 +350,9 @@ impl Executor {
         code: String,
         path: &std::path::Path,
     ) -> Result<Value> {
-        let fid = match ruruby_parse::Parser::parse_program(code, path) {
+        let fid = match crate::parser::parse_program(code, path) {
             Ok(res) => bytecodegen::bytecode_compile_script(globals, res),
-            Err(err) => Err(MonorubyErr::parse(err)),
+            Err(err) => Err(err),
         }?;
         self.eval_toplevel(globals, fid)
     }
