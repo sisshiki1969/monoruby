@@ -18,9 +18,9 @@ use ruby_prism::{
     ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode,
     GlobalVariableReadNode, GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
     InstanceVariableWriteNode, IntegerNode, InterpolatedStringNode, LocalVariableReadNode,
-    LocalVariableWriteNode, Location, ModuleNode, ParametersNode, ProgramNode, RangeNode,
-    RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
-    WhileNode,
+    LocalVariableWriteNode, Location, ModuleNode, MultiWriteNode, ParametersNode, ProgramNode,
+    RangeNode, RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode,
+    UntilNode, WhileNode,
 };
 
 use crate::ast::{
@@ -308,6 +308,144 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::BeginNode { .. } => {
                 self.lower_begin(&node.as_begin_node().unwrap())?
+            }
+            prism::Node::MultiWriteNode { .. } => {
+                self.lower_multi_write(&node.as_multi_write_node().unwrap())?
+            }
+            prism::Node::LocalVariableOperatorWriteNode { .. } => {
+                let n = node.as_local_variable_operator_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::LocalVariableOrWriteNode { .. } => {
+                let n = node.as_local_variable_or_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::LocalVariableAndWriteNode { .. } => {
+                let n = node.as_local_variable_and_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::InstanceVariableOperatorWriteNode { .. } => {
+                let n = node.as_instance_variable_operator_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::InstanceVariableOrWriteNode { .. } => {
+                let n = node.as_instance_variable_or_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::InstanceVariableAndWriteNode { .. } => {
+                let n = node.as_instance_variable_and_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::GlobalVariableOperatorWriteNode { .. } => {
+                let n = node.as_global_variable_operator_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::GlobalVariableOrWriteNode { .. } => {
+                let n = node.as_global_variable_or_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::GlobalVariableAndWriteNode { .. } => {
+                let n = node.as_global_variable_and_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::ClassVariableOperatorWriteNode { .. } => {
+                let n = node.as_class_variable_operator_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::ClassVariableOrWriteNode { .. } => {
+                let n = node.as_class_variable_or_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::ClassVariableAndWriteNode { .. } => {
+                let n = node.as_class_variable_and_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::ConstantOperatorWriteNode { .. } => {
+                let n = node.as_constant_operator_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::Const {
+                        toplevel: false,
+                        parent: None,
+                        prefix: vec![],
+                        name: constant_name(&n.name())?,
+                    },
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::ConstantOrWriteNode { .. } => {
+                let n = node.as_constant_or_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::Const {
+                        toplevel: false,
+                        parent: None,
+                        prefix: vec![],
+                        name: constant_name(&n.name())?,
+                    },
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::ConstantAndWriteNode { .. } => {
+                let n = node.as_constant_and_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::Const {
+                        toplevel: false,
+                        parent: None,
+                        prefix: vec![],
+                        name: constant_name(&n.name())?,
+                    },
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
             }
             prism::Node::InstanceVariableReadNode { .. } => {
                 let n = node.as_instance_variable_read_node().unwrap();
@@ -927,6 +1065,181 @@ impl<'pr> Lowerer<'pr> {
     /// the `rescue` chain as a singly-linked list via
     /// `RescueNode::subsequent`; we walk it and collect each clause
     /// into a `RescueEntry`.
+    /// `target OP= value` -> `AssignOp(BinOp, target, value)`.
+    /// Used for the `*OperatorWriteNode` family (the `+=`, `-=`, ...
+    /// shapes). The operator name comes back from Prism as the bare
+    /// op (`"+"`, `"-"`, ...); we route it through the existing
+    /// `binop_from_name` table.
+    fn build_op_assign(
+        &mut self,
+        target: Node,
+        op_id: &ConstantId<'pr>,
+        value: &prism::Node<'pr>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let op_name = constant_name(op_id)?;
+        let op = binop_from_name(&op_name)
+            .ok_or(LowerError::Unsupported("unknown op-assign operator"))?;
+        let value = self.lower_node(value)?;
+        Ok(Node {
+            kind: NodeKind::AssignOp(op, Box::new(target), Box::new(value)),
+            loc,
+        })
+    }
+
+    /// `target ||= value` -> `BinOp(LOr, target, MulAssign([target],
+    /// [value]))` and likewise for `&&=` -> `LAnd`. Prism reports
+    /// these via `*OrWriteNode` / `*AndWriteNode`; we collapse them
+    /// into the same shape ruruby's parser produces (a short-circuit
+    /// binop wrapped around an inline assignment).
+    fn build_short_circuit_assign(
+        &mut self,
+        op: BinOp,
+        target: Node,
+        value: &prism::Node<'pr>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let value = self.lower_node(value)?;
+        let assign = Node {
+            kind: NodeKind::MulAssign(vec![target.clone()], vec![value]),
+            loc,
+        };
+        Ok(Node {
+            kind: NodeKind::BinOp(op, Box::new(target), Box::new(assign)),
+            loc,
+        })
+    }
+
+    /// `a, b = 1, 2` and friends. Prism's MultiWriteNode keeps three
+    /// piece-wise lists (`lefts`, optional `rest`, `rights`); we
+    /// concatenate them in source order, wrapping the rest target in
+    /// `Splat(...)` to match ruruby's flat shape. The RHS shape is
+    /// determined by the ArrayNode wrapper Prism inserts:
+    /// `a, b = 1, 2` -> implicit (no `[`) -> unpack into the
+    /// multi-RHS form `[1, 2]`. `a, b = [1, 2]` -> explicit -> single-
+    /// element RHS `[Array([1,2])]`. Any non-array RHS (`a, b = c`)
+    /// goes in unwrapped as a single-element RHS.
+    fn lower_multi_write(&mut self, node: &MultiWriteNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let mut lhs: Vec<Node> = Vec::new();
+        for n in node.lefts().iter() {
+            lhs.push(self.lower_assign_target(&n)?);
+        }
+        if let Some(rest) = node.rest() {
+            match rest {
+                prism::Node::SplatNode { .. } => {
+                    let inner = rest.as_splat_node().unwrap();
+                    let rest_loc = location_to_loc(&inner.location());
+                    let target = match inner.expression() {
+                        Some(e) => self.lower_assign_target(&e)?,
+                        // Anonymous splat target `*` swallows the rest
+                        // without binding; ruruby uses `DiscardLhs` for
+                        // this slot.
+                        None => Node {
+                            kind: NodeKind::DiscardLhs,
+                            loc: rest_loc,
+                        },
+                    };
+                    lhs.push(Node {
+                        kind: NodeKind::Splat(Box::new(target)),
+                        loc: rest_loc,
+                    });
+                }
+                other => return Err(unsupported("multi-write rest", &other)),
+            }
+        }
+        for n in node.rights().iter() {
+            lhs.push(self.lower_assign_target(&n)?);
+        }
+
+        let value = node.value();
+        let rhs: Vec<Node> = match value {
+            prism::Node::ArrayNode { .. } => {
+                let arr = value.as_array_node().unwrap();
+                if arr.opening_loc().is_none() {
+                    // Implicit array (no `[...]`): the source wrote
+                    // `a, b = 1, 2` and Prism wrapped the RHS into an
+                    // ArrayNode for the assignment. Unpack so each
+                    // element becomes its own RHS slot, matching
+                    // ruruby's `MulAssign(lhs, [v1, v2, ...])` form.
+                    let mut out = Vec::new();
+                    for elem in arr.elements().iter() {
+                        out.push(self.lower_node(&elem)?);
+                    }
+                    out
+                } else {
+                    // Explicit `a, b = [1, 2]` keeps the array as a
+                    // single RHS so it gets splatted at runtime.
+                    vec![self.lower_node(&value)?]
+                }
+            }
+            _ => vec![self.lower_node(&value)?],
+        };
+
+        Ok(Node {
+            kind: NodeKind::MulAssign(lhs, rhs),
+            loc,
+        })
+    }
+
+    /// Lowers a `*TargetNode` (the assignment-LHS variants Prism uses
+    /// inside `MultiWriteNode`/`MultiTargetNode`/etc.) onto the same
+    /// `Local/Instance/Global/ClassVar/Const` shapes ruruby's parser
+    /// would have produced for the LHS. Used by both `MultiWriteNode`
+    /// and the rescue-target lowerer (which calls into here).
+    fn lower_assign_target(
+        &self,
+        node: &prism::Node<'pr>,
+    ) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        Ok(match node {
+            prism::Node::LocalVariableTargetNode { .. } => {
+                let n = node.as_local_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::InstanceVariableTargetNode { .. } => {
+                let n = node.as_instance_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::GlobalVariableTargetNode { .. } => {
+                let n = node.as_global_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::ClassVariableTargetNode { .. } => {
+                let n = node.as_class_variable_target_node().unwrap();
+                Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::ConstantTargetNode { .. } => {
+                let n = node.as_constant_target_node().unwrap();
+                Node {
+                    kind: NodeKind::Const {
+                        toplevel: false,
+                        parent: None,
+                        prefix: vec![],
+                        name: constant_name(&n.name())?,
+                    },
+                    loc,
+                }
+            }
+            // Nested destructure (`((a, b), c) = ...`), call/index
+            // targets (`a.foo = x`, `a[i] = x`) and `__attr__=` style
+            // setters need their own per-shape lowering. Defer.
+            other => return Err(unsupported("assign target", &other)),
+        })
+    }
+
     fn lower_begin(&mut self, node: &BeginNode<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
         let body_loc = match node.statements() {
@@ -994,7 +1307,7 @@ impl<'pr> Lowerer<'pr> {
             exception_list.push(self.lower_node(&ex)?);
         }
         let assign = match node.reference() {
-            Some(ref_node) => Some(Box::new(self.lower_rescue_target(&ref_node)?)),
+            Some(ref_node) => Some(Box::new(self.lower_assign_target(&ref_node)?)),
             None => None,
         };
         let body_loc = match node.statements() {
@@ -1012,41 +1325,6 @@ impl<'pr> Lowerer<'pr> {
             exception_list,
             assign,
             body: Box::new(body),
-        })
-    }
-
-    /// `rescue ... => target`. The target is one of: a local var (the
-    /// usual `=> e`), an instance / class / global var, or a constant.
-    /// Prism uses `*TargetNode` variants for the bare-name cases that
-    /// only make sense as assignment LHS.
-    fn lower_rescue_target(
-        &self,
-        node: &prism::Node<'pr>,
-    ) -> Result<Node, LowerError> {
-        let loc = location_to_loc(&node.location());
-        Ok(match node {
-            prism::Node::LocalVariableTargetNode { .. } => {
-                let n = node.as_local_variable_target_node().unwrap();
-                Node {
-                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
-                    loc,
-                }
-            }
-            prism::Node::InstanceVariableTargetNode { .. } => {
-                let n = node.as_instance_variable_target_node().unwrap();
-                Node {
-                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
-                    loc,
-                }
-            }
-            prism::Node::GlobalVariableTargetNode { .. } => {
-                let n = node.as_global_variable_target_node().unwrap();
-                Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
-                    loc,
-                }
-            }
-            other => return Err(unsupported("rescue target", &other)),
         })
     }
 
