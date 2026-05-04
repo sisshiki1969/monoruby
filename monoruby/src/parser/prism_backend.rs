@@ -114,6 +114,16 @@ enum LowerError {
     Unsupported(&'static str),
 }
 
+/// Result of lowering the `block` slot on a Prism call/super node.
+enum CallBlock {
+    /// A block literal (`{ ... }` / `do ... end`) or a `&expr`
+    /// argument — placed into `ArgList::block` as-is.
+    Block(Node),
+    /// `foo(&)` — anonymous forward of the enclosing method's block.
+    /// Caller flips `ArgList::delegate_block`.
+    Delegate,
+}
+
 fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
     let path_display = path.display().to_string();
     let source_info: SourceInfoRef =
@@ -639,14 +649,33 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::SuperNode { .. } => {
                 let n = node.as_super_node().unwrap();
-                let mut arglist = ruruby_parse::ArgList::default();
-                if let Some(args) = n.arguments() {
-                    for arg in args.arguments().iter() {
-                        arglist.args.push(self.lower_node(&arg)?);
+                let mut args: Vec<Node> = vec![];
+                let mut kw_args: Vec<(String, Node)> = vec![];
+                let mut hash_splat: Vec<Node> = vec![];
+                let mut forwarding = false;
+                if let Some(prism_args) = n.arguments() {
+                    for arg in prism_args.arguments().iter() {
+                        self.collect_call_arg(
+                            &arg,
+                            &mut args,
+                            &mut kw_args,
+                            &mut hash_splat,
+                            &mut forwarding,
+                        )?;
                     }
                 }
+                let has_splat = args.iter().any(|a| matches!(a.kind, NodeKind::Splat(_)));
+                let mut arglist = ruruby_parse::ArgList::default();
+                arglist.args = args;
+                arglist.kw_args = kw_args;
+                arglist.hash_splat = hash_splat;
+                arglist.forwarding = forwarding;
+                arglist.splat = has_splat;
                 if let Some(block_node) = n.block() {
-                    arglist.block = Some(Box::new(self.lower_call_block(&block_node)?));
+                    match self.lower_call_block(&block_node)? {
+                        CallBlock::Block(b) => arglist.block = Some(Box::new(b)),
+                        CallBlock::Delegate => arglist.delegate_block = true,
+                    }
                 }
                 Node {
                     kind: NodeKind::Super(Some(Box::new(arglist))),
@@ -673,11 +702,27 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::YieldNode { .. } => {
                 let n = node.as_yield_node().unwrap();
                 let mut arglist = ruruby_parse::ArgList::default();
-                if let Some(args) = n.arguments() {
-                    for arg in args.arguments().iter() {
-                        arglist.args.push(self.lower_node(&arg)?);
+                let mut args: Vec<Node> = vec![];
+                let mut kw_args: Vec<(String, Node)> = vec![];
+                let mut hash_splat: Vec<Node> = vec![];
+                let mut forwarding = false;
+                if let Some(prism_args) = n.arguments() {
+                    for arg in prism_args.arguments().iter() {
+                        self.collect_call_arg(
+                            &arg,
+                            &mut args,
+                            &mut kw_args,
+                            &mut hash_splat,
+                            &mut forwarding,
+                        )?;
                     }
                 }
+                let has_splat = args.iter().any(|a| matches!(a.kind, NodeKind::Splat(_)));
+                arglist.args = args;
+                arglist.kw_args = kw_args;
+                arglist.hash_splat = hash_splat;
+                arglist.forwarding = forwarding;
+                arglist.splat = has_splat;
                 Node {
                     kind: NodeKind::Yield(Box::new(arglist)),
                     loc,
@@ -941,10 +986,13 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::SourceEncodingNode { .. } => {
-                // `__ENCODING__` — ruruby emits a method call (it has
-                // no Encoding class baked in); fall back so the
-                // existing handling stays in charge.
-                return Err(LowerError::Unsupported("__ENCODING__"));
+                // ruruby parses `__ENCODING__` as a bare identifier
+                // (`NodeKind::Ident("__ENCODING__")`) which bytecodegen
+                // turns into a method call resolved at runtime.
+                Node {
+                    kind: NodeKind::Ident("__ENCODING__".to_string()),
+                    loc,
+                }
             }
             prism::Node::RescueModifierNode { .. } => {
                 // `expr rescue value` — desugar to a `Begin` with a
@@ -1426,7 +1474,7 @@ impl<'pr> Lowerer<'pr> {
     /// `class A; end` => `(None, "A")`. `class M::N::A; end` =>
     /// `(Some(Const{prefix:["M"], name:"N"}), "A")`.
     fn split_class_path(
-        &self,
+        &mut self,
         path: &prism::Node<'pr>,
     ) -> Result<(Option<Box<Node>>, String), LowerError> {
         match path {
@@ -1465,7 +1513,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn lower_constant_path(&self, node: &ConstantPathNode<'pr>) -> Result<Node, LowerError> {
+    fn lower_constant_path(&mut self, node: &ConstantPathNode<'pr>) -> Result<Node, LowerError> {
         self.lower_const_chain(&node.as_node())
     }
 
@@ -1474,9 +1522,9 @@ impl<'pr> Lowerer<'pr> {
     /// prefix, name }` representation. Pure constant-only chains like
     /// `A::B::C` flatten into `prefix: ["A", "B"], name: "C"`. Chains
     /// rooted at `::` flatten with `toplevel: true`. Chains rooted at
-    /// an arbitrary expression (e.g. `expr::C`) are not yet supported
-    /// here — they fall back to ruruby.
-    fn lower_const_chain(&self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
+    /// a non-constant expression (e.g. `expr::C`) become
+    /// `parent: Some(<lowered expr>)`.
+    fn lower_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
         let chain = self.collect_const_chain(node)?;
         Ok(Node {
@@ -1490,7 +1538,10 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn collect_const_chain(&self, node: &prism::Node<'pr>) -> Result<ConstChain, LowerError> {
+    fn collect_const_chain(
+        &mut self,
+        node: &prism::Node<'pr>,
+    ) -> Result<ConstChain, LowerError> {
         match node {
             prism::Node::ConstantReadNode { .. } => {
                 let n = node.as_constant_read_node().unwrap();
@@ -1514,24 +1565,42 @@ impl<'pr> Lowerer<'pr> {
                         prefix: vec![],
                         name,
                     }),
-                    Some(p) => {
-                        let mut inner = self.collect_const_chain(&p)?;
-                        if inner.parent.is_some() {
-                            return Err(LowerError::Unsupported(
-                                "constant path nested under non-constant parent",
-                            ));
+                    Some(p) => match self.collect_const_chain(&p) {
+                        Ok(mut inner) => {
+                            if inner.parent.is_some() {
+                                // Already rooted in a non-constant
+                                // expression — push our leaf into the
+                                // prefix, keep the same parent.
+                                inner.prefix.push(std::mem::take(&mut inner.name));
+                                inner.name = name;
+                                Ok(inner)
+                            } else {
+                                // Pure constant chain: slide the inner
+                                // leaf into the prefix and replace it
+                                // with `name`.
+                                inner.prefix.push(std::mem::take(&mut inner.name));
+                                inner.name = name;
+                                Ok(inner)
+                            }
                         }
-                        // Slide the inner chain's leaf name into the
-                        // prefix and put `name` in its place. After
-                        // the swap, `inner` describes the same chain
-                        // one level deeper.
-                        inner.prefix.push(std::mem::take(&mut inner.name));
-                        inner.name = name;
-                        Ok(inner)
-                    }
+                        // Non-constant parent: lower the parent as a
+                        // value expression and root the chain on it.
+                        Err(LowerError::Unsupported("non-constant constant path prefix")) => {
+                            let parent_node = self.lower_node(&p)?;
+                            Ok(ConstChain {
+                                toplevel: false,
+                                parent: Some(Box::new(parent_node)),
+                                prefix: vec![],
+                                name,
+                            })
+                        }
+                        Err(e) => Err(e),
+                    },
                 }
             }
-            // Non-constant prefix expressions are handled by ruruby.
+            // Treat anything else as a non-constant prefix; the caller
+            // (the `ConstantPathNode` arm above) recovers and lowers it
+            // as a value expression.
             _ => Err(LowerError::Unsupported("non-constant constant path prefix")),
         }
     }
@@ -1592,24 +1661,26 @@ impl<'pr> Lowerer<'pr> {
     /// Lowers the `block` slot of a `CallNode` / `SuperNode` — Prism
     /// stores either a literal `BlockNode` (`{ ... }`) or a
     /// `BlockArgumentNode` (`&proc`) there, and ruruby plugs both
-    /// into `arglist.block` differentiated by NodeKind.
+    /// into `arglist.block` differentiated by NodeKind. The
+    /// anonymous-& form (`foo(&)`) is reported separately via
+    /// [`CallBlock::Delegate`] so the caller can flip
+    /// `arglist.delegate_block`.
     fn lower_call_block(
         &mut self,
         block_node: &prism::Node<'pr>,
-    ) -> Result<Node, LowerError> {
+    ) -> Result<CallBlock, LowerError> {
         match block_node {
             prism::Node::BlockNode { .. } => {
                 let bn = block_node.as_block_node().unwrap();
-                self.lower_block(&bn)
+                Ok(CallBlock::Block(self.lower_block(&bn)?))
             }
             prism::Node::BlockArgumentNode { .. } => {
                 let ba = block_node.as_block_argument_node().unwrap();
                 match ba.expression() {
-                    Some(e) => self.lower_node(&e),
+                    Some(e) => Ok(CallBlock::Block(self.lower_node(&e)?)),
                     // `foo(&)` — anonymous forward of the outer
-                    // method's block. Defer; handled via
-                    // arglist.delegate_block on ruruby's side.
-                    None => Err(LowerError::Unsupported("anonymous &-forward")),
+                    // method's block.
+                    None => Ok(CallBlock::Delegate),
                 }
             }
             other => Err(unsupported("call block", other)),
@@ -1617,6 +1688,87 @@ impl<'pr> Lowerer<'pr> {
     }
 
     /// Build the `MethodCall { receiver, method, arglist: empty }`
+    /// Lower one call-site argument. Routes regular expressions into
+    /// `args`, `KeywordHashNode` elements into `kw_args` /
+    /// `hash_splat`, and `ForwardingArgumentsNode` (`g(...)`) into the
+    /// `forwarding` flag — mirroring the way ruruby's parser flattens
+    /// these onto an `ArgList`.
+    fn collect_call_arg(
+        &mut self,
+        n: &prism::Node<'pr>,
+        args: &mut Vec<Node>,
+        kw_args: &mut Vec<(String, Node)>,
+        hash_splat: &mut Vec<Node>,
+        forwarding: &mut bool,
+    ) -> Result<(), LowerError> {
+        match n {
+            // `g(...)` — forward the enclosing method's args.
+            prism::Node::ForwardingArgumentsNode { .. } => {
+                *forwarding = true;
+            }
+            // `g(a: 1, **opts)` — Prism gathers trailing keyword
+            // pairs into a `KeywordHashNode`. ruruby instead splits
+            // them onto `arglist.kw_args` (static-keyed) and
+            // `arglist.hash_splat` (`**` splats).
+            prism::Node::KeywordHashNode { .. } => {
+                let kh = n.as_keyword_hash_node().unwrap();
+                for elem in kh.elements().iter() {
+                    match elem {
+                        prism::Node::AssocNode { .. } => {
+                            let assoc = elem.as_assoc_node().unwrap();
+                            let key = assoc.key();
+                            // Only static-symbol keys (`a:` form) fit
+                            // ruruby's `(String, Node)` shape;
+                            // anything else (string interpolation,
+                            // dynamic key, …) goes through `lower_hash`
+                            // by lowering the whole `KeywordHashNode`
+                            // as a regular hash arg instead.
+                            let name = match &key {
+                                prism::Node::SymbolNode { .. } => {
+                                    let s = key.as_symbol_node().unwrap();
+                                    match s.unescaped() {
+                                        bytes if !bytes.is_empty() => {
+                                            std::str::from_utf8(bytes)
+                                                .map(str::to_owned)
+                                                .map_err(|_| LowerError::Unsupported(
+                                                    "non-utf8 keyword arg name",
+                                                ))?
+                                        }
+                                        _ => return Err(LowerError::Unsupported(
+                                            "empty keyword arg name",
+                                        )),
+                                    }
+                                }
+                                _ => return Err(LowerError::Unsupported(
+                                    "non-symbol keyword arg key",
+                                )),
+                            };
+                            let value = self.lower_node(&assoc.value())?;
+                            kw_args.push((name, value));
+                        }
+                        prism::Node::AssocSplatNode { .. } => {
+                            let s = elem.as_assoc_splat_node().unwrap();
+                            let inner = match s.value() {
+                                Some(v) => self.lower_node(&v)?,
+                                None => Node {
+                                    kind: NodeKind::Nil,
+                                    loc: location_to_loc(&s.location()),
+                                },
+                            };
+                            hash_splat.push(inner);
+                        }
+                        other => return Err(unsupported("kwarg element", &other)),
+                    }
+                }
+            }
+            // Splat (`*expr`) is already handled in `lower_node` and
+            // ends up as `Splat(...)` in args; the `arglist.splat`
+            // flag is set later by detecting it.
+            _ => args.push(self.lower_node(n)?),
+        }
+        Ok(())
+    }
+
     /// shape used as the target of `obj.attr += ...` / `obj.attr ||=
     /// ...`. This mirrors what ruruby's parser does for the LHS of an
     /// attribute op-assign — bytecodegen later rewrites the call into
@@ -2080,6 +2232,15 @@ impl<'pr> Lowerer<'pr> {
                 prism::Node::EmbeddedVariableNode { .. } => {
                     let inner = part.as_embedded_variable_node().unwrap();
                     out.push(self.lower_node(&inner.variable())?);
+                }
+                // Heredoc-and-friends: Prism may emit a nested
+                // InterpolatedStringNode as one part — common when a
+                // squiggly heredoc body or adjacent-string concat is
+                // parsed inside another interpolated string. Lower it
+                // as a regular value-producing string and let it sit
+                // alongside the static chunks.
+                prism::Node::InterpolatedStringNode { .. } => {
+                    out.push(self.lower_node(&part)?);
                 }
                 other => return Err(unsupported("interpolation part", &other)),
             }
@@ -2663,29 +2824,18 @@ impl<'pr> Lowerer<'pr> {
             .unwrap_or_else(|_| String::from_utf8_lossy(name_bytes).into_owned());
 
         let mut args: Vec<Node> = vec![];
+        let mut kw_args: Vec<(String, Node)> = vec![];
+        let mut hash_splat: Vec<Node> = vec![];
         let mut forwarding = false;
         if let Some(arglist) = node.arguments() {
             for n in arglist.arguments().iter() {
-                match n {
-                    // `g(...)` — forward the enclosing method's args.
-                    // ruruby sets `arglist.forwarding = true` and
-                    // leaves `args` empty.
-                    prism::Node::ForwardingArgumentsNode { .. } => {
-                        forwarding = true;
-                    }
-                    // `g(*arr)` — Prism wraps splat args in
-                    // `SplatNode(Some(expr))`. ruruby sets
-                    // `arglist.splat = true` and pushes a
-                    // `Splat(expr)` node for the splatted arg, and
-                    // each non-splat arg as itself. We already
-                    // handle SplatNode directly via the recursive
-                    // lower_node path so the resulting `Splat` ends
-                    // up in args. However, ruruby's `arglist.splat`
-                    // boolean ALSO needs to be set or bytecodegen
-                    // miscomputes the spill count and panics in
-                    // `expand_array`.
-                    _ => args.push(self.lower_node(&n)?),
-                }
+                self.collect_call_arg(
+                    &n,
+                    &mut args,
+                    &mut kw_args,
+                    &mut hash_splat,
+                    &mut forwarding,
+                )?;
             }
         }
         // Detect splat presence in the freshly-lowered args list and
@@ -2695,9 +2845,18 @@ impl<'pr> Lowerer<'pr> {
         // ruruby stores both block-literal (`{ ... }`) and
         // block-argument (`&proc`) forms in the same `arglist.block`
         // slot — bytecodegen disambiguates by NodeKind.
+        // `foo(&)` (anonymous & forward) instead sets the
+        // `delegate_block` flag with no block node.
+        let mut delegate_block = false;
         let block = match node.block() {
             None => None,
-            Some(block_node) => Some(Box::new(self.lower_call_block(&block_node)?)),
+            Some(block_node) => match self.lower_call_block(&block_node)? {
+                CallBlock::Block(b) => Some(Box::new(b)),
+                CallBlock::Delegate => {
+                    delegate_block = true;
+                    None
+                }
+            },
         };
 
         // `a[i]` / `a[i, j]` come through as `CallNode` with method
@@ -2794,9 +2953,12 @@ impl<'pr> Lowerer<'pr> {
 
         let mut arglist = ruruby_parse::ArgList::default();
         arglist.args = args;
+        arglist.kw_args = kw_args;
+        arglist.hash_splat = hash_splat;
         arglist.block = block;
         arglist.forwarding = forwarding;
         arglist.splat = has_splat;
+        arglist.delegate_block = delegate_block;
 
         Ok(match receiver_opt {
             Some(recv) => {
@@ -2947,7 +3109,13 @@ fn location_to_loc(loc: &Location<'_>) -> Loc {
 fn unsupported(context: &'static str, node: &prism::Node<'_>) -> LowerError {
     let kind = node_kind_name(node);
     if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-        eprintln!("[prism] unsupported {context} node: {kind}");
+        if kind == "<other>" {
+            // Surface the precise Prism type name when we hit the
+            // node_kind_name catch-all so it's easy to extend.
+            eprintln!("[prism] unsupported {context} node: <other> // {node:?}");
+        } else {
+            eprintln!("[prism] unsupported {context} node: {kind}");
+        }
     }
     LowerError::Unsupported(kind)
 }
