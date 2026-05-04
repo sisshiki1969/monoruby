@@ -14,6 +14,7 @@ mod codegen;
 mod executor;
 mod globals;
 mod id_table;
+pub mod parser;
 pub mod tests;
 mod value;
 
