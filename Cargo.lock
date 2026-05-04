@@ -1757,8 +1757,6 @@ dependencies = [
 [[package]]
 name = "ruby-prism"
 version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b302f00359d0b5423a600314935ca5f994484e15da2db5345631d28c6e029d6"
 dependencies = [
  "ruby-prism-sys",
  "serde",

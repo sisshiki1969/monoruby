@@ -70,6 +70,10 @@ impl ExternalContext {
     pub fn new() -> Self {
         Self { scope: vec![] }
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.scope.len()
+    }
 }
 
 pub(crate) struct Invokers {
