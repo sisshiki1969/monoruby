@@ -17,6 +17,12 @@ fn handle_error(err: MonorubyErr, globals: &Globals) -> ! {
     std::process::exit(1);
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ParserKind {
+    Ruruby,
+    Prism,
+}
+
 #[derive(clap::Parser, Debug)]
 #[command(author, about, long_about = None)]
 struct CommandLineArgs {
@@ -35,9 +41,10 @@ struct CommandLineArgs {
     /// switch for garbage collection.
     #[arg(long)]
     no_gc: bool,
-    /// emit AST.
-    #[arg(long)]
-    ast: bool,
+    /// dump parsed AST and exit. Defaults to `ruruby`; pass `prism`
+    /// to dump the equivalent ruby-prism AST.
+    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "ruruby", value_name = "PARSER")]
+    ast: Option<ParserKind>,
     /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
     directory: Vec<String>,
@@ -47,6 +54,27 @@ struct CommandLineArgs {
     /// File name.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     file: Vec<String>,
+}
+
+fn dump_ast(code: &str, path: &std::path::Path, kind: ParserKind, globals: &Globals) {
+    match kind {
+        ParserKind::Ruruby => match ruruby_parse::Parser::parse_program(code.to_string(), path) {
+            Ok(res) => eprintln!("{:#?}", res.node),
+            Err(err) => handle_error(MonorubyErr::parse(err), globals),
+        },
+        ParserKind::Prism => {
+            let result = ruby_prism::parse(code.as_bytes());
+            for diag in result.errors() {
+                eprintln!(
+                    "prism error at {}..{}: {}",
+                    diag.location().start_offset(),
+                    diag.location().end_offset(),
+                    diag.message(),
+                );
+            }
+            eprintln!("{:#?}", result.node());
+        }
+    }
 }
 
 fn main() {
@@ -73,17 +101,9 @@ fn main() {
         let argv = Value::array_from_iter(args.file.iter().cloned().map(Value::string));
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
         globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
-        if args.ast {
+        if let Some(kind) = args.ast {
             for code in args.exec {
-                match ruruby_parse::Parser::parse_program(code, path) {
-                    Ok(res) => {
-                        eprintln!("{:#?}", res.node)
-                    }
-                    Err(err) => {
-                        let err = MonorubyErr::parse(err);
-                        handle_error(err, &globals);
-                    }
-                }
+                dump_ast(&code, path, kind, &globals);
             }
         } else {
             for code in args.exec {
@@ -121,11 +141,8 @@ fn main() {
         std::io::stdin().read_to_string(&mut code).unwrap();
         (code, std::path::PathBuf::from("-"))
     };
-    if args.ast {
-        match ruruby_parse::Parser::parse_program(code, path) {
-            Ok(res) => eprintln!("{:#?}", res.node),
-            Err(err) => handle_error(MonorubyErr::parse(err), &globals),
-        }
+    if let Some(kind) = args.ast {
+        dump_ast(&code, &path, kind, &globals);
     } else if let Err(err) = globals.run(code, &path) {
         handle_error(err, &globals);
     }
