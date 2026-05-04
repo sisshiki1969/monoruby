@@ -14,12 +14,14 @@
 use std::path::PathBuf;
 
 use ruby_prism::{
-    self as prism, FloatNode, IntegerNode, Location, ProgramNode, StatementsNode, StringNode,
-    SymbolNode,
+    self as prism, ArrayNode, ConstantId, ConstantList, FloatNode, HashNode, IfNode, IntegerNode,
+    LocalVariableReadNode, LocalVariableWriteNode, Location, ProgramNode, RangeNode,
+    StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
 };
 
 use crate::ast::{
-    BinOp, Loc, LocalsContext, LvarCollector, Node, NodeKind, ParseResult, SourceInfoRef,
+    BinOp, CmpKind, Loc, LocalsContext, LvarCollector, Node, NodeKind, ParseResult, SourceInfoRef,
+    UnOp,
 };
 use crate::globals::MonorubyErr;
 
@@ -177,11 +179,24 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_program(&mut self, node: &ProgramNode<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
+        // Pre-populate the local variable table from Prism's per-scope
+        // locals list so the resulting AST matches what ruruby-parse
+        // would have produced (bytecodegen reads `LvarCollector` to
+        // assign register slots before walking the tree).
+        self.collect_locals(&node.locals())?;
         let stmts = self.lower_statements_into_vec(&node.statements())?;
         Ok(Node {
             kind: NodeKind::CompStmt(stmts),
             loc,
         })
+    }
+
+    fn collect_locals(&mut self, locals: &ConstantList<'pr>) -> Result<(), LowerError> {
+        for id in locals.iter() {
+            let name = constant_name(&id)?;
+            self.lvars.insert(&name);
+        }
+        Ok(())
     }
 
     fn lower_statements_into_vec(
@@ -222,6 +237,67 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::CallNode { .. } => self.lower_call(&node.as_call_node().unwrap(), loc)?,
+            prism::Node::LocalVariableReadNode { .. } => {
+                self.lower_local_var_read(&node.as_local_variable_read_node().unwrap())?
+            }
+            prism::Node::LocalVariableWriteNode { .. } => {
+                self.lower_local_var_write(&node.as_local_variable_write_node().unwrap())?
+            }
+            prism::Node::IfNode { .. } => self.lower_if(&node.as_if_node().unwrap())?,
+            prism::Node::UnlessNode { .. } => {
+                self.lower_unless(&node.as_unless_node().unwrap())?
+            }
+            prism::Node::WhileNode { .. } => self.lower_while(&node.as_while_node().unwrap())?,
+            prism::Node::UntilNode { .. } => self.lower_until(&node.as_until_node().unwrap())?,
+            prism::Node::ArrayNode { .. } => {
+                self.lower_array(&node.as_array_node().unwrap())?
+            }
+            prism::Node::HashNode { .. } => self.lower_hash(&node.as_hash_node().unwrap())?,
+            prism::Node::RangeNode { .. } => {
+                self.lower_range(&node.as_range_node().unwrap())?
+            }
+            prism::Node::ParenthesesNode { .. } => {
+                let inner = node.as_parentheses_node().unwrap();
+                match inner.body() {
+                    Some(body) => self.lower_node(&body)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                }
+            }
+            prism::Node::SplatNode { .. } => {
+                let inner = node.as_splat_node().unwrap();
+                let expr = match inner.expression() {
+                    Some(e) => self.lower_node(&e)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                };
+                Node {
+                    kind: NodeKind::Splat(Box::new(expr)),
+                    loc,
+                }
+            }
+            prism::Node::AndNode { .. } => {
+                let inner = node.as_and_node().unwrap();
+                let lhs = self.lower_node(&inner.left())?;
+                let rhs = self.lower_node(&inner.right())?;
+                Node {
+                    kind: NodeKind::BinOp(BinOp::LAnd, Box::new(lhs), Box::new(rhs)),
+                    loc,
+                }
+            }
+            prism::Node::OrNode { .. } => {
+                let inner = node.as_or_node().unwrap();
+                let lhs = self.lower_node(&inner.left())?;
+                let rhs = self.lower_node(&inner.right())?;
+                Node {
+                    kind: NodeKind::BinOp(BinOp::LOr, Box::new(lhs), Box::new(rhs)),
+                    loc,
+                }
+            }
             other => return Err(unsupported("expression", other)),
         })
     }
@@ -311,6 +387,223 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
+    fn lower_local_var_read(
+        &self,
+        node: &LocalVariableReadNode<'pr>,
+    ) -> Result<Node, LowerError> {
+        let name = constant_name(&node.name())?;
+        Ok(Node {
+            kind: NodeKind::LocalVar(node.depth() as usize, name),
+            loc: location_to_loc(&node.location()),
+        })
+    }
+
+    fn lower_local_var_write(
+        &mut self,
+        node: &LocalVariableWriteNode<'pr>,
+    ) -> Result<Node, LowerError> {
+        let name = constant_name(&node.name())?;
+        let depth = node.depth() as usize;
+        let target = Node {
+            kind: NodeKind::LocalVar(depth, name),
+            loc: location_to_loc(&node.name_loc()),
+        };
+        let value = self.lower_node(&node.value())?;
+        Ok(Node {
+            kind: NodeKind::MulAssign(vec![target], vec![value]),
+            loc: location_to_loc(&node.location()),
+        })
+    }
+
+    fn lower_optional_statements(
+        &mut self,
+        stmts: Option<&StatementsNode<'pr>>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        match stmts {
+            Some(s) => Ok(Node {
+                kind: NodeKind::CompStmt(self.lower_statements_into_vec(s)?),
+                loc,
+            }),
+            None => Ok(Node {
+                kind: NodeKind::Nil,
+                loc,
+            }),
+        }
+    }
+
+    fn lower_if(&mut self, node: &IfNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let cond = self.lower_node(&node.predicate())?;
+        let stmts = node.statements();
+        let then_ = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        let else_ = match node.subsequent() {
+            Some(sub) => match sub {
+                prism::Node::IfNode { .. } => self.lower_if(&sub.as_if_node().unwrap())?,
+                prism::Node::ElseNode { .. } => {
+                    let else_node = sub.as_else_node().unwrap();
+                    let inner = else_node.statements();
+                    self.lower_optional_statements(
+                        inner.as_ref(),
+                        location_to_loc(&else_node.location()),
+                    )?
+                }
+                other => return Err(unsupported("if subsequent", &other)),
+            },
+            None => Node {
+                kind: NodeKind::Nil,
+                loc,
+            },
+        };
+        Ok(Node {
+            kind: NodeKind::If {
+                cond: Box::new(cond),
+                then_: Box::new(then_),
+                else_: Box::new(else_),
+            },
+            loc,
+        })
+    }
+
+    fn lower_unless(&mut self, node: &UnlessNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let cond = self.lower_node(&node.predicate())?;
+        let stmts = node.statements();
+        let then_for_unless = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        let else_for_unless = match node.else_clause() {
+            Some(e) => {
+                let inner = e.statements();
+                self.lower_optional_statements(
+                    inner.as_ref(),
+                    location_to_loc(&e.location()),
+                )?
+            }
+            None => Node {
+                kind: NodeKind::Nil,
+                loc,
+            },
+        };
+        // ruruby has no separate `Unless` variant; it represents
+        // `unless cond ; A ; else ; B ; end` as
+        // `If { cond, then_: B, else_: A }` with the branches swapped.
+        Ok(Node {
+            kind: NodeKind::If {
+                cond: Box::new(cond),
+                then_: Box::new(else_for_unless),
+                else_: Box::new(then_for_unless),
+            },
+            loc,
+        })
+    }
+
+    fn lower_while(&mut self, node: &WhileNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let cond = self.lower_node(&node.predicate())?;
+        let stmts = node.statements();
+        let body = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        Ok(Node {
+            kind: NodeKind::While {
+                cond: Box::new(cond),
+                body: Box::new(body),
+                cond_op: true,
+                postfix: node.is_begin_modifier(),
+            },
+            loc,
+        })
+    }
+
+    fn lower_until(&mut self, node: &UntilNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let cond = self.lower_node(&node.predicate())?;
+        let stmts = node.statements();
+        let body = self.lower_optional_statements(stmts.as_ref(), loc)?;
+        Ok(Node {
+            kind: NodeKind::While {
+                cond: Box::new(cond),
+                body: Box::new(body),
+                cond_op: false,
+                postfix: node.is_begin_modifier(),
+            },
+            loc,
+        })
+    }
+
+    fn lower_array(&mut self, node: &ArrayNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let mut elements: Vec<Node> = Vec::new();
+        let mut all_const = true;
+        for n in node.elements().iter() {
+            let lowered = self.lower_node(&n)?;
+            if !is_constant_literal(&lowered.kind) {
+                all_const = false;
+            }
+            elements.push(lowered);
+        }
+        Ok(Node {
+            kind: NodeKind::Array(elements, all_const),
+            loc,
+        })
+    }
+
+    fn lower_hash(&mut self, node: &HashNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let mut pairs: Vec<(Node, Node)> = Vec::new();
+        let mut splat: Vec<Node> = Vec::new();
+        for elem in node.elements().iter() {
+            match elem {
+                prism::Node::AssocNode { .. } => {
+                    let assoc = elem.as_assoc_node().unwrap();
+                    let key = self.lower_node(&assoc.key())?;
+                    let value = self.lower_node(&assoc.value())?;
+                    pairs.push((key, value));
+                }
+                prism::Node::AssocSplatNode { .. } => {
+                    let s = elem.as_assoc_splat_node().unwrap();
+                    let inner = match s.value() {
+                        Some(v) => self.lower_node(&v)?,
+                        None => Node {
+                            kind: NodeKind::Nil,
+                            loc: location_to_loc(&s.location()),
+                        },
+                    };
+                    splat.push(inner);
+                }
+                other => return Err(unsupported("hash element", &other)),
+            }
+        }
+        Ok(Node {
+            kind: NodeKind::Hash(pairs, splat),
+            loc,
+        })
+    }
+
+    fn lower_range(&mut self, node: &RangeNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let start = match node.left() {
+            Some(n) => Some(self.lower_node(&n)?),
+            None => None,
+        };
+        let end = match node.right() {
+            Some(n) => Some(self.lower_node(&n)?),
+            None => None,
+        };
+        let is_const = match (&start, &end) {
+            (Some(s), Some(e)) => {
+                is_constant_literal(&s.kind) && is_constant_literal(&e.kind)
+            }
+            _ => false,
+        };
+        Ok(Node {
+            kind: NodeKind::Range {
+                start: Box::new(start),
+                end: Box::new(end),
+                exclude_end: node.is_exclude_end(),
+                is_const,
+            },
+            loc,
+        })
+    }
+
     fn lower_call(
         &mut self,
         node: &prism::CallNode<'pr>,
@@ -332,8 +625,23 @@ impl<'pr> Lowerer<'pr> {
             return Err(LowerError::Unsupported("CallNode with block"));
         }
 
-        // Common binary operators come back from Prism as a `CallNode`
-        // with a one-element arg list and the operator as the name.
+        // 0-arg "method" calls of the form `-x`, `+x`, `~x`, `!x` are
+        // really unary operators in our IR. Detect them before the
+        // binop fast path so they don't get mistaken for a 1-arg
+        // arithmetic call.
+        if let Some(recv) = receiver_opt.as_ref()
+            && args.is_empty()
+            && let Some(op) = unop_from_name(&method)
+        {
+            let inner = self.lower_node(recv)?;
+            return Ok(Node {
+                kind: NodeKind::UnOp(op, Box::new(inner)),
+                loc,
+            });
+        }
+
+        // Binary operators come back from Prism as a `CallNode` with a
+        // one-element arg list and the operator as the method name.
         if let Some(recv) = receiver_opt.as_ref()
             && args.len() == 1
             && let Some(op) = binop_from_name(&method)
@@ -374,6 +682,34 @@ impl<'pr> Lowerer<'pr> {
     }
 }
 
+/// Conservative test for "this expression has no side effects and
+/// produces a value known at compile time", used to set the
+/// `is_constant_expr` flag on `Array` / `Range` literals so that
+/// bytecodegen can fold them into the constant pool.
+fn is_constant_literal(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Nil
+            | NodeKind::Bool(_)
+            | NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
+            | NodeKind::Rational(_, _)
+            | NodeKind::RImaginary(_, _)
+            | NodeKind::String(_)
+            | NodeKind::Bytes(_)
+            | NodeKind::Symbol(_)
+    )
+}
+
+fn constant_name(id: &ConstantId<'_>) -> Result<String, LowerError> {
+    let bytes = id.as_slice();
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| LowerError::Unsupported("non-utf8 identifier"))
+}
+
 fn binop_from_name(name: &str) -> Option<BinOp> {
     Some(match name {
         "+" => BinOp::Add,
@@ -387,6 +723,26 @@ fn binop_from_name(name: &str) -> Option<BinOp> {
         "&" => BinOp::BitAnd,
         "|" => BinOp::BitOr,
         "^" => BinOp::BitXor,
+        "<=>" => BinOp::Compare,
+        "==" => BinOp::Cmp(CmpKind::Eq),
+        "!=" => BinOp::Cmp(CmpKind::Ne),
+        "<" => BinOp::Cmp(CmpKind::Lt),
+        "<=" => BinOp::Cmp(CmpKind::Le),
+        ">" => BinOp::Cmp(CmpKind::Gt),
+        ">=" => BinOp::Cmp(CmpKind::Ge),
+        "===" => BinOp::Cmp(CmpKind::TEq),
+        "=~" => BinOp::Match,
+        "!~" => BinOp::Unmatch,
+        _ => return None,
+    })
+}
+
+fn unop_from_name(name: &str) -> Option<UnOp> {
+    Some(match name {
+        "-@" | "-" => UnOp::Neg,
+        "+@" | "+" => UnOp::Pos,
+        "~" => UnOp::BitNot,
+        "!" => UnOp::Not,
         _ => return None,
     })
 }
@@ -438,6 +794,8 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         InterpolatedStringNode { .. } => "InterpolatedStringNode",
         RangeNode { .. } => "RangeNode",
         ReturnNode { .. } => "ReturnNode",
+        LocalVariableTargetNode { .. } => "LocalVariableTargetNode",
+        MultiWriteNode { .. } => "MultiWriteNode",
         _ => "<other>",
     }
 }
