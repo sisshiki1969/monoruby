@@ -12,10 +12,12 @@
 //!   `SyntaxError`.
 //! * **Unsupported node** — Prism parsed successfully but the
 //!   lowerer has no handler for one of the produced node types.
-//!   This used to silently fall back to ruruby-parse so the
-//!   interpreter could keep running; today it's a hard panic so the
-//!   gap can't hide. Add the missing arm to [`Lowerer::lower_node`]
-//!   (or the relevant sub-helper) when the panic fires.
+//!   Surfaced as a Ruby-level [`MonorubyErrKind::Fatal`] error
+//!   carrying the offending node name and the file path. The host
+//!   process keeps running and the script gets the same trace it
+//!   would for any other unhandled error; add the missing arm to
+//!   [`Lowerer::lower_node`] (or the relevant sub-helper) when the
+//!   error fires.
 
 use std::path::PathBuf;
 
@@ -38,7 +40,7 @@ use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
 
 pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
-    finalize(try_prism_inner(&code, path.clone(), None, None, 0), &path)
+    try_prism_inner(&code, path, None, None, 0)
 }
 
 pub(super) fn parse_program_eval(
@@ -48,14 +50,13 @@ pub(super) fn parse_program_eval(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, None, line_offset);
-    let res = try_prism_inner(
+    try_prism_inner(
         &code,
-        path.clone(),
+        path,
         Some(options),
         None,
         line_offset.max(0) as usize,
-    );
-    finalize(res, &path)
+    )
 }
 
 pub(super) fn parse_program_binding(
@@ -66,45 +67,13 @@ pub(super) fn parse_program_binding(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
-    let res = try_prism_inner(
+    try_prism_inner(
         &code,
-        path.clone(),
+        path,
         Some(options),
         context,
         line_offset.max(0) as usize,
-    );
-    finalize(res, &path)
-}
-
-/// Convert a `LowerError` from `try_prism_inner` into the public
-/// `Result<ParseResult, MonorubyErr>` shape.
-///
-/// - `Ok(result)` is forwarded as-is.
-/// - `Err(LowerError::ParseError(err))` is a genuine syntax error
-///   reported by Prism for invalid Ruby; surfaced to the caller as
-///   the regular parse-error path.
-/// - `Err(LowerError::Unsupported(kind))` means Prism parsed the
-///   source successfully but our lowerer doesn't yet have a handler
-///   for one of the produced nodes. We used to silently retry the
-///   parse with ruruby-parse so the interpreter could keep running;
-///   that's now a hard panic so missing coverage doesn't hide
-///   behind the fallback. Add the missing handler in
-///   `Lowerer::lower_node` (and friends).
-fn finalize(
-    res: Result<ParseResult, LowerError>,
-    path: &std::path::Path,
-) -> Result<ParseResult, MonorubyErr> {
-    match res {
-        Ok(result) => Ok(result),
-        Err(LowerError::ParseError(err)) => Err(err),
-        Err(LowerError::Unsupported(kind)) => {
-            panic!(
-                "prism lowerer hit an unsupported node `{kind}` while parsing {} \
-                 — add a handler in monoruby/src/parser/prism_backend.rs",
-                path.display(),
-            );
-        }
-    }
+    )
 }
 
 /// Build a `prism::Options` for an eval/binding parse. Prism's
@@ -190,7 +159,7 @@ fn try_prism_inner(
     options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
     line_offset: usize,
-) -> Result<ParseResult, LowerError> {
+) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
     let source_info: SourceInfoRef =
         std::rc::Rc::new(ruruby_parse::SourceInfo::new(path, code.to_owned()));
@@ -201,16 +170,14 @@ fn try_prism_inner(
     };
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
-        return Err(LowerError::ParseError(MonorubyErr::parse(
-            ruruby_parse::ParseErr {
-                kind: ruruby_parse::ParseErrKind::SyntaxError(format!(
-                    "prism: {}",
-                    diag.message()
-                )),
-                loc,
-                source_info,
-            },
-        )));
+        return Err(MonorubyErr::parse(ruruby_parse::ParseErr {
+            kind: ruruby_parse::ParseErrKind::SyntaxError(format!(
+                "prism: {}",
+                diag.message()
+            )),
+            loc,
+            source_info,
+        }));
     }
 
     let mut lowerer = Lowerer::new(code.as_bytes(), path_display);
@@ -222,7 +189,29 @@ fn try_prism_inner(
         // Prism side too.
         lowerer.lvars = seed;
     }
-    let body = lowerer.lower_top(&result.node())?;
+    let body = match lowerer.lower_top(&result.node()) {
+        Ok(body) => body,
+        Err(LowerError::ParseError(err)) => return Err(err),
+        Err(LowerError::Unsupported(kind)) => {
+            // Prism parsed the source but our lowerer has no
+            // handler for one of the produced nodes. Surface this
+            // as a Ruby-level `FatalError` (carrying the same
+            // source-location frame a SyntaxError would) instead
+            // of `panic!`-ing — the host process keeps running and
+            // the script gets a normal exception, while the
+            // FatalError kind still propagates through `rescue`
+            // handlers without being silently swallowed.
+            return Err(MonorubyErr::fatal_with_loc(
+                format!(
+                    "prism lowerer hit an unsupported node `{kind}` while parsing {} \
+                     — add a handler in monoruby/src/parser/prism_backend.rs",
+                    source_info.path.display(),
+                ),
+                Loc::default(),
+                source_info,
+            ));
+        }
+    };
     let lvar_collector = lowerer.into_lvars();
 
     Ok(ParseResult {
