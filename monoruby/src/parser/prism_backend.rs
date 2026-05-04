@@ -119,10 +119,12 @@ fn build_prism_options(
 #[derive(Debug)]
 enum LowerError {
     /// Prism parsed the source successfully but the lowerer hit a
-    /// node it does not handle. The wrapper turns this into a hard
-    /// panic at the parser entry point — there is no longer a
-    /// silent ruruby fallback for missing coverage.
-    Unsupported(&'static str),
+    /// node it does not handle. The `Loc` points back at the
+    /// offending node (or `Loc::default()` when raised from a
+    /// helper that doesn't have one in scope) so the caller can
+    /// surface a useful "line N" frame instead of always pointing
+    /// at line 1.
+    Unsupported(&'static str, Loc),
 }
 
 /// Result of lowering the `block` slot on a Prism call/super node.
@@ -173,7 +175,7 @@ fn try_prism_inner(
     }
     let body = match lowerer.lower_top(&result.node()) {
         Ok(body) => body,
-        Err(LowerError::Unsupported(kind)) => {
+        Err(LowerError::Unsupported(kind, err_loc)) => {
             // Prism parsed the source but our lowerer has no
             // handler for one of the produced nodes. Surface this
             // as a Ruby-level `FatalError` (carrying the same
@@ -188,7 +190,7 @@ fn try_prism_inner(
                      — add a handler in monoruby/src/parser/prism_backend.rs",
                     source_info.path.display(),
                 ),
-                Loc::default(),
+                err_loc,
                 source_info,
             ));
         }
@@ -637,6 +639,7 @@ impl<'pr> Lowerer<'pr> {
                 if n.block().is_some() {
                     return Err(LowerError::Unsupported(
                         "indexed op-assign with block argument",
+                        loc,
                     ));
                 }
                 let target = self.build_index_target(
@@ -649,7 +652,10 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOrWriteNode { .. } => {
                 let n = node.as_index_or_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported("indexed ||= with block argument"));
+                    return Err(LowerError::Unsupported(
+                        "indexed ||= with block argument",
+                        loc,
+                    ));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -661,7 +667,10 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexAndWriteNode { .. } => {
                 let n = node.as_index_and_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported("indexed &&= with block argument"));
+                    return Err(LowerError::Unsupported(
+                        "indexed &&= with block argument",
+                        loc,
+                    ));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -829,11 +838,15 @@ impl<'pr> Lowerer<'pr> {
                     // a multi-element `param: Vec<(depth, name)>`.
                     prism::Node::MultiTargetNode { .. } => {
                         let mt = index.as_multi_target_node().unwrap();
+                        let mt_loc = location_to_loc(&index.location());
                         if mt.rest().is_some() {
-                            return Err(LowerError::Unsupported("for index with splat"));
+                            return Err(LowerError::Unsupported("for index with splat", mt_loc));
                         }
                         if mt.rights().iter().next().is_some() {
-                            return Err(LowerError::Unsupported("for index with post element"));
+                            return Err(LowerError::Unsupported(
+                                "for index with post element",
+                                mt_loc,
+                            ));
                         }
                         let mut out: Vec<(usize, String)> = Vec::new();
                         for tgt in mt.lefts().iter() {
@@ -1648,7 +1661,12 @@ impl<'pr> Lowerer<'pr> {
                 let n = path.as_constant_path_node().unwrap();
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
-                    None => return Err(LowerError::Unsupported("class path missing name")),
+                    None => {
+                        return Err(LowerError::Unsupported(
+                            "class path missing name",
+                            location_to_loc(&path.location()),
+                        ));
+                    }
                 };
                 let base = match n.parent() {
                     Some(parent) => {
@@ -1662,9 +1680,10 @@ impl<'pr> Lowerer<'pr> {
                         // class's base scope.
                         match self.lower_const_chain(&parent) {
                             Ok(node) => Some(Box::new(node)),
-                            Err(LowerError::Unsupported("non-constant constant path prefix")) => {
-                                Some(Box::new(self.lower_node(&parent)?))
-                            }
+                            Err(LowerError::Unsupported(
+                                "non-constant constant path prefix",
+                                _,
+                            )) => Some(Box::new(self.lower_node(&parent)?)),
                             Err(e) => return Err(e),
                         }
                     }
@@ -1733,7 +1752,12 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_constant_path_node().unwrap();
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
-                    None => return Err(LowerError::Unsupported("constant path missing name")),
+                    None => {
+                        return Err(LowerError::Unsupported(
+                            "constant path missing name",
+                            location_to_loc(&node.location()),
+                        ));
+                    }
                 };
                 match n.parent() {
                     None => Ok(ConstChain {
@@ -1762,7 +1786,7 @@ impl<'pr> Lowerer<'pr> {
                         }
                         // Non-constant parent: lower the parent as a
                         // value expression and root the chain on it.
-                        Err(LowerError::Unsupported("non-constant constant path prefix")) => {
+                        Err(LowerError::Unsupported("non-constant constant path prefix", _)) => {
                             let parent_node = self.lower_node(&p)?;
                             Ok(ConstChain {
                                 toplevel: false,
@@ -1778,7 +1802,10 @@ impl<'pr> Lowerer<'pr> {
             // Treat anything else as a non-constant prefix; the caller
             // (the `ConstantPathNode` arm above) recovers and lowers it
             // as a value expression.
-            _ => Err(LowerError::Unsupported("non-constant constant path prefix")),
+            _ => Err(LowerError::Unsupported(
+                "non-constant constant path prefix",
+                location_to_loc(&node.location()),
+            )),
         }
     }
 
@@ -1956,12 +1983,16 @@ impl<'pr> Lowerer<'pr> {
                             let key = assoc.key();
                             let s = key.as_symbol_node().unwrap();
                             let bytes = s.unescaped();
+                            let key_loc = location_to_loc(&key.location());
                             if bytes.is_empty() {
-                                return Err(LowerError::Unsupported("empty keyword arg name"));
+                                return Err(LowerError::Unsupported(
+                                    "empty keyword arg name",
+                                    key_loc,
+                                ));
                             }
                             let name =
                                 std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
-                                    LowerError::Unsupported("non-utf8 keyword arg name")
+                                    LowerError::Unsupported("non-utf8 keyword arg name", key_loc)
                                 })?;
                             let value = self.lower_node(&assoc.value())?;
                             kw_args.push((name, value));
@@ -2001,7 +2032,8 @@ impl<'pr> Lowerer<'pr> {
         safe_nav: bool,
         loc: Loc,
     ) -> Result<Node, LowerError> {
-        let recv = receiver.ok_or(LowerError::Unsupported("attr op-assign without receiver"))?;
+        let recv =
+            receiver.ok_or(LowerError::Unsupported("attr op-assign without receiver", loc))?;
         let receiver_node = self.lower_node(recv)?;
         let method = constant_name(read_name)?;
         Ok(Node {
@@ -2026,7 +2058,8 @@ impl<'pr> Lowerer<'pr> {
         args: Option<&prism::ArgumentsNode<'pr>>,
         loc: Loc,
     ) -> Result<Node, LowerError> {
-        let recv = receiver.ok_or(LowerError::Unsupported("index target without receiver"))?;
+        let recv =
+            receiver.ok_or(LowerError::Unsupported("index target without receiver", loc))?;
         let base = self.lower_node(recv)?;
         let mut index: Vec<Node> = Vec::new();
         if let Some(a) = args {
@@ -2057,7 +2090,7 @@ impl<'pr> Lowerer<'pr> {
     ) -> Result<Node, LowerError> {
         let op_name = constant_name(op_id)?;
         let op = binop_from_name(&op_name)
-            .ok_or(LowerError::Unsupported("unknown op-assign operator"))?;
+            .ok_or(LowerError::Unsupported("unknown op-assign operator", loc))?;
         let value = self.lower_node(value)?;
         Ok(Node {
             kind: NodeKind::AssignOp(op, Box::new(target), Box::new(value)),
@@ -2243,7 +2276,10 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexTargetNode { .. } => {
                 let n = node.as_index_target_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported("index target with block argument"));
+                    return Err(LowerError::Unsupported(
+                        "index target with block argument",
+                        loc,
+                    ));
                 }
                 let recv = n.receiver();
                 self.build_index_target(Some(&recv), n.arguments().as_ref(), loc)?
@@ -2256,7 +2292,10 @@ impl<'pr> Lowerer<'pr> {
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
                     None => {
-                        return Err(LowerError::Unsupported("constant path target missing name"));
+                        return Err(LowerError::Unsupported(
+                            "constant path target missing name",
+                            loc,
+                        ));
                     }
                 };
                 let chain = match n.parent() {
@@ -2271,6 +2310,7 @@ impl<'pr> Lowerer<'pr> {
                         if inner.parent.is_some() {
                             return Err(LowerError::Unsupported(
                                 "constant path target nested under non-constant parent",
+                                loc,
                             ));
                         }
                         inner.prefix.push(std::mem::take(&mut inner.name));
@@ -2727,7 +2767,10 @@ impl<'pr> Lowerer<'pr> {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
                             if bp.locals().iter().next().is_some() {
-                                return Err(LowerError::Unsupported("lambda shadow locals"));
+                                return Err(LowerError::Unsupported(
+                                    "lambda shadow locals",
+                                    location_to_loc(&p.location()),
+                                ));
                             }
                             match bp.parameters() {
                                 Some(pn) => this.lower_parameters(&pn)?,
@@ -2793,7 +2836,10 @@ impl<'pr> Lowerer<'pr> {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
                             if bp.locals().iter().next().is_some() {
-                                return Err(LowerError::Unsupported("block shadow locals"));
+                                return Err(LowerError::Unsupported(
+                                    "block shadow locals",
+                                    location_to_loc(&p.location()),
+                                ));
                             }
                             match bp.parameters() {
                                 Some(pn) => this.lower_parameters(&pn)?,
@@ -2897,12 +2943,17 @@ impl<'pr> Lowerer<'pr> {
                 // now.
                 prism::Node::MultiTargetNode { .. } => {
                     let mt = n.as_multi_target_node().unwrap();
+                    let mt_loc = location_to_loc(&n.location());
                     if mt.rest().is_some() {
-                        return Err(LowerError::Unsupported("destructure param with splat"));
+                        return Err(LowerError::Unsupported(
+                            "destructure param with splat",
+                            mt_loc,
+                        ));
                     }
                     if mt.rights().iter().next().is_some() {
                         return Err(LowerError::Unsupported(
                             "destructure param with post element",
+                            mt_loc,
                         ));
                     }
                     let mut destruct: Vec<(String, Loc)> = Vec::new();
@@ -2920,7 +2971,7 @@ impl<'pr> Lowerer<'pr> {
                         }
                     }
                     if destruct.is_empty() {
-                        return Err(LowerError::Unsupported("empty destructure param"));
+                        return Err(LowerError::Unsupported("empty destructure param", mt_loc));
                     }
                     // Match ruruby's loc-merging convention so
                     // bytecodegen reports matching source spans.
@@ -3321,7 +3372,7 @@ fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, LowerError> {
             kind: NodeKind::Symbol(s.to_owned()),
             loc,
         }),
-        Err(_) => Err(LowerError::Unsupported("non-utf8 global variable name")),
+        Err(_) => Err(LowerError::Unsupported("non-utf8 global variable name", Loc::default())),
     }
 }
 
@@ -3346,7 +3397,7 @@ fn constant_name(id: &ConstantId<'_>) -> Result<String, LowerError> {
     let bytes = id.as_slice();
     std::str::from_utf8(bytes)
         .map(str::to_owned)
-        .map_err(|_| LowerError::Unsupported("non-utf8 identifier"))
+        .map_err(|_| LowerError::Unsupported("non-utf8 identifier", Loc::default()))
 }
 
 /// 1-based line number of `offset` in `source`, used to inline
@@ -3374,7 +3425,7 @@ fn prism_integer_to_bigint(value: &prism::Integer<'_>) -> num::BigInt {
 fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, LowerError> {
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(NodeKind::String(s.to_owned())),
-        Err(_) => Err(LowerError::Unsupported("non-utf8 regex literal")),
+        Err(_) => Err(LowerError::Unsupported("non-utf8 regex literal", Loc::default())),
     }
 }
 
@@ -3456,7 +3507,7 @@ fn unsupported(context: &'static str, node: &prism::Node<'_>) -> LowerError {
             eprintln!("[prism] unsupported {context} node: {kind}");
         }
     }
-    LowerError::Unsupported(kind)
+    LowerError::Unsupported(kind, location_to_loc(&node.location()))
 }
 
 fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
