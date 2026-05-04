@@ -12,6 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
 
+    globals.define_private_builtin_func_with(HASH_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
     globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
     globals.define_builtin_func(HASH_CLASS, "default_proc=", default_proc_assign, 1);
@@ -154,6 +155,44 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         None,
     )?;
     Ok(obj)
+}
+
+///
+/// ### Hash#initialize
+///
+/// - initialize(ifnone = nil) -> self
+/// - initialize {|hash, key| ... } -> self
+///
+/// Private hook called by `Hash.new`. Mirrors the previous Ruby
+/// implementation in `builtins.rb`:
+///   - frozen receivers raise `FrozenError` before any mutation;
+///   - giving both a positional `ifnone` *and* a block is
+///     `ArgumentError("wrong number of arguments (given 1, expected 0)")`;
+///   - with a block, the block becomes the hash's `default_proc`;
+///   - with no block, the hash's default value is set to the
+///     argument (or `nil` if none was given — explicitly resetting
+///     any prior default).
+/// Returns `self`.
+#[monoruby_builtin]
+fn initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let mut hash = lfp.self_val().as_hash();
+    if let Some(bh) = lfp.block() {
+        if lfp.try_arg(0).is_some() {
+            return Err(MonorubyErr::argumenterr(
+                "wrong number of arguments (given 1, expected 0)",
+            ));
+        }
+        hash.set_defalut_proc(vm.generate_proc(globals, bh, pc)?);
+    } else {
+        hash.set_defalut_value(lfp.try_arg(0).unwrap_or_default());
+    }
+    Ok(lfp.self_val())
 }
 
 /// Allocator for `Hash` and its subclasses.

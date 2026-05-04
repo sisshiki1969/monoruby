@@ -68,18 +68,6 @@ end
 class Hash
   include Enumerable
 
-  def initialize(default = (no_arg = true; nil), &block)
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    if block
-      raise ArgumentError, "wrong number of arguments (given 1, expected 0)" unless no_arg
-      self.default_proc = block
-    else
-      self.default = no_arg ? nil : default
-    end
-    self
-  end
-  private :initialize
-
   def to_hash
     self
   end
