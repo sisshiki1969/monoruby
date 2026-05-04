@@ -28,7 +28,8 @@ use crate::ast::{
     BinOp, BlockInfo, CmpKind, Loc, LocalsContext, LvarCollector, NReal, Node, NodeKind, ParamKind,
     ParseResult, SourceInfoRef, UnOp,
 };
-use crate::globals::MonorubyErr;
+use crate::globals::{ExternalContext, MonorubyErr};
+use crate::id_table::IdentId;
 
 use super::ruruby_backend;
 
@@ -38,38 +39,113 @@ pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, 
     })
 }
 
-pub(super) fn parse_program_eval<C: LocalsContext>(
+pub(super) fn parse_program_eval(
     code: String,
     path: PathBuf,
-    extern_context: Option<&C>,
+    extern_context: Option<&ExternalContext>,
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
-    try_prism_then_ruruby(
-        code,
-        path,
-        extern_context,
-        line_offset,
-        |code, path, ctx, line| ruruby_backend::parse_program_eval(code, path, ctx, line),
-    )
+    let options = build_prism_options(extern_context, None, line_offset);
+    let path_for_fallback = path.clone();
+    let extern_for_fallback = extern_context;
+    match try_prism_inner(&code, path.clone(), Some(options), None, line_offset.max(0) as usize) {
+        Ok(result) => Ok(result),
+        Err(reason) => {
+            if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "[prism] eval falling back to ruruby for {}: {reason:?}",
+                    path_for_fallback.display()
+                );
+            }
+            ruruby_backend::parse_program_eval(code, path_for_fallback, extern_for_fallback, line_offset)
+        }
+    }
 }
 
-pub(super) fn parse_program_binding<C: LocalsContext>(
+pub(super) fn parse_program_binding(
     code: String,
     path: PathBuf,
     context: Option<LvarCollector>,
-    extern_context: Option<&C>,
+    extern_context: Option<&ExternalContext>,
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
+    let options = build_prism_options(extern_context, context.as_ref(), line_offset);
+    let path_for_fallback = path.clone();
     let context_for_fallback = context.clone();
-    try_prism_then_ruruby(
-        code,
-        path,
-        extern_context,
-        line_offset,
-        |code, path, ctx, line| {
-            ruruby_backend::parse_program_binding(code, path, context_for_fallback.clone(), ctx, line)
-        },
-    )
+    let extern_for_fallback = extern_context;
+    match try_prism_inner(&code, path.clone(), Some(options), context, line_offset.max(0) as usize) {
+        Ok(result) => Ok(result),
+        Err(reason) => {
+            if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "[prism] binding falling back to ruruby for {}: {reason:?}",
+                    path_for_fallback.display()
+                );
+            }
+            ruruby_backend::parse_program_binding(
+                code,
+                path_for_fallback,
+                context_for_fallback,
+                extern_for_fallback,
+                line_offset,
+            )
+        }
+    }
+}
+
+/// Build a `prism::Options` for an eval/binding parse. Prism's
+/// scope list is **outermost-first**; monoruby's `ExternalContext`
+/// stores them innermost-first (`scope[0]` = caller of eval), so we
+/// iterate in reverse. If `binding_locals` is supplied we append it
+/// as the very innermost scope (the binding's own frame).
+fn build_prism_options(
+    extern_context: Option<&ExternalContext>,
+    binding_locals: Option<&LvarCollector>,
+    line_offset: i64,
+) -> prism::Options {
+    // Prism's `line` is 1-indexed. monoruby tracks an offset
+    // (`lineno - 1`) at the call sites in `globals.rs`, so the
+    // wire-format we want is `line_offset + 1`.
+    let line = line_offset.saturating_add(1).clamp(1, i32::MAX as i64) as i32;
+    let mut opts = prism::Options::new().line(line);
+
+    if let Some(ctx) = extern_context {
+        // Walk outermost -> innermost.
+        for scope_idx in (0..ctx.len()).rev() {
+            let (locals, block_param) = &ctx[scope_idx];
+            let mut names: Vec<String> =
+                locals.keys().map(|id: &IdentId| id.get_name()).collect();
+            if let Some(blk_id) = block_param {
+                names.push(blk_id.get_name());
+            }
+            opts.add_scope(names, 0);
+        }
+    }
+
+    // Prism's `pm_parser_init` makes the *last* options scope the
+    // parser's current scope, which `parse_program` then reuses as
+    // the program's own scope. So whichever scope we push last is
+    // the "eval body" scope.
+    //
+    // - For plain `eval(code)` (no binding), the body needs its own
+    //   fresh, empty scope on top of the surrounding-scope stack;
+    //   any reference to e.g. `str` inside `eval("str")` shows up
+    //   with `depth=1` so bytecodegen walks the outer chain. This
+    //   matches Ruby's `Prism.parse(source, scopes:)` API, which
+    //   internally appends an empty scope.
+    // - For `binding.eval(code)` the body *shares* the binding's
+    //   own frame — that frame's locals are visible at depth 0 and
+    //   any new locals introduced by the eval append onto it. So
+    //   the binding's locals go in as the last (eval-body-itself)
+    //   scope, and we don't append a separate empty placeholder.
+    if let Some(coll) = binding_locals {
+        let names: Vec<String> = coll.table().iter().cloned().collect();
+        opts.add_scope(names, 0);
+    } else {
+        opts.add_scope(Vec::<&[u8]>::new(), 0);
+    }
+
+    opts
 }
 
 fn try_prism_then_ruruby<C, F>(
@@ -124,11 +200,24 @@ enum CallBlock {
 }
 
 fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
+    try_prism_inner(code, path, None, None, 0)
+}
+
+fn try_prism_inner(
+    code: &str,
+    path: PathBuf,
+    options: Option<prism::Options>,
+    seed_lvars: Option<LvarCollector>,
+    line_offset: usize,
+) -> Result<ParseResult, LowerError> {
     let path_display = path.display().to_string();
     let source_info: SourceInfoRef =
         std::rc::Rc::new(ruruby_parse::SourceInfo::new(path, code.to_owned()));
 
-    let result = prism::parse(code.as_bytes());
+    let result = match options {
+        Some(opts) => prism::parse_with_options(code.as_bytes(), opts),
+        None => prism::parse(code.as_bytes()),
+    };
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
         return Err(LowerError::ParseError(MonorubyErr::parse(
@@ -144,6 +233,14 @@ fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
     }
 
     let mut lowerer = Lowerer::new(code.as_bytes(), path_display);
+    lowerer.line_offset = line_offset;
+    if let Some(seed) = seed_lvars {
+        // For `binding.eval`, monoruby preloads a `LvarCollector`
+        // with the binding's existing locals so any *new* names the
+        // eval body introduces append onto it. Match that on the
+        // Prism side too.
+        lowerer.lvars = seed;
+    }
     let body = lowerer.lower_top(&result.node())?;
     let lvar_collector = lowerer.into_lvars();
 
@@ -168,6 +265,11 @@ struct Lowerer<'pr> {
     source: &'pr [u8],
     /// The path of the file we're lowering. Inlined for `__FILE__`.
     path: String,
+    /// 0 for ordinary file parses; for `eval(_, _, _, lineno)` and
+    /// `binding.eval` this is `lineno - 1`. Added to every
+    /// `__LINE__` literal so the inlined value matches the host
+    /// frame instead of starting back at 1 inside the eval body.
+    line_offset: usize,
     lvars: LvarCollector,
 }
 
@@ -176,6 +278,7 @@ impl<'pr> Lowerer<'pr> {
         Self {
             source,
             path,
+            line_offset: 0,
             lvars: LvarCollector::new(),
         }
     }
@@ -976,9 +1079,12 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::SourceLineNode { .. } => {
                 // `__LINE__` — likewise inlined as the (1-based) line
                 // number computed by counting newlines up to the
-                // start offset.
+                // start offset, then adding the eval line offset
+                // (0 for ordinary file parses, `lineno - 1` for
+                // `eval(_, _, _, lineno)`).
                 let off = node.location().start_offset();
-                let line = source_line_for_offset(self.source, off) as i64;
+                let line =
+                    (source_line_for_offset(self.source, off) + self.line_offset) as i64;
                 Node {
                     kind: NodeKind::Integer(line),
                     loc,

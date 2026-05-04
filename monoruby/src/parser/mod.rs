@@ -58,33 +58,53 @@ pub fn parse_program_with(
     }
 }
 
-/// `eval` / `instance_eval` / `class_eval` always go through ruruby
-/// regardless of `MONORUBY_PARSER`. The Rust `ruby-prism` 1.9 binding
-/// doesn't expose `pm_options_t.scopes` / `.line`, so Prism can't be
-/// told about the surrounding method's locals; identifiers like `str`
-/// in `eval("str + ' Fred'")` would be parsed as zero-arg method calls
-/// and fail at runtime. Until either ruby-prism is vendored with
-/// options support or the equivalent FFI is added, ruruby is the
-/// source of truth for eval-style parses.
-pub fn parse_program_eval<C: LocalsContext>(
+/// `eval` / `instance_eval` / `class_eval`. Dispatches to the
+/// configured backend ([`default_backend`]). The Prism backend now
+/// receives the surrounding scopes via the vendored ruby-prism's
+/// `parse_with_options` (see `vendor/ruby-prism/src/lib.rs`); the
+/// ruruby backend keeps its existing direct support.
+pub fn parse_program_eval(
     code: String,
     path: impl Into<PathBuf>,
-    extern_context: Option<&C>,
+    extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let path = path.into();
-    ruruby_backend::parse_program_eval(code, path, extern_context, line_offset)
+    match default_backend() {
+        Backend::Ruruby => {
+            ruruby_backend::parse_program_eval(code, path, extern_context, line_offset)
+        }
+        Backend::Prism => {
+            prism_backend::parse_program_eval(code, path, extern_context, line_offset)
+        }
+    }
 }
 
-/// `binding.eval` / `eval(code, binding)` — see the note on
-/// [`parse_program_eval`]; same constraint applies.
-pub fn parse_program_binding<C: LocalsContext>(
+/// `binding.eval` / `eval(code, binding)`. Dispatches like
+/// [`parse_program_eval`]; for the Prism backend the binding's
+/// frame locals are pushed as the innermost surrounding scope.
+pub fn parse_program_binding(
     code: String,
     path: impl Into<PathBuf>,
     context: Option<LvarCollector>,
-    extern_context: Option<&C>,
+    extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let path = path.into();
-    ruruby_backend::parse_program_binding(code, path, context, extern_context, line_offset)
+    match default_backend() {
+        Backend::Ruruby => ruruby_backend::parse_program_binding(
+            code,
+            path,
+            context,
+            extern_context,
+            line_offset,
+        ),
+        Backend::Prism => prism_backend::parse_program_binding(
+            code,
+            path,
+            context,
+            extern_context,
+            line_offset,
+        ),
+    }
 }
