@@ -522,6 +522,247 @@ impl<'pr> Lowerer<'pr> {
                 )?;
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
             }
+            prism::Node::ConstantPathWriteNode { .. } => {
+                let n = node.as_constant_path_write_node().unwrap();
+                let target_path = n.target();
+                let target = self.lower_const_chain(&target_path.as_node())?;
+                let value = self.lower_node(&n.value())?;
+                Node {
+                    kind: NodeKind::MulAssign(vec![target], vec![value]),
+                    loc,
+                }
+            }
+            prism::Node::ConstantPathOperatorWriteNode { .. } => {
+                let n = node.as_constant_path_operator_write_node().unwrap();
+                let target = self.lower_const_chain(&n.target().as_node())?;
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::ConstantPathOrWriteNode { .. } => {
+                let n = node.as_constant_path_or_write_node().unwrap();
+                let target = self.lower_const_chain(&n.target().as_node())?;
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::ConstantPathAndWriteNode { .. } => {
+                let n = node.as_constant_path_and_write_node().unwrap();
+                let target = self.lower_const_chain(&n.target().as_node())?;
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::SuperNode { .. } => {
+                let n = node.as_super_node().unwrap();
+                let mut arglist = ruruby_parse::ArgList::default();
+                if let Some(args) = n.arguments() {
+                    for arg in args.arguments().iter() {
+                        arglist.args.push(self.lower_node(&arg)?);
+                    }
+                }
+                if let Some(block_node) = n.block() {
+                    arglist.block = Some(Box::new(self.lower_call_block(&block_node)?));
+                }
+                Node {
+                    kind: NodeKind::Super(Some(Box::new(arglist))),
+                    loc,
+                }
+            }
+            prism::Node::ForwardingSuperNode { .. } => {
+                // `super` (no parens) — forwards the enclosing
+                // method's arguments. ruruby uses `Super(None)` for
+                // exactly this case. A literal block can still be
+                // attached (`super { ... }`); we don't model that
+                // yet, so fall back if one is present.
+                let n = node.as_forwarding_super_node().unwrap();
+                if n.block().is_some() {
+                    return Err(LowerError::Unsupported(
+                        "forwarding super with literal block",
+                    ));
+                }
+                Node {
+                    kind: NodeKind::Super(None),
+                    loc,
+                }
+            }
+            prism::Node::YieldNode { .. } => {
+                let n = node.as_yield_node().unwrap();
+                let mut arglist = ruruby_parse::ArgList::default();
+                if let Some(args) = n.arguments() {
+                    for arg in args.arguments().iter() {
+                        arglist.args.push(self.lower_node(&arg)?);
+                    }
+                }
+                Node {
+                    kind: NodeKind::Yield(Box::new(arglist)),
+                    loc,
+                }
+            }
+            prism::Node::ForNode { .. } => {
+                let n = node.as_for_node().unwrap();
+                let index = n.index();
+                let param: Vec<(usize, String)> = match index {
+                    prism::Node::LocalVariableTargetNode { .. } => {
+                        let inner = index.as_local_variable_target_node().unwrap();
+                        vec![(inner.depth() as usize, constant_name(&inner.name())?)]
+                    }
+                    // `for a, b in ...` lands as MultiTargetNode here;
+                    // ruruby's `param: Vec<(usize, String)>` could
+                    // accommodate that but bytecodegen's lowering of
+                    // For only handles a flat list and we'd need to
+                    // expand each target. Defer.
+                    other => return Err(unsupported("for index", &other)),
+                };
+                let iter = self.lower_node(&n.collection())?;
+                let body_loc = match n.statements() {
+                    Some(s) => location_to_loc(&s.location()),
+                    None => loc,
+                };
+                let body = match n.statements() {
+                    Some(s) => self.lower_statements_compact(&s, body_loc)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc: body_loc,
+                    },
+                };
+                // ruruby's `for` body lives in a `BlockInfo` whose
+                // own LvarCollector is empty — the loop variable is
+                // visible to the surrounding scope, not introduced
+                // here. Build a fresh empty collector to match.
+                Node {
+                    kind: NodeKind::For {
+                        param,
+                        iter: Box::new(iter),
+                        body: Box::new(BlockInfo {
+                            params: vec![],
+                            body: Box::new(body),
+                            lvar: LvarCollector::new(),
+                            loc: body_loc,
+                        }),
+                    },
+                    loc,
+                }
+            }
+            prism::Node::BreakNode { .. } => {
+                let n = node.as_break_node().unwrap();
+                Node {
+                    kind: NodeKind::Break(Box::new(self.lower_jump_value(n.arguments(), loc)?)),
+                    loc,
+                }
+            }
+            prism::Node::NextNode { .. } => {
+                let n = node.as_next_node().unwrap();
+                Node {
+                    kind: NodeKind::Next(Box::new(self.lower_jump_value(n.arguments(), loc)?)),
+                    loc,
+                }
+            }
+            prism::Node::RedoNode { .. } => Node {
+                kind: NodeKind::Redo,
+                loc,
+            },
+            prism::Node::RetryNode { .. } => Node {
+                kind: NodeKind::Retry,
+                loc,
+            },
+            prism::Node::DefinedNode { .. } => {
+                let n = node.as_defined_node().unwrap();
+                let inner = self.lower_node(&n.value())?;
+                Node {
+                    kind: NodeKind::Defined(Box::new(inner)),
+                    loc,
+                }
+            }
+            prism::Node::AliasMethodNode { .. } => {
+                let n = node.as_alias_method_node().unwrap();
+                let new_name = self.lower_node(&n.new_name())?;
+                let old_name = self.lower_node(&n.old_name())?;
+                Node {
+                    kind: NodeKind::AliasMethod(Box::new(new_name), Box::new(old_name)),
+                    loc,
+                }
+            }
+            prism::Node::UndefNode { .. } => {
+                let n = node.as_undef_node().unwrap();
+                // ruruby's `UndefMethod(Box<Node>)` only carries a
+                // single name; Prism's UndefNode can list multiple
+                // (`undef foo, bar`). Wrap each in its own UndefMethod
+                // and emit them as a CompStmt so bytecodegen sees
+                // them in source order.
+                let mut nodes: Vec<Node> = Vec::new();
+                for name in n.names().iter() {
+                    let lowered = self.lower_node(&name)?;
+                    let inner_loc = lowered.loc;
+                    nodes.push(Node {
+                        kind: NodeKind::UndefMethod(Box::new(lowered)),
+                        loc: inner_loc,
+                    });
+                }
+                match nodes.len() {
+                    0 => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                    1 => nodes.pop().unwrap(),
+                    _ => Node {
+                        kind: NodeKind::CompStmt(nodes),
+                        loc,
+                    },
+                }
+            }
+            prism::Node::CaseNode { .. } => {
+                let n = node.as_case_node().unwrap();
+                let cond = match n.predicate() {
+                    Some(p) => Some(Box::new(self.lower_node(&p)?)),
+                    None => None,
+                };
+                let mut when_branches: Vec<ruruby_parse::CaseBranch> = Vec::new();
+                for w in n.conditions().iter() {
+                    match w {
+                        prism::Node::WhenNode { .. } => {
+                            let wn = w.as_when_node().unwrap();
+                            let mut conds: Vec<Node> = Vec::new();
+                            for c in wn.conditions().iter() {
+                                conds.push(self.lower_node(&c)?);
+                            }
+                            let body_loc = match wn.statements() {
+                                Some(s) => location_to_loc(&s.location()),
+                                None => location_to_loc(&wn.location()),
+                            };
+                            let body = match wn.statements() {
+                                Some(s) => self.lower_statements_compact(&s, body_loc)?,
+                                None => Node {
+                                    kind: NodeKind::Nil,
+                                    loc: body_loc,
+                                },
+                            };
+                            when_branches.push(ruruby_parse::CaseBranch {
+                                when: conds,
+                                body: Box::new(body),
+                            });
+                        }
+                        // `case ... in pattern` arms (CaseMatchNode)
+                        // produce `InNode`s instead; not supported here.
+                        other => return Err(unsupported("case branch", &other)),
+                    }
+                }
+                let else_branch = match n.else_clause() {
+                    Some(e) => {
+                        let stmts = e.statements();
+                        Box::new(self.lower_optional_statements(
+                            stmts.as_ref(),
+                            location_to_loc(&e.location()),
+                        )?)
+                    }
+                    None => Box::new(Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    }),
+                };
+                Node {
+                    kind: NodeKind::Case {
+                        cond,
+                        when_: when_branches,
+                        else_: else_branch,
+                    },
+                    loc,
+                }
+            }
             prism::Node::InstanceVariableReadNode { .. } => {
                 let n = node.as_instance_variable_read_node().unwrap();
                 self.lower_named_var_read(NodeKind::InstanceVar, &n.name(), &n.location())?
@@ -1140,6 +1381,33 @@ impl<'pr> Lowerer<'pr> {
     /// the `rescue` chain as a singly-linked list via
     /// `RescueNode::subsequent`; we walk it and collect each clause
     /// into a `RescueEntry`.
+    /// Lowers the `block` slot of a `CallNode` / `SuperNode` — Prism
+    /// stores either a literal `BlockNode` (`{ ... }`) or a
+    /// `BlockArgumentNode` (`&proc`) there, and ruruby plugs both
+    /// into `arglist.block` differentiated by NodeKind.
+    fn lower_call_block(
+        &mut self,
+        block_node: &prism::Node<'pr>,
+    ) -> Result<Node, LowerError> {
+        match block_node {
+            prism::Node::BlockNode { .. } => {
+                let bn = block_node.as_block_node().unwrap();
+                self.lower_block(&bn)
+            }
+            prism::Node::BlockArgumentNode { .. } => {
+                let ba = block_node.as_block_argument_node().unwrap();
+                match ba.expression() {
+                    Some(e) => self.lower_node(&e),
+                    // `foo(&)` — anonymous forward of the outer
+                    // method's block. Defer; handled via
+                    // arglist.delegate_block on ruruby's side.
+                    None => Err(LowerError::Unsupported("anonymous &-forward")),
+                }
+            }
+            other => Err(unsupported("call block", other)),
+        }
+    }
+
     /// Build the `MethodCall { receiver, method, arglist: empty }`
     /// shape used as the target of `obj.attr += ...` / `obj.attr ||=
     /// ...`. This mirrors what ruruby's parser does for the LHS of an
@@ -1375,6 +1643,46 @@ impl<'pr> Lowerer<'pr> {
                 let recv = n.receiver();
                 self.build_index_target(Some(&recv), n.arguments().as_ref(), loc)?
             }
+            prism::Node::ConstantPathTargetNode { .. } => {
+                // Same logical shape as ConstantPathNode used in a
+                // read context — flatten through `collect_const_chain`
+                // by reading the parent chain plus this target's name.
+                let n = node.as_constant_path_target_node().unwrap();
+                let name = match n.name() {
+                    Some(id) => constant_name(&id)?,
+                    None => return Err(LowerError::Unsupported(
+                        "constant path target missing name",
+                    )),
+                };
+                let chain = match n.parent() {
+                    None => ConstChain {
+                        toplevel: true,
+                        parent: None,
+                        prefix: vec![],
+                        name,
+                    },
+                    Some(p) => {
+                        let mut inner = self.collect_const_chain(&p)?;
+                        if inner.parent.is_some() {
+                            return Err(LowerError::Unsupported(
+                                "constant path target nested under non-constant parent",
+                            ));
+                        }
+                        inner.prefix.push(std::mem::take(&mut inner.name));
+                        inner.name = name;
+                        inner
+                    }
+                };
+                Node {
+                    kind: NodeKind::Const {
+                        toplevel: chain.toplevel,
+                        parent: chain.parent,
+                        prefix: chain.prefix,
+                        name: chain.name,
+                    },
+                    loc,
+                }
+            }
             // Nested destructure (`((a, b), c) = ...`) and call /
             // attribute targets (`a.foo = x`) need their own per-
             // shape lowering. Defer.
@@ -1538,6 +1846,35 @@ impl<'pr> Lowerer<'pr> {
         Ok(Node {
             kind: NodeKind::InterporatedString(parts),
             loc,
+        })
+    }
+
+    /// Build the value carried by a `break` / `next`. Mirrors the
+    /// `return` shape: 0 args -> Nil, 1 arg -> bare, more -> Array.
+    fn lower_jump_value(
+        &mut self,
+        args: Option<prism::ArgumentsNode<'pr>>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let mut values: Vec<Node> = Vec::new();
+        if let Some(arglist) = args {
+            for arg in arglist.arguments().iter() {
+                values.push(self.lower_node(&arg)?);
+            }
+        }
+        Ok(match values.len() {
+            0 => Node {
+                kind: NodeKind::Nil,
+                loc,
+            },
+            1 => values.into_iter().next().unwrap(),
+            _ => {
+                let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
+                Node {
+                    kind: NodeKind::Array(values, all_const),
+                    loc,
+                }
+            }
         })
     }
 
@@ -2013,28 +2350,10 @@ impl<'pr> Lowerer<'pr> {
         }
         // ruruby stores both block-literal (`{ ... }`) and
         // block-argument (`&proc`) forms in the same `arglist.block`
-        // slot — bytecodegen disambiguates by NodeKind. Lower
-        // accordingly.
+        // slot — bytecodegen disambiguates by NodeKind.
         let block = match node.block() {
             None => None,
-            Some(block_node) => match block_node {
-                prism::Node::BlockNode { .. } => {
-                    let bn = block_node.as_block_node().unwrap();
-                    Some(Box::new(self.lower_block(&bn)?))
-                }
-                prism::Node::BlockArgumentNode { .. } => {
-                    let ba = block_node.as_block_argument_node().unwrap();
-                    let inner = match ba.expression() {
-                        Some(e) => self.lower_node(&e)?,
-                        // `foo(&)` — anonymous forward of the outer
-                        // method's block. Defer; handled via
-                        // arglist.delegate_block on ruruby's side.
-                        None => return Err(LowerError::Unsupported("anonymous &-forward")),
-                    };
-                    Some(Box::new(inner))
-                }
-                other => return Err(unsupported("call block", &other)),
-            },
+            Some(block_node) => Some(Box::new(self.lower_call_block(&block_node)?)),
         };
 
         // `a[i]` / `a[i, j]` come through as `CallNode` with method
