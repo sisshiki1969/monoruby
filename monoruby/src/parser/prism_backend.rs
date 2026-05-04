@@ -4,12 +4,18 @@
 //! `Node<'pr>` tree into the owned `ruruby_parse` AST shape that the
 //! rest of monoruby consumes via [`crate::ast::Node`].
 //!
-//! The lowerer is incremental: only a small subset of node kinds is
-//! handled today. When the lowerer encounters something it does not
-//! yet recognise it returns [`LowerError::Unsupported`]; the wrapper
-//! catches that and silently falls back to the ruruby backend so the
-//! interpreter as a whole keeps running while we expand coverage.
-//! Set `MONORUBY_PARSER_VERBOSE=1` to log every fallback to stderr.
+//! Prism failures fall into two cases:
+//!
+//! * **Parse error** — Prism rejected the source as invalid Ruby.
+//!   Surfaced to the caller as a normal [`MonorubyErr`] so the
+//!   interpreter can report it the same way as a CRuby
+//!   `SyntaxError`.
+//! * **Unsupported node** — Prism parsed successfully but the
+//!   lowerer has no handler for one of the produced node types.
+//!   This used to silently fall back to ruruby-parse so the
+//!   interpreter could keep running; today it's a hard panic so the
+//!   gap can't hide. Add the missing arm to [`Lowerer::lower_node`]
+//!   (or the relevant sub-helper) when the panic fires.
 
 use std::path::PathBuf;
 
@@ -25,18 +31,14 @@ use ruby_prism::{
 };
 
 use crate::ast::{
-    BinOp, BlockInfo, CmpKind, Loc, LocalsContext, LvarCollector, NReal, Node, NodeKind, ParamKind,
-    ParseResult, SourceInfoRef, UnOp,
+    BinOp, BlockInfo, CmpKind, Loc, LvarCollector, NReal, Node, NodeKind, ParamKind, ParseResult,
+    SourceInfoRef, UnOp,
 };
 use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
 
-use super::ruruby_backend;
-
 pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
-    try_prism_then_ruruby(code, path, None::<&DummyContext>, 0, |code, path, ctx, line| {
-        ruruby_backend::parse_program_eval(code, path, ctx, line)
-    })
+    finalize(try_prism_inner(&code, path.clone(), None, None, 0), &path)
 }
 
 pub(super) fn parse_program_eval(
@@ -46,20 +48,14 @@ pub(super) fn parse_program_eval(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, None, line_offset);
-    let path_for_fallback = path.clone();
-    let extern_for_fallback = extern_context;
-    match try_prism_inner(&code, path.clone(), Some(options), None, line_offset.max(0) as usize) {
-        Ok(result) => Ok(result),
-        Err(reason) => {
-            if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-                eprintln!(
-                    "[prism] eval falling back to ruruby for {}: {reason:?}",
-                    path_for_fallback.display()
-                );
-            }
-            ruruby_backend::parse_program_eval(code, path_for_fallback, extern_for_fallback, line_offset)
-        }
-    }
+    let res = try_prism_inner(
+        &code,
+        path.clone(),
+        Some(options),
+        None,
+        line_offset.max(0) as usize,
+    );
+    finalize(res, &path)
 }
 
 pub(super) fn parse_program_binding(
@@ -70,25 +66,43 @@ pub(super) fn parse_program_binding(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
-    let path_for_fallback = path.clone();
-    let context_for_fallback = context.clone();
-    let extern_for_fallback = extern_context;
-    match try_prism_inner(&code, path.clone(), Some(options), context, line_offset.max(0) as usize) {
+    let res = try_prism_inner(
+        &code,
+        path.clone(),
+        Some(options),
+        context,
+        line_offset.max(0) as usize,
+    );
+    finalize(res, &path)
+}
+
+/// Convert a `LowerError` from `try_prism_inner` into the public
+/// `Result<ParseResult, MonorubyErr>` shape.
+///
+/// - `Ok(result)` is forwarded as-is.
+/// - `Err(LowerError::ParseError(err))` is a genuine syntax error
+///   reported by Prism for invalid Ruby; surfaced to the caller as
+///   the regular parse-error path.
+/// - `Err(LowerError::Unsupported(kind))` means Prism parsed the
+///   source successfully but our lowerer doesn't yet have a handler
+///   for one of the produced nodes. We used to silently retry the
+///   parse with ruruby-parse so the interpreter could keep running;
+///   that's now a hard panic so missing coverage doesn't hide
+///   behind the fallback. Add the missing handler in
+///   `Lowerer::lower_node` (and friends).
+fn finalize(
+    res: Result<ParseResult, LowerError>,
+    path: &std::path::Path,
+) -> Result<ParseResult, MonorubyErr> {
+    match res {
         Ok(result) => Ok(result),
-        Err(reason) => {
-            if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-                eprintln!(
-                    "[prism] binding falling back to ruruby for {}: {reason:?}",
-                    path_for_fallback.display()
-                );
-            }
-            ruruby_backend::parse_program_binding(
-                code,
-                path_for_fallback,
-                context_for_fallback,
-                extern_for_fallback,
-                line_offset,
-            )
+        Err(LowerError::ParseError(err)) => Err(err),
+        Err(LowerError::Unsupported(kind)) => {
+            panic!(
+                "prism lowerer hit an unsupported node `{kind}` while parsing {} \
+                 — add a handler in monoruby/src/parser/prism_backend.rs",
+                path.display(),
+            );
         }
     }
 }
@@ -148,44 +162,15 @@ fn build_prism_options(
     opts
 }
 
-fn try_prism_then_ruruby<C, F>(
-    code: String,
-    path: PathBuf,
-    extern_context: Option<&C>,
-    line_offset: i64,
-    fallback: F,
-) -> Result<ParseResult, MonorubyErr>
-where
-    C: LocalsContext,
-    F: FnOnce(String, PathBuf, Option<&C>, i64) -> Result<ParseResult, MonorubyErr>,
-{
-    match try_prism(&code, path.clone()) {
-        Ok(result) => Ok(result),
-        Err(reason) => {
-            // While the lowerer is incomplete, every Prism failure —
-            // both real parse errors and "lowerer doesn't know this
-            // node yet" — falls back to ruruby. Once Prism owns
-            // every node we lower we'll switch `ParseError` back to a
-            // hard failure.
-            if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-                eprintln!(
-                    "[prism] falling back to ruruby for {}: {reason:?}",
-                    path.display()
-                );
-            }
-            fallback(code, path, extern_context, line_offset)
-        }
-    }
-}
-
 #[derive(Debug)]
 enum LowerError {
     /// A genuine parse error reported by Prism (also includes our own
     /// "post-parse rejected" cases). Surfaced to the caller as-is.
     ParseError(MonorubyErr),
-    /// Prism parsed the source successfully but the lowerer hit a node
-    /// it cannot yet translate. The caller should retry with the ruruby
-    /// backend.
+    /// Prism parsed the source successfully but the lowerer hit a
+    /// node it does not handle. The wrapper turns this into a hard
+    /// panic at the parser entry point — there is no longer a
+    /// silent ruruby fallback for missing coverage.
     Unsupported(&'static str),
 }
 
@@ -197,10 +182,6 @@ enum CallBlock {
     /// `foo(&)` — anonymous forward of the enclosing method's block.
     /// Caller flips `ArgList::delegate_block`.
     Delegate,
-}
-
-fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
-    try_prism_inner(code, path, None, None, 0)
 }
 
 fn try_prism_inner(
@@ -249,15 +230,6 @@ fn try_prism_inner(
         lvar_collector,
         source_info,
     })
-}
-
-/// Placeholder `LocalsContext` used when callers don't supply one.
-struct DummyContext;
-
-impl LocalsContext for DummyContext {
-    fn find_lvar(&self, _name: &str) -> Option<usize> {
-        None
-    }
 }
 
 struct Lowerer<'pr> {
@@ -871,11 +843,36 @@ impl<'pr> Lowerer<'pr> {
                         let inner = index.as_local_variable_target_node().unwrap();
                         vec![(inner.depth() as usize, constant_name(&inner.name())?)]
                     }
-                    // `for a, b in ...` lands as MultiTargetNode here;
-                    // ruruby's `param: Vec<(usize, String)>` could
-                    // accommodate that but bytecodegen's lowering of
-                    // For only handles a flat list and we'd need to
-                    // expand each target. Defer.
+                    // `for a, b in ...` / `for (a, b) in ...` lands
+                    // as MultiTargetNode. ruruby flattens this into
+                    // a multi-element `param: Vec<(depth, name)>`.
+                    prism::Node::MultiTargetNode { .. } => {
+                        let mt = index.as_multi_target_node().unwrap();
+                        if mt.rest().is_some() {
+                            return Err(LowerError::Unsupported("for index with splat"));
+                        }
+                        if mt.rights().iter().next().is_some() {
+                            return Err(LowerError::Unsupported(
+                                "for index with post element",
+                            ));
+                        }
+                        let mut out: Vec<(usize, String)> = Vec::new();
+                        for tgt in mt.lefts().iter() {
+                            match tgt {
+                                prism::Node::LocalVariableTargetNode { .. } => {
+                                    let inner = tgt.as_local_variable_target_node().unwrap();
+                                    out.push((
+                                        inner.depth() as usize,
+                                        constant_name(&inner.name())?,
+                                    ));
+                                }
+                                other => {
+                                    return Err(unsupported("for index target", &other));
+                                }
+                            }
+                        }
+                        out
+                    }
                     other => return Err(unsupported("for index", &other)),
                 };
                 let iter = self.lower_node(&n.collection())?;
@@ -1679,7 +1676,23 @@ impl<'pr> Lowerer<'pr> {
                     None => return Err(LowerError::Unsupported("class path missing name")),
                 };
                 let base = match n.parent() {
-                    Some(parent) => Some(Box::new(self.lower_const_chain(&parent)?)),
+                    Some(parent) => {
+                        // `class A::B::C` — pure constant chain, hand
+                        // off to the const-chain flattener. For
+                        // dynamic prefixes (`class expr::C`,
+                        // including `class parent::C` where `parent`
+                        // is a local variable, or `class self::C`),
+                        // fall back to a regular value lowering;
+                        // bytecodegen accepts any expression as the
+                        // class's base scope.
+                        match self.lower_const_chain(&parent) {
+                            Ok(node) => Some(Box::new(node)),
+                            Err(LowerError::Unsupported("non-constant constant path prefix")) => {
+                                Some(Box::new(self.lower_node(&parent)?))
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
                     // `class ::Foo; end`: ruruby would set toplevel:true on
                     // the resulting Const but ClassDef has no such field;
                     // mark unsupported until we wire the toplevel base in.
@@ -1902,37 +1915,70 @@ impl<'pr> Lowerer<'pr> {
             // `arglist.hash_splat` (`**` splats).
             prism::Node::KeywordHashNode { .. } => {
                 let kh = n.as_keyword_hash_node().unwrap();
+                let kh_loc = location_to_loc(&kh.location());
+                // ruruby splits trailing keyword pairs into
+                // `arglist.kw_args` (static-symbol keys) and
+                // `arglist.hash_splat` (`**` splats); a key that
+                // isn't a static symbol literal — string keys
+                // (`f("a" => 1)`), interpolated keys, dynamic keys,
+                // etc. — doesn't fit that shape, so we fall back
+                // to the same shape ruruby produces in that case:
+                // build a single `Hash(...)` value and pass it as a
+                // regular positional arg.
+                let mut all_static_symbol = true;
+                for elem in kh.elements().iter() {
+                    if let prism::Node::AssocNode { .. } = elem {
+                        let assoc = elem.as_assoc_node().unwrap();
+                        if !matches!(assoc.key(), prism::Node::SymbolNode { .. }) {
+                            all_static_symbol = false;
+                            break;
+                        }
+                    }
+                }
+                if !all_static_symbol {
+                    let mut pairs: Vec<(Node, Node)> = Vec::new();
+                    let mut splat: Vec<Node> = Vec::new();
+                    for elem in kh.elements().iter() {
+                        match elem {
+                            prism::Node::AssocNode { .. } => {
+                                let assoc = elem.as_assoc_node().unwrap();
+                                let k = self.lower_node(&assoc.key())?;
+                                let v = self.lower_node(&assoc.value())?;
+                                pairs.push((k, v));
+                            }
+                            prism::Node::AssocSplatNode { .. } => {
+                                let s = elem.as_assoc_splat_node().unwrap();
+                                let inner = match s.value() {
+                                    Some(v) => self.lower_node(&v)?,
+                                    None => Node {
+                                        kind: NodeKind::Nil,
+                                        loc: location_to_loc(&s.location()),
+                                    },
+                                };
+                                splat.push(inner);
+                            }
+                            other => return Err(unsupported("kwarg element", &other)),
+                        }
+                    }
+                    args.push(Node {
+                        kind: NodeKind::Hash(pairs, splat),
+                        loc: kh_loc,
+                    });
+                    return Ok(());
+                }
                 for elem in kh.elements().iter() {
                     match elem {
                         prism::Node::AssocNode { .. } => {
                             let assoc = elem.as_assoc_node().unwrap();
                             let key = assoc.key();
-                            // Only static-symbol keys (`a:` form) fit
-                            // ruruby's `(String, Node)` shape;
-                            // anything else (string interpolation,
-                            // dynamic key, …) goes through `lower_hash`
-                            // by lowering the whole `KeywordHashNode`
-                            // as a regular hash arg instead.
-                            let name = match &key {
-                                prism::Node::SymbolNode { .. } => {
-                                    let s = key.as_symbol_node().unwrap();
-                                    match s.unescaped() {
-                                        bytes if !bytes.is_empty() => {
-                                            std::str::from_utf8(bytes)
-                                                .map(str::to_owned)
-                                                .map_err(|_| LowerError::Unsupported(
-                                                    "non-utf8 keyword arg name",
-                                                ))?
-                                        }
-                                        _ => return Err(LowerError::Unsupported(
-                                            "empty keyword arg name",
-                                        )),
-                                    }
-                                }
-                                _ => return Err(LowerError::Unsupported(
-                                    "non-symbol keyword arg key",
-                                )),
-                            };
+                            let s = key.as_symbol_node().unwrap();
+                            let bytes = s.unescaped();
+                            if bytes.is_empty() {
+                                return Err(LowerError::Unsupported("empty keyword arg name"));
+                            }
+                            let name = std::str::from_utf8(bytes)
+                                .map(str::to_owned)
+                                .map_err(|_| LowerError::Unsupported("non-utf8 keyword arg name"))?;
                             let value = self.lower_node(&assoc.value())?;
                             kw_args.push((name, value));
                         }
@@ -2931,8 +2977,19 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                // `ImplicitRestNode` (trailing `,` in block params)
-                // and other rest shapes need their own handling.
+                prism::Node::ImplicitRestNode { .. } => {
+                    // `|k, v,|` — trailing comma in block params
+                    // forces destructure of a single yielded array
+                    // argument (block-arg auto-splat). ruruby
+                    // models the trailing comma as a single
+                    // anonymous `Post(None)` entry that bumps the
+                    // positional arity but allocates no local; we
+                    // do the same.
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Post(None),
+                        loc: location_to_loc(&rest.location()),
+                    });
+                }
                 other => return Err(unsupported("rest param", &other)),
             }
         }

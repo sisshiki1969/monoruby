@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{LocalsContext, LvarCollector, ParseResult};
+use crate::ast::{LvarCollector, ParseResult};
 use crate::globals::MonorubyErr;
 
 mod prism_backend;
@@ -63,7 +63,7 @@ pub fn parse_program_with(
 /// receives the surrounding scopes via the vendored ruby-prism's
 /// `parse_with_options` (see `vendor/ruby-prism/src/lib.rs`); the
 /// ruruby backend keeps its existing direct support.
-pub fn parse_program_eval(
+pub(crate) fn parse_program_eval(
     code: String,
     path: impl Into<PathBuf>,
     extern_context: Option<&crate::globals::ExternalContext>,
@@ -83,7 +83,7 @@ pub fn parse_program_eval(
 /// `binding.eval` / `eval(code, binding)`. Dispatches like
 /// [`parse_program_eval`]; for the Prism backend the binding's
 /// frame locals are pushed as the innermost surrounding scope.
-pub fn parse_program_binding(
+pub(crate) fn parse_program_binding(
     code: String,
     path: impl Into<PathBuf>,
     context: Option<LvarCollector>,
