@@ -23,13 +23,11 @@ use std::path::PathBuf;
 
 use ruby_prism::{
     self as prism, ArrayNode, BeginNode, BlockNode, ClassNode, ConstantId, ConstantList,
-    ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode,
-    GlobalVariableReadNode, GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
-    InstanceVariableWriteNode, IntegerNode, InterpolatedRegularExpressionNode,
-    InterpolatedStringNode, LambdaNode, LocalVariableReadNode, LocalVariableWriteNode, Location,
-    ModuleNode, MultiWriteNode, ParametersNode, ProgramNode, RangeNode, RegularExpressionNode,
-    RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
-    WhileNode,
+    ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode, HashNode, IfNode,
+    IntegerNode, InterpolatedRegularExpressionNode, InterpolatedStringNode, LambdaNode,
+    LocalVariableReadNode, LocalVariableWriteNode, Location, ModuleNode, MultiWriteNode,
+    ParametersNode, ProgramNode, RangeNode, RegularExpressionNode, RescueNode, ReturnNode,
+    StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
 };
 
 use crate::ast::{
@@ -50,13 +48,7 @@ pub(super) fn parse_program_eval(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, None, line_offset);
-    try_prism_inner(
-        &code,
-        path,
-        Some(options),
-        None,
-        line_offset.max(0) as usize,
-    )
+    try_prism_inner(&code, path, Some(options), None, line_offset)
 }
 
 pub(super) fn parse_program_binding(
@@ -67,13 +59,7 @@ pub(super) fn parse_program_binding(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
-    try_prism_inner(
-        &code,
-        path,
-        Some(options),
-        context,
-        line_offset.max(0) as usize,
-    )
+    try_prism_inner(&code, path, Some(options), context, line_offset)
 }
 
 /// Build a `prism::Options` for an eval/binding parse. Prism's
@@ -96,8 +82,7 @@ fn build_prism_options(
         // Walk outermost -> innermost.
         for scope_idx in (0..ctx.len()).rev() {
             let (locals, block_param) = &ctx[scope_idx];
-            let mut names: Vec<String> =
-                locals.keys().map(|id: &IdentId| id.get_name()).collect();
+            let mut names: Vec<String> = locals.keys().map(|id: &IdentId| id.get_name()).collect();
             if let Some(blk_id) = block_param {
                 names.push(blk_id.get_name());
             }
@@ -133,9 +118,6 @@ fn build_prism_options(
 
 #[derive(Debug)]
 enum LowerError {
-    /// A genuine parse error reported by Prism (also includes our own
-    /// "post-parse rejected" cases). Surfaced to the caller as-is.
-    ParseError(MonorubyErr),
     /// Prism parsed the source successfully but the lowerer hit a
     /// node it does not handle. The wrapper turns this into a hard
     /// panic at the parser entry point — there is no longer a
@@ -158,11 +140,14 @@ fn try_prism_inner(
     path: PathBuf,
     options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
-    line_offset: usize,
+    line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
-    let source_info: SourceInfoRef =
-        std::rc::Rc::new(ruruby_parse::SourceInfo::new(path, code.to_owned()));
+    let source_info: SourceInfoRef = std::rc::Rc::new(ruruby_parse::SourceInfo::new_eval(
+        path,
+        code.to_owned(),
+        line_offset,
+    ));
 
     let result = match options {
         Some(opts) => prism::parse_with_options(code.as_bytes(), opts),
@@ -171,10 +156,7 @@ fn try_prism_inner(
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
         return Err(MonorubyErr::parse(ruruby_parse::ParseErr {
-            kind: ruruby_parse::ParseErrKind::SyntaxError(format!(
-                "prism: {}",
-                diag.message()
-            )),
+            kind: ruruby_parse::ParseErrKind::SyntaxError(format!("prism: {}", diag.message())),
             loc,
             source_info,
         }));
@@ -191,7 +173,6 @@ fn try_prism_inner(
     }
     let body = match lowerer.lower_top(&result.node()) {
         Ok(body) => body,
-        Err(LowerError::ParseError(err)) => return Err(err),
         Err(LowerError::Unsupported(kind)) => {
             // Prism parsed the source but our lowerer has no
             // handler for one of the produced nodes. Surface this
@@ -230,7 +211,7 @@ struct Lowerer<'pr> {
     /// `binding.eval` this is `lineno - 1`. Added to every
     /// `__LINE__` literal so the inlined value matches the host
     /// frame instead of starting back at 1 inside the eval body.
-    line_offset: usize,
+    line_offset: i64,
     lvars: LvarCollector,
 }
 
@@ -326,18 +307,12 @@ impl<'pr> Lowerer<'pr> {
                 self.lower_local_var_write(&node.as_local_variable_write_node().unwrap())?
             }
             prism::Node::IfNode { .. } => self.lower_if(&node.as_if_node().unwrap())?,
-            prism::Node::UnlessNode { .. } => {
-                self.lower_unless(&node.as_unless_node().unwrap())?
-            }
+            prism::Node::UnlessNode { .. } => self.lower_unless(&node.as_unless_node().unwrap())?,
             prism::Node::WhileNode { .. } => self.lower_while(&node.as_while_node().unwrap())?,
             prism::Node::UntilNode { .. } => self.lower_until(&node.as_until_node().unwrap())?,
-            prism::Node::ArrayNode { .. } => {
-                self.lower_array(&node.as_array_node().unwrap())?
-            }
+            prism::Node::ArrayNode { .. } => self.lower_array(&node.as_array_node().unwrap())?,
             prism::Node::HashNode { .. } => self.lower_hash(&node.as_hash_node().unwrap())?,
-            prism::Node::RangeNode { .. } => {
-                self.lower_range(&node.as_range_node().unwrap())?
-            }
+            prism::Node::RangeNode { .. } => self.lower_range(&node.as_range_node().unwrap())?,
             prism::Node::ParenthesesNode { .. } => {
                 let inner = node.as_parentheses_node().unwrap();
                 match inner.body() {
@@ -363,12 +338,8 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::DefNode { .. } => self.lower_def(&node.as_def_node().unwrap())?,
-            prism::Node::ClassNode { .. } => {
-                self.lower_class(&node.as_class_node().unwrap())?
-            }
-            prism::Node::ModuleNode { .. } => {
-                self.lower_module(&node.as_module_node().unwrap())?
-            }
+            prism::Node::ClassNode { .. } => self.lower_class(&node.as_class_node().unwrap())?,
+            prism::Node::ModuleNode { .. } => self.lower_module(&node.as_module_node().unwrap())?,
             prism::Node::SingletonClassNode { .. } => {
                 let n = node.as_singleton_class_node().unwrap();
                 let singleton = self.lower_node(&n.expression())?;
@@ -397,9 +368,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ConstantWriteNode { .. } => {
                 self.lower_constant_write(&node.as_constant_write_node().unwrap())?
             }
-            prism::Node::ReturnNode { .. } => {
-                self.lower_return(&node.as_return_node().unwrap())?
-            }
+            prism::Node::ReturnNode { .. } => self.lower_return(&node.as_return_node().unwrap())?,
             prism::Node::InterpolatedStringNode { .. } => {
                 self.lower_interpolated_string(&node.as_interpolated_string_node().unwrap())?
             }
@@ -415,7 +384,10 @@ impl<'pr> Lowerer<'pr> {
                     Ok(s) => NodeKind::String(s.to_owned()),
                     Err(_) => NodeKind::Bytes(bytes.to_vec()),
                 };
-                let body = Node { kind: body_kind, loc: body_loc };
+                let body = Node {
+                    kind: body_kind,
+                    loc: body_loc,
+                };
                 Node {
                     kind: NodeKind::Command(Box::new(body)),
                     loc,
@@ -502,9 +474,7 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
-            prism::Node::BeginNode { .. } => {
-                self.lower_begin(&node.as_begin_node().unwrap())?
-            }
+            prism::Node::BeginNode { .. } => self.lower_begin(&node.as_begin_node().unwrap())?,
             prism::Node::MultiWriteNode { .. } => {
                 self.lower_multi_write(&node.as_multi_write_node().unwrap())?
             }
@@ -630,9 +600,7 @@ impl<'pr> Lowerer<'pr> {
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
             }
-            prism::Node::LambdaNode { .. } => {
-                self.lower_lambda(&node.as_lambda_node().unwrap())?
-            }
+            prism::Node::LambdaNode { .. } => self.lower_lambda(&node.as_lambda_node().unwrap())?,
             prism::Node::ConstantAndWriteNode { .. } => {
                 let n = node.as_constant_and_write_node().unwrap();
                 let target = Node {
@@ -663,9 +631,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOrWriteNode { .. } => {
                 let n = node.as_index_or_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
-                        "indexed ||= with block argument",
-                    ));
+                    return Err(LowerError::Unsupported("indexed ||= with block argument"));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -677,9 +643,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexAndWriteNode { .. } => {
                 let n = node.as_index_and_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
-                        "indexed &&= with block argument",
-                    ));
+                    return Err(LowerError::Unsupported("indexed &&= with block argument"));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -851,9 +815,7 @@ impl<'pr> Lowerer<'pr> {
                             return Err(LowerError::Unsupported("for index with splat"));
                         }
                         if mt.rights().iter().next().is_some() {
-                            return Err(LowerError::Unsupported(
-                                "for index with post element",
-                            ));
+                            return Err(LowerError::Unsupported("for index with post element"));
                         }
                         let mut out: Vec<(usize, String)> = Vec::new();
                         for tgt in mt.lefts().iter() {
@@ -1127,8 +1089,7 @@ impl<'pr> Lowerer<'pr> {
                 // (0 for ordinary file parses, `lineno - 1` for
                 // `eval(_, _, _, lineno)`).
                 let off = node.location().start_offset();
-                let line =
-                    (source_line_for_offset(self.source, off) + self.line_offset) as i64;
+                let line = source_line_for_offset(self.source, off) as i64 + self.line_offset;
                 Node {
                     kind: NodeKind::Integer(line),
                     loc,
@@ -1273,10 +1234,7 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_local_var_read(
-        &self,
-        node: &LocalVariableReadNode<'pr>,
-    ) -> Result<Node, LowerError> {
+    fn lower_local_var_read(&self, node: &LocalVariableReadNode<'pr>) -> Result<Node, LowerError> {
         let name = constant_name(&node.name())?;
         Ok(Node {
             kind: NodeKind::LocalVar(node.depth() as usize, name),
@@ -1359,10 +1317,7 @@ impl<'pr> Lowerer<'pr> {
         let else_for_unless = match node.else_clause() {
             Some(e) => {
                 let inner = e.statements();
-                self.lower_optional_statements(
-                    inner.as_ref(),
-                    location_to_loc(&e.location()),
-                )?
+                self.lower_optional_statements(inner.as_ref(), location_to_loc(&e.location()))?
             }
             None => Node {
                 kind: NodeKind::Nil,
@@ -1510,7 +1465,10 @@ impl<'pr> Lowerer<'pr> {
         // Pre-folding heterogeneous-type ranges like `9155.."s"` would
         // silently swallow the runtime ArgumentError CRuby raises.
         let is_const = matches!(
-            (start.as_ref().map(|n| &n.kind), end.as_ref().map(|n| &n.kind)),
+            (
+                start.as_ref().map(|n| &n.kind),
+                end.as_ref().map(|n| &n.kind)
+            ),
             (
                 Some(NodeKind::Integer(_) | NodeKind::Bignum(_)),
                 Some(NodeKind::Integer(_) | NodeKind::Bignum(_)),
@@ -1692,10 +1650,12 @@ impl<'pr> Lowerer<'pr> {
                             Err(e) => return Err(e),
                         }
                     }
-                    // `class ::Foo; end`: ruruby would set toplevel:true on
-                    // the resulting Const but ClassDef has no such field;
-                    // mark unsupported until we wire the toplevel base in.
-                    None => return Err(LowerError::Unsupported("toplevel class path")),
+                    // `class ::Foo; end`: matches the ruruby backend,
+                    // which discards the toplevel marker and lowers
+                    // this as a base-less ClassDef. At top level the
+                    // current lexical scope already *is* the toplevel
+                    // so the resulting class binds in the right place.
+                    None => None,
                 };
                 Ok((base, name))
             }
@@ -1740,10 +1700,7 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    fn collect_const_chain(
-        &mut self,
-        node: &prism::Node<'pr>,
-    ) -> Result<ConstChain, LowerError> {
+    fn collect_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<ConstChain, LowerError> {
         match node {
             prism::Node::ConstantReadNode { .. } => {
                 let n = node.as_constant_read_node().unwrap();
@@ -1867,10 +1824,7 @@ impl<'pr> Lowerer<'pr> {
     /// anonymous-& form (`foo(&)`) is reported separately via
     /// [`CallBlock::Delegate`] so the caller can flip
     /// `arglist.delegate_block`.
-    fn lower_call_block(
-        &mut self,
-        block_node: &prism::Node<'pr>,
-    ) -> Result<CallBlock, LowerError> {
+    fn lower_call_block(&mut self, block_node: &prism::Node<'pr>) -> Result<CallBlock, LowerError> {
         match block_node {
             prism::Node::BlockNode { .. } => {
                 let bn = block_node.as_block_node().unwrap();
@@ -1987,9 +1941,10 @@ impl<'pr> Lowerer<'pr> {
                             if bytes.is_empty() {
                                 return Err(LowerError::Unsupported("empty keyword arg name"));
                             }
-                            let name = std::str::from_utf8(bytes)
-                                .map(str::to_owned)
-                                .map_err(|_| LowerError::Unsupported("non-utf8 keyword arg name"))?;
+                            let name =
+                                std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
+                                    LowerError::Unsupported("non-utf8 keyword arg name")
+                                })?;
                             let value = self.lower_node(&assoc.value())?;
                             kw_args.push((name, value));
                         }
@@ -2028,8 +1983,7 @@ impl<'pr> Lowerer<'pr> {
         safe_nav: bool,
         loc: Loc,
     ) -> Result<Node, LowerError> {
-        let recv = receiver
-            .ok_or(LowerError::Unsupported("attr op-assign without receiver"))?;
+        let recv = receiver.ok_or(LowerError::Unsupported("attr op-assign without receiver"))?;
         let receiver_node = self.lower_node(recv)?;
         let method = constant_name(read_name)?;
         Ok(Node {
@@ -2054,8 +2008,7 @@ impl<'pr> Lowerer<'pr> {
         args: Option<&prism::ArgumentsNode<'pr>>,
         loc: Loc,
     ) -> Result<Node, LowerError> {
-        let recv = receiver
-            .ok_or(LowerError::Unsupported("index target without receiver"))?;
+        let recv = receiver.ok_or(LowerError::Unsupported("index target without receiver"))?;
         let base = self.lower_node(recv)?;
         let mut index: Vec<Node> = Vec::new();
         if let Some(a) = args {
@@ -2226,10 +2179,7 @@ impl<'pr> Lowerer<'pr> {
     /// `Local/Instance/Global/ClassVar/Const` shapes ruruby's parser
     /// would have produced for the LHS. Used by both `MultiWriteNode`
     /// and the rescue-target lowerer.
-    fn lower_assign_target(
-        &mut self,
-        node: &prism::Node<'pr>,
-    ) -> Result<Node, LowerError> {
+    fn lower_assign_target(&mut self, node: &prism::Node<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
         Ok(match node {
             prism::Node::LocalVariableTargetNode { .. } => {
@@ -2275,9 +2225,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexTargetNode { .. } => {
                 let n = node.as_index_target_node().unwrap();
                 if n.block().is_some() {
-                    return Err(LowerError::Unsupported(
-                        "index target with block argument",
-                    ));
+                    return Err(LowerError::Unsupported("index target with block argument"));
                 }
                 let recv = n.receiver();
                 self.build_index_target(Some(&recv), n.arguments().as_ref(), loc)?
@@ -2289,9 +2237,9 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_constant_path_target_node().unwrap();
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
-                    None => return Err(LowerError::Unsupported(
-                        "constant path target missing name",
-                    )),
+                    None => {
+                        return Err(LowerError::Unsupported("constant path target missing name"));
+                    }
                 };
                 let chain = match n.parent() {
                     None => ConstChain {
@@ -2484,10 +2432,7 @@ impl<'pr> Lowerer<'pr> {
     ///   `Nil`, or `CompStmt` depending on statement count
     /// - `EmbeddedVariableNode` (`#@x`, `#$x`) — forward the inner
     ///   variable read directly
-    fn lower_interp_parts(
-        &mut self,
-        parts: prism::NodeList<'pr>,
-    ) -> Result<Vec<Node>, LowerError> {
+    fn lower_interp_parts(&mut self, parts: prism::NodeList<'pr>) -> Result<Vec<Node>, LowerError> {
         let mut out: Vec<Node> = Vec::new();
         for part in parts.iter() {
             match part {
@@ -2543,11 +2488,7 @@ impl<'pr> Lowerer<'pr> {
     /// ruruby uses `Imaginary(NReal)` for the integer / float cases
     /// and a separate `RImaginary(BigInt, BigInt)` when the inner
     /// part is a rational.
-    fn lower_imaginary(
-        &self,
-        numeric: &prism::Node<'pr>,
-        loc: Loc,
-    ) -> Result<Node, LowerError> {
+    fn lower_imaginary(&self, numeric: &prism::Node<'pr>, loc: Loc) -> Result<Node, LowerError> {
         match numeric {
             prism::Node::IntegerNode { .. } => {
                 let inner = numeric.as_integer_node().unwrap();
@@ -2737,9 +2678,7 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 });
                 let kind = match singleton_receiver {
-                    Some(recv) => {
-                        NodeKind::SingletonMethodDef(Box::new(recv), name, info)
-                    }
+                    Some(recv) => NodeKind::SingletonMethodDef(Box::new(recv), name, info),
                     None => NodeKind::MethodDef(name, info),
                 };
                 Ok(Node { kind, loc })
@@ -2826,62 +2765,63 @@ impl<'pr> Lowerer<'pr> {
         // lowering is wrapped so an error inside it doesn't leak the
         // partially-built block scope into the outer lowerer.
         let saved = std::mem::take(&mut self.lvars);
-        let result = (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
-            // Parameters first (see comment on the def-node lowerer for
-            // why), then top up the rest from `node.locals()`.
-            let params = match node.parameters() {
-                None => Vec::new(),
-                Some(p) => match p {
-                    prism::Node::BlockParametersNode { .. } => {
-                        let bp = p.as_block_parameters_node().unwrap();
-                        if bp.locals().iter().next().is_some() {
-                            return Err(LowerError::Unsupported("block shadow locals"));
+        let result =
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+                // Parameters first (see comment on the def-node lowerer for
+                // why), then top up the rest from `node.locals()`.
+                let params = match node.parameters() {
+                    None => Vec::new(),
+                    Some(p) => match p {
+                        prism::Node::BlockParametersNode { .. } => {
+                            let bp = p.as_block_parameters_node().unwrap();
+                            if bp.locals().iter().next().is_some() {
+                                return Err(LowerError::Unsupported("block shadow locals"));
+                            }
+                            match bp.parameters() {
+                                Some(pn) => this.lower_parameters(&pn)?,
+                                None => Vec::new(),
+                            }
                         }
-                        match bp.parameters() {
-                            Some(pn) => this.lower_parameters(&pn)?,
-                            None => Vec::new(),
+                        prism::Node::NumberedParametersNode { .. } => {
+                            // `_1`, `_2`, … — Prism reports the max
+                            // index actually referenced (`.maximum()`)
+                            // and we synthesize one `Param("_N")` per
+                            // index. ruruby tracks the same shape plus
+                            // a `numbered_param: Some(loc)` flag on
+                            // `LvarCollector`; we mirror that flag too
+                            // so bytecodegen's `_1`-vs-explicit-block-arg
+                            // checks behave identically.
+                            let np = p.as_numbered_parameters_node().unwrap();
+                            let max = np.maximum() as usize;
+                            let np_loc = location_to_loc(&np.location());
+                            let mut out = Vec::with_capacity(max);
+                            for i in 1..=max {
+                                let name = format!("_{i}");
+                                this.lvars.insert(&name);
+                                out.push(ruruby_parse::FormalParam {
+                                    kind: ParamKind::Param(name),
+                                    loc: np_loc,
+                                });
+                            }
+                            if max > 0 {
+                                this.lvars.numbered_param = Some(np_loc);
+                                this.lvars.numbered_param_max = max as u8;
+                            }
+                            out
                         }
-                    }
-                    prism::Node::NumberedParametersNode { .. } => {
-                        // `_1`, `_2`, … — Prism reports the max
-                        // index actually referenced (`.maximum()`)
-                        // and we synthesize one `Param("_N")` per
-                        // index. ruruby tracks the same shape plus
-                        // a `numbered_param: Some(loc)` flag on
-                        // `LvarCollector`; we mirror that flag too
-                        // so bytecodegen's `_1`-vs-explicit-block-arg
-                        // checks behave identically.
-                        let np = p.as_numbered_parameters_node().unwrap();
-                        let max = np.maximum() as usize;
-                        let np_loc = location_to_loc(&np.location());
-                        let mut out = Vec::with_capacity(max);
-                        for i in 1..=max {
-                            let name = format!("_{i}");
-                            this.lvars.insert(&name);
-                            out.push(ruruby_parse::FormalParam {
-                                kind: ParamKind::Param(name),
-                                loc: np_loc,
-                            });
-                        }
-                        if max > 0 {
-                            this.lvars.numbered_param = Some(np_loc);
-                            this.lvars.numbered_param_max = max as u8;
-                        }
-                        out
-                    }
-                    other => return Err(unsupported("block parameters", &other)),
-                },
-            };
-            this.collect_locals(&node.locals())?;
-            let body = match node.body() {
-                Some(b) => this.lower_node(&b)?,
-                None => Node {
-                    kind: NodeKind::Nil,
-                    loc,
-                },
-            };
-            Ok((params, body))
-        })(self);
+                        other => return Err(unsupported("block parameters", &other)),
+                    },
+                };
+                this.collect_locals(&node.locals())?;
+                let body = match node.body() {
+                    Some(b) => this.lower_node(&b)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                };
+                Ok((params, body))
+            })(self);
 
         match result {
             Ok((params, body)) => {
@@ -2940,9 +2880,7 @@ impl<'pr> Lowerer<'pr> {
                 prism::Node::MultiTargetNode { .. } => {
                     let mt = n.as_multi_target_node().unwrap();
                     if mt.rest().is_some() {
-                        return Err(LowerError::Unsupported(
-                            "destructure param with splat",
-                        ));
+                        return Err(LowerError::Unsupported("destructure param with splat"));
                     }
                     if mt.rights().iter().next().is_some() {
                         return Err(LowerError::Unsupported(
@@ -2968,8 +2906,11 @@ impl<'pr> Lowerer<'pr> {
                     }
                     // Match ruruby's loc-merging convention so
                     // bytecodegen reports matching source spans.
-                    let merged =
-                        destruct.iter().map(|(_, l)| *l).reduce(|a, b| a.merge(b)).unwrap();
+                    let merged = destruct
+                        .iter()
+                        .map(|(_, l)| *l)
+                        .reduce(|a, b| a.merge(b))
+                        .unwrap();
                     out.push(ruruby_parse::FormalParam {
                         kind: ParamKind::Destruct(destruct),
                         loc: merged,
@@ -3139,11 +3080,7 @@ impl<'pr> Lowerer<'pr> {
         Ok(out)
     }
 
-    fn lower_call(
-        &mut self,
-        node: &prism::CallNode<'pr>,
-        loc: Loc,
-    ) -> Result<Node, LowerError> {
+    fn lower_call(&mut self, node: &prism::CallNode<'pr>, loc: Loc) -> Result<Node, LowerError> {
         let receiver_opt = node.receiver();
         let name_bytes = node.name().as_slice();
         let method = std::str::from_utf8(name_bytes)

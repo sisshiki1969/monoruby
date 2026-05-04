@@ -46,7 +46,6 @@ categories = [
     "parsing",
 ]
 license = "MIT"
-license-file = "LICENSE.md"
 repository = "https://github.com/ruby/prism"
 
 [features]
