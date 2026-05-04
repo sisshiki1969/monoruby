@@ -1,1 +1,1 @@
-cargo install --path monoruby && monoruby ../doom/bin/doom
+cargo run --features jit-log --features gc-log -- ../doom/bin/doom

@@ -2,8 +2,8 @@ use crate::codegen::runtime::_dump_stacktrace;
 
 use super::*;
 
-pub mod coerce;
 mod constants;
+pub mod format;
 pub mod frame;
 pub mod inline;
 pub mod op;
@@ -263,6 +263,32 @@ impl Executor {
     /// temp stack (i.e. it has not yet been popped/cleared).
     pub fn temp_at(&self, idx: usize) -> Value {
         self.temp_stack[idx]
+    }
+
+    /// Run `f` with the temp_stack restored to its current depth on exit
+    /// (success, error, or panic). This is the canonical RAII helper for
+    /// keeping freshly-allocated `Value`s reachable across Ruby callbacks
+    /// without touching the global GC enable flag — any `temp_push` /
+    /// `temp_array_new` / `temp_array_push` issued through `f` is rolled
+    /// back automatically, including paths that early-return via `?`.
+    pub fn with_temp_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Executor) -> T,
+    {
+        struct TempScopeGuard<'a> {
+            vm: &'a mut Executor,
+            saved: usize,
+        }
+        impl Drop for TempScopeGuard<'_> {
+            fn drop(&mut self) {
+                self.vm.temp_clear(self.saved);
+            }
+        }
+        let saved = self.temp_len();
+        let guard = TempScopeGuard { vm: self, saved };
+        // Reborrow so the guard retains its own &mut for `Drop` while `f`
+        // gets exclusive access for the call's duration.
+        f(&mut *guard.vm)
     }
 
     pub fn temp_array_push(&mut self, v: Value) {
@@ -732,14 +758,14 @@ impl Executor {
             {
                 check_constant_visibility(globals, defining, constant)?;
             }
-            let (val, _) = self.get_constant_superclass_with_class(globals, module, constant)?;
+            let val = self.get_qualified_constant_with_missing(globals, module, constant)?;
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
         let module = globals[parent].get_module();
         if let Some(defining) = Self::probe_constant_superclass_with_class(globals, module, name) {
             check_constant_visibility(globals, defining, name)?;
         }
-        let (v, _) = self.get_constant_superclass_with_class(globals, module, name)?;
+        let v = self.get_qualified_constant_with_missing(globals, module, name)?;
         Ok((v, base))
     }
 

@@ -414,8 +414,8 @@ impl ISeqInfo {
             .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
     }
 
-    pub(crate) fn no_ensure(&self) -> bool {
-        self.exception_map.iter().all(|map| map.ensure_pc.is_none())
+    pub(crate) fn has_exception_handler(&self) -> bool {
+        !self.exception_map.is_empty()
     }
 
     #[cfg(feature = "emit-bc")]
