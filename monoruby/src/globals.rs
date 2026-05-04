@@ -250,9 +250,18 @@ impl Globals {
                 String::new()
             }
         };
-        // prepend monoruby-specific lib directory so it can override CRuby stdlib files
+        // prepend monoruby-specific lib directory so it can override CRuby stdlib files.
+        // CRuby ships some stdlib files (e.g. `rbconfig/sizeof.rb`) under a
+        // platform-specific subdirectory and adds that subdir to `$LOAD_PATH`
+        // alongside the generic one; mirror that here so a bare
+        // `require "rbconfig/sizeof"` resolves to the x86_64-linux stub.
         let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
-        globals.extend_load_path(std::iter::once(monoruby_lib.to_string_lossy().to_string()));
+        let monoruby_arch_lib = monoruby_lib.join("x86_64-linux");
+        globals.extend_load_path(
+            [&monoruby_lib, &monoruby_arch_lib]
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned()),
+        );
         let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
         globals.extend_load_path(list.iter().cloned());
 
