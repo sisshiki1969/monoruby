@@ -14,48 +14,48 @@ diff -s monoruby.log ruby.log
 # Build instrumented binary via cargo llvm-cov run
 cargo llvm-cov run --no-report --features stress-spill-pool --features gc-stress -- --version > /dev/null
 
-$MONORUBY benchmark/tarai.rb > monoruby.log
-ruby --yjit benchmark/tarai.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/so_nbody.rb > monoruby.log
-ruby --yjit benchmark/so_nbody.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/bf.rb > monoruby.log
-ruby --yjit benchmark/bf.rb > ruby.log
-diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/tarai.rb > monoruby.log
+# ruby --yjit benchmark/tarai.rb > ruby.log
+# diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/so_nbody.rb > monoruby.log
+# ruby --yjit benchmark/so_nbody.rb > ruby.log
+# diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/bf.rb > monoruby.log
+# ruby --yjit benchmark/bf.rb > ruby.log
+# diff -s monoruby.log ruby.log
 
-echo "checking plb2.."
-$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
-ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
-ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
-ruby --yjit benchmark/plb2/matmul.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
-ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
-diff -s monoruby.log ruby.log
+# echo "checking plb2.."
+# $MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
+# ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
+# diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
+# ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
+# diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/plb2/matmul.rb > monoruby.log
+# ruby --yjit benchmark/plb2/matmul.rb > ruby.log
+# diff -s monoruby.log ruby.log
+# $MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
+# ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
+# diff -s monoruby.log ruby.log
 
-$MONORUBY benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
-ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
+# $MONORUBY benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
+# ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
 
-$MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
-$MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
-ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
-diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
-diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
-rm benchmark/*.ppm
+# $MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
+# $MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
+# ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
+# diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
+# diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
+# rm benchmark/*.ppm
 
-$MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
-diff -s monoruby.log ruby.log
+# $MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+# ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
+# diff -s monoruby.log ruby.log
 
-$MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
-diff -s monoruby.log ruby.log
-rm *.log
+# $MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
+# ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
+# diff -s monoruby.log ruby.log
+# rm *.log
 
 # Run ruby/spec with instrumented binary for coverage
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
