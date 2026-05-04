@@ -15,10 +15,11 @@ use std::path::PathBuf;
 
 use ruby_prism::{
     self as prism, ArrayNode, BlockNode, ClassNode, ConstantId, ConstantList, ConstantPathNode,
-    ConstantReadNode, ConstantWriteNode, DefNode, FloatNode, HashNode, IfNode, IntegerNode,
-    LocalVariableReadNode, LocalVariableWriteNode, Location, ModuleNode, ParametersNode,
-    ProgramNode, RangeNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
-    WhileNode,
+    ConstantReadNode, ConstantWriteNode, DefNode, FloatNode, GlobalVariableReadNode,
+    GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
+    InstanceVariableWriteNode, IntegerNode, LocalVariableReadNode, LocalVariableWriteNode,
+    Location, ModuleNode, ParametersNode, ProgramNode, RangeNode, ReturnNode, StatementsNode,
+    StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
 };
 
 use crate::ast::{
@@ -297,6 +298,37 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::ConstantWriteNode { .. } => {
                 self.lower_constant_write(&node.as_constant_write_node().unwrap())?
+            }
+            prism::Node::ReturnNode { .. } => {
+                self.lower_return(&node.as_return_node().unwrap())?
+            }
+            prism::Node::InstanceVariableReadNode { .. } => {
+                let n = node.as_instance_variable_read_node().unwrap();
+                self.lower_named_var_read(NodeKind::InstanceVar, &n.name(), &n.location())?
+            }
+            prism::Node::InstanceVariableWriteNode { .. } => {
+                let n = node.as_instance_variable_write_node().unwrap();
+                self.lower_named_var_write(
+                    NodeKind::InstanceVar,
+                    &n.name(),
+                    &n.name_loc(),
+                    &n.value(),
+                    &n.location(),
+                )?
+            }
+            prism::Node::GlobalVariableReadNode { .. } => {
+                let n = node.as_global_variable_read_node().unwrap();
+                self.lower_named_var_read(NodeKind::GlobalVar, &n.name(), &n.location())?
+            }
+            prism::Node::GlobalVariableWriteNode { .. } => {
+                let n = node.as_global_variable_write_node().unwrap();
+                self.lower_named_var_write(
+                    NodeKind::GlobalVar,
+                    &n.name(),
+                    &n.name_loc(),
+                    &n.value(),
+                    &n.location(),
+                )?
             }
             prism::Node::AndNode { .. } => {
                 let inner = node.as_and_node().unwrap();
@@ -835,6 +867,75 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
+    /// `return` (no value) -> `Return(Nil)`.
+    /// `return x` -> `Return(<x>)`.
+    /// `return x, y` -> `Return(Array([x, y], is_const))` (matching the
+    /// shape ruruby-parse produces — it always wraps the multi-value
+    /// case in an Array).
+    /// Generic helper for `InstanceVariableReadNode` / `GlobalVariableReadNode`,
+    /// both of which carry an interned `name` (already including the
+    /// `@`/`$` sigil) plus a location. The same `Const` / `Param` /
+    /// `Splat` shape is built by passing the appropriate `NodeKind`
+    /// variant constructor.
+    fn lower_named_var_read(
+        &self,
+        kind: fn(String) -> NodeKind,
+        name: &ConstantId<'pr>,
+        loc: &Location<'pr>,
+    ) -> Result<Node, LowerError> {
+        Ok(Node {
+            kind: kind(constant_name(name)?),
+            loc: location_to_loc(loc),
+        })
+    }
+
+    fn lower_named_var_write(
+        &mut self,
+        kind: fn(String) -> NodeKind,
+        name: &ConstantId<'pr>,
+        name_loc: &Location<'pr>,
+        value: &prism::Node<'pr>,
+        full_loc: &Location<'pr>,
+    ) -> Result<Node, LowerError> {
+        let target = Node {
+            kind: kind(constant_name(name)?),
+            loc: location_to_loc(name_loc),
+        };
+        let value = self.lower_node(value)?;
+        Ok(Node {
+            kind: NodeKind::MulAssign(vec![target], vec![value]),
+            loc: location_to_loc(full_loc),
+        })
+    }
+
+    fn lower_return(&mut self, node: &ReturnNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let mut values: Vec<Node> = Vec::new();
+        if let Some(arglist) = node.arguments() {
+            for arg in arglist.arguments().iter() {
+                values.push(self.lower_node(&arg)?);
+            }
+        }
+        let inner = match values.len() {
+            0 => Node {
+                kind: NodeKind::Nil,
+                loc,
+            },
+            1 => values.into_iter().next().unwrap(),
+            _ => {
+                let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
+                Node {
+                    kind: NodeKind::Array(values, all_const),
+                    loc,
+                }
+            }
+        };
+        Ok(Node {
+            kind: NodeKind::Return(Box::new(inner)),
+            loc,
+        })
+    }
+
     fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
         let name = constant_name(&node.name())?;
@@ -873,11 +974,17 @@ impl<'pr> Lowerer<'pr> {
         let saved = std::mem::take(&mut self.lvars);
         let result =
             (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
-                this.collect_locals(&node.locals())?;
+                // Parameters first so the LvarCollector's special
+                // fields (kw / kwrest / block / forwarding_param) get
+                // populated through the proper insert helpers; then
+                // sweep the rest of `node.locals()` to add body-only
+                // locals. `insert` is idempotent, so previously-seen
+                // names from the param pass are no-ops.
                 let params = match node.parameters() {
                     Some(p) => this.lower_parameters(&p)?,
                     None => Vec::new(),
                 };
+                this.collect_locals(&node.locals())?;
                 let body_inner = match node.body() {
                     Some(b) => this.lower_node(&b)?,
                     None => Node {
@@ -931,7 +1038,8 @@ impl<'pr> Lowerer<'pr> {
         // partially-built block scope into the outer lowerer.
         let saved = std::mem::take(&mut self.lvars);
         let result = (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
-            this.collect_locals(&node.locals())?;
+            // Parameters first (see comment on the def-node lowerer for
+            // why), then top up the rest from `node.locals()`.
             let params = match node.parameters() {
                 None => Vec::new(),
                 Some(p) => match p {
@@ -948,6 +1056,7 @@ impl<'pr> Lowerer<'pr> {
                     other => return Err(unsupported("block parameters", &other)),
                 },
             };
+            this.collect_locals(&node.locals())?;
             let body = match node.body() {
                 Some(b) => this.lower_node(&b)?,
                 None => Node {
@@ -980,44 +1089,165 @@ impl<'pr> Lowerer<'pr> {
 
     /// Lowers a `ParametersNode` (the typed parameter cluster shared by
     /// method definitions and block parameters) into ruruby's flat
-    /// `Vec<FormalParam>`.
+    /// `Vec<FormalParam>` AND threads each parameter into the current
+    /// `LvarCollector` using the same special-field rules ruruby's
+    /// parser applies (`kw.push` for keyword params,
+    /// `insert_kwrest_param` for `**kw`, `insert_block_param` for
+    /// `&blk`, `insert_delegate_param` for `...`). Callers must
+    /// invoke this BEFORE seeding the rest of `node.locals()` so that
+    /// the table order matches ruruby's.
     fn lower_parameters(
         &mut self,
         params: &ParametersNode<'pr>,
     ) -> Result<Vec<ruruby_parse::FormalParam>, LowerError> {
         let mut out: Vec<ruruby_parse::FormalParam> = Vec::new();
 
+        // Required positional: `def f(a, b)` -> Param("a"), Param("b")
         for n in params.requireds().iter() {
             match n {
                 prism::Node::RequiredParameterNode { .. } => {
                     let inner = n.as_required_parameter_node().unwrap();
                     let name = constant_name(&inner.name())?;
+                    self.lvars.insert(&name);
                     out.push(ruruby_parse::FormalParam {
                         kind: ParamKind::Param(name),
                         loc: location_to_loc(&inner.location()),
                     });
                 }
+                // `|(a, b)|` destructure on block params lands here as
+                // `MultiTargetNode`; not yet supported.
                 other => return Err(unsupported("required param", &other)),
             }
         }
 
-        if params.optionals().iter().next().is_some() {
-            return Err(LowerError::Unsupported("optional parameter"));
+        // Optional: `b = expr` -> Optional("b", default)
+        for n in params.optionals().iter() {
+            match n {
+                prism::Node::OptionalParameterNode { .. } => {
+                    let inner = n.as_optional_parameter_node().unwrap();
+                    let name = constant_name(&inner.name())?;
+                    self.lvars.insert(&name);
+                    let default = self.lower_node(&inner.value())?;
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Optional(name, Box::new(default)),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                other => return Err(unsupported("optional param", &other)),
+            }
         }
-        if params.rest().is_some() {
-            return Err(LowerError::Unsupported("rest parameter"));
+
+        // Rest: `*rest` or `*` (anonymous)
+        if let Some(rest) = params.rest() {
+            match rest {
+                prism::Node::RestParameterNode { .. } => {
+                    let inner = rest.as_rest_parameter_node().unwrap();
+                    let name = match inner.name() {
+                        Some(id) => Some(constant_name(&id)?),
+                        None => None,
+                    };
+                    if let Some(n) = &name {
+                        self.lvars.insert(n);
+                    }
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Rest(name),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                // `ImplicitRestNode` (trailing `,` in block params)
+                // and other rest shapes need their own handling.
+                other => return Err(unsupported("rest param", &other)),
+            }
         }
-        if params.posts().iter().next().is_some() {
-            return Err(LowerError::Unsupported("post parameter"));
+
+        // Post (after `*rest`): `def f(*rest, c, d)` -> Post("c"), Post("d")
+        for n in params.posts().iter() {
+            match n {
+                prism::Node::RequiredParameterNode { .. } => {
+                    let inner = n.as_required_parameter_node().unwrap();
+                    let name = constant_name(&inner.name())?;
+                    self.lvars.insert(&name);
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Post(Some(name)),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                other => return Err(unsupported("post param", &other)),
+            }
         }
-        if params.keywords().iter().next().is_some() {
-            return Err(LowerError::Unsupported("keyword parameter"));
+
+        // Keywords (required and optional, intermingled in source order)
+        for n in params.keywords().iter() {
+            match n {
+                prism::Node::RequiredKeywordParameterNode { .. } => {
+                    let inner = n.as_required_keyword_parameter_node().unwrap();
+                    let name = constant_name(&inner.name())?;
+                    let lid = self.lvars.insert(&name);
+                    self.lvars.kw.push(lid);
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Keyword(name, None),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                prism::Node::OptionalKeywordParameterNode { .. } => {
+                    let inner = n.as_optional_keyword_parameter_node().unwrap();
+                    let name = constant_name(&inner.name())?;
+                    let lid = self.lvars.insert(&name);
+                    self.lvars.kw.push(lid);
+                    let default = self.lower_node(&inner.value())?;
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Keyword(name, Some(Box::new(default))),
+                        loc: location_to_loc(&inner.location()),
+                    });
+                }
+                other => return Err(unsupported("keyword param", &other)),
+            }
         }
-        if params.keyword_rest().is_some() {
-            return Err(LowerError::Unsupported("keyword rest parameter"));
+
+        // Keyword rest (`**kw` / `**` / `...` forwarding lands here too)
+        if let Some(kr) = params.keyword_rest() {
+            match kr {
+                prism::Node::KeywordRestParameterNode { .. } => {
+                    let inner = kr.as_keyword_rest_parameter_node().unwrap();
+                    let loc = location_to_loc(&inner.location());
+                    let name_opt = match inner.name() {
+                        Some(id) => Some(constant_name(&id)?),
+                        None => None,
+                    };
+                    if let Some(n) = &name_opt {
+                        self.lvars.insert_kwrest_param(n.clone());
+                    }
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::KWRest(name_opt),
+                        loc,
+                    });
+                }
+                prism::Node::ForwardingParameterNode { .. } => {
+                    let loc = location_to_loc(&kr.location());
+                    self.lvars.insert_delegate_param();
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Forwarding,
+                        loc,
+                    });
+                }
+                other => return Err(unsupported("keyword rest param", &other)),
+            }
         }
-        if params.block().is_some() {
-            return Err(LowerError::Unsupported("block parameter"));
+
+        // Block param (`&blk` / `&`)
+        if let Some(bp) = params.block() {
+            let loc = location_to_loc(&bp.location());
+            let name = match bp.name() {
+                Some(id) => Some(constant_name(&id)?),
+                None => None,
+            };
+            if let Some(n) = &name {
+                self.lvars.insert_block_param(n.clone());
+            }
+            out.push(ruruby_parse::FormalParam {
+                kind: ParamKind::Block(name),
+                loc,
+            });
         }
 
         Ok(out)
