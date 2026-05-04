@@ -17,14 +17,15 @@ use ruby_prism::{
     self as prism, ArrayNode, BeginNode, BlockNode, ClassNode, ConstantId, ConstantList,
     ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode,
     GlobalVariableReadNode, GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
-    InstanceVariableWriteNode, IntegerNode, InterpolatedStringNode, LambdaNode,
-    LocalVariableReadNode, LocalVariableWriteNode, Location, ModuleNode, MultiWriteNode,
-    ParametersNode, ProgramNode, RangeNode, RescueNode, ReturnNode, StatementsNode, StringNode,
-    SymbolNode, UnlessNode, UntilNode, WhileNode,
+    InstanceVariableWriteNode, IntegerNode, InterpolatedRegularExpressionNode,
+    InterpolatedStringNode, LambdaNode, LocalVariableReadNode, LocalVariableWriteNode, Location,
+    ModuleNode, MultiWriteNode, ParametersNode, ProgramNode, RangeNode, RegularExpressionNode,
+    RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode,
+    WhileNode,
 };
 
 use crate::ast::{
-    BinOp, BlockInfo, CmpKind, Loc, LocalsContext, LvarCollector, Node, NodeKind, ParamKind,
+    BinOp, BlockInfo, CmpKind, Loc, LocalsContext, LvarCollector, NReal, Node, NodeKind, ParamKind,
     ParseResult, SourceInfoRef, UnOp,
 };
 use crate::globals::MonorubyErr;
@@ -114,6 +115,7 @@ enum LowerError {
 }
 
 fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
+    let path_display = path.display().to_string();
     let source_info: SourceInfoRef =
         std::rc::Rc::new(ruruby_parse::SourceInfo::new(path, code.to_owned()));
 
@@ -132,7 +134,7 @@ fn try_prism(code: &str, path: PathBuf) -> Result<ParseResult, LowerError> {
         )));
     }
 
-    let mut lowerer = Lowerer::new(code.as_bytes());
+    let mut lowerer = Lowerer::new(code.as_bytes(), path_display);
     let body = lowerer.lower_top(&result.node())?;
     let lvar_collector = lowerer.into_lvars();
 
@@ -155,13 +157,16 @@ impl LocalsContext for DummyContext {
 struct Lowerer<'pr> {
     #[allow(dead_code)]
     source: &'pr [u8],
+    /// The path of the file we're lowering. Inlined for `__FILE__`.
+    path: String,
     lvars: LvarCollector,
 }
 
 impl<'pr> Lowerer<'pr> {
-    fn new(source: &'pr [u8]) -> Self {
+    fn new(source: &'pr [u8], path: String) -> Self {
         Self {
             source,
+            path,
             lvars: LvarCollector::new(),
         }
     }
@@ -291,6 +296,16 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ModuleNode { .. } => {
                 self.lower_module(&node.as_module_node().unwrap())?
             }
+            prism::Node::SingletonClassNode { .. } => {
+                // `class << expr ... end` — Prism parses it but the
+                // bytecode that monoruby emits for `SingletonClassDef`
+                // panics in `expand_array` when produced from this
+                // path; the same shape works fine when ruruby
+                // produces it. Defer to ruruby until the underlying
+                // mismatch (likely register / lvar accounting) is
+                // pinned down.
+                return Err(LowerError::Unsupported("class << expr"));
+            }
             prism::Node::ConstantReadNode { .. } => {
                 self.lower_constant_read(&node.as_constant_read_node().unwrap())?
             }
@@ -305,6 +320,72 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::InterpolatedStringNode { .. } => {
                 self.lower_interpolated_string(&node.as_interpolated_string_node().unwrap())?
+            }
+            prism::Node::RationalNode { .. } => {
+                let n = node.as_rational_node().unwrap();
+                Node {
+                    kind: NodeKind::Rational(
+                        prism_integer_to_bigint(&n.numerator()),
+                        prism_integer_to_bigint(&n.denominator()),
+                    ),
+                    loc,
+                }
+            }
+            prism::Node::ImaginaryNode { .. } => {
+                let n = node.as_imaginary_node().unwrap();
+                self.lower_imaginary(&n.numeric(), loc)?
+            }
+            prism::Node::InterpolatedSymbolNode { .. } => {
+                // ruruby has no dedicated InterpolatedSymbol variant —
+                // it desugars `:"foo#{x}"` to `(InterporatedString
+                // ["foo", x]).to_sym`. Match that.
+                let n = node.as_interpolated_symbol_node().unwrap();
+                let parts = self.lower_interp_parts(n.parts())?;
+                let inner = Node {
+                    kind: NodeKind::InterporatedString(parts),
+                    loc,
+                };
+                Node {
+                    kind: NodeKind::MethodCall {
+                        receiver: Box::new(inner),
+                        method: "to_sym".to_owned(),
+                        arglist: Box::new(ruruby_parse::ArgList::default()),
+                        safe_nav: false,
+                    },
+                    loc,
+                }
+            }
+            prism::Node::RegularExpressionNode { .. } => {
+                self.lower_regex(&node.as_regular_expression_node().unwrap())?
+            }
+            prism::Node::InterpolatedRegularExpressionNode { .. } => self
+                .lower_interpolated_regex(
+                    &node.as_interpolated_regular_expression_node().unwrap(),
+                )?,
+            prism::Node::MatchLastLineNode { .. } => {
+                // `if /pat/` (implicit match against `$_`) — ruruby
+                // doesn't have a dedicated node for this either; the
+                // regex literal is parsed the same way and the
+                // implicit match is recognised at bytecodegen.
+                let n = node.as_match_last_line_node().unwrap();
+                let part = Node {
+                    kind: regex_body_to_string(n.unescaped(), location_to_loc(&n.location()))?,
+                    loc: location_to_loc(&n.location()),
+                };
+                let flags = regex_flags_from_closing(&n.closing_loc());
+                Node {
+                    kind: NodeKind::RegExp(vec![part], flags, true),
+                    loc,
+                }
+            }
+            prism::Node::InterpolatedMatchLastLineNode { .. } => {
+                let n = node.as_interpolated_match_last_line_node().unwrap();
+                let parts = self.lower_interp_parts(n.parts())?;
+                let flags = regex_flags_from_closing(&n.closing_loc());
+                Node {
+                    kind: NodeKind::RegExp(parts, flags, false),
+                    loc,
+                }
             }
             prism::Node::BeginNode { .. } => {
                 self.lower_begin(&node.as_begin_node().unwrap())?
@@ -791,6 +872,94 @@ impl<'pr> Lowerer<'pr> {
                     &n.location(),
                 )?
             }
+            prism::Node::ClassVariableReadNode { .. } => {
+                let n = node.as_class_variable_read_node().unwrap();
+                Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::ClassVariableWriteNode { .. } => {
+                let n = node.as_class_variable_write_node().unwrap();
+                let target = Node {
+                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    loc: location_to_loc(&n.name_loc()),
+                };
+                let value = self.lower_node(&n.value())?;
+                Node {
+                    kind: NodeKind::MulAssign(vec![target], vec![value]),
+                    loc,
+                }
+            }
+            prism::Node::NumberedReferenceReadNode { .. } => {
+                // `$1` / `$2` etc. ruruby treats these as ordinary
+                // global variables ($1 lookups eventually go through
+                // the regex match data); match that.
+                let n = node.as_numbered_reference_read_node().unwrap();
+                Node {
+                    kind: NodeKind::GlobalVar(format!("${}", n.number())),
+                    loc,
+                }
+            }
+            prism::Node::BackReferenceReadNode { .. } => {
+                // `$~`, `$&`, `$'`, `` $` ``, `$+` — ruruby exposes
+                // these as plain global variables with the sigil
+                // included.
+                let n = node.as_back_reference_read_node().unwrap();
+                Node {
+                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    loc,
+                }
+            }
+            prism::Node::SourceFileNode { .. } => {
+                // `__FILE__` — ruruby's parser inlines the source
+                // path as a `String` literal at parse time, so do the
+                // same here.
+                Node {
+                    kind: NodeKind::String(self.path.clone()),
+                    loc,
+                }
+            }
+            prism::Node::SourceLineNode { .. } => {
+                // `__LINE__` — likewise inlined as the (1-based) line
+                // number computed by counting newlines up to the
+                // start offset.
+                let off = node.location().start_offset();
+                let line = source_line_for_offset(self.source, off) as i64;
+                Node {
+                    kind: NodeKind::Integer(line),
+                    loc,
+                }
+            }
+            prism::Node::SourceEncodingNode { .. } => {
+                // `__ENCODING__` — ruruby emits a method call (it has
+                // no Encoding class baked in); fall back so the
+                // existing handling stays in charge.
+                return Err(LowerError::Unsupported("__ENCODING__"));
+            }
+            prism::Node::RescueModifierNode { .. } => {
+                // `expr rescue value` — desugar to a `Begin` with a
+                // single bare-rescue clause that catches the default
+                // `StandardError` family. ruruby uses the same
+                // shape (empty exception_list, no assign).
+                let n = node.as_rescue_modifier_node().unwrap();
+                let body = self.lower_node(&n.expression())?;
+                let rescue_body = self.lower_node(&n.rescue_expression())?;
+                let entry = ruruby_parse::RescueEntry {
+                    exception_list: vec![],
+                    assign: None,
+                    body: Box::new(rescue_body),
+                };
+                Node {
+                    kind: NodeKind::Begin {
+                        body: Box::new(body),
+                        rescue: vec![entry],
+                        else_: None,
+                        ensure: None,
+                    },
+                    loc,
+                }
+            }
             prism::Node::AndNode { .. } => {
                 let inner = node.as_and_node().unwrap();
                 let lhs = self.lower_node(&inner.left())?;
@@ -1125,10 +1294,40 @@ impl<'pr> Lowerer<'pr> {
         loc: Loc,
     ) -> Result<BlockInfo, LowerError> {
         let saved = std::mem::take(&mut self.lvars);
+        // ruruby's class / module body has a specific `Begin { body }`
+        // shape that bytecodegen depends on:
+        //   - empty body  -> `Begin { body: CompStmt([]) }`
+        //   - 1 statement -> `Begin { body: <bare expr> }` (NO CompStmt)
+        //   - N>=2        -> `Begin { body: CompStmt([s1, s2, ...]) }`
+        // Lowering through plain `lower_node(StatementsNode)` always
+        // wraps in `CompStmt`, even for single statements; that
+        // throws off bytecodegen's class-definition register
+        // arithmetic and panics later in `expand_array`. Use the
+        // statement-compact lowering instead so the shape matches.
         let body_res = match body {
-            Some(b) => self.lower_node(&b),
+            Some(b) => match b {
+                prism::Node::StatementsNode { .. } => {
+                    let stmts_node = b.as_statements_node().unwrap();
+                    let stmts_loc = location_to_loc(&stmts_node.location());
+                    match self.lower_statements_into_vec(&stmts_node) {
+                        Ok(mut stmts) => match stmts.len() {
+                            0 => Ok(Node {
+                                kind: NodeKind::CompStmt(vec![]),
+                                loc: stmts_loc,
+                            }),
+                            1 => Ok(stmts.pop().unwrap()),
+                            _ => Ok(Node {
+                                kind: NodeKind::CompStmt(stmts),
+                                loc: stmts_loc,
+                            }),
+                        },
+                        Err(e) => Err(e),
+                    }
+                }
+                _ => self.lower_node(&b),
+            },
             None => Ok(Node {
-                kind: NodeKind::Nil,
+                kind: NodeKind::CompStmt(vec![]),
                 loc,
             }),
         };
@@ -1545,6 +1744,18 @@ impl<'pr> Lowerer<'pr> {
                         loc: rest_loc,
                     });
                 }
+                prism::Node::ImplicitRestNode { .. } => {
+                    // `a, b, = arr` — trailing comma forces a "rest
+                    // discard" slot. Same shape as anonymous splat.
+                    let rest_loc = location_to_loc(&rest.location());
+                    lhs.push(Node {
+                        kind: NodeKind::Splat(Box::new(Node {
+                            kind: NodeKind::DiscardLhs,
+                            loc: rest_loc,
+                        })),
+                        loc: rest_loc,
+                    });
+                }
                 other => return Err(unsupported("multi-write rest", &other)),
             }
         }
@@ -1805,11 +2016,30 @@ impl<'pr> Lowerer<'pr> {
         node: &InterpolatedStringNode<'pr>,
     ) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
-        let mut parts: Vec<Node> = Vec::new();
-        for part in node.parts().iter() {
+        let parts = self.lower_interp_parts(node.parts())?;
+        Ok(Node {
+            kind: NodeKind::InterporatedString(parts),
+            loc,
+        })
+    }
+
+    /// Shared lowering for the `parts` lists of
+    /// `InterpolatedStringNode`, `InterpolatedRegularExpressionNode`,
+    /// and `InterpolatedMatchLastLineNode`. Each part is one of:
+    /// - `StringNode` — a static chunk; pass through `lower_string`
+    /// - `EmbeddedStatementsNode` (`#{...}`) — unwrap to bare expr,
+    ///   `Nil`, or `CompStmt` depending on statement count
+    /// - `EmbeddedVariableNode` (`#@x`, `#$x`) — forward the inner
+    ///   variable read directly
+    fn lower_interp_parts(
+        &mut self,
+        parts: prism::NodeList<'pr>,
+    ) -> Result<Vec<Node>, LowerError> {
+        let mut out: Vec<Node> = Vec::new();
+        for part in parts.iter() {
             match part {
                 prism::Node::StringNode { .. } => {
-                    parts.push(self.lower_string(&part.as_string_node().unwrap()));
+                    out.push(self.lower_string(&part.as_string_node().unwrap()));
                 }
                 prism::Node::EmbeddedStatementsNode { .. } => {
                     let inner = part.as_embedded_statements_node().unwrap();
@@ -1834,17 +2064,91 @@ impl<'pr> Lowerer<'pr> {
                             }
                         }
                     };
-                    parts.push(lowered);
+                    out.push(lowered);
                 }
                 prism::Node::EmbeddedVariableNode { .. } => {
                     let inner = part.as_embedded_variable_node().unwrap();
-                    parts.push(self.lower_node(&inner.variable())?);
+                    out.push(self.lower_node(&inner.variable())?);
                 }
                 other => return Err(unsupported("interpolation part", &other)),
             }
         }
+        Ok(out)
+    }
+
+    /// `42i` / `1.5i` / `1ri` — Prism nests an `IntegerNode` /
+    /// `FloatNode` / `RationalNode` inside `ImaginaryNode::numeric`.
+    /// ruruby uses `Imaginary(NReal)` for the integer / float cases
+    /// and a separate `RImaginary(BigInt, BigInt)` when the inner
+    /// part is a rational.
+    fn lower_imaginary(
+        &self,
+        numeric: &prism::Node<'pr>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        match numeric {
+            prism::Node::IntegerNode { .. } => {
+                let inner = numeric.as_integer_node().unwrap();
+                let value = inner.value();
+                let (negative, digits) = value.to_u32_digits();
+                if digits.len() <= 1 {
+                    let n = digits.first().copied().unwrap_or(0) as i64;
+                    let signed = if negative { -n } else { n };
+                    Ok(Node {
+                        kind: NodeKind::Imaginary(NReal::Integer(signed)),
+                        loc,
+                    })
+                } else {
+                    let bi = prism_integer_to_bigint(&value);
+                    Ok(Node {
+                        kind: NodeKind::Imaginary(NReal::Bignum(bi)),
+                        loc,
+                    })
+                }
+            }
+            prism::Node::FloatNode { .. } => {
+                let inner = numeric.as_float_node().unwrap();
+                Ok(Node {
+                    kind: NodeKind::Imaginary(NReal::Float(inner.value())),
+                    loc,
+                })
+            }
+            prism::Node::RationalNode { .. } => {
+                let inner = numeric.as_rational_node().unwrap();
+                Ok(Node {
+                    kind: NodeKind::RImaginary(
+                        prism_integer_to_bigint(&inner.numerator()),
+                        prism_integer_to_bigint(&inner.denominator()),
+                    ),
+                    loc,
+                })
+            }
+            other => Err(unsupported("imaginary numeric", other)),
+        }
+    }
+
+    fn lower_regex(&self, node: &RegularExpressionNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let part = Node {
+            kind: regex_body_to_string(node.unescaped(), loc)?,
+            loc,
+        };
+        let flags = regex_flags_from_closing(&node.closing_loc());
         Ok(Node {
-            kind: NodeKind::InterporatedString(parts),
+            kind: NodeKind::RegExp(vec![part], flags, true),
+            loc,
+        })
+    }
+
+    fn lower_interpolated_regex(
+        &mut self,
+        node: &InterpolatedRegularExpressionNode<'pr>,
+    ) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let parts = self.lower_interp_parts(node.parts())?;
+        let flags = regex_flags_from_closing(&node.closing_loc());
+        Ok(Node {
+            kind: NodeKind::RegExp(parts, flags, false),
             loc,
         })
     }
@@ -1935,11 +2239,15 @@ impl<'pr> Lowerer<'pr> {
         let loc = location_to_loc(&node.location());
         let name = constant_name(&node.name())?;
 
-        if node.receiver().is_some() {
-            // `def self.foo` / `def obj.foo` — needs SingletonMethodDef
-            // and is not yet handled.
-            return Err(LowerError::Unsupported("singleton method def"));
-        }
+        // `def self.foo`, `def obj.foo` — Prism puts the receiver in
+        // `node.receiver()`. The body / params / locals story is the
+        // same as for a regular method, so we share the rest of the
+        // lowering and just emit the singleton variant once we know
+        // which receiver to attach.
+        let singleton_receiver = match node.receiver() {
+            Some(recv) => Some(self.lower_node(&recv)?),
+            None => None,
+        };
 
         let saved = std::mem::take(&mut self.lvars);
         let result =
@@ -1977,18 +2285,19 @@ impl<'pr> Lowerer<'pr> {
         match result {
             Ok((params, body)) => {
                 let method_lvars = std::mem::replace(&mut self.lvars, saved);
-                Ok(Node {
-                    kind: NodeKind::MethodDef(
-                        name,
-                        Box::new(BlockInfo {
-                            params,
-                            body: Box::new(body),
-                            lvar: method_lvars,
-                            loc,
-                        }),
-                    ),
+                let info = Box::new(BlockInfo {
+                    params,
+                    body: Box::new(body),
+                    lvar: method_lvars,
                     loc,
-                })
+                });
+                let kind = match singleton_receiver {
+                    Some(recv) => {
+                        NodeKind::SingletonMethodDef(Box::new(recv), name, info)
+                    }
+                    None => NodeKind::MethodDef(name, info),
+                };
+                Ok(Node { kind, loc })
             }
             Err(e) => {
                 self.lvars = saved;
@@ -2343,11 +2652,35 @@ impl<'pr> Lowerer<'pr> {
             .unwrap_or_else(|_| String::from_utf8_lossy(name_bytes).into_owned());
 
         let mut args: Vec<Node> = vec![];
+        let mut forwarding = false;
         if let Some(arglist) = node.arguments() {
             for n in arglist.arguments().iter() {
-                args.push(self.lower_node(&n)?);
+                match n {
+                    // `g(...)` — forward the enclosing method's args.
+                    // ruruby sets `arglist.forwarding = true` and
+                    // leaves `args` empty.
+                    prism::Node::ForwardingArgumentsNode { .. } => {
+                        forwarding = true;
+                    }
+                    // `g(*arr)` — Prism wraps splat args in
+                    // `SplatNode(Some(expr))`. ruruby sets
+                    // `arglist.splat = true` and pushes a
+                    // `Splat(expr)` node for the splatted arg, and
+                    // each non-splat arg as itself. We already
+                    // handle SplatNode directly via the recursive
+                    // lower_node path so the resulting `Splat` ends
+                    // up in args. However, ruruby's `arglist.splat`
+                    // boolean ALSO needs to be set or bytecodegen
+                    // miscomputes the spill count and panics in
+                    // `expand_array`.
+                    _ => args.push(self.lower_node(&n)?),
+                }
             }
         }
+        // Detect splat presence in the freshly-lowered args list and
+        // mirror ruruby's `arglist.splat` flag so the calling
+        // convention agrees with what bytecodegen expects.
+        let has_splat = args.iter().any(|a| matches!(a.kind, NodeKind::Splat(_)));
         // ruruby stores both block-literal (`{ ... }`) and
         // block-argument (`&proc`) forms in the same `arglist.block`
         // slot — bytecodegen disambiguates by NodeKind.
@@ -2451,6 +2784,8 @@ impl<'pr> Lowerer<'pr> {
         let mut arglist = ruruby_parse::ArgList::default();
         arglist.args = args;
         arglist.block = block;
+        arglist.forwarding = forwarding;
+        arglist.splat = has_splat;
 
         Ok(match receiver_opt {
             Some(recv) => {
@@ -2513,6 +2848,46 @@ fn constant_name(id: &ConstantId<'_>) -> Result<String, LowerError> {
     std::str::from_utf8(bytes)
         .map(str::to_owned)
         .map_err(|_| LowerError::Unsupported("non-utf8 identifier"))
+}
+
+/// 1-based line number of `offset` in `source`, used to inline
+/// `__LINE__`.
+fn source_line_for_offset(source: &[u8], offset: usize) -> usize {
+    let upper = offset.min(source.len());
+    1 + source[..upper].iter().filter(|&&b| b == b'\n').count()
+}
+
+/// Convert Prism's `Integer<'_>` (numeric handle exposing
+/// `to_u32_digits`) into a `num::BigInt`.
+fn prism_integer_to_bigint(value: &prism::Integer<'_>) -> num::BigInt {
+    let (negative, digits) = value.to_u32_digits();
+    let mut bytes: Vec<u8> = Vec::with_capacity(digits.len() * 4);
+    for &d in digits {
+        bytes.extend_from_slice(&d.to_le_bytes());
+    }
+    let mag = num::BigInt::from_bytes_le(num::bigint::Sign::Plus, &bytes);
+    if negative { -mag } else { mag }
+}
+
+/// Convert the byte body of a regex literal (Prism's `unescaped()`)
+/// into the `NodeKind::String(...)` part used inside ruruby's
+/// `RegExp` parts list.
+fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, LowerError> {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(NodeKind::String(s.to_owned())),
+        Err(_) => Err(LowerError::Unsupported("non-utf8 regex literal")),
+    }
+}
+
+/// Pull the option flags out of a regex closing-delimiter slice. The
+/// slice looks like `b"/"`, `b"/i"`, `b"/im"`, etc.; we drop the
+/// leading `/` and return the rest as an owned UTF-8 string.
+fn regex_flags_from_closing(closing: &Location<'_>) -> String {
+    let bytes = closing.as_slice();
+    let tail = bytes.strip_prefix(b"/").unwrap_or(bytes);
+    std::str::from_utf8(tail)
+        .map(str::to_owned)
+        .unwrap_or_default()
 }
 
 fn binop_from_name(name: &str) -> Option<BinOp> {
@@ -2601,6 +2976,113 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         ReturnNode { .. } => "ReturnNode",
         LocalVariableTargetNode { .. } => "LocalVariableTargetNode",
         MultiWriteNode { .. } => "MultiWriteNode",
+        BlockNode { .. } => "BlockNode",
+        BlockParametersNode { .. } => "BlockParametersNode",
+        BlockArgumentNode { .. } => "BlockArgumentNode",
+        LambdaNode { .. } => "LambdaNode",
+        SingletonClassNode { .. } => "SingletonClassNode",
+        ClassVariableReadNode { .. } => "ClassVariableReadNode",
+        ClassVariableWriteNode { .. } => "ClassVariableWriteNode",
+        BackReferenceReadNode { .. } => "BackReferenceReadNode",
+        NumberedReferenceReadNode { .. } => "NumberedReferenceReadNode",
+        ItLocalVariableReadNode { .. } => "ItLocalVariableReadNode",
+        ItParametersNode { .. } => "ItParametersNode",
+        NumberedParametersNode { .. } => "NumberedParametersNode",
+        ImplicitRestNode { .. } => "ImplicitRestNode",
+        FlipFlopNode { .. } => "FlipFlopNode",
+        SourceFileNode { .. } => "SourceFileNode",
+        SourceLineNode { .. } => "SourceLineNode",
+        SourceEncodingNode { .. } => "SourceEncodingNode",
+        ForwardingArgumentsNode { .. } => "ForwardingArgumentsNode",
+        ForwardingSuperNode { .. } => "ForwardingSuperNode",
+        ForwardingParameterNode { .. } => "ForwardingParameterNode",
+        SuperNode { .. } => "SuperNode",
+        YieldNode { .. } => "YieldNode",
+        DefinedNode { .. } => "DefinedNode",
+        AliasMethodNode { .. } => "AliasMethodNode",
+        AliasGlobalVariableNode { .. } => "AliasGlobalVariableNode",
+        UndefNode { .. } => "UndefNode",
+        BreakNode { .. } => "BreakNode",
+        NextNode { .. } => "NextNode",
+        RedoNode { .. } => "RedoNode",
+        RetryNode { .. } => "RetryNode",
+        ForNode { .. } => "ForNode",
+        CaseNode { .. } => "CaseNode",
+        CaseMatchNode { .. } => "CaseMatchNode",
+        WhenNode { .. } => "WhenNode",
+        InNode { .. } => "InNode",
+        ArrayPatternNode { .. } => "ArrayPatternNode",
+        HashPatternNode { .. } => "HashPatternNode",
+        FindPatternNode { .. } => "FindPatternNode",
+        PinnedExpressionNode { .. } => "PinnedExpressionNode",
+        PinnedVariableNode { .. } => "PinnedVariableNode",
+        SplatNode { .. } => "SplatNode",
+        AssocNode { .. } => "AssocNode",
+        AssocSplatNode { .. } => "AssocSplatNode",
+        ParenthesesNode { .. } => "ParenthesesNode",
+        RegularExpressionNode { .. } => "RegularExpressionNode",
+        InterpolatedRegularExpressionNode { .. } => "InterpolatedRegularExpressionNode",
+        MatchLastLineNode { .. } => "MatchLastLineNode",
+        InterpolatedMatchLastLineNode { .. } => "InterpolatedMatchLastLineNode",
+        InterpolatedSymbolNode { .. } => "InterpolatedSymbolNode",
+        RationalNode { .. } => "RationalNode",
+        ImaginaryNode { .. } => "ImaginaryNode",
+        ConstantPathNode { .. } => "ConstantPathNode",
+        ConstantPathWriteNode { .. } => "ConstantPathWriteNode",
+        ConstantPathOperatorWriteNode { .. } => "ConstantPathOperatorWriteNode",
+        ConstantPathOrWriteNode { .. } => "ConstantPathOrWriteNode",
+        ConstantPathAndWriteNode { .. } => "ConstantPathAndWriteNode",
+        ConstantPathTargetNode { .. } => "ConstantPathTargetNode",
+        IndexOperatorWriteNode { .. } => "IndexOperatorWriteNode",
+        IndexOrWriteNode { .. } => "IndexOrWriteNode",
+        IndexAndWriteNode { .. } => "IndexAndWriteNode",
+        IndexTargetNode { .. } => "IndexTargetNode",
+        CallOperatorWriteNode { .. } => "CallOperatorWriteNode",
+        CallOrWriteNode { .. } => "CallOrWriteNode",
+        CallAndWriteNode { .. } => "CallAndWriteNode",
+        CallTargetNode { .. } => "CallTargetNode",
+        LocalVariableOperatorWriteNode { .. } => "LocalVariableOperatorWriteNode",
+        LocalVariableOrWriteNode { .. } => "LocalVariableOrWriteNode",
+        LocalVariableAndWriteNode { .. } => "LocalVariableAndWriteNode",
+        InstanceVariableOperatorWriteNode { .. } => "InstanceVariableOperatorWriteNode",
+        InstanceVariableOrWriteNode { .. } => "InstanceVariableOrWriteNode",
+        InstanceVariableAndWriteNode { .. } => "InstanceVariableAndWriteNode",
+        InstanceVariableTargetNode { .. } => "InstanceVariableTargetNode",
+        GlobalVariableOperatorWriteNode { .. } => "GlobalVariableOperatorWriteNode",
+        GlobalVariableOrWriteNode { .. } => "GlobalVariableOrWriteNode",
+        GlobalVariableAndWriteNode { .. } => "GlobalVariableAndWriteNode",
+        GlobalVariableTargetNode { .. } => "GlobalVariableTargetNode",
+        ClassVariableOperatorWriteNode { .. } => "ClassVariableOperatorWriteNode",
+        ClassVariableOrWriteNode { .. } => "ClassVariableOrWriteNode",
+        ClassVariableAndWriteNode { .. } => "ClassVariableAndWriteNode",
+        ClassVariableTargetNode { .. } => "ClassVariableTargetNode",
+        ConstantOperatorWriteNode { .. } => "ConstantOperatorWriteNode",
+        ConstantOrWriteNode { .. } => "ConstantOrWriteNode",
+        ConstantAndWriteNode { .. } => "ConstantAndWriteNode",
+        ConstantTargetNode { .. } => "ConstantTargetNode",
+        MatchPredicateNode { .. } => "MatchPredicateNode",
+        MatchRequiredNode { .. } => "MatchRequiredNode",
+        MatchWriteNode { .. } => "MatchWriteNode",
+        PreExecutionNode { .. } => "PreExecutionNode",
+        PostExecutionNode { .. } => "PostExecutionNode",
+        EmbeddedStatementsNode { .. } => "EmbeddedStatementsNode",
+        EmbeddedVariableNode { .. } => "EmbeddedVariableNode",
+        ElseNode { .. } => "ElseNode",
+        EnsureNode { .. } => "EnsureNode",
+        RescueNode { .. } => "RescueNode",
+        RescueModifierNode { .. } => "RescueModifierNode",
+        ParametersNode { .. } => "ParametersNode",
+        OptionalParameterNode { .. } => "OptionalParameterNode",
+        OptionalKeywordParameterNode { .. } => "OptionalKeywordParameterNode",
+        RequiredKeywordParameterNode { .. } => "RequiredKeywordParameterNode",
+        RestParameterNode { .. } => "RestParameterNode",
+        KeywordRestParameterNode { .. } => "KeywordRestParameterNode",
+        BlockParameterNode { .. } => "BlockParameterNode",
+        RequiredParameterNode { .. } => "RequiredParameterNode",
+        MultiTargetNode { .. } => "MultiTargetNode",
+        XStringNode { .. } => "XStringNode",
+        InterpolatedXStringNode { .. } => "InterpolatedXStringNode",
+        ArgumentsNode { .. } => "ArgumentsNode",
         _ => "<other>",
     }
 }
