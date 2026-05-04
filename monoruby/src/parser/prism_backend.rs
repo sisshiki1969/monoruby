@@ -297,14 +297,23 @@ impl<'pr> Lowerer<'pr> {
                 self.lower_module(&node.as_module_node().unwrap())?
             }
             prism::Node::SingletonClassNode { .. } => {
-                // `class << expr ... end` — Prism parses it but the
-                // bytecode that monoruby emits for `SingletonClassDef`
-                // panics in `expand_array` when produced from this
-                // path; the same shape works fine when ruruby
-                // produces it. Defer to ruruby until the underlying
-                // mismatch (likely register / lvar accounting) is
-                // pinned down.
-                return Err(LowerError::Unsupported("class << expr"));
+                let n = node.as_singleton_class_node().unwrap();
+                let singleton = self.lower_node(&n.expression())?;
+                let saved = std::mem::take(&mut self.lvars);
+                if let Err(e) = self.collect_locals(&n.locals()) {
+                    self.lvars = saved;
+                    return Err(e);
+                }
+                let info_res = self.lower_class_body(n.body(), loc);
+                self.lvars = saved;
+                let info = info_res?;
+                Node {
+                    kind: NodeKind::SingletonClassDef {
+                        singleton: Box::new(singleton),
+                        info: Box::new(info),
+                    },
+                    loc,
+                }
             }
             prism::Node::ConstantReadNode { .. } => {
                 self.lower_constant_read(&node.as_constant_read_node().unwrap())?
@@ -1745,14 +1754,16 @@ impl<'pr> Lowerer<'pr> {
                     });
                 }
                 prism::Node::ImplicitRestNode { .. } => {
-                    // `a, b, = arr` — trailing comma forces a "rest
-                    // discard" slot. Same shape as anonymous splat.
+                    // `a, b, = arr` — ruruby produces a bare
+                    // `DiscardLhs` for the trailing slot, NOT
+                    // `Splat(DiscardLhs)`. Wrapping it in `Splat`
+                    // turns the slot into a rest-position with no
+                    // matching register, which corrupts
+                    // `ExpandArray`'s output (e.g. `len=1, rest_pos=1`
+                    // for `os, = arch`).
                     let rest_loc = location_to_loc(&rest.location());
                     lhs.push(Node {
-                        kind: NodeKind::Splat(Box::new(Node {
-                            kind: NodeKind::DiscardLhs,
-                            loc: rest_loc,
-                        })),
+                        kind: NodeKind::DiscardLhs,
                         loc: rest_loc,
                     });
                 }
