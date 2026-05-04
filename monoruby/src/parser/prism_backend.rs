@@ -86,12 +86,11 @@ where
     match try_prism(&code, path.clone()) {
         Ok(result) => Ok(result),
         Err(reason) => {
-            // While the lowerer is incomplete and Prism's stricter
-            // grammar diverges from ruruby on some legacy forms (e.g.
-            // `expr rescue return X`), every Prism failure — both real
-            // parse errors and "lowerer doesn't know this node yet" —
-            // falls back to ruruby. Once Prism is the source of truth
-            // we'll switch ParseError back to a hard failure.
+            // While the lowerer is incomplete, every Prism failure —
+            // both real parse errors and "lowerer doesn't know this
+            // node yet" — falls back to ruruby. Once Prism owns
+            // every node we lower we'll switch `ParseError` back to a
+            // hard failure.
             if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
                 eprintln!(
                     "[prism] falling back to ruruby for {}: {reason:?}",
