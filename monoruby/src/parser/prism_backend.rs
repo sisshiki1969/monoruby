@@ -17,10 +17,10 @@ use ruby_prism::{
     self as prism, ArrayNode, BeginNode, BlockNode, ClassNode, ConstantId, ConstantList,
     ConstantPathNode, ConstantReadNode, ConstantWriteNode, DefNode, FloatNode,
     GlobalVariableReadNode, GlobalVariableWriteNode, HashNode, IfNode, InstanceVariableReadNode,
-    InstanceVariableWriteNode, IntegerNode, InterpolatedStringNode, LocalVariableReadNode,
-    LocalVariableWriteNode, Location, ModuleNode, MultiWriteNode, ParametersNode, ProgramNode,
-    RangeNode, RescueNode, ReturnNode, StatementsNode, StringNode, SymbolNode, UnlessNode,
-    UntilNode, WhileNode,
+    InstanceVariableWriteNode, IntegerNode, InterpolatedStringNode, LambdaNode,
+    LocalVariableReadNode, LocalVariableWriteNode, Location, ModuleNode, MultiWriteNode,
+    ParametersNode, ProgramNode, RangeNode, RescueNode, ReturnNode, StatementsNode, StringNode,
+    SymbolNode, UnlessNode, UntilNode, WhileNode,
 };
 
 use crate::ast::{
@@ -434,6 +434,9 @@ impl<'pr> Lowerer<'pr> {
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
             }
+            prism::Node::LambdaNode { .. } => {
+                self.lower_lambda(&node.as_lambda_node().unwrap())?
+            }
             prism::Node::ConstantAndWriteNode { .. } => {
                 let n = node.as_constant_and_write_node().unwrap();
                 let target = Node {
@@ -445,6 +448,78 @@ impl<'pr> Lowerer<'pr> {
                     },
                     loc: location_to_loc(&n.name_loc()),
                 };
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::IndexOperatorWriteNode { .. } => {
+                let n = node.as_index_operator_write_node().unwrap();
+                if n.block().is_some() {
+                    return Err(LowerError::Unsupported(
+                        "indexed op-assign with block argument",
+                    ));
+                }
+                let target = self.build_index_target(
+                    n.receiver().as_ref(),
+                    n.arguments().as_ref(),
+                    location_to_loc(&n.location()),
+                )?;
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::IndexOrWriteNode { .. } => {
+                let n = node.as_index_or_write_node().unwrap();
+                if n.block().is_some() {
+                    return Err(LowerError::Unsupported(
+                        "indexed ||= with block argument",
+                    ));
+                }
+                let target = self.build_index_target(
+                    n.receiver().as_ref(),
+                    n.arguments().as_ref(),
+                    location_to_loc(&n.location()),
+                )?;
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::IndexAndWriteNode { .. } => {
+                let n = node.as_index_and_write_node().unwrap();
+                if n.block().is_some() {
+                    return Err(LowerError::Unsupported(
+                        "indexed &&= with block argument",
+                    ));
+                }
+                let target = self.build_index_target(
+                    n.receiver().as_ref(),
+                    n.arguments().as_ref(),
+                    location_to_loc(&n.location()),
+                )?;
+                self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
+            }
+            prism::Node::CallOperatorWriteNode { .. } => {
+                let n = node.as_call_operator_write_node().unwrap();
+                let target = self.build_attr_target(
+                    n.receiver().as_ref(),
+                    &n.read_name(),
+                    n.is_safe_navigation(),
+                    location_to_loc(&n.location()),
+                )?;
+                self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
+            }
+            prism::Node::CallOrWriteNode { .. } => {
+                let n = node.as_call_or_write_node().unwrap();
+                let target = self.build_attr_target(
+                    n.receiver().as_ref(),
+                    &n.read_name(),
+                    n.is_safe_navigation(),
+                    location_to_loc(&n.location()),
+                )?;
+                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+            }
+            prism::Node::CallAndWriteNode { .. } => {
+                let n = node.as_call_and_write_node().unwrap();
+                let target = self.build_attr_target(
+                    n.receiver().as_ref(),
+                    &n.read_name(),
+                    n.is_safe_navigation(),
+                    location_to_loc(&n.location()),
+                )?;
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
             }
             prism::Node::InstanceVariableReadNode { .. } => {
@@ -1065,6 +1140,63 @@ impl<'pr> Lowerer<'pr> {
     /// the `rescue` chain as a singly-linked list via
     /// `RescueNode::subsequent`; we walk it and collect each clause
     /// into a `RescueEntry`.
+    /// Build the `MethodCall { receiver, method, arglist: empty }`
+    /// shape used as the target of `obj.attr += ...` / `obj.attr ||=
+    /// ...`. This mirrors what ruruby's parser does for the LHS of an
+    /// attribute op-assign — bytecodegen later rewrites the call into
+    /// the corresponding setter (`attr=`) when it emits the
+    /// assignment.
+    fn build_attr_target(
+        &mut self,
+        receiver: Option<&prism::Node<'pr>>,
+        read_name: &ConstantId<'pr>,
+        safe_nav: bool,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let recv = receiver
+            .ok_or(LowerError::Unsupported("attr op-assign without receiver"))?;
+        let receiver_node = self.lower_node(recv)?;
+        let method = constant_name(read_name)?;
+        Ok(Node {
+            kind: NodeKind::MethodCall {
+                receiver: Box::new(receiver_node),
+                method,
+                arglist: Box::new(ruruby_parse::ArgList::default()),
+                safe_nav,
+            },
+            loc,
+        })
+    }
+
+    /// Build the `Index { base, index }` shape used as the target of
+    /// `a[i] += ...` / `a[i] ||= ...` / `a[i, j] = ...`. Shared
+    /// between the operator-write nodes, the multi-assign LHS path
+    /// (via `IndexTargetNode`), and the `[]` / `[]=` short-form
+    /// detected inside `lower_call`.
+    fn build_index_target(
+        &mut self,
+        receiver: Option<&prism::Node<'pr>>,
+        args: Option<&prism::ArgumentsNode<'pr>>,
+        loc: Loc,
+    ) -> Result<Node, LowerError> {
+        let recv = receiver
+            .ok_or(LowerError::Unsupported("index target without receiver"))?;
+        let base = self.lower_node(recv)?;
+        let mut index: Vec<Node> = Vec::new();
+        if let Some(a) = args {
+            for arg in a.arguments().iter() {
+                index.push(self.lower_node(&arg)?);
+            }
+        }
+        Ok(Node {
+            kind: NodeKind::Index {
+                base: Box::new(base),
+                index,
+            },
+            loc,
+        })
+    }
+
     /// `target OP= value` -> `AssignOp(BinOp, target, value)`.
     /// Used for the `*OperatorWriteNode` family (the `+=`, `-=`, ...
     /// shapes). The operator name comes back from Prism as the bare
@@ -1186,9 +1318,9 @@ impl<'pr> Lowerer<'pr> {
     /// inside `MultiWriteNode`/`MultiTargetNode`/etc.) onto the same
     /// `Local/Instance/Global/ClassVar/Const` shapes ruruby's parser
     /// would have produced for the LHS. Used by both `MultiWriteNode`
-    /// and the rescue-target lowerer (which calls into here).
+    /// and the rescue-target lowerer.
     fn lower_assign_target(
-        &self,
+        &mut self,
         node: &prism::Node<'pr>,
     ) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
@@ -1233,9 +1365,19 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
-            // Nested destructure (`((a, b), c) = ...`), call/index
-            // targets (`a.foo = x`, `a[i] = x`) and `__attr__=` style
-            // setters need their own per-shape lowering. Defer.
+            prism::Node::IndexTargetNode { .. } => {
+                let n = node.as_index_target_node().unwrap();
+                if n.block().is_some() {
+                    return Err(LowerError::Unsupported(
+                        "index target with block argument",
+                    ));
+                }
+                let recv = n.receiver();
+                self.build_index_target(Some(&recv), n.arguments().as_ref(), loc)?
+            }
+            // Nested destructure (`((a, b), c) = ...`) and call /
+            // attribute targets (`a.foo = x`) need their own per-
+            // shape lowering. Defer.
             other => return Err(unsupported("assign target", &other)),
         })
     }
@@ -1521,6 +1663,71 @@ impl<'pr> Lowerer<'pr> {
     /// Lowers `BlockNode` (the literal `{ ... }` / `do ... end` attached
     /// to a method call) into the `Lambda(BlockInfo)` shape ruruby uses
     /// for `arglist.block`.
+    /// `-> (params) { body }` standalone lambda literal. Has the same
+    /// scope shape as a `BlockNode`, just produced without an outer
+    /// CallNode. Lowers to `Lambda(BlockInfo)` — bytecodegen treats
+    /// the same Lambda node as either a method-call block or a free
+    /// proc depending on how it's used.
+    fn lower_lambda(&mut self, node: &LambdaNode<'pr>) -> Result<Node, LowerError> {
+        let loc = location_to_loc(&node.location());
+        let saved = std::mem::take(&mut self.lvars);
+        let result =
+            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), LowerError> {
+                let params = match node.parameters() {
+                    None => Vec::new(),
+                    Some(p) => match p {
+                        prism::Node::BlockParametersNode { .. } => {
+                            let bp = p.as_block_parameters_node().unwrap();
+                            if bp.locals().iter().next().is_some() {
+                                return Err(LowerError::Unsupported("lambda shadow locals"));
+                            }
+                            match bp.parameters() {
+                                Some(pn) => this.lower_parameters(&pn)?,
+                                None => Vec::new(),
+                            }
+                        }
+                        // `->(a, b) { ... }` with full ParametersNode
+                        // (no BlockParametersNode wrapper) is allowed
+                        // in Prism for `->(...)` form; handle it the
+                        // same way.
+                        prism::Node::ParametersNode { .. } => {
+                            let pn = p.as_parameters_node().unwrap();
+                            this.lower_parameters(&pn)?
+                        }
+                        other => return Err(unsupported("lambda parameters", &other)),
+                    },
+                };
+                this.collect_locals(&node.locals())?;
+                let body = match node.body() {
+                    Some(b) => this.lower_node(&b)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                };
+                Ok((params, body))
+            })(self);
+
+        match result {
+            Ok((params, body)) => {
+                let lambda_lvars = std::mem::replace(&mut self.lvars, saved);
+                Ok(Node {
+                    kind: NodeKind::Lambda(Box::new(BlockInfo {
+                        params,
+                        body: Box::new(body),
+                        lvar: lambda_lvars,
+                        loc,
+                    })),
+                    loc,
+                })
+            }
+            Err(e) => {
+                self.lvars = saved;
+                Err(e)
+            }
+        }
+    }
+
     fn lower_block(&mut self, node: &BlockNode<'pr>) -> Result<Node, LowerError> {
         let loc = location_to_loc(&node.location());
         // Block scope owns its own LvarCollector. Save the outer one
@@ -1605,8 +1812,51 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                // `|(a, b)|` destructure on block params lands here as
-                // `MultiTargetNode`; not yet supported.
+                // `|(a, b)|` block-destructure: Prism wraps it in a
+                // `MultiTargetNode` whose `lefts` list holds the
+                // individual `RequiredParameterNode` leaves. ruruby's
+                // shape is `ParamKind::Destruct(Vec<(name, loc)>)` —
+                // flat, no splat / post entries — so we reject nested
+                // destructure (`|((a, b), c)|`) and `|(*rest)|` for
+                // now.
+                prism::Node::MultiTargetNode { .. } => {
+                    let mt = n.as_multi_target_node().unwrap();
+                    if mt.rest().is_some() {
+                        return Err(LowerError::Unsupported(
+                            "destructure param with splat",
+                        ));
+                    }
+                    if mt.rights().iter().next().is_some() {
+                        return Err(LowerError::Unsupported(
+                            "destructure param with post element",
+                        ));
+                    }
+                    let mut destruct: Vec<(String, Loc)> = Vec::new();
+                    for el in mt.lefts().iter() {
+                        match el {
+                            prism::Node::RequiredParameterNode { .. } => {
+                                let inner = el.as_required_parameter_node().unwrap();
+                                let name = constant_name(&inner.name())?;
+                                self.lvars.insert(&name);
+                                destruct.push((name, location_to_loc(&inner.location())));
+                            }
+                            other => {
+                                return Err(unsupported("destructure param leaf", &other));
+                            }
+                        }
+                    }
+                    if destruct.is_empty() {
+                        return Err(LowerError::Unsupported("empty destructure param"));
+                    }
+                    // Match ruruby's loc-merging convention so
+                    // bytecodegen reports matching source spans.
+                    let merged =
+                        destruct.iter().map(|(_, l)| *l).reduce(|a, b| a.merge(b)).unwrap();
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::Destruct(destruct),
+                        loc: merged,
+                    });
+                }
                 other => return Err(unsupported("required param", &other)),
             }
         }
@@ -1761,6 +2011,10 @@ impl<'pr> Lowerer<'pr> {
                 args.push(self.lower_node(&n)?);
             }
         }
+        // ruruby stores both block-literal (`{ ... }`) and
+        // block-argument (`&proc`) forms in the same `arglist.block`
+        // slot — bytecodegen disambiguates by NodeKind. Lower
+        // accordingly.
         let block = match node.block() {
             None => None,
             Some(block_node) => match block_node {
@@ -1768,11 +2022,81 @@ impl<'pr> Lowerer<'pr> {
                     let bn = block_node.as_block_node().unwrap();
                     Some(Box::new(self.lower_block(&bn)?))
                 }
-                // BlockArgumentNode (`&proc`) and other forms are not
-                // supported yet — fall back so monoruby still runs.
+                prism::Node::BlockArgumentNode { .. } => {
+                    let ba = block_node.as_block_argument_node().unwrap();
+                    let inner = match ba.expression() {
+                        Some(e) => self.lower_node(&e)?,
+                        // `foo(&)` — anonymous forward of the outer
+                        // method's block. Defer; handled via
+                        // arglist.delegate_block on ruruby's side.
+                        None => return Err(LowerError::Unsupported("anonymous &-forward")),
+                    };
+                    Some(Box::new(inner))
+                }
                 other => return Err(unsupported("call block", &other)),
             },
         };
+
+        // `a[i]` / `a[i, j]` come through as `CallNode` with method
+        // `[]`. ruruby treats indexing as a first-class `Index` node
+        // rather than a method call, so collapse it here.
+        if block.is_none()
+            && let Some(recv) = receiver_opt.as_ref()
+            && method == "[]"
+        {
+            let base = self.lower_node(recv)?;
+            return Ok(Node {
+                kind: NodeKind::Index {
+                    base: Box::new(base),
+                    index: args,
+                },
+                loc,
+            });
+        }
+
+        // Setter calls (`a[i] = v`, `c.x = v`) come back as a
+        // `CallNode` whose method name ends in `=` and whose
+        // `is_attribute_write` flag is set. The last arg is always
+        // the value being written; the rest (if any) are index
+        // arguments. ruruby's parser desugars all of these to
+        // `MulAssign([target], [value])` where the target is built
+        // from the read form (method name without the trailing `=`)
+        // — bytecodegen later rewrites the call into the setter when
+        // it emits the assignment.
+        if block.is_none()
+            && let Some(recv) = receiver_opt.as_ref()
+            && node.is_attribute_write()
+            && !args.is_empty()
+        {
+            let value = args.pop().unwrap();
+            let base = self.lower_node(recv)?;
+            let read_name = method.strip_suffix('=').unwrap_or(&method).to_string();
+            let target = if read_name == "[]" {
+                Node {
+                    kind: NodeKind::Index {
+                        base: Box::new(base),
+                        index: args,
+                    },
+                    loc,
+                }
+            } else {
+                let mut arglist = ruruby_parse::ArgList::default();
+                arglist.args = args;
+                Node {
+                    kind: NodeKind::MethodCall {
+                        receiver: Box::new(base),
+                        method: read_name,
+                        arglist: Box::new(arglist),
+                        safe_nav: node.is_safe_navigation(),
+                    },
+                    loc,
+                }
+            };
+            return Ok(Node {
+                kind: NodeKind::MulAssign(vec![target], vec![value]),
+                loc,
+            });
+        }
 
         // 0-arg "method" calls of the form `-x`, `+x`, `~x`, `!x` are
         // really unary operators in our IR. Detect them before the
