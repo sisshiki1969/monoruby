@@ -3112,15 +3112,23 @@ fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, LowerError>
 /// the source (`b"/"`, `b"/i"`, `b"]i"`, `b"}"`, `b")im"`, …) — the
 /// first byte is the closing delimiter character (which varies by
 /// `%r{...}` / `%r[...]` / `%r(...)` / `/.../`) and any trailing
-/// bytes are option flags (`i`, `m`, `x`, etc.). Drop the first
-/// byte (whatever it is) and return the rest as an owned UTF-8
-/// string.
+/// bytes are option flags.
+///
+/// Of those, only `i`/`m`/`x`/`n` survive into the regex options
+/// string; ruruby drops `o` (compile-once, runtime-only),
+/// `u`/`s`/`e` (legacy encoding selectors), and we follow that
+/// convention so the resulting flag string can be passed straight
+/// into Onigmo (which only knows the four). Without this filter,
+/// e.g. `%r[\A...\z]o` would inject `o` into `(?o-mix:...)` and
+/// Onigmo errors with `undefined group option`.
 fn regex_flags_from_closing(closing: &Location<'_>) -> String {
     let bytes = closing.as_slice();
     let tail = if bytes.is_empty() { bytes } else { &bytes[1..] };
-    std::str::from_utf8(tail)
-        .map(str::to_owned)
-        .unwrap_or_default()
+    tail.iter()
+        .copied()
+        .filter(|b| matches!(b, b'i' | b'm' | b'x' | b'n'))
+        .map(|b| b as char)
+        .collect()
 }
 
 fn binop_from_name(name: &str) -> Option<BinOp> {
