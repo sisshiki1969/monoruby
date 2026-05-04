@@ -2380,8 +2380,17 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    /// Build the value carried by a `break` / `next`. Mirrors the
-    /// `return` shape: 0 args -> Nil, 1 arg -> bare, more -> Array.
+    /// Build the value carried by a `return` / `break` / `next`.
+    /// ruruby's shape is:
+    ///   - 0 args         -> `Nil`
+    ///   - 1 non-splat    -> bare expr
+    ///   - 1 splat        -> `Array([Splat(...)])` (wrapped, NOT bare)
+    ///   - n>=2           -> `Array([...])`
+    /// Wrapping the lone-splat case keeps bytecodegen from feeding a
+    /// raw `Splat(...)` into the value-producing path (which it
+    /// rejects as `unsupported lhs Splat(...)`); the array shape is
+    /// flattened at runtime. Ruby semantics: `return *x` returns
+    /// `[*x]`, which matches.
     fn lower_jump_value(
         &mut self,
         args: Option<prism::ArgumentsNode<'pr>>,
@@ -2393,20 +2402,7 @@ impl<'pr> Lowerer<'pr> {
                 values.push(self.lower_node(&arg)?);
             }
         }
-        Ok(match values.len() {
-            0 => Node {
-                kind: NodeKind::Nil,
-                loc,
-            },
-            1 => values.into_iter().next().unwrap(),
-            _ => {
-                let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
-                Node {
-                    kind: NodeKind::Array(values, all_const),
-                    loc,
-                }
-            }
-        })
+        Ok(jump_value_node(values, loc))
     }
 
     fn lower_return(&mut self, node: &ReturnNode<'pr>) -> Result<Node, LowerError> {
@@ -2417,20 +2413,7 @@ impl<'pr> Lowerer<'pr> {
                 values.push(self.lower_node(&arg)?);
             }
         }
-        let inner = match values.len() {
-            0 => Node {
-                kind: NodeKind::Nil,
-                loc,
-            },
-            1 => values.into_iter().next().unwrap(),
-            _ => {
-                let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
-                Node {
-                    kind: NodeKind::Array(values, all_const),
-                    loc,
-                }
-            }
-        };
+        let inner = jump_value_node(values, loc);
         Ok(Node {
             kind: NodeKind::Return(Box::new(inner)),
             loc,
@@ -3054,6 +3037,33 @@ struct ConstChain {
 /// produces a value known at compile time", used to set the
 /// `is_constant_expr` flag on `Array` / `Range` literals so that
 /// bytecodegen can fold them into the constant pool.
+/// Build the value-producing inner node for a `return` / `break` /
+/// `next` from its lowered argument list. See `lower_jump_value` for
+/// the wrapping rules.
+fn jump_value_node(values: Vec<Node>, loc: Loc) -> Node {
+    match values.len() {
+        0 => Node {
+            kind: NodeKind::Nil,
+            loc,
+        },
+        1 if matches!(values[0].kind, NodeKind::Splat(_)) => {
+            let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
+            Node {
+                kind: NodeKind::Array(values, all_const),
+                loc,
+            }
+        }
+        1 => values.into_iter().next().unwrap(),
+        _ => {
+            let all_const = values.iter().all(|n| is_constant_literal(&n.kind));
+            Node {
+                kind: NodeKind::Array(values, all_const),
+                loc,
+            }
+        }
+    }
+}
+
 fn is_constant_literal(kind: &NodeKind) -> bool {
     matches!(
         kind,
