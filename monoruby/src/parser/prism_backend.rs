@@ -442,6 +442,39 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::InterpolatedStringNode { .. } => {
                 self.lower_interpolated_string(&node.as_interpolated_string_node().unwrap())?
             }
+            prism::Node::XStringNode { .. } => {
+                // `` `cmd` `` — ruruby wraps the static string in
+                // `Command(...)`. The wrapped node is whichever
+                // string shape ruruby would have produced for the
+                // body, here a plain `NodeKind::String`.
+                let n = node.as_x_string_node().unwrap();
+                let body_loc = location_to_loc(&n.content_loc());
+                let bytes = n.unescaped();
+                let body_kind = match std::str::from_utf8(bytes) {
+                    Ok(s) => NodeKind::String(s.to_owned()),
+                    Err(_) => NodeKind::Bytes(bytes.to_vec()),
+                };
+                let body = Node { kind: body_kind, loc: body_loc };
+                Node {
+                    kind: NodeKind::Command(Box::new(body)),
+                    loc,
+                }
+            }
+            prism::Node::InterpolatedXStringNode { .. } => {
+                // `` `echo #{x}` `` — same `Command(...)` wrapper as
+                // the static form, but the inner node is an
+                // `InterporatedString` (note ruruby's misspelling).
+                let n = node.as_interpolated_x_string_node().unwrap();
+                let parts = self.lower_interp_parts(n.parts())?;
+                let inner = Node {
+                    kind: NodeKind::InterporatedString(parts),
+                    loc,
+                };
+                Node {
+                    kind: NodeKind::Command(Box::new(inner)),
+                    loc,
+                }
+            }
             prism::Node::RationalNode { .. } => {
                 let n = node.as_rational_node().unwrap();
                 Node {
@@ -909,6 +942,21 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_alias_method_node().unwrap();
                 let new_name = self.lower_node(&n.new_name())?;
                 let old_name = self.lower_node(&n.old_name())?;
+                Node {
+                    kind: NodeKind::AliasMethod(Box::new(new_name), Box::new(old_name)),
+                    loc,
+                }
+            }
+            prism::Node::AliasGlobalVariableNode { .. } => {
+                // `alias $foo $bar` — ruruby reuses `AliasMethod` and
+                // expects its operands to be `Symbol("$foo") /
+                // Symbol("$bar")`; bytecodegen pattern-matches on the
+                // `$` prefix to emit `AliasGvar` instead of
+                // `AliasMethod`. Convert the Prism
+                // `GlobalVariableReadNode`s accordingly.
+                let n = node.as_alias_global_variable_node().unwrap();
+                let new_name = global_var_alias_target(&n.new_name())?;
+                let old_name = global_var_alias_target(&n.old_name())?;
                 Node {
                     kind: NodeKind::AliasMethod(Box::new(new_name), Box::new(old_name)),
                     loc,
@@ -2712,6 +2760,33 @@ impl<'pr> Lowerer<'pr> {
                             None => Vec::new(),
                         }
                     }
+                    prism::Node::NumberedParametersNode { .. } => {
+                        // `_1`, `_2`, … — Prism reports the max
+                        // index actually referenced (`.maximum()`)
+                        // and we synthesize one `Param("_N")` per
+                        // index. ruruby tracks the same shape plus
+                        // a `numbered_param: Some(loc)` flag on
+                        // `LvarCollector`; we mirror that flag too
+                        // so bytecodegen's `_1`-vs-explicit-block-arg
+                        // checks behave identically.
+                        let np = p.as_numbered_parameters_node().unwrap();
+                        let max = np.maximum() as usize;
+                        let np_loc = location_to_loc(&np.location());
+                        let mut out = Vec::with_capacity(max);
+                        for i in 1..=max {
+                            let name = format!("_{i}");
+                            this.lvars.insert(&name);
+                            out.push(ruruby_parse::FormalParam {
+                                kind: ParamKind::Param(name),
+                                loc: np_loc,
+                            });
+                        }
+                        if max > 0 {
+                            this.lvars.numbered_param = Some(np_loc);
+                            this.lvars.numbered_param_max = max as u8;
+                        }
+                        out
+                    }
                     other => return Err(unsupported("block parameters", &other)),
                 },
             };
@@ -2929,6 +3004,22 @@ impl<'pr> Lowerer<'pr> {
                     self.lvars.insert_delegate_param();
                     out.push(ruruby_parse::FormalParam {
                         kind: ParamKind::Forwarding,
+                        loc,
+                    });
+                }
+                prism::Node::NoKeywordsParameterNode { .. } => {
+                    // `**nil` — explicitly declines kwargs. ruruby
+                    // models it as a kwrest param literally named
+                    // "nil" (`KWRest(Some("nil"))` + an `lvars`
+                    // entry); bytecodegen reads that shape and
+                    // emits the "kwargs forbidden" runtime check.
+                    // No safer name is available without ruruby
+                    // AST extensions, so we replicate that exact
+                    // shape.
+                    let loc = location_to_loc(&kr.location());
+                    self.lvars.insert_kwrest_param("nil".to_owned());
+                    out.push(ruruby_parse::FormalParam {
+                        kind: ParamKind::KWRest(Some("nil".to_owned())),
                         loc,
                     });
                 }
@@ -3166,6 +3257,23 @@ fn jump_value_node(values: Vec<Node>, loc: Loc) -> Node {
                 loc,
             }
         }
+    }
+}
+
+/// Convert a Prism global-variable reference (the kind that appears
+/// on either side of `alias $foo $bar`) into the
+/// `Symbol("$foo")`-shape ruruby uses for `NodeKind::AliasMethod`
+/// operands, including the `$`/`$1`/`$~` etc. prefixes that
+/// bytecodegen later pattern-matches to pick `AliasGvar`.
+fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, LowerError> {
+    let loc = location_to_loc(&node.location());
+    let bytes = node.location().as_slice();
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(Node {
+            kind: NodeKind::Symbol(s.to_owned()),
+            loc,
+        }),
+        Err(_) => Err(LowerError::Unsupported("non-utf8 global variable name")),
     }
 }
 
