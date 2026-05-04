@@ -1936,8 +1936,20 @@ impl<'pr> Lowerer<'pr> {
                     }
                 }
                 if !all_static_symbol {
+                    // Mixed-key trailing hash (`a: 1, 100 => 100`).
+                    // ruruby pushes a single `Hash(pairs, splats)`
+                    // node onto `arglist.hash_splat` (NOT `args`,
+                    // and NOT `kw_args` — the non-symbol key
+                    // doesn't fit kwargs's `(String, Node)` shape).
+                    // bytecodegen treats a `hash_splat` entry as a
+                    // `**hash` argument; CRuby semantics for
+                    // `foo(a: 1, 100 => 100)` are equivalent to
+                    // `foo(**{a: 1, 100 => 100})` so the runtime
+                    // passes the whole hash to the method's
+                    // `**kw` slot (or, if there is none, falls
+                    // back to a trailing positional hash).
                     let mut pairs: Vec<(Node, Node)> = Vec::new();
-                    let mut splat: Vec<Node> = Vec::new();
+                    let mut inner_splat: Vec<Node> = Vec::new();
                     for elem in kh.elements().iter() {
                         match elem {
                             prism::Node::AssocNode { .. } => {
@@ -1955,13 +1967,13 @@ impl<'pr> Lowerer<'pr> {
                                         loc: location_to_loc(&s.location()),
                                     },
                                 };
-                                splat.push(inner);
+                                inner_splat.push(inner);
                             }
                             other => return Err(unsupported("kwarg element", &other)),
                         }
                     }
-                    args.push(Node {
-                        kind: NodeKind::Hash(pairs, splat),
+                    hash_splat.push(Node {
+                        kind: NodeKind::Hash(pairs, inner_splat),
                         loc: kh_loc,
                     });
                     return Ok(());
