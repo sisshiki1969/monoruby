@@ -1967,21 +1967,39 @@ impl<'pr> Lowerer<'pr> {
         let rhs: Vec<Node> = match value {
             prism::Node::ArrayNode { .. } => {
                 let arr = value.as_array_node().unwrap();
-                if arr.opening_loc().is_none() {
-                    // Implicit array (no `[...]`): the source wrote
-                    // `a, b = 1, 2` and Prism wrapped the RHS into an
-                    // ArrayNode for the assignment. Unpack so each
-                    // element becomes its own RHS slot, matching
-                    // ruruby's `MulAssign(lhs, [v1, v2, ...])` form.
+                let elements = arr.elements();
+                let has_splat = elements
+                    .iter()
+                    .any(|e| matches!(e, prism::Node::SplatNode { .. }));
+                if arr.opening_loc().is_none() && !has_splat {
+                    // Implicit array (no `[...]`) with no splat: the
+                    // source wrote `a, b = 1, 2` and Prism wrapped the
+                    // RHS into an ArrayNode for the assignment. Unpack
+                    // so each element becomes its own RHS slot,
+                    // matching ruruby's `MulAssign(lhs, [v1, v2, ...])`
+                    // form.
                     let mut out = Vec::new();
-                    for elem in arr.elements().iter() {
+                    for elem in elements.iter() {
                         out.push(self.lower_node(&elem)?);
                     }
                     out
                 } else {
-                    // Explicit `a, b = [1, 2]` keeps the array as a
-                    // single RHS so it gets splatted at runtime.
-                    vec![self.lower_node(&value)?]
+                    // Explicit `a, b = [1, 2]` *or* implicit-with-splat
+                    // (`a, b = *arg`, `a, b = 1, *rest`): keep the
+                    // array as a single RHS so it gets splatted at
+                    // runtime. ruruby's parser uses the same single-
+                    // `Array` shape for both, with the splat element
+                    // preserved inside.
+                    let mut elems = Vec::new();
+                    for elem in elements.iter() {
+                        elems.push(self.lower_node(&elem)?);
+                    }
+                    let arr_loc = location_to_loc(&arr.location());
+                    let is_const = elems.iter().all(|n| is_constant_literal(&n.kind));
+                    vec![Node {
+                        kind: NodeKind::Array(elems, is_const),
+                        loc: arr_loc,
+                    }]
                 }
             }
             _ => vec![self.lower_node(&value)?],
