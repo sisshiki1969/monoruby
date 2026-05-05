@@ -2835,37 +2835,40 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             return Err(MonorubyErr::rangeerr("too big to product"));
         }
     }
-    let v: Vec<Value> = product_inner(lhs, lists)
-        .into_iter()
-        .map(|a| Value::array_from_iter(a.into_iter().cloned()))
-        .collect();
+    let iter = product_inner(lhs, lists);
     if let Some(bh) = lfp.block() {
-        let ary = Array::new_from_vec(v);
-        vm.temp_push(ary.into());
-        vm.invoke_block_iter1(globals, bh, ary.into_iter().cloned())?;
-        vm.temp_pop();
+        //let ary = Array::new_from_vec(v);
+        //vm.temp_push(ary.into());
+        vm.invoke_block_iter1(globals, bh, iter)?;
+        //vm.temp_pop();
         Ok(lfp.self_val())
     } else {
-        Ok(Value::array_from_vec(v))
+        Ok(Value::array_from_iter(iter))
     }
 }
 
-fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
-    let mut res = vec![];
-    for e1 in lhs.into_iter() {
-        if rhs.is_empty() {
-            res.push(Array::new1(*e1));
-        } else {
-            let mut rhs = rhs.clone();
-            let l = rhs.remove(0);
-            for e2 in product_inner(l, rhs).into_iter() {
-                let mut v = vec![*e1];
-                v.extend(e2.into_iter());
-                res.push(Array::new_from_vec(v));
-            }
+fn product_inner(lhs: Array, rhs: Vec<Array>) -> impl Iterator<Item = Value> {
+    let mut arrays: Vec<Array> = Vec::with_capacity(rhs.len() + 1);
+    arrays.push(lhs);
+    arrays.extend(rhs);
+
+    let dims: Vec<usize> = arrays.iter().map(|a| a.len()).collect();
+    let n = arrays.len();
+    let total: usize = if dims.iter().any(|&d| d == 0) {
+        0
+    } else {
+        dims.iter().product()
+    };
+
+    (0..total).map(move |mut k| {
+        let mut v = vec![Value::nil(); n];
+        for i in (0..n).rev() {
+            let d = dims[i];
+            v[i] = arrays[i][k % d];
+            k /= d;
         }
-    }
-    res
+        Array::new_from_vec(v).into()
+    })
 }
 
 ///
