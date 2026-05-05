@@ -675,7 +675,7 @@ impl RStringInner {
     /// succeeds — broken byte sequences fall back to byte counting
     /// (matches CRuby's `String#length` returning byte length on
     /// invalid UTF-8).
-    pub fn char_count(&self) -> usize {
+    pub fn char_length(&self) -> usize {
         match self.ty {
             // Fixed 1-byte-per-char.
             Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => self.content.len(),
@@ -845,7 +845,7 @@ impl RStringInner {
     /// Return None if `i` is out of range.
     ///
     pub fn conv_char_index(&self, char_pos: i64) -> Option<usize> {
-        let len = self.char_count();
+        let len = self.char_length();
         if char_pos >= 0 {
             if char_pos <= len as i64 {
                 Some(char_pos as usize)
@@ -866,7 +866,7 @@ impl RStringInner {
     /// Return None if `i` is negative.
     ///
     pub fn conv_char_index2(&self, char_pos: i64) -> Option<usize> {
-        let len = self.char_count();
+        let len = self.char_length();
         if len == 0 && char_pos == -1 {
             return Some(0);
         }
@@ -942,7 +942,7 @@ impl RStringInner {
         match start_byte {
             // `index` past the end but exactly equal to char count
             // is the "append point" — empty range at end.
-            None if index == self.char_count() => self.content.len()..self.content.len(),
+            None if index == self.char_length() => self.content.len()..self.content.len(),
             None => 0..0,
             Some(s) => s..end_byte,
         }
@@ -953,7 +953,7 @@ impl RStringInner {
     /// on incompatible encodings. Used by call sites that have
     /// access to `Store` — preferred for new code; the older
     /// `extend()` is kept for the call sites that don't.
-    pub fn extend_compat(&mut self, other: &Self, store: &Store) -> Result<()> {
+    pub fn extend(&mut self, other: &Self, store: &Store) -> Result<()> {
         if other.is_empty() {
             return Ok(());
         }
@@ -963,7 +963,7 @@ impl RStringInner {
         // Snapshot (possibly cached) classifications BEFORE extending the
         // buffer and fold them into a combined cr in O(1). Previously every
         // append wiped self.cr to Unknown, which forced the *next*
-        // extend_compat's compatible_encoding() call to re-classify the
+        // extend's compatible_encoding() call to re-classify the
         // entire growing buffer -- turning N appends from O(N) into O(N²).
         // (See String#<< micro-bench: a 100k-iter `s << "abcde"` loop took
         // ~5.7s before this change vs 5.6ms in CRuby.)

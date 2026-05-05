@@ -283,7 +283,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     self_
         .as_rstring_inner_mut()
-        .extend_compat(&other, &globals.store)?;
+        .extend(&other, &globals.store)?;
     Ok(self_)
 }
 
@@ -536,7 +536,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if let Some(other) = lfp.arg(0).is_rstring() {
         self_
             .as_rstring_inner_mut()
-            .extend_compat(&other, &globals.store)?;
+            .extend(&other, &globals.store)?;
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
@@ -562,7 +562,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
         self_
             .as_rstring_inner_mut()
-            .extend_compat(&coerced, &globals.store)?;
+            .extend(&coerced, &globals.store)?;
     }
     Ok(self_)
 }
@@ -690,10 +690,10 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 INTEGER_CLASS,
             ));
         }
-        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_count - 1
+        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_length - 1
         // (so the inclusive `end` reaches the last character; the
         // exclusive bookkeeping below subtracts as usual).
-        let char_count = lhs.iter_char_bytes().count() as i64;
+        let char_length = lhs.iter_char_bytes().count() as i64;
         let start = if info.start().is_nil() {
             0
         } else {
@@ -701,9 +701,9 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         let end = if info.end().is_nil() {
             // For endless ranges we just want "everything from start".
-            // Use char_count and treat exclude_end as a no-op so the
+            // Use char_length and treat exclude_end as a no-op so the
             // slice extends through the final character.
-            char_count - 1
+            char_length - 1
         } else {
             info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64
         };
@@ -2689,7 +2689,7 @@ fn string_rindex(
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Use the encoding-aware char counter; it always succeeds (broken
     // UTF-8 falls back to byte count, matching CRuby).
-    let length = lfp.self_val().as_rstring_inner().char_count();
+    let length = lfp.self_val().as_rstring_inner().char_length();
     Ok(Value::integer(length as i64))
 }
 
@@ -8638,7 +8638,7 @@ mod tests {
 
     #[test]
     fn string_split_empty_separator_limit() {
-        // With an empty separator, lim > char_count appends a
+        // With an empty separator, lim > char_length appends a
         // trailing empty field.
         run_tests(&[
             r##""hi!".split("")"##,
