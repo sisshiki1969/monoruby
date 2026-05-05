@@ -122,7 +122,15 @@ module Psych
     end
 
     def indent_of(line)
-      line ? (line =~ /\S/ || line.size) : -1
+      return -1 if line.nil?
+      i = 0
+      len = line.size
+      while i < len
+        b = line.getbyte(i)
+        break unless b == 0x20 || b == 0x09
+        i += 1
+      end
+      i
     end
 
     def parse_value(parent_indent)
@@ -173,14 +181,49 @@ module Psych
     end
 
     def block_mapping_line?(line)
-      s = line.strip
-      return false if s.start_with?("- ")
-      return false if s.start_with?("#")
-      if s =~ /\A(?:["'].*?["']|[^:#]*?)\s*:\s/
-        return true
+      # Find the first non-leading-whitespace byte without allocating.
+      bytes = line.bytes
+      len = bytes.size
+      i = 0
+      while i < len && (bytes[i] == 0x20 || bytes[i] == 0x09)
+        i += 1
       end
-      if s =~ /\A(?:["'].*?["']|[^:#]*?)\s*:\z/
-        return true
+      return false if i == len
+      first = bytes[i]
+      return false if first == 0x23 # '#'
+      return false if first == 0x2D && i + 1 < len && bytes[i + 1] == 0x20 # "- "
+      # A block-mapping line is a key followed by ':' that is either
+      # at end of line or followed by whitespace. Strings escape the
+      # match (so we have to skip past balanced "..." or '...').
+      while i < len
+        b = bytes[i]
+        case b
+        when 0x22 # '"'
+          i += 1
+          while i < len && bytes[i] != 0x22
+            i += 1
+          end
+          i += 1 # past closing "
+        when 0x27 # "'"
+          i += 1
+          while i < len && bytes[i] != 0x27
+            i += 1
+          end
+          i += 1 # past closing '
+        when 0x23 # '#'  inline comment ⇒ no mapping
+          return false
+        when 0x3A # ':'
+          # ':' followed by whitespace or end-of-line is a mapping
+          # separator. Anything else (e.g. ::, :foo) is not.
+          if i + 1 == len
+            return true
+          end
+          nx = bytes[i + 1]
+          return true if nx == 0x20 || nx == 0x09
+          i += 1
+        else
+          i += 1
+        end
       end
       false
     end
@@ -402,36 +445,77 @@ module Psych
     def resolve_scalar(str)
       return nil if str.nil?
       str = str.strip
-      str = $1 if str =~ /\A(.*?)\s+#.*\z/ && !str.start_with?('"') && !str.start_with?("'")
+      return nil if str.empty?
 
-      if str =~ /\A\*(\S+)\z/
-        return @anchors[$1]
+      # Most YAML scalars are plain strings. Dispatch on the first
+      # byte to skip the per-call regex/case scan whenever possible.
+      first = str.getbyte(0)
+      # Cheap leading-comment trim, but only for unquoted plain
+      # scalars (quoted strings may legally contain " #").
+      if first != 0x22 && first != 0x27 && (idx = str.index(" #"))
+        str = str[0, idx].rstrip
+        return nil if str.empty?
+        first = str.getbyte(0)
       end
 
-      case str
-      when "", "~", "null", "Null", "NULL"
-        nil
-      when "true", "True", "TRUE"
-        true
-      when "false", "False", "FALSE"
-        false
-      when /\A-?\d+\z/
-        str.to_i
-      when /\A-?\d+\.\d+(?:[eE][+-]?\d+)?\z/
-        str.to_f
-      when /\A"(.*)"\z/
-        $1.gsub('\\n', "\n").gsub('\\t', "\t").gsub('\\"', '"').gsub('\\\\', '\\')
-      when /\A'(.*)'\z/
-        $1
-      else
-        str
+      case first
+      when 0x22 # "..."  double-quoted
+        if str.end_with?('"') && str.size >= 2
+          inner = str[1..-2]
+          # Cheap path: no escape sequences ⇒ return as-is.
+          if inner.include?("\\")
+            return inner.gsub('\\n', "\n").gsub('\\t', "\t")
+                        .gsub('\\"', '"').gsub('\\\\', '\\')
+          end
+          return inner
+        end
+      when 0x27 # '...'  single-quoted
+        return str[1..-2] if str.end_with?("'") && str.size >= 2
+      when 0x2A # '*'    alias
+        return @anchors[str[1..-1]] if str.size > 1 && !str.include?(" ")
+      when 0x7E # '~'
+        return nil if str.size == 1
+      when 0x6E # 'n'
+        return nil if str == "null"
+      when 0x4E # 'N'
+        return nil if str == "Null" || str == "NULL"
+      when 0x74 # 't'
+        return true if str == "true"
+      when 0x54 # 'T'
+        return true if str == "True" || str == "TRUE"
+      when 0x66 # 'f'
+        return false if str == "false"
+      when 0x46 # 'F'
+        return false if str == "False" || str == "FALSE"
       end
+
+      # Numbers: only worth a regex when the leading byte could
+      # plausibly start one.
+      if first == 0x2D || (first >= 0x30 && first <= 0x39) # '-' or '0'..'9'
+        if str =~ /\A-?\d+\z/
+          return str.to_i
+        elsif str =~ /\A-?\d+\.\d+(?:[eE][+-]?\d+)?\z/
+          return str.to_f
+        end
+      end
+
+      str
     end
 
     def skip_blanks_and_comments
       while @pos < @lines.size
         line = @lines[@pos]
-        if line.strip.empty? || line.strip.start_with?("#")
+        # Avoid two strip allocations per line (the old code stripped
+        # twice). Walk leading whitespace inline; lines that only have
+        # whitespace, or whose first non-space byte is '#', are skipped.
+        i = 0
+        len = line.size
+        while i < len
+          b = line.getbyte(i)
+          break unless b == 0x20 || b == 0x09
+          i += 1
+        end
+        if i == len || line.getbyte(i) == 0x23 # '#'
           @pos += 1
         else
           break
