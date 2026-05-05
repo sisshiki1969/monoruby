@@ -335,7 +335,7 @@ impl MonorubyErr {
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
-            format!("undefined method `{name}' for {}", obj.inspect(store)),
+            format!("undefined method `{name}' for {}", obj.to_s(store)),
         )
     }
 

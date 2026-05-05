@@ -1,1 +1,1 @@
-RUST_BACKTRACE=1 cargo run -- ../doom/bin/doom
+cargo run --features jit-log --features gc-log -- ../doom/bin/doom
