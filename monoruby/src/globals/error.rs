@@ -335,7 +335,7 @@ impl MonorubyErr {
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod(Some(obj.id())),
-            format!("undefined method `{name}' for {}", obj.to_s(store)),
+            format!("undefined method `{name}' for {}", obj.inspect(store)),
         )
     }
 
@@ -527,7 +527,11 @@ impl MonorubyErr {
         a: crate::value::Encoding,
         b: crate::value::Encoding,
     ) -> MonorubyErr {
-        let msg = format!("incompatible character encodings: {} and {}", a.name(), b.name());
+        let msg = format!(
+            "incompatible character encodings: {} and {}",
+            a.name(),
+            b.name()
+        );
         Self::encoding_compatibility_error_with_store(store, msg)
     }
 
@@ -544,10 +548,7 @@ impl MonorubyErr {
                 enc_const.as_class_id(),
                 IdentId::get_id("CompatibilityError"),
             ) {
-                return MonorubyErr::new(
-                    MonorubyErrKind::Other(compat_const.as_class_id()),
-                    msg,
-                );
+                return MonorubyErr::new(MonorubyErrKind::Other(compat_const.as_class_id()), msg);
             }
         }
         MonorubyErr::runtimeerr(msg)
@@ -644,10 +645,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn keyerr_with(msg: String, receiver: Value, key: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Key(Some((receiver.id(), key.id()))),
-            msg,
-        )
+        MonorubyErr::new(MonorubyErrKind::Key(Some((receiver.id(), key.id()))), msg)
     }
 
     pub(crate) fn stopiterationerr(msg: String) -> MonorubyErr {
@@ -711,11 +709,7 @@ impl MonorubyErr {
     /// `SyntaxError` would be misleading, but we still want the
     /// usual "<path>:<line>" prefix on stderr instead of bare
     /// `location not defined.`.
-    pub fn fatal_with_loc(
-        msg: impl ToString,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> MonorubyErr {
+    pub fn fatal_with_loc(msg: impl ToString, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Fatal,
             msg.to_string(),
