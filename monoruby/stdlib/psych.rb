@@ -252,7 +252,9 @@ module Psych
 
         key = resolve_scalar(key)
 
-        if rest.nil? || rest.empty?
+        if rest.nil? || rest.empty? || rest.start_with?("#")
+          # `key: # comment` carries no inline value; the value is on
+          # the following indented line(s).
           value = parse_value(ind)
         elsif rest.start_with?("*")
           alias_name = rest[1..-1].strip
@@ -274,11 +276,24 @@ module Psych
           value = parse_flow_mapping(rest)
         elsif rest.start_with?("[")
           value = parse_flow_sequence(rest)
-        elsif rest == "|" || rest == "|-" || rest == "|+"
-          value = parse_literal_block(ind, rest)
-        elsif rest == ">" || rest == ">-" || rest == ">+"
-          value = parse_folded_block(ind, rest)
+        elsif rest =~ /\A([|>])(\d*)([+-]?)\z/
+          block_type = $1
+          explicit_n = $2.empty? ? nil : $2.to_i
+          chomp = $3 # "" (clip), "-" (strip), or "+" (keep)
+          if block_type == "|"
+            value = parse_literal_block(ind, explicit_n, chomp)
+          else
+            value = parse_folded_block(ind, explicit_n, chomp)
+          end
         else
+          # YAML allows "..." / '...' values to span multiple lines; the
+          # closing quote may be on a later line. Pull continuation
+          # lines into `rest` (folding line breaks into single spaces
+          # per YAML 1.1) before handing off to resolve_scalar.
+          if (rest.start_with?('"') || rest.start_with?("'")) &&
+             !quoted_string_terminated?(rest, rest.getbyte(0))
+            rest = consume_multiline_quoted(rest)
+          end
           value = resolve_scalar(rest)
         end
 
@@ -355,12 +370,14 @@ module Psych
     end
 
     def split_mapping_key(stripped)
+      # For quoted keys, keep the quotes so that resolve_scalar
+      # treats `"1"` as the string "1" rather than the integer 1.
       if stripped.start_with?('"')
-        if stripped =~ /\A"((?:[^"\\]|\\.)*)"\s*:\s*(.*)\z/
+        if stripped =~ /\A("(?:[^"\\]|\\.)*")\s*:\s*(.*)\z/
           return [$1, $2]
         end
       elsif stripped.start_with?("'")
-        if stripped =~ /\A'([^']*)'\s*:\s*(.*)\z/
+        if stripped =~ /\A('[^']*')\s*:\s*(.*)\z/
           return [$1, $2]
         end
       end
@@ -373,30 +390,55 @@ module Psych
       [stripped, nil]
     end
 
-    def parse_literal_block(parent_indent, chomp)
-      lines = []
-      while @pos < @lines.size
-        line = @lines[@pos]
-        if line.strip.empty?
-          lines << ""
-          @pos += 1
+    # True iff the quoted scalar `s` (which starts with `quote`) has a
+    # matching unescaped closing `quote` on the same line. Mirrors
+    # YAML 1.1 escapes: `\` consumes the next byte inside `"..."` and
+    # `''` is the in-string escape for `'` inside `'...'`.
+    def quoted_string_terminated?(s, quote)
+      return false if s.bytesize < 2
+      i = 1
+      len = s.bytesize
+      while i < len
+        c = s.getbyte(i)
+        if c == quote
+          if quote == 0x27 && i + 1 < len && s.getbyte(i + 1) == 0x27
+            i += 2
+            next
+          end
+          return true
+        end
+        if quote == 0x22 && c == 0x5C # backslash escape inside "..."
+          i += 2
           next
         end
-        ind = indent_of(line)
-        break if ind <= parent_indent
-        lines << line[parent_indent + 2..-1].to_s
-        @pos += 1
+        i += 1
       end
-      result = lines.join("\n")
-      case chomp
-      when "|"  then result + "\n"
-      when "|-" then result
-      when "|+" then result + "\n"
-      else result + "\n"
-      end
+      false
     end
 
-    def parse_folded_block(parent_indent, chomp)
+    # `rest` starts with `"` / `'` whose closing quote is on a later
+    # line. Pull continuation lines into a single buffer, folding the
+    # joining line break into a single space (YAML 1.1 rule for
+    # double/single-quoted multi-line scalars on contiguous non-blank
+    # lines), and advance @pos past the consumed lines.
+    def consume_multiline_quoted(rest)
+      quote = rest.getbyte(0)
+      buf = rest.dup
+      while @pos < @lines.size
+        nxt = @lines[@pos]
+        @pos += 1
+        buf = buf.rstrip + " " + nxt.lstrip
+        break if quoted_string_terminated?(buf, quote)
+      end
+      buf
+    end
+
+    # `chomp` is one of "" (clip — single trailing newline), "-"
+    # (strip — no trailing newline), "+" (keep — preserve all
+    # trailing newlines). `explicit_indent`, when given, fixes the
+    # content indent at parent_indent + explicit_indent (e.g. `|2-`).
+    def parse_literal_block(parent_indent, explicit_indent, chomp)
+      content_indent = explicit_indent ? parent_indent + explicit_indent : parent_indent + 2
       lines = []
       while @pos < @lines.size
         line = @lines[@pos]
@@ -407,15 +449,56 @@ module Psych
         end
         ind = indent_of(line)
         break if ind <= parent_indent
-        lines << line[parent_indent + 2..-1].to_s
+        lines << line[content_indent..-1].to_s
         @pos += 1
       end
-      result = lines.join(" ").gsub("  ", " ")
+      # Pop trailing empty lines (the chomp indicator decides what to
+      # do with them).
+      trailing = 0
+      while !lines.empty? && lines.last.empty?
+        lines.pop
+        trailing += 1
+      end
+      body = lines.join("\n")
+      apply_chomp(body, trailing, chomp)
+    end
+
+    def parse_folded_block(parent_indent, explicit_indent, chomp)
+      content_indent = explicit_indent ? parent_indent + explicit_indent : parent_indent + 2
+      lines = []
+      while @pos < @lines.size
+        line = @lines[@pos]
+        if line.strip.empty?
+          lines << ""
+          @pos += 1
+          next
+        end
+        ind = indent_of(line)
+        break if ind <= parent_indent
+        lines << line[content_indent..-1].to_s
+        @pos += 1
+      end
+      trailing = 0
+      while !lines.empty? && lines.last.empty?
+        lines.pop
+        trailing += 1
+      end
+      # Folded: line breaks fold to a single space (collapsing any
+      # double-spaces that arise from joining).
+      body = lines.join(" ").gsub("  ", " ")
+      apply_chomp(body, trailing, chomp)
+    end
+
+    # Block-scalar chomp indicator:
+    #   ""  (clip)  -> exactly one trailing newline
+    #   "-" (strip) -> no trailing newlines
+    #   "+" (keep)  -> the original trailing-empty-line count, plus the
+    #                   final block-end newline
+    def apply_chomp(body, trailing, chomp)
       case chomp
-      when ">"  then result + "\n"
-      when ">-" then result
-      when ">+" then result + "\n"
-      else result + "\n"
+      when "-" then body
+      when "+" then body + ("\n" * (trailing + 1))
+      else          body + "\n"
       end
     end
 
