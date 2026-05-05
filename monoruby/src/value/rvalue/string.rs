@@ -965,9 +965,32 @@ impl RStringInner {
         let result_enc = self
             .compatible_encoding(other)
             .ok_or_else(|| MonorubyErr::incompatible_encoding(store, self.ty, other.ty))?;
+        // Snapshot (possibly cached) classifications BEFORE extending the
+        // buffer and fold them into a combined cr in O(1). Previously every
+        // append wiped self.cr to Unknown, which forced the *next*
+        // extend_compat's compatible_encoding() call to re-classify the
+        // entire growing buffer -- turning N appends from O(N) into O(N²).
+        // (See String#<< micro-bench: a 100k-iter `s << "abcde"` loop took
+        // ~5.7s before this change vs 5.6ms in CRuby.)
+        let new_cr = match (self.cr.get(), other.cr.get()) {
+            (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+            (
+                CodeRange::SevenBit | CodeRange::Valid,
+                CodeRange::SevenBit | CodeRange::Valid,
+            ) => {
+                // compatible_encoding already verified the encodings agree,
+                // so two well-formed pieces concatenate to a well-formed
+                // whole. (Multi-byte boundaries can only collide at the
+                // junction if one side was already Broken.)
+                CodeRange::Valid
+            }
+            // Either side is Broken or its cr was never computed --
+            // fall back to lazy re-classify on the next access.
+            _ => CodeRange::Unknown,
+        };
         self.content.extend_from_slice(&other.content);
         self.ty = result_enc;
-        self.cr.set(CodeRange::Unknown);
+        self.cr.set(new_cr);
         Ok(())
     }
 
