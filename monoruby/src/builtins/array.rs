@@ -1440,61 +1440,72 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ary = lfp.self_val().as_array();
     let self_len = self_ary.len();
     let each_id = IdentId::get_id("each");
+    let to_enum_id = IdentId::get_id("to_enum");
+    let next_id = IdentId::get_id("next");
 
-    // Phase 1: Convert each argument to an Array or collect elements via #each.
-    // For arguments responding to #each but not #to_ary, we collect only up to
-    // self.len() elements to handle infinite enumerators correctly.
-    let mut args_list: Vec<Vec<Value>> = vec![];
-
-    for a in lfp.arg(0).as_array().iter() {
-        if let Ok(ary) = a.coerce_to_array(vm, globals) {
-            args_list.push(ary.to_vec());
-        } else if globals.check_method(*a, each_id).is_some() {
-            let to_enum_id = IdentId::get_id("to_enum");
-            let enum_val = vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
-            let next_id = IdentId::get_id("next");
-            let mut collected = Vec::with_capacity(self_len);
-            for _ in 0..self_len {
-                match vm.invoke_method_inner(globals, next_id, enum_val, &[], None, None) {
-                    Ok(val) => collected.push(val),
-                    Err(_) => break, // StopIteration — enumerator exhausted
+    vm.with_temp_scope(|vm| {
+        // Phase 1: stash each converted argument as a GC-rooted Array on the
+        // temp_stack at offsets [base..base + n_args]. This protects values
+        // pulled from enumerators (which are freshly allocated by `#next` and
+        // would otherwise be unreachable across the next Ruby callback).
+        let base = vm.temp_len();
+        for a in lfp.arg(0).as_array().iter() {
+            if let Ok(ary) = a.coerce_to_array(vm, globals) {
+                vm.temp_push(ary.into());
+            } else if globals.check_method(*a, each_id).is_some() {
+                let enum_val =
+                    vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
+                vm.temp_push(enum_val);
+                vm.temp_array_new(Some(self_len));
+                for _ in 0..self_len {
+                    match vm
+                        .invoke_method_inner(globals, next_id, enum_val, &[], None, None)
+                    {
+                        Ok(val) => vm.temp_array_push(val),
+                        Err(_) => break, // StopIteration — enumerator exhausted
+                    }
                 }
+                let inner = vm.temp_pop();
+                vm.temp_pop(); // discard enum_val
+                vm.temp_push(inner);
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (must respond to :each)",
+                    a.get_real_class_name(&globals.store),
+                )));
             }
-            args_list.push(collected);
+        }
+        let n_args = vm.temp_len() - base;
+
+        // Phase 2: build rows. Each `row` is consumed (passed to invoke_block
+        // or pushed into result_ary) before the next Ruby callback, so it does
+        // not need its own temp protection.
+        if let Some(bh) = lfp.block() {
+            let data = vm.get_block_data(globals, bh)?;
+            for (i, val) in self_ary.iter().enumerate() {
+                let mut row = Array::new_empty();
+                row.push(*val);
+                for j in 0..n_args {
+                    let arg = vm.temp_at(base + j).as_array();
+                    row.push(if i < arg.len() { arg[i] } else { Value::nil() });
+                }
+                vm.invoke_block(globals, &data, &[row.as_val()])?;
+            }
+            Ok(Value::nil())
         } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "wrong argument type {} (must respond to :each)",
-                a.get_real_class_name(&globals.store),
-            )));
+            let mut result_ary = Array::new_empty();
+            for (i, val) in self_ary.iter().enumerate() {
+                let mut row = Array::new_empty();
+                row.push(*val);
+                for j in 0..n_args {
+                    let arg = vm.temp_at(base + j).as_array();
+                    row.push(if i < arg.len() { arg[i] } else { Value::nil() });
+                }
+                result_ary.push(row.as_val());
+            }
+            Ok(result_ary.as_val())
         }
-    }
-
-    // Phase 2: Build result
-    // Helper to build a single row for index i
-    let build_row = |i: usize, val: Value, args: &[Vec<Value>]| -> Array {
-        let mut row = Array::new_empty();
-        row.push(val);
-        for arg in args {
-            row.push(if i < arg.len() { arg[i] } else { Value::nil() });
-        }
-        row
-    };
-
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for (i, val) in self_ary.iter().enumerate() {
-            let row = build_row(i, *val, &args_list);
-            vm.invoke_block(globals, &data, &[row.as_val()])?;
-        }
-        Ok(Value::nil())
-    } else {
-        let mut result_ary = Array::new_empty();
-        for (i, val) in self_ary.iter().enumerate() {
-            let row = build_row(i, *val, &args_list);
-            result_ary.push(row.as_val());
-        }
-        Ok(result_ary.as_val())
-    }
+    })
 }
 
 ///
@@ -2629,35 +2640,36 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let ary: Vec<_> = match lfp.block() {
-        None => {
-            let mut res = vec![];
-            let mut i = 0;
-            while i < self_val.as_array().len() {
-                let v = self_val.as_array()[i];
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
-                    res.push(v)
-                }
-                i += 1;
-            }
-            res
-        }
-        Some(bh) => {
+    if let Some(bh) = lfp.block() {
+        return vm.with_temp_scope(|vm| {
             let bh = vm.get_block_data(globals, bh)?;
-            let mut res = vec![];
+            // Block return values accumulate into a GC-rooted Array on the
+            // temp_stack so they survive subsequent invoke_block / cmp_teq calls.
+            vm.temp_array_new(Some(self_val.as_array().len()));
             let mut i = 0;
             while i < self_val.as_array().len() {
                 let v = self_val.as_array()[i];
                 if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
                     let mapped = vm.invoke_block(globals, &bh, &[v])?;
-                    res.push(mapped);
+                    vm.temp_array_push(mapped);
                 }
                 i += 1;
             }
-            res
+            Ok(vm.temp_pop())
+        });
+    }
+    // No-block path: pushed values are elements of self's array (already
+    // rooted via lfp.self_val()), so a plain Vec is fine.
+    let mut res = vec![];
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let v = self_val.as_array()[i];
+        if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+            res.push(v)
         }
-    };
-    Ok(Value::array_from_vec(ary))
+        i += 1;
+    }
+    Ok(Value::array_from_vec(res))
 }
 
 ///
@@ -2994,10 +3006,16 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             ary.uniq(vm, globals)?;
             Ok(ary.into())
         }
-        Some(bh) => {
+        Some(bh) => vm.with_temp_scope(|vm| {
             let data = vm.get_block_data(globals, bh)?;
+            // `result` is a GC-rooted Array on the temp_stack; collected
+            // elements come from self's array (already rooted via lfp), but
+            // each block-returned `key` is a fresh allocation that we also
+            // temp_push so that the unmarked RubySet below holds only live
+            // pointers across subsequent invoke_block / h.insert callbacks.
+            vm.temp_array_new(None);
+            let result_idx = vm.temp_len() - 1;
             let mut h = RubySet::default();
-            let mut result = vec![];
             let mut i = 0;
             loop {
                 let ary = lfp.self_val().as_array();
@@ -3006,13 +3024,14 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 }
                 let elem = ary[i];
                 let key = vm.invoke_block(globals, &data, &[elem])?;
+                vm.temp_push(key);
                 if h.insert(key, vm, globals)? {
-                    result.push(elem);
+                    vm.temp_at(result_idx).as_array().push(elem);
                 }
                 i += 1;
             }
-            Ok(Value::array_from_vec(result))
-        }
+            Ok(vm.temp_at(result_idx))
+        }),
     }
 }
 
@@ -3024,7 +3043,7 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             let mut ary = lfp.self_val().as_array();
             ary.uniq(vm, globals)?
         }
-        Some(bh) => {
+        Some(bh) => vm.with_temp_scope(|vm| -> Result<bool> {
             let data = vm.get_block_data(globals, bh)?;
             let mut h = RubySet::default();
             let mut i = 0;
@@ -3036,6 +3055,10 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 }
                 let elem = ary[i];
                 let key = vm.invoke_block(globals, &data, &[elem])?;
+                // Keep `key` alive across the rest of the loop so the unmarked
+                // RubySet's stored pointers remain valid when h.insert() of a
+                // future iteration dereferences them via .eql?.
+                vm.temp_push(key);
                 if h.insert(key, vm, globals)? {
                     if del > 0 {
                         let mut ary = lfp.self_val().as_array();
@@ -3051,8 +3074,8 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 let new_len = ary.len() - del;
                 ary.truncate(new_len);
             }
-            del > 0
-        }
+            Ok(del > 0)
+        })?,
     };
     if deleted {
         Ok(lfp.self_val())
