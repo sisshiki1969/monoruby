@@ -234,13 +234,6 @@ impl<'pr> Lowerer<'pr> {
     /// dispatch-style match.
     fn unsupported(&self, context: &'static str, node: &prism::Node<'_>) -> MonorubyErr {
         let kind = node_kind_name(node);
-        if std::env::var("MONORUBY_PARSER_VERBOSE").ok().as_deref() == Some("1") {
-            if kind == "<other>" {
-                eprintln!("[prism] unsupported {context} node: <other> // {node:?}");
-            } else {
-                eprintln!("[prism] unsupported {context} node: {kind}");
-            }
-        }
         self.unsupported_node(kind, location_to_loc(&node.location()))
     }
 
@@ -650,10 +643,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOperatorWriteNode { .. } => {
                 let n = node.as_index_operator_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(self.unsupported_node(
-                        "indexed op-assign with block argument",
-                        loc,
-                    ));
+                    return Err(self.unsupported_node("indexed op-assign with block argument", loc));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -665,10 +655,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexOrWriteNode { .. } => {
                 let n = node.as_index_or_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(self.unsupported_node(
-                        "indexed ||= with block argument",
-                        loc,
-                    ));
+                    return Err(self.unsupported_node("indexed ||= with block argument", loc));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -680,10 +667,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexAndWriteNode { .. } => {
                 let n = node.as_index_and_write_node().unwrap();
                 if n.block().is_some() {
-                    return Err(self.unsupported_node(
-                        "indexed &&= with block argument",
-                        loc,
-                    ));
+                    return Err(self.unsupported_node("indexed &&= with block argument", loc));
                 }
                 let target = self.build_index_target(
                     n.receiver().as_ref(),
@@ -856,10 +840,9 @@ impl<'pr> Lowerer<'pr> {
                             return Err(self.unsupported_node("for index with splat", mt_loc));
                         }
                         if mt.rights().iter().next().is_some() {
-                            return Err(self.unsupported_node(
-                                "for index with post element",
-                                mt_loc,
-                            ));
+                            return Err(
+                                self.unsupported_node("for index with post element", mt_loc)
+                            );
                         }
                         let mut out: Vec<(usize, String)> = Vec::new();
                         for tgt in mt.lefts().iter() {
@@ -1750,9 +1733,9 @@ impl<'pr> Lowerer<'pr> {
     /// non-Const node.
     fn lower_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let chain = self.collect_const_chain(node)?.ok_or_else(|| {
-            self.unsupported_node("non-constant constant path prefix", loc)
-        })?;
+        let chain = self
+            .collect_const_chain(node)?
+            .ok_or_else(|| self.unsupported_node("non-constant constant path prefix", loc))?;
         Ok(Node {
             kind: NodeKind::Const {
                 toplevel: chain.toplevel,
@@ -1893,7 +1876,10 @@ impl<'pr> Lowerer<'pr> {
     /// anonymous-& form (`foo(&)`) is reported separately via
     /// [`CallBlock::Delegate`] so the caller can flip
     /// `arglist.delegate_block`.
-    fn lower_call_block(&mut self, block_node: &prism::Node<'pr>) -> Result<CallBlock, MonorubyErr> {
+    fn lower_call_block(
+        &mut self,
+        block_node: &prism::Node<'pr>,
+    ) -> Result<CallBlock, MonorubyErr> {
         match block_node {
             prism::Node::BlockNode { .. } => {
                 let bn = block_node.as_block_node().unwrap();
@@ -2009,10 +1995,9 @@ impl<'pr> Lowerer<'pr> {
                             let bytes = s.unescaped();
                             let key_loc = location_to_loc(&key.location());
                             if bytes.is_empty() {
-                                return Err(self.unsupported_node(
-                                    "empty keyword arg name",
-                                    key_loc,
-                                ));
+                                return Err(
+                                    self.unsupported_node("empty keyword arg name", key_loc)
+                                );
                             }
                             let name =
                                 std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
@@ -2056,8 +2041,7 @@ impl<'pr> Lowerer<'pr> {
         safe_nav: bool,
         loc: Loc,
     ) -> Result<Node, MonorubyErr> {
-        let recv =
-            receiver.ok_or(self.unsupported_node("attr op-assign without receiver", loc))?;
+        let recv = receiver.ok_or(self.unsupported_node("attr op-assign without receiver", loc))?;
         let receiver_node = self.lower_node(recv)?;
         let method = constant_name(read_name)?;
         Ok(Node {
@@ -2082,8 +2066,7 @@ impl<'pr> Lowerer<'pr> {
         args: Option<&prism::ArgumentsNode<'pr>>,
         loc: Loc,
     ) -> Result<Node, MonorubyErr> {
-        let recv =
-            receiver.ok_or(self.unsupported_node("index target without receiver", loc))?;
+        let recv = receiver.ok_or(self.unsupported_node("index target without receiver", loc))?;
         let base = self.lower_node(recv)?;
         let mut index: Vec<Node> = Vec::new();
         if let Some(a) = args {
@@ -2300,10 +2283,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::IndexTargetNode { .. } => {
                 let n = node.as_index_target_node().unwrap();
                 if n.block().is_some() {
-                    return Err(self.unsupported_node(
-                        "index target with block argument",
-                        loc,
-                    ));
+                    return Err(self.unsupported_node("index target with block argument", loc));
                 }
                 let recv = n.receiver();
                 self.build_index_target(Some(&recv), n.arguments().as_ref(), loc)?
@@ -2316,10 +2296,7 @@ impl<'pr> Lowerer<'pr> {
                 let name = match n.name() {
                     Some(id) => constant_name(&id)?,
                     None => {
-                        return Err(self.unsupported_node(
-                            "constant path target missing name",
-                            loc,
-                        ));
+                        return Err(self.unsupported_node("constant path target missing name", loc));
                     }
                 };
                 let chain = match n.parent() {
@@ -2519,7 +2496,10 @@ impl<'pr> Lowerer<'pr> {
     ///   `Nil`, or `CompStmt` depending on statement count
     /// - `EmbeddedVariableNode` (`#@x`, `#$x`) — forward the inner
     ///   variable read directly
-    fn lower_interp_parts(&mut self, parts: prism::NodeList<'pr>) -> Result<Vec<Node>, MonorubyErr> {
+    fn lower_interp_parts(
+        &mut self,
+        parts: prism::NodeList<'pr>,
+    ) -> Result<Vec<Node>, MonorubyErr> {
         let mut out: Vec<Node> = Vec::new();
         for part in parts.iter() {
             match part {
@@ -2974,16 +2954,12 @@ impl<'pr> Lowerer<'pr> {
                     let mt = n.as_multi_target_node().unwrap();
                     let mt_loc = location_to_loc(&n.location());
                     if mt.rest().is_some() {
-                        return Err(self.unsupported_node(
-                            "destructure param with splat",
-                            mt_loc,
-                        ));
+                        return Err(self.unsupported_node("destructure param with splat", mt_loc));
                     }
                     if mt.rights().iter().next().is_some() {
-                        return Err(self.unsupported_node(
-                            "destructure param with post element",
-                            mt_loc,
-                        ));
+                        return Err(
+                            self.unsupported_node("destructure param with post element", mt_loc)
+                        );
                     }
                     let mut destruct: Vec<(String, Loc)> = Vec::new();
                     for el in mt.lefts().iter() {
