@@ -840,32 +840,22 @@ impl RStringInner {
     }
 
     ///
-    /// Get the length in char of the string `self`.
-    ///
-    pub fn char_length(&self) -> Result<usize> {
-        // Always-succeeding char counter: broken UTF-8 falls back to
-        // counting each invalid byte as one character (matches
-        // CRuby's `String#length` rule).
-        Ok(self.char_count())
-    }
-
-    ///
     /// Convert `char_pos` to the true position in char of the string `self`.
     ///
     /// Return None if `i` is out of range.
     ///
-    pub fn conv_char_index(&self, char_pos: i64) -> Result<Option<usize>> {
-        let len = self.char_length()?;
+    pub fn conv_char_index(&self, char_pos: i64) -> Option<usize> {
+        let len = self.char_count();
         if char_pos >= 0 {
             if char_pos <= len as i64 {
-                Ok(Some(char_pos as usize))
+                Some(char_pos as usize)
             } else {
-                Ok(None)
+                None
             }
         } else {
             match len as i64 + char_pos {
-                n if n < 0 => Ok(None),
-                n => Ok(Some(n as usize)),
+                n if n < 0 => None,
+                n => Some(n as usize),
             }
         }
     }
@@ -875,17 +865,17 @@ impl RStringInner {
     ///
     /// Return None if `i` is negative.
     ///
-    pub fn conv_char_index2(&self, char_pos: i64) -> Result<Option<usize>> {
-        let len = self.char_length()?;
+    pub fn conv_char_index2(&self, char_pos: i64) -> Option<usize> {
+        let len = self.char_count();
         if len == 0 && char_pos == -1 {
-            return Ok(Some(0));
+            return Some(0);
         }
         if char_pos >= 0 {
-            Ok(Some(char_pos as usize))
+            Some(char_pos as usize)
         } else {
             match len as i64 + char_pos {
-                n if n < 0 => Ok(None),
-                n => Ok(Some(n as usize)),
+                n if n < 0 => None,
+                n => Some(n as usize),
             }
         }
     }
@@ -956,43 +946,6 @@ impl RStringInner {
             None => 0..0,
             Some(s) => s..end_byte,
         }
-    }
-
-    pub fn extend(&mut self, other: &Self) -> Result<()> {
-        if other.is_empty() {
-            return Ok(());
-        }
-        let result_enc = match self.compatible_encoding(other) {
-            Some(enc) => enc,
-            None => {
-                // Caller does not have access to `Store`, so raise a
-                // generic runtime error that matches CRuby's
-                // wording. Callers that have access to `Store` can
-                // build a proper `Encoding::CompatibilityError` via
-                // `MonorubyErr::incompatible_encoding`; see
-                // `String#<<` / `String#concat` /
-                // `Array#join`-style sites.
-                return Err(MonorubyErr::runtimeerr(format!(
-                    "incompatible character encodings: {} and {}",
-                    self.ty.name(),
-                    other.ty.name(),
-                )));
-            }
-        };
-        // Same O(1) cr-merge optimisation as extend_compat — see the
-        // comment there for why this matters (avoids O(N²) String#<<).
-        let new_cr = match (self.cr.get(), other.cr.get()) {
-            (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
-            (
-                CodeRange::SevenBit | CodeRange::Valid,
-                CodeRange::SevenBit | CodeRange::Valid,
-            ) => CodeRange::Valid,
-            _ => CodeRange::Unknown,
-        };
-        self.content.extend_from_slice(&other.content);
-        self.ty = result_enc;
-        self.cr.set(new_cr);
-        Ok(())
     }
 
     /// Append `other`'s bytes to `self`, raising
@@ -1371,18 +1324,6 @@ mod encoding_tests {
         assert_eq!(s.code_range(), CodeRange::Broken);
     }
 
-    #[test]
-    fn extend_invalidates_cache_for_new_bytes() {
-        let mut a = RStringInner::from_encoding(&[0xC3], Encoding::Utf8);
-        // 0xC3 alone is a truncated 2-byte UTF-8 scalar → Broken.
-        assert_eq!(a.code_range(), CodeRange::Broken);
-        let b = RStringInner::from_encoding(&[0xA9], Encoding::Utf8);
-        assert_eq!(b.code_range(), CodeRange::Broken);
-        a.extend(&b).unwrap();
-        // Two broken halves combine into U+00E9 (é) — Valid.
-        assert_eq!(a.code_range(), CodeRange::Valid);
-        assert!(a.is_valid_encoding());
-    }
 
     #[test]
     fn encoding_compatible_same_encoding() {
@@ -1496,31 +1437,6 @@ mod encoding_tests {
         let utf16 = RStringInner::from_encoding(&[0x00, 0xD8], Encoding::Utf16Le);
         // 0x00 stays ASCII-printable; 0xD8 escapes.
         assert_eq!(utf16.to_str().unwrap().as_ref(), "\x00\\xD8");
-    }
-
-    #[test]
-    fn extend_errors_on_incompatible_encodings() {
-        // UTF-8 (with non-ASCII content) + UTF-16LE → no compatible
-        // encoding → RuntimeError mentioning both encoding names.
-        let mut a = RStringInner::from_encoding("あ".as_bytes(), Encoding::Utf8);
-        let b = RStringInner::from_encoding(&[0x61, 0x00], Encoding::Utf16Le);
-        let err = a.extend(&b).unwrap_err();
-        let msg = err.message();
-        assert!(msg.contains("incompatible character encodings"), "{msg}");
-        assert!(msg.contains("UTF-8"), "{msg}");
-        assert!(msg.contains("UTF-16LE"), "{msg}");
-    }
-
-    #[test]
-    fn extend_compatible_seven_bit_and_other() {
-        // Pure-ASCII operand is compatible with any ASCII-compatible
-        // encoding (Shift_JIS in this case) — append succeeds and the
-        // result keeps the receiver's encoding.
-        let mut a = RStringInner::from_encoding(b"\x82\xa0", Encoding::Sjis(0));
-        let b = RStringInner::from_str("xy");
-        a.extend(&b).unwrap();
-        assert_eq!(a.encoding(), Encoding::Sjis(0));
-        assert_eq!(a.as_bytes(), b"\x82\xa0xy");
     }
 
     #[test]

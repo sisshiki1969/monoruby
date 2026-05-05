@@ -656,7 +656,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let lhs = self_.as_rstring_inner();
     let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
-        let index = match lhs.conv_char_index(i)? {
+        let index = match lhs.conv_char_index(i) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
@@ -707,7 +707,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         } else {
             info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64
         };
-        let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
+        let (start, len) = match (lhs.conv_char_index(start), lhs.conv_char_index(end)) {
             (Some(start), Some(end)) => {
                 if start > end {
                     (start, 0)
@@ -760,7 +760,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
             let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
             if let RV::Fixnum(i) = result.unpack() {
-                let index = match lhs.conv_char_index(i)? {
+                let index = match lhs.conv_char_index(i) {
                     Some(i) => i,
                     None => return Ok(Value::nil()),
                 };
@@ -2369,7 +2369,7 @@ fn string_index(
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
-    let char_pos = match given.conv_char_index(char_pos)? {
+    let char_pos = match given.conv_char_index(char_pos) {
         Some(pos) => pos,
         None => return Ok(Value::nil()),
     };
@@ -2613,7 +2613,7 @@ fn string_rindex(
 
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
         let pos = arg1.coerce_to_int_i64(vm, globals)?;
-        match given.conv_char_index2(pos)? {
+        match given.conv_char_index2(pos) {
             Some(pos) => pos,
             None => return Ok(Value::nil()),
         }
