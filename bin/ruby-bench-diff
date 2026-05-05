@@ -42,7 +42,10 @@ if [ ! -x "$MONORUBY" ]; then
   exit 2
 fi
 
-# --- locate a CRuby >= 4.0
+# --- locate CRuby. When CRUBY is explicitly set, trust it as-is. When
+# unset, auto-detect a Ruby >= 4.0 (the version monoruby compares
+# against in its other test paths) by walking PATH and the standard
+# rbenv / rvm shim locations.
 ruby_ok() {
   local r="$1" v
   [ -x "$r" ] || command -v "$r" >/dev/null 2>&1 || return 1
@@ -52,14 +55,17 @@ ruby_ok() {
     *) return 1 ;;
   esac
 }
-CRUBY="${CRUBY:-}"
-if [ -z "$CRUBY" ]; then
+if [ -z "${CRUBY:-}" ]; then
   for c in ruby "$HOME/.rbenv/shims/ruby" "$HOME/.rvm/bin/ruby"; do
     if ruby_ok "$c"; then CRUBY="$c"; break; fi
   done
+  if [ -z "${CRUBY:-}" ]; then
+    echo "no Ruby >= 4.0 found (set CRUBY=...)" >&2
+    exit 2
+  fi
 fi
-if [ -z "$CRUBY" ] || ! ruby_ok "$CRUBY"; then
-  echo "no Ruby >= 4.0 found (set CRUBY=...)" >&2
+if ! command -v "$CRUBY" >/dev/null 2>&1 && [ ! -x "$CRUBY" ]; then
+  echo "CRUBY=$CRUBY: not executable / not on PATH" >&2
   exit 2
 fi
 
