@@ -685,14 +685,18 @@ impl RStringInner {
             }
             // UTF-8: count valid scalars and count each invalid byte
             // individually (CRuby's "adds 1 for every invalid byte
-            // in UTF-8" rule).
-            Encoding::Utf8 => {
-                if std::str::from_utf8(&self.content).is_ok() {
+            // in UTF-8" rule). Use the cached cr instead of re-running
+            // from_utf8 -- a SevenBit string can answer in O(1).
+            Encoding::Utf8 => match self.code_range() {
+                CodeRange::SevenBit => self.content.len(),
+                CodeRange::Valid => {
                     self.content.iter().filter(|&&b| (b & 0xC0) != 0x80).count()
-                } else {
-                    self.iter_char_bytes().count()
                 }
-            }
+                CodeRange::Broken => self.iter_char_bytes().count(),
+                // code_range() always populates `cr` to a concrete
+                // variant before returning; Unknown is unreachable.
+                CodeRange::Unknown => unreachable!(),
+            },
             // EUC-JP / Shift_JIS: byte count (no native multibyte
             // decoder yet).
             Encoding::EucJp | Encoding::Sjis(_) => self.content.len(),
@@ -753,11 +757,26 @@ impl RStringInner {
     }
 
     pub fn check_utf8(&self) -> Result<&str> {
+        // Skip the O(n) re-validation when we already know the answer:
+        //
+        //   - SevenBit: every byte is < 0x80, which is a strict subset
+        //     of valid UTF-8, regardless of the declared encoding.
+        //   - Utf8 + Valid: classify ran from_utf8 and accepted the
+        //     bytes. Other encodings can also classify as Valid (e.g.
+        //     EUC-JP / ASCII-8BIT) without being valid UTF-8, so we
+        //     still re-check those.
+        let cr = self.code_range();
+        if matches!(cr, CodeRange::SevenBit)
+            || (self.ty == Encoding::Utf8 && matches!(cr, CodeRange::Valid))
+        {
+            // SAFETY: see above.
+            return Ok(unsafe { std::str::from_utf8_unchecked(&self.content) });
+        }
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
-            Err(_) => Err(MonorubyErr::argumenterr(format!(
-                "invalid byte sequence in UTF-8"
-            ))),
+            Err(_) => Err(MonorubyErr::argumenterr(
+                "invalid byte sequence in UTF-8",
+            )),
         }
     }
 
@@ -797,11 +816,18 @@ impl RStringInner {
     pub fn set_byte(&mut self, index: usize, byte: u8) {
         self.content[index] = byte;
         // Phase 1 lets a UTF-8-tagged buffer hold invalid bytes,
-        // so we no longer downgrade the encoding tag here. The
-        // cached classification is invalidated and will be
-        // re-computed on the next access (`valid_encoding?` will
-        // see the byte and report Broken).
-        self.cr.set(CodeRange::Unknown);
+        // so we no longer downgrade the encoding tag here.
+        //
+        // Most setbyte calls poke ASCII bytes into already-SevenBit
+        // strings; we can preserve the cached classification for that
+        // common case to avoid an O(N) re-classify on the next
+        // `valid_encoding?` / encoding-compat check. Anything else
+        // falls back to lazy re-classify.
+        let new_cr = match (self.cr.get(), byte) {
+            (CodeRange::SevenBit, b) if b < 0x80 => CodeRange::SevenBit,
+            _ => CodeRange::Unknown,
+        };
+        self.cr.set(new_cr);
     }
 
     ///
@@ -944,12 +970,19 @@ impl RStringInner {
                 )));
             }
         };
+        // Same O(1) cr-merge optimisation as extend_compat — see the
+        // comment there for why this matters (avoids O(N²) String#<<).
+        let new_cr = match (self.cr.get(), other.cr.get()) {
+            (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+            (
+                CodeRange::SevenBit | CodeRange::Valid,
+                CodeRange::SevenBit | CodeRange::Valid,
+            ) => CodeRange::Valid,
+            _ => CodeRange::Unknown,
+        };
         self.content.extend_from_slice(&other.content);
         self.ty = result_enc;
-        // The cached classification doesn't survive mutation: appending
-        // bytes can flip SevenBit → Valid/Broken, or two Broken halves
-        // can combine into a Valid character.
-        self.cr.set(CodeRange::Unknown);
+        self.cr.set(new_cr);
         Ok(())
     }
 
@@ -1001,8 +1034,29 @@ impl RStringInner {
                 slice
             )));
         }
+        // We just verified `slice` validates under self.ty when
+        // utf8-compatible, so its cr is at worst Valid; if every byte is
+        // < 0x80 it's still SevenBit. Combine with self.cr in O(1) so
+        // repeated callers (e.g. String#<< with single-char Integer args
+        // or per-codepoint encode loops) don't degenerate to O(N²) when
+        // self.code_range() is later queried.
+        let slice_cr = if slice.iter().all(|&b| b < 0x80) {
+            CodeRange::SevenBit
+        } else if self.ty.is_utf8_compatible() {
+            CodeRange::Valid
+        } else {
+            CodeRange::Unknown
+        };
+        let new_cr = match (self.cr.get(), slice_cr) {
+            (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+            (
+                CodeRange::SevenBit | CodeRange::Valid,
+                CodeRange::SevenBit | CodeRange::Valid,
+            ) => CodeRange::Valid,
+            _ => CodeRange::Unknown,
+        };
         self.content.extend_from_slice(slice);
-        self.cr.set(CodeRange::Unknown);
+        self.cr.set(new_cr);
         Ok(())
     }
 
@@ -1040,6 +1094,17 @@ impl RStringInner {
         }
         // Copy replacement in
         self.content[start..start + replacement.len()].copy_from_slice(replacement);
+        // Fast path: if the receiver was already SevenBit and the spliced
+        // bytes are all ASCII, the SevenBit invariant survives and we can
+        // skip the O(n) from_utf8 walk below.
+        let prev_cr = self.cr.get();
+        if matches!(prev_cr, CodeRange::SevenBit)
+            && self.ty.is_ascii_compatible()
+            && replacement.iter().all(|&b| b < 0x80)
+        {
+            self.cr.set(CodeRange::SevenBit);
+            return;
+        }
         // Re-check encoding
         if self.ty.is_utf8_compatible() {
             if std::str::from_utf8(&self.content).is_err() {
