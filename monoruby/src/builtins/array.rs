@@ -92,6 +92,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "minmax", minmax, 0);
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
@@ -612,21 +613,22 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
-    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    let mut v = vec![];
-    for lhs in lhs_v.as_array().iter() {
-        let mut flag = true;
-        for rhs in rhs.iter() {
-            if lhs.eql(rhs, vm, globals)? {
-                flag = false;
-                break;
+    vm.with_temp_scope(|vm| {
+        let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+        vm.temp_push(rhs.into());
+        // O(n + m): hash rhs once, then membership-check each lhs element.
+        let mut rhs_set = RubySet::default();
+        for v in rhs.iter() {
+            rhs_set.insert(*v, vm, globals)?;
+        }
+        let mut v = vec![];
+        for lhs in lhs_v.as_array().iter() {
+            if !rhs_set.contains(lhs, vm, globals)? {
+                v.push(*lhs);
             }
         }
-        if flag {
-            v.push(*lhs)
-        }
-    }
-    Ok(Value::array_from_vec(v))
+        Ok(Value::array_from_vec(v))
+    })
 }
 
 ///
@@ -708,17 +710,19 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.uniq(vm, globals)?;
-    lhs.retain(|v| {
-        for rhs_elem in rhs.iter() {
-            if v.eql(rhs_elem, vm, globals)? {
-                return Ok(true);
-            }
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(lhs.into());
+        let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+        vm.temp_push(rhs.into());
+        lhs.uniq(vm, globals)?;
+        // O(n + m): hash rhs once, then membership-check each lhs element.
+        let mut rhs_set = RubySet::default();
+        for v in rhs.iter() {
+            rhs_set.insert(*v, vm, globals)?;
         }
-        Ok(false)
-    })?;
-    Ok(lhs.as_val())
+        lhs.retain(|v| rhs_set.contains(v, vm, globals))?;
+        Ok(lhs.as_val())
+    })
 }
 
 ///
@@ -1930,6 +1934,68 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 ///
+/// ### Array#minmax
+///
+/// - minmax -> [object, object]
+/// - minmax {|a, b| ... } -> [object, object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/minmax.html]
+#[monoruby_builtin]
+fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    if ary.len() == 0 {
+        return Ok(Value::array2(Value::nil(), Value::nil()));
+    }
+    let mut min = ary[0];
+    let mut max = ary[0];
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for v in &ary[1..] {
+            let r_min = vm.invoke_block(globals, &data, &[*v, min])?;
+            if r_min.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            if r_min.coerce_to_int_i64(vm, globals)? < 0 {
+                min = *v;
+            }
+            let r_max = vm.invoke_block(globals, &data, &[*v, max])?;
+            if r_max.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            if r_max.coerce_to_int_i64(vm, globals)? > 0 {
+                max = *v;
+            }
+        }
+    } else if let Some(first_i) = ary[0].try_fixnum()
+        && ary.iter().all(|v| v.try_fixnum().is_some())
+    {
+        // All-Fixnum fast path: tight i64 loop, no Ruby-level dispatch.
+        let mut min_i = first_i;
+        let mut max_i = first_i;
+        for v in &ary[1..] {
+            // SAFETY: pre-checked above that every element is a Fixnum.
+            let x = unsafe { v.try_fixnum().unwrap_unchecked() };
+            if x < min_i {
+                min_i = x;
+            } else if x > max_i {
+                max_i = x;
+            }
+        }
+        return Ok(Value::array2(Value::integer(min_i), Value::integer(max_i)));
+    } else {
+        for v in &ary[1..] {
+            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+                min = *v;
+            }
+            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+                max = *v;
+            }
+        }
+    }
+    Ok(Value::array2(min, max))
+}
+
+///
 /// ### Enumerable#partition
 ///
 /// - [NOT SUPPORTED] partition -> Enumerator
@@ -2945,29 +3011,31 @@ fn intersection(
     let src = lfp.self_val().as_array();
     // Build a unique copy as a plain Array
     let mut ary = Value::array_from_vec(src.to_vec()).as_array();
-    ary.uniq(vm, globals)?;
-    let others: Vec<_> = lfp
-        .arg(0)
-        .as_array()
-        .iter()
-        .map(|v| v.coerce_to_array(vm, globals))
-        .collect::<Result<Vec<_>>>()?;
-    ary.retain(|lhs| {
-        for other in &others {
-            let mut found = false;
-            for rhs in other.iter() {
-                if lhs.eql(rhs, vm, globals)? {
-                    found = true;
-                    break;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(ary.into());
+        ary.uniq(vm, globals)?;
+        // Build one hash set per `other` arg so each membership check is O(1).
+        let mut other_sets: Vec<RubySet<Value>> =
+            Vec::with_capacity(lfp.arg(0).as_array().len());
+        for arg in lfp.arg(0).as_array().iter() {
+            let other = arg.coerce_to_array(vm, globals)?;
+            vm.temp_push(other.into());
+            let mut set = RubySet::default();
+            for elem in other.iter() {
+                set.insert(*elem, vm, globals)?;
+            }
+            other_sets.push(set);
+        }
+        ary.retain(|lhs| {
+            for set in &other_sets {
+                if !set.contains(lhs, vm, globals)? {
+                    return Ok(false);
                 }
             }
-            if !found {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    })?;
-    Ok(ary.as_val())
+            Ok(true)
+        })?;
+        Ok(ary.as_val())
+    })
 }
 
 ///
