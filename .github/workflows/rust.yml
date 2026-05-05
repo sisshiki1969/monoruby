@@ -23,8 +23,6 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
-      - name: Install ImageMagick
-        run: sudo apt-get install imagemagick
       - name: Clone optcarrot
         run: git clone https://github.com/mame/optcarrot.git ../optcarrot
       - name: Clone ruby/spec
