@@ -10,7 +10,6 @@ on:
       - 'monoruby_attr/**'
       - 'rubymap/**'
       - 'Cargo.toml'
-      - 'benchmark/**'
       - '.github/workflows/bench.yml'
       - '.github/portal/**'
       - '.github/bench-pages/**'
@@ -21,7 +20,7 @@ permissions:
 jobs:
   bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 240
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -38,105 +37,146 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install system deps for yjit-bench
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libmagickwand-dev imagemagick libsqlite3-dev libpq-dev libyaml-dev
+
       - name: Install monoruby (release)
         run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
 
-      - name: Install benchmark_driver
-        run: gem install --no-document benchmark_driver
+      - name: Clone yjit-bench (Shopify/yjit-bench)
+        run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
 
-      - name: Run benchmarks (monoruby vs ruby --yjit)
+      - name: bundle install yjit-bench
+        working-directory: ../ruby-bench
+        run: |
+          gem install --no-document bundler
+          bundle install || true
+
+      - name: Run yjit-bench (monoruby vs ruby --yjit)
         id: run
-        working-directory: benchmark
+        working-directory: ../ruby-bench
         shell: bash
         run: |
           set +e
           set -uo pipefail
 
           OUT="$GITHUB_WORKSPACE/bench-results"
-          mkdir -p "$OUT"
-          RAW="$OUT/raw.md"
+          mkdir -p "$OUT/data"
 
-          # Same set as bin/bench, minus app_aobench (slow) and bedcov for CI time.
-          BENCHMARKS=(
-            app_fib.yml
-            so_nbody.yml
-            so_mandelbrot.yml
-            bf.rb
-            plb2/nqueen.rb
-            plb2/sudoku.rb
-            plb2/matmul.rb
-          )
-
-          # Use full paths for both executables. benchmark-driver treats a
-          # bare name like "ruby" as a relative path (./ruby) and fails with
-          # ENOENT when run from the benchmark/ directory.
-          RUBY_BIN=$(command -v ruby)
-
-          benchmark-driver \
-            -o markdown \
-            "${BENCHMARKS[@]}" \
+          # Options follow bin/ruby-bench: --rss --harness=harness-warmup
+          # Plus --no-sudo / --no-pinning because GH-hosted runners lack the
+          # privileges and CPU layout assumptions yjit-bench's CPUConfig wants.
+          # We measure ALL benchmarks (no --headline, no --category) and let
+          # benchmarks that error under monoruby be recorded as failures.
+          ./run_benchmarks.rb \
+            --no-sudo \
+            --no-pinning \
+            --rss \
+            --harness=harness-warmup \
+            --out_path="$OUT/data" \
+            --out-name="$OUT/data/raw" \
             -e "monoruby::$HOME/.cargo/bin/monoruby" \
-            -e "yjit::$RUBY_BIN --yjit" \
-            | tee "$RAW"
+            -e "yjit::$(command -v ruby) --yjit" \
+            2>&1 | tee "$OUT/run.log"
 
-      - name: Aggregate results
-        id: agg
-        shell: bash
-        run: |
-          set +e
-          set -uo pipefail
-
-          OUT="$GITHUB_WORKSPACE/bench-results"
-          RAW="$OUT/raw.md"
+          # run_benchmarks.rb exits 1 when at least one benchmark failed.
+          # We always want to publish the partial result.
+          true
 
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
-          # Parse markdown table rows of the form
-          #   |name |monoruby |yjit |
-          # Skip the header row (|name) and the alignment row (|:---).
-          awk -F'|' -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" '
-          BEGIN {
-            printf "{\"timestamp\":\"%s\",\"commit\":\"%s\",\"benchmarks\":[", ts, sha
-            first=1
+      - name: Aggregate to portal JSON
+        env:
+          TIMESTAMP: ${{ steps.run.outputs.timestamp }}
+          SHORT_SHA: ${{ steps.run.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/bench-results"
+          RAW="$OUT/data/raw.json"
+
+          # Parse the run log for the "Failed benchmarks:" block so we can
+          # surface benchmarks that errored on every executable. Listed names
+          # become entries with both *_ms = nil.
+          ruby -rjson <<'RUBY' > "$OUT/portal.json"
+          out = ENV['GITHUB_WORKSPACE'] + '/bench-results'
+          raw = JSON.parse(File.read(out + '/data/raw.json'))
+          mr_data = raw.dig('raw_data', 'monoruby') || {}
+          yj_data = raw.dig('raw_data', 'yjit') || {}
+
+          median = ->(arr) {
+            return nil if arr.nil? || arr.empty?
+            s = arr.sort
+            n = s.size
+            n.odd? ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2.0
           }
-          /^\|name/ { next }
-          /^\|:/ { next }
-          /^\|/ {
-            name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
-            mr=$3+0; yj=$4+0
-            if (yj > 0 && mr > 0) {
-              if (!first) printf ","
-              first=0
-              printf "{\"name\":\"%s\",\"monoruby_ips\":%.4f,\"yjit_ips\":%.4f,\"ratio\":%.4f}", \
-                     name, mr, yj, mr/yj
+
+          # Failures for each executable, parsed from run.log's
+          #   "Failed benchmarks:" section ("  <exe>: a, b, c").
+          failures = Hash.new { |h, k| h[k] = [] }
+          log = File.read(out + '/run.log') rescue ''
+          if (idx = log.index(/^Failed benchmarks:$/m))
+            log[idx..].each_line.drop(1).each do |line|
+              if line =~ /\A\s+(\S+):\s*(.+?)\s*\z/
+                failures[$1].concat($2.split(/,\s*/))
+              else
+                break
+              end
+            end
+          end
+
+          all_names = (mr_data.keys + yj_data.keys + failures.values.flatten).uniq.sort
+
+          benches = all_names.map do |name|
+            mr = mr_data[name]
+            yj = yj_data[name]
+            mr_med = mr ? median.call(mr['bench']) : nil
+            yj_med = yj ? median.call(yj['bench']) : nil
+            mr_ms = (mr_med && mr_med > 0) ? mr_med * 1000.0 : nil
+            yj_ms = (yj_med && yj_med > 0) ? yj_med * 1000.0 : nil
+            ratio = (mr_ms && yj_ms) ? yj_ms / mr_ms : nil
+            {
+              name: name,
+              monoruby_ms: mr_ms,
+              yjit_ms: yj_ms,
+              ratio: ratio,
+              monoruby_failed: mr_ms.nil?,
+              yjit_failed: yj_ms.nil?,
             }
-          }
-          END { print "]}" }
-          ' "$RAW" > "$OUT/latest.json"
+          end
 
-          cat "$OUT/latest.json"
+          puts JSON.generate(
+            timestamp: ENV['TIMESTAMP'],
+            commit: ENV['SHORT_SHA'],
+            benchmarks: benches,
+          )
+          RUBY
 
+          # Step Summary
           {
-            echo "## Benchmark vs YJIT"
+            echo "## Benchmark vs YJIT (yjit-bench)"
             echo ""
             echo "monoruby commit: \`$SHORT_SHA\`"
             echo ""
-            echo "| Benchmark | monoruby (i/s) | YJIT (i/s) | monoruby / YJIT |"
+            echo "| Benchmark | monoruby (ms) | YJIT (ms) | YJIT / monoruby |"
             echo "| --- | ---: | ---: | ---: |"
-            awk -F'|' '
-            /^\|name/ { next }
-            /^\|:/ { next }
-            /^\|/ {
-              name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
-              mr=$3+0; yj=$4+0
-              if (yj > 0 && mr > 0)
-                printf "| %s | %.4f | %.4f | %.3fx |\n", name, mr, yj, mr/yj
-            }' "$RAW"
+            ruby -rjson <<'RUBY'
+            data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
+            data['benchmarks'].each do |b|
+              mr = b['monoruby_failed'] ? 'ERROR' : '%.3f' % b['monoruby_ms']
+              yj = b['yjit_failed']     ? 'ERROR' : '%.3f' % b['yjit_ms']
+              ratio = b['ratio'] ? '%.3fx' % b['ratio'] : '-'
+              puts "| #{b['name']} | #{mr} | #{yj} | #{ratio} |"
+            end
+          RUBY
           } >> "$GITHUB_STEP_SUMMARY"
-
-          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload results
         if: always()
@@ -150,8 +190,8 @@ jobs:
         if: github.ref == 'refs/heads/master' || github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TIMESTAMP: ${{ steps.agg.outputs.timestamp }}
-          SHORT_SHA: ${{ steps.agg.outputs.short_sha }}
+          TIMESTAMP: ${{ steps.run.outputs.timestamp }}
+          SHORT_SHA: ${{ steps.run.outputs.short_sha }}
         run: |
           set -euo pipefail
 
@@ -173,20 +213,22 @@ jobs:
           mkdir -p bench/data
 
           if [ ! -f bench/data/history.csv ]; then
-            echo "timestamp,commit,benchmark,monoruby_ips,yjit_ips,ratio" > bench/data/history.csv
+            echo "timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed" > bench/data/history.csv
           fi
 
-          awk -F'|' -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" '
-          /^\|name/ { next }
-          /^\|:/ { next }
-          /^\|/ {
-            name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
-            mr=$3+0; yj=$4+0
-            if (yj > 0 && mr > 0)
-              printf "%s,%s,%s,%.4f,%.4f,%.4f\n", ts, sha, name, mr, yj, mr/yj
-          }' "$GITHUB_WORKSPACE/bench-results/raw.md" >> bench/data/history.csv
+          ruby -rjson <<'RUBY' >> bench/data/history.csv
+          data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
+          ts = ENV['TIMESTAMP']
+          sha = ENV['SHORT_SHA']
+          data['benchmarks'].each do |b|
+            mr = b['monoruby_failed'] ? '' : '%.4f' % b['monoruby_ms']
+            yj = b['yjit_failed']     ? '' : '%.4f' % b['yjit_ms']
+            ra = b['ratio'] ? '%.4f' % b['ratio'] : ''
+            puts [ts, sha, b['name'], mr, yj, ra, b['monoruby_failed'], b['yjit_failed']].join(',')
+          end
+          RUBY
 
-          cp "$GITHUB_WORKSPACE/bench-results/latest.json" bench/latest.json
+          cp "$GITHUB_WORKSPACE/bench-results/portal.json" bench/latest.json
           cp "$GITHUB_WORKSPACE/.github/bench-pages/index.html" bench/index.html
 
           git add -A
