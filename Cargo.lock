@@ -1758,6 +1758,7 @@ dependencies = [
 name = "ruby-prism"
 version = "1.9.0"
 dependencies = [
+ "libc",
  "ruby-prism-sys",
  "serde",
  "serde_json",

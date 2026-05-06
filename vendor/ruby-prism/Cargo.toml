@@ -59,6 +59,9 @@ path = "src/lib.rs"
 [dependencies.ruby-prism-sys]
 version = "1.9.0"
 
+[dependencies.libc]
+version = "0.2"
+
 [build-dependencies.serde]
 version = "1.0"
 features = ["derive"]

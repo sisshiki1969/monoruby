@@ -19,7 +19,19 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 pub use self::bindings::*;
-use ruby_prism_sys::{pm_comment_t, pm_comment_type_t, pm_constant_id_list_t, pm_constant_id_t, pm_diagnostic_t, pm_integer_t, pm_location_t, pm_magic_comment_t, pm_node_destroy, pm_node_list, pm_node_t, pm_options_scope_t, pm_options_t, pm_parse, pm_parser_free, pm_parser_init, pm_parser_t, pm_string_t, PM_STRING_CONSTANT};
+use ruby_prism_sys::{pm_comment_t, pm_comment_type_t, pm_constant_id_list_t, pm_constant_id_t, pm_diagnostic_t, pm_integer_t, pm_location_t, pm_magic_comment_t, pm_node_destroy, pm_node_list, pm_node_t, pm_options_scope_t, pm_options_t, pm_parse, pm_parser_free, pm_parser_init, pm_parser_t, pm_string_t};
+
+// `ruby-prism-sys`'s bindgen allowlist excludes the option-allocator
+// helpers, so we forward-declare them here. They are exported with
+// default visibility from the statically-linked libprism (every
+// `PRISM_EXPORTED_FUNCTION`), so the link step resolves them.
+extern "C" {
+    fn pm_options_line_set(options: *mut pm_options_t, line: i32);
+    fn pm_options_scope_init(scope: *mut pm_options_scope_t, locals_count: usize) -> bool;
+    fn pm_options_scope_forwarding_set(scope: *mut pm_options_scope_t, forwarding: u8);
+    fn pm_options_free(options: *mut pm_options_t);
+    fn pm_string_owned_init(string: *mut pm_string_t, source: *mut u8, length: usize);
+}
 
 /// A range in the source file.
 pub struct Location<'pr> {
@@ -565,16 +577,11 @@ impl<'pr> Iterator for MagicComments<'pr> {
 }
 
 /// The result of parsing a source string.
+#[derive(Debug)]
 pub struct ParseResult<'pr> {
     source: &'pr [u8],
     parser: NonNull<pm_parser_t>,
     node: NonNull<pm_node_t>,
-    // `Some` only for `parse_with_options`. The parser holds raw
-    // pointers into the options block (scope list, local-name
-    // bytes), so we have to keep it alive at least until
-    // `pm_parser_free` runs in `Drop`. Read implicitly via `Drop`.
-    #[allow(dead_code)]
-    options_keepalive: Option<Box<Options>>,
 }
 
 impl<'pr> ParseResult<'pr> {
@@ -708,64 +715,44 @@ pub fn parse(source: &[u8]) -> ParseResult<'_> {
         let node = pm_parse(parser.as_ptr());
         let node = NonNull::new_unchecked(node);
 
-        ParseResult {
-            source,
-            parser,
-            node,
-            options_keepalive: None,
-        }
+        ParseResult { source, parser, node }
     }
 }
 
-/// A builder for `pm_options_t` that owns all the heap allocations
-/// (local-variable name buffers, per-scope `pm_string_t` arrays, the
-/// `pm_options_scope_t` array itself) needed by the Prism C API and
-/// keeps them alive for as long as the resulting parser does.
+/// A `#[repr(transparent)]` newtype around `pm_options_t`. The
+/// data Prism reads through pointers in it (the scope array,
+/// per-scope local-name arrays, the local-name byte buffers) is
+/// owned by Prism's C-side allocator (`xmalloc`/`xfree` ≡
+/// `libc::malloc`/`libc::free` by default) and freed in `Drop` via
+/// `pm_options_free`. There is no Rust-side side storage.
 ///
-/// Use `Options::new()` to start an empty option set, then chain
-/// `line`, `add_scope`, etc., and finally hand it to
-/// [`parse_with_options`].
+/// Use `Options::new()` to start an empty option block, chain field
+/// setters (`line`, etc.) and `add_scope` calls, then pass the
+/// result by reference to [`parse_with_options`]. `pm_parser_init`
+/// copies everything it needs out of the options block (scope
+/// locals are `xmalloc`/`memcpy`'d into the parser's own scope
+/// stack), so `Options` may be dropped as soon as
+/// `parse_with_options` returns.
 ///
 /// Currently only the fields needed by `eval` / `binding.eval`
 /// support are exposed (line offset and the surrounding-locals
 /// scopes). Other Prism options (`encoding`, `frozen_string_literal`,
-/// `partial_script`, …) can be added the same way when needed.
-//
-// The struct is stored in a `Box` returned by `parse_with_options`
-// so the addresses we hand to Prism never move while the parser is
-// alive — `pm_parser_init` saves the pointers we put into
-// `options.scopes` / `pm_options_scope.locals` directly into the
-// parser.
-pub struct Options {
-    // Each `Vec<u8>` holds the bytes of one local name; we keep them
-    // here so the `pm_string_t` slots can borrow into stable memory.
-    name_storage: Vec<Vec<Vec<u8>>>,
-    // One `Vec<pm_string_t>` per scope, each indexing into the
-    // corresponding `name_storage[i]`.
-    string_storage: Vec<Vec<pm_string_t>>,
-    // The scope array we point Prism at. Filled in just-in-time when
-    // `parse_with_options` finalizes the option block.
-    scopes: Vec<pm_options_scope_t>,
-    // The actual options struct passed to `pm_parser_init`. Pointers
-    // are wired up in `finalize`.
-    options: pm_options_t,
-}
+/// `partial_script`, …) can be added by chaining setters that wrap
+/// the corresponding `pm_options_*_set` helper.
+#[repr(transparent)]
+pub struct Options(pm_options_t);
 
 impl Options {
-    /// Returns a fresh, all-zero options block.
+    /// Returns a fresh, all-zero options block. An all-zero
+    /// `pm_options_t` is `pm_options_free`-safe (every owned pointer
+    /// is null, every count is zero).
     #[must_use]
     pub fn new() -> Self {
         // SAFETY: `pm_options_t` is a plain C-style struct; an
         // all-zero bit pattern matches its documented "default"
         // behaviour (no scopes, line=0 (treated as 1 by Prism),
         // version unset, every bool false, no shebang callback).
-        let options = unsafe { std::mem::zeroed::<pm_options_t>() };
-        Self {
-            name_storage: Vec::new(),
-            string_storage: Vec::new(),
-            scopes: Vec::new(),
-            options,
-        }
+        Self(unsafe { std::mem::zeroed() })
     }
 
     /// Sets the 1-indexed starting line for the parsed source. Used
@@ -773,7 +760,8 @@ impl Options {
     /// the caller's line numbering instead of starting at 1.
     #[must_use]
     pub fn line(mut self, line: i32) -> Self {
-        self.options.line = line;
+        // SAFETY: `&mut self.0` points at a valid `pm_options_t`.
+        unsafe { pm_options_line_set(&mut self.0, line) };
         self
     }
 
@@ -785,45 +773,82 @@ impl Options {
     /// non-zero values map to the `PM_OPTIONS_SCOPE_FORWARDING_*`
     /// flag bits and are only relevant when the surrounding scope
     /// uses `...` forwarding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the underlying allocations (the scope-array
+    /// grow, the locals-array allocation, or per-name byte buffers)
+    /// fails. These come from `libc::malloc`/`libc::realloc` and
+    /// only return null on OOM.
     pub fn add_scope<I, S>(&mut self, locals: I, forwarding: u8)
     where
         I: IntoIterator<Item = S>,
         S: AsRef<[u8]>,
     {
-        let owned: Vec<Vec<u8>> = locals.into_iter().map(|s| s.as_ref().to_vec()).collect();
-        let strings: Vec<pm_string_t> = owned
-            .iter()
-            .map(|bytes| pm_string_t {
-                source: bytes.as_ptr(),
-                length: bytes.len(),
-                type_: PM_STRING_CONSTANT,
-            })
-            .collect();
-        self.name_storage.push(owned);
-        self.string_storage.push(strings);
-        // We push a placeholder; the `locals` pointer is wired up in
-        // `finalize_pointers` below, after the storage Vecs are
-        // pinned (no more growth). This avoids dangling references
-        // if `add_scope` is called multiple times and the storage
-        // Vec reallocates between calls.
-        self.scopes.push(pm_options_scope_t {
-            locals_count: 0,
-            locals: std::ptr::null_mut(),
-            forwarding,
-        });
-    }
+        let names: Vec<Vec<u8>> = locals.into_iter().map(|s| s.as_ref().to_vec()).collect();
+        let old_count = self.0.scopes_count;
+        let new_count = old_count + 1;
 
-    // Wire up the `locals` / `scopes` pointers right before handing
-    // `&self.options` to Prism. After this call no more
-    // `add_scope` is allowed (the public API enforces that by taking
-    // `self` by value into `parse_with_options`).
-    fn finalize_pointers(&mut self) {
-        for (i, scope) in self.scopes.iter_mut().enumerate() {
-            scope.locals_count = self.string_storage[i].len();
-            scope.locals = self.string_storage[i].as_mut_ptr();
+        // Grow the scopes array via libc::realloc. Prism's
+        // `pm_options_scopes_init` only does a one-shot xcalloc;
+        // there's no append helper. Realloc'ing a buffer that was
+        // first xcalloc'd (by an earlier add_scope on the same
+        // Options) is fine since both go through libc.
+        // SAFETY: `realloc(null, n)` ≡ `malloc(n)`; otherwise the
+        // pointer was last set by us (or by an earlier realloc) and
+        // is still valid. We update `scopes` and `scopes_count`
+        // atomically below so a Drop in between would see a
+        // consistent block.
+        let new_scopes = unsafe {
+            libc::realloc(
+                self.0.scopes.cast::<libc::c_void>(),
+                new_count.checked_mul(size_of::<pm_options_scope_t>()).expect("scope-array size overflow"),
+            )
+            .cast::<pm_options_scope_t>()
+        };
+        assert!(!new_scopes.is_null(), "libc::realloc OOM growing scopes array");
+        self.0.scopes = new_scopes;
+        self.0.scopes_count = new_count;
+
+        // Zero-init the new last slot so `pm_options_scope_init`
+        // sees a clean state and so a Drop right after this point
+        // (e.g. if a later malloc panics) sees `locals == null` and
+        // skips the inner free loop.
+        // SAFETY: `old_count < new_count`, so `new_scopes.add(old_count)` is in-bounds.
+        let new_scope = unsafe { new_scopes.add(old_count) };
+        // SAFETY: `pm_options_scope_t` is a plain C struct (POD).
+        unsafe { std::ptr::write(new_scope, std::mem::zeroed()) };
+
+        // Allocate the locals array (xcalloc'd, so each slot is a
+        // zero-bit `pm_string_t` — `PM_STRING_SHARED` with a null
+        // source, which `pm_string_free` no-ops on).
+        // SAFETY: `new_scope` is in-bounds and zero-initialized.
+        assert!(unsafe { pm_options_scope_init(new_scope, names.len()) }, "pm_options_scope_init OOM");
+        // SAFETY: `new_scope` is in-bounds and was just initialized.
+        unsafe { pm_options_scope_forwarding_set(new_scope, forwarding) };
+
+        // Copy each name into a libc-malloc'd buffer and hand it to
+        // `pm_string_owned_init`, which records `PM_STRING_OWNED` so
+        // `pm_string_free` (called from `pm_options_free`) will
+        // `libc::free` it.
+        for (i, name) in names.into_iter().enumerate() {
+            let len = name.len();
+            let buf: *mut u8 = if len == 0 {
+                std::ptr::null_mut()
+            } else {
+                // SAFETY: requesting `len` bytes from libc; null on OOM.
+                let p = unsafe { libc::malloc(len) }.cast::<u8>();
+                assert!(!p.is_null(), "libc::malloc OOM in add_scope");
+                // SAFETY: `name` lives in `names` until the iterator
+                // completes; `p` is a fresh `len`-byte allocation.
+                unsafe { std::ptr::copy_nonoverlapping(name.as_ptr(), p, len) };
+                p
+            };
+            // SAFETY: `(*new_scope).locals[i]` is in-bounds (i < names.len() = locals_count).
+            let local = unsafe { (*new_scope).locals.add(i) };
+            // SAFETY: `local` is a freshly-zeroed `pm_string_t`.
+            unsafe { pm_string_owned_init(local, buf, len) };
         }
-        self.options.scopes_count = self.scopes.len();
-        self.options.scopes = self.scopes.as_mut_ptr();
     }
 }
 
@@ -833,28 +858,37 @@ impl Default for Options {
     }
 }
 
+impl Drop for Options {
+    fn drop(&mut self) {
+        // SAFETY: `pm_options_free` walks `scopes`/`locals`/owned
+        // strings and `xfree`s everything. Safe on an all-zero
+        // `pm_options_t` (no-op) and on any block we've built up via
+        // `add_scope` (every owned pointer was libc-allocated).
+        unsafe { pm_options_free(&mut self.0) };
+    }
+}
+
 /// Parses the given source string with the supplied [`Options`] and
-/// returns a parse result. The `Options` struct (which owns the
-/// local-name buffers Prism reads through pointers) is kept alive
-/// inside the returned `ParseResult` for the duration of the parse
-/// and the lifetime of every produced node, so callers don't need
-/// to manage it manually.
+/// returns a parse result. `pm_parser_init` reads each option field
+/// it cares about (scope-locals are `xmalloc`/`memcpy`'d into the
+/// parser's own scope stack, scalars are copied into parser fields)
+/// and does not retain any pointer back into the `Options` block, so
+/// the borrow only needs to last for this call — the caller is free
+/// to drop `options` as soon as `parse_with_options` returns.
 ///
 /// # Panics
 ///
 /// Panics if the parser fails to initialize.
 #[must_use]
-pub fn parse_with_options(source: &[u8], mut options: Options) -> ParseResult<'_> {
-    options.finalize_pointers();
+pub fn parse_with_options<'pr>(source: &'pr [u8], options: &Options) -> ParseResult<'pr> {
     unsafe {
         let uninit = Box::new(MaybeUninit::<pm_parser_t>::uninit());
         let uninit = Box::into_raw(uninit);
 
-        // SAFETY: `options` lives in `options_keepalive` which is
-        // owned by the returned ParseResult. The pointers we pass
-        // (scopes / locals / name bytes) all transitively live in
-        // that same struct and so outlive the parser.
-        let options_ptr: *const pm_options_t = &options.options;
+        // SAFETY: `options.0` is a live `pm_options_t` for the
+        // duration of this call (caller holds an exclusive borrow
+        // for `&Options`); `pm_parser_init` only reads from it.
+        let options_ptr: *const pm_options_t = &options.0;
         pm_parser_init((*uninit).as_mut_ptr(), source.as_ptr(), source.len(), options_ptr);
 
         let parser = (*uninit).assume_init_mut();
@@ -863,12 +897,7 @@ pub fn parse_with_options(source: &[u8], mut options: Options) -> ParseResult<'_
         let node = pm_parse(parser.as_ptr());
         let node = NonNull::new_unchecked(node);
 
-        ParseResult {
-            source,
-            parser,
-            node,
-            options_keepalive: Some(Box::new(options)),
-        }
+        ParseResult { source, parser, node }
     }
 }
 

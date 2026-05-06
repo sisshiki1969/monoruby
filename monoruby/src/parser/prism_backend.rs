@@ -140,7 +140,7 @@ fn try_prism_inner(
         line_offset,
     ));
 
-    let result = match options {
+    let result = match options.as_ref() {
         Some(opts) => prism::parse_with_options(code.as_bytes(), opts),
         None => prism::parse(code.as_bytes()),
     };
@@ -216,7 +216,7 @@ impl<'pr> Lowerer<'pr> {
     /// Carries the lowerer's `SourceInfoRef` so the host's error
     /// formatter can print the usual `<path>:<line>` prefix and an
     /// arrow under the offending span.
-    fn unsupported_node(&self, kind: &'static str, loc: Loc) -> MonorubyErr {
+    fn unsupported_node(&self, kind: &str, loc: Loc) -> MonorubyErr {
         MonorubyErr::fatal_with_loc(
             format!(
                 "prism lowerer hit an unsupported node `{kind}` while parsing {} \
@@ -234,7 +234,8 @@ impl<'pr> Lowerer<'pr> {
     /// dispatch-style match.
     fn unsupported(&self, context: &'static str, node: &prism::Node<'_>) -> MonorubyErr {
         let kind = node_kind_name(node);
-        self.unsupported_node(kind, location_to_loc(&node.location()))
+        let location = location_to_loc(&node.location());
+        self.unsupported_node(&format!("{}:{}", context, kind), location)
     }
 
     /// Top-level entry: lowers a `ProgramNode` to a `CompStmt`.
