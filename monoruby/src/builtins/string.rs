@@ -281,8 +281,9 @@ fn string_try_convert(
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val().dup();
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-    self_.as_rstring_inner_mut()
-        .extend_compat(&other, &globals.store)?;
+    self_
+        .as_rstring_inner_mut()
+        .extend(&other, &globals.store)?;
     Ok(self_)
 }
 
@@ -533,8 +534,9 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     if let Some(other) = lfp.arg(0).is_rstring() {
-        self_.as_rstring_inner_mut()
-            .extend_compat(&other, &globals.store)?;
+        self_
+            .as_rstring_inner_mut()
+            .extend(&other, &globals.store)?;
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
@@ -558,8 +560,9 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         // Try to_str coercion
         let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-        self_.as_rstring_inner_mut()
-            .extend_compat(&coerced, &globals.store)?;
+        self_
+            .as_rstring_inner_mut()
+            .extend(&coerced, &globals.store)?;
     }
     Ok(self_)
 }
@@ -653,7 +656,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let lhs = self_.as_rstring_inner();
     let enc = lhs.encoding();
     if let Some(i) = lfp.arg(0).try_fixnum() {
-        let index = match lhs.conv_char_index(i)? {
+        let index = match lhs.conv_char_index(i) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
@@ -687,10 +690,10 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 INTEGER_CLASS,
             ));
         }
-        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_count - 1
+        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_length - 1
         // (so the inclusive `end` reaches the last character; the
         // exclusive bookkeeping below subtracts as usual).
-        let char_count = lhs.iter_char_bytes().count() as i64;
+        let char_length = lhs.iter_char_bytes().count() as i64;
         let start = if info.start().is_nil() {
             0
         } else {
@@ -698,13 +701,13 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         let end = if info.end().is_nil() {
             // For endless ranges we just want "everything from start".
-            // Use char_count and treat exclude_end as a no-op so the
+            // Use char_length and treat exclude_end as a no-op so the
             // slice extends through the final character.
-            char_count - 1
+            char_length - 1
         } else {
             info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64
         };
-        let (start, len) = match (lhs.conv_char_index(start)?, lhs.conv_char_index(end)?) {
+        let (start, len) = match (lhs.conv_char_index(start), lhs.conv_char_index(end)) {
             (Some(start), Some(end)) => {
                 if start > end {
                     (start, 0)
@@ -757,7 +760,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
             let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
             if let RV::Fixnum(i) = result.unpack() {
-                let index = match lhs.conv_char_index(i)? {
+                let index = match lhs.conv_char_index(i) {
                     Some(i) => i,
                     None => return Ok(Value::nil()),
                 };
@@ -2366,7 +2369,7 @@ fn string_index(
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
-    let char_pos = match given.conv_char_index(char_pos)? {
+    let char_pos = match given.conv_char_index(char_pos) {
         Some(pos) => pos,
         None => return Ok(Value::nil()),
     };
@@ -2610,7 +2613,7 @@ fn string_rindex(
 
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
         let pos = arg1.coerce_to_int_i64(vm, globals)?;
-        match given.conv_char_index2(pos)? {
+        match given.conv_char_index2(pos) {
             Some(pos) => pos,
             None => return Ok(Value::nil()),
         }
@@ -2686,7 +2689,7 @@ fn string_rindex(
 fn length(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Use the encoding-aware char counter; it always succeeds (broken
     // UTF-8 falls back to byte count, matching CRuby).
-    let length = lfp.self_val().as_rstring_inner().char_count();
+    let length = lfp.self_val().as_rstring_inner().char_length();
     Ok(Value::integer(length as i64))
 }
 
@@ -2902,15 +2905,14 @@ fn lines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let s = inner.check_utf8()?.to_string();
     let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
-    let out: Vec<Value> = parts
+    let out = parts
         .into_iter()
-        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)))
-        .collect();
+        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)));
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, bh, out.into_iter())?;
+        vm.invoke_block_iter1(globals, bh, out)?;
         Ok(receiver)
     } else {
-        Ok(Value::array_from_iter(out.into_iter()))
+        Ok(Value::array_from_iter(out))
     }
 }
 
@@ -3388,12 +3390,11 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     let s = inner.check_utf8()?.to_string();
     let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
-    let out: Vec<Value> = parts
+    let out = parts
         .into_iter()
-        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)))
-        .collect();
+        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)));
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, bh, out.into_iter())?;
+        vm.invoke_block_iter1(globals, bh, out)?;
         Ok(receiver)
     } else {
         let mut args = vec![];
@@ -3462,7 +3463,9 @@ fn split_with_default_newline(s: &str, chomp: bool) -> Vec<String> {
         for line in out.iter_mut() {
             if let Some(stripped) = line.strip_suffix("\r\n") {
                 *line = stripped.to_string();
-            } else if let Some(stripped) = line.strip_suffix('\n').or_else(|| line.strip_suffix('\r')) {
+            } else if let Some(stripped) =
+                line.strip_suffix('\n').or_else(|| line.strip_suffix('\r'))
+            {
                 *line = stripped.to_string();
             }
         }
@@ -3816,7 +3819,8 @@ fn strip_sign(s: &str) -> (&str, bool) {
 fn strip_int_prefix(s: &str, radix: u32) -> (&str, u32) {
     let try_strip = |prefix_lo: &str, prefix_up: &str, base: u32| -> Option<&str> {
         if radix == 0 || radix == base {
-            s.strip_prefix(prefix_lo).or_else(|| s.strip_prefix(prefix_up))
+            s.strip_prefix(prefix_lo)
+                .or_else(|| s.strip_prefix(prefix_up))
         } else {
             None
         }
@@ -4771,8 +4775,14 @@ fn tr_build_map(from: &str, to: &str) -> Result<TrMap> {
 
 enum TrMap {
     Map(indexmap::IndexMap<char, char>),
-    Delete { chars: Vec<char>, negated: bool },
-    Negated { from_set: Vec<char>, replacement: char },
+    Delete {
+        chars: Vec<char>,
+        negated: bool,
+    },
+    Negated {
+        from_set: Vec<char>,
+        replacement: char,
+    },
 }
 
 /// Run a `tr` translation. Returns `(result, changed)` so callers can
@@ -4845,13 +4855,18 @@ fn tr_translate(s: &str, from: &str, to: &str, squeeze: bool) -> Result<(String,
 fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() == 0 {
-        return Err(MonorubyErr::argumenterr("wrong number of arguments (given 0, expected 1+)"));
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
     }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| arg.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
-    let sets: Vec<TrSet> = strs.iter().map(|s| TrSet::from_spec(s)).collect::<Result<_>>()?;
+    let sets: Vec<TrSet> = strs
+        .iter()
+        .map(|s| TrSet::from_spec(s))
+        .collect::<Result<_>>()?;
     let self_ = lfp.self_val();
     let target = self_.as_str();
     let mut c = 0i64;
@@ -4914,7 +4929,10 @@ fn squeeze_impl(
         .iter()
         .map(|a| a.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
-    let sets: Vec<TrSet> = strs.iter().map(|s| TrSet::from_spec(s)).collect::<Result<_>>()?;
+    let sets: Vec<TrSet> = strs
+        .iter()
+        .map(|s| TrSet::from_spec(s))
+        .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
     let mut out = String::with_capacity(s.len());
     let mut prev: Option<char> = None;
@@ -5033,12 +5051,11 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Materialise per-char byte slices into owned RStringInner values
     // tagged with the source encoding. Walking eagerly avoids
     // borrowing `inner` past the iterator.
-    let chars: Vec<Value> = inner
+    let chars = inner
         .iter_char_bytes()
-        .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
-        .collect();
+        .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)));
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_map1(globals, bh, chars.into_iter(), None)?;
+        vm.invoke_block_map1(globals, bh, chars, None)?;
         Ok(lfp.self_val())
     } else {
         Ok(Value::array_from_iter(chars.into_iter()))
@@ -5051,7 +5068,7 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// segmentation pass and the resulting clusters are converted back.
 /// Falls back to byte-by-byte slicing for ASCII-incompatible legacy
 /// encodings, matching what `iter_char_bytes` already returns.
-fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<Value> {
+fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<RStringInner> {
     use unicode_segmentation::UnicodeSegmentation;
     let enc = inner.encoding();
     if enc.is_utf8_compatible() {
@@ -5061,9 +5078,7 @@ fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<Value> {
         // but here we need a `&str` for `graphemes()`.
         let s = std::str::from_utf8(inner.as_bytes()).unwrap_or("");
         s.graphemes(true)
-            .map(|g| {
-                Value::string_from_inner(RStringInner::from_encoding(g.as_bytes(), enc))
-            })
+            .map(|g| RStringInner::from_encoding(g.as_bytes(), enc))
             .collect()
     } else {
         // Encodings we don't decode (UTF-16/32, dummy, EUC-JP, …):
@@ -5073,7 +5088,7 @@ fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<Value> {
         // but keeps the spec's encoding-roundtrip invariants.
         inner
             .iter_char_bytes()
-            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
+            .map(|s| RStringInner::from_encoding(s, enc))
             .collect()
     }
 }
@@ -5093,12 +5108,14 @@ fn grapheme_clusters(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let clusters = collect_grapheme_clusters(self_.as_rstring_inner());
+    let clusters = collect_grapheme_clusters(self_.as_rstring_inner())
+        .into_iter()
+        .map(Value::string_from_inner);
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_map1(globals, bh, clusters.into_iter(), None)?;
+        vm.invoke_block_map1(globals, bh, clusters, None)?;
         Ok(self_)
     } else {
-        Ok(Value::array_from_iter(clusters.into_iter()))
+        Ok(Value::array_from_iter(clusters))
     }
 }
 
@@ -5118,16 +5135,13 @@ fn each_grapheme_cluster(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     if let Some(bh) = lfp.block() {
-        let clusters = collect_grapheme_clusters(self_.as_rstring_inner());
-        vm.invoke_block_iter1(globals, bh, clusters.into_iter())?;
+        let clusters = collect_grapheme_clusters(self_.as_rstring_inner())
+            .into_iter()
+            .map(Value::string_from_inner);
+        vm.invoke_block_iter1(globals, bh, clusters)?;
         Ok(self_)
     } else {
-        vm.generate_enumerator(
-            IdentId::get_id("each_grapheme_cluster"),
-            self_,
-            vec![],
-            pc,
-        )
+        vm.generate_enumerator(IdentId::get_id("each_grapheme_cluster"), self_, vec![], pc)
     }
 }
 
@@ -5144,11 +5158,10 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     if let Some(bh) = lfp.block() {
         let inner = self_.as_rstring_inner();
         let enc = inner.encoding();
-        let chars: Vec<Value> = inner
+        let chars = inner
             .iter_char_bytes()
-            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)))
-            .collect();
-        vm.invoke_block_iter1(globals, bh, chars.into_iter())?;
+            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)));
+        vm.invoke_block_iter1(globals, bh, chars)?;
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
@@ -5366,11 +5379,7 @@ fn scrub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(self_)
 }
 
-fn scrub_replacement(
-    globals: &mut Globals,
-    lfp: Lfp,
-    self_enc: Encoding,
-) -> Result<RStringInner> {
+fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Result<RStringInner> {
     if let Some(arg) = lfp.try_arg(0) {
         if arg.is_nil() {
             return Ok(default_scrub_replacement(self_enc));
@@ -5464,14 +5473,11 @@ fn scrub_inner_with_block(
                         }
                         let bad_len = e.error_len().unwrap_or(bytes.len() - i);
                         let bad_slice = &bytes[i..i + bad_len];
-                        let bad_arg = Value::string_from_inner(
-                            RStringInner::from_encoding(bad_slice, enc),
-                        );
+                        let bad_arg =
+                            Value::string_from_inner(RStringInner::from_encoding(bad_slice, enc));
                         let result = vm.invoke_block(globals, &data, &[bad_arg])?;
                         let result_inner = result.is_rstring_inner().ok_or_else(|| {
-                            MonorubyErr::typeerr(
-                                "scrub block must return a String",
-                            )
+                            MonorubyErr::typeerr("scrub block must return a String")
                         })?;
                         out.extend_from_slice(result_inner.as_bytes());
                         i += bad_len;
@@ -5484,13 +5490,14 @@ fn scrub_inner_with_block(
                 if b < 0x80 {
                     out.push(b);
                 } else {
-                    let bad_arg = Value::string_from_inner(
-                        RStringInner::from_encoding(&bytes[idx..idx + 1], enc),
-                    );
+                    let bad_arg = Value::string_from_inner(RStringInner::from_encoding(
+                        &bytes[idx..idx + 1],
+                        enc,
+                    ));
                     let result = vm.invoke_block(globals, &data, &[bad_arg])?;
-                    let result_inner = result.is_rstring_inner().ok_or_else(|| {
-                        MonorubyErr::typeerr("scrub block must return a String")
-                    })?;
+                    let result_inner = result
+                        .is_rstring_inner()
+                        .ok_or_else(|| MonorubyErr::typeerr("scrub block must return a String"))?;
                     out.extend_from_slice(result_inner.as_bytes());
                 }
             }
@@ -5731,10 +5738,7 @@ fn unicode_normalized_p(
     {
         return Err(MonorubyErr::encoding_compatibility_error_with_store(
             &globals.store,
-            format!(
-                "incompatible encoding with this operation: {}",
-                enc.name()
-            ),
+            format!("incompatible encoding with this operation: {}", enc.name()),
         ));
     }
     let s = self_.expect_string(globals)?;
@@ -8216,9 +8220,7 @@ mod tests {
             s.append_as_bytes("y")
             "##,
         );
-        run_test_error(
-            r##""hello".append_as_bytes(:sym)"##,
-        );
+        run_test_error(r##""hello".append_as_bytes(:sym)"##);
     }
 
     #[test]
@@ -8636,7 +8638,7 @@ mod tests {
 
     #[test]
     fn string_split_empty_separator_limit() {
-        // With an empty separator, lim > char_count appends a
+        // With an empty separator, lim > char_length appends a
         // trailing empty field.
         run_tests(&[
             r##""hi!".split("")"##,
@@ -8821,9 +8823,7 @@ mod tests {
             "##,
         );
         // (4) nil → TypeError "no implicit conversion from nil to integer".
-        run_tests(&[
-            r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##,
-        ]);
+        run_tests(&[r##"begin; "%c" % nil; rescue TypeError => e; e.message; end"##]);
         // (5) Object with neither to_int nor to_str → TypeError
         // mentioning Integer.
         run_tests(&[

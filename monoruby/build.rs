@@ -2,6 +2,57 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
 
+/// Minimum CRuby version whose stdlib monoruby is willing to wire up at
+/// build time. Older Rubies (Debian's system 3.0, for example) lack APIs
+/// monoruby relies on and have a different Hash inspect form.
+const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
+
+fn ruby_version_ok(ruby_cmd: &str) -> bool {
+    let Ok(output) = Command::new(ruby_cmd)
+        .args(["-e", "puts RUBY_VERSION"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let mut parts = s.trim().split('.').map(|p| p.parse::<u32>().ok());
+    let major = parts.next().flatten();
+    let minor = parts.next().flatten();
+    match (major, minor) {
+        (Some(maj), Some(min)) => (maj, min) >= MIN_RUBY_VERSION,
+        _ => false,
+    }
+}
+
+/// Pick a `ruby` executable that is at least `MIN_RUBY_VERSION`. Returns
+/// `None` if no suitable Ruby is found, in which case build.rs leaves the
+/// cached library_path / ruby_version files untouched and prints a warning.
+fn find_ruby() -> Option<String> {
+    if ruby_version_ok("ruby") {
+        return Some("ruby".to_string());
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let shim = PathBuf::from(home).join(".rbenv/shims/ruby");
+        if let Some(s) = shim.to_str()
+            && ruby_version_ok(s)
+        {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let rvm = PathBuf::from(home).join(".rvm/bin/ruby");
+        if let Some(s) = rvm.to_str()
+            && ruby_version_ok(s)
+        {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
 fn main() {
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 
@@ -27,28 +78,39 @@ fn main() {
         fs::create_dir(p).unwrap();
     }
 
-    match Command::new("ruby").args(["-e", "puts($:)"]).output() {
-        Ok(output) => {
-            let dest_path = lib_path.join("library_path");
-            let load_path = std::str::from_utf8(&output.stdout).unwrap();
-            fs::write(dest_path, load_path).unwrap();
-        }
-        Err(_) => {
-            eprintln!("failed to read ruby library path");
-        }
-    }
+    match find_ruby() {
+        Some(ruby) => {
+            match Command::new(&ruby).args(["-e", "puts($:)"]).output() {
+                Ok(output) => {
+                    let dest_path = lib_path.join("library_path");
+                    let load_path = std::str::from_utf8(&output.stdout).unwrap();
+                    fs::write(dest_path, load_path).unwrap();
+                }
+                Err(_) => {
+                    println!("cargo:warning=failed to read ruby library path from {ruby}");
+                }
+            }
 
-    match Command::new("ruby")
-        .args(["-e", "puts(RUBY_VERSION)"])
-        .output()
-    {
-        Ok(output) => {
-            let dest_path = lib_path.join("ruby_version");
-            let load_path = std::str::from_utf8(&output.stdout).unwrap();
-            fs::write(dest_path, load_path).unwrap();
+            match Command::new(&ruby)
+                .args(["-e", "puts(RUBY_VERSION)"])
+                .output()
+            {
+                Ok(output) => {
+                    let dest_path = lib_path.join("ruby_version");
+                    let load_path = std::str::from_utf8(&output.stdout).unwrap();
+                    fs::write(dest_path, load_path).unwrap();
+                }
+                Err(_) => {
+                    println!("cargo:warning=failed to read ruby version from {ruby}");
+                }
+            }
         }
-        Err(_) => {
-            eprintln!("failed to read ruby version");
+        None => {
+            println!(
+                "cargo:warning=no Ruby >= {}.{} found on PATH or in rbenv/rvm; \
+                 ~/.monoruby/library_path and ruby_version were not refreshed",
+                MIN_RUBY_VERSION.0, MIN_RUBY_VERSION.1
+            );
         }
     }
 

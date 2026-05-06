@@ -1,5 +1,5 @@
 #!/bin/sh
 
 cargo install --path monoruby
-#cd ../ruby-bench && ./run_benchmarks.rb --once -e "monoruby" -e "yjit::ruby --yjit"
+# cd ../ruby-bench && ./run_benchmarks.rb --once -e "monoruby" -e "yjit::ruby --yjit"
 cd ../ruby-bench && ./run_benchmarks.rb --rss --harness=harness-warmup -e "monoruby" -e "yjit::ruby --yjit"

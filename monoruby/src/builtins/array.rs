@@ -92,6 +92,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
     globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "minmax", minmax, 0);
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
@@ -612,21 +613,22 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
-    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    let mut v = vec![];
-    for lhs in lhs_v.as_array().iter() {
-        let mut flag = true;
-        for rhs in rhs.iter() {
-            if lhs.eql(rhs, vm, globals)? {
-                flag = false;
-                break;
+    vm.with_temp_scope(|vm| {
+        let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+        vm.temp_push(rhs.into());
+        // O(n + m): hash rhs once, then membership-check each lhs element.
+        let mut rhs_set = RubySet::default();
+        for v in rhs.iter() {
+            rhs_set.insert(*v, vm, globals)?;
+        }
+        let mut v = vec![];
+        for lhs in lhs_v.as_array().iter() {
+            if !rhs_set.contains(lhs, vm, globals)? {
+                v.push(*lhs);
             }
         }
-        if flag {
-            v.push(*lhs)
-        }
-    }
-    Ok(Value::array_from_vec(v))
+        Ok(Value::array_from_vec(v))
+    })
 }
 
 ///
@@ -708,17 +710,19 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.uniq(vm, globals)?;
-    lhs.retain(|v| {
-        for rhs_elem in rhs.iter() {
-            if v.eql(rhs_elem, vm, globals)? {
-                return Ok(true);
-            }
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(lhs.into());
+        let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+        vm.temp_push(rhs.into());
+        lhs.uniq(vm, globals)?;
+        // O(n + m): hash rhs once, then membership-check each lhs element.
+        let mut rhs_set = RubySet::default();
+        for v in rhs.iter() {
+            rhs_set.insert(*v, vm, globals)?;
         }
-        Ok(false)
-    })?;
-    Ok(lhs.as_val())
+        lhs.retain(|v| rhs_set.contains(v, vm, globals))?;
+        Ok(lhs.as_val())
+    })
 }
 
 ///
@@ -1440,61 +1444,72 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ary = lfp.self_val().as_array();
     let self_len = self_ary.len();
     let each_id = IdentId::get_id("each");
+    let to_enum_id = IdentId::get_id("to_enum");
+    let next_id = IdentId::get_id("next");
 
-    // Phase 1: Convert each argument to an Array or collect elements via #each.
-    // For arguments responding to #each but not #to_ary, we collect only up to
-    // self.len() elements to handle infinite enumerators correctly.
-    let mut args_list: Vec<Vec<Value>> = vec![];
-
-    for a in lfp.arg(0).as_array().iter() {
-        if let Ok(ary) = a.coerce_to_array(vm, globals) {
-            args_list.push(ary.to_vec());
-        } else if globals.check_method(*a, each_id).is_some() {
-            let to_enum_id = IdentId::get_id("to_enum");
-            let enum_val = vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
-            let next_id = IdentId::get_id("next");
-            let mut collected = Vec::with_capacity(self_len);
-            for _ in 0..self_len {
-                match vm.invoke_method_inner(globals, next_id, enum_val, &[], None, None) {
-                    Ok(val) => collected.push(val),
-                    Err(_) => break, // StopIteration — enumerator exhausted
+    vm.with_temp_scope(|vm| {
+        // Phase 1: stash each converted argument as a GC-rooted Array on the
+        // temp_stack at offsets [base..base + n_args]. This protects values
+        // pulled from enumerators (which are freshly allocated by `#next` and
+        // would otherwise be unreachable across the next Ruby callback).
+        let base = vm.temp_len();
+        for a in lfp.arg(0).as_array().iter() {
+            if let Ok(ary) = a.coerce_to_array(vm, globals) {
+                vm.temp_push(ary.into());
+            } else if globals.check_method(*a, each_id).is_some() {
+                let enum_val =
+                    vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
+                vm.temp_push(enum_val);
+                vm.temp_array_new(Some(self_len));
+                for _ in 0..self_len {
+                    match vm
+                        .invoke_method_inner(globals, next_id, enum_val, &[], None, None)
+                    {
+                        Ok(val) => vm.temp_array_push(val),
+                        Err(_) => break, // StopIteration — enumerator exhausted
+                    }
                 }
+                let inner = vm.temp_pop();
+                vm.temp_pop(); // discard enum_val
+                vm.temp_push(inner);
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (must respond to :each)",
+                    a.get_real_class_name(&globals.store),
+                )));
             }
-            args_list.push(collected);
+        }
+        let n_args = vm.temp_len() - base;
+
+        // Phase 2: build rows. Each `row` is consumed (passed to invoke_block
+        // or pushed into result_ary) before the next Ruby callback, so it does
+        // not need its own temp protection.
+        if let Some(bh) = lfp.block() {
+            let data = vm.get_block_data(globals, bh)?;
+            for (i, val) in self_ary.iter().enumerate() {
+                let mut row = Array::new_empty();
+                row.push(*val);
+                for j in 0..n_args {
+                    let arg = vm.temp_at(base + j).as_array();
+                    row.push(if i < arg.len() { arg[i] } else { Value::nil() });
+                }
+                vm.invoke_block(globals, &data, &[row.as_val()])?;
+            }
+            Ok(Value::nil())
         } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "wrong argument type {} (must respond to :each)",
-                a.get_real_class_name(&globals.store),
-            )));
+            let mut result_ary = Array::new_empty();
+            for (i, val) in self_ary.iter().enumerate() {
+                let mut row = Array::new_empty();
+                row.push(*val);
+                for j in 0..n_args {
+                    let arg = vm.temp_at(base + j).as_array();
+                    row.push(if i < arg.len() { arg[i] } else { Value::nil() });
+                }
+                result_ary.push(row.as_val());
+            }
+            Ok(result_ary.as_val())
         }
-    }
-
-    // Phase 2: Build result
-    // Helper to build a single row for index i
-    let build_row = |i: usize, val: Value, args: &[Vec<Value>]| -> Array {
-        let mut row = Array::new_empty();
-        row.push(val);
-        for arg in args {
-            row.push(if i < arg.len() { arg[i] } else { Value::nil() });
-        }
-        row
-    };
-
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for (i, val) in self_ary.iter().enumerate() {
-            let row = build_row(i, *val, &args_list);
-            vm.invoke_block(globals, &data, &[row.as_val()])?;
-        }
-        Ok(Value::nil())
-    } else {
-        let mut result_ary = Array::new_empty();
-        for (i, val) in self_ary.iter().enumerate() {
-            let row = build_row(i, *val, &args_list);
-            result_ary.push(row.as_val());
-        }
-        Ok(result_ary.as_val())
-    }
+    })
 }
 
 ///
@@ -1520,19 +1535,45 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         };
         vm.invoke_block_fold1(globals, bh, iter, res)
     } else {
-        let (sym, mut res) = if let Some(arg0) = lfp.try_arg(0) {
+        // The `inject(sym)` form may consume the first element as the
+        // initial accumulator; track where the remaining elements start.
+        let (sym, mut res, mut start) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(arg1) = lfp.try_arg(1) {
-                (arg1.expect_symbol_or_string(globals)?, arg0)
+                (arg1.expect_symbol_or_string(globals)?, arg0, 0usize)
             } else {
                 let sym = arg0.expect_symbol_or_string(globals)?;
-                let res = iter.next().unwrap_or_default();
-                (sym, res)
+                if self_.len() == 0 {
+                    return Ok(Value::nil());
+                }
+                (sym, self_[0], 1usize)
             }
         } else {
             return Err(MonorubyErr::argumenterr("wrong number of arguments"));
         };
-        for v in iter {
-            res = vm.invoke_method_inner(globals, sym, res, &[v], None, None)?;
+        // Fast path for `inject(:+)` on a Fixnum accumulator: skip method
+        // dispatch entirely while elements stay in i64 range.
+        if sym == IdentId::_ADD
+            && let Some(acc_i) = res.try_fixnum()
+        {
+            let mut acc = acc_i;
+            let len = self_.len();
+            let mut i = start;
+            while i < len {
+                let v = self_[i];
+                let Some(x) = v.try_fixnum() else { break };
+                let Some(new) = acc.checked_add(x) else { break };
+                acc = new;
+                i += 1;
+            }
+            if i == len {
+                return Ok(Value::integer(acc));
+            }
+            // Resume generic dispatch with the partial sum we have so far.
+            res = Value::integer(acc);
+            start = i;
+        }
+        for v in self_[start..].iter() {
+            res = vm.invoke_method_inner(globals, sym, res, &[*v], None, None)?;
         }
         Ok(res)
     }
@@ -1818,6 +1859,29 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         lfp.arg(0)
     };
     let self_ = lfp.self_val().as_array();
+    // Fast path: no block, integer init, all-Fixnum elements, no overflow.
+    // Bypasses per-element add_values dispatch for ~30x speedup on Fixnum arrays.
+    if lfp.block().is_none()
+        && let Some(init_i) = sum.try_fixnum()
+    {
+        let mut acc: i64 = init_i;
+        let mut fast_ok = true;
+        for v in self_.iter() {
+            let Some(x) = v.try_fixnum() else {
+                fast_ok = false;
+                break;
+            };
+            let Some(new) = acc.checked_add(x) else {
+                fast_ok = false;
+                break;
+            };
+            acc = new;
+        }
+        if fast_ok {
+            return Ok(Value::integer(acc));
+        }
+        // Fall through to the generic loop with the original `sum`.
+    }
     let iter = self_.iter().cloned();
     match lfp.block() {
         None => {
@@ -1916,6 +1980,68 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         Ok(max)
     }
+}
+
+///
+/// ### Array#minmax
+///
+/// - minmax -> [object, object]
+/// - minmax {|a, b| ... } -> [object, object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/minmax.html]
+#[monoruby_builtin]
+fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ary = lfp.self_val().as_array();
+    if ary.len() == 0 {
+        return Ok(Value::array2(Value::nil(), Value::nil()));
+    }
+    let mut min = ary[0];
+    let mut max = ary[0];
+    if let Some(bh) = lfp.block() {
+        let data = vm.get_block_data(globals, bh)?;
+        for v in &ary[1..] {
+            let r_min = vm.invoke_block(globals, &data, &[*v, min])?;
+            if r_min.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            if r_min.coerce_to_int_i64(vm, globals)? < 0 {
+                min = *v;
+            }
+            let r_max = vm.invoke_block(globals, &data, &[*v, max])?;
+            if r_max.is_nil() {
+                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
+            }
+            if r_max.coerce_to_int_i64(vm, globals)? > 0 {
+                max = *v;
+            }
+        }
+    } else if let Some(first_i) = ary[0].try_fixnum()
+        && ary.iter().all(|v| v.try_fixnum().is_some())
+    {
+        // All-Fixnum fast path: tight i64 loop, no Ruby-level dispatch.
+        let mut min_i = first_i;
+        let mut max_i = first_i;
+        for v in &ary[1..] {
+            // SAFETY: pre-checked above that every element is a Fixnum.
+            let x = unsafe { v.try_fixnum().unwrap_unchecked() };
+            if x < min_i {
+                min_i = x;
+            } else if x > max_i {
+                max_i = x;
+            }
+        }
+        return Ok(Value::array2(Value::integer(min_i), Value::integer(max_i)));
+    } else {
+        for v in &ary[1..] {
+            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+                min = *v;
+            }
+            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+                max = *v;
+            }
+        }
+    }
+    Ok(Value::array2(min, max))
 }
 
 ///
@@ -2629,35 +2755,36 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let ary: Vec<_> = match lfp.block() {
-        None => {
-            let mut res = vec![];
-            let mut i = 0;
-            while i < self_val.as_array().len() {
-                let v = self_val.as_array()[i];
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
-                    res.push(v)
-                }
-                i += 1;
-            }
-            res
-        }
-        Some(bh) => {
+    if let Some(bh) = lfp.block() {
+        return vm.with_temp_scope(|vm| {
             let bh = vm.get_block_data(globals, bh)?;
-            let mut res = vec![];
+            // Block return values accumulate into a GC-rooted Array on the
+            // temp_stack so they survive subsequent invoke_block / cmp_teq calls.
+            vm.temp_array_new(Some(self_val.as_array().len()));
             let mut i = 0;
             while i < self_val.as_array().len() {
                 let v = self_val.as_array()[i];
                 if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
                     let mapped = vm.invoke_block(globals, &bh, &[v])?;
-                    res.push(mapped);
+                    vm.temp_array_push(mapped);
                 }
                 i += 1;
             }
-            res
+            Ok(vm.temp_pop())
+        });
+    }
+    // No-block path: pushed values are elements of self's array (already
+    // rooted via lfp.self_val()), so a plain Vec is fine.
+    let mut res = vec![];
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let v = self_val.as_array()[i];
+        if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+            res.push(v)
         }
-    };
-    Ok(Value::array_from_vec(ary))
+        i += 1;
+    }
+    Ok(Value::array_from_vec(res))
 }
 
 ///
@@ -2835,37 +2962,40 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             return Err(MonorubyErr::rangeerr("too big to product"));
         }
     }
-    let v: Vec<Value> = product_inner(lhs, lists)
-        .into_iter()
-        .map(|a| Value::array_from_iter(a.into_iter().cloned()))
-        .collect();
+    let iter = product_inner(lhs, lists);
     if let Some(bh) = lfp.block() {
-        let ary = Array::new_from_vec(v);
-        vm.temp_push(ary.into());
-        vm.invoke_block_iter1(globals, bh, ary.into_iter().cloned())?;
-        vm.temp_pop();
+        //let ary = Array::new_from_vec(v);
+        //vm.temp_push(ary.into());
+        vm.invoke_block_iter1(globals, bh, iter)?;
+        //vm.temp_pop();
         Ok(lfp.self_val())
     } else {
-        Ok(Value::array_from_vec(v))
+        Ok(Value::array_from_iter(iter))
     }
 }
 
-fn product_inner(lhs: Array, rhs: Vec<Array>) -> Vec<Array> {
-    let mut res = vec![];
-    for e1 in lhs.into_iter() {
-        if rhs.is_empty() {
-            res.push(Array::new1(*e1));
-        } else {
-            let mut rhs = rhs.clone();
-            let l = rhs.remove(0);
-            for e2 in product_inner(l, rhs).into_iter() {
-                let mut v = vec![*e1];
-                v.extend(e2.into_iter());
-                res.push(Array::new_from_vec(v));
-            }
+fn product_inner(lhs: Array, rhs: Vec<Array>) -> impl Iterator<Item = Value> {
+    let mut arrays: Vec<Array> = Vec::with_capacity(rhs.len() + 1);
+    arrays.push(lhs);
+    arrays.extend(rhs);
+
+    let dims: Vec<usize> = arrays.iter().map(|a| a.len()).collect();
+    let n = arrays.len();
+    let total: usize = if dims.iter().any(|&d| d == 0) {
+        0
+    } else {
+        dims.iter().product()
+    };
+
+    (0..total).map(move |mut k| {
+        let mut v = vec![Value::nil(); n];
+        for i in (0..n).rev() {
+            let d = dims[i];
+            v[i] = arrays[i][k % d];
+            k /= d;
         }
-    }
-    res
+        Array::new_from_vec(v).into()
+    })
 }
 
 ///
@@ -2930,29 +3060,31 @@ fn intersection(
     let src = lfp.self_val().as_array();
     // Build a unique copy as a plain Array
     let mut ary = Value::array_from_vec(src.to_vec()).as_array();
-    ary.uniq(vm, globals)?;
-    let others: Vec<_> = lfp
-        .arg(0)
-        .as_array()
-        .iter()
-        .map(|v| v.coerce_to_array(vm, globals))
-        .collect::<Result<Vec<_>>>()?;
-    ary.retain(|lhs| {
-        for other in &others {
-            let mut found = false;
-            for rhs in other.iter() {
-                if lhs.eql(rhs, vm, globals)? {
-                    found = true;
-                    break;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(ary.into());
+        ary.uniq(vm, globals)?;
+        // Build one hash set per `other` arg so each membership check is O(1).
+        let mut other_sets: Vec<RubySet<Value>> =
+            Vec::with_capacity(lfp.arg(0).as_array().len());
+        for arg in lfp.arg(0).as_array().iter() {
+            let other = arg.coerce_to_array(vm, globals)?;
+            vm.temp_push(other.into());
+            let mut set = RubySet::default();
+            for elem in other.iter() {
+                set.insert(*elem, vm, globals)?;
+            }
+            other_sets.push(set);
+        }
+        ary.retain(|lhs| {
+            for set in &other_sets {
+                if !set.contains(lhs, vm, globals)? {
+                    return Ok(false);
                 }
             }
-            if !found {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    })?;
-    Ok(ary.as_val())
+            Ok(true)
+        })?;
+        Ok(ary.as_val())
+    })
 }
 
 ///
@@ -2991,10 +3123,16 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             ary.uniq(vm, globals)?;
             Ok(ary.into())
         }
-        Some(bh) => {
+        Some(bh) => vm.with_temp_scope(|vm| {
             let data = vm.get_block_data(globals, bh)?;
+            // `result` is a GC-rooted Array on the temp_stack; collected
+            // elements come from self's array (already rooted via lfp), but
+            // each block-returned `key` is a fresh allocation that we also
+            // temp_push so that the unmarked RubySet below holds only live
+            // pointers across subsequent invoke_block / h.insert callbacks.
+            vm.temp_array_new(None);
+            let result_idx = vm.temp_len() - 1;
             let mut h = RubySet::default();
-            let mut result = vec![];
             let mut i = 0;
             loop {
                 let ary = lfp.self_val().as_array();
@@ -3003,13 +3141,14 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 }
                 let elem = ary[i];
                 let key = vm.invoke_block(globals, &data, &[elem])?;
+                vm.temp_push(key);
                 if h.insert(key, vm, globals)? {
-                    result.push(elem);
+                    vm.temp_at(result_idx).as_array().push(elem);
                 }
                 i += 1;
             }
-            Ok(Value::array_from_vec(result))
-        }
+            Ok(vm.temp_at(result_idx))
+        }),
     }
 }
 
@@ -3021,7 +3160,7 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             let mut ary = lfp.self_val().as_array();
             ary.uniq(vm, globals)?
         }
-        Some(bh) => {
+        Some(bh) => vm.with_temp_scope(|vm| -> Result<bool> {
             let data = vm.get_block_data(globals, bh)?;
             let mut h = RubySet::default();
             let mut i = 0;
@@ -3033,6 +3172,10 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 }
                 let elem = ary[i];
                 let key = vm.invoke_block(globals, &data, &[elem])?;
+                // Keep `key` alive across the rest of the loop so the unmarked
+                // RubySet's stored pointers remain valid when h.insert() of a
+                // future iteration dereferences them via .eql?.
+                vm.temp_push(key);
                 if h.insert(key, vm, globals)? {
                     if del > 0 {
                         let mut ary = lfp.self_val().as_array();
@@ -3048,8 +3191,8 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 let new_len = ary.len() - del;
                 ary.truncate(new_len);
             }
-            del > 0
-        }
+            Ok(del > 0)
+        })?,
     };
     if deleted {
         Ok(lfp.self_val())

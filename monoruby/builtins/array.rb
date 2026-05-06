@@ -180,14 +180,9 @@ class Array
     val.dig(*rest)
   end
 
-  def sum(init = 0)
-    if block_given?
-      each { |x| init = init + yield(x) }
-    else
-      each { |x| init = init + x }
-    end
-    init
-  end
+  # Array#sum is implemented in Rust (see builtins/array.rs::sum) with a
+  # Fixnum fast-path. Falling back to the Ruby version below would skip
+  # that fast-path, so it stays out of the Array re-opens.
 
   def tally
     h = {}

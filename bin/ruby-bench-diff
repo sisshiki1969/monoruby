@@ -1,0 +1,207 @@
+#!/bin/bash
+# bin/ruby-bench-diff
+#
+# Verify that monoruby's output matches CRuby's on a curated subset of
+# the ruby-bench benchmarks. Each benchmark is run once on each
+# interpreter; the output (rendered template, parsed YAML, computed
+# checksum, ...) is reduced to a deterministic stamp and the two
+# stamps are diffed. Exits non-zero if any benchmark differs.
+#
+# Layout assumption:
+#
+#   .../monoruby     <- this repo
+#   .../ruby-bench   <- https://github.com/Shopify/ruby-bench (sibling)
+#
+# Usage:
+#   bin/ruby-bench-diff                 # uses release monoruby + auto-detected ruby
+#   CRUBY=/path/to/ruby bin/ruby-bench-diff
+#   MONORUBY=/path/to/monoruby bin/ruby-bench-diff
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+RUBY_BENCH="${RUBY_BENCH:-$REPO/../ruby-bench}"
+
+if [ ! -d "$RUBY_BENCH/benchmarks" ]; then
+  echo "ruby-bench not found at $RUBY_BENCH (set RUBY_BENCH=...)" >&2
+  exit 2
+fi
+
+# --- locate monoruby. Prefer the existing release binary; build only if
+# missing or NO_BUILD is unset and the user explicitly asked. The
+# repo's rust-toolchain.toml requires the rustup-managed cargo, so
+# prepend ~/.cargo/bin if present.
+if [ -z "${MONORUBY:-}" ]; then
+  MONORUBY="$REPO/target/release/monoruby"
+  if [ ! -x "$MONORUBY" ] || [ "${BUILD:-0}" = "1" ]; then
+    if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+    (cd "$REPO" && cargo build --release -p monoruby) >&2
+  fi
+fi
+if [ ! -x "$MONORUBY" ]; then
+  echo "monoruby binary not found at $MONORUBY (run 'cargo build --release' first or set MONORUBY=...)" >&2
+  exit 2
+fi
+
+# --- locate CRuby. When CRUBY is explicitly set, trust it as-is. When
+# unset, auto-detect a Ruby >= 4.0 (the version monoruby compares
+# against in its other test paths) by walking PATH and the standard
+# rbenv / rvm shim locations.
+ruby_ok() {
+  local r="$1" v
+  [ -x "$r" ] || command -v "$r" >/dev/null 2>&1 || return 1
+  v=$("$r" -e 'puts RUBY_VERSION' 2>/dev/null) || return 1
+  case "$v" in
+    [4-9].*|[1-9][0-9].*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if [ -z "${CRUBY:-}" ]; then
+  for c in ruby "$HOME/.rbenv/shims/ruby" "$HOME/.rvm/bin/ruby"; do
+    if ruby_ok "$c"; then CRUBY="$c"; break; fi
+  done
+  if [ -z "${CRUBY:-}" ]; then
+    echo "no Ruby >= 4.0 found (set CRUBY=...)" >&2
+    exit 2
+  fi
+fi
+if ! command -v "$CRUBY" >/dev/null 2>&1 && [ ! -x "$CRUBY" ]; then
+  echo "CRUBY=$CRUBY: not executable / not on PATH" >&2
+  exit 2
+fi
+
+PAYLOAD="$(mktemp -t ruby-bench-diff-XXXXXX.rb)"
+trap 'rm -f "$PAYLOAD" "$PAYLOAD.mono.out" "$PAYLOAD.cruby.out"' EXIT
+
+# Embed the comparison Ruby program. RUBY_BENCH is interpolated by
+# bash; everything else is plain Ruby.
+cat > "$PAYLOAD" <<PAYLOAD_EOF
+RUBY_BENCH = "$RUBY_BENCH"
+PAYLOAD_EOF
+
+cat >> "$PAYLOAD" <<'PAYLOAD_EOF'
+# ---------- helpers ----------
+def stamp(s, name)
+  bytes = s.is_a?(String) ? s : s.inspect
+  h = 0
+  bytes.each_byte { |b| h = (h * 131 + b) & 0xFFFFFFFFFFFFFFFF }
+  preview = bytes.byteslice(0, 32).each_byte.map { |b| "%02x" % b }.join
+  printf "%-30s size=%-7d hash=%016x  prefix=%s\n",
+         name, bytes.bytesize, h, preview
+end
+
+def ensure_gem(name)
+  spec = Gem::Specification.find_by_name(name) rescue nil
+  return false unless spec
+  $LOAD_PATH.unshift File.join(spec.full_gem_path, "lib")
+  true
+end
+
+# ---------- erubi ----------
+ensure_gem("erubi") or abort "erubi gem not installed"
+require "json"
+require "erubi"
+erubi_dir = "#{RUBY_BENCH}/benchmarks/erubi"
+erubi_src = Erubi::Engine.new(File.read("#{erubi_dir}/simple_template.erb")).src
+eval <<RUBY
+class ErbRenderer
+  def initialize(values); @values = values; end
+  def run_erb; #{erubi_src}; end
+end
+RUBY
+erubi_values = JSON.load(File.read("#{erubi_dir}/gem_specs.json"))
+stamp(ErbRenderer.new(erubi_values).run_erb, "erubi")
+
+# ---------- etanni ----------
+class Etanni
+  SEPARATOR = "E69t116A65n110N78i105S83e101P80a97R82a97T84o111R82"
+  CHOMP = "<<#{SEPARATOR}.chomp!"
+  START = "\n_out_ << #{CHOMP}\n"
+  STOP = "\n#{SEPARATOR}\n"
+  REPLACEMENT = "#{STOP}\\1#{START}"
+  def initialize(template, filename = '<Etanni>')
+    @template = template; @filename = filename
+    temp = template.strip
+    temp.gsub!(/<\?r\s+(.*?)\s+\?>/m, REPLACEMENT)
+    @compiled = eval("Proc.new{ _out_ = [#{CHOMP}]\n#{temp}#{STOP}_out_.join }",
+      nil, filename)
+  end
+  def result(instance) = instance.instance_eval(&@compiled)
+end
+etanni_dir = "#{RUBY_BENCH}/benchmarks/etanni"
+@values = JSON.load(File.read("#{etanni_dir}/gem_specs.json"))
+stamp(Etanni.new(File.read("#{etanni_dir}/simple_template.etanni")).result(self),
+      "etanni")
+
+# ---------- fannkuchredux ----------
+def fannkuch(n)
+  p = (0..n).to_a; s = p.dup; q = p.dup
+  sign = 1; sum = maxflips = 0
+  while true
+    if (q1 = p[1]) != 1
+      q[0..-1] = p; flips = 1
+      until (qq = q[q1]) == 1
+        q[q1] = q1
+        if q1 >= 4
+          i, j = 2, q1 - 1
+          while i < j
+            q[i], q[j] = q[j], q[i]; i += 1; j -= 1
+          end
+        end
+        q1 = qq; flips += 1
+      end
+      sum += sign * flips
+      maxflips = flips if flips > maxflips
+    end
+    if sign == 1
+      p[1], p[2] = p[2], p[1]; sign = -1
+    else
+      p[2], p[3] = p[3], p[2]; sign = 1
+      i = 3
+      while i <= n && s[i] == 1
+        return [sum, maxflips] if i == n
+        s[i] = i
+        t = p.delete_at(1); i += 1; p.insert(i, t)
+      end
+      s[i] -= 1 if i <= n
+    end
+  end
+end
+sum, flips = fannkuch(9)
+printf "%-30s sum=%d  flips=%d\n", "fannkuch", sum, flips
+
+# ---------- psych-load ----------
+require "psych"
+psych_dir = "#{RUBY_BENCH}/benchmarks/psych-load/yaml"
+Dir["#{psych_dir}/*.yaml"].sort.each do |path|
+  y = Psych.load(File.read(path))
+  stamp(y.inspect, "psych:#{File.basename(path, '.yaml')}")
+end
+
+# ---------- blurhash ----------
+# Strip the harness wiring so the bench file just defines the module.
+blurhash_path = "#{RUBY_BENCH}/benchmarks/blurhash/benchmark.rb"
+src = File.read(blurhash_path)
+if (cut = src.index('require_relative "../../harness/loader"'))
+  src = src[0, cut]
+end
+eval src
+pixels = File.read("#{RUBY_BENCH}/benchmarks/blurhash/test.bin").bytes
+stamp(Blurhash.encode_rb(204, 204, pixels), "blurhash")
+PAYLOAD_EOF
+
+# --- run both
+echo ">>> monoruby: $MONORUBY" >&2
+"$MONORUBY" "$PAYLOAD" > "$PAYLOAD.mono.out"
+echo ">>> cruby:    $CRUBY" >&2
+"$CRUBY"    "$PAYLOAD" > "$PAYLOAD.cruby.out"
+
+# --- diff
+if diff -u "$PAYLOAD.cruby.out" "$PAYLOAD.mono.out"; then
+  echo
+  echo "OK: monoruby output matches CRuby on all benchmarks"
+  exit 0
+else
+  echo
+  echo "FAIL: monoruby output differs from CRuby (see diff above)" >&2
+  exit 1
+fi
