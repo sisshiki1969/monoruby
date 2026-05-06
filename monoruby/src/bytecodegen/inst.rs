@@ -1,5 +1,5 @@
 use super::*;
-use ruruby_parse::CmpKind;
+use crate::ast::CmpKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum BrKind {
