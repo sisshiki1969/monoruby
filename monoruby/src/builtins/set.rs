@@ -989,19 +989,27 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let keys = set_keys(lfp.self_val());
     let data = vm.get_block_data(globals, bh)?;
-    let mut new_elems = vec![];
-    for val in keys {
-        let mapped = vm.invoke_block(globals, &data, &[val])?;
-        new_elems.push(mapped);
-    }
-    let mut self_val = lfp.self_val();
-    self_val.as_hashmap_inner_mut().clear()?;
-    for elem in new_elems {
-        self_val
-            .as_hashmap_inner_mut()
-            .insert(elem, Value::bool(true), vm, globals)?;
-    }
-    Ok(self_val)
+    vm.with_temp_scope(|vm| {
+        // Block return values are freshly allocated; stash them in a GC-rooted
+        // Array on the temp_stack so they survive both the collection loop
+        // and the subsequent insert loop (which calls Ruby-level .hash/.eql?).
+        vm.temp_array_new(Some(keys.len()));
+        for val in keys {
+            let mapped = vm.invoke_block(globals, &data, &[val])?;
+            vm.temp_array_push(mapped);
+        }
+        let new_elems_idx = vm.temp_len() - 1;
+        let mut self_val = lfp.self_val();
+        self_val.as_hashmap_inner_mut().clear()?;
+        let n = vm.temp_at(new_elems_idx).as_array().len();
+        for i in 0..n {
+            let elem = vm.temp_at(new_elems_idx).as_array()[i];
+            self_val
+                .as_hashmap_inner_mut()
+                .insert(elem, Value::bool(true), vm, globals)?;
+        }
+        Ok(self_val)
+    })
 }
 
 ///

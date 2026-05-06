@@ -453,7 +453,12 @@ pub(super) fn ascii_only(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_rstring_inner().is_ascii()))
+    // Use the cr-cached `is_ascii_only`, not the slice's `is_ascii`,
+    // so that repeated calls on a long-but-already-classified string
+    // are O(1) instead of O(n) per call.
+    Ok(Value::bool(
+        lfp.self_val().as_rstring_inner().is_ascii_only(),
+    ))
 }
 
 // -------------------------------------------------------

@@ -31,6 +31,12 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ruby/spec.git ../spec
           git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+      - name: Install ruby-bench gem dependencies
+        # bin/ruby-bench-diff requires `erubi`. The other benchmarks
+        # only use stdlib gems, so a single explicit install is enough.
+        run: gem install erubi --no-document
       - name: Test
         run: bin/test
 

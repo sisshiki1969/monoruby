@@ -226,30 +226,58 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     res
 }
 
-/// Locate the `ruby` executable.
-/// Tries the system PATH first, then falls back to common rbenv/rvm shim paths.
-fn find_ruby() -> String {
-    // Already on PATH?
-    if std::process::Command::new("ruby")
-        .arg("--version")
+/// Minimum CRuby version the test harness compares output against.
+/// monoruby's startup files mirror Ruby 4.x semantics (e.g. the new Hash
+/// inspect form), so older Rubies on PATH would produce spurious diffs.
+const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
+
+/// Returns true when `ruby_cmd` exists and reports a version `>=
+/// MIN_RUBY_VERSION`.
+fn ruby_version_ok(ruby_cmd: &str) -> bool {
+    let Ok(output) = std::process::Command::new(ruby_cmd)
+        .args(["-e", "puts RUBY_VERSION"])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let mut parts = s.trim().split('.').map(|p| p.parse::<u32>().ok());
+    let major = parts.next().flatten();
+    let minor = parts.next().flatten();
+    match (major, minor) {
+        (Some(maj), Some(min)) => (maj, min) >= MIN_RUBY_VERSION,
+        _ => false,
+    }
+}
+
+/// Locate a `ruby` executable that is at least `MIN_RUBY_VERSION`.
+/// Tries the system PATH first, then falls back to common rbenv/rvm shim
+/// paths. A too-old Ruby on PATH (e.g. system 3.0 on Debian) is skipped
+/// so tests run against the rbenv-managed Ruby instead.
+fn find_ruby() -> String {
+    // Already on PATH and recent enough?
+    if ruby_version_ok("ruby") {
         return "ruby".to_string();
     }
-    // rbenv shim
+    // rbenv shim — defers to the version selected by ~/.rbenv/version.
     if let Some(home) = std::env::var_os("HOME") {
         let shim = std::path::PathBuf::from(home).join(".rbenv/shims/ruby");
-        if shim.exists() {
-            return shim.to_string_lossy().into_owned();
+        if let Some(shim_str) = shim.to_str() {
+            if ruby_version_ok(shim_str) {
+                return shim_str.to_string();
+            }
         }
     }
     // rvm
     if let Some(home) = std::env::var_os("HOME") {
         let rvm = std::path::PathBuf::from(home).join(".rvm/bin/ruby");
-        if rvm.exists() {
-            return rvm.to_string_lossy().into_owned();
+        if let Some(rvm_str) = rvm.to_str() {
+            if ruby_version_ok(rvm_str) {
+                return rvm_str.to_string();
+            }
         }
     }
     "ruby".to_string() // last resort — will fail with a clear error message
