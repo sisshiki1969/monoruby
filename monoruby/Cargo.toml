@@ -41,8 +41,8 @@ emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 
 [dependencies]
-clap = { version = "4.5.39", features = ["derive"] }
-rustyline = "16.0.0"
+clap = { version = "4.6.1", features = ["derive"] }
+rustyline = "18.0.0"
 paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
@@ -51,20 +51,20 @@ ruruby-parse = { path = "../ruruby-parse" }
 ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", rev = "2ffc03f8ecda374a528d6ad870111fdbb48daaac" }
 monoruby-attr = { path = "../monoruby_attr" }
 rubymap = { path = "../rubymap" }
-indexmap = "2.10.0"
+indexmap = "2.14.0"
 num = "0.4.3"
 fxhash = "0.2.1"
-tempfile = "3.20.0"
-dtoa = "1.0.10"
-chrono = "0.4.41"
+tempfile = "3.27.0"
+dtoa = "1.0.11"
+chrono = "0.4.44"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
 ] }
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.9.1"
-regex = "1.11.1"
-libc = "0.2.172"
+regex = "1.12.3"
+libc = "0.2.186"
 getrandom = "0.3.3"
 rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 bitvec = "1.0.1"
@@ -73,9 +73,9 @@ dirs = "6.0.0"
 globset = "0.4.14"
 html-escape = "0.2.13"
 unicode-general-category = "1.0.0"
-unicode-normalization = "0.1.24"
+unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.2"
-signal-hook = "0.3.17"
+signal-hook = "0.4.4"
 divrem = "1.0.0"
 libffi = "5.1.0"
 
