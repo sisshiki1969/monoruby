@@ -1,4 +1,4 @@
-use ruruby_parse::{BlockInfo, Loc, LvarCollector, Node, ParamKind, Parser, SourceInfoRef};
+use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
 use std::io::{BufWriter, Stdout, stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ pub(crate) struct ExternalContext {
     )>,
 }
 
-impl ruruby_parse::LocalsContext for ExternalContext {
+impl crate::ast::LocalsContext for ExternalContext {
     fn find_lvar(&self, name: &str) -> Option<usize> {
         let id = IdentId::get_id(name);
         for (outer, scope) in self.scope.iter().enumerate() {
@@ -69,6 +69,10 @@ impl std::ops::Index<usize> for ExternalContext {
 impl ExternalContext {
     pub fn new() -> Self {
         Self { scope: vec![] }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.scope.len()
     }
 }
 
@@ -412,7 +416,12 @@ impl Globals {
         };
         let external_context = self.store.scoped_locals(outer);
 
-        match Parser::parse_program_eval(code, path.into(), Some(&external_context), line_offset) {
+        match crate::parser::parse_program_eval(
+            code,
+            path,
+            Some(&external_context),
+            line_offset,
+        ) {
             Ok(result) => {
                 let fid =
                     bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
@@ -425,7 +434,7 @@ impl Globals {
                 self.dump_bc();
                 Ok(fid)
             }
-            Err(err) => Err(MonorubyErr::parse(err)),
+            Err(err) => Err(err),
         }
     }
 
@@ -458,9 +467,9 @@ impl Globals {
             None
         };
 
-        let fid = match Parser::parse_program_binding(
+        let fid = match crate::parser::parse_program_binding(
             code,
-            path.into(),
+            path,
             context.clone(),
             Some(&external_context),
             line_offset,
@@ -472,7 +481,7 @@ impl Globals {
                 self.dump_bc();
                 res
             }
-            Err(err) => Err(MonorubyErr::parse(err)),
+            Err(err) => Err(err),
         }?;
         self.new_binding_frame(fid, binding.self_val(), binding);
         Ok(())

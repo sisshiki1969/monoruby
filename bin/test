@@ -2,7 +2,8 @@
 set -e
 
 cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --features stress-spill-pool --no-report
+cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
+MONORUBY_PARSER=ruruby cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
 
 cargo llvm-cov run --no-report --features emit-asm --features deopt --features perf --features gc-debug --features jit-debug --features emit-cfg --features gc-stress --features stress-spill-pool -- --version > /dev/null
 MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
@@ -37,9 +38,6 @@ diff -s monoruby.log ruby.log
 $MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
 ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
 diff -s monoruby.log ruby.log
-
-$MONORUBY benchmark/app_aobench.rb > benchmark/monoruby.ppm && convert benchmark/monoruby.ppm benchmark/monoruby.jpg
-ruby --yjit  benchmark/app_aobench.rb > benchmark/ruby.ppm && convert benchmark/ruby.ppm benchmark/ruby.jpg
 
 $MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
 $MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm

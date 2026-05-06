@@ -250,10 +250,10 @@ impl<'a> BytecodeGen<'a> {
                 self.level_down(body, level + 1);
                 for p in params {
                     match &mut p.kind {
-                        ruruby_parse::ParamKind::Optional(_, n) => {
+                        crate::ast::ParamKind::Optional(_, n) => {
                             self.level_down(n, level);
                         }
-                        ruruby_parse::ParamKind::Keyword(_, Some(n)) => {
+                        crate::ast::ParamKind::Keyword(_, Some(n)) => {
                             self.level_down(n, level);
                         }
                         _ => {}
@@ -377,10 +377,10 @@ impl<'a> BytecodeGen<'a> {
                 self.level_down(body, level);
                 for p in params {
                     match &mut p.kind {
-                        ruruby_parse::ParamKind::Optional(_, n) => {
+                        crate::ast::ParamKind::Optional(_, n) => {
                             self.level_down(n, level);
                         }
-                        ruruby_parse::ParamKind::Keyword(_, Some(n)) => {
+                        crate::ast::ParamKind::Keyword(_, Some(n)) => {
                             self.level_down(n, level);
                         }
                         _ => {}
@@ -409,7 +409,7 @@ impl<'a> BytecodeGen<'a> {
                 ensure,
             } => {
                 self.level_down(body, level);
-                for ruruby_parse::RescueEntry {
+                for crate::ast::RescueEntry {
                     exception_list,
                     assign,
                     body,

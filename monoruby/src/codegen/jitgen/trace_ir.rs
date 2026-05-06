@@ -146,14 +146,14 @@ pub(crate) enum TraceIr {
         ic: Option<(ClassId, ClassId)>,
     },
     BinCmp {
-        kind: ruruby_parse::CmpKind,
+        kind: crate::ast::CmpKind,
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
     },
     BinCmpBr {
-        kind: ruruby_parse::CmpKind,
+        kind: crate::ast::CmpKind,
         _dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
@@ -718,7 +718,7 @@ impl TraceIr {
 
         fn cmp_fmt(
             store: &Store,
-            kind: ruruby_parse::CmpKind,
+            kind: crate::ast::CmpKind,
             dst: Option<SlotId>,
             lhs: SlotId,
             rhs: SlotId,

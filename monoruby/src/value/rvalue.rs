@@ -5,9 +5,9 @@ use super::*;
 use num::BigInt;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
-use ruruby_parse::Loc;
-use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
+
+use crate::ast::{Loc, SourceInfoRef};
 
 pub use array::*;
 pub use binding::*;
@@ -93,7 +93,7 @@ impl std::fmt::Debug for ObjTy {
                 22 => "MATCHDATA",
                 23 => "RATIONAL",
                 24 => "STRUCT",
-                _ => unreachable!("Invalid ty: {ty}"),
+                _ => return write!(f, "INVALID({ty})"),
             }
         )
     }
@@ -1030,9 +1030,7 @@ impl RValue {
                             matchdata: self.kind.matchdata.clone(),
                         },
                         ObjTy::STRUCT => ObjKind {
-                            struct_inner: ManuallyDrop::new(
-                                (*self.kind.struct_inner).clone(),
-                            ),
+                            struct_inner: ManuallyDrop::new((*self.kind.struct_inner).clone()),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1104,9 +1102,7 @@ impl RValue {
                             matchdata: self.kind.matchdata.clone(),
                         },
                         ObjTy::STRUCT => ObjKind {
-                            struct_inner: ManuallyDrop::new(
-                                (*self.kind.struct_inner).clone(),
-                            ),
+                            struct_inner: ManuallyDrop::new((*self.kind.struct_inner).clone()),
                         },
                         ty => unreachable!("{ty:?}"),
                     }

@@ -1,4 +1,4 @@
-use ruruby_parse::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
+use crate::ast::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
 
 use super::*;
 
@@ -32,7 +32,7 @@ impl MonorubyErr {
         }
     }
 
-    fn new_with_loc(
+    pub(crate) fn new_with_loc(
         kind: MonorubyErrKind,
         msg: String,
         loc: Loc,
@@ -527,7 +527,11 @@ impl MonorubyErr {
         a: crate::value::Encoding,
         b: crate::value::Encoding,
     ) -> MonorubyErr {
-        let msg = format!("incompatible character encodings: {} and {}", a.name(), b.name());
+        let msg = format!(
+            "incompatible character encodings: {} and {}",
+            a.name(),
+            b.name()
+        );
         Self::encoding_compatibility_error_with_store(store, msg)
     }
 
@@ -544,10 +548,7 @@ impl MonorubyErr {
                 enc_const.as_class_id(),
                 IdentId::get_id("CompatibilityError"),
             ) {
-                return MonorubyErr::new(
-                    MonorubyErrKind::Other(compat_const.as_class_id()),
-                    msg,
-                );
+                return MonorubyErr::new(MonorubyErrKind::Other(compat_const.as_class_id()), msg);
             }
         }
         MonorubyErr::runtimeerr(msg)
@@ -644,10 +645,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn keyerr_with(msg: String, receiver: Value, key: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Key(Some((receiver.id(), key.id()))),
-            msg,
-        )
+        MonorubyErr::new(MonorubyErrKind::Key(Some((receiver.id(), key.id()))), msg)
     }
 
     pub(crate) fn stopiterationerr(msg: String) -> MonorubyErr {
@@ -701,6 +699,24 @@ impl MonorubyErr {
     /// `rescue` handlers without being caught.
     pub fn fatal(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Fatal, msg)
+    }
+
+    /// Like [`MonorubyErr::fatal`] but seeds the error's trace with a
+    /// single source-location frame so the interpreter's "where did
+    /// it happen?" formatter has something to print. Used by the
+    /// Prism backend when its lowerer hits a node it can't yet
+    /// translate — Prism parsed the file fine, so a regular
+    /// `SyntaxError` would be misleading, but we still want the
+    /// usual "<path>:<line>" prefix on stderr instead of bare
+    /// `location not defined.`.
+    pub fn fatal_with_loc(msg: impl ToString, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Fatal,
+            msg.to_string(),
+            loc,
+            sourceinfo,
+            None,
+        )
     }
 
     /// Convenience: is this error a fatal (panic-caught) one?

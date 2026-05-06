@@ -6,6 +6,7 @@
 #![feature(iter_array_chunks)]
 
 mod alloc;
+pub mod ast;
 mod builtins;
 mod bytecode;
 mod bytecodegen;
@@ -13,6 +14,7 @@ mod codegen;
 mod executor;
 mod globals;
 mod id_table;
+pub mod parser;
 pub mod tests;
 mod value;
 
