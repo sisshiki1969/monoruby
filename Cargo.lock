@@ -1757,7 +1757,7 @@ dependencies = [
 [[package]]
 name = "ruby-prism"
 version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?rev=f96247fca4d213ff596e635737d05fc93aa300f7#f96247fca4d213ff596e635737d05fc93aa300f7"
+source = "git+https://github.com/sisshiki1969/prism.git?rev=2ffc03f8ecda374a528d6ad870111fdbb48daaac#2ffc03f8ecda374a528d6ad870111fdbb48daaac"
 dependencies = [
  "libc",
  "ruby-prism-sys",

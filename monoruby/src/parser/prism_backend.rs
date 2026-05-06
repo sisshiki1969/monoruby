@@ -76,7 +76,8 @@ fn build_prism_options(
     // (`lineno - 1`) at the call sites in `globals.rs`, so the
     // wire-format we want is `line_offset + 1`.
     let line = line_offset.saturating_add(1).clamp(1, i32::MAX as i64) as i32;
-    let mut opts = prism::Options::new().line(line);
+
+    let mut scopes: Vec<prism::Scope> = Vec::new();
 
     if let Some(ctx) = extern_context {
         // Walk outermost -> innermost.
@@ -86,7 +87,7 @@ fn build_prism_options(
             if let Some(blk_id) = block_param {
                 names.push(blk_id.get_name());
             }
-            opts.add_scope(names, 0);
+            scopes.push(prism::Scope::new(names));
         }
     }
 
@@ -108,12 +109,12 @@ fn build_prism_options(
     //   scope, and we don't append a separate empty placeholder.
     if let Some(coll) = binding_locals {
         let names: Vec<String> = coll.table().iter().cloned().collect();
-        opts.add_scope(names, 0);
+        scopes.push(prism::Scope::new(names));
     } else {
-        opts.add_scope(Vec::<&[u8]>::new(), 0);
+        scopes.push(prism::Scope::new(Vec::<&[u8]>::new()));
     }
 
-    opts
+    prism::Options::new().line(line).scopes(scopes)
 }
 
 /// Result of lowering the `block` slot on a Prism call/super node.
