@@ -790,11 +790,30 @@ impl RStringInner {
     }
 
     pub fn from_str(s: &str) -> Self {
-        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
+        let inner = RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8);
+        // `&str` is always well-formed UTF-8; record `SevenBit` when
+        // every byte is < 0x80, otherwise `Valid`. Pre-classifying
+        // here saves the `std::str::from_utf8` rerun that lazy
+        // classification would do on first use, which adds up for
+        // every regex match result, every interned literal, and
+        // every byteslice that goes through `Value::string_from_str`.
+        inner.cr.set(if s.is_ascii() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Valid
+        });
+        inner
     }
 
     pub fn from_string(s: String) -> Self {
-        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
+        let cr = if s.is_ascii() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Valid
+        };
+        let inner = RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8);
+        inner.cr.set(cr);
+        inner
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
@@ -894,12 +913,25 @@ impl RStringInner {
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
-        let enc = if std::str::from_utf8(&vec).is_ok() {
-            Encoding::Utf8
+        // Pre-classify while we already have to walk the bytes for
+        // encoding detection: SevenBit if all-ASCII (the most common
+        // case), otherwise Valid (Ascii8 trivially Valid; UTF-8
+        // confirmed Valid by `from_utf8`).
+        let cr;
+        let enc;
+        if vec.iter().all(|&b| b < 0x80) {
+            cr = CodeRange::SevenBit;
+            enc = Encoding::Utf8;
+        } else if std::str::from_utf8(&vec).is_ok() {
+            cr = CodeRange::Valid;
+            enc = Encoding::Utf8;
         } else {
-            Encoding::Ascii8
-        };
-        RStringInner::from(SmallVec::from_vec(vec), enc)
+            cr = CodeRange::Valid; // Ascii8 — every byte is "valid"
+            enc = Encoding::Ascii8;
+        }
+        let inner = RStringInner::from(SmallVec::from_vec(vec), enc);
+        inner.cr.set(cr);
+        inner
     }
 
     pub fn as_bytes(&self) -> &[u8] {
