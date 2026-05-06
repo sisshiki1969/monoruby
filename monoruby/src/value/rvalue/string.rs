@@ -809,20 +809,88 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_slice(slice), encoding)
     }
 
-    /// Build a substring of `parent` from a byte-range view, inheriting
-    /// the parent's encoding and propagating the cached code range when
-    /// the parent's classification implies the child's. Avoids the
-    /// O(N) re-classification that `String#match` and friends would
-    /// otherwise pay on every byteslice of an ASCII-only haystack.
-    pub fn from_substring(parent: &RStringInner, slice: &[u8]) -> Self {
-        let s = RStringInner::from(SmallVec::from_slice(slice), parent.encoding());
-        // A SevenBit parent has every byte < 0x80; any byte-range view
-        // is still SevenBit, regardless of the encoding or whether the
-        // slice falls on a character boundary.
-        if matches!(parent.code_range(), CodeRange::SevenBit) {
-            s.cr.set(CodeRange::SevenBit);
-        }
+    /// Build a substring of `parent` covering the byte range
+    /// `start..end`, inheriting the parent's encoding and propagating
+    /// the cached code range when the parent's classification implies
+    /// the child's. Avoids the O(N) re-classification that
+    /// `String#match` and friends would otherwise pay on every
+    /// byteslice of an already-classified haystack.
+    pub fn from_substring(parent: &RStringInner, start: usize, end: usize) -> Self {
+        let s = RStringInner::from(
+            SmallVec::from_slice(&parent.content[start..end]),
+            parent.encoding(),
+        );
+        s.cr.set(Self::propagated_cr(parent, start, end));
         s
+    }
+
+    /// Determine the child code range for a `start..end` byte-range
+    /// view of `parent`. Returns `Unknown` when the parent's state
+    /// doesn't imply the child's (e.g. UTF-8 + Valid where the cut
+    /// could land in the middle of a multi-byte sequence, or
+    /// encodings without a native decoder).
+    fn propagated_cr(parent: &RStringInner, start: usize, end: usize) -> CodeRange {
+        // Empty slice: trivially SevenBit (matches `classify` for
+        // every encoding).
+        if start == end {
+            return CodeRange::SevenBit;
+        }
+        match parent.code_range() {
+            // SevenBit: every byte is < 0x80, so any byte-range view
+            // is still SevenBit, regardless of encoding or character
+            // boundaries.
+            CodeRange::SevenBit => CodeRange::SevenBit,
+            CodeRange::Valid => match parent.encoding() {
+                // Single-byte encodings: every byte position is a
+                // character boundary; Valid trivially propagates.
+                Encoding::Ascii8 | Encoding::Iso8859(_) => CodeRange::Valid,
+                // UTF-8: the cut points must land on character
+                // boundaries (a non-continuation byte or one-past-the-
+                // end). When both endpoints align, the byte sequence
+                // between them is still valid UTF-8.
+                Encoding::Utf8 => {
+                    if Self::is_utf8_char_boundary(parent, start)
+                        && Self::is_utf8_char_boundary(parent, end)
+                    {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                // UTF-16/UTF-32: code-unit width is fixed at 2/4
+                // bytes. A byte slice that starts and ends on a code-
+                // unit boundary is still well-formed under the same
+                // "byte count parity" rule that `classify` uses.
+                Encoding::Utf16Le | Encoding::Utf16Be => {
+                    if start % 2 == 0 && end % 2 == 0 {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                Encoding::Utf32Le | Encoding::Utf32Be => {
+                    if start % 4 == 0 && end % 4 == 0 {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                // No native multibyte decoder; defer to lazy
+                // re-classify on first use.
+                Encoding::UsAscii | Encoding::EucJp | Encoding::Sjis(_) => CodeRange::Unknown,
+            },
+            // Broken parents are never safe to propagate — a sub-
+            // range could be Valid (if the broken bytes are outside
+            // it) or still Broken.
+            CodeRange::Broken | CodeRange::Unknown => CodeRange::Unknown,
+        }
+    }
+
+    /// Whether byte index `i` is a UTF-8 character boundary. `0` and
+    /// `content.len()` are always boundaries; otherwise the byte at
+    /// `i` must not be a continuation byte (top two bits != `10`).
+    fn is_utf8_char_boundary(parent: &RStringInner, i: usize) -> bool {
+        i == 0 || i == parent.content.len() || (parent.content[i] & 0xC0) != 0x80
     }
 
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
