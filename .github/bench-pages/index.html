@@ -20,6 +20,7 @@
   th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
   thead th { border-bottom: 2px solid #888; }
+  td.err { color: #c62828; font-weight: 600; }
   a { color: #1565c0; }
   .empty { color: #888; padding: 1em 0; }
 </style>
@@ -27,9 +28,10 @@
 <body>
 <h1>monoruby × ruby <code>--yjit</code></h1>
 <div class="meta">
-  Per-benchmark relative speed against <code>ruby 4.0.1 --yjit</code> measured on every <code>master</code> push.
-  Source: <a href="latest.json">latest.json</a>, <a href="data/history.csv">history.csv</a>.
-  Back to <a href="../">portal</a>.
+  Per-benchmark relative speed against <code>ruby 4.0.1 --yjit</code>, measured on every <code>master</code> push with
+  <a href="https://github.com/Shopify/yjit-bench">Shopify/yjit-bench</a> (<code>--rss --harness=harness-warmup</code>).
+  Failed benchmarks are listed in red. Source: <a href="latest.json">latest.json</a>,
+  <a href="data/history.csv">history.csv</a>. Back to <a href="../">portal</a>.
 </div>
 
 <section>
@@ -40,9 +42,9 @@
     <thead>
       <tr>
         <th>Benchmark</th>
-        <th>monoruby (i/s)</th>
-        <th>YJIT (i/s)</th>
-        <th>monoruby / YJIT</th>
+        <th>monoruby (ms)</th>
+        <th>YJIT (ms)</th>
+        <th>YJIT / monoruby</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -66,28 +68,48 @@ async function loadJson(path) {
     empty.hidden = false;
     return;
   }
-  benches.sort((a, b) => b.ratio - a.ratio);
+
+  // Bar chart sort: ratio DESC, then errors at the bottom.
+  // ok = both implementations succeeded → use ratio
+  // monoruby_failed → push to bottom (ratio = 0)
+  // yjit_failed but monoruby ok → very high "ratio" (treat as ∞)
+  const sortKey = b => {
+    if (b.monoruby_failed) return -1; // bottom
+    if (b.yjit_failed)     return Infinity;
+    return b.ratio;
+  };
+  benches.sort((a, b) => sortKey(b) - sortKey(a));
 
   document.getElementById("latestMeta").textContent =
     "snapshot: " + data.timestamp + " @ " + data.commit;
 
-  const barColor = r =>
-    r >= 1.0 ? "#2e7d32" :
-    r >= 0.7 ? "#9ccc65" :
-    r >= 0.4 ? "#fdd835" :
-               "#c62828";
+  const okBars = benches.filter(b => !b.monoruby_failed);
+  const maxRatio = okBars.reduce((m, b) =>
+    (b.ratio && b.ratio > m) ? b.ratio : m, 1.5);
+  // Failed-monoruby bars get a small visible stub at the *negative* side
+  // so they're labeled and visible without distorting the ratio scale.
+  const FAIL_STUB = -Math.max(0.5, maxRatio * 0.05);
+
+  const barColor = b => {
+    if (b.monoruby_failed) return "#c62828";
+    const r = b.ratio || 0;
+    if (r >= 1.0) return "#2e7d32";
+    if (r >= 0.7) return "#9ccc65";
+    if (r >= 0.4) return "#fdd835";
+    return "#c62828";
+  };
 
   document.getElementById("latestBarWrap").style.height =
-    Math.max(280, benches.length * 32) + "px";
+    Math.max(280, benches.length * 26) + "px";
 
   new Chart(document.getElementById("latestBar"), {
     type: "bar",
     data: {
-      labels: benches.map(b => b.name),
+      labels: benches.map(b => b.name + (b.monoruby_failed ? " ✕" : "")),
       datasets: [{
-        label: "monoruby / YJIT",
-        data: benches.map(b => b.ratio),
-        backgroundColor: benches.map(b => barColor(b.ratio))
+        label: "YJIT / monoruby",
+        data: benches.map(b => b.monoruby_failed ? FAIL_STUB : (b.ratio || 0)),
+        backgroundColor: benches.map(barColor)
       }]
     },
     options: {
@@ -95,8 +117,9 @@ async function loadJson(path) {
       maintainAspectRatio: false,
       scales: {
         x: {
-          beginAtZero: true,
-          title: { display: true, text: "relative speed (× YJIT)" },
+          suggestedMin: FAIL_STUB,
+          suggestedMax: Math.max(2.0, maxRatio),
+          title: { display: true, text: "relative speed (× YJIT, higher = monoruby faster)" },
           grid: {
             color: ctx => ctx.tick.value === 1 ? "#1a1a1a" : "rgba(0,0,0,0.08)",
             lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1
@@ -110,10 +133,19 @@ async function loadJson(path) {
           callbacks: {
             label: ctx => {
               const b = benches[ctx.dataIndex];
+              if (b.monoruby_failed) {
+                return [b.name + ": monoruby failed",
+                        b.yjit_failed ? "yjit also failed"
+                                      : "yjit: " + b.yjit_ms.toFixed(2) + " ms"];
+              }
+              if (b.yjit_failed) {
+                return [b.name + ": yjit failed",
+                        "monoruby: " + b.monoruby_ms.toFixed(2) + " ms"];
+              }
               return [
                 ctx.parsed.x.toFixed(2) + "× YJIT",
-                "monoruby: " + b.monoruby_ips.toFixed(2) + " i/s",
-                "yjit:     " + b.yjit_ips.toFixed(2) + " i/s"
+                "monoruby: " + b.monoruby_ms.toFixed(2) + " ms",
+                "yjit:     " + b.yjit_ms.toFixed(2) + " ms"
               ];
             }
           }
@@ -125,17 +157,18 @@ async function loadJson(path) {
   const tbody = document.querySelector("#latestTable tbody");
   for (const b of benches) {
     const tr = document.createElement("tr");
-    const cells = [
-      b.name,
-      b.monoruby_ips.toFixed(3),
-      b.yjit_ips.toFixed(3),
-      b.ratio.toFixed(3) + "x"
-    ];
-    for (const v of cells) {
+    const fmt = (v, fail) => {
       const td = document.createElement("td");
-      td.textContent = v;
-      tr.appendChild(td);
-    }
+      if (fail) { td.textContent = "ERROR"; td.className = "err"; }
+      else { td.textContent = v; }
+      return td;
+    };
+    const nameTd = document.createElement("td");
+    nameTd.textContent = b.name;
+    tr.appendChild(nameTd);
+    tr.appendChild(fmt(b.monoruby_ms != null ? b.monoruby_ms.toFixed(3) : "", b.monoruby_failed));
+    tr.appendChild(fmt(b.yjit_ms != null ? b.yjit_ms.toFixed(3) : "", b.yjit_failed));
+    tr.appendChild(fmt(b.ratio != null ? b.ratio.toFixed(3) + "x" : "", b.ratio == null));
     tbody.appendChild(tr);
   }
 })();
