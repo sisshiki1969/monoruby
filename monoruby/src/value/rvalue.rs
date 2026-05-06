@@ -722,6 +722,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
                 ObjTy::STRUCT => ManuallyDrop::drop(&mut self.kind.struct_inner),
+                ObjTy::MATCHDATA => ManuallyDrop::drop(&mut self.kind.matchdata),
                 _ => {}
             }
             self.set_next_none();
