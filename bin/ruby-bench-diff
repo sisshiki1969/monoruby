@@ -125,7 +125,9 @@ class Etanni
     @compiled = eval("Proc.new{ _out_ = [#{CHOMP}]\n#{temp}#{STOP}_out_.join }",
       nil, filename)
   end
-  def result(instance) = instance.instance_eval(&@compiled)
+  def result(instance)
+    instance.instance_eval(&@compiled)
+  end
 end
 etanni_dir = "#{RUBY_BENCH}/benchmarks/etanni"
 @values = JSON.load(File.read("#{etanni_dir}/gem_specs.json"))
