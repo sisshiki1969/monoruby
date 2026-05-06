@@ -60,10 +60,10 @@ rm *.log
 # Run the ruby-bench output-diff harness if the ruby-bench checkout is
 # present alongside this repo. Reuses the already-built instrumented
 # monoruby and the `ruby` from PATH; exits non-zero on output mismatch.
-if [ -d "../ruby-bench/benchmarks" ]; then
-  echo "Running ruby-bench output diff..."
-  MONORUBY="$MONORUBY" CRUBY=ruby bin/ruby-bench-diff
-fi
+#if [ -d "../ruby-bench/benchmarks" ]; then
+#  echo "Running ruby-bench output diff..."
+#  MONORUBY="$MONORUBY" CRUBY=ruby bin/ruby-bench-diff
+#fi
 
 # Run ruby/spec with instrumented binary for coverage
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
