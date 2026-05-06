@@ -1,6 +1,16 @@
 [workspace]
-members = ["monoruby", "monoruby_attr", "ruruby-parse", "rubymap", "hashbrown", "ruby_traits", "vendor/ruby-prism"]
+members = ["monoruby", "monoruby_attr", "ruruby-parse", "rubymap", "hashbrown", "ruby_traits"]
 resolver = "2"
 
 [profile.dev]
 opt-level = 1
+
+# `sisshiki1969/prism` only carries the Rust-wrapper changes; the
+# `ruby-prism-sys` crate inside the fork has the same source as
+# upstream, but its `vendor/prism-{ver}/` C-source dir is `.gitignore`'d
+# (rake builds it locally before publishing) and so doesn't exist in
+# the fork tree. Pull `ruby-prism-sys` from crates.io instead — that
+# tarball ships the populated vendor dir and is bit-identical to what
+# the fork would produce.
+[patch."https://github.com/sisshiki1969/prism.git"]
+ruby-prism-sys = "1.9.0"
