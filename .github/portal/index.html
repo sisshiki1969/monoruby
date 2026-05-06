@@ -5,6 +5,7 @@
 <title>monoruby</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   :root {
     --bg: #ffffff;
@@ -85,6 +86,14 @@
   li { margin: 0.3em 0; }
   img { max-width: 100%; height: auto; }
   .loading { color: var(--muted); }
+  section.bench { margin-bottom: 3em; }
+  section.bench h2 {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3em;
+    margin: 0 0 0.4em;
+  }
+  section.bench .meta { font-size: 0.9em; color: var(--muted); margin: 0.2em 0 1em; }
+  #benchWrap { position: relative; }
 </style>
 </head>
 <body>
@@ -93,6 +102,16 @@
   <a class="primary" href="./spec/">ruby/spec compliance dashboard →</a>
   <a class="secondary" href="https://github.com/sisshiki1969/monoruby">GitHub</a>
 </nav>
+
+<section class="bench" id="bench" hidden>
+  <h2>Performance vs YJIT</h2>
+  <p class="meta">
+    Relative speed (× <code>ruby 4.0.1 --yjit</code>). Higher is better;
+    bars beyond <code>1.0×</code> are faster than YJIT.
+  </p>
+  <div id="benchWrap"><canvas id="benchChart"></canvas></div>
+  <div id="benchMeta" class="meta"></div>
+</section>
 
 <main id="readme"><p class="loading">Loading README…</p></main>
 
@@ -113,6 +132,75 @@ const STOP_AT = /^## Prerequisites/m;
     target.innerHTML =
       '<p>Could not load README (' + e.message + '). ' +
       'See the <a href="https://github.com/sisshiki1969/monoruby">repository</a>.</p>';
+  }
+})();
+
+(async () => {
+  const section = document.getElementById("bench");
+  try {
+    const res = await fetch("bench/latest.json?t=" + Date.now());
+    if (!res.ok) return;
+    const data = await res.json();
+    const benches = (data.benchmarks || []).slice()
+      .sort((a, b) => b.ratio - a.ratio);
+    if (!benches.length) return;
+
+    section.hidden = false;
+
+    const wrap = document.getElementById("benchWrap");
+    wrap.style.height = Math.max(260, benches.length * 30) + "px";
+
+    const color = r => r >= 1.0 ? "#2e7d32"
+                     : r >= 0.7 ? "#9ccc65"
+                     : r >= 0.4 ? "#fdd835"
+                     :            "#c62828";
+
+    new Chart(document.getElementById("benchChart"), {
+      type: "bar",
+      data: {
+        labels: benches.map(b => b.name),
+        datasets: [{
+          label: "monoruby / YJIT",
+          data: benches.map(b => b.ratio),
+          backgroundColor: benches.map(b => color(b.ratio))
+        }]
+      },
+      options: {
+        indexAxis: "y",
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            beginAtZero: true,
+            title: { display: true, text: "relative speed (× YJIT)" },
+            grid: {
+              color: ctx => ctx.tick.value === 1 ? "#1a1a1a" : "rgba(0,0,0,0.08)",
+              lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1
+            }
+          },
+          y: { ticks: { autoSkip: false, font: { size: 11 } } }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const b = benches[ctx.dataIndex];
+                return [
+                  ctx.parsed.x.toFixed(2) + "× YJIT",
+                  "monoruby: " + b.monoruby_ips.toFixed(2) + " i/s",
+                  "yjit:     " + b.yjit_ips.toFixed(2) + " i/s"
+                ];
+              }
+            }
+          }
+        }
+      }
+    });
+
+    document.getElementById("benchMeta").textContent =
+      "snapshot: " + data.timestamp + " @ " + data.commit;
+  } catch (e) {
+    /* leave section hidden if data is unavailable */
   }
 })();
 </script>

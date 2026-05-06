@@ -1,0 +1,196 @@
+name: bench vs YJIT
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'monoruby/**'
+      - 'ruruby-parse/**'
+      - 'monoruby_attr/**'
+      - 'rubymap/**'
+      - 'Cargo.toml'
+      - 'benchmark/**'
+      - '.github/workflows/bench.yml'
+      - '.github/portal/**'
+
+permissions:
+  contents: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install monoruby (release)
+        run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
+
+      - name: Install benchmark_driver
+        run: gem install --no-document benchmark_driver
+
+      - name: Run benchmarks (monoruby vs ruby --yjit)
+        id: run
+        working-directory: benchmark
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+
+          OUT="$GITHUB_WORKSPACE/bench-results"
+          mkdir -p "$OUT"
+          RAW="$OUT/raw.md"
+
+          # Same set as bin/bench, minus app_aobench (slow) and bedcov for CI time.
+          BENCHMARKS=(
+            app_fib.yml
+            so_nbody.yml
+            so_mandelbrot.yml
+            bf.rb
+            plb2/nqueen.rb
+            plb2/sudoku.rb
+            plb2/matmul.rb
+          )
+
+          benchmark-driver \
+            -o markdown \
+            "${BENCHMARKS[@]}" \
+            -e "monoruby::$HOME/.cargo/bin/monoruby" \
+            -e "yjit::ruby --yjit" \
+            | tee "$RAW"
+
+      - name: Aggregate results
+        id: agg
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+
+          OUT="$GITHUB_WORKSPACE/bench-results"
+          RAW="$OUT/raw.md"
+
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          # Parse markdown table rows of the form
+          #   |name |monoruby |yjit |
+          # Skip the header row (|name) and the alignment row (|:---).
+          awk -F'|' -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" '
+          BEGIN {
+            printf "{\"timestamp\":\"%s\",\"commit\":\"%s\",\"benchmarks\":[", ts, sha
+            first=1
+          }
+          /^\|name/ { next }
+          /^\|:/ { next }
+          /^\|/ {
+            name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
+            mr=$3+0; yj=$4+0
+            if (yj > 0 && mr > 0) {
+              if (!first) printf ","
+              first=0
+              printf "{\"name\":\"%s\",\"monoruby_ips\":%.4f,\"yjit_ips\":%.4f,\"ratio\":%.4f}", \
+                     name, mr, yj, mr/yj
+            }
+          }
+          END { print "]}" }
+          ' "$RAW" > "$OUT/latest.json"
+
+          cat "$OUT/latest.json"
+
+          {
+            echo "## Benchmark vs YJIT"
+            echo ""
+            echo "monoruby commit: \`$SHORT_SHA\`"
+            echo ""
+            echo "| Benchmark | monoruby (i/s) | YJIT (i/s) | monoruby / YJIT |"
+            echo "| --- | ---: | ---: | ---: |"
+            awk -F'|' '
+            /^\|name/ { next }
+            /^\|:/ { next }
+            /^\|/ {
+              name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
+              mr=$3+0; yj=$4+0
+              if (yj > 0 && mr > 0)
+                printf "| %s | %.4f | %.4f | %.3fx |\n", name, mr, yj, mr/yj
+            }' "$RAW"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench-results/
+          retention-days: 30
+
+      - name: Publish to gh-pages
+        if: github.ref == 'refs/heads/master' || github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TIMESTAMP: ${{ steps.agg.outputs.timestamp }}
+          SHORT_SHA: ${{ steps.agg.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+
+          GH_PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          if git ls-remote --exit-code --heads "$REPO_URL" gh-pages > /dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REPO_URL" "$GH_PAGES_DIR"
+          else
+            mkdir -p "$GH_PAGES_DIR"
+            git -C "$GH_PAGES_DIR" init -b gh-pages
+            git -C "$GH_PAGES_DIR" remote add origin "$REPO_URL"
+          fi
+
+          cd "$GH_PAGES_DIR"
+          mkdir -p bench/data
+
+          if [ ! -f bench/data/history.csv ]; then
+            echo "timestamp,commit,benchmark,monoruby_ips,yjit_ips,ratio" > bench/data/history.csv
+          fi
+
+          awk -F'|' -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" '
+          /^\|name/ { next }
+          /^\|:/ { next }
+          /^\|/ {
+            name=$2; gsub(/^[ \t]+|[ \t]+$/,"",name)
+            mr=$3+0; yj=$4+0
+            if (yj > 0 && mr > 0)
+              printf "%s,%s,%s,%.4f,%.4f,%.4f\n", ts, sha, name, mr, yj, mr/yj
+          }' "$GITHUB_WORKSPACE/bench-results/raw.md" >> bench/data/history.csv
+
+          cp "$GITHUB_WORKSPACE/bench-results/latest.json" bench/latest.json
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "bench: ${TIMESTAMP} (${SHORT_SHA})"
+            for i in 1 2 3 4; do
+              if git push -u origin gh-pages; then
+                break
+              fi
+              sleep $((2 ** i))
+            done
+          fi
