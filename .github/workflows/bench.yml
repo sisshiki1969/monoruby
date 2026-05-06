@@ -13,6 +13,7 @@ on:
       - 'benchmark/**'
       - '.github/workflows/bench.yml'
       - '.github/portal/**'
+      - '.github/bench-pages/**'
 
 permissions:
   contents: write
@@ -66,11 +67,16 @@ jobs:
             plb2/matmul.rb
           )
 
+          # Use full paths for both executables. benchmark-driver treats a
+          # bare name like "ruby" as a relative path (./ruby) and fails with
+          # ENOENT when run from the benchmark/ directory.
+          RUBY_BIN=$(command -v ruby)
+
           benchmark-driver \
             -o markdown \
             "${BENCHMARKS[@]}" \
             -e "monoruby::$HOME/.cargo/bin/monoruby" \
-            -e "yjit::ruby --yjit" \
+            -e "yjit::$RUBY_BIN --yjit" \
             | tee "$RAW"
 
       - name: Aggregate results
@@ -181,6 +187,7 @@ jobs:
           }' "$GITHUB_WORKSPACE/bench-results/raw.md" >> bench/data/history.csv
 
           cp "$GITHUB_WORKSPACE/bench-results/latest.json" bench/latest.json
+          cp "$GITHUB_WORKSPACE/.github/bench-pages/index.html" bench/index.html
 
           git add -A
           if git diff --cached --quiet; then
