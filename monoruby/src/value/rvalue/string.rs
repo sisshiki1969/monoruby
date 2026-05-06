@@ -809,6 +809,22 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_slice(slice), encoding)
     }
 
+    /// Build a substring of `parent` from a byte-range view, inheriting
+    /// the parent's encoding and propagating the cached code range when
+    /// the parent's classification implies the child's. Avoids the
+    /// O(N) re-classification that `String#match` and friends would
+    /// otherwise pay on every byteslice of an ASCII-only haystack.
+    pub fn from_substring(parent: &RStringInner, slice: &[u8]) -> Self {
+        let s = RStringInner::from(SmallVec::from_slice(slice), parent.encoding());
+        // A SevenBit parent has every byte < 0x80; any byte-range view
+        // is still SevenBit, regardless of the encoding or whether the
+        // slice falls on a character boundary.
+        if matches!(parent.code_range(), CodeRange::SevenBit) {
+            s.cr.set(CodeRange::SevenBit);
+        }
+        s
+    }
+
     pub fn string_from_vec(vec: Vec<u8>) -> Self {
         let enc = if std::str::from_utf8(&vec).is_ok() {
             Encoding::Utf8
