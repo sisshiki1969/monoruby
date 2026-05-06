@@ -71,6 +71,14 @@ jobs:
           # privileges and CPU layout assumptions yjit-bench's CPUConfig wants.
           # We measure ALL benchmarks (no --headline, no --category) and let
           # benchmarks that error under monoruby be recorded as failures.
+          #
+          # Cap each benchmark process with `timeout` so a hang under monoruby
+          # (e.g. an infinite loop while loading a gem-heavy benchmark like
+          # tinygql / lobsters / railsbench) doesn't burn the whole job's
+          # timeout-minutes. 90s is enough for the warmup harness to converge
+          # on a clean run; ones that exceed it are killed (SIGTERM -> exit
+          # 124) and yjit-bench records them as failures. yjit gets a longer
+          # cap because some benchmarks are genuinely slow under YJIT.
           ./run_benchmarks.rb \
             --no-sudo \
             --no-pinning \
@@ -78,8 +86,8 @@ jobs:
             --harness=harness-warmup \
             --out_path="$OUT/data" \
             --out-name="$OUT/data/raw" \
-            -e "monoruby::$HOME/.cargo/bin/monoruby" \
-            -e "yjit::$(command -v ruby) --yjit" \
+            -e "monoruby::timeout --foreground -k 5 90 $HOME/.cargo/bin/monoruby" \
+            -e "yjit::timeout --foreground -k 5 300 $(command -v ruby) --yjit" \
             2>&1 | tee "$OUT/run.log"
 
           # run_benchmarks.rb exits 1 when at least one benchmark failed.
