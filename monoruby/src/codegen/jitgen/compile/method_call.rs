@@ -209,19 +209,26 @@ impl<'a> JitContext<'a> {
             FuncKind::Builtin { .. } => (func_id, None),
             FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
             FuncKind::ISeq(iseq) => {
-                // Check ISeq hint for trivial methods
-                match self.store[iseq].hint {
-                    ISeqHint::ConstReturn(v) => {
-                        state.def_C(dst, v);
-                        return Ok(CompileResult::Continue);
-                    }
-                    ISeqHint::SelfReturn => {
-                        if let Some(dst) = dst {
-                            state.copy_slot(ir, callsite.recv, dst);
+                // Check ISeq hint for trivial methods. Only fold when the
+                // call site's argument shape would actually dispatch (i.e.
+                // arity / splat / kw / block-arg checks would pass);
+                // otherwise CRuby raises ArgumentError and we must fall
+                // through to the normal path so the runtime can do the
+                // same.
+                if self.store.is_simple_call(func_id, callid) {
+                    match self.store[iseq].hint {
+                        ISeqHint::ConstReturn(v) => {
+                            state.def_C(dst, v);
+                            return Ok(CompileResult::Continue);
                         }
-                        return Ok(CompileResult::Continue);
+                        ISeqHint::SelfReturn => {
+                            if let Some(dst) = dst {
+                                state.copy_slot(ir, callsite.recv, dst);
+                            }
+                            return Ok(CompileResult::Continue);
+                        }
+                        ISeqHint::Normal => {}
                     }
-                    ISeqHint::Normal => {}
                 }
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (state.is_C(callsite.recv)
