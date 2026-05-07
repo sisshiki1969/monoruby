@@ -68,10 +68,6 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
-    /// `FuncId` of the default `Object#respond_to_missing?` (defined in
-    /// `startup.rb`). Memoised once at the first lookup so JIT inliners can
-    /// recognise an unmodified resolution and fold `respond_to?` to `false`.
-    default_respond_to_missing_fid: std::cell::Cell<Option<FuncId>>,
 }
 
 impl std::ops::Deref for Store {
@@ -184,34 +180,7 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
-            default_respond_to_missing_fid: std::cell::Cell::new(None),
         }
-    }
-
-    ///
-    /// `FuncId` of the default `Object#respond_to_missing?` (defined in
-    /// `startup.rb`).
-    ///
-    /// `startup.rb` is loaded after `Store::new`, so this is resolved
-    /// lazily on first call and memoised. Uses the version-agnostic
-    /// `search_method_by_class_id` directly — calling
-    /// `Globals::class_version()` from the JIT compile context would
-    /// re-borrow CODEGEN, and the resolved FuncId for an existing method
-    /// is stable regardless of the cache.
-    ///
-    /// Returns `None` only if `respond_to_missing?` has not been defined
-    /// on `Object` yet; callers should treat that as "cannot inline".
-    ///
-    pub(crate) fn default_respond_to_missing_fid(&self) -> Option<FuncId> {
-        if let Some(fid) = self.default_respond_to_missing_fid.get() {
-            return Some(fid);
-        }
-        let fid = self
-            .classes
-            .search_method_by_class_id(OBJECT_CLASS, IdentId::RESPOND_TO_MISSING_)?
-            .func_id()?;
-        self.default_respond_to_missing_fid.set(Some(fid));
-        Some(fid)
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
