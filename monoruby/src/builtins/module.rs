@@ -52,14 +52,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "attr_writer", attr_writer);
     globals.define_builtin_func(MODULE_CLASS, "autoload", autoload, 2);
     globals.define_builtin_func_with(MODULE_CLASS, "autoload?", autoload_query, 1, 2, false);
+    // Registered as a rest-arg builtin so that the dispatch layer
+    // doesn't pre-format the arity error with monoruby's default
+    // "expected 0..3"; the function does its own arity check below
+    // and produces the CRuby-compatible "expected 1..3" message that
+    // ruby/spec asserts on.
     globals.define_builtin_funcs_with_effect(
         MODULE_CLASS,
         "class_eval",
         &["module_eval"],
         class_eval,
         0,
-        3,
-        false,
+        0,
+        true,
         Effect::EVAL,
     );
     globals.define_builtin_funcs_with_effect(
@@ -729,35 +734,37 @@ fn class_eval(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let module = lfp.self_val().as_class();
+    let args = lfp.arg(0).as_array();
+    let supplied = args.len();
 
     // CRuby: `class_eval` accepts at most 3 args (expr, fname, lineno);
-    // anything more is an ArgumentError, even before classifying the
-    // string-vs-block dispatch. The arity is also reported as 0..3 to
-    // match the spec's regex.
-    let supplied = lfp.args_count(3);
+    // anything more is an ArgumentError. The reported range is `1..3`
+    // because the string form requires the expression argument; the
+    // no-arg block form is a separate dispatch and never reaches this
+    // arity check.
     if supplied > 3 {
         return Err(MonorubyErr::argumenterr(format!(
-            "wrong number of arguments (given {supplied}, expected 0..3)"
+            "wrong number of arguments (given {supplied}, expected 1..3)"
         )));
     }
 
     if let Some(bh) = lfp.block() {
-        if lfp.try_arg(0).is_some() {
+        if supplied != 0 {
             return Err(MonorubyErr::wrong_number_of_arg(0, supplied));
         }
         vm.module_eval(globals, module, bh)
-    } else if let Some(arg0) = lfp.try_arg(0) {
-        let expr = arg0.coerce_to_string(vm, globals)?;
+    } else if supplied >= 1 {
+        let expr = args[0].coerce_to_string(vm, globals)?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
-        let path = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.coerce_to_str(vm, globals)?
+        let path = if supplied >= 2 {
+            args[1].coerce_to_str(vm, globals)?
         } else {
             let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
             format!("(eval at {})", caller_loc)
         };
-        let lineno: i64 = if let Some(arg2) = lfp.try_arg(2) {
-            arg2.coerce_to_int_i64(vm, globals)?
+        let lineno: i64 = if supplied >= 3 {
+            args[2].coerce_to_int_i64(vm, globals)?
         } else {
             1
         };
@@ -1178,12 +1185,11 @@ fn const_set(
     let val = lfp.arg(1);
     // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
     // when overwriting an existing same-name constant on the receiver,
-    // matching CRuby's redefinition warning.
+    // matching CRuby's redefinition warning. The qualified name uses
+    // the full ancestor chain so reflective tests can match
+    // `/.+::Name/`.
     if globals.store.get_constant_noautoload(module, name).is_some() {
-        let parent_name = globals.store[module]
-            .get_name()
-            .unwrap_or_default()
-            .to_string();
+        let parent_name = globals.store.qualified_name(module);
         let qual = if parent_name.is_empty() {
             name.get_name().to_string()
         } else {
@@ -2492,7 +2498,7 @@ fn deprecate_constant(
 /// correctly.
 #[monoruby_builtin]
 fn ruby2_keywords(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -2505,16 +2511,50 @@ fn ruby2_keywords(
         // string"). We don't honour `to_str` here — CRuby's
         // `ruby2_keywords` is also strict about Symbol/String only.
         let name = arg.expect_symbol_or_string(globals)?;
-        if globals.store[class_id].has_own_method(name) {
-            continue;
+        if !globals.store[class_id].has_own_method(name) {
+            return Err(MonorubyErr::nameerr(format!(
+                "undefined method '{}' for class '{}'",
+                name,
+                class_id.get_name(&globals.store)
+            )));
         }
-        return Err(MonorubyErr::nameerr(format!(
-            "undefined method '{}' for class '{}'",
-            name,
-            class_id.get_name(&globals.store)
-        )));
+        // Even though we don't track the ruby2_keywords flag, we still
+        // emit the CRuby compatibility warning when the target method
+        // signature is incompatible (i.e. the method has no positional
+        // splat, has explicit keywords, or has a keyword splat — none
+        // of which can be marked ruby2_keywords by CRuby either). The
+        // message format mirrors CRuby's "Skipping set of
+        // ruby2_keywords flag for <name> (...)".
+        if let Ok((func_id, _, _)) = globals.store.find_method_for_class(class_id, name)
+            && let Some(reason) = ruby2_keywords_skip_reason(globals, func_id)
+        {
+            let msg = format!(
+                "Skipping set of ruby2_keywords flag for {name} ({reason})",
+            );
+            crate::value::emit_verbose_warning(vm, globals, &msg)?;
+        }
     }
     Ok(Value::nil())
+}
+
+/// Returns a human-readable reason string when the method signature
+/// can't be marked ruby2_keywords, matching CRuby's wording.
+fn ruby2_keywords_skip_reason(globals: &Globals, func_id: FuncId) -> Option<&'static str> {
+    let info = &globals[func_id];
+    if !info.no_keyword() {
+        // Has explicit keyword params or `**kw`.
+        return Some("method accepts keywords or method accepts keyword splat");
+    }
+    if !info.is_rest() {
+        // No `*args` to absorb the trailing kwsplat.
+        return Some("method does not accept argument splat");
+    }
+    if info.post_num() > 0 {
+        // `*a, b` — post-rest required positional makes the trailing
+        // kwhash undecidable.
+        return Some("method accepts argument splat with post-rest required arguments");
+    }
+    None
 }
 
 /// True when `s` parses as `(::)?CONST(::CONST)*` where each `CONST`
@@ -5130,7 +5170,7 @@ mod tests {
     fn class_eval_too_many_args_raises() {
         // `Module#class_eval` takes at most 3 args (expr, fname, lineno);
         // passing 4 raises ArgumentError ("wrong number of arguments
-        // (given 4, expected 0..3)").
+        // (given 4, expected 1..3)").
         run_test_error(
             r#"
             Class.new.class_eval("nil", "f", 1, :extra)
@@ -5595,6 +5635,182 @@ mod tests {
             r2 = c.send(:attr, :bar, false)
             r1 + r2
             "#,
+        );
+    }
+
+    #[test]
+    fn class_eval_too_many_args_message_uses_1_to_3_range() {
+        // CRuby's `Module#class_eval` reports `expected 1..3` (not
+        // `0..3`) for the string form's arity error, since the no-arg
+        // block dispatch is a different path.
+        run_test_error(
+            r#"
+            Class.new.class_eval("nil", "f", 1, :extra)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_eval_too_many_args_uses_1_to_3_range() {
+        run_test_error(
+            r#"
+            Class.new.module_eval("nil", "f", 1, :extra)
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_defined_module_does_not_search_object_or_kernel() {
+        // CRuby: `Module#method_defined?` on a plain Module receiver
+        // does NOT walk into `Object`/`Kernel`, even though monoruby's
+        // class store wires every Module's superclass through `Object`
+        // for dispatch reasons. So `:hash` (a Kernel method) shouldn't
+        // surface here.
+        run_test(
+            r#"
+            Module.new.method_defined?(:hash)
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_defined_class_still_finds_inherited() {
+        // Class receivers continue to walk into Object/Kernel — verify
+        // we didn't break the common case.
+        run_test(
+            r#"
+            Class.new.method_defined?(:hash)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_eval_redef_warning_uses_qualified_name() {
+        // The "warning: already initialized constant ..." message must
+        // be qualified with the receiver's name even when the
+        // assignment happens through `module_eval` against an
+        // anonymous module — the regex
+        // `/already initialized constant .+::TEST/` from
+        // `core/module/const_added_spec.rb` requires a parent
+        // qualifier, even if it's the anonymous-module render.
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              mod = Module.new
+              mod.module_eval("TEST = 1; TEST = 2")
+            ensure
+              $stderr = old_stderr
+            end
+            captured =~ /already initialized constant .+::TEST/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn const_set_redef_warning_uses_qualified_name() {
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              m = Module.new
+              m.const_set(:X, 1)
+              m.const_set(:X, 2)
+            ensure
+              $stderr = old_stderr
+            end
+            captured =~ /already initialized constant .+::X/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_warns_when_method_has_no_splat() {
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              c = Class.new { def foo(a, b, c); end }
+              c.send(:ruby2_keywords, :foo)
+            ensure
+              $stderr = old_stderr
+            end
+            captured =~ /Skipping set of ruby2_keywords flag for foo/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_warns_when_method_has_explicit_keyword() {
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              c = Class.new { def foo(*a, b:); end }
+              c.send(:ruby2_keywords, :foo)
+            ensure
+              $stderr = old_stderr
+            end
+            captured =~ /Skipping set of ruby2_keywords flag for foo/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_warns_when_method_has_post_argument() {
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              c = Class.new { def foo(*a, b); end }
+              c.send(:ruby2_keywords, :foo)
+            ensure
+              $stderr = old_stderr
+            end
+            captured =~ /Skipping set of ruby2_keywords flag for foo/ ? :ok : captured
+            "##,
+        );
+    }
+
+    #[test]
+    fn ruby2_keywords_silent_for_compatible_signature() {
+        // `def foo(*args)` is the canonical compatible shape — must
+        // not warn.
+        run_test(
+            r##"
+            old_stderr = $stderr
+            captured = String.new
+            $stderr = Class.new {
+              define_method(:write) { |s| captured << s; s.size }
+            }.new
+            begin
+              c = Class.new { def foo(*args); end }
+              c.send(:ruby2_keywords, :foo)
+            ensure
+              $stderr = old_stderr
+            end
+            captured.empty?
+            "##,
         );
     }
 }

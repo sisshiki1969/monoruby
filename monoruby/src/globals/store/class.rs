@@ -601,6 +601,31 @@ impl ClassInfoTable {
         class_obj
     }
 
+    /// Build the fully qualified `A::B::Leaf` name for *class_id*.
+    /// Returns an empty string for anonymous classes whose `name` slot
+    /// is `None` (the caller must decide how to render those — for the
+    /// "already initialized constant" warning we fall back to the bare
+    /// constant name). This is `ClassInfoTable`-local so call sites
+    /// inside `set_constant` can use it without going through `Store`.
+    pub(crate) fn qualified_name(&self, class_id: ClassId) -> String {
+        if class_id == OBJECT_CLASS {
+            return String::new();
+        }
+        if self[class_id].name.is_none() {
+            // Anonymous owner: render its inspect form.
+            let class_obj = self[class_id].get_module().as_val();
+            let kind = if class_obj.ty() == Some(ObjTy::MODULE) {
+                "Module"
+            } else {
+                "Class"
+            };
+            return format!("#<{kind}:0x{:016x}>", class_obj.id());
+        }
+        let mut parts = self.get_parents(class_id);
+        parts.reverse();
+        parts.join("::")
+    }
+
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
         let mut parents = vec![self[class].name.clone().unwrap()];
         while let Some(parent) = self[class].parent {
@@ -1458,11 +1483,27 @@ impl Store {
         func_name: IdentId,
         inherit: bool,
     ) -> Option<Visibility> {
-        Some(if inherit {
-            self.check_method_for_class(class_id, func_name)?.visibility
-        } else {
-            self.classes.get_method(class_id, func_name)?.1
-        })
+        if !inherit {
+            return Some(self.classes.get_method(class_id, func_name)?.1);
+        }
+        // For a Module receiver (not a Class), the lookup must NOT walk
+        // into `Object`/`Kernel` even though monoruby's class store
+        // wires every Module's superclass chain through `Object` for
+        // method-dispatch reasons. CRuby returns false for things like
+        // `Module.new.method_defined?(:hash)`, since the lookup is
+        // restricted to the module itself plus any modules it includes
+        // via iclass entries. `Store::ancestors` already implements
+        // that "stop at the first real Class" rule, so reuse it here.
+        let module = self.classes[class_id].get_module();
+        if module.as_val().ty() == Some(ObjTy::CLASS) {
+            return Some(self.check_method_for_class(class_id, func_name)?.visibility);
+        }
+        for ancestor in self.ancestors(class_id) {
+            if let Some((_, visi, _)) = self.classes.get_method(ancestor.id(), func_name) {
+                return Some(visi);
+            }
+        }
+        None
     }
 
     ///

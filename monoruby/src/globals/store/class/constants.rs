@@ -102,6 +102,7 @@ impl ConstState {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_loaded(&self) -> bool {
         matches!(self.kind, ConstStateKind::Loaded(_))
     }
@@ -271,12 +272,14 @@ impl ClassInfoTable {
             new_state.visibility = vis;
         }
         new_state.deprecated = prev_deprecated;
-        let prev = self[class_id].constants.insert(name, new_state);
-        if prev.as_ref().is_some_and(|s| s.is_loaded())
-            && WARNING.load(std::sync::atomic::Ordering::Relaxed) >= 1
-        {
-            eprintln!("warning: already initialized constant {name}")
-        }
+        // The "already initialized constant" warning for user-level
+        // redefinitions is emitted by the upstream call sites
+        // (`Executor::set_constant` for literal assignments,
+        // `Module#const_set` for the reflective form, `Struct.new`'s
+        // class-binding) so that the message goes through Ruby's
+        // `$stderr.write` and uses the proper qualified path. We
+        // intentionally do *not* re-emit here.
+        let _prev = self[class_id].constants.insert(name, new_state);
         if let Some(klass) = val.is_class_or_module() {
             if self[klass.id()].get_name().is_none() {
                 self[klass.id()].set_parent(class_id);
