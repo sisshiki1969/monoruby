@@ -2018,4 +2018,67 @@ mod encoding_tests {
         });
         assert_eq!(out, "あ\\a");
     }
+
+    #[test]
+    fn dump_non_utf8_compatible_routes_through_ascii_escape() {
+        // Non-UTF-8-compatible encodings (UTF-16/32, ISO-8859,
+        // EUC-JP, Shift_JIS) take the byte-wise branch in `dump`.
+        // Each byte goes through `ascii_escape` (high bytes become
+        // `\xHH`).
+        let s = RStringInner::from_encoding(b"a\x80\xFFb", Encoding::Ascii8);
+        assert_eq!(s.dump(), "a\\x80\\xFFb");
+
+        let s = RStringInner::from_encoding(&[0x00, 0xD8, 0x00, 0x00], Encoding::Utf16Le);
+        assert_eq!(s.dump(), "\\x00\\xD8\\x00\\x00");
+
+        // The `#`-trigram lookahead also fires on the byte-wise path.
+        let s = RStringInner::from_encoding(b"a#$b", Encoding::Ascii8);
+        assert_eq!(s.dump(), "a\\#$b");
+        let s = RStringInner::from_encoding(b"#@x", Encoding::Ascii8);
+        assert_eq!(s.dump(), "\\#@x");
+        let s = RStringInner::from_encoding(b"#{}", Encoding::Ascii8);
+        assert_eq!(s.dump(), "\\#{}");
+        // Lone `#` (not followed by a trigram char) is left alone.
+        let s = RStringInner::from_encoding(b"#abc", Encoding::Ascii8);
+        assert_eq!(s.dump(), "#abc");
+    }
+
+    #[test]
+    fn utf8_dump_with_lookahead_handles_invalid_utf8() {
+        // Invalid bytes within a UTF-8-tagged buffer fall into the
+        // `Err(_)` arm of `from_utf8` and emit `\xHH` per byte.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, b"a\xFFb");
+        assert_eq!(out, "a\\xFFb");
+
+        // Multiple invalid bytes in a row → one `\xHH` each.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, &[0xC0, 0xC1, 0xF5]);
+        assert_eq!(out, "\\xC0\\xC1\\xF5");
+
+        // Mixed valid + invalid: walk-and-resume keeps the rest of
+        // the input. `#$` inside the valid prefix is escaped.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, b"#$\xFFhi");
+        assert_eq!(out, "\\#$\\xFFhi");
+
+        // Truncated multibyte at the end (the `error_len() == None`
+        // arm): the leading bytes surface as `\xHH`.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, &[b'a', 0xE3, 0x81]);
+        assert_eq!(out, "a\\xE3\\x81");
+
+        // BMP non-ASCII still passes through `utf8_dump_one` →
+        // `utf8_escape`, so it lands on `\uNNNN` (confirms the
+        // lookahead-driven path doesn't bypass the codepoint-form
+        // rule for valid runs).
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, "\u{0080}".as_bytes());
+        assert_eq!(out, "\\u0080");
+
+        // Supplementary-plane char → brace form.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, "\u{1F600}".as_bytes());
+        assert_eq!(out, "\\u{1F600}");
+    }
 }
