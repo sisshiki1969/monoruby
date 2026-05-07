@@ -2300,9 +2300,35 @@ fn object_respond_to(
             state.def_C(dst, Immediate::bool(true));
             return true;
         }
+        // Found but private and !include_all: CRuby still consults
+        // respond_to_missing?, so fall through.
     }
-    // Method not found directly. Cannot JIT-inline because respond_to_missing?
-    // may be overridden and needs to be called at runtime.
+    // Method not visible. CRuby calls `recv.respond_to_missing?(name, include_all)`
+    // and coerces the result to bool. If `recv_class` still resolves to the
+    // default `Object#respond_to_missing?` (returns `false` unconditionally),
+    // fold the whole call to `false`. The class_version guard upstream
+    // catches any later override that would change the resolution.
+    //
+    // Note: we cannot rely on `ISeqHint::ConstReturn` for this — `hint()`
+    // currently only fires for empty bodies / explicit `return`, not for
+    // single-expression bodies wrapped in CompStmt (which is how the
+    // default `def respond_to_missing?(name, include_private = false); false; end`
+    // parses).
+    let default_fid = match store.default_respond_to_missing_fid() {
+        Some(fid) => fid,
+        None => return false,
+    };
+    let resolved = store
+        .check_method_for_class_with_version(
+            recv_class,
+            IdentId::RESPOND_TO_MISSING_,
+            ctx.class_version(),
+        )
+        .and_then(|e| e.func_id());
+    if resolved == Some(default_fid) {
+        state.def_C(dst, Immediate::bool(false));
+        return true;
+    }
     false
 }
 
