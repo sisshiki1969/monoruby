@@ -738,7 +738,7 @@ fn kernel_integer(
 /// prefix or a leading `0`) or a value in `2..=36`. Returns the same
 /// `ArgumentError` shape CRuby produces (the message embeds the
 /// original input, quoted).
-fn parse_kernel_integer(s: &str, given_base: u32) -> Result<Value> {
+pub(crate) fn parse_kernel_integer(s: &str, given_base: u32) -> Result<Value> {
     let raw = s;
     let invalid = || MonorubyErr::argumenterr(format!("invalid value for Integer(): \"{}\"", raw));
     // CRuby trims leading/trailing whitespace.
@@ -856,7 +856,7 @@ fn is_digit_for_base(b: u8, base: u32) -> bool {
 ///
 /// On any structural problem returns `ArgumentError("invalid value
 /// for Float(): \"...\"")` with the original input quoted.
-fn parse_kernel_float(s: &str) -> Result<Value> {
+pub(crate) fn parse_kernel_float(s: &str) -> Result<Value> {
     let raw = s;
     let invalid = || MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", raw));
     let trimmed = s.trim();

@@ -126,8 +126,55 @@ class String
     self
   end
 
+  # Empties the string in place. Encoding is preserved.
+  def clear
+    bytesplice(0, bytesize, "")
+    self
+  end
+
   def upto(max, exclusive = false, &block)
+    # CRuby coerces `max` via `to_str`; anything else (Integer,
+    # Symbol, an object without `to_str`) raises TypeError before
+    # we look at length / `<=>`.
+    unless max.is_a?(String)
+      if max.respond_to?(:to_str)
+        max = max.to_str
+        unless max.is_a?(String)
+          raise TypeError, "no implicit conversion of #{max.class} into String"
+        end
+      else
+        raise TypeError, "no implicit conversion of #{max.class} into String"
+      end
+    end
     return to_enum(:upto, max, exclusive) unless block
+    # Two CRuby special cases:
+    #   1. Both ends are all-digit strings → iterate as integers
+    #      (`"8".upto("11")` yields "8".."11"). Falls through to
+    #      `Integer#upto` so we get the same iteration count even when
+    #      the strings differ in length.
+    #   2. Both ends are single ASCII characters → iterate by byte
+    #      (`"9".upto("A")` yields "9", ":", ";", "<", "=", ">", "?",
+    #      "@", "A"). The default `succ` would jump "9"→"10", which
+    #      would never reach a single-char max.
+    if !empty? && bytes.all? { |b| (48..57).cover?(b) } &&
+       !max.empty? && max.bytes.all? { |b| (48..57).cover?(b) }
+      from = self.to_i
+      to = max.to_i
+      width = self.length
+      if exclusive
+        from.upto(to - 1) { |i| block.call(i.to_s.rjust(width, "0")) }
+      else
+        from.upto(to) { |i| block.call(i.to_s.rjust(width, "0")) }
+      end
+      return self
+    end
+    if length == 1 && max.length == 1 && ascii_only? && max.ascii_only?
+      from = bytes[0]
+      to = max.bytes[0]
+      stop = exclusive ? to - 1 : to
+      (from..stop).each { |b| block.call(b.chr) }
+      return self
+    end
     current = self
     if exclusive
       while current < max && current.length <= max.length
@@ -162,6 +209,9 @@ class String
   alias_method :dedup, :-@
 
   def encode(*args, **opts)
+    if opts.key?(:xml) && opts[:xml] != :attr && opts[:xml] != :text
+      raise ArgumentError, "unexpected value for xml option: #{opts[:xml].inspect}"
+    end
     if opts[:xml] == :attr
       s = gsub("&", "&amp;")
       s = s.gsub("<", "&lt;")
@@ -178,5 +228,12 @@ class String
     else
       dup.force_encoding(args[0])
     end
+  end
+
+  def encode!(*args, **opts)
+    if opts.key?(:xml) && opts[:xml] != :attr && opts[:xml] != :text
+      raise ArgumentError, "unexpected value for xml option: #{opts[:xml].inspect}"
+    end
+    replace(encode(*args, **opts))
   end
 end

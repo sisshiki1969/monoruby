@@ -442,12 +442,18 @@ impl RStringInner {
     pub fn dump(&self) -> String {
         if self.ty.is_utf8_compatible() {
             let mut res = String::with_capacity(self.len());
-            utf8_escape_bytes(&mut res, self.as_bytes(), utf8_escape);
+            utf8_dump_with_lookahead(&mut res, self.as_bytes());
             res
         } else {
             let mut res = String::with_capacity(self.len());
-            for c in self.as_bytes() {
-                ascii_escape(&mut res, *c);
+            let bytes = self.as_bytes();
+            for (i, c) in bytes.iter().enumerate() {
+                let next = bytes.get(i + 1).copied().unwrap_or(0);
+                if *c == b'#' && matches!(next, b'$' | b'@' | b'{') {
+                    res.push_str("\\#");
+                } else {
+                    ascii_escape(&mut res, *c);
+                }
             }
             res
         }
@@ -490,10 +496,18 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
 }
 
 fn utf8_escape(s: &mut String, ch: char) {
-    if ch as u32 <= 0xff {
+    let cp = ch as u32;
+    if cp < 0x80 {
+        // ASCII bytes are escaped per the standard `\\xNN` /
+        // named-escape rules. Letting `ascii_escape` handle this
+        // keeps `dump` and `inspect` aligned for plain ASCII.
         ascii_escape(s, ch as u8);
+    } else if cp <= 0xFFFF {
+        // BMP non-ASCII: 4-digit `\uNNNN` form.
+        s.push_str(&format!("\\u{:0>4X}", cp));
     } else {
-        s.push_str(&format!("\\u{:0>4X}", ch as u32));
+        // Supplementary planes: brace form, variable width.
+        s.push_str(&format!("\\u{{{:X}}}", cp));
     }
 }
 
@@ -529,7 +543,15 @@ fn utf8_inspect_with_next(s: &mut String, ch: char, next_ch: char, is_utf8: bool
     } else if printable::is_printable(ch) {
         s.push(ch);
     } else {
-        s.push_str(&format!("\\u{{{:X}}}", ch as u32));
+        let cp = ch as u32;
+        // CRuby prefers the 4-digit `\uNNNN` form for BMP codepoints
+        // and only falls back to `\u{N}` once the codepoint exceeds
+        // 0xFFFF (`"\u{1F600}".inspect` → `"\\u{1F600}"`).
+        if cp <= 0xFFFF {
+            s.push_str(&format!("\\u{:0>4X}", cp));
+        } else {
+            s.push_str(&format!("\\u{{{:X}}}", cp));
+        }
     }
 }
 
@@ -592,6 +614,51 @@ fn ascii_escape(s: &mut String, ch: u8) {
         }
     };
     s.push_str(str);
+}
+
+/// `String#dump` with one-character lookahead so `#` can be escaped
+/// to `\#` when the next char is `$` / `@` / `{` (CRuby keeps the
+/// dumped form parseable as a Ruby literal — those trigrams would
+/// otherwise re-trigger interpolation when parsed back).
+fn utf8_dump_with_lookahead(res: &mut String, bytes: &[u8]) {
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(valid) => {
+                let chars: Vec<char> = valid.chars().collect();
+                for (idx, &c) in chars.iter().enumerate() {
+                    let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                    utf8_dump_one(res, c, next_ch);
+                }
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid_str =
+                        unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
+                    let chars: Vec<char> = valid_str.chars().collect();
+                    for (idx, &c) in chars.iter().enumerate() {
+                        let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                        utf8_dump_one(res, c, next_ch);
+                    }
+                }
+                let error_len = err.error_len().unwrap_or(bytes.len() - i - valid_up_to);
+                for b in &bytes[i + valid_up_to..i + valid_up_to + error_len] {
+                    res.push_str(&format!("\\x{:0>2X}", b));
+                }
+                i += valid_up_to + error_len;
+            }
+        }
+    }
+}
+
+fn utf8_dump_one(s: &mut String, ch: char, next_ch: char) {
+    if ch == '#' && matches!(next_ch, '$' | '@' | '{') {
+        s.push_str("\\#");
+        return;
+    }
+    utf8_escape(s, ch);
 }
 
 /// Process a byte slice as UTF-8, applying `escape_fn` to valid characters
@@ -1950,5 +2017,68 @@ mod encoding_tests {
             }
         });
         assert_eq!(out, "あ\\a");
+    }
+
+    #[test]
+    fn dump_non_utf8_compatible_routes_through_ascii_escape() {
+        // Non-UTF-8-compatible encodings (UTF-16/32, ISO-8859,
+        // EUC-JP, Shift_JIS) take the byte-wise branch in `dump`.
+        // Each byte goes through `ascii_escape` (high bytes become
+        // `\xHH`).
+        let s = RStringInner::from_encoding(b"a\x80\xFFb", Encoding::Ascii8);
+        assert_eq!(s.dump(), "a\\x80\\xFFb");
+
+        let s = RStringInner::from_encoding(&[0x00, 0xD8, 0x00, 0x00], Encoding::Utf16Le);
+        assert_eq!(s.dump(), "\\x00\\xD8\\x00\\x00");
+
+        // The `#`-trigram lookahead also fires on the byte-wise path.
+        let s = RStringInner::from_encoding(b"a#$b", Encoding::Ascii8);
+        assert_eq!(s.dump(), "a\\#$b");
+        let s = RStringInner::from_encoding(b"#@x", Encoding::Ascii8);
+        assert_eq!(s.dump(), "\\#@x");
+        let s = RStringInner::from_encoding(b"#{}", Encoding::Ascii8);
+        assert_eq!(s.dump(), "\\#{}");
+        // Lone `#` (not followed by a trigram char) is left alone.
+        let s = RStringInner::from_encoding(b"#abc", Encoding::Ascii8);
+        assert_eq!(s.dump(), "#abc");
+    }
+
+    #[test]
+    fn utf8_dump_with_lookahead_handles_invalid_utf8() {
+        // Invalid bytes within a UTF-8-tagged buffer fall into the
+        // `Err(_)` arm of `from_utf8` and emit `\xHH` per byte.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, b"a\xFFb");
+        assert_eq!(out, "a\\xFFb");
+
+        // Multiple invalid bytes in a row → one `\xHH` each.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, &[0xC0, 0xC1, 0xF5]);
+        assert_eq!(out, "\\xC0\\xC1\\xF5");
+
+        // Mixed valid + invalid: walk-and-resume keeps the rest of
+        // the input. `#$` inside the valid prefix is escaped.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, b"#$\xFFhi");
+        assert_eq!(out, "\\#$\\xFFhi");
+
+        // Truncated multibyte at the end (the `error_len() == None`
+        // arm): the leading bytes surface as `\xHH`.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, &[b'a', 0xE3, 0x81]);
+        assert_eq!(out, "a\\xE3\\x81");
+
+        // BMP non-ASCII still passes through `utf8_dump_one` →
+        // `utf8_escape`, so it lands on `\uNNNN` (confirms the
+        // lookahead-driven path doesn't bypass the codepoint-form
+        // rule for valid runs).
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, "\u{0080}".as_bytes());
+        assert_eq!(out, "\\u0080");
+
+        // Supplementary-plane char → brace form.
+        let mut out = String::new();
+        utf8_dump_with_lookahead(&mut out, "\u{1F600}".as_bytes());
+        assert_eq!(out, "\\u{1F600}");
     }
 }

@@ -831,7 +831,29 @@ impl Executor {
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 's' => {
-                    let mut s = val.coerce_to_s(self, globals)?;
+                    // `%s` always dispatches to `Object#to_s` — it
+                    // never tries `to_str`. If the receiver doesn't
+                    // respond to `to_s` (e.g. a bare `BasicObject`),
+                    // CRuby raises `NoMethodError`. Don't fall back
+                    // to the C-level inspect.
+                    let mut s = if let Some(string) = val.is_str() {
+                        string.to_string()
+                    } else if let Some(func_id) = globals.check_method(val, IdentId::TO_S) {
+                        let result = self.invoke_func_inner(
+                            globals, func_id, val, &[], None, None,
+                        )?;
+                        if let Some(string) = result.is_str() {
+                            string.to_string()
+                        } else {
+                            result.to_s(&globals.store)
+                        }
+                    } else {
+                        return Err(MonorubyErr::method_not_found(
+                            &globals.store,
+                            IdentId::TO_S,
+                            val,
+                        ));
+                    };
                     if let Some(prec) = precision {
                         if s.len() > prec {
                             s.truncate(prec);
@@ -840,7 +862,20 @@ impl Executor {
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 'p' => {
-                    let s = val.inspect(&globals.store);
+                    // `%p` dispatches to `Object#inspect` (Ruby-level)
+                    // so user-defined `inspect` overrides are honoured.
+                    let s = if let Some(func_id) = globals.check_method(val, IdentId::INSPECT) {
+                        let result = self.invoke_func_inner(
+                            globals, func_id, val, &[], None, None,
+                        )?;
+                        if let Some(string) = result.is_str() {
+                            string.to_string()
+                        } else {
+                            result.to_s(&globals.store)
+                        }
+                    } else {
+                        val.inspect(&globals.store)
+                    };
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 'd' | 'i' | 'u' => {

@@ -239,11 +239,21 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.try_arg(0) {
-        Some(string) => string.coerce_to_string(vm, globals)?,
-        None => "".to_string(),
-    };
-    Ok(Value::string(s))
+    match lfp.try_arg(0) {
+        Some(string) => {
+            // Preserve the source string's encoding by going through
+            // `coerce_to_rstring` and cloning the inner.
+            let other = string.coerce_to_rstring(vm, globals)?;
+            Ok(Value::string_from_inner((*other).clone()))
+        }
+        None => {
+            // CRuby's `String.new` (no arg) returns a binary string.
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
+                b"",
+                Encoding::Ascii8,
+            )))
+        }
+    }
 }
 
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
@@ -5012,8 +5022,13 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let s = lfp.arg(0).coerce_to_string(vm, globals)?;
-    lfp.self_val().replace_str(&s);
+    // Preserve the source string's bytes *and* its encoding (CRuby's
+    // `String#replace` copies both). `coerce_to_string` returned a
+    // bare Rust String which loses encoding information; instead we
+    // route through `coerce_to_rstring` and clone the inner.
+    let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let new_inner = (*other).clone();
+    *lfp.self_val().as_rstring_inner_mut() = new_inner;
     Ok(lfp.self_val())
 }
 
@@ -8841,6 +8856,166 @@ mod tests {
             r##"begin; "abc".gsub(123, "x"); rescue TypeError => e; "raised"; end"##,
             r##"begin; "abc".sub(:l, "x"); rescue TypeError => e; "raised"; end"##,
             r##"begin; "abc".gsub(nil, "x"); rescue TypeError => e; "raised"; end"##,
+        ]);
+    }
+
+    #[test]
+    fn sprintf_string_coerce_kernel_integer() {
+        // sprintf integer specifiers (%b/%d/%i/%o/%u/%x/%X) on a
+        // String operand parse the string the same way `Kernel#Integer`
+        // does — including the `0x` / `0b` / `0o` prefixes, leading
+        // zero octal, and underscore separators.
+        run_tests(&[
+            r##""%d" % "0x42""##,
+            r##""%d" % "0b1101""##,
+            r##""%o" % "0o777""##,
+            r##""%x" % "0xff""##,
+            r##""%b" % "0b101""##,
+            r##""%d" % "1_000_000""##,
+            r##""%d" % "  42  ""##,
+        ]);
+    }
+
+    #[test]
+    fn sprintf_string_coerce_kernel_float() {
+        // sprintf float specifiers (%e/%E/%f/%g/%G) on a String
+        // operand mirror `Kernel#Float`: hex floats and underscore
+        // separators are accepted.
+        run_tests(&[
+            r##""%f" % "0xA""##,
+            r##""%f" % "0xA.B""##,
+            r##""%e" % "0xA.Bp3""##,
+            r##""%f" % "10_1_0.5_5_5""##,
+            r##""%e" % "1.5e1_0""##,
+        ]);
+    }
+
+    #[test]
+    fn sprintf_s_requires_to_s() {
+        // `%s` always dispatches to `Object#to_s`. A receiver without
+        // `to_s` (BasicObject) raises NoMethodError instead of
+        // falling through to a C-level fallback.
+        run_test_with_prelude(
+            r##"begin; "%s" % obj; rescue NoMethodError => e; "raised"; end"##,
+            r##"
+                obj = BasicObject.new
+                def obj.to_str; "abc"; end
+            "##,
+        );
+    }
+
+    #[test]
+    fn sprintf_p_calls_ruby_inspect() {
+        // `%p` must dispatch to the user-defined `Object#inspect`
+        // method, not to monoruby's internal C-level inspect.
+        run_test_with_prelude(
+            r##""%p" % M.new"##,
+            r##"
+                class M
+                  def inspect; "<custom>"; end
+                end
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_clear_in_place() {
+        run_tests(&[
+            r##"s = +"hello"; s.clear; s"##,
+            r##"s = +"hello"; s.clear.equal?(s)"##,
+            // clear preserves the encoding tag (this depends on
+            // `bytesplice` not changing the encoding).
+            r##"s = +"abc".dup.force_encoding("Shift_JIS"); s.clear; s.encoding.name"##,
+        ]);
+    }
+
+    #[test]
+    fn string_upto_argument_handling() {
+        // upto with a non-String argument that responds to `to_str`.
+        run_test_with_prelude(
+            r##""abc".upto(other).to_a"##,
+            r##"
+                other = Object.new
+                def other.to_str; "abe"; end
+            "##,
+        );
+        // upto with an Integer / Symbol raises TypeError.
+        run_tests(&[
+            r##"begin; "abc".upto(123) {}; rescue TypeError => e; "raised"; end"##,
+            r##"begin; "a".upto(:c).to_a; rescue TypeError => e; "raised"; end"##,
+        ]);
+        // upto specials: digit-only / single-character ranges.
+        run_tests(&[
+            r##""8".upto("11").to_a"##,
+            r##""9".upto("A").to_a"##,
+            r##""z".upto("~").to_a"##,
+        ]);
+    }
+
+    #[test]
+    fn string_replace_preserves_encoding() {
+        run_tests(&[
+            // `replace` copies bytes *and* encoding from the source.
+            r##"s = +"abc"; t = "xyz".dup.force_encoding("Shift_JIS"); s.replace(t); s.encoding.name"##,
+            r##"s = +"abc"; t = "xyz".dup.force_encoding("Shift_JIS"); s.replace(t); s"##,
+        ]);
+    }
+
+    #[test]
+    fn string_new_no_arg_is_binary() {
+        run_tests(&[
+            // `String.new` (no arg) returns a BINARY-encoded empty
+            // string per CRuby.
+            r##"String.new.encoding.name"##,
+            // With an argument, the source encoding is preserved.
+            r##"String.new("abc").encoding.name"##,
+        ]);
+    }
+
+    #[test]
+    fn string_to_f_underscores() {
+        // `String#to_f` accepts underscores between two digits;
+        // leading / trailing / consecutive underscores stop the run
+        // (and any preceding digits are still returned).
+        run_tests(&[
+            r##""1_234_567.890_1".to_f"##,
+            r##""-5_5e-5_0".to_f"##,
+            r##""_9".to_f"##,
+            r##""1__0".to_f"##,
+            r##""1_".to_f"##,
+            r##""1.".to_f"##,
+            r##"" 1.2 ".to_f"##,
+        ]);
+    }
+
+    #[test]
+    fn string_dump_and_inspect_codepoint_forms() {
+        // `dump`: `#` followed by `$` / `@` / `{` is escaped to `\#`,
+        // BMP non-ASCII uses `\uNNNN`, supplementary uses `\u{N}`.
+        run_tests(&[
+            r##""\u{0080}".dump"##,
+            r##""\u{10000}".dump"##,
+            r##"("#" + "$").dump"##,
+            r##"("#" + "@").dump"##,
+            r##"("#" + "{").dump"##,
+        ]);
+        // `inspect`: same codepoint-form rules (BMP `\uNNNN`, beyond
+        // BMP `\u{N}`).
+        run_tests(&[
+            r##""\u{0080}".inspect"##,
+            r##""\u{0001}".inspect"##,
+        ]);
+    }
+
+    #[test]
+    fn string_encode_xml_option_validation() {
+        // `:xml` option accepts only `:text` / `:attr`; anything else
+        // raises ArgumentError before any conversion happens.
+        run_tests(&[
+            r##""abc".encode("UTF-8", xml: :text)"##,
+            r##""abc".encode("UTF-8", xml: :attr)"##,
+            r##"begin; "abc".encode("UTF-8", xml: :other); rescue ArgumentError => e; "raised"; end"##,
+            r##"begin; (+"abc").encode!("UTF-8", xml: :other); rescue ArgumentError => e; "raised"; end"##,
         ]);
     }
 }

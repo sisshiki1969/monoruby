@@ -185,12 +185,18 @@ impl Value {
                 };
             }
             RV::String(s) => {
+                // CRuby's sprintf integer specifiers (%b/%d/%i/%o/%u/%x/%X)
+                // treat a String operand the same as `Kernel#Integer(s)`,
+                // so they honour `0x`/`0b`/`0o` prefixes, leading-zero
+                // octal, and underscore separators. Routing through the
+                // shared parser keeps the behaviour aligned.
                 let s = s.check_utf8()?;
-                if let Ok(i) = s.parse::<i64>() {
-                    return Ok(IntegerBase::Fixnum(i));
-                } else if let Ok(b) = s.parse::<BigInt>() {
-                    return Ok(IntegerBase::BigInt(b));
-                }
+                let v = crate::builtins::parse_kernel_integer(s, 0)?;
+                return Ok(match v.unpack() {
+                    RV::Fixnum(i) => IntegerBase::Fixnum(i),
+                    RV::BigInt(b) => IntegerBase::BigInt(b.clone()),
+                    _ => unreachable!("parse_kernel_integer returns Fixnum or BigInt"),
+                });
             }
             _ => {}
         };
@@ -222,10 +228,15 @@ impl Value {
             RV::Fixnum(i) => return Ok(i as f64),
             RV::Float(f) => return Ok(f),
             RV::String(s) => {
+                // Match `Kernel#Float(s)` semantics here so sprintf's
+                // float specifiers (%e/%E/%f/%g/%G/%a/%A) accept hex
+                // floats and underscore separators consistently.
                 let s = s.check_utf8()?;
-                return s.parse::<f64>().map_err(|_| {
-                    MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", s))
-                });
+                let v = crate::builtins::parse_kernel_float(s)?;
+                if let RV::Float(f) = v.unpack() {
+                    return Ok(f);
+                }
+                unreachable!("parse_kernel_float returns Float");
             }
             _ => {}
         };
