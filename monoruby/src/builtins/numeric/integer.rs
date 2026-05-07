@@ -685,7 +685,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         }
         _ => {
             // Reverse dispatch: try rhs == lhs
-            let eq_id = IdentId::get_id("==");
+            let eq_id = IdentId::_EQ;
             let result = vm.invoke_method_inner(globals, eq_id, rhs, &[lhs], None, None)?;
             return Ok(Value::bool(result.as_bool()));
         }
@@ -736,7 +736,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 Ok(Some(result)) => {
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
-                            let cmp_id = IdentId::get_id("<=>");
+                            let cmp_id = IdentId::_CMP;
                             return vm.invoke_method_inner(
                                 globals,
                                 cmp_id,

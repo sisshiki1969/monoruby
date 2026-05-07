@@ -2198,7 +2198,7 @@ fn initialize_clone(
     let self_val = lfp.self_val();
     vm.invoke_method_inner(
         globals,
-        IdentId::get_id("initialize_copy"),
+        IdentId::INITIALIZE_COPY,
         self_val,
         &[orig],
         None,
@@ -2241,7 +2241,7 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         return Ok(Value::bool(true));
     }
     // Call respond_to_missing?(name, include_all) as CRuby does.
-    let respond_to_missing = IdentId::get_id("respond_to_missing?");
+    let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
         let result = vm.invoke_func_inner(
             globals,

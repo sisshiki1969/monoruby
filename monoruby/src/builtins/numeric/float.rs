@@ -70,7 +70,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.store[FLOAT_CLASS].clear_alloc_func();
     // Float.new should raise NoMethodError (not TypeError from allocate)
     let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
-    globals.add_empty_method(float_meta, IdentId::get_id("new"), Visibility::Undefined);
+    globals.add_empty_method(float_meta, IdentId::NEW, Visibility::Undefined);
 }
 
 ///
@@ -330,7 +330,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             {
                 if let Some(ary) = result.try_array_ty() {
                     if ary.len() == 2 {
-                        let cmp_id = IdentId::get_id("<=>");
+                        let cmp_id = IdentId::_CMP;
                         let res =
                             vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None)?;
                         return Ok(res);
@@ -901,7 +901,7 @@ fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let rhs = lfp.arg(0);
     // Complex: delegate to Complex division
     if let Some(_) = rhs.try_complex() {
-        let div_id = IdentId::get_id("/");
+        let div_id = IdentId::_DIV;
         let complex_self = Value::complex(lhs, 0.0);
         return vm.invoke_method_inner(globals, div_id, complex_self, &[rhs], None, None);
     }
@@ -916,7 +916,7 @@ fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             {
                 if let Some(ary) = result.try_array_ty() {
                     if ary.len() == 2 {
-                        let div_id = IdentId::get_id("/");
+                        let div_id = IdentId::_DIV;
                         return vm.invoke_method_inner(
                             globals,
                             div_id,

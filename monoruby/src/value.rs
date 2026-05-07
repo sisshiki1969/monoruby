@@ -1223,7 +1223,7 @@ pub(crate) fn emit_chilled_string_mutation_warning(
     let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
     let dep = vm.invoke_method_inner(
         globals,
-        IdentId::get_id("[]"),
+        IdentId::_INDEX,
         warning_val,
         &[dep_sym],
         None,
@@ -1325,7 +1325,7 @@ pub(crate) fn emit_deprecated_constant_warning(
     let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
     let dep = vm.invoke_method_inner(
         globals,
-        IdentId::get_id("[]"),
+        IdentId::_INDEX,
         warning_val,
         &[dep_sym],
         None,

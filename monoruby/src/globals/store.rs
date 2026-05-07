@@ -394,7 +394,7 @@ impl Store {
         };
         let compile_info = Store::handle_args(info, vec![])?;
         let fid = self.new_iseq_method(
-            Some(IdentId::get_id("/main")),
+            Some(IdentId::_MAIN),
             compile_info,
             Loc::default(),
             result.source_info,

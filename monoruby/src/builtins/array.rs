@@ -260,7 +260,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             *self_val = (*arg.as_array()).clone();
             return Ok(self_val.into());
         }
-        let to_ary = IdentId::get_id("to_ary");
+        let to_ary = IdentId::TO_ARY;
         if let Some(func_id) = globals.check_method(arg, to_ary) {
             let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
             if result.is_array_ty() {
@@ -1443,7 +1443,7 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ary = lfp.self_val().as_array();
     let self_len = self_ary.len();
-    let each_id = IdentId::get_id("each");
+    let each_id = IdentId::EACH;
     let to_enum_id = IdentId::get_id("to_enum");
     let next_id = IdentId::get_id("next");
 
