@@ -210,12 +210,21 @@ impl<'a> JitContext<'a> {
             FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
             FuncKind::ISeq(iseq) => {
                 // Check ISeq hint for trivial methods. Only fold when the
-                // call site's argument shape would actually dispatch (i.e.
-                // arity / splat / kw / block-arg checks would pass);
-                // otherwise CRuby raises ArgumentError and we must fall
-                // through to the normal path so the runtime can do the
-                // same.
-                if self.store.is_simple_call(func_id, callid) {
+                // call site's argument shape would actually dispatch
+                // without raising; otherwise CRuby raises ArgumentError
+                // and we must fall through to the normal path so the
+                // runtime can do the same.
+                //
+                // `is_simple_call` covers positional arity, splats, and
+                // the "callee has no kw + callsite passes kw" case, but
+                // it does NOT validate keyword matching when the callee
+                // accepts kwargs — required-kw-missing and unknown-kw
+                // would silently fold otherwise. Restrict folding to the
+                // "neither side touches kwargs" case to avoid that.
+                if self.store.is_simple_call(func_id, callid)
+                    && self.store[func_id].no_keyword()
+                    && !callsite.kw_may_exists()
+                {
                     match self.store[iseq].hint {
                         ISeqHint::ConstReturn(v) => {
                             state.def_C(dst, v);
