@@ -240,6 +240,12 @@ impl ObjKind {
         }
     }
 
+    fn string_from_string_scanned(s: String) -> Self {
+        Self {
+            string: ManuallyDrop::new(RStringInner::from_string_scanned(s)),
+        }
+    }
+
     fn string_from_str(s: &str) -> Self {
         Self {
             string: ManuallyDrop::new(RStringInner::from_str(s)),
@@ -248,7 +254,7 @@ impl ObjKind {
 
     fn string_from_vec(vec: Vec<u8>) -> Self {
         Self {
-            string: ManuallyDrop::new(RStringInner::string_from_vec(vec)),
+            string: ManuallyDrop::new(RStringInner::from_vec_scanned(vec)),
         }
     }
 
@@ -1252,6 +1258,18 @@ impl RValue {
         RValue {
             header: Header::new(STRING_CLASS, ObjTy::STRING),
             kind: ObjKind::string_from_string(s),
+            var_table: None,
+        }
+    }
+
+    /// Build a String RValue with the underlying `RStringInner`'s
+    /// code range pre-classified. Used by bytecodegen literal
+    /// emission and other long-lived string templates that get
+    /// `deep_copy`-cloned many times.
+    pub(super) fn new_string_scanned(s: String) -> Self {
+        RValue {
+            header: Header::new(STRING_CLASS, ObjTy::STRING),
+            kind: ObjKind::string_from_string_scanned(s),
             var_table: None,
         }
     }

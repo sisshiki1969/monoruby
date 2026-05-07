@@ -1095,7 +1095,12 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_string(&mut self, dst: BcReg, s: String) {
-        self.emit_literal(dst, Value::string(s));
+        // String literals become long-lived templates: `Literal`
+        // dispatch `deep_copy`s the template into a fresh RValue on
+        // every execution, and the clone preserves the template's
+        // `cr`. Pre-classify here so each clone gets `cr` for free
+        // instead of re-running classify on first use.
+        self.emit_literal(dst, Value::string_scanned(s));
     }
 
     fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
