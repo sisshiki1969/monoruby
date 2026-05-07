@@ -117,10 +117,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             .get_constant_noautoload(parent_class, n)
             .is_some();
         if prev {
-            let parent_name = globals.store[parent_class]
-                .get_name()
-                .unwrap_or_default()
-                .to_string();
+            let parent_name = globals.store.qualified_name(parent_class);
             let qual = if parent_name.is_empty() {
                 n.get_name().to_string()
             } else {

@@ -823,10 +823,10 @@ impl Executor {
             .get_constant_noautoload(parent, name)
             .is_some()
         {
-            let parent_name = globals.store[parent]
-                .get_name()
-                .unwrap_or_default()
-                .to_string();
+            // Use the full qualified path (`Foo::Bar::Leaf`) instead of
+            // just the immediate parent's leaf name. Anonymous parents
+            // render as `#<Module:0x..>::Leaf`; `Object` renders bare.
+            let parent_name = globals.store.qualified_name(parent);
             let qual = if parent_name.is_empty() {
                 name.get_name().to_string()
             } else {
