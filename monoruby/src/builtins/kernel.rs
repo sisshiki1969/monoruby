@@ -740,9 +740,7 @@ fn kernel_integer(
 /// original input, quoted).
 fn parse_kernel_integer(s: &str, given_base: u32) -> Result<Value> {
     let raw = s;
-    let invalid = || {
-        MonorubyErr::argumenterr(format!("invalid value for Integer(): \"{}\"", raw))
-    };
+    let invalid = || MonorubyErr::argumenterr(format!("invalid value for Integer(): \"{}\"", raw));
     // CRuby trims leading/trailing whitespace.
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -860,9 +858,7 @@ fn is_digit_for_base(b: u8, base: u32) -> bool {
 /// for Float(): \"...\"")` with the original input quoted.
 fn parse_kernel_float(s: &str) -> Result<Value> {
     let raw = s;
-    let invalid = || {
-        MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", raw))
-    };
+    let invalid = || MonorubyErr::argumenterr(format!("invalid value for Float(): \"{}\"", raw));
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err(invalid());
@@ -912,10 +908,7 @@ fn parse_kernel_float(s: &str) -> Result<Value> {
 
 /// Strip underscores from a digit run, validating that each `_` sits
 /// strictly between two digit (or hex-digit / `.`/`p`/`e`) characters.
-fn strip_underscores(
-    bytes: &[u8],
-    invalid: &dyn Fn() -> MonorubyErr,
-) -> Result<Vec<u8>> {
+fn strip_underscores(bytes: &[u8], invalid: &dyn Fn() -> MonorubyErr) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len());
     let is_alnum = |b: u8| b.is_ascii_alphanumeric();
     for (i, &b) in bytes.iter().enumerate() {
@@ -2272,11 +2265,11 @@ fn object_respond_to(
     let CallSiteInfo {
         dst, args, pos_num, ..
     } = *callsite;
-    let dst = if let Some(dst) = dst {
-        dst
-    } else {
-        return false;
-    };
+    //let dst = if let Some(dst) = dst {
+    //    dst
+    //} else {
+    //    return false;
+    //};
     let include_all = if pos_num != 1 {
         if state.is_truthy(args + 1usize) {
             true
@@ -2297,7 +2290,9 @@ fn object_respond_to(
         store.check_method_for_class_with_version(recv_class, method_name, ctx.class_version())
     {
         if include_all || entry.is_public() {
-            state.def_C(dst, Immediate::bool(true));
+            if let Some(dst) = dst {
+                state.def_C(dst, Immediate::bool(true));
+            }
             return true;
         }
         // Found but private and !include_all: CRuby still consults
@@ -2321,7 +2316,9 @@ fn object_respond_to(
         && let Some(iseq) = store[fid].is_iseq()
         && let ISeqHint::ConstReturn(v) = store[iseq].hint
     {
-        state.def_C(dst, Immediate::bool(v.as_bool()));
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(v.as_bool()));
+        }
         return true;
     }
     false
@@ -3250,7 +3247,7 @@ mod tests {
             r#"Integer("0o17")"#,
             r#"Integer("0O17")"#,
             r#"Integer("0d42")"#,
-            r#"Integer("042")"#,    // leading 0 → octal
+            r#"Integer("042")"#, // leading 0 → octal
             r#"Integer("42")"#,
             r#"Integer("-0x42")"#,
             r#"Integer(" +0x42 ")"#, // whitespace tolerated
@@ -4102,10 +4099,7 @@ mod tests {
     fn kernel_putc_fn() {
         // `putc` returns the argument unchanged. Writes to stdout as a
         // side effect -- the test framework captures that.
-        run_tests(&[
-            r#"putc(65)"#,
-            r#"putc("Z")"#,
-        ]);
+        run_tests(&[r#"putc(65)"#, r#"putc("Z")"#]);
     }
 
     // --- tests for ARGF stub added in PR #328 ---
