@@ -17,10 +17,13 @@
   section { margin-bottom: 3em; }
   canvas { max-width: 100%; }
   table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
-  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { text-align: right; }
+  td { text-align: right; }
   th:first-child, td:first-child { text-align: left; }
-  thead th { border-bottom: 2px solid #888; }
+  td.reason { text-align: left; color: #c62828; font-weight: 600; font-size: 0.85em; }
   td.err { color: #c62828; font-weight: 600; }
+  thead th { border-bottom: 2px solid #888; }
   a { color: #1565c0; }
   .empty { color: #888; padding: 1em 0; }
 </style>
@@ -30,8 +33,8 @@
 <div class="meta">
   Per-benchmark relative speed against <code>ruby 4.0.1 --yjit</code>, measured on every <code>master</code> push with
   <a href="https://github.com/Shopify/yjit-bench">Shopify/yjit-bench</a> (<code>--rss --harness=harness-warmup</code>).
-  Failed benchmarks are listed in red. Source: <a href="latest.json">latest.json</a>,
-  <a href="data/history.csv">history.csv</a>. Back to <a href="../">portal</a>.
+  Each benchmark process is bounded with <code>timeout(1)</code>; benchmarks that crash or time out are listed in red with the cause.
+  Source: <a href="latest.json">latest.json</a>, <a href="data/history.csv">history.csv</a>. Back to <a href="../">portal</a>.
 </div>
 
 <section>
@@ -45,6 +48,8 @@
         <th>monoruby (ms)</th>
         <th>YJIT (ms)</th>
         <th>YJIT / monoruby</th>
+        <th>monoruby reason</th>
+        <th>yjit reason</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -69,26 +74,25 @@ async function loadJson(path) {
     return;
   }
 
-  // Bar chart sort: ratio DESC, then errors at the bottom.
-  // ok = both implementations succeeded → use ratio
-  // monoruby_failed → push to bottom (ratio = 0)
-  // yjit_failed but monoruby ok → very high "ratio" (treat as ∞)
+  // Bar chart sort: ratio DESC, monoruby-failed at the bottom.
   const sortKey = b => {
-    if (b.monoruby_failed) return -1; // bottom
+    if (b.monoruby_failed) return -1;
     if (b.yjit_failed)     return Infinity;
     return b.ratio;
   };
   benches.sort((a, b) => sortKey(b) - sortKey(a));
 
-  document.getElementById("latestMeta").textContent =
-    "snapshot: " + data.timestamp + " @ " + data.commit;
+  const tos = (data.timeouts) || {};
+  const meta = "snapshot: " + data.timestamp + " @ " + data.commit
+    + (tos.monoruby ? " (timeouts: monoruby " + tos.monoruby + "s, yjit " + tos.yjit + "s)" : "");
+  document.getElementById("latestMeta").textContent = meta;
 
   const okBars = benches.filter(b => !b.monoruby_failed);
   const maxRatio = okBars.reduce((m, b) =>
     (b.ratio && b.ratio > m) ? b.ratio : m, 1.5);
   // Failed-monoruby bars get a small visible stub at the *negative* side
   // so they're labeled and visible without distorting the ratio scale.
-  const FAIL_STUB = -Math.max(0.5, maxRatio * 0.05);
+  const FAIL_STUB = -Math.max(0.5, maxRatio * 0.08);
 
   const barColor = b => {
     if (b.monoruby_failed) return "#c62828";
@@ -99,13 +103,21 @@ async function loadJson(path) {
     return "#c62828";
   };
 
+  // Bar label: "<bench> ✕ <reason>" for failures, plain name otherwise.
+  const labelFor = b => {
+    if (b.monoruby_failed) {
+      return b.name + " ✕ " + (b.monoruby_reason || "failed");
+    }
+    return b.name;
+  };
+
   document.getElementById("latestBarWrap").style.height =
     Math.max(280, benches.length * 26) + "px";
 
   new Chart(document.getElementById("latestBar"), {
     type: "bar",
     data: {
-      labels: benches.map(b => b.name + (b.monoruby_failed ? " ✕" : "")),
+      labels: benches.map(labelFor),
       datasets: [{
         label: "YJIT / monoruby",
         data: benches.map(b => b.monoruby_failed ? FAIL_STUB : (b.ratio || 0)),
@@ -133,20 +145,21 @@ async function loadJson(path) {
           callbacks: {
             label: ctx => {
               const b = benches[ctx.dataIndex];
+              const lines = [];
               if (b.monoruby_failed) {
-                return [b.name + ": monoruby failed",
-                        b.yjit_failed ? "yjit also failed"
-                                      : "yjit: " + b.yjit_ms.toFixed(2) + " ms"];
+                lines.push("monoruby: " + (b.monoruby_reason || "failed"));
+              } else {
+                lines.push("monoruby: " + b.monoruby_ms.toFixed(2) + " ms");
               }
               if (b.yjit_failed) {
-                return [b.name + ": yjit failed",
-                        "monoruby: " + b.monoruby_ms.toFixed(2) + " ms"];
+                lines.push("yjit: " + (b.yjit_reason || "failed"));
+              } else {
+                lines.push("yjit:     " + b.yjit_ms.toFixed(2) + " ms");
               }
-              return [
-                ctx.parsed.x.toFixed(2) + "× YJIT",
-                "monoruby: " + b.monoruby_ms.toFixed(2) + " ms",
-                "yjit:     " + b.yjit_ms.toFixed(2) + " ms"
-              ];
+              if (!b.monoruby_failed && !b.yjit_failed) {
+                lines.unshift(ctx.parsed.x.toFixed(2) + "× YJIT");
+              }
+              return lines;
             }
           }
         }
@@ -155,20 +168,32 @@ async function loadJson(path) {
   });
 
   const tbody = document.querySelector("#latestTable tbody");
+  const numCell = (v, fail) => {
+    const td = document.createElement("td");
+    if (fail) { td.textContent = "ERROR"; td.className = "err"; }
+    else      { td.textContent = v; }
+    return td;
+  };
+  const reasonCell = text => {
+    const td = document.createElement("td");
+    if (text) {
+      td.textContent = text;
+      td.className = "reason";
+    } else {
+      td.textContent = "";
+    }
+    return td;
+  };
   for (const b of benches) {
     const tr = document.createElement("tr");
-    const fmt = (v, fail) => {
-      const td = document.createElement("td");
-      if (fail) { td.textContent = "ERROR"; td.className = "err"; }
-      else { td.textContent = v; }
-      return td;
-    };
     const nameTd = document.createElement("td");
     nameTd.textContent = b.name;
     tr.appendChild(nameTd);
-    tr.appendChild(fmt(b.monoruby_ms != null ? b.monoruby_ms.toFixed(3) : "", b.monoruby_failed));
-    tr.appendChild(fmt(b.yjit_ms != null ? b.yjit_ms.toFixed(3) : "", b.yjit_failed));
-    tr.appendChild(fmt(b.ratio != null ? b.ratio.toFixed(3) + "x" : "", b.ratio == null));
+    tr.appendChild(numCell(b.monoruby_ms != null ? b.monoruby_ms.toFixed(3) : "", b.monoruby_failed));
+    tr.appendChild(numCell(b.yjit_ms != null ? b.yjit_ms.toFixed(3) : "", b.yjit_failed));
+    tr.appendChild(numCell(b.ratio != null ? b.ratio.toFixed(3) + "x" : "", b.ratio == null));
+    tr.appendChild(reasonCell(b.monoruby_failed ? (b.monoruby_reason || "failed") : ""));
+    tr.appendChild(reasonCell(b.yjit_failed     ? (b.yjit_reason     || "failed") : ""));
     tbody.appendChild(tr);
   }
 })();
