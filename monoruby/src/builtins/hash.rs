@@ -436,7 +436,7 @@ fn default_proc_assign(
     let proc_val = if arg.is_proc().is_some() {
         arg
     } else {
-        let to_proc_id = IdentId::get_id("to_proc");
+        let to_proc_id = IdentId::TO_PROC;
         let coerced =
             vm.invoke_method_if_exists(globals, to_proc_id, arg, &[], None, None)?;
         match coerced {
@@ -554,7 +554,7 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
-    let eql_id = IdentId::get_id("eql?");
+    let eql_id = IdentId::EQL_;
     crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
         for (k, lhs_value) in lhs.iter() {
             let Some(rhs_value) = rhs.get(k, vm, globals)? else {
@@ -603,7 +603,7 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             const VAL_MIX: i64 = 0xc6bc279692b5c323u64 as i64;
             const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
             let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
-            let hash_id = IdentId::get_id("hash");
+            let hash_id = IdentId::HASH;
             for (k, v) in h.iter() {
                 let kh = vm
                     .invoke_method_inner(globals, hash_id, k, &[], None, None)?
@@ -939,7 +939,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
         None => {
-            let id = IdentId::get_id("each");
+            let id = IdentId::EACH;
             return hash_to_sized_enum(vm, id, lfp, pc);
         }
         Some(block) => block,

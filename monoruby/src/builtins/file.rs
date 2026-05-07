@@ -1853,7 +1853,7 @@ fn value_to_timeval(
     if let Some(rv) = val.try_rvalue()
         && rv.ty() == ObjTy::TIME
     {
-        let to_f = IdentId::get_id("to_f");
+        let to_f = IdentId::TO_F;
         let f = vm.invoke_method_inner(globals, to_f, val, &[], None, None)?;
         if let Some(f) = f.try_float() {
             let secs = f.floor() as i64;

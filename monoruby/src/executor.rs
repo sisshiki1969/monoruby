@@ -619,7 +619,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/name"), Value::symbol(name))
+                    .set_ivar(v, IdentId::_NAME, Value::symbol(name))
                     .unwrap();
                 v
             }

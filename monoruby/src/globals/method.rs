@@ -924,8 +924,8 @@ impl Globals {
 /// exercises this for the alias path.
 fn is_always_private_method(name: IdentId) -> bool {
     name == IdentId::INITIALIZE
-        || name == IdentId::get_id("initialize_copy")
-        || name == IdentId::get_id("initialize_clone")
-        || name == IdentId::get_id("initialize_dup")
-        || name == IdentId::get_id("respond_to_missing?")
+        || name == IdentId::INITIALIZE_COPY
+        || name == IdentId::INITIALIZE_CLONE
+        || name == IdentId::INITIALIZE_DUP
+        || name == IdentId::RESPOND_TO_MISSING_
 }

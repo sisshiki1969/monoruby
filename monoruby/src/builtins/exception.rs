@@ -140,7 +140,7 @@ fn nameerr_name(
     let self_val = lfp.self_val();
     let v = globals
         .store
-        .get_ivar(self_val, IdentId::get_id("/name"))
+        .get_ivar(self_val, IdentId::_NAME)
         .unwrap_or_default();
     Ok(v)
 }
@@ -176,7 +176,7 @@ fn nameerr_initialize(
             // `NameError#name` can return it as-is.
             globals
                 .store
-                .set_ivar(self_, IdentId::get_id("/name"), name)?;
+                .set_ivar(self_, IdentId::_NAME, name)?;
         }
     }
     Ok(Value::nil())

@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     // Symbol.new is undefined (raises NoMethodError).
     let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
     globals
-        .undef_method_for_class(meta, IdentId::get_id("new"))
+        .undef_method_for_class(meta, IdentId::NEW)
         .unwrap();
 }
 

@@ -202,7 +202,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     {
         globals.set_constant_by_str(enc.id(), "ASCII", us_ascii);
     }
-    if let Some(utf8) = globals.store.get_constant_noautoload(enc.id(), IdentId::get_id("UTF_8")) {
+    if let Some(utf8) = globals.store.get_constant_noautoload(enc.id(), IdentId::UTF_8) {
         globals.set_constant_by_str(enc.id(), "CP65001", utf8);
     }
 
@@ -341,7 +341,7 @@ pub(super) fn str_encoding(
     }
     let enc = self_.as_rstring_inner().encoding();
     let enc_class = vm
-        .get_constant_checked(globals, OBJECT_CLASS, IdentId::get_id("Encoding"))?
+        .get_constant_checked(globals, OBJECT_CLASS, IdentId::ENCODING)?
         .expect_class(globals)?
         .id();
     let const_name = encoding_constant_name(enc);
@@ -480,7 +480,7 @@ fn enc_default_external(
     let enc_class = encoding_class(globals);
     let utf8 = globals
         .store
-        .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8"))
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
         .unwrap_or(Value::nil());
     Ok(utf8)
 }
@@ -543,7 +543,7 @@ fn enc_list(
     let enc_class = encoding_class(globals);
     let utf8 = globals
         .store
-        .get_constant_noautoload(enc_class, IdentId::get_id("UTF_8"))
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
         .unwrap_or(Value::nil());
     let ascii = globals
         .store

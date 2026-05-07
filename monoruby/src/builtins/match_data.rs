@@ -47,7 +47,7 @@ fn allocate_undefined(
 ) -> Result<Value> {
     Err(MonorubyErr::method_not_found_for_class(
         &globals.store,
-        IdentId::get_id("allocate"),
+        IdentId::ALLOCATE,
         MATCHDATA_CLASS,
     ))
 }

@@ -610,7 +610,7 @@ fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
             _ => {
                 // Try to_int coercion
-                let to_int_id = IdentId::get_id("to_int");
+                let to_int_id = IdentId::TO_INT;
                 if let Some(fid) = globals.check_method(exp_val, to_int_id) {
                     let result = vm.invoke_func_inner(globals, fid, exp_val, &[], None, None)?;
                     match result.unpack() {

@@ -1514,6 +1514,52 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
+    /// Lower a `StatementsNode`-shaped body to ruruby-parse's compact
+    /// shape:
+    ///
+    ///   - empty body  -> `CompStmt([])`
+    ///   - 1 statement -> bare expression (NO `CompStmt` wrapper)
+    ///   - N>=2        -> `CompStmt([s1, s2, ...])`
+    ///
+    /// Plain `lower_node(StatementsNode)` always wraps in `CompStmt`,
+    /// which (a) throws off class-body register arithmetic in
+    /// bytecodegen and (b) hides the inner kind from
+    /// `bytecodegen::hint()`, suppressing trivial-method
+    /// `ConstReturn` annotation. Both class-body and method-body
+    /// lowering route through here so the shape stays uniform with
+    /// ruruby-parse.
+    fn lower_compact_body(
+        &mut self,
+        body: Option<prism::Node<'pr>>,
+        fallback_loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        match body {
+            Some(b) => match b {
+                prism::Node::StatementsNode { .. } => {
+                    let stmts_node = b.as_statements_node().unwrap();
+                    let stmts_loc = location_to_loc(&stmts_node.location());
+                    let mut stmts = self.lower_statements_into_vec(&stmts_node)?;
+                    Ok(match stmts.len() {
+                        0 => Node {
+                            kind: NodeKind::CompStmt(vec![]),
+                            loc: stmts_loc,
+                        },
+                        1 => stmts.pop().unwrap(),
+                        _ => Node {
+                            kind: NodeKind::CompStmt(stmts),
+                            loc: stmts_loc,
+                        },
+                    })
+                }
+                _ => self.lower_node(&b),
+            },
+            None => Ok(Node {
+                kind: NodeKind::CompStmt(vec![]),
+                loc: fallback_loc,
+            }),
+        }
+    }
+
     /// Lower the body of a class / module / class-shovel definition,
     /// returning a fully-built `BlockInfo` with the body wrapped in
     /// the implicit `Begin { rescue: [], else_: None, ensure: None }`
@@ -1524,43 +1570,7 @@ impl<'pr> Lowerer<'pr> {
         loc: Loc,
     ) -> Result<BlockInfo, MonorubyErr> {
         let saved = std::mem::take(&mut self.lvars);
-        // ruruby's class / module body has a specific `Begin { body }`
-        // shape that bytecodegen depends on:
-        //   - empty body  -> `Begin { body: CompStmt([]) }`
-        //   - 1 statement -> `Begin { body: <bare expr> }` (NO CompStmt)
-        //   - N>=2        -> `Begin { body: CompStmt([s1, s2, ...]) }`
-        // Lowering through plain `lower_node(StatementsNode)` always
-        // wraps in `CompStmt`, even for single statements; that
-        // throws off bytecodegen's class-definition register
-        // arithmetic and panics later in `expand_array`. Use the
-        // statement-compact lowering instead so the shape matches.
-        let body_res = match body {
-            Some(b) => match b {
-                prism::Node::StatementsNode { .. } => {
-                    let stmts_node = b.as_statements_node().unwrap();
-                    let stmts_loc = location_to_loc(&stmts_node.location());
-                    match self.lower_statements_into_vec(&stmts_node) {
-                        Ok(mut stmts) => match stmts.len() {
-                            0 => Ok(Node {
-                                kind: NodeKind::CompStmt(vec![]),
-                                loc: stmts_loc,
-                            }),
-                            1 => Ok(stmts.pop().unwrap()),
-                            _ => Ok(Node {
-                                kind: NodeKind::CompStmt(stmts),
-                                loc: stmts_loc,
-                            }),
-                        },
-                        Err(e) => Err(e),
-                    }
-                }
-                _ => self.lower_node(&b),
-            },
-            None => Ok(Node {
-                kind: NodeKind::CompStmt(vec![]),
-                loc,
-            }),
-        };
+        let body_res = self.lower_compact_body(body, loc);
         match body_res {
             Ok(body_inner) => {
                 let body = Node {
@@ -2718,13 +2728,15 @@ impl<'pr> Lowerer<'pr> {
                     None => Vec::new(),
                 };
                 this.collect_locals(&node.locals())?;
-                let body_inner = match node.body() {
-                    Some(b) => this.lower_node(&b)?,
-                    None => Node {
-                        kind: NodeKind::Nil,
-                        loc,
-                    },
-                };
+                // Match ruruby-parse's method-body shape (also assumed by
+                // bytecodegen's `hint()`): a single-statement body is the
+                // bare expression, not a `CompStmt([expr])`. Plain
+                // `lower_node(StatementsNode)` always wraps in CompStmt,
+                // which makes `def foo; false; end` fall through `hint()`
+                // and miss the `ConstReturn(false)` annotation; without
+                // it the JIT can't fold trivial helpers like the default
+                // `Object#respond_to_missing?`.
+                let body_inner = this.lower_compact_body(node.body(), loc)?;
                 let body = Node {
                     kind: NodeKind::Begin {
                         body: Box::new(body_inner),

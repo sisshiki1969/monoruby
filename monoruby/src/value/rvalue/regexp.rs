@@ -841,7 +841,7 @@ fn lookup_hash_replacement(
     key: Value,
 ) -> Result<String> {
     let v =
-        vm.invoke_method_inner(globals, IdentId::get_id("[]"), hash, &[key], None, None)?;
+        vm.invoke_method_inner(globals, IdentId::_INDEX, hash, &[key], None, None)?;
     if v.is_nil() {
         Ok(String::new())
     } else if let Some(s) = v.is_str() {

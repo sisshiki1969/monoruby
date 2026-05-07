@@ -97,7 +97,7 @@ fn enum_to_vec(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<V
         return Ok(ary.iter().copied().collect());
     }
     // Check if it responds to each (is enumerable)
-    let each_id = IdentId::get_id("each");
+    let each_id = IdentId::EACH;
     if globals.check_method(val, each_id).is_none() {
         return Err(MonorubyErr::argumenterr(format!(
             "value must be enumerable"
@@ -298,7 +298,7 @@ fn delete_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let bh = match lfp.block() {
         None => {
-            let id = IdentId::get_id("each");
+            let id = IdentId::EACH;
             return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect(), pc);
         }
         Some(block) => block,

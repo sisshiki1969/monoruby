@@ -2198,7 +2198,7 @@ fn initialize_clone(
     let self_val = lfp.self_val();
     vm.invoke_method_inner(
         globals,
-        IdentId::get_id("initialize_copy"),
+        IdentId::INITIALIZE_COPY,
         self_val,
         &[orig],
         None,
@@ -2241,7 +2241,7 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         return Ok(Value::bool(true));
     }
     // Call respond_to_missing?(name, include_all) as CRuby does.
-    let respond_to_missing = IdentId::get_id("respond_to_missing?");
+    let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
         let result = vm.invoke_func_inner(
             globals,
@@ -2300,9 +2300,30 @@ fn object_respond_to(
             state.def_C(dst, Immediate::bool(true));
             return true;
         }
+        // Found but private and !include_all: CRuby still consults
+        // respond_to_missing?, so fall through.
     }
-    // Method not found directly. Cannot JIT-inline because respond_to_missing?
-    // may be overridden and needs to be called at runtime.
+    // Method not visible. CRuby calls `recv.respond_to_missing?(name, include_all)`
+    // and coerces the result to bool. If `respond_to_missing?` resolves to
+    // an ISeq whose hint says it returns a constant (typical for the
+    // default `Object#respond_to_missing?` which is `def ...; false; end`
+    // and any user override that just returns a literal), fold the call
+    // to that value. The class_version guard upstream catches any later
+    // override that would change the resolution.
+    let resolved = store
+        .check_method_for_class_with_version(
+            recv_class,
+            IdentId::RESPOND_TO_MISSING_,
+            ctx.class_version(),
+        )
+        .and_then(|e| e.func_id());
+    if let Some(fid) = resolved
+        && let Some(iseq) = store[fid].is_iseq()
+        && let ISeqHint::ConstReturn(v) = store[iseq].hint
+    {
+        state.def_C(dst, Immediate::bool(v.as_bool()));
+        return true;
+    }
     false
 }
 

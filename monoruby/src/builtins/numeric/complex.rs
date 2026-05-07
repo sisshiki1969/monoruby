@@ -378,12 +378,12 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         if !rhs.im().is_zero() {
             return Ok(Value::nil());
         }
-        let cmp_id = IdentId::get_id("<=>");
+        let cmp_id = IdentId::_CMP;
         return vm.invoke_method_inner(globals, cmp_id, lhs_re, &[rhs.re().get()], None, None);
     }
     match other.unpack() {
         RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {
-            let cmp_id = IdentId::get_id("<=>");
+            let cmp_id = IdentId::_CMP;
             vm.invoke_method_inner(globals, cmp_id, lhs_re, &[other], None, None)
         }
         _ => Ok(Value::nil()),
@@ -546,7 +546,7 @@ fn complex_to_real(
 
 #[monoruby_builtin]
 fn to_f(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    complex_to_real(vm, globals, lfp, IdentId::get_id("to_f"), "Float")
+    complex_to_real(vm, globals, lfp, IdentId::TO_F, "Float")
 }
 
 #[monoruby_builtin]
@@ -590,7 +590,7 @@ fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn neg_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
-    let neg_id = IdentId::get_id("-@");
+    let neg_id = IdentId::_UMINUS;
     let re = vm.invoke_method_inner(globals, neg_id, c.re().get(), &[], None, None)?;
     let im = vm.invoke_method_inner(globals, neg_id, c.im().get(), &[], None, None)?;
     let re_r = Real::try_from(globals, re)?;

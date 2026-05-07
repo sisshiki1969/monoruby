@@ -127,7 +127,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         RV::Float(f) => Ok(Value::bool(lhs.to_f() == f)),
         _ => {
             // Reverse dispatch
-            let eq_id = IdentId::get_id("==");
+            let eq_id = IdentId::_EQ;
             let result =
                 vm.invoke_method_inner(globals, eq_id, rhs, &[lfp.self_val()], None, None)?;
             Ok(Value::bool(result.as_bool()))
@@ -194,7 +194,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 Ok(Some(result)) => {
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
-                            let cmp_id = IdentId::get_id("<=>");
+                            let cmp_id = IdentId::_CMP;
                             return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
                         }
                     }
@@ -226,7 +226,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
-                    let add_id = IdentId::get_id("+");
+                    let add_id = IdentId::_ADD;
                     return vm.invoke_method_inner(globals, add_id, ary[0], &[ary[1]], None, None);
                 }
             }
@@ -257,7 +257,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
-                    let sub_id = IdentId::get_id("-");
+                    let sub_id = IdentId::_SUB;
                     return vm.invoke_method_inner(globals, sub_id, ary[0], &[ary[1]], None, None);
                 }
             }
@@ -288,7 +288,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
-                    let mul_id = IdentId::get_id("*");
+                    let mul_id = IdentId::_MUL;
                     return vm.invoke_method_inner(globals, mul_id, ary[0], &[ary[1]], None, None);
                 }
             }
@@ -321,7 +321,7 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
-                    let div_id = IdentId::get_id("/");
+                    let div_id = IdentId::_DIV;
                     return vm.invoke_method_inner(globals, div_id, ary[0], &[ary[1]], None, None);
                 }
             }
@@ -381,7 +381,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
-                    let pow_id = IdentId::get_id("**");
+                    let pow_id = IdentId::_POW;
                     return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
                 }
             }
