@@ -1,0 +1,4 @@
+[submodule "vendor/prism"]
+	path = vendor/prism
+	url = https://github.com/sisshiki1969/prism.git
+	branch = monoruby

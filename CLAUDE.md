@@ -496,8 +496,26 @@ The repository vendors several dependencies as local paths rather than crates.io
 - `hashbrown/` — local fork
 - `rust-smallvec/` — local fork with const-generics feature
 - `ruruby-parse/` — developed in tandem with monoruby
+- `vendor/prism/` — **git submodule**, branch `monoruby` of `sisshiki1969/prism`. The Rust wrapper crates `ruby-prism` and `ruby-prism-sys` are consumed as path deps from inside this submodule.
 
 When modifying these, be aware changes affect the whole workspace.
+
+### Working with the prism submodule
+
+After cloning monoruby:
+
+```sh
+git submodule update --init --recursive
+```
+
+The `ruby-prism-sys` build script (`vendor/prism/rust/ruby-prism-sys/build/vendored.rs`) invokes `bundle exec rake cargo:build` against `vendor/prism/` to regenerate `vendor/prism/rust/ruby-prism{-sys,}/vendor/prism-{ver}/` (which is `.gitignore`'d in the prism repo). Prerequisites:
+
+```sh
+# One-time, in the prism submodule
+(cd vendor/prism && bundle install)
+```
+
+The auto-populate is gated on `vendor/{src,include}` existence under each prism rust crate, so it only runs once per checkout. Wipe `vendor/prism/rust/ruby-prism-sys/vendor/` to force a fresh `rake cargo:build` after editing prism sources.
 
 ---
 

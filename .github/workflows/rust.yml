@@ -13,10 +13,20 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `vendor/prism` is a submodule; the `ruby-prism-sys` build
+          # script `bundle exec rake cargo:build`s against its source
+          # tree to regenerate `vendor/prism-{ver}/`.
+          submodules: recursive
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "4.0.1"
+          bundler-cache: false
+      - name: Install prism Gemfile deps
+        # ruby-prism-sys's build.rs invokes `bundle exec rake cargo:build`
+        # in the submodule.
+        run: bundle install --gemfile=vendor/prism/Gemfile
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
