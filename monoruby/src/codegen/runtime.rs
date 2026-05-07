@@ -322,13 +322,21 @@ fn concatenate_string_inner(
             }
             bytes.extend_from_slice(inner.as_bytes());
         } else {
-            // `invoke_tos` returns a String for everything except
-            // packed types (nil/Fixnum/Float/Symbol etc.), so this
-            // branch only sees ASCII-clean fallbacks.
-            let s = s_val.to_s(&globals.store);
-            if !s.is_empty() && enc.is_none() {
-                enc = Some(Encoding::Utf8);
-            }
+            // `invoke_tos` returns the user-defined `to_s` result
+            // verbatim for `RV::Object` receivers, so this branch is
+            // only reached when that override returned a non-String.
+            // Per CRuby, the bogus result is discarded and the
+            // default `Object#to_s` form (`#<ClassName:0xADDR>`) of
+            // the original receiver is emitted instead.
+            let s = format!(
+                "#<{}:0x{:016x}>",
+                v.get_real_class_name(&globals.store),
+                v.id()
+            );
+            enc = Some(match enc {
+                None => Encoding::Utf8,
+                Some(prev) => prev,
+            });
             bytes.extend_from_slice(s.as_bytes());
         }
     }
