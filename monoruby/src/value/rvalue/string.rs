@@ -442,12 +442,18 @@ impl RStringInner {
     pub fn dump(&self) -> String {
         if self.ty.is_utf8_compatible() {
             let mut res = String::with_capacity(self.len());
-            utf8_escape_bytes(&mut res, self.as_bytes(), utf8_escape);
+            utf8_dump_with_lookahead(&mut res, self.as_bytes());
             res
         } else {
             let mut res = String::with_capacity(self.len());
-            for c in self.as_bytes() {
-                ascii_escape(&mut res, *c);
+            let bytes = self.as_bytes();
+            for (i, c) in bytes.iter().enumerate() {
+                let next = bytes.get(i + 1).copied().unwrap_or(0);
+                if *c == b'#' && matches!(next, b'$' | b'@' | b'{') {
+                    res.push_str("\\#");
+                } else {
+                    ascii_escape(&mut res, *c);
+                }
             }
             res
         }
@@ -490,10 +496,18 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
 }
 
 fn utf8_escape(s: &mut String, ch: char) {
-    if ch as u32 <= 0xff {
+    let cp = ch as u32;
+    if cp < 0x80 {
+        // ASCII bytes are escaped per the standard `\\xNN` /
+        // named-escape rules. Letting `ascii_escape` handle this
+        // keeps `dump` and `inspect` aligned for plain ASCII.
         ascii_escape(s, ch as u8);
+    } else if cp <= 0xFFFF {
+        // BMP non-ASCII: 4-digit `\uNNNN` form.
+        s.push_str(&format!("\\u{:0>4X}", cp));
     } else {
-        s.push_str(&format!("\\u{:0>4X}", ch as u32));
+        // Supplementary planes: brace form, variable width.
+        s.push_str(&format!("\\u{{{:X}}}", cp));
     }
 }
 
@@ -529,7 +543,15 @@ fn utf8_inspect_with_next(s: &mut String, ch: char, next_ch: char, is_utf8: bool
     } else if printable::is_printable(ch) {
         s.push(ch);
     } else {
-        s.push_str(&format!("\\u{{{:X}}}", ch as u32));
+        let cp = ch as u32;
+        // CRuby prefers the 4-digit `\uNNNN` form for BMP codepoints
+        // and only falls back to `\u{N}` once the codepoint exceeds
+        // 0xFFFF (`"\u{1F600}".inspect` → `"\\u{1F600}"`).
+        if cp <= 0xFFFF {
+            s.push_str(&format!("\\u{:0>4X}", cp));
+        } else {
+            s.push_str(&format!("\\u{{{:X}}}", cp));
+        }
     }
 }
 
@@ -592,6 +614,51 @@ fn ascii_escape(s: &mut String, ch: u8) {
         }
     };
     s.push_str(str);
+}
+
+/// `String#dump` with one-character lookahead so `#` can be escaped
+/// to `\#` when the next char is `$` / `@` / `{` (CRuby keeps the
+/// dumped form parseable as a Ruby literal — those trigrams would
+/// otherwise re-trigger interpolation when parsed back).
+fn utf8_dump_with_lookahead(res: &mut String, bytes: &[u8]) {
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(valid) => {
+                let chars: Vec<char> = valid.chars().collect();
+                for (idx, &c) in chars.iter().enumerate() {
+                    let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                    utf8_dump_one(res, c, next_ch);
+                }
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid_str =
+                        unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
+                    let chars: Vec<char> = valid_str.chars().collect();
+                    for (idx, &c) in chars.iter().enumerate() {
+                        let next_ch = chars.get(idx + 1).copied().unwrap_or('\0');
+                        utf8_dump_one(res, c, next_ch);
+                    }
+                }
+                let error_len = err.error_len().unwrap_or(bytes.len() - i - valid_up_to);
+                for b in &bytes[i + valid_up_to..i + valid_up_to + error_len] {
+                    res.push_str(&format!("\\x{:0>2X}", b));
+                }
+                i += valid_up_to + error_len;
+            }
+        }
+    }
+}
+
+fn utf8_dump_one(s: &mut String, ch: char, next_ch: char) {
+    if ch == '#' && matches!(next_ch, '$' | '@' | '{') {
+        s.push_str("\\#");
+        return;
+    }
+    utf8_escape(s, ch);
 }
 
 /// Process a byte slice as UTF-8, applying `escape_fn` to valid characters

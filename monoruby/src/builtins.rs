@@ -46,7 +46,7 @@ pub use monoasm::*;
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
-pub(crate) use kernel::{object_send, send};
+pub(crate) use kernel::{object_send, parse_kernel_float, parse_kernel_integer, send};
 pub use time::TimeInner;
 
 //
@@ -115,68 +115,103 @@ impl std::ops::Add<usize> for Arg {
     }
 }
 
+/// Parse `s` as a floating-point number using CRuby's `String#to_f`
+/// rules: leading whitespace and an optional sign are allowed,
+/// underscores may sit *between* two digits (a leading `_` or `__`
+/// terminates the run), and any trailing junk is silently dropped.
+/// Returns `(value, had_trailing_junk)` so callers like
+/// `Kernel#Float` can reject the strict-mode case while `String#to_f`
+/// ignores it.
+///
+/// Internally we walk the input once, build a normalized
+/// `[+-]?DIGITS[.DIGITS][eEXP]` string with the underscores stripped,
+/// and hand the result to Rust's `f64::from_str` so the final
+/// conversion uses the same correctly-rounded path Ruby relies on.
 fn parse_f64(s: &str) -> (f64, bool) {
-    let mut f = <num::BigInt as num::Zero>::zero();
-    let mut e = 0;
-    let mut positive = true;
-    let mut iter = s.chars().skip_while(|c| c.is_ascii_whitespace()).peekable();
+    let trimmed = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let mut iter = trimmed.chars().peekable();
+    let mut buf = String::with_capacity(trimmed.len());
 
-    let c = iter.peek();
-    if c == Some(&'+') {
-        iter.next().unwrap();
-    } else if c == Some(&'-') {
-        iter.next().unwrap();
-        positive = false;
+    if let Some(&c) = iter.peek() {
+        if c == '+' || c == '-' {
+            buf.push(c);
+            iter.next();
+        }
     }
 
-    while let Some(c) = iter.peek()
-        && c.is_ascii_digit()
-    {
-        let c = iter.next().unwrap();
-        f = f * 10 + (c as u32 - '0' as u32);
+    /// Consume a digit run, tolerating `_` between two digit
+    /// characters. Returns true if at least one digit was consumed.
+    fn consume_digits(
+        iter: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        out: &mut String,
+    ) -> bool {
+        let mut any = false;
+        loop {
+            match iter.peek() {
+                Some(c) if c.is_ascii_digit() => {
+                    out.push(*c);
+                    iter.next();
+                    any = true;
+                }
+                Some(&'_') if any => {
+                    // `_` is only accepted when the previous char was
+                    // a digit *and* the next is also a digit. Peek
+                    // ahead to verify the trailing side; on failure
+                    // (e.g. `1_e10` or `1__0`) leave the `_` in place
+                    // so the outer parser stops here.
+                    let mut clone = iter.clone();
+                    clone.next();
+                    if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
+                        iter.next();
+                        continue;
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        any
     }
+
+    let any_int = consume_digits(&mut iter, &mut buf);
 
     if iter.peek() == Some(&'.') {
-        iter.next();
-        while let Some(c) = iter.peek()
-            && c.is_ascii_digit()
-        {
-            let c = iter.next().unwrap();
-            f = f * 10 + (c as u32 - '0' as u32);
-            e -= 1;
+        // Only consume the dot if a digit follows. `"1.".to_f == 1.0`
+        // but `"1.foo".to_f` stops at the integer run.
+        let mut clone = iter.clone();
+        clone.next();
+        if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
+            buf.push('.');
+            iter.next();
+            consume_digits(&mut iter, &mut buf);
         }
     }
 
-    let peek = iter.peek();
-    if peek == Some(&'e') || peek == Some(&'E') {
-        let mut sign = 1i32;
-        let mut i = 0;
-        iter.next().unwrap();
-        let c = iter.peek();
-        if c == Some(&'+') {
-            iter.next().unwrap();
-        } else if c == Some(&'-') {
-            iter.next().unwrap();
-            sign = -1;
+    if matches!(iter.peek(), Some(&'e') | Some(&'E')) {
+        let mut clone = iter.clone();
+        clone.next();
+        if matches!(clone.peek(), Some(&'+') | Some(&'-')) {
+            clone.next();
         }
-        while let Some(c) = iter.peek()
-            && c.is_ascii_digit()
-        {
-            let c = iter.next().unwrap();
-            i = i * 10 + (c as u32 - '0' as u32);
+        if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
+            buf.push('e');
+            iter.next();
+            if matches!(iter.peek(), Some(&'+') | Some(&'-')) {
+                buf.push(*iter.peek().unwrap());
+                iter.next();
+            }
+            consume_digits(&mut iter, &mut buf);
         }
-        e += (i as i32) * sign;
     }
 
-    while e > 0 {
-        f *= 10;
-        e -= 1;
-    }
-
-    let mut f = f.to_f64().unwrap();
-    if e < 0 {
-        f /= 10.0f64.powi(-e);
-    }
     let err = iter.peek().is_some();
-    if positive { (f, err) } else { (-f, err) }
+    let f = if any_int || buf.contains('.') {
+        // Strip the optional leading sign for the actual parse — Rust's
+        // `f64::from_str` accepts it but we want the all-zero short
+        // circuit to avoid `-0`-vs-`+0` weirdness on empty mantissas.
+        buf.parse::<f64>().unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    (f, err)
 }
