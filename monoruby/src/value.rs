@@ -854,8 +854,23 @@ impl Value {
         Value::object(unsafe { crate::builtins::YIELDER.unwrap().id() })
     }
 
+    /// Build a String value without scanning the bytes. The
+    /// `RStringInner`'s `cr` starts as `Unknown`; the first
+    /// operation that needs the code range lazy-classifies. Use
+    /// for runtime-constructed strings (concatenation results,
+    /// `to_s` output, etc.) where the cost of an unconditional
+    /// scan would be wasted on the many cases that never query cr.
     pub fn string(s: String) -> Self {
         RValue::new_string(s).pack()
+    }
+
+    /// Build a String value and pre-scan it so the cr is set to
+    /// SevenBit / Valid up front. Use for long-lived strings
+    /// (bytecodegen literal templates) whose cr is queried by every
+    /// `deep_copy` clone — paying the scan once at construction
+    /// avoids redoing it lazily on each clone.
+    pub fn string_scanned(s: String) -> Self {
+        RValue::new_string_scanned(s).pack()
     }
 
     pub fn string_with_class(s: &str, class_id: ClassId) -> Self {
@@ -884,7 +899,11 @@ impl Value {
     /// false and byte-level operations still work.
     ///
     pub fn string_from_source_bytes(b: &[u8]) -> Self {
-        Self::string_from_inner(RStringInner::from_encoding(b, Encoding::Utf8))
+        // Source-byte literals are bytecode-time templates that get
+        // `deep_copy`-cloned at every literal-load. Pre-classify so
+        // the cr is fixed on the template; clones inherit it for free
+        // instead of each one re-running the encoding check.
+        Self::string_from_inner(RStringInner::from_encoding_scanned(b, Encoding::Utf8))
     }
 
     pub fn string_from_vec(b: Vec<u8>) -> Self {

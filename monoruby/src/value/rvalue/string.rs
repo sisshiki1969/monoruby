@@ -630,11 +630,16 @@ fn utf8_escape_bytes(res: &mut String, bytes: &[u8], escape_fn: fn(&mut String, 
 }
 
 impl RStringInner {
-    fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding) -> Self {
+    /// Low-level constructor. Callers pass the `cr` they want to
+    /// record — either `Unknown` (defer classification to the first
+    /// query) or a value computed up front (caller has already done
+    /// the scan). Keeping `cr` explicit at this layer means every
+    /// public constructor states its scanning behaviour in one place.
+    fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding, cr: CodeRange) -> Self {
         RStringInner {
             content,
             ty,
-            cr: Cell::new(CodeRange::Unknown),
+            cr: Cell::new(cr),
         }
     }
 
@@ -789,33 +794,188 @@ impl RStringInner {
         }
     }
 
+    /// O(1): build a UTF-8 string from `&str` without scanning.
+    /// `&str` guarantees valid UTF-8 bytes, but the resulting string
+    /// starts with `cr = Unknown` — the first operation that needs
+    /// the code range (e.g. `is_ascii_only?`, `check_utf8`,
+    /// encoding compatibility) will lazy-classify. Use this for
+    /// ephemeral strings where the cr may never be queried; pay the
+    /// scan only when something needs it.
     pub fn from_str(s: &str) -> Self {
-        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8)
+        RStringInner::from(
+            SmallVec::from_slice(s.as_bytes()),
+            Encoding::Utf8,
+            CodeRange::Unknown,
+        )
     }
 
+    /// O(N): build a UTF-8 string and pre-scan it so `cr` is set to
+    /// `SevenBit` (all bytes < 0x80) or `Valid`. Use for long-lived
+    /// strings whose `cr` will be queried often or that are templates
+    /// for many `deep_copy` clones — paying the scan once up front
+    /// amortises across every later cr-needing operation.
+    pub fn from_str_scanned(s: &str) -> Self {
+        let cr = if s.is_ascii() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Valid
+        };
+        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8, cr)
+    }
+
+    /// O(1) variant of `from_str_scanned` that consumes a `String`.
+    /// See `from_str` for the distinction between scanning and lazy
+    /// variants.
     pub fn from_string(s: String) -> Self {
-        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8)
+        RStringInner::from(
+            SmallVec::from_vec(s.into_bytes()),
+            Encoding::Utf8,
+            CodeRange::Unknown,
+        )
+    }
+
+    /// O(N) variant of `from_string` that pre-scans for SevenBit.
+    pub fn from_string_scanned(s: String) -> Self {
+        let cr = if s.is_ascii() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Valid
+        };
+        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8, cr)
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
-        RStringInner::from(SmallVec::from_slice(slice), Encoding::Ascii8)
+        RStringInner::from(
+            SmallVec::from_slice(slice),
+            Encoding::Ascii8,
+            CodeRange::Unknown,
+        )
     }
 
     pub fn bytes_from_vec(vec: Vec<u8>) -> Self {
-        RStringInner::from(SmallVec::from_vec(vec), Encoding::Ascii8)
+        RStringInner::from(
+            SmallVec::from_vec(vec),
+            Encoding::Ascii8,
+            CodeRange::Unknown,
+        )
     }
 
+    /// O(1): build a string with the given encoding without
+    /// scanning. `cr = Unknown`; lazy-classify on first need.
     pub fn from_encoding(slice: &[u8], encoding: Encoding) -> Self {
-        RStringInner::from(SmallVec::from_slice(slice), encoding)
+        RStringInner::from(SmallVec::from_slice(slice), encoding, CodeRange::Unknown)
     }
 
-    pub fn string_from_vec(vec: Vec<u8>) -> Self {
-        let enc = if std::str::from_utf8(&vec).is_ok() {
-            Encoding::Utf8
+    /// O(N): build a string with the given encoding and pre-classify
+    /// `cr` via `Encoding::classify`. Useful for source-byte
+    /// literals (`"\xFF"`) and other long-lived inputs where the
+    /// classification will outlive many clones.
+    pub fn from_encoding_scanned(slice: &[u8], encoding: Encoding) -> Self {
+        RStringInner::from(
+            SmallVec::from_slice(slice),
+            encoding,
+            encoding.classify(slice),
+        )
+    }
+
+    /// Build a substring of `parent` covering the byte range
+    /// `start..end`, inheriting the parent's encoding and propagating
+    /// the cached code range when the parent's classification implies
+    /// the child's. Avoids the O(N) re-classification that
+    /// `String#match` and friends would otherwise pay on every
+    /// byteslice of an already-classified haystack.
+    pub fn from_substring(parent: &RStringInner, start: usize, end: usize) -> Self {
+        RStringInner::from(
+            SmallVec::from_slice(&parent.content[start..end]),
+            parent.encoding(),
+            Self::propagated_cr(parent, start, end),
+        )
+    }
+
+    /// Determine the child code range for a `start..end` byte-range
+    /// view of `parent`. Returns `Unknown` when the parent's state
+    /// doesn't imply the child's (e.g. UTF-8 + Valid where the cut
+    /// could land in the middle of a multi-byte sequence, or
+    /// encodings without a native decoder).
+    fn propagated_cr(parent: &RStringInner, start: usize, end: usize) -> CodeRange {
+        // Empty slice: trivially SevenBit (matches `classify` for
+        // every encoding).
+        if start == end {
+            return CodeRange::SevenBit;
+        }
+        match parent.code_range() {
+            // SevenBit: every byte is < 0x80, so any byte-range view
+            // is still SevenBit, regardless of encoding or character
+            // boundaries.
+            CodeRange::SevenBit => CodeRange::SevenBit,
+            CodeRange::Valid => match parent.encoding() {
+                // Single-byte encodings: every byte position is a
+                // character boundary; Valid trivially propagates.
+                Encoding::Ascii8 | Encoding::Iso8859(_) => CodeRange::Valid,
+                // UTF-8: the cut points must land on character
+                // boundaries (a non-continuation byte or one-past-the-
+                // end). When both endpoints align, the byte sequence
+                // between them is still valid UTF-8.
+                Encoding::Utf8 => {
+                    if Self::is_utf8_char_boundary(parent, start)
+                        && Self::is_utf8_char_boundary(parent, end)
+                    {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                // UTF-16/UTF-32: code-unit width is fixed at 2/4
+                // bytes. A byte slice that starts and ends on a code-
+                // unit boundary is still well-formed under the same
+                // "byte count parity" rule that `classify` uses.
+                Encoding::Utf16Le | Encoding::Utf16Be => {
+                    if start % 2 == 0 && end % 2 == 0 {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                Encoding::Utf32Le | Encoding::Utf32Be => {
+                    if start % 4 == 0 && end % 4 == 0 {
+                        CodeRange::Valid
+                    } else {
+                        CodeRange::Unknown
+                    }
+                }
+                // No native multibyte decoder; defer to lazy
+                // re-classify on first use.
+                Encoding::UsAscii | Encoding::EucJp | Encoding::Sjis(_) => CodeRange::Unknown,
+            },
+            // Broken parents are never safe to propagate — a sub-
+            // range could be Valid (if the broken bytes are outside
+            // it) or still Broken.
+            CodeRange::Broken | CodeRange::Unknown => CodeRange::Unknown,
+        }
+    }
+
+    /// Whether byte index `i` is a UTF-8 character boundary. `0` and
+    /// `content.len()` are always boundaries; otherwise the byte at
+    /// `i` must not be a continuation byte (top two bits != `10`).
+    fn is_utf8_char_boundary(parent: &RStringInner, i: usize) -> bool {
+        i == 0 || i == parent.content.len() || (parent.content[i] & 0xC0) != 0x80
+    }
+
+    /// O(N): build a string from arbitrary bytes with auto-detected
+    /// encoding (UTF-8 if valid, else ASCII-8BIT) and pre-classified
+    /// `cr`. Always scans — encoding detection requires walking the
+    /// bytes, so we fold the SevenBit/Valid classification into the
+    /// same pass.
+    pub fn from_vec_scanned(vec: Vec<u8>) -> Self {
+        let (enc, cr) = if vec.iter().all(|&b| b < 0x80) {
+            (Encoding::Utf8, CodeRange::SevenBit)
+        } else if std::str::from_utf8(&vec).is_ok() {
+            (Encoding::Utf8, CodeRange::Valid)
         } else {
-            Encoding::Ascii8
+            // Ascii8 — every byte is "valid" under the binary tag.
+            (Encoding::Ascii8, CodeRange::Valid)
         };
-        RStringInner::from(SmallVec::from_vec(vec), enc)
+        RStringInner::from(SmallVec::from_vec(vec), enc, cr)
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -1031,9 +1191,16 @@ impl RStringInner {
     }
 
     pub fn repeat(&self, len: usize) -> RStringInner {
-        let ty = self.ty;
-        let vec = self.content.repeat(len);
-        RStringInner::from(SmallVec::from_vec(vec), ty)
+        // Repetition of a classified buffer trivially preserves cr:
+        // SevenBit/Valid stay so under concatenation of identical
+        // valid runs, and Broken stays Broken. The empty case
+        // (`len == 0`) collapses to SevenBit, matching `classify(b"")`.
+        let cr = if len == 0 {
+            CodeRange::SevenBit
+        } else {
+            self.cr.get()
+        };
+        RStringInner::from(SmallVec::from_vec(self.content.repeat(len)), self.ty, cr)
     }
 
     /// Replace byte range `start..start+len` with `replacement` bytes.
@@ -1324,6 +1491,297 @@ mod encoding_tests {
         assert_eq!(s.code_range(), CodeRange::Broken);
     }
 
+    #[test]
+    fn from_str_does_not_scan_until_queried() {
+        // The no-scan constructor should leave cr at Unknown so
+        // ephemeral strings that never need cr pay nothing. Once
+        // queried, lazy classify computes and caches.
+        let s = RStringInner::from_str("abc");
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+
+        let s = RStringInner::from_str("あいう");
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::Valid);
+    }
+
+    #[test]
+    fn from_str_scanned_sets_cr_eagerly() {
+        // The scanning constructor records cr at construction time
+        // so subsequent queries are O(1) and `deep_copy` clones
+        // inherit the classification without rescanning.
+        let s = RStringInner::from_str_scanned("abc");
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+
+        let s = RStringInner::from_str_scanned("あいう");
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+
+        // Empty -> classify returns SevenBit; eager constructor
+        // mirrors that.
+        let s = RStringInner::from_str_scanned("");
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+    }
+
+    #[test]
+    fn from_string_does_not_scan_until_queried() {
+        let s = RStringInner::from_string("abc".to_string());
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+    }
+
+    #[test]
+    fn from_string_scanned_sets_cr_eagerly() {
+        let s = RStringInner::from_string_scanned("abc".to_string());
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+
+        let s = RStringInner::from_string_scanned("カナ".to_string());
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+    }
+
+    #[test]
+    fn from_encoding_does_not_scan_until_queried() {
+        let s = RStringInner::from_encoding(b"abc", Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+    }
+
+    #[test]
+    fn from_encoding_scanned_sets_cr_eagerly() {
+        // Source-byte literal that's all ASCII -> SevenBit.
+        let s = RStringInner::from_encoding_scanned(b"abc", Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+
+        // Source-byte literal with valid UTF-8 multi-byte content.
+        let s = RStringInner::from_encoding_scanned("é".as_bytes(), Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+
+        // Source-byte literal with broken UTF-8 (e.g. `"\xff"`).
+        let s = RStringInner::from_encoding_scanned(b"\xff", Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::Broken);
+
+        // Ascii8 + high bytes: trivially Valid (no cut into char
+        // sequences).
+        let s = RStringInner::from_encoding_scanned(b"\xff\xfe", Encoding::Ascii8);
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+    }
+
+    #[test]
+    fn propagated_cr_empty_range_is_seven_bit() {
+        // Any empty byte range matches the way `Encoding::classify`
+        // treats `b""` — SevenBit by definition, regardless of the
+        // parent's encoding or cr.
+        let parent = RStringInner::from_encoding(b"\xff", Encoding::Ascii8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 0),
+            CodeRange::SevenBit
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 1),
+            CodeRange::SevenBit
+        );
+    }
+
+    #[test]
+    fn propagated_cr_valid_single_byte_encodings_propagate_unconditionally() {
+        // ASCII-8BIT: every byte position is a character boundary, so
+        // a Valid parent always yields a Valid child for any non-empty
+        // sub-range.
+        let parent = RStringInner::from_encoding(&[0xff, 0x80, 0x81], Encoding::Ascii8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 3),
+            CodeRange::Valid
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 2),
+            CodeRange::Valid
+        );
+
+        // ISO-8859-1: same — every byte represents a glyph, so any
+        // cut respects character boundaries.
+        let parent = RStringInner::from_encoding(&[0xc3, 0xa9, 0xfe], Encoding::Iso8859(1));
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 3),
+            CodeRange::Valid
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 3),
+            CodeRange::Valid
+        );
+    }
+
+    #[test]
+    fn propagated_cr_valid_utf8_only_propagates_on_char_boundaries() {
+        // "abcあdef" — 9 bytes; the あ scalar occupies offsets 3..6
+        // (E3 81 82). Cuts that land on offsets 0/3/6/9 are character
+        // boundaries; offsets 4/5/7/8 land on continuation bytes and
+        // must NOT inherit Valid.
+        let parent = RStringInner::from_encoding("abcあdef".as_bytes(), Encoding::Utf8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+
+        for &(start, end) in &[(0, 3), (0, 6), (3, 6), (6, 9), (3, 9), (0, 9)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Valid,
+                "{start}..{end} should propagate Valid"
+            );
+        }
+
+        for &(start, end) in &[(0, 4), (0, 5), (3, 5), (4, 6), (4, 9), (5, 9)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Unknown,
+                "{start}..{end} crosses a UTF-8 continuation byte"
+            );
+        }
+    }
+
+    #[test]
+    fn propagated_cr_valid_utf16_requires_even_byte_endpoints() {
+        // "abc" encoded as UTF-16LE: 6 bytes, code-unit width 2.
+        let parent = RStringInner::from_encoding(
+            &[0x61, 0x00, 0x62, 0x00, 0x63, 0x00],
+            Encoding::Utf16Le,
+        );
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+
+        for &(start, end) in &[(0, 2), (0, 4), (0, 6), (2, 6), (4, 6)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Valid,
+                "{start}..{end} should propagate Valid"
+            );
+        }
+
+        for &(start, end) in &[(0, 1), (0, 3), (0, 5), (1, 4), (3, 6)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Unknown,
+                "{start}..{end} would split a UTF-16 code unit"
+            );
+        }
+
+        // BE side: same parity rule.
+        let parent = RStringInner::from_encoding(&[0x00, 0x61, 0x00, 0x62], Encoding::Utf16Be);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 4),
+            CodeRange::Valid
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 4),
+            CodeRange::Unknown
+        );
+    }
+
+    #[test]
+    fn propagated_cr_valid_utf32_requires_endpoints_aligned_to_four() {
+        // "ab" encoded as UTF-32LE: 8 bytes, code-unit width 4.
+        let parent = RStringInner::from_encoding(
+            &[0x61, 0x00, 0x00, 0x00, 0x62, 0x00, 0x00, 0x00],
+            Encoding::Utf32Le,
+        );
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+
+        for &(start, end) in &[(0, 4), (0, 8), (4, 8)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Valid
+            );
+        }
+
+        for &(start, end) in &[(0, 2), (0, 5), (1, 4), (2, 8)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::Unknown
+            );
+        }
+    }
+
+    #[test]
+    fn propagated_cr_valid_no_native_decoder_falls_back_to_unknown() {
+        // EUC-JP / Shift_JIS: variable-width but monoruby has no
+        // native decoder, so we can't tell whether `start`/`end`
+        // land on a character boundary. The conservative choice is
+        // Unknown so the next operation lazy-classifies.
+        let parent = RStringInner::from_encoding(&[0xc6, 0xfc, 0xcb, 0xdc], Encoding::EucJp);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 2),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 4),
+            CodeRange::Unknown
+        );
+
+        let parent = RStringInner::from_encoding(&[0x82, 0xa0, 0x82, 0xa2], Encoding::Sjis(0));
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 1),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 4),
+            CodeRange::Unknown
+        );
+    }
+
+    #[test]
+    fn propagated_cr_broken_or_unknown_parent_never_propagates() {
+        // A Broken parent could have either Broken or Valid sub-
+        // ranges depending on which bytes the slice covers, so we
+        // don't propagate.
+        let parent = RStringInner::from_encoding(&[0x61, 0xff, 0x62], Encoding::Utf8);
+        assert_eq!(parent.code_range(), CodeRange::Broken);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 1),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 3),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 2, 3),
+            CodeRange::Unknown
+        );
+    }
+
+    #[test]
+    fn from_vec_scanned_classifies_eagerly() {
+        // All-ASCII bytes: tagged UTF-8 and pre-classified as
+        // SevenBit, skipping the `from_utf8` rerun the lazy path
+        // would do on first use.
+        let s = RStringInner::from_vec_scanned(b"abc".to_vec());
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+
+        // Non-ASCII but valid UTF-8: tagged UTF-8 and pre-classified
+        // Valid (the from_utf8 check landed on Ok).
+        let s = RStringInner::from_vec_scanned("あいう".as_bytes().to_vec());
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.code_range(), CodeRange::Valid);
+
+        // Two-byte UTF-8 scalar: still Valid + UTF-8.
+        let s = RStringInner::from_vec_scanned("é".as_bytes().to_vec());
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.code_range(), CodeRange::Valid);
+
+        // Invalid UTF-8 falls back to ASCII-8BIT, which classifies
+        // every non-empty byte sequence as Valid.
+        let s = RStringInner::from_vec_scanned(vec![0xff, 0xfe, 0x80]);
+        assert_eq!(s.encoding(), Encoding::Ascii8);
+        assert_eq!(s.code_range(), CodeRange::Valid);
+
+        // Empty input: SevenBit by definition under any encoding.
+        let s = RStringInner::from_vec_scanned(vec![]);
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+    }
 
     #[test]
     fn encoding_compatible_same_encoding() {

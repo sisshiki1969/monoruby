@@ -3083,9 +3083,8 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 enc,
             )));
         }
-        Ok(Value::string_from_inner(RStringInner::from_encoding(
-            &s[start..end],
-            enc,
+        Ok(Value::string_from_inner(RStringInner::from_substring(
+            s, start, end,
         )))
     } else {
         let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
@@ -3111,16 +3110,16 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 None => return Ok(Value::nil()),
             };
             let end = (start + len as usize).min(byte_len);
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &s[start..end],
-                enc,
+            Ok(Value::string_from_inner(RStringInner::from_substring(
+                s, start, end,
             )))
         } else {
             // byteslice(nth)
             match conv_byte_index(i) {
-                Some(idx) => Ok(Value::string_from_inner(RStringInner::from_encoding(
-                    &s[idx..idx + 1],
-                    enc,
+                Some(idx) => Ok(Value::string_from_inner(RStringInner::from_substring(
+                    s,
+                    idx,
+                    idx + 1,
                 ))),
                 None => Ok(Value::nil()),
             }
