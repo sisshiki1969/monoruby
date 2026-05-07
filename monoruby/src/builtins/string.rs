@@ -9018,4 +9018,25 @@ mod tests {
             r##"begin; (+"abc").encode!("UTF-8", xml: :other); rescue ArgumentError => e; "raised"; end"##,
         ]);
     }
+
+    #[test]
+    fn string_interpolation_preserves_invalid_utf8_bytes() {
+        // String interpolation `#{...}` must copy operand bytes
+        // verbatim rather than route them through
+        // `String::from_utf8_lossy`, which would silently rewrite
+        // invalid UTF-8 sequences as U+FFFD.
+        run_tests(&[
+            // Single broken byte appended.
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc#{x81}").bytes"##,
+            // Broken byte sandwiched between valid prefixes.
+            r##"x80 = [0x80].pack("C").force_encoding("utf-8"); ("a#{x80}b").bytes"##,
+            // Empty operand still works.
+            r##"empty = "".dup.force_encoding("ASCII-8BIT"); ("abc#{empty}").bytes"##,
+            // Valid multibyte UTF-8 operand.
+            r##"jp = "あ"; ("hi#{jp}").bytes"##,
+            // The result keeps the operand encoding when only one
+            // string operand is non-empty.
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("#{x81}").encoding.name"##,
+        ]);
+    }
 }

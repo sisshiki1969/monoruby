@@ -1389,6 +1389,14 @@ impl Executor {
 
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
         match receiver.unpack() {
+            // String operands round-trip via `to_s` to themselves
+            // (or to whatever the user-overridden `to_s` returns),
+            // so the receiver is the answer. Going through
+            // `to_s(&globals.store)` would route through
+            // `from_utf8_lossy` and corrupt invalid byte sequences
+            // (relevant to interpolation: `"abc#{x}"` for an `x`
+            // tagged UTF-8 with broken bytes).
+            RV::String(_) => return Ok(receiver),
             RV::Object(_) => {}
             _ => return Ok(Value::string(receiver.to_s(&globals.store))),
         }
