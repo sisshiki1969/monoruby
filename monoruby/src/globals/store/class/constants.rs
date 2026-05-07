@@ -281,23 +281,141 @@ impl ClassInfoTable {
         // intentionally do *not* re-emit here.
         let _prev = self[class_id].constants.insert(name, new_state);
         if let Some(klass) = val.is_class_or_module() {
-            if self[klass.id()].get_name().is_none() {
-                self[klass.id()].set_parent(class_id);
-                // Store the leaf name only; `get_parents` walks the parent
-                // chain at lookup time and joins the segments. Anonymous
-                // ancestors are rendered using their inspect form during the
-                // walk (see `get_parents`).
-                self[klass.id()].set_name(name.to_string());
-                // The new module is permanently named only if its parent
-                // is itself permanent (so the full chain back to a
-                // top-level constant is reachable). Otherwise the leaf
-                // name is "borrowed" through an anonymous ancestor and
-                // CRuby still allows `set_temporary_name` on it.
-                let parent_permanent =
-                    class_id == OBJECT_CLASS || self[class_id].is_name_permanent();
-                self[klass.id()].set_name_permanent(parent_permanent);
+            // The new owner is "permanent" iff its parent's chain is
+            // already reachable from a top-level constant. `Object`
+            // counts as permanent at the root.
+            let parent_permanent =
+                class_id == OBJECT_CLASS || self[class_id].is_name_permanent();
+            let target = klass.id();
+            let target_was_anon = self[target].get_name().is_none();
+            let target_was_non_permanent = !self[target].is_name_permanent();
+            if target_was_anon {
+                // First-time naming: install the leaf name and parent.
+                self[target].set_parent(class_id);
+                // Store the leaf name only; `get_parents` walks the
+                // parent chain at lookup time and joins the segments.
+                // Anonymous ancestors are rendered using their inspect
+                // form during the walk (see `get_parents`).
+                self[target].set_name(name.to_string());
+                self[target].set_name_permanent(parent_permanent);
+            } else if target_was_non_permanent && parent_permanent {
+                // Promotion: an existing non-permanent name (anonymous
+                // parent or `set_temporary_name`) gets replaced when
+                // the module is bound under a permanent parent.
+                // Discard any explicit-temporary marker so future
+                // `Module#name` calls render the parent chain. Mirrors
+                // CRuby's `rb_set_class_path` re-binding behaviour.
+                self[target].set_parent(class_id);
+                self[target].set_name(name.to_string());
+                self[target].set_name_permanent(true);
+            }
+            // Whenever the target's permanence may have flipped, walk
+            // its descendants and promote any of *their* non-permanent
+            // names too — `module m::N; end; M = m` must promote both
+            // `m` and `m::N`.
+            if self[target].is_name_permanent() {
+                self.propagate_permanent_name(target);
             }
         }
+    }
+
+    /// Walk the (parent, child) graph rooted at `root` and promote any
+    /// descendant whose own name was non-permanent up to permanent,
+    /// clearing the `name_explicit_temporary` flag in the process. The
+    /// descendants' leaf names are kept as-is — only the rendered
+    /// fully-qualified path changes (recomputed lazily via
+    /// `get_parents`).
+    fn propagate_permanent_name(&mut self, root: ClassId) {
+        // Collect descendants iteratively. Walking the full class
+        // table is acceptable because re-binding is rare; this avoids
+        // maintaining a child-list per `ClassInfo`.
+        let mut stack = vec![root];
+        let mut to_promote: Vec<(ClassId, ClassId)> = Vec::new();
+        while let Some(parent) = stack.pop() {
+            // The class table is `ClassId`-indexed, so `table[idx]`
+            // corresponds to `ClassId(idx)`; index 0 is unused
+            // (`ClassId` is `NonZeroU32`).
+            for idx in 1..self.classinfo_len() {
+                let id = ClassId::new(idx as u32);
+                if id == root {
+                    continue;
+                }
+                if self[id].parent_id() != Some(parent) {
+                    continue;
+                }
+                if self[id].get_name().is_none() {
+                    // No own name — nothing to promote, and it can't
+                    // have permanent named descendants either (a
+                    // permanent name is propagated through named
+                    // ancestors only).
+                    continue;
+                }
+                if !self[id].is_name_permanent() {
+                    to_promote.push((id, parent));
+                }
+                stack.push(id);
+            }
+        }
+        for (id, parent) in to_promote {
+            // If `set_temporary_name` had overridden the leaf, find
+            // the original constant-bound leaf name on the parent and
+            // restore it. Otherwise keep the existing leaf — it's
+            // already the constant-bound one.
+            if self[id].is_name_explicit_temporary()
+                && let Some(original) = self.find_constant_binding(parent, id)
+            {
+                self[id].set_name(original.get_name().to_string());
+            }
+            self[id].set_name_permanent(true);
+            // Drop the explicit-temporary flag too, otherwise
+            // `get_class_name` would still short-circuit to the bare
+            // leaf and skip the parent-chain rendering.
+            self[id].clear_explicit_temporary();
+            self[id].invalidate_cached_name_value();
+        }
+        // Also invalidate the root's cached name Value: it may have
+        // been previously rendered as anonymous.
+        self[root].invalidate_cached_name_value();
+    }
+
+    /// Drop the cached frozen-`String` returned by `Module#name` for
+    /// every descendant of `root` whose lexical chain runs through
+    /// `root`. Used when the qualified rendering may change without
+    /// the descendant's own leaf having been rewritten — e.g. after
+    /// `set_temporary_name` on `root`.
+    pub(crate) fn invalidate_descendant_name_caches(&mut self, root: ClassId) {
+        let mut stack = vec![root];
+        while let Some(parent) = stack.pop() {
+            for idx in 1..self.classinfo_len() {
+                let id = ClassId::new(idx as u32);
+                if id == root {
+                    continue;
+                }
+                if self[id].parent_id() != Some(parent) {
+                    continue;
+                }
+                self[id].invalidate_cached_name_value();
+                stack.push(id);
+            }
+        }
+        self[root].invalidate_cached_name_value();
+    }
+
+    /// Walk `parent`'s constant table looking for an entry whose
+    /// loaded value is the class/module `child`. Returns the binding
+    /// `IdentId` if found, used by `propagate_permanent_name` to
+    /// restore the constant-bound leaf name when a temporary is
+    /// overridden.
+    fn find_constant_binding(&self, parent: ClassId, child: ClassId) -> Option<IdentId> {
+        for (name, state) in self[parent].constants.iter() {
+            if let ConstStateKind::Loaded(v) = state.kind
+                && let Some(m) = v.is_class_or_module()
+                && m.id() == child
+            {
+                return Some(*name);
+            }
+        }
+        None
     }
 }
 

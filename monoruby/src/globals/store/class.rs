@@ -413,6 +413,13 @@ impl ClassInfo {
         self.parent = Some(parent);
     }
 
+    /// Lexical parent (`Outer` in `Outer::Inner`), if any. Used by
+    /// the descendant-walk in `propagate_permanent_name` and by
+    /// `get_parents` to assemble a fully-qualified name.
+    pub(crate) fn parent_id(&self) -> Option<ClassId> {
+        self.parent
+    }
+
     pub(crate) fn set_name(&mut self, name: String) {
         self.name = Some(name);
         // Invalidate any cached frozen name Value so the next call to
@@ -450,6 +457,23 @@ impl ClassInfo {
 
     pub(crate) fn set_name_permanent(&mut self, permanent: bool) {
         self.name_permanent = permanent;
+    }
+
+    /// Drop the "set via `Module#set_temporary_name`" marker. Used
+    /// when an enclosing anonymous ancestor gets a permanent name and
+    /// thereby promotes this descendant: the previously-explicit
+    /// temporary leaf must yield to the qualified parent-chain
+    /// rendering.
+    pub(crate) fn clear_explicit_temporary(&mut self) {
+        self.name_explicit_temporary = false;
+    }
+
+    /// Force `Module#name` to recompute its frozen-string return next
+    /// time it's called, instead of returning the cached value. Needed
+    /// when something external to `set_name` mutates the rendered
+    /// path — e.g. when a parent's permanence flips.
+    pub(crate) fn invalidate_cached_name_value(&mut self) {
+        self.name_value = None;
     }
 
     pub(crate) fn get_name(&self) -> Option<&str> {
