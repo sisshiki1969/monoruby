@@ -2609,6 +2609,10 @@ fn set_temporary_name(
         }
         globals.store[class_id].set_temporary_name(name);
     }
+    // The receiver's leaf changed; any descendant that renders its
+    // own `Module#name` through us has a stale frozen-string cache.
+    // Invalidate so the next call rebuilds with the new chain.
+    globals.store.invalidate_descendant_name_caches(class_id);
     Ok(lfp.self_val())
 }
 
@@ -5811,6 +5815,104 @@ mod tests {
             end
             captured.empty?
             "##,
+        );
+    }
+
+    #[test]
+    fn name_constant_rebind_promotes_existing_named_module() {
+        // `m::N` was created with `module m::N; end`, so it already has
+        // a leaf name "N" but with an anonymous parent. Binding it to
+        // a permanent constant must replace the anon parent with the
+        // new owner, so `Module#name` renders the full path.
+        run_test(
+            r#"
+            module ModuleSpecs2; module Anonymous2; end; end
+            m = Module.new
+            module m::N; end
+            ModuleSpecs2::Anonymous2::WasAnnon2 = m::N
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn name_anonymous_parent_promotion_propagates_to_descendant() {
+        // Promoting `m` to a permanent constant should also flip its
+        // descendant `m::N` to permanent — the qualified rendering
+        // walks through `m`'s new permanent name.
+        run_test(
+            r#"
+            module ModuleSpecs3; end
+            m = Module.new
+            module m::N; end
+            ModuleSpecs3::Mod3 = m
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn name_promotion_discards_temporary_on_descendant() {
+        // A descendant that explicitly chose a temporary name (via
+        // `set_temporary_name`) gets the constant-bound leaf restored
+        // when an ancestor is promoted to permanent.
+        run_test(
+            r#"
+            module ModuleSpecs4; end
+            m = Module.new
+            module m::N; end
+            m::N.set_temporary_name("fake")
+            ModuleSpecs4::Mod4 = m
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_propagates_to_nested_module_render() {
+        // When the receiver's leaf name changes via
+        // `set_temporary_name`, descendants' cached qualified names
+        // must be invalidated so the next call rebuilds with the new
+        // leaf.
+        run_test(
+            r#"
+            m = Module.new
+            m::N = Module.new
+            m::N.name # warm the cache with the anon-parent rendering
+            m.set_temporary_name "m"
+            m::N.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn name_promotion_does_not_replace_already_permanent() {
+        // Once a module has a permanent constant binding, a *second*
+        // binding under a different parent must not silently move it.
+        run_test(
+            r#"
+            module ModuleSpecsP1; end
+            module ModuleSpecsP2; end
+            module ModuleSpecsP1::Inner; end
+            ModuleSpecsP2::Alias = ModuleSpecsP1::Inner
+            ModuleSpecsP1::Inner.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_on_descendant_after_promotion_is_rejected() {
+        // After `M = m` promotes m::N, calling `set_temporary_name`
+        // on m::N must raise `RuntimeError("can't change permanent
+        // name")` — the promotion really did make it permanent.
+        run_test_error(
+            r#"
+            module ModuleSpecs5; end
+            m = Module.new
+            module m::N; end
+            ModuleSpecs5::Mod5 = m
+            m::N.set_temporary_name("nope")
+            "#,
         );
     }
 }

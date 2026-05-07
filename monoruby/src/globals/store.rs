@@ -988,6 +988,14 @@ impl ClassInfoTable {
         }
     }
 
+    /// Number of slots in the class table, including the unused
+    /// `ClassId(0)` slot at index 0. Used by sweep-style operations
+    /// that need to iterate every live class (e.g. propagating a
+    /// rebind across descendants for `Module#name`).
+    pub(crate) fn classinfo_len(&self) -> usize {
+        self.table.len()
+    }
+
     fn add_class(&mut self) -> ClassId {
         let id = self.table.len();
         self.table.push(ClassInfo::new());
