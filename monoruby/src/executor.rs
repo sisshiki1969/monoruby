@@ -482,6 +482,18 @@ impl Executor {
             .push(Cref::new(class_id, false, Visibility::Public));
     }
 
+    /// Runtime-only push used by `class_eval` / `module_eval` /
+    /// `class_exec` (block forms). The pushed cref drives `def`'s
+    /// default definee but is **not** a real lexical scope, so
+    /// `module Foo; end` / `X = ...` inside the block fall through
+    /// to the iseq's captured lexical context.
+    pub(crate) fn push_runtime_class_context(&mut self, class_id: ClassId) {
+        self.lexical_class
+            .last_mut()
+            .unwrap()
+            .push(Cref::new_runtime(class_id, Visibility::Public));
+    }
+
     pub(crate) fn push_instance_eval_context(&mut self, receiver: Value) {
         self.lexical_class
             .last_mut()
@@ -521,6 +533,35 @@ impl Executor {
                 DefinitionContext::Receiver(val) => val.class(),
             })
             .unwrap_or(OBJECT_CLASS)
+    }
+
+    /// Lexical parent for `module Foo; end` / `class Foo; end` /
+    /// `X = ...`. Walks the runtime cref stack (top-down) and returns
+    /// the first entry tagged as a lexical push — i.e. one introduced
+    /// by the `class`/`module` keyword or a `Kernel#load` wrap, but
+    /// **not** one introduced by `class_exec` / `module_eval` /
+    /// `instance_exec` (those push only to drive `def`'s default
+    /// definee). If no lexical entry is on the stack, falls back to
+    /// the current iseq's captured lexical context — the block-form
+    /// case where the runtime push doesn't reflect a lexical change.
+    pub(crate) fn lexical_context_class_id(&self, globals: &Globals) -> ClassId {
+        // Walk only the *current* require/load frame (`lexical_class`
+        // is a `Vec<Vec<Cref>>`; each outer entry is one require
+        // boundary, each inner one a class/module/eval push). We must
+        // not descend into the enclosing require's frame because that
+        // would leak the requirer's lexical scope into the loaded
+        // file.
+        if let Some(crefs) = self.lexical_class.last() {
+            for cref in crefs.iter().rev() {
+                if cref.is_lexical
+                    && let DefinitionContext::Class(class_id) = cref.context
+                {
+                    return class_id;
+                }
+            }
+        }
+        self.definition_func_id(globals)
+            .lexical_class(&globals.store)
     }
 
     /// Returns the lexical class nesting at the current point of execution,
@@ -1406,7 +1447,10 @@ impl Executor {
         bh: BlockHandler,
     ) -> Result<Value> {
         let data = self.get_block_data(globals, bh)?;
-        self.push_class_context(module.id());
+        // module_eval { ... }: runtime-only push so that an enclosed
+        // `def` lands on the receiver, but `module Foo; end` /
+        // `X = ...` use the block's captured lexical scope.
+        self.push_runtime_class_context(module.id());
         let res = self.invoke_block_with_self(globals, &data, module.get(), &[module.get()]);
         self.pop_class_context();
         res
@@ -1723,7 +1767,15 @@ impl Executor {
     ) -> Result<Value> {
         let parent = match base {
             Some(base) => base.expect_class_or_module(&globals.store)?.id(),
-            None => self.context_class_id(),
+            // Use the lexical parent, not the runtime class-context
+            // stack. The two diverge inside `class_eval` /
+            // `module_eval` / `class_exec` / `instance_exec` blocks:
+            // the runtime stack is pushed to the receiver (so that an
+            // enclosed `def` lands on the receiver), but `module Foo;
+            // end` / `class Foo; end` inside such a block must use
+            // the block's captured lexical scope. CRuby's
+            // `rb_vm_get_cref` / `rb_const_set` does the same.
+            None => self.lexical_context_class_id(globals),
         };
         // Capture the call-site location *before* we create / look up
         // the class so we can attach it to the constant if this is the
@@ -2107,6 +2159,13 @@ struct Cref {
     pub(crate) context: DefinitionContext,
     pub(crate) module_function: bool,
     pub(crate) visibility: Visibility,
+    /// True when this cref was introduced by a `class`/`module`
+    /// keyword (or `Kernel#load(path, true)` wrap) — i.e. when it
+    /// represents a real lexical scope, not just a runtime override
+    /// for `def`'s default definee. `class_eval` / `module_eval` /
+    /// `class_exec` / `instance_eval` / `instance_exec` push with
+    /// `is_lexical = false`.
+    pub(crate) is_lexical: bool,
 }
 
 impl Cref {
@@ -2115,6 +2174,16 @@ impl Cref {
             context: DefinitionContext::Class(class_id),
             module_function,
             visibility,
+            is_lexical: true,
+        }
+    }
+
+    fn new_runtime(class_id: ClassId, visibility: Visibility) -> Self {
+        Self {
+            context: DefinitionContext::Class(class_id),
+            module_function: false,
+            visibility,
+            is_lexical: false,
         }
     }
 
@@ -2123,6 +2192,7 @@ impl Cref {
             context: DefinitionContext::Receiver(receiver),
             module_function: false,
             visibility,
+            is_lexical: false,
         }
     }
 }

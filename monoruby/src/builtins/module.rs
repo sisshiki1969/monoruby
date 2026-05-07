@@ -771,7 +771,12 @@ fn class_eval(
 
         let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()), lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
-        vm.push_class_context(module.id());
+        // class_eval "..." string form: runtime-only push, just like
+        // the block form. The compiled eval body itself receives the
+        // module as its lexical context via `compile_script_eval`'s
+        // 4th argument, so `module Foo; end` / `X = ...` inside the
+        // string still see `module` as the lexical owner.
+        vm.push_runtime_class_context(module.id());
         let res = vm.invoke_block_with_self(globals, &proc, module.get(), &[]);
         vm.pop_class_context();
         res
@@ -802,7 +807,10 @@ fn class_exec(
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
     let args = lfp.arg(0).as_array();
-    vm.push_class_context(module.id());
+    // class_exec(&block) is a runtime-only push: `def` inside lands
+    // on the receiver, but `module Foo; end` / `X = ...` use the
+    // block's captured lexical scope (matches CRuby).
+    vm.push_runtime_class_context(module.id());
     let res = vm.invoke_block_with_self(globals, &data, module.get(), &args);
     vm.pop_class_context();
     res
@@ -5912,6 +5920,91 @@ mod tests {
             module m::N; end
             ModuleSpecs5::Mod5 = m
             m::N.set_temporary_name("nope")
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_exec_module_def_uses_lexical_scope() {
+        // CRuby: `module Inner` inside `A.class_exec { ... }` creates
+        // toplevel `::Inner`, NOT `A::Inner`, because `class_exec`
+        // changes only the receiver (for `def`), not the lexical
+        // scope.
+        run_test(
+            r#"
+            class ClassExecLexA; end
+            ClassExecLexA.class_exec {
+              module ClassExecLexInner; end
+            }
+            [
+              Object.constants.include?(:ClassExecLexInner),
+              ClassExecLexA.constants.include?(:ClassExecLexInner),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_eval_block_module_def_uses_lexical_scope() {
+        // Same rule for `module_eval(&block)` — the block-form's body
+        // doesn't change lexical scope for `module Foo; end`.
+        run_test(
+            r#"
+            class ModEvalBlockA; end
+            ModEvalBlockA.module_eval {
+              module ModEvalBlockInner; end
+            }
+            [
+              Object.constants.include?(:ModEvalBlockInner),
+              ModEvalBlockA.constants.include?(:ModEvalBlockInner),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn instance_exec_module_def_uses_lexical_scope() {
+        run_test(
+            r#"
+            class InstanceExecA; end
+            InstanceExecA.new.instance_exec {
+              module InstanceExecInner; end
+            }
+            [
+              Object.constants.include?(:InstanceExecInner),
+              InstanceExecA.constants.include?(:InstanceExecInner),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_keyword_still_pushes_lexical_scope() {
+        // Negative control: `class Outer; class Inner; end; end`
+        // must still nest Inner under Outer (the keyword form is a
+        // real lexical push).
+        run_test(
+            r#"
+            class ClassKwOuter
+              class ClassKwInner; end
+            end
+            ClassKwOuter::ClassKwInner.name
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_exec_def_still_lands_on_receiver() {
+        // The receiver-as-default-definee semantics for `def` must
+        // be preserved — `def` inside `class_exec` still adds to the
+        // receiver class.
+        run_test(
+            r#"
+            klass = Class.new
+            klass.class_exec do
+              def hi; :hi; end
+            end
+            klass.new.hi
             "#,
         );
     }
