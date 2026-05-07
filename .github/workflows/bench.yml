@@ -61,7 +61,9 @@ jobs:
           file = "lib/benchmark_runner/cli.rb"
           src = File.read(file)
           unless src.include?("failures.json")
-            insert = "      File.write(\"#{output_path}.failures.json\", JSON.generate(bench_failures))\n\n"
+            # Single-quoted Ruby string so #{output_path} is preserved
+            # verbatim; it'll be interpolated inside cli.rb at run time.
+            insert = '      File.write("#{output_path}.failures.json", JSON.generate(bench_failures))' + "\n\n"
             patched = src.sub(/(^      # Save the output in a text file)/) { insert + $1 }
             raise "could not locate insertion point" if patched == src
             File.write(file, patched)
