@@ -48,7 +48,7 @@ monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = 
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
 ruruby-parse = { path = "../ruruby-parse" }
-ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", rev = "2ffc03f8ecda374a528d6ad870111fdbb48daaac" }
+ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", rev = "28752c89d0da012d91794cf10bd5f8d7225cc32d" }
 monoruby-attr = { path = "../monoruby_attr" }
 rubymap = { path = "../rubymap" }
 indexmap = "2.14.0"

@@ -1746,9 +1746,8 @@ dependencies = [
 [[package]]
 name = "ruby-prism"
 version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?rev=2ffc03f8ecda374a528d6ad870111fdbb48daaac#2ffc03f8ecda374a528d6ad870111fdbb48daaac"
+source = "git+https://github.com/sisshiki1969/prism.git?rev=28752c89d0da012d91794cf10bd5f8d7225cc32d#28752c89d0da012d91794cf10bd5f8d7225cc32d"
 dependencies = [
- "libc",
  "ruby-prism-sys",
  "serde",
  "serde_json",
