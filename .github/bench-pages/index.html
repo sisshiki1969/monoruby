@@ -87,15 +87,11 @@ async function loadJson(path) {
     + (tos.monoruby ? " (timeouts: monoruby " + tos.monoruby + "s, yjit " + tos.yjit + "s)" : "");
   document.getElementById("latestMeta").textContent = meta;
 
-  const okBars = benches.filter(b => !b.monoruby_failed);
+  const okBars = benches.filter(b => !b.monoruby_failed && !b.yjit_failed);
   const maxRatio = okBars.reduce((m, b) =>
     (b.ratio && b.ratio > m) ? b.ratio : m, 1.5);
-  // Failed-monoruby bars get a small visible stub at the *negative* side
-  // so they're labeled and visible without distorting the ratio scale.
-  const FAIL_STUB = -Math.max(0.5, maxRatio * 0.08);
 
   const barColor = b => {
-    if (b.monoruby_failed) return "#c62828";
     const r = b.ratio || 0;
     if (r >= 1.0) return "#2e7d32";
     if (r >= 0.7) return "#9ccc65";
@@ -103,41 +99,65 @@ async function loadJson(path) {
     return "#c62828";
   };
 
-  // Bar label: "<bench> ✕ <reason>" for failures, plain name otherwise.
-  const labelFor = b => {
-    if (b.monoruby_failed) {
-      return b.name + " ✕ " + (b.monoruby_reason || "failed");
-    }
-    return b.name;
+  const failed = b => b.monoruby_failed || b.yjit_failed;
+
+  // For failed runs, surface what went wrong with which side.
+  const failureText = b => {
+    const parts = [];
+    if (b.monoruby_failed) parts.push("monoruby: " + (b.monoruby_reason || "failed"));
+    if (b.yjit_failed)     parts.push("yjit: "     + (b.yjit_reason     || "failed"));
+    return parts.join("  /  ");
   };
 
   document.getElementById("latestBarWrap").style.height =
     Math.max(280, benches.length * 26) + "px";
 
+  // Plugin draws the failure reason as text inside the chart area for
+  // benchmarks where either implementation didn't produce a result.
+  // No bar is drawn for those rows (data is 0).
+  const failureTextPlugin = {
+    id: "failureText",
+    afterDatasetsDraw(chart) {
+      const { ctx, scales: { x: xs, y: ys }, chartArea } = chart;
+      ctx.save();
+      ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillStyle = "#c62828";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      benches.forEach((b, i) => {
+        if (!failed(b)) return;
+        const y = ys.getPixelForValue(i);
+        const x = chartArea.left + 8;
+        ctx.fillText(failureText(b), x, y);
+      });
+      ctx.restore();
+    },
+  };
+
   new Chart(document.getElementById("latestBar"), {
     type: "bar",
     data: {
-      labels: benches.map(labelFor),
+      labels: benches.map(b => b.name),
       datasets: [{
         label: "YJIT / monoruby",
-        data: benches.map(b => b.monoruby_failed ? FAIL_STUB : (b.ratio || 0)),
-        backgroundColor: benches.map(barColor)
-      }]
+        data: benches.map(b => failed(b) ? 0 : (b.ratio || 0)),
+        backgroundColor: benches.map(b => failed(b) ? "transparent" : barColor(b)),
+      }],
     },
     options: {
       indexAxis: "y",
       maintainAspectRatio: false,
       scales: {
         x: {
-          suggestedMin: FAIL_STUB,
+          beginAtZero: true,
           suggestedMax: Math.max(2.0, maxRatio),
           title: { display: true, text: "relative speed (× YJIT, higher = monoruby faster)" },
           grid: {
             color: ctx => ctx.tick.value === 1 ? "#1a1a1a" : "rgba(0,0,0,0.08)",
-            lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1
-          }
+            lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1,
+          },
         },
-        y: { ticks: { autoSkip: false, font: { size: 11 } } }
+        y: { ticks: { autoSkip: false, font: { size: 11 } } },
       },
       plugins: {
         legend: { display: false },
@@ -145,26 +165,25 @@ async function loadJson(path) {
           callbacks: {
             label: ctx => {
               const b = benches[ctx.dataIndex];
-              const lines = [];
-              if (b.monoruby_failed) {
-                lines.push("monoruby: " + (b.monoruby_reason || "failed"));
-              } else {
-                lines.push("monoruby: " + b.monoruby_ms.toFixed(2) + " ms");
+              if (failed(b)) {
+                const lines = [];
+                if (b.monoruby_failed) lines.push("monoruby: " + (b.monoruby_reason || "failed"));
+                if (b.yjit_failed)     lines.push("yjit: "     + (b.yjit_reason     || "failed"));
+                if (!b.monoruby_failed) lines.unshift("monoruby: " + b.monoruby_ms.toFixed(2) + " ms");
+                if (!b.yjit_failed)     lines.unshift("yjit: "     + b.yjit_ms.toFixed(2) + " ms");
+                return lines;
               }
-              if (b.yjit_failed) {
-                lines.push("yjit: " + (b.yjit_reason || "failed"));
-              } else {
-                lines.push("yjit:     " + b.yjit_ms.toFixed(2) + " ms");
-              }
-              if (!b.monoruby_failed && !b.yjit_failed) {
-                lines.unshift(ctx.parsed.x.toFixed(2) + "× YJIT");
-              }
-              return lines;
-            }
-          }
-        }
-      }
-    }
+              return [
+                ctx.parsed.x.toFixed(2) + "× YJIT",
+                "monoruby: " + b.monoruby_ms.toFixed(2) + " ms",
+                "yjit:     " + b.yjit_ms.toFixed(2) + " ms",
+              ];
+            },
+          },
+        },
+      },
+    },
+    plugins: [failureTextPlugin],
   });
 
   const tbody = document.querySelector("#latestTable tbody");
