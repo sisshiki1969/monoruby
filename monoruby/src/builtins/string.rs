@@ -341,11 +341,23 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
-    let b = equal(lhs, lfp.arg(0));
-    Ok(Value::bool(b))
+    let rhs = lfp.arg(0);
+    if let Some(rhs_inner) = rhs.is_rstring_inner() {
+        return Ok(Value::bool(lhs == rhs_inner));
+    }
+    // CRuby's `String#==` short-circuits on `to_str`: if the rhs
+    // *responds to* `to_str`, dispatch to `rhs == self` and let the
+    // user-defined `==` decide. (Note: `to_str` is *not* actually
+    // called.) This lets a mock that defines both `to_str` and a
+    // custom `==` exercise the fallback branch.
+    if globals.check_method(rhs, IdentId::TO_STR).is_some() {
+        let result = vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
+        return Ok(Value::bool(result.as_bool()));
+    }
+    Ok(Value::bool(false))
 }
 
 ///
@@ -376,12 +388,27 @@ fn string_cmp(
 ) -> Result<Option<std::cmp::Ordering>> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
-    if let Some(rhs) = lfp.arg(0).is_rstring() {
+    let other = lfp.arg(0);
+    if let Some(rhs) = other.is_rstring() {
         return Ok(Some(lhs.cmp(&rhs)));
     }
-    // Try to_str coercion
-    if let Ok(rhs) = lfp.arg(0).coerce_to_rstring(vm, globals) {
-        return Ok(Some(lhs.cmp(&rhs)));
+    // Try `to_str` coercion first; CRuby uses it in preference to
+    // `<=>` (`String#<=>` only inverts via `<=>` when `to_str` is
+    // not defined).
+    if globals.check_method(other, IdentId::TO_STR).is_some() {
+        if let Ok(rhs) = other.coerce_to_rstring(vm, globals) {
+            return Ok(Some(lhs.cmp(&rhs)));
+        }
+    }
+    // Fall back to `other <=> self` and invert the result. Returns
+    // `None` (i.e. `nil`) if `<=>` returns nil or the inverted form
+    // also delegates back (CRuby short-circuits the recursion via a
+    // thread-local guard; we just dispatch once).
+    if let Some(func_id) = globals.check_method(other, IdentId::_CMP) {
+        let result = vm.invoke_func_inner(globals, func_id, other, &[lfp.self_val()], None, None)?;
+        if let Some(ord) = Value::ord_from(result) {
+            return Ok(Some(ord.reverse()));
+        }
     }
     Ok(None)
 }
@@ -594,11 +621,21 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         // element argument list. Older `format_by_hash` only supported
         // `%{name}`, so this also unifies the two code paths.
         vec![arg]
-    } else {
-        match arg.try_array_ty() {
-            Some(ary) => ary.to_vec(),
-            None => vec![arg],
+    } else if let Some(ary) = arg.try_array_ty() {
+        ary.to_vec()
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
+        // CRuby tries `to_ary` on non-Array operands before falling
+        // back to "wrap in a single-element array" — this lets a
+        // mock that defines `to_ary` exercise the splatting branch
+        // (`"%f" % obj` ↔ `"%f" % obj.to_ary`).
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if let Some(ary) = result.try_array_ty() {
+            ary.to_vec()
+        } else {
+            return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
         }
+    } else {
+        vec![arg]
     };
     let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
     Ok(Value::string(format_str))
@@ -9134,6 +9171,29 @@ mod tests {
     }
 
     #[test]
+    fn string_modulo_to_ary_coercion() {
+        // `String#%` calls `to_ary` on a non-Array, non-Hash argument
+        // before falling back to "wrap in a singleton array". This
+        // matches CRuby and lets a mock that defines `to_ary` drive
+        // the splatted-arguments code path.
+        run_test(
+            r##"
+            class MAry1; def to_ary; [3.14]; end; end
+            class MAry2; def to_ary; [1, 2]; end; end
+            class MAryBad; def to_ary; 5; end; end
+            r1 = "%f" % MAry1.new
+            r2 = "%d-%d" % MAry2.new
+            r3 = begin
+                   "%d" % MAryBad.new
+                 rescue TypeError
+                   "raised"
+                 end
+            [r1, r2, r3]
+            "##,
+        );
+    }
+
+    #[test]
     fn string_unpack_sleb128_directive() {
         // 'r' decodes SLEB128 signed integers. Same continuation
         // layout as ULEB128, but bit 6 of the final byte is sign-
@@ -9173,6 +9233,27 @@ mod tests {
             packed = [-1, 0, 1, 128, -128].pack("r*")
             got = packed.unpack("r*")
             raise "pack(r*)/unpack(r*) failed: #{got.inspect}" unless got == [-1, 0, 1, 128, -128]
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_cmp_inverse_dispatch() {
+        // When the rhs lacks `to_str`, `String#<=>` falls back to
+        // `rhs.<=>(self)` and inverts the result. Returns nil if the
+        // rhs lacks `<=>` too, or its `<=>` returns nil.
+        run_test(
+            r##"
+            class MCmpNeg; def <=>(other); -1; end; end
+            class MCmpZero; def <=>(other); 0; end; end
+            class MCmpNil; def <=>(other); nil; end; end
+            class MCmpStr; def to_str; "zzz"; end; end
+            r1 = "abc" <=> MCmpNeg.new            # rhs.<=> -> -1, inverted -> 1
+            r2 = "abc" <=> MCmpZero.new           # 0 inverts to 0
+            r3 = ("abc" <=> MCmpNil.new).inspect  # nil
+            r4 = ("abc" <=> Object.new).inspect   # neither to_str nor <=>
+            r5 = "abc" <=> MCmpStr.new            # to_str path: "abc" < "zzz"
+            [r1, r2, r3, r4, r5]
             "##,
         );
     }
@@ -9221,6 +9302,26 @@ mod tests {
             # surrounding directives, but `^` itself emits nothing).
             raise "pack('^') should be empty" unless [].pack("^") == ""
             raise "pack('C^C') should ignore '^'" unless [1, 2].pack("C^C") == "\x01\x02".b
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_eq_to_str_dispatch() {
+        // `String#==` returns false for any non-String rhs that does
+        // not respond to `to_str`. If the rhs *responds to* `to_str`,
+        // `String#==` dispatches to `rhs == self` (without actually
+        // calling to_str).
+        run_test(
+            r##"
+            class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end
+            class MEqStrOnly; def to_str; "hello"; end; end
+            r1 = "hello" == 5
+            r2 = "hello" == :hello
+            r3 = "hello" == Object.new
+            r4 = "hello" == MEqStrTrue.new   # rhs#== returns true
+            r5 = "hello" == MEqStrOnly.new   # rhs falls back to Object#== -> false
+            [r1, r2, r3, r4, r5]
             "##,
         );
     }

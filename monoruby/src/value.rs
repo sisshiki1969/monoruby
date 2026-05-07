@@ -732,6 +732,20 @@ impl Value {
         Value::i32(ord as i32)
     }
 
+    /// Inverse of `from_ord`. Reads a `<=>` return value (which Ruby
+    /// constrains to `-1` / `0` / `1` / `nil`) and converts to
+    /// `Option<Ordering>`. Returns `None` for any value outside that
+    /// set, matching CRuby's "if `<=>` returned nil, leave the result
+    /// nil too" semantics.
+    pub(crate) fn ord_from(v: Value) -> Option<std::cmp::Ordering> {
+        match v.try_fixnum()? {
+            n if n < 0 => Some(std::cmp::Ordering::Less),
+            0 => Some(std::cmp::Ordering::Equal),
+            n if n > 0 => Some(std::cmp::Ordering::Greater),
+            _ => None,
+        }
+    }
+
     pub fn check_fixnum(i: i64) -> Option<Value> {
         if Self::is_i63(i) {
             Some(Value::fixnum(i))
