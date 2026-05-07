@@ -240,7 +240,10 @@ fn superclass(
             // Distinguish uninitialized classes (from Class.allocate) from BasicObject.
             // An uninitialized class has neither a name nor a superclass.
             let info = &globals.store[class.id()];
-            if info.get_name().is_none() && class.superclass().is_none() && class.id() != BASIC_OBJECT_CLASS {
+            if info.get_name().is_none()
+                && class.superclass().is_none()
+                && class.id() != BASIC_OBJECT_CLASS
+            {
                 return Err(MonorubyErr::typeerr("uninitialized class"));
             }
             Ok(Value::nil())
@@ -1016,69 +1019,47 @@ mod tests {
 
     #[test]
     fn class_allocate() {
-        // Class.allocate returns an instance of Class
-        run_test("Class.allocate.class");
-        // Class.allocate returns a Class object (is_a?(Class))
-        run_test("Class.allocate.is_a?(Class)");
-        // Normal class allocate still works
-        run_test("String.allocate.class");
-        run_test(
+        run_tests(&[
+            "Class.allocate.class",
+            "Class.allocate.is_a?(Class)",
+            "String.allocate.class",
             r#"
             class Foo; end
             Foo.allocate.class
             "#,
-        );
-        // Class.allocate returns distinct objects
-        run_test("Class.allocate.equal?(Class.allocate)");
-        // Hash.allocate returns a Hash
-        run_test("Hash.allocate.class");
-        run_test("Hash.allocate.is_a?(Hash)");
-        // Hash subclass allocate
-        run_test(
+            "Class.allocate.equal?(Class.allocate)",
+            "Hash.allocate.class",
+            "Hash.allocate.is_a?(Hash)",
             r#"
             class MyHash < Hash; end
             MyHash.allocate.class
             "#,
-        );
-        // Array.allocate returns an Array
-        run_test("Array.allocate.class");
-        // Array subclass allocate
-        run_test(
+            "Array.allocate.class",
             r#"
             class MyArray < Array; end
             MyArray.allocate.class
             "#,
-        );
+            "String.allocate.class",
+            "String.allocate",
+            r#"
+            class MyString < String; end
+            MyString.allocate.class
+            "#,
+            "Time.allocate.class",
+            "Range.allocate.class",
+            "Exception.allocate.class",
+            r#"
+            class MyError < StandardError; end
+            MyError.allocate.class
+            "#,
+            "Regexp.allocate.class",
+            "IO.allocate.class",
+        ]);
         // allocator undefined for immediate classes
         run_test_error("NilClass.allocate");
         run_test_error("TrueClass.allocate");
         run_test_error("FalseClass.allocate");
         run_test_error("Symbol.allocate");
-        // String.allocate returns an empty String
-        run_test("String.allocate.class");
-        run_test("String.allocate");
-        run_test(
-            r#"
-            class MyString < String; end
-            MyString.allocate.class
-            "#,
-        );
-        // Time.allocate returns a Time
-        run_test("Time.allocate.class");
-        // Range.allocate returns a Range
-        run_test("Range.allocate.class");
-        // Exception.allocate returns an Exception
-        run_test("Exception.allocate.class");
-        run_test(
-            r#"
-            class MyError < StandardError; end
-            MyError.allocate.class
-            "#,
-        );
-        // Regexp.allocate returns a Regexp
-        run_test("Regexp.allocate.class");
-        // IO.allocate returns an IO
-        run_test("IO.allocate.class");
         // allocator undefined for special classes
         run_test_error("Proc.allocate");
         run_test_error("Method.allocate");

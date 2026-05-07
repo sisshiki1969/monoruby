@@ -1746,9 +1746,8 @@ dependencies = [
 [[package]]
 name = "ruby-prism"
 version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?rev=2ffc03f8ecda374a528d6ad870111fdbb48daaac#2ffc03f8ecda374a528d6ad870111fdbb48daaac"
+source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#e010ec14f3f5b80ce5a29fa3ea34ca2f7e6d3fc3"
 dependencies = [
- "libc",
  "ruby-prism-sys",
  "serde",
  "serde_json",
@@ -1757,8 +1756,7 @@ dependencies = [
 [[package]]
 name = "ruby-prism-sys"
 version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f85fd9571455bdca2b3bf0b2f543cd13ac39d5de0026a8eb2deb94ffd264f00"
+source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#e010ec14f3f5b80ce5a29fa3ea34ca2f7e6d3fc3"
 dependencies = [
  "bindgen 0.72.1",
  "cc",

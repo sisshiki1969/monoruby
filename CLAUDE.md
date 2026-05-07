@@ -490,14 +490,28 @@ Benchmark scripts live in `benchmark/`. YAML files (`*.yaml`, `*.yml`) contain b
 
 ---
 
-## Submodule / Vendored Dependencies
+## Vendored Dependencies
 
 The repository vendors several dependencies as local paths rather than crates.io:
 - `hashbrown/` — local fork
 - `rust-smallvec/` — local fork with const-generics feature
 - `ruruby-parse/` — developed in tandem with monoruby
 
-When modifying these, be aware changes affect the whole workspace.
+The `ruby-prism` Rust wrapper is consumed as a `git` dependency against the
+`monoruby-vendored` branch of [`sisshiki1969/prism`](https://github.com/sisshiki1969/prism).
+That fork is split into two branches:
+
+- `monoruby` — minimal upstream-bound diff (Rust `parse_with_options` API +
+  `ruby-prism-sys` bindgen allowlist additions). Used as the base for any
+  upstream PR to `ruby/prism`.
+- `monoruby-vendored` — `monoruby` plus a single commit that checks in
+  `rust/ruby-prism{,-sys}/vendor/prism-{ver}/` (the C source the upstream
+  `vendored.rs` build script needs). This is the branch `monoruby/Cargo.toml`
+  pins, so consumers don't need bundler or `rake cargo:build` locally.
+
+To bump the prism rev: push the change to the fork's `monoruby` branch,
+run `bin/refresh-prism-vendored` (rebuilds and force-pushes
+`monoruby-vendored`), then `cargo update -p ruby-prism` in this repo.
 
 ---
 
