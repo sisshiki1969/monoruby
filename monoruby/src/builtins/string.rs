@@ -949,7 +949,7 @@ fn index_assign(
         // mock that should not receive `to_str` when the match fails.
         let (start, end) = locate_regex_match(vm, &re, &lfp.self_val(), arg1_opt, globals)?;
         let subst = arg_val.coerce_to_string(vm, globals)?;
-        replace_byte_range(lfp.self_val(), start, end, &subst);
+        replace_byte_range(globals, lfp.self_val(), start, end, &subst)?;
         return Ok(arg_val);
     }
 
@@ -968,7 +968,7 @@ fn index_assign(
             Some(p) => p,
             None => return Err(MonorubyErr::indexerr("string not matched")),
         };
-        replace_byte_range(lfp.self_val(), pos, pos + needle.len(), &subst);
+        replace_byte_range(globals, lfp.self_val(), pos, pos + needle.len(), &subst)?;
         return Ok(arg_val);
     }
 
@@ -1128,15 +1128,16 @@ fn locate_regex_match(
     }
 }
 
-fn replace_byte_range(mut self_val: Value, start: usize, end: usize, subst: &str) {
+fn replace_byte_range(
+    globals: &Globals,
+    mut self_val: Value,
+    start: usize,
+    end: usize,
+    subst: &str,
+) -> Result<()> {
+    let repl = RStringInner::from_str_scanned(subst);
     let inner = self_val.as_rstring_inner_mut();
-    let mut buf = inner.as_bytes().to_vec();
-    buf.splice(start..end, subst.as_bytes().iter().copied());
-    // Encoding-preserving construction is a separate concern; for
-    // now treat the result as UTF-8, which matches the rest of the
-    // string-builder paths in this file.
-    let s = String::from_utf8(buf).unwrap_or_default();
-    *inner = RStringInner::from_string(s);
+    inner.bytesplice_with(start, end - start, &repl, &globals.store)
 }
 
 ///
