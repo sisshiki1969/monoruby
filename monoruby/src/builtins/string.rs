@@ -4082,7 +4082,13 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Upcase, mode)))
+    // `apply_case` walks `chars()` and pushes whole scalars, so the
+    // output is well-formed UTF-8 by construction; pre-scan it so
+    // the cr lands as SevenBit/Valid up front and the next access
+    // doesn't have to walk the buffer again.
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Upcase, mode),
+    )))
 }
 
 ///
@@ -4099,7 +4105,7 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Upcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
 
     Ok(if changed {
         lfp.self_val()
@@ -4119,7 +4125,9 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Downcase, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Downcase, mode),
+    )))
 }
 
 ///
@@ -4136,7 +4144,7 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Downcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
 
     Ok(if changed {
         lfp.self_val()
@@ -4161,7 +4169,9 @@ fn capitalize(
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Capitalize, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Capitalize, mode),
+    )))
 }
 
 ///
@@ -4183,7 +4193,7 @@ fn capitalize_(
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Capitalize, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -4202,7 +4212,9 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Swapcase, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Swapcase, mode),
+    )))
 }
 
 ///
@@ -4219,7 +4231,7 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Swapcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
     Ok(if changed {
         lfp.self_val()
     } else {
