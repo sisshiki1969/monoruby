@@ -882,6 +882,65 @@ impl ClassInfoTable {
         names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
+    /// Walk the class chain to gather method names with `visibility_filter`,
+    /// stopping after the first non-singleton, non-iclass class is processed.
+    ///
+    /// CRuby's `Kernel#{public,protected,private}_methods(false)` semantics:
+    /// "non-inherited" means the receiver's singleton class chain (singleton
+    /// itself plus any iclasses inserted by `extend`) and the receiver's
+    /// actual class itself, but NOT the class's superclass nor modules
+    /// `include`d into the class.
+    fn get_method_names_direct<F>(&self, class_id: ClassId, visibility_filter: F) -> Vec<Value>
+    where
+        F: Fn(&MethodTableEntry) -> bool,
+    {
+        let mut names = HashSet::default();
+        let mut module = self.get_module(class_id);
+        let mut exclude = HashSet::default();
+        loop {
+            for (name, entry) in &self[module.id()].methods {
+                if exclude.contains(name) || names.contains(name) {
+                    continue;
+                }
+                if matches!(entry.visibility, Visibility::Undefined) {
+                    exclude.insert(*name);
+                } else if visibility_filter(entry) {
+                    names.insert(*name);
+                } else {
+                    exclude.insert(*name);
+                }
+            }
+            // Stop after the first real (non-singleton, non-iclass) class
+            // has been processed. For a non-singleton, non-iclass starting
+            // point this means we only walk that one entry.
+            if module.is_singleton().is_none() && !module.is_iclass() {
+                break;
+            }
+            match module.superclass() {
+                Some(superclass) => module = superclass,
+                None => break,
+            }
+        }
+        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+    }
+
+    /// Public-only "non-inherited" view used by `Kernel#public_methods(false)`.
+    pub(crate) fn get_public_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
+        self.get_method_names_direct(class_id, |entry| entry.is_public())
+    }
+
+    /// Private-only "non-inherited" view used by `Kernel#private_methods(false)`.
+    pub(crate) fn get_private_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
+        self.get_method_names_direct(class_id, |entry| entry.is_private())
+    }
+
+    /// Protected-only "non-inherited" view used by `Kernel#protected_methods(false)`.
+    pub(crate) fn get_protected_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
+        self.get_method_names_direct(class_id, |entry| {
+            entry.func_id().is_some() && entry.visibility() == Visibility::Protected
+        })
+    }
+
     ///
     /// Get private method names in the class of *class_id*.
     ///  

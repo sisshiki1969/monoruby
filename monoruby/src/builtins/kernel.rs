@@ -2454,7 +2454,7 @@ fn private_methods(
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     let class_id = lfp.self_val().class();
     Ok(Value::array_from_vec(if !inherited_too {
-        globals.store.get_private_method_names(class_id)
+        globals.store.get_private_method_names_direct(class_id)
     } else {
         globals.store.get_private_method_names_inherit(class_id)
     }))
@@ -2476,7 +2476,7 @@ fn protected_methods(
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     let class_id = lfp.self_val().class();
     Ok(Value::array_from_vec(if !inherited_too {
-        globals.store.get_protected_method_names(class_id)
+        globals.store.get_protected_method_names_direct(class_id)
     } else {
         globals.store.get_protected_method_names_inherit(class_id)
     }))
@@ -2502,7 +2502,7 @@ fn public_methods(
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
     let class_id = lfp.self_val().class();
     Ok(Value::array_from_vec(if !inherited_too {
-        globals.store.get_method_names(class_id)
+        globals.store.get_public_method_names_direct(class_id)
     } else {
         globals.store.get_method_names_inherit(class_id, false)
     }))
