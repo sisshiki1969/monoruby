@@ -632,6 +632,11 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if let Some(ary) = result.try_array_ty() {
             ary.to_vec()
+        } else if result.is_nil() {
+            // CRuby: when `to_ary` returns nil, fall back to wrapping
+            // the original object in a single-element array (so
+            // `"%s" % obj` becomes `"%s" % [obj]`).
+            vec![arg]
         } else {
             return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
         }
@@ -1887,32 +1892,45 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
-fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
+/// Compute the new byte-end after `chomp(rs)`. Operates on raw
+/// bytes so that strings with invalid encoding (e.g.
+/// `"\xa0\xa1\n"` — invalid UTF-8 but with a literal trailing
+/// `\n`) still get their separator stripped, matching CRuby.
+fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
     if rs.is_empty() {
-        let mut s = self_;
-        let mut len = s.len();
+        // Paragraph mode: iteratively strip trailing `\r\n` / `\n`.
+        let mut end = bytes.len();
         loop {
-            s = s.trim_end_matches("\r\n");
-            if s.ends_with('\n') {
-                s = &s[0..s.len() - 1];
+            let prev = end;
+            while end >= 2 && &bytes[end - 2..end] == b"\r\n" {
+                end -= 2;
             }
-            if len == s.len() {
+            if end >= 1 && bytes[end - 1] == b'\n' {
+                end -= 1;
+            }
+            if end == prev {
                 break;
             }
-            len = s.len();
         }
-        s
-    } else if rs == "\n" {
-        // Default separator: remove one trailing \r\n, \n, or \r.
-        if self_.ends_with("\r\n") {
-            &self_[..self_.len() - 2]
-        } else if self_.ends_with('\n') || self_.ends_with('\r') {
-            &self_[..self_.len() - 1]
+        end
+    } else if rs == b"\n" {
+        // Default: remove ONE trailing `\r\n` / `\n` / `\r`.
+        let end = bytes.len();
+        if end >= 2 && &bytes[end - 2..end] == b"\r\n" {
+            end - 2
+        } else if end >= 1 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
+            end - 1
         } else {
-            self_
+            end
         }
     } else {
-        self_.trim_end_matches(rs)
+        // Explicit separator: strip iteratively. Matches the
+        // pre-existing behaviour of `&str::trim_end_matches(rs)`.
+        let mut end = bytes.len();
+        while end >= rs.len() && &bytes[end - rs.len()..end] == rs {
+            end -= rs.len();
+        }
+        end
     }
 }
 
@@ -1926,25 +1944,24 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs_owned;
-    let rs = if let Some(arg0) = &arg0 {
+    let rs_bytes: &[u8] = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             // `chomp(nil)` returns a copy of `self` per CRuby — never
             // the same instance, even when there's nothing to strip.
             return Ok(lfp.self_val().dup());
         }
-        rs_owned = arg0.coerce_to_string(vm, globals)?;
-        rs_owned.as_str()
+        rs_owned = arg0.coerce_to_rstring(vm, globals)?;
+        rs_owned.as_bytes()
     } else {
-        "\n"
+        b"\n"
     };
 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let self_s = self_.expect_str(globals)?;
-    // `chomp_sub` returns a prefix of `self_s`; its length is the
-    // byte-end of the substring. `from_substring` propagates the
-    // parent's cached cr in O(1) on a single-byte trim.
-    let new_end = chomp_sub(self_s, rs).len();
+    // Operate on bytes so that strings whose declared encoding
+    // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
+    // have their trailing newline stripped.
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
     Ok(Value::string_from_inner(RStringInner::from_substring(
         inner, 0, new_end,
     )))
@@ -1961,21 +1978,21 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let arg0 = lfp.try_arg(0);
     let rs_owned;
-    let rs = if let Some(arg0) = &arg0 {
+    let rs_bytes: &[u8] = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             return Ok(Value::nil());
         }
-        rs_owned = arg0.coerce_to_string(vm, globals)?;
-        rs_owned.as_str()
+        rs_owned = arg0.coerce_to_rstring(vm, globals)?;
+        rs_owned.as_bytes()
     } else {
-        "\n"
+        b"\n"
     };
 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let self_s = self_.expect_str(globals)?;
-    let new_end = chomp_sub(self_s, rs).len();
-    if new_end == self_s.len() {
+    let self_len = inner.as_bytes().len();
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
+    if new_end == self_len {
         Ok(Value::nil())
     } else {
         let trimmed = RStringInner::from_substring(inner, 0, new_end);
