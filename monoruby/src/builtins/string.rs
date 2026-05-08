@@ -3406,7 +3406,19 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // splice can promote the receiver's encoding (e.g. US-ASCII
     // target + UTF-8 replacement → UTF-8 result, mirroring
     // `String#+`).
-    let repl_inner = RStringInner::from_encoding_scanned(replacement, str_enc);
+    //
+    // *Empty* replacements are special: `s.clear` (and
+    // `s.bytesplice(0, n, "")`) must not promote the receiver's
+    // encoding to the replacement's, since no source bytes are
+    // actually introduced. Tag the empty slice with the
+    // receiver's own encoding so `compatible_encoding`'s
+    // empty-other rule trivially returns `self_enc`.
+    let repl_enc = if replacement.is_empty() {
+        self_enc
+    } else {
+        str_enc
+    };
+    let repl_inner = RStringInner::from_encoding_scanned(replacement, repl_enc);
     self_
         .as_rstring_inner_mut()
         .bytesplice_with(start, splice_len, &repl_inner, &globals.store)?;
