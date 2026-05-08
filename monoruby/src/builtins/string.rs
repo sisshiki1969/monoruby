@@ -1938,9 +1938,15 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
 
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
     let self_s = self_.expect_str(globals)?;
-    let res = chomp_sub(self_s, rs);
-    Ok(Value::string_from_str(res))
+    // `chomp_sub` returns a prefix of `self_s`; its length is the
+    // byte-end of the substring. `from_substring` propagates the
+    // parent's cached cr in O(1) on a single-byte trim.
+    let new_end = chomp_sub(self_s, rs).len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, 0, new_end,
+    )))
 }
 
 ///
@@ -1965,12 +1971,14 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
 
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
     let self_s = self_.expect_str(globals)?;
-    let res = chomp_sub(self_s, rs);
-    if res.len() == self_s.len() {
+    let new_end = chomp_sub(self_s, rs).len();
+    if new_end == self_s.len() {
         Ok(Value::nil())
     } else {
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_str(res);
+        let trimmed = RStringInner::from_substring(inner, 0, new_end);
+        lfp.self_val().replace_with_inner(trimmed);
         Ok(lfp.self_val())
     }
 }
@@ -1986,11 +1994,15 @@ const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
 #[monoruby_builtin]
 fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val
-        .expect_str(globals)?
-        .trim_end_matches(STRIP)
-        .trim_start_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let after_rtrim = s.trim_end_matches(STRIP);
+    let new_end = after_rtrim.len();
+    let after_ltrim = after_rtrim.trim_start_matches(STRIP);
+    let new_start = new_end - after_ltrim.len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, new_start, new_end,
+    )))
 }
 
 ///
@@ -2003,12 +2015,17 @@ fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_end_matches(STRIP).trim_start_matches(STRIP);
-    if self_.len() == orig.len() {
+    let after_rtrim = orig.trim_end_matches(STRIP);
+    let new_end = after_rtrim.len();
+    let after_ltrim = after_rtrim.trim_start_matches(STRIP);
+    let new_start = new_end - after_ltrim.len();
+    if new_end - new_start == orig.len() {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let trimmed = RStringInner::from_substring(inner, new_start, new_end);
+    lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
 
@@ -2021,8 +2038,12 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val.expect_str(globals)?.trim_end_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let new_end = s.trim_end_matches(STRIP).len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, 0, new_end,
+    )))
 }
 
 ///
@@ -2035,12 +2056,14 @@ fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_end_matches(STRIP);
-    if self_.len() == orig.len() {
+    let new_end = orig.trim_end_matches(STRIP).len();
+    if new_end == orig.len() {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let trimmed = RStringInner::from_substring(inner, 0, new_end);
+    lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
 
@@ -2053,8 +2076,15 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val.expect_str(globals)?.trim_start_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let trimmed = s.trim_start_matches(STRIP);
+    let new_start = s.len() - trimmed.len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner,
+        new_start,
+        s.len(),
+    )))
 }
 
 ///
@@ -2067,12 +2097,15 @@ fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_start_matches(STRIP);
-    if self_.len() == orig.len() {
+    let trimmed = orig.trim_start_matches(STRIP);
+    let new_start = orig.len() - trimmed.len();
+    if new_start == 0 {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let result = RStringInner::from_substring(inner, new_start, orig.len());
+    lfp.self_val().replace_with_inner(result);
     Ok(lfp.self_val())
 }
 
