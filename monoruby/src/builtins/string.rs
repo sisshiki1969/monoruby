@@ -5266,7 +5266,7 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
-    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, false)
+    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, false, offset)
 }
 
 ///
@@ -5281,7 +5281,7 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
-    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true)
+    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true, offset)
 }
 
 fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {
@@ -9075,6 +9075,152 @@ mod tests {
             # the non-fallback (is_rstring_inner) path.
             r6 = "abc#{MTosOk.new}"
             [r1, r2, r3, r4, r5, r6]
+            "##,
+        );
+    }
+
+    // The 'R' / 'r' / '^' directives below are Ruby 4.1+ additions.
+    // Our reference Ruby (4.0.1) doesn't know them, so we exercise
+    // monoruby in isolation via `run_test_no_result_check` and use
+    // `raise` for failure detection — `run_test` would not be useful
+    // because every comparison would short-circuit on CRuby.
+
+    #[test]
+    fn string_unpack_uleb128_directive() {
+        // 'R' decodes ULEB128 unsigned integers. Bit 7 of each byte
+        // signals continuation; the payload is 7 bits per byte.
+        run_test_no_result_check(
+            r##"
+            cases = [
+                ["\x00",                                          [0]],
+                ["\x01",                                          [1]],
+                ["\x7f",                                          [127]],
+                ["\x80\x01",                                      [128]],
+                ["\xff\x7f",                                      [0x3fff]],
+                ["\x80\x80\x01",                                  [0x4000]],
+                ["\xff\xff\xff\xff\x0f",                          [0xffffffff]],
+                ["\x80\x80\x80\x80\x10",                          [0x100000000]],
+                # 64-bit max takes 10 bytes.
+                ["\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01",      [0xffff_ffff_ffff_ffff]],
+                # '*' decodes until the source is exhausted.
+                ["\x01\x02",     [1, 2],   "R*"],
+                ["\x7f\x80\x01", [127, 128], "R*"],
+                # Incomplete tail under a fixed count → nil; under
+                # '*' the partial run is silently dropped.
+                ["\xFF",         [nil]],
+                ["\xFF",         [],       "R*"],
+            ]
+            cases.each do |bytes, expected, directive|
+                directive ||= "R"
+                got = bytes.unpack(directive)
+                raise "unpack(#{directive.inspect}) on #{bytes.bytes.inspect} " \
+                      "→ #{got.inspect}, expected #{expected.inspect}" unless got == expected
+            end
+
+            # Round-trip via `pack('R')` for a representative range,
+            # including the i32 / u32 / u64 boundaries.
+            [0, 1, 127, 128, 16384, 65535, 4294967295,
+             18446744073709551615].each do |i|
+                got = [i].pack("R").unpack("R")[0]
+                raise "pack/unpack roundtrip failed for #{i}: got #{got.inspect}" unless got == i
+            end
+
+            # `pack('R*')` accepts a stream of values.
+            packed = [0, 127, 128, 16384].pack("R*")
+            got = packed.unpack("R*")
+            raise "pack(R*)/unpack(R*) failed: #{got.inspect}" unless got == [0, 127, 128, 16384]
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_unpack_sleb128_directive() {
+        // 'r' decodes SLEB128 signed integers. Same continuation
+        // layout as ULEB128, but bit 6 of the final byte is sign-
+        // extended.
+        run_test_no_result_check(
+            r##"
+            cases = [
+                ["\x00",         [0]],
+                ["\x01",         [1]],
+                ["\x7f",         [-1]],
+                ["\x7e",         [-2]],
+                ["\xff\x00",     [127]],
+                ["\x80\x01",     [128]],
+                ["\x81\x7f",     [-127]],
+                ["\x80\x7f",     [-128]],
+                ["\x00\x01\x7f", [0, 1, -1], "r*"],
+                ["\xFF",         [nil]],
+                ["\xFF",         [],         "r*"],
+            ]
+            cases.each do |bytes, expected, directive|
+                directive ||= "r"
+                got = bytes.unpack(directive)
+                raise "unpack(#{directive.inspect}) on #{bytes.bytes.inspect} " \
+                      "→ #{got.inspect}, expected #{expected.inspect}" unless got == expected
+            end
+
+            # Round-trip through `pack('r')` for both signs and the
+            # transition points where a continuation byte is required.
+            [-1, 0, 1, -127, 127, 128, -128, 16384, -16385,
+             0x7fff_ffff, -0x8000_0000,
+             0x7fff_ffff_ffff_ffff, -0x8000_0000_0000_0000].each do |i|
+                got = [i].pack("r").unpack("r")[0]
+                raise "pack/unpack roundtrip failed for #{i}: got #{got.inspect}" unless got == i
+            end
+
+            # `pack('r*')` for multiple values.
+            packed = [-1, 0, 1, 128, -128].pack("r*")
+            got = packed.unpack("r*")
+            raise "pack(r*)/unpack(r*) failed: #{got.inspect}" unless got == [-1, 0, 1, 128, -128]
+            "##,
+        );
+    }
+
+    #[test]
+    fn string_unpack_offset_directive() {
+        // '^' returns the current byte offset since the start of the
+        // unpack walk. The offset reflects all preceding directives,
+        // including `X` (back), and is added to the optional
+        // `offset:` keyword.
+        run_test_no_result_check(
+            r##"
+            cases = [
+                # Empty input — offset is the base offset (0).
+                [""                 , "^"     , [0]                 ],
+                # `^` doesn't consume; after `CC` we're at byte 1
+                # (only one byte was actually available).
+                ["a"                , "CC^"   , [97, nil, 1]        ],
+                # `offset:` keyword bumps the reported offset.
+                ["abc"              , ["^", { offset: 1 }], [1]     ],
+                # `X` walks back; the offset reflects that.
+                ["\x01\x02\x03\x04", "C3X2^" , [1, 2, 3, 1]         ],
+                # `x` skips forward.
+                ["\x01\x02\x03\x04", "Cx2^"  , [1, 3]               ],
+                # Fixed-width string directives consume their full
+                # width.
+                ["foo"              , "A4^"   , ["foo", 3]          ],
+                ["foo"              , "a4^"   , ["foo", 3]          ],
+                ["foo"              , "Z5^"   , ["foo", 3]          ],
+                # `*` consumes everything remaining.
+                ["foo   "           , "A*^"   , ["foo", 6]          ],
+                ["foo\0"            , "Z*^"   , ["foo", 4]          ],
+            ]
+            cases.each do |input, directive, expected|
+                got = if directive.is_a?(Array)
+                          input.unpack(directive[0], **directive[1])
+                      else
+                          input.unpack(directive)
+                      end
+                raise "unpack(#{directive.inspect}) on #{input.inspect} " \
+                      "→ #{got.inspect}, expected #{expected.inspect}" unless got == expected
+            end
+
+            # `^` is unpack-only; pack treats it as a no-op (the
+            # accompanying values are still consumed for any
+            # surrounding directives, but `^` itself emits nothing).
+            raise "pack('^') should be empty" unless [].pack("^") == ""
+            raise "pack('C^C') should ignore '^'" unless [1, 2].pack("C^C") == "\x01\x02".b
             "##,
         );
     }

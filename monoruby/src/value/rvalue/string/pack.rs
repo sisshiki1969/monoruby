@@ -39,6 +39,13 @@ enum Template {
     Pointer,
     /// 'P' — pointer to fixed-length string
     PointerFixed,
+    /// 'R' — ULEB128 unsigned variable-length integer (Ruby 4.1+)
+    UlebUnsigned,
+    /// 'r' — SLEB128 signed variable-length integer (Ruby 4.1+)
+    SlebSigned,
+    /// '^' — current byte offset since the start of unpacking
+    /// (Ruby 4.1+)
+    Offset,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,7 +114,12 @@ impl<'a> ByteIter<'a> {
     }
 }
 
-pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value> {
+pub(crate) fn unpack(
+    packed: &[u8],
+    template: &str,
+    once: bool,
+    base_offset: usize,
+) -> Result<Value> {
     let mut template = parse_template(template, true)?;
     if once {
         template.truncate(1);
@@ -452,6 +464,66 @@ pub(crate) fn unpack(packed: &[u8], template: &str, once: bool) -> Result<Value>
                         ary.push(Value::bytes(slice.to_vec()));
                     }
                 }
+            }
+            Template::UlebUnsigned => {
+                // 'R' — ULEB128 unsigned variable-length integer.
+                // Each byte contributes 7 bits; bit 7 (MSB) signals
+                // continuation. CRuby returns `nil` for the requested
+                // count when there's no complete encoding left, but
+                // skips the slot under '*' when only an incomplete
+                // tail remains.
+                // `repeat.is_none()` is only true for the '*' suffix
+                // (see `parse_template`); a bare directive parses as
+                // `Some(1)`. The `explicit_count` field is *also*
+                // true under '*', so AND-ing it would defeat the
+                // detection.
+                let star = repeat.is_none();
+                let count = repeat.unwrap_or(usize::MAX);
+                for _ in 0..count {
+                    match unpack_uleb128(&mut b) {
+                        UlebOutcome::Value(v) => ary.push(Value::integer_from_u64(v)),
+                        UlebOutcome::Incomplete => {
+                            if !star {
+                                ary.push(Value::nil());
+                            }
+                            break;
+                        }
+                        UlebOutcome::End => break,
+                    }
+                }
+            }
+            Template::SlebSigned => {
+                // 'r' — SLEB128 signed variable-length integer. Same
+                // 7-bit-per-byte layout, but bit 6 of the final byte
+                // is sign-extended.
+                // `repeat.is_none()` is only true for the '*' suffix
+                // (see `parse_template`); a bare directive parses as
+                // `Some(1)`. The `explicit_count` field is *also*
+                // true under '*', so AND-ing it would defeat the
+                // detection.
+                let star = repeat.is_none();
+                let count = repeat.unwrap_or(usize::MAX);
+                for _ in 0..count {
+                    match unpack_sleb128(&mut b) {
+                        SlebOutcome::Value(v) => ary.push(Value::integer(v)),
+                        SlebOutcome::Incomplete => {
+                            if !star {
+                                ary.push(Value::nil());
+                            }
+                            break;
+                        }
+                        SlebOutcome::End => break,
+                    }
+                }
+            }
+            Template::Offset => {
+                // '^' — current byte offset since the start of
+                // unpacking. Always emits one Integer regardless of
+                // count. We add the caller's `base_offset` so the
+                // value is absolute when `unpack` was invoked with an
+                // `offset:` keyword (`"abc".unpack("^", offset: 1)`
+                // returns `[1]`).
+                ary.push(Value::integer((base_offset + b.i) as i64));
             }
         };
     }
@@ -899,6 +971,48 @@ pub(crate) fn pack(
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
+            Template::UlebUnsigned => {
+                // 'R' — pack one or more values as ULEB128. Under
+                // '*' (`repeat == None`) consume all remaining
+                // arguments, matching the macro-driven directives.
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if let Some(value) = iter.next() {
+                            let i = value.coerce_to_pack_u64(vm, globals)?;
+                            encode_uleb128(&mut packed, i);
+                        } else {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                    }
+                } else {
+                    while let Some(value) = iter.next() {
+                        let i = value.coerce_to_pack_u64(vm, globals)?;
+                        encode_uleb128(&mut packed, i);
+                    }
+                }
+            }
+            Template::SlebSigned => {
+                // 'r' — pack one or more values as SLEB128. Same
+                // '*' handling as `R`.
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if let Some(value) = iter.next() {
+                            let i = value.coerce_to_int_i64(vm, globals)?;
+                            encode_sleb128(&mut packed, i);
+                        } else {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                    }
+                } else {
+                    while let Some(value) = iter.next() {
+                        let i = value.coerce_to_int_i64(vm, globals)?;
+                        encode_sleb128(&mut packed, i);
+                    }
+                }
+            }
+            Template::Offset => {
+                // '^' is unpack-only — pack treats it as no-op.
+            }
         };
     }
     if let Some(mut buf_val) = buffer {
@@ -976,6 +1090,9 @@ fn parse_template(template: &str, is_unpack: bool) -> Result<Vec<TemplateNode>> 
             'w' => (Template::BerCompressedInt, Endianness::Little),
             'p' => (Template::Pointer, Endianness::Little),
             'P' => (Template::PointerFixed, Endianness::Little),
+            'R' => (Template::UlebUnsigned, Endianness::Little),
+            'r' => (Template::SlebSigned, Endianness::Little),
+            '^' => (Template::Offset, Endianness::Little),
             _ => {
                 let kind = if is_unpack { "unpack" } else { "pack" };
                 return Err(MonorubyErr::argumenterr(format!(
@@ -1436,6 +1553,111 @@ fn uu_decode_char(c: u8) -> u32 {
         (c - 32) as u32 & 0x3F
     } else {
         0
+    }
+}
+
+// --- ULEB128 / SLEB128 (DWARF-style variable-length integers) ---
+//
+// Used by the Ruby 4.1+ `R` (unsigned) and `r` (signed) directives.
+// Each byte stores 7 bits; bit 7 (the MSB) signals "more bytes
+// follow." For SLEB128 the final byte is sign-extended from bit 6.
+
+fn encode_uleb128(buf: &mut Vec<u8>, mut val: u64) {
+    loop {
+        let mut byte = (val & 0x7F) as u8;
+        val >>= 7;
+        if val != 0 {
+            byte |= 0x80;
+            buf.push(byte);
+        } else {
+            buf.push(byte);
+            break;
+        }
+    }
+}
+
+fn encode_sleb128(buf: &mut Vec<u8>, mut val: i64) {
+    loop {
+        let byte = (val & 0x7F) as u8;
+        // `val` arithmetically shifts (sign-extends) since it's i64.
+        val >>= 7;
+        // The terminator condition is: the remaining bits are all
+        // sign bits, AND bit 6 of the emitted byte already encodes
+        // that sign. Otherwise we still need a continuation byte.
+        let sign_bit = (byte & 0x40) != 0;
+        if (val == 0 && !sign_bit) || (val == -1 && sign_bit) {
+            buf.push(byte);
+            break;
+        }
+        buf.push(byte | 0x80);
+    }
+}
+
+enum UlebOutcome {
+    Value(u64),
+    /// The next byte had its continuation bit set but the source ran
+    /// out before reaching a terminating byte. Decoded bytes are
+    /// discarded.
+    Incomplete,
+    /// No bytes left to decode at all.
+    End,
+}
+
+fn unpack_uleb128(b: &mut ByteIter) -> UlebOutcome {
+    if b.is_empty() {
+        return UlebOutcome::End;
+    }
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        let byte = match b.next() {
+            Some(byte) => byte,
+            None => return UlebOutcome::Incomplete,
+        };
+        // 64-bit ceiling: 9 full payload bytes + a 10th byte whose
+        // top bit can carry exactly the high bit of the result. If
+        // shift exceeds 63, the remaining bits would overflow; CRuby
+        // truncates by dropping them, which we do via wrapping shifts.
+        let payload = (byte & 0x7F) as u64;
+        if shift < 64 {
+            result |= payload.wrapping_shl(shift);
+        }
+        if byte & 0x80 == 0 {
+            return UlebOutcome::Value(result);
+        }
+        shift += 7;
+    }
+}
+
+enum SlebOutcome {
+    Value(i64),
+    Incomplete,
+    End,
+}
+
+fn unpack_sleb128(b: &mut ByteIter) -> SlebOutcome {
+    if b.is_empty() {
+        return SlebOutcome::End;
+    }
+    let mut result: i64 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        let byte = match b.next() {
+            Some(byte) => byte,
+            None => return SlebOutcome::Incomplete,
+        };
+        let payload = (byte & 0x7F) as i64;
+        if shift < 64 {
+            result |= payload.wrapping_shl(shift);
+        }
+        shift += 7;
+        if byte & 0x80 == 0 {
+            // Sign-extend from bit 6 of the final byte.
+            if shift < 64 && (byte & 0x40) != 0 {
+                result |= (-1i64).wrapping_shl(shift);
+            }
+            return SlebOutcome::Value(result);
+        }
     }
 }
 
