@@ -1174,6 +1174,10 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
+            prism::Node::ImplicitNode { .. } => {
+                let implicit = node.as_implicit_node().unwrap();
+                return self.lower_node(&implicit.value());
+            }
             other => return Err(self.unsupported("expression", other)),
         })
     }
@@ -3566,6 +3570,7 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         ItLocalVariableReadNode { .. } => "ItLocalVariableReadNode",
         ItParametersNode { .. } => "ItParametersNode",
         NumberedParametersNode { .. } => "NumberedParametersNode",
+        ImplicitNode { .. } => "ImplicitNode",
         ImplicitRestNode { .. } => "ImplicitRestNode",
         FlipFlopNode { .. } => "FlipFlopNode",
         SourceFileNode { .. } => "SourceFileNode",
