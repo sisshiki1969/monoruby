@@ -5470,6 +5470,10 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
     let bytes = inner.as_bytes();
     let enc = inner.encoding();
     if inner.is_valid_encoding() {
+        // Already valid — copy through unchanged. `from_encoding`'s
+        // cr=Unknown is harmless here since the next access still
+        // takes the cached path of `inner` itself; this is the
+        // only branch that doesn't synthesise a fresh buffer.
         return Ok(RStringInner::from_encoding(bytes, enc));
     }
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -5486,7 +5490,11 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
         }
         _ => out.extend_from_slice(bytes),
     }
-    Ok(RStringInner::from_encoding(&out, enc))
+    // Scrub by definition produces a fully valid byte sequence under
+    // `enc`, so we eagerly classify the result. Skipping this leaves
+    // cr=Unknown and the next operation that touches cr would walk
+    // the whole buffer again.
+    Ok(RStringInner::from_encoding_scanned(&out, enc))
 }
 
 /// Block-form scrub. For each "maximal subpart" of an ill-formed
@@ -5556,7 +5564,10 @@ fn scrub_inner_with_block(
         }
         _ => out.extend_from_slice(bytes),
     }
-    Ok(RStringInner::from_encoding(&out, enc))
+    // Same eagerness rationale as `scrub_inner` — block-driven
+    // replacements produce a final buffer that's expected to satisfy
+    // `enc`, so we cache the cr now.
+    Ok(RStringInner::from_encoding_scanned(&out, enc))
 }
 
 fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
