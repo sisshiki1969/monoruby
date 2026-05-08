@@ -1244,22 +1244,7 @@ impl RStringInner {
             && is_utf8_char_boundary(&self.content, start)
             && is_utf8_char_boundary(&self.content, end);
 
-        let new_len = self.content.len() - len + replacement.len();
-        if replacement.len() > len {
-            // Need to grow: extend first, then shift
-            let extra = replacement.len() - len;
-            self.content.resize(new_len, 0);
-            // Shift tail right
-            self.content.copy_within(end..new_len - extra, end + extra);
-        } else if replacement.len() < len {
-            // Shrink: shift tail left, then truncate
-            let shrink = len - replacement.len();
-            let old_len = self.content.len();
-            self.content.copy_within(end..old_len, end - shrink);
-            self.content.truncate(new_len);
-        }
-        // Copy replacement in
-        self.content[start..start + replacement.len()].copy_from_slice(replacement);
+        self.splice_bytes(start, end, replacement);
         // Fast path 1: if the receiver was already SevenBit and the
         // spliced bytes are all ASCII, the SevenBit invariant survives
         // and we can skip the O(n) from_utf8 walk below.
@@ -1303,6 +1288,31 @@ impl RStringInner {
         } else {
             self.cr.set(cr);
         }
+    }
+
+    /// Mutate `self.content` in place: replace bytes `start..end` with
+    /// `replacement`. Encoding tag and `cr` are *not* touched — the
+    /// caller is responsible for re-classifying or otherwise updating
+    /// them. Pure data shuffling so it can be reused by the upcoming
+    /// `bytesplice_with(&RStringInner)` API.
+    fn splice_bytes(&mut self, start: usize, end: usize, replacement: &[u8]) {
+        debug_assert!(start <= end);
+        debug_assert!(end <= self.content.len());
+        let len = end - start;
+        let new_len = self.content.len() - len + replacement.len();
+        if replacement.len() > len {
+            // Need to grow: extend first, then shift the tail right.
+            let extra = replacement.len() - len;
+            self.content.resize(new_len, 0);
+            self.content.copy_within(end..new_len - extra, end + extra);
+        } else if replacement.len() < len {
+            // Shrink: shift the tail left, then truncate.
+            let shrink = len - replacement.len();
+            let old_len = self.content.len();
+            self.content.copy_within(end..old_len, end - shrink);
+            self.content.truncate(new_len);
+        }
+        self.content[start..start + replacement.len()].copy_from_slice(replacement);
     }
 
     pub fn first_code(&self) -> Result<u32> {
