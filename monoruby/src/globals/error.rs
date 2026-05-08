@@ -76,6 +76,11 @@ impl MonorubyErr {
                 v.mark(alloc);
                 lfp.mark(alloc);
             }
+            // Kernel#throw: carries the tag and value.
+            MonorubyErrKind::Throw(tag, val) => {
+                tag.mark(alloc);
+                val.mark(alloc);
+            }
             // The remaining kinds carry no `Value` payload.
             _ => {}
         }
@@ -179,6 +184,7 @@ impl MonorubyErr {
             MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
+            MonorubyErrKind::Throw(..) => "UncaughtThrowError",
             MonorubyErrKind::Retry => "Retry",
             MonorubyErrKind::Redo => "Redo",
             MonorubyErrKind::Fatal => "FatalError",
@@ -210,7 +216,10 @@ impl MonorubyErr {
             MonorubyErrKind::SystemExit(..) => SYSTEM_EXIT_ERROR_CLASS,
             MonorubyErrKind::Other(class_id) => *class_id,
             MonorubyErrKind::Fatal => FATAL_ERROR_CLASS,
-            MonorubyErrKind::MethodReturn(..) | MonorubyErrKind::Retry | MonorubyErrKind::Redo => {
+            MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::Retry
+            | MonorubyErrKind::Redo => {
                 unreachable!()
             }
         }
@@ -322,6 +331,15 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(val, target_lfp),
             String::new(),
         )
+    }
+
+    pub(crate) fn throw(tag: Value, val: Value) -> MonorubyErr {
+        let msg = if let Some(sym) = tag.try_symbol() {
+            format!("uncaught throw :{}", sym.to_string())
+        } else {
+            "uncaught throw".to_string()
+        };
+        MonorubyErr::new(MonorubyErrKind::Throw(tag, val), msg)
     }
 
     pub(crate) fn retry() -> MonorubyErr {
@@ -828,6 +846,9 @@ pub enum MonorubyErrKind {
     MethodReturn(Value, Lfp),
     Retry,
     Redo,
+    /// Kernel#throw — carries (tag, value). Not catchable by `rescue`;
+    /// only `Kernel#catch` with a matching tag intercepts it.
+    Throw(Value, Value),
     /// FatalError — raised when a Rust `panic!` is caught at an `extern "C"`
     /// boundary. Deliberately NOT catchable from Ruby `rescue` (even
     /// `rescue Exception`); propagates up to the top level.

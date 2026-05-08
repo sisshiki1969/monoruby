@@ -95,6 +95,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
+    globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
@@ -1609,6 +1611,48 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
     globals.store[fid]
         .name()
         .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
+}
+
+///
+/// Kernel.#catch
+///
+/// - catch(tag = Object.new) { |tag| ... } -> object
+///
+#[monoruby_builtin]
+fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let tag = match lfp.try_arg(0) {
+        Some(v) => v,
+        None => Value::object(OBJECT_CLASS),
+    };
+    let bh = lfp.expect_block()?;
+    match vm.invoke_block_once(globals, bh, &[tag]) {
+        Ok(val) => Ok(val),
+        Err(err) => {
+            if let MonorubyErrKind::Throw(throw_tag, throw_val) = err.kind() {
+                if tag.id() == throw_tag.id() {
+                    return Ok(*throw_val);
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+///
+/// Kernel.#throw
+///
+/// - throw(tag, value = nil) -> void
+///
+#[monoruby_builtin]
+fn throw_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let tag = lfp.arg(0);
+    let value = lfp.try_arg(1).unwrap_or(Value::nil());
+    Err(MonorubyErr::throw(tag, value))
 }
 
 ///
