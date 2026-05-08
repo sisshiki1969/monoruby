@@ -149,14 +149,9 @@ async function loadJson(path) {
       maintainAspectRatio: false,
       scales: {
         x: {
-          position: "top",
           beginAtZero: true,
           suggestedMax: Math.max(2.0, maxRatio),
-          title: {
-            display: true,
-            text: "relative speed (× YJIT, higher = monoruby faster)",
-            align: "center",
-          },
+          title: { display: true, text: "relative speed (× YJIT, higher = monoruby faster)" },
           grid: {
             color: ctx => ctx.tick.value === 1 ? "#1a1a1a" : "rgba(0,0,0,0.08)",
             lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1,
@@ -165,7 +160,7 @@ async function loadJson(path) {
         y: { ticks: { autoSkip: false, font: { size: 11 } } },
       },
       plugins: {
-        legend: { display: true, position: "top", align: "end" },
+        legend: { display: false },
         tooltip: {
           callbacks: {
             label: ctx => {
