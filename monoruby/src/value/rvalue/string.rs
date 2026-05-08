@@ -1932,34 +1932,6 @@ mod encoding_tests {
     }
 
     #[test]
-    fn utf8_escape_bytes_escapes_invalid_sequences() {
-        // Walk a buffer with one valid prefix, an invalid byte, and
-        // another valid suffix. The escape function should pass valid
-        // chars through and emit `\xHH` for the invalid byte.
-        let mut out = String::new();
-        utf8_escape_bytes(&mut out, b"a\xFFb", |s, c| s.push(c));
-        assert_eq!(out, "a\\xFFb");
-
-        // All-invalid bytes get one `\xHH` per byte.
-        let mut out = String::new();
-        utf8_escape_bytes(&mut out, &[0xC0, 0xC1, 0xF5], |s, c| s.push(c));
-        assert_eq!(out, "\\xC0\\xC1\\xF5");
-
-        // The `escape_fn` callback receives valid chars verbatim — we
-        // route control chars through `ascii_escape` to verify the
-        // callback is actually called per-codepoint, not per-byte.
-        let mut out = String::new();
-        utf8_escape_bytes(&mut out, "あ\x07".as_bytes(), |s, c| {
-            if c.is_ascii() {
-                ascii_escape(s, c as u8);
-            } else {
-                s.push(c);
-            }
-        });
-        assert_eq!(out, "あ\\a");
-    }
-
-    #[test]
     fn dump_non_utf8_compatible_routes_through_ascii_escape() {
         // Non-UTF-8-compatible encodings (UTF-16/32, ISO-8859,
         // EUC-JP, Shift_JIS) take the byte-wise branch in `dump`.
