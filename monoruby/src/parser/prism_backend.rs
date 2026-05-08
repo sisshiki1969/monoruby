@@ -1178,6 +1178,10 @@ impl<'pr> Lowerer<'pr> {
                 let implicit = node.as_implicit_node().unwrap();
                 return self.lower_node(&implicit.value());
             }
+            prism::Node::ShareableConstantNode { .. } => {
+                let sc = node.as_shareable_constant_node().unwrap();
+                return self.lower_node(&sc.write());
+            }
             other => return Err(self.unsupported("expression", other)),
         })
     }
@@ -3572,6 +3576,7 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         NumberedParametersNode { .. } => "NumberedParametersNode",
         ImplicitNode { .. } => "ImplicitNode",
         ImplicitRestNode { .. } => "ImplicitRestNode",
+        ShareableConstantNode { .. } => "ShareableConstantNode",
         FlipFlopNode { .. } => "FlipFlopNode",
         SourceFileNode { .. } => "SourceFileNode",
         SourceLineNode { .. } => "SourceLineNode",
