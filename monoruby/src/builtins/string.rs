@@ -949,7 +949,7 @@ fn index_assign(
         // mock that should not receive `to_str` when the match fails.
         let (start, end) = locate_regex_match(vm, &re, &lfp.self_val(), arg1_opt, globals)?;
         let subst = arg_val.coerce_to_string(vm, globals)?;
-        replace_byte_range(lfp.self_val(), start, end, &subst);
+        replace_byte_range(globals, lfp.self_val(), start, end, &subst)?;
         return Ok(arg_val);
     }
 
@@ -968,7 +968,7 @@ fn index_assign(
             Some(p) => p,
             None => return Err(MonorubyErr::indexerr("string not matched")),
         };
-        replace_byte_range(lfp.self_val(), pos, pos + needle.len(), &subst);
+        replace_byte_range(globals, lfp.self_val(), pos, pos + needle.len(), &subst)?;
         return Ok(arg_val);
     }
 
@@ -1128,15 +1128,16 @@ fn locate_regex_match(
     }
 }
 
-fn replace_byte_range(mut self_val: Value, start: usize, end: usize, subst: &str) {
+fn replace_byte_range(
+    globals: &Globals,
+    mut self_val: Value,
+    start: usize,
+    end: usize,
+    subst: &str,
+) -> Result<()> {
+    let repl = RStringInner::from_str_scanned(subst);
     let inner = self_val.as_rstring_inner_mut();
-    let mut buf = inner.as_bytes().to_vec();
-    buf.splice(start..end, subst.as_bytes().iter().copied());
-    // Encoding-preserving construction is a separate concern; for
-    // now treat the result as UTF-8, which matches the rest of the
-    // string-builder paths in this file.
-    let s = String::from_utf8(buf).unwrap_or_default();
-    *inner = RStringInner::from_string(s);
+    inner.bytesplice_with(start, end - start, &repl, &globals.store)
 }
 
 ///
@@ -1937,9 +1938,15 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
 
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
     let self_s = self_.expect_str(globals)?;
-    let res = chomp_sub(self_s, rs);
-    Ok(Value::string_from_str(res))
+    // `chomp_sub` returns a prefix of `self_s`; its length is the
+    // byte-end of the substring. `from_substring` propagates the
+    // parent's cached cr in O(1) on a single-byte trim.
+    let new_end = chomp_sub(self_s, rs).len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, 0, new_end,
+    )))
 }
 
 ///
@@ -1964,12 +1971,14 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
 
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
     let self_s = self_.expect_str(globals)?;
-    let res = chomp_sub(self_s, rs);
-    if res.len() == self_s.len() {
+    let new_end = chomp_sub(self_s, rs).len();
+    if new_end == self_s.len() {
         Ok(Value::nil())
     } else {
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_str(res);
+        let trimmed = RStringInner::from_substring(inner, 0, new_end);
+        lfp.self_val().replace_with_inner(trimmed);
         Ok(lfp.self_val())
     }
 }
@@ -1985,11 +1994,15 @@ const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
 #[monoruby_builtin]
 fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val
-        .expect_str(globals)?
-        .trim_end_matches(STRIP)
-        .trim_start_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let after_rtrim = s.trim_end_matches(STRIP);
+    let new_end = after_rtrim.len();
+    let after_ltrim = after_rtrim.trim_start_matches(STRIP);
+    let new_start = new_end - after_ltrim.len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, new_start, new_end,
+    )))
 }
 
 ///
@@ -2002,12 +2015,17 @@ fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_end_matches(STRIP).trim_start_matches(STRIP);
-    if self_.len() == orig.len() {
+    let after_rtrim = orig.trim_end_matches(STRIP);
+    let new_end = after_rtrim.len();
+    let after_ltrim = after_rtrim.trim_start_matches(STRIP);
+    let new_start = new_end - after_ltrim.len();
+    if new_end - new_start == orig.len() {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let trimmed = RStringInner::from_substring(inner, new_start, new_end);
+    lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
 
@@ -2020,8 +2038,12 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val.expect_str(globals)?.trim_end_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let new_end = s.trim_end_matches(STRIP).len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner, 0, new_end,
+    )))
 }
 
 ///
@@ -2034,12 +2056,14 @@ fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_end_matches(STRIP);
-    if self_.len() == orig.len() {
+    let new_end = orig.trim_end_matches(STRIP).len();
+    if new_end == orig.len() {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let trimmed = RStringInner::from_substring(inner, 0, new_end);
+    lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
 
@@ -2052,8 +2076,15 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let self_ = self_val.expect_str(globals)?.trim_start_matches(STRIP);
-    Ok(Value::string_from_str(self_))
+    let inner = self_val.as_rstring_inner();
+    let s = self_val.expect_str(globals)?;
+    let trimmed = s.trim_start_matches(STRIP);
+    let new_start = s.len() - trimmed.len();
+    Ok(Value::string_from_inner(RStringInner::from_substring(
+        inner,
+        new_start,
+        s.len(),
+    )))
 }
 
 ///
@@ -2066,12 +2097,15 @@ fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
     let orig = self_val.expect_str(globals)?;
-    let self_ = orig.trim_start_matches(STRIP);
-    if self_.len() == orig.len() {
+    let trimmed = orig.trim_start_matches(STRIP);
+    let new_start = orig.len() - trimmed.len();
+    if new_start == 0 {
         return Ok(Value::nil());
     }
-    lfp.self_val().replace_str(self_);
+    let result = RStringInner::from_substring(inner, new_start, orig.len());
+    lfp.self_val().replace_with_inner(result);
     Ok(lfp.self_val())
 }
 
@@ -2086,7 +2120,7 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     require_sub_block_or_replacement(&lfp, "sub")?;
     let (res, _) = sub_main(vm, globals, lfp.self_val(), lfp)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_inner(res))
 }
 
 ///
@@ -2102,7 +2136,7 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, lfp)?;
-    self_.replace_string(res);
+    self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
 }
@@ -2124,7 +2158,7 @@ fn sub_main(
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
-) -> Result<(String, bool)> {
+) -> Result<(RStringInner, bool)> {
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -2198,7 +2232,7 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         );
     }
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), lfp)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_inner(res))
 }
 
 ///
@@ -2222,7 +2256,7 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
-    self_.replace_string(res);
+    self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
 }
@@ -2232,7 +2266,7 @@ fn gsub_main(
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
-) -> Result<(String, bool)> {
+) -> Result<(RStringInner, bool)> {
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -3364,24 +3398,30 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     }
 
-    // Check encoding compatibility
-    match (self_enc, str_enc) {
-        (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
-            if !replacement.is_ascii() && !self_.as_rstring_inner().as_bytes().is_ascii() {
-                return Err(MonorubyErr::runtimeerr(
-                    "incompatible character encodings: UTF-8 and ASCII-8BIT",
-                ));
-            }
-        }
-        (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
-            // OK
-        }
-        _ => {}
-    }
-
+    // Encoding-compatibility is delegated to `bytesplice_with`,
+    // which raises `Encoding::CompatibilityError` (matching CRuby)
+    // when the receiver and replacement disagree. The bytes were
+    // already extracted as a sub-slice, so we wrap them with the
+    // source string's encoding to preserve its semantics — the
+    // splice can promote the receiver's encoding (e.g. US-ASCII
+    // target + UTF-8 replacement → UTF-8 result, mirroring
+    // `String#+`).
+    //
+    // *Empty* replacements are special: `s.clear` (and
+    // `s.bytesplice(0, n, "")`) must not promote the receiver's
+    // encoding to the replacement's, since no source bytes are
+    // actually introduced. Tag the empty slice with the
+    // receiver's own encoding so `compatible_encoding`'s
+    // empty-other rule trivially returns `self_enc`.
+    let repl_enc = if replacement.is_empty() {
+        self_enc
+    } else {
+        str_enc
+    };
+    let repl_inner = RStringInner::from_encoding_scanned(replacement, repl_enc);
     self_
         .as_rstring_inner_mut()
-        .bytesplice(start, splice_len, replacement);
+        .bytesplice_with(start, splice_len, &repl_inner, &globals.store)?;
 
     Ok(self_)
 }
@@ -4081,7 +4121,13 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Upcase, mode)))
+    // `apply_case` walks `chars()` and pushes whole scalars, so the
+    // output is well-formed UTF-8 by construction; pre-scan it so
+    // the cr lands as SevenBit/Valid up front and the next access
+    // doesn't have to walk the buffer again.
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Upcase, mode),
+    )))
 }
 
 ///
@@ -4098,7 +4144,7 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Upcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
 
     Ok(if changed {
         lfp.self_val()
@@ -4118,7 +4164,9 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Downcase, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Downcase, mode),
+    )))
 }
 
 ///
@@ -4135,7 +4183,7 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Downcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
 
     Ok(if changed {
         lfp.self_val()
@@ -4160,7 +4208,9 @@ fn capitalize(
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Capitalize, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Capitalize, mode),
+    )))
 }
 
 ///
@@ -4182,7 +4232,7 @@ fn capitalize_(
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Capitalize, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -4201,7 +4251,9 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string(apply_case(s, CaseOp::Swapcase, mode)))
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        apply_case(s, CaseOp::Swapcase, mode),
+    )))
 }
 
 ///
@@ -4218,7 +4270,7 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Swapcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_string(result);
+    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -5469,7 +5521,12 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
     let bytes = inner.as_bytes();
     let enc = inner.encoding();
     if inner.is_valid_encoding() {
-        return Ok(RStringInner::from_encoding(bytes, enc));
+        // Already valid — clone the receiver so the result inherits
+        // its cached cr instead of reverting to Unknown. Same alloc
+        // cost as `from_encoding(bytes, enc)` (both copy `bytes`),
+        // but preserves the SevenBit/Valid classification the caller
+        // had already paid for.
+        return Ok(inner.clone());
     }
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     match enc {
@@ -5485,7 +5542,11 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
         }
         _ => out.extend_from_slice(bytes),
     }
-    Ok(RStringInner::from_encoding(&out, enc))
+    // Scrub by definition produces a fully valid byte sequence under
+    // `enc`, so we eagerly classify the result. Skipping this leaves
+    // cr=Unknown and the next operation that touches cr would walk
+    // the whole buffer again.
+    Ok(RStringInner::from_encoding_scanned(&out, enc))
 }
 
 /// Block-form scrub. For each "maximal subpart" of an ill-formed
@@ -5503,7 +5564,8 @@ fn scrub_inner_with_block(
     let bytes = inner.as_bytes();
     let enc = inner.encoding();
     if inner.is_valid_encoding() {
-        return Ok(RStringInner::from_encoding(bytes, enc));
+        // Same cr-preservation rationale as `scrub_inner` above.
+        return Ok(inner.clone());
     }
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let data = vm.get_block_data(globals, bh)?;
@@ -5555,7 +5617,10 @@ fn scrub_inner_with_block(
         }
         _ => out.extend_from_slice(bytes),
     }
-    Ok(RStringInner::from_encoding(&out, enc))
+    // Same eagerness rationale as `scrub_inner` — block-driven
+    // replacements produce a final buffer that's expected to satisfy
+    // `enc`, so we cache the cr now.
+    Ok(RStringInner::from_encoding_scanned(&out, enc))
 }
 
 fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
@@ -5826,9 +5891,13 @@ fn unicode_normalize_(
         _ => unreachable!(),
     };
     let old_len = lfp.self_val().as_rstring_inner().len();
+    // NFC/NFD/NFKC/NFKD output is well-formed UTF-8 by construction,
+    // so `from_string_scanned` lets the splice land in the Valid /
+    // SevenBit fast path without re-classifying afterwards.
+    let repl = RStringInner::from_string_scanned(result);
     lfp.self_val()
         .as_rstring_inner_mut()
-        .bytesplice(0, old_len, result.as_bytes());
+        .bytesplice_with(0, old_len, &repl, &globals.store)?;
     Ok(lfp.self_val())
 }
 

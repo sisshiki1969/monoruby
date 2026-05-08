@@ -362,9 +362,9 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         replace: &str,
-    ) -> Result<(String, bool)> {
-        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, _| {
-            re.replace_once(vm, given, replace)
+    ) -> Result<(RStringInner, bool)> {
+        Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
+            re.replace_once(vm, &globals.store, given, replace)
         })
         .map(|(s, c)| (s, c.is_some()))
     }
@@ -375,18 +375,18 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         bh: BlockHandler,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
-                None => Ok((given.to_string(), false)),
+                None => Ok((RStringInner::from_str_scanned(given), false)),
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let mut res = given.to_string();
+                    let mut res = RStringInner::from_str_scanned(given);
                     let matched = Value::string_from_str(matched_str);
                     let result = vm.invoke_block_once(globals, bh, &[matched])?;
-                    let s = block_result_to_string(vm, globals, result)?;
-                    res.replace_range(start..end, &s);
+                    let rep_inner = block_result_to_inner(vm, globals, result)?;
+                    res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
             }
@@ -400,9 +400,9 @@ impl RegexpInner {
         regexp: Value,
         given: &str,
         replace: &str,
-    ) -> Result<(String, bool)> {
-        Self::with_coerced_regexp(vm, globals, regexp, |re, vm, _| {
-            re.replace_repeat(vm, given, replace)
+    ) -> Result<(RStringInner, bool)> {
+        Self::with_coerced_regexp(vm, globals, regexp, |re, vm, globals| {
+            re.replace_repeat(vm, &globals.store, given, replace)
         })
     }
 
@@ -414,7 +414,7 @@ impl RegexpInner {
         given: &str,
         bh: BlockHandler,
         self_enc: Option<crate::value::Encoding>,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             let mut range = vec![];
             let data = vm.get_block_data(globals, bh)?;
@@ -443,16 +443,16 @@ impl RegexpInner {
                         }
                     }
                 }
-                let replace = block_result_to_string(vm, globals, result)?;
+                let replace = block_result_to_inner(vm, globals, result)?;
 
                 range.push((m.range(), replace));
             }
 
-            let mut res = given.to_string();
+            let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
 
-            for (range, replace) in range.into_iter().rev() {
-                res.replace_range(range, &replace);
+            for (r, rep_inner) in range.into_iter().rev() {
+                res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
             }
 
             Ok((res, !is_empty))
@@ -469,17 +469,17 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         hash_val: Value,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
-                None => Ok((given.to_string(), false)),
+                None => Ok((RStringInner::from_str_scanned(given), false)),
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let mut res = given.to_string();
+                    let mut res = RStringInner::from_str_scanned(given);
                     let key = Value::string_from_str(matched_str);
-                    let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
-                    res.replace_range(start..end, &replacement);
+                    let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key)?;
+                    res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
             }
@@ -493,7 +493,7 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         hash_val: Value,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             let mut range = vec![];
 
@@ -510,11 +510,11 @@ impl RegexpInner {
                 range.push((m.range(), replacement));
             }
 
-            let mut res = given.to_string();
+            let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
 
-            for (range, replace) in range.into_iter().rev() {
-                res.replace_range(range, &replace);
+            for (r, rep_inner) in range.into_iter().rev() {
+                res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
             }
 
             Ok((res, !is_empty))
@@ -602,13 +602,18 @@ impl RegexpInner {
     /// Replace all matches for `self` in `given` string with `replace`.
     ///
     /// ### return
-    /// (replaced:String, is_replaced?:bool)
+    /// `(replaced: RStringInner, is_replaced?: bool)`. The result
+    /// inherits the receiver-side encoding implicit in `given`
+    /// (always UTF-8 today, since the caller goes through
+    /// `expect_str`); cr is propagated through `bytesplice_with`
+    /// rather than re-classified after the fact.
     fn replace_repeat(
         &self,
         vm: &mut Executor,
+        store: &Store,
         given: &str,
         replace: &str,
-    ) -> Result<(String, bool)> {
+    ) -> Result<(RStringInner, bool)> {
         // Walk the haystack manually rather than relying on
         // `captures_iter`, which can skip the zero-width match that
         // sits between two non-empty matches (e.g.
@@ -642,10 +647,15 @@ impl RegexpInner {
                 next
             };
         }
-        let mut res = given.to_string();
+        let mut res = RStringInner::from_str_scanned(given);
         let is_empty = replacements.is_empty();
         for (r, rep) in replacements.into_iter().rev() {
-            res.replace_range(r, &rep);
+            // `r` is a UTF-8 byte range produced by Onigmo, so it
+            // sits on character boundaries; `rep` is the
+            // backref-expanded replacement, which inherits the
+            // splice substring's UTF-8 validity.
+            let rep_inner = RStringInner::from_string_scanned(rep);
+            res.bytesplice_with(r.start, r.end - r.start, &rep_inner, store)?;
         }
 
         if let Some(c) = last_captures {
@@ -787,44 +797,57 @@ impl RegexpInner {
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
     ///
-    /// ### return
-    /// replaced:String
+    /// `(replaced: RStringInner, captures)`. See `replace_repeat`
+    /// for why we build the result via `bytesplice_with` rather
+    /// than `String::replace_range`.
     fn replace_once<'a>(
         &self,
         vm: &mut Executor,
+        store: &Store,
         given: &'a str,
         replace: &str,
-    ) -> Result<(String, Option<Captures<'a>>)> {
+    ) -> Result<(RStringInner, Option<Captures<'a>>)> {
         match self.captures(given, vm)? {
-            None => Ok((given.to_string(), None)),
+            None => Ok((RStringInner::from_str_scanned(given), None)),
             Some(captures) => {
-                let mut res = given.to_string();
+                let mut res = RStringInner::from_str_scanned(given);
                 let m = captures.get(0).unwrap();
                 let rep = self.expand_backref(replace, given, &captures);
-                res.replace_range(m.start()..m.end(), &rep);
+                let rep_inner = RStringInner::from_string_scanned(rep);
+                res.bytesplice_with(m.start(), m.end() - m.start(), &rep_inner, store)?;
                 Ok((res, Some(captures)))
             }
         }
     }
 }
 
-/// Coerce the result of a `String#sub`/`#gsub` block to a String,
-/// calling user-defined `to_s` so a mock returning a non-String
-/// from `to_s` is exercised. Falls back to monoruby's intrinsic
-/// `to_s` rendering when the object's `to_s` doesn't return a String.
-fn block_result_to_string(
+/// Coerce the result of a `String#sub`/`#gsub` block to an
+/// `RStringInner`, calling user-defined `to_s` so a mock returning
+/// a non-String from `to_s` is exercised. Falls back to monoruby's
+/// intrinsic `to_s` rendering when the object's `to_s` doesn't
+/// return a String. Returns the `RStringInner` directly so callers
+/// don't have to round-trip through `String` and re-classify.
+///
+/// Result encoding mirrors `block_result_to_string`'s pre-existing
+/// behaviour: `is_str()` validates the bytes are UTF-8 and surfaces
+/// `ArgumentError: invalid byte sequence in UTF-8` for non-UTF-8
+/// receivers. Callers (e.g. `replace_all_block`) layer their own
+/// `Encoding::CompatibilityError` checks on top.
+fn block_result_to_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     v: Value,
-) -> Result<String> {
+) -> Result<RStringInner> {
     if let Some(s) = v.is_str() {
-        return Ok(s.to_string());
+        return Ok(RStringInner::from_str_scanned(s));
     }
     let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
     if let Some(s) = coerced.is_str() {
-        Ok(s.to_string())
+        Ok(RStringInner::from_str_scanned(s))
     } else {
-        Ok(coerced.to_s(&globals.store))
+        // Intrinsic fallback produces `String`; pre-classify it
+        // so the splice that follows lands on a fast path.
+        Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store)))
     }
 }
 
@@ -839,19 +862,19 @@ fn lookup_hash_replacement(
     globals: &mut Globals,
     hash: Value,
     key: Value,
-) -> Result<String> {
+) -> Result<RStringInner> {
     let v =
         vm.invoke_method_inner(globals, IdentId::_INDEX, hash, &[key], None, None)?;
     if v.is_nil() {
-        Ok(String::new())
+        Ok(RStringInner::from_str_scanned(""))
     } else if let Some(s) = v.is_str() {
-        Ok(s.to_string())
+        Ok(RStringInner::from_str_scanned(s))
     } else {
         // CRuby coerces non-String hash values via `Object#to_s`.
-        let s = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
-        match s.is_str() {
-            Some(s) => Ok(s.to_string()),
-            None => Ok(s.to_s(&globals.store)),
+        let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+        match coerced.is_str() {
+            Some(s) => Ok(RStringInner::from_str_scanned(s)),
+            None => Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store))),
         }
     }
 }

@@ -2183,6 +2183,15 @@ impl Value {
         unsafe { *self.rvalue_mut().as_rstring_mut() = RStringInner::from_string(replace) };
     }
 
+    /// Replace the underlying `RStringInner` with the supplied one.
+    /// Used by `sub!` / `gsub!` to land an already-built result
+    /// (with cached cr / encoding) without an extra String round-trip.
+    pub(crate) fn replace_with_inner(&mut self, inner: RStringInner) {
+        assert_eq!(ObjTy::STRING, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a string.
+        unsafe { *self.rvalue_mut().as_rstring_mut() = inner };
+    }
+
     pub(crate) fn replace_str(&mut self, replace: &str) {
         assert_eq!(ObjTy::STRING, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a string.
