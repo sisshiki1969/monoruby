@@ -863,6 +863,7 @@ impl Store {
         let mut optional_num = 0;
         let mut post_num = 0;
         let mut rest = None;
+        let mut rest_is_implicit = false;
         let mut kw_rest_param = None;
         let mut block_param = None;
         let mut for_param_info = vec![];
@@ -897,10 +898,21 @@ impl Store {
                     rest = Some(args_names.len());
                     args_names.push(name.map(IdentId::get_id_from_string));
                 }
+                ParamKind::ImplicitRest => {
+                    // `|a,|` — synthetic anonymous rest emitted for a
+                    // block-param trailing comma. Allocates a slot
+                    // (so block dispatch can use it as a regular rest)
+                    // but flags `rest_is_implicit` so arity / strict
+                    // checks treat it as absent. Semantically it's
+                    // equivalent to `|a, *|` for proc/block but to
+                    // `|a|` for `define_method` / lambda. See
+                    // `ParamsInfo::is_explicit_rest`.
+                    assert_eq!(rest, None);
+                    rest = Some(args_names.len());
+                    rest_is_implicit = true;
+                    args_names.push(None);
+                }
                 ParamKind::Post(name) => {
-                    // Anonymous post (`None`) is emitted for block-trailing
-                    // comma auto-splat (`|k,|`); it bumps the positional
-                    // arity but does NOT allocate a named local.
                     args_names.push(name.map(IdentId::get_id_from_string));
                     post_num += 1;
                 }
@@ -944,6 +956,7 @@ impl Store {
             required_num,
             optional_num,
             rest,
+            rest_is_implicit,
             post_num,
             args_names,
             keyword_names,

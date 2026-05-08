@@ -584,6 +584,15 @@ pub(crate) struct ParamsInfo {
     optional_num: usize,
     /// rest
     rest: Option<usize>,
+    /// True when `rest` was introduced by a trailing comma (Prism's
+    /// `ImplicitRestNode`, e.g. `|a,|`) rather than an explicit
+    /// `*name` / `*`. An implicit rest behaves like a normal rest at
+    /// block dispatch (extras absorbed, total positional bumped so
+    /// `single_arg_expand` still triggers single-Array auto-splat),
+    /// but does *not* count toward `arity` / strict-arity checks —
+    /// `define_method(:m) { |a,| }; m.arity` is `1`, `m(1, 2)` raises
+    /// `ArgumentError`, matching CRuby.
+    rest_is_implicit: bool,
     /// post
     post_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, kw_rest, destructed local, block
@@ -599,6 +608,7 @@ impl ParamsInfo {
         required_num: usize,
         optional_num: usize,
         rest: Option<usize>,
+        rest_is_implicit: bool,
         post_num: usize,
         args_names: Vec<Option<IdentId>>,
         keyword_names: Vec<IdentId>,
@@ -610,6 +620,7 @@ impl ParamsInfo {
             required_num,
             optional_num,
             rest,
+            rest_is_implicit,
             post_num,
             args_names,
             kw_names: keyword_names,
@@ -628,6 +639,7 @@ impl ParamsInfo {
             required_num: 1,
             optional_num: 0,
             rest: None,
+            rest_is_implicit: false,
             post_num: 0,
             args_names: vec![],
             kw_names: vec![],
@@ -655,6 +667,7 @@ impl ParamsInfo {
             } else {
                 None
             },
+            rest_is_implicit: false,
             post_num: 0,
             args_names: vec![],
             kw_names,
@@ -699,6 +712,24 @@ impl ParamsInfo {
     ///
     pub fn is_rest(&self) -> Option<u16> {
         self.rest.map(|i| i as u16)
+    }
+
+    /// Like `is_rest`, but only returns the position when `rest` is
+    /// an explicit `*name` / `*`. The trailing-comma `|a,|` form is
+    /// not counted — used by arity reporting and the method-style
+    /// strict-arity check so `|a,|` reports `arity = 1` and rejects
+    /// extras at `define_method` call time, while still letting block
+    /// dispatch absorb extras (via the regular `is_rest` path).
+    pub fn is_explicit_rest(&self) -> Option<u16> {
+        if self.rest_is_implicit {
+            None
+        } else {
+            self.is_rest()
+        }
+    }
+
+    pub fn rest_is_implicit(&self) -> bool {
+        self.rest_is_implicit
     }
 
     #[allow(dead_code)]

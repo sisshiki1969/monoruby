@@ -205,14 +205,19 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
         result.push(entry);
         name_idx += 1;
     }
-    // rest param
+    // rest param — but skip the implicit trailing-comma rest (`|a,|`)
+    // since CRuby's `Method#parameters` reports `[[:req, :a]]`, not
+    // `[[:req, :a], [:rest]]`. The slot still exists internally for
+    // the runtime arg dispatcher to absorb extras under block style.
     if params.is_rest().is_some() {
-        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
-            Value::array2(rest_tag, Value::symbol(*name))
-        } else {
-            Value::array1(rest_tag)
-        };
-        result.push(entry);
+        if !params.rest_is_implicit() {
+            let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+                Value::array2(rest_tag, Value::symbol(*name))
+            } else {
+                Value::array1(rest_tag)
+            };
+            result.push(entry);
+        }
         name_idx += 1;
     }
     // post params (required after rest)

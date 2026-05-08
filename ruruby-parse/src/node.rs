@@ -189,8 +189,12 @@ impl FormalParam {
 
     /// Anonymous post param, used to inject a trailing-comma auto-splat
     /// hint into block / lambda parameter lists. Does not allocate a local.
+    /// Lowers `|a,|`-style trailing commas to `ParamKind::ImplicitRest`
+    /// so the rest-slot only counts toward block-style auto-splat /
+    /// extras absorption, not toward `arity` or method-style strict
+    /// checks.
     pub(crate) fn post_discard(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Post(None), loc)
+        FormalParam::new(ParamKind::ImplicitRest, loc)
     }
 
     pub(crate) fn keyword(name: String, default: Option<Node>, loc: Loc) -> Self {
@@ -231,6 +235,13 @@ pub enum ParamKind {
     Post(Option<String>),
     Optional(String, Box<Node>), // name, default expr
     Rest(Option<String>),
+    /// Trailing-comma rest (`|a,|`): a Prism `ImplicitRestNode`.
+    /// Acts like an anonymous rest only when the body is invoked
+    /// block-style (proc/yield) — extras are absorbed and a single
+    /// Array argument auto-splats. In method-style (`define_method`)
+    /// it disappears: arity counts the required params alone, and
+    /// passing extras raises `ArgumentError`. Carries no local slot.
+    ImplicitRest,
     Keyword(String, Option<Box<Node>>), // name, default expr
     KWRest(Option<String>),
     Block(Option<String>),

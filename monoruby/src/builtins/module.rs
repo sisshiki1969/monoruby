@@ -6008,4 +6008,99 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn define_method_trailing_comma_arity_is_one() {
+        // CRuby's `|a,|` reports `arity = 1` (not 2) for both proc
+        // and method/lambda forms — the trailing comma is a hint to
+        // the runtime, not a "second required arg".
+        run_test(
+            r#"
+            class C; define_method(:m) { |a,| a }; end
+            C.new.method(:m).arity
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_trailing_comma_parameters() {
+        // `Method#parameters` should report the trailing-comma rest
+        // as absent — only the explicit positionals appear.
+        run_test(
+            r#"
+            class C; define_method(:m) { |a,| a }; end
+            C.new.method(:m).parameters
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_trailing_comma_strict_arity_rejects_extras() {
+        // The method form is strict: passing extras raises
+        // ArgumentError even though the block-form proc would absorb
+        // them.
+        run_test_error(
+            r#"
+            class C; define_method(:m) { |a,| a }; end
+            C.new.m(1, 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_trailing_comma_no_destructure() {
+        // `m([1, 2])` returns `[1, 2]` whole — trailing-comma in
+        // method form does NOT auto-splat a single Array argument.
+        run_test(
+            r#"
+            class C; define_method(:m) { |a,| a }; end
+            C.new.m([1, 2])
+            "#,
+        );
+    }
+
+    #[test]
+    fn proc_trailing_comma_block_form_auto_splats() {
+        // The block form: `proc { |a,| a }.call([1, 2])` returns 1
+        // because the trailing comma's "block-style implicit rest"
+        // makes the caller treat a single Array as auto-splat.
+        run_test(
+            r#"
+            proc { |a,| a }.call([1, 2])
+            "#,
+        );
+    }
+
+    #[test]
+    fn proc_trailing_comma_block_form_absorbs_extras() {
+        // Without strict-arity (block form), extras are absorbed.
+        run_test(
+            r#"
+            proc { |a,| a }.call(1, 2, 3)
+            "#,
+        );
+    }
+
+    #[test]
+    fn lambda_trailing_comma_arity_is_one() {
+        // The `lambda` form is method-style strict but reports the
+        // same arity = 1 as proc.
+        run_test(
+            r#"
+            lambda { |a,| a }.arity
+            "#,
+        );
+    }
+
+    #[test]
+    fn explicit_anonymous_rest_arity_negative() {
+        // Sanity: an *explicit* anonymous rest still flips arity to
+        // the negative form (`-2`).
+        run_test(
+            r#"
+            class C; define_method(:m) { |a, *| a }; end
+            C.new.method(:m).arity
+            "#,
+        );
+    }
 }
