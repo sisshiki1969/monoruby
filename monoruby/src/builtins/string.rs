@@ -656,13 +656,28 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let given = self_val.expect_str(globals)?;
-    let regex = &lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
-    let res = match regex.find_one(vm, given)? {
-        Some(r) => Value::integer(r.start as i64),
-        None => Value::nil(),
-    };
-    Ok(res)
+    let other = lfp.arg(0);
+    // Fast path: rhs is already a Regexp or String — go through the
+    // standard regex match.
+    if other.is_regex().is_some() || other.is_str().is_some() {
+        let given = self_val.expect_str(globals)?;
+        let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
+        let res = match regex.find_one(vm, given)? {
+            Some(r) => Value::integer(r.start as i64),
+            None => Value::nil(),
+        };
+        return Ok(res);
+    }
+    // CRuby: when rhs is neither Regexp nor String, dispatch to
+    // `rhs =~ self` so a user-defined `=~` (e.g. on a Mock) is
+    // honoured. This must come BEFORE `to_str` coercion — CRuby
+    // doesn't try `to_str` for `=~` at all.
+    if let Some(fid) = globals.check_method(other, IdentId::_MATCH) {
+        return vm.invoke_func_inner(globals, fid, other, &[self_val], None, None);
+    }
+    // Last resort: surface the original "is not a regexp nor a
+    // string" error.
+    Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, other))
 }
 
 ///
