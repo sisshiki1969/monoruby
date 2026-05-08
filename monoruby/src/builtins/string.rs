@@ -2087,7 +2087,7 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     require_sub_block_or_replacement(&lfp, "sub")?;
     let (res, _) = sub_main(vm, globals, lfp.self_val(), lfp)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_inner(res))
 }
 
 ///
@@ -2103,7 +2103,7 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, lfp)?;
-    self_.replace_string(res);
+    self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
 }
@@ -2125,7 +2125,7 @@ fn sub_main(
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
-) -> Result<(String, bool)> {
+) -> Result<(RStringInner, bool)> {
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -2199,7 +2199,7 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         );
     }
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), lfp)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_inner(res))
 }
 
 ///
@@ -2223,7 +2223,7 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
-    self_.replace_string(res);
+    self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
 }
@@ -2233,7 +2233,7 @@ fn gsub_main(
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
-) -> Result<(String, bool)> {
+) -> Result<(RStringInner, bool)> {
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
