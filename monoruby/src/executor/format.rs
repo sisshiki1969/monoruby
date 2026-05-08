@@ -1,5 +1,6 @@
 use super::*;
 use crate::value::IntegerBase;
+use num::BigInt;
 
 /// Apply integer precision: pad digits with leading zeros to at
 /// least `prec` digits. Special-case: precision 0 with value 0
@@ -91,7 +92,9 @@ fn format_float_with_flags(
         ""
     };
     let body = format!("{}{}", sign, s);
-    if zero_flag && width > body.len() {
+    // `0` flag is ignored for Inf / NaN — CRuby pads with spaces in
+    // these cases (`%010E` on `Float::INFINITY` → `"       Inf"`).
+    if zero_flag && f.is_finite() && width > body.len() {
         let pad = width - sign.len();
         format!("{}{:0>w$}", sign, s, w = pad)
     } else {
@@ -242,9 +245,23 @@ fn hex_digit_val(b: u8) -> u8 {
 /// Format a float using %g/%G rules:
 /// Use scientific notation if exponent < -4 or >= precision, otherwise fixed.
 /// Strip trailing zeros after decimal point (and the point itself if no digits remain).
-fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
+/// When `keep_trailing` is true (`#` flag), trailing zeros and the
+/// decimal point are preserved so that the result has `precision`
+/// significant digits.
+fn format_g(f: f64, precision: usize, uppercase: bool, keep_trailing: bool) -> String {
     if f == 0.0 {
-        return "0".to_string();
+        return if keep_trailing {
+            // `%#g % 0` keeps the precision-driven zeros (e.g.
+            // `"%#g" % 0 == "0.00000"`).
+            let extra = precision.saturating_sub(1);
+            if extra == 0 {
+                "0.".to_string()
+            } else {
+                format!("0.{}", "0".repeat(extra))
+            }
+        } else {
+            "0".to_string()
+        };
     }
     if f.is_infinite() {
         return if f > 0.0 {
@@ -265,8 +282,13 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
         } else {
             format!("{:.p$e}", f, p = sci_prec)
         };
-        // Strip trailing zeros in the mantissa part (before 'e'/'E')
-        strip_trailing_zeros_scientific(&s)
+        if keep_trailing {
+            // Spec: `%#.0e % 100 == "1.e+02"` — empty fractional
+            // part still gets the decimal point.
+            ensure_decimal_point_scientific(&s)
+        } else {
+            strip_trailing_zeros_scientific(&s)
+        }
     } else {
         // Use fixed notation
         // precision means total significant digits
@@ -276,7 +298,34 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
             0
         };
         let s = format!("{:.p$}", f, p = fixed_prec);
-        strip_trailing_zeros_fixed(&s)
+        if keep_trailing {
+            // Spec: `%#g % 123456 == "123456."` (precision 6, no
+            // fractional digits — but a `.` is still emitted).
+            if s.contains('.') {
+                s
+            } else {
+                format!("{}.", s)
+            }
+        } else {
+            strip_trailing_zeros_fixed(&s)
+        }
+    }
+}
+
+/// Ensure the mantissa of a scientific-notation float string has a
+/// `.` (used by the `#` flag with `%e`/`%g`).
+fn ensure_decimal_point_scientific(s: &str) -> String {
+    let (mantissa, exponent) = if let Some(pos) = s.find('e') {
+        (&s[..pos], &s[pos..])
+    } else if let Some(pos) = s.find('E') {
+        (&s[..pos], &s[pos..])
+    } else {
+        return s.to_string();
+    };
+    if mantissa.contains('.') {
+        s.to_string()
+    } else {
+        format!("{}.{}", mantissa, exponent)
     }
 }
 
@@ -328,6 +377,81 @@ fn normalize_sci_exponent(s: &str) -> String {
     }
 }
 
+/// Width padding for `..`-prefixed two's-complement bodies. With the
+/// `0` flag, padding is inserted *between* the `..` prefix and the
+/// digits using the radix-1 fill char (so `%010b` on -10 becomes
+/// `..11110110`, not `   ..10110`). Without `0`, ordinary
+/// space-padding is applied to the whole body.
+fn apply_twos_complement_width(
+    s: &str,
+    width: usize,
+    zero_flag: bool,
+    left_align: bool,
+    fill: char,
+) -> String {
+    if s.len() >= width || !zero_flag || left_align {
+        return apply_width(s, width, left_align, ' ');
+    }
+    let (head, digits) = if let Some(idx) = s.find("..") {
+        (&s[..idx + 2], &s[idx + 2..])
+    } else {
+        ("", s)
+    };
+    let pad_len = width.saturating_sub(s.len());
+    let padding: String = std::iter::repeat(fill).take(pad_len).collect();
+    format!("{}{}{}", head, padding, digits)
+}
+
+fn apply_twos_complement_precision(s: &str, precision: usize, fill: char) -> String {
+    if s.len() >= precision {
+        return s.to_string();
+    }
+    let (head, digits) = if let Some(idx) = s.find("..") {
+        (&s[..idx + 2], &s[idx + 2..])
+    } else {
+        ("", s)
+    };
+    let pad_len = precision - s.len();
+    let padding: String = std::iter::repeat(fill).take(pad_len).collect();
+    format!("{}{}{}", head, padding, digits)
+}
+
+fn format_neg_twos_complement_bigint(val: &BigInt, base: u32, uppercase: bool) -> String {
+    let max_digit = base - 1;
+    let fill_char = if uppercase {
+        char::from_digit(max_digit, base).unwrap().to_ascii_uppercase()
+    } else {
+        char::from_digit(max_digit, base).unwrap()
+    };
+    let abs = val.magnitude();
+    let s = match base {
+        16 => format!("{:x}", abs),
+        8 => format!("{:o}", abs),
+        2 => format!("{:b}", abs),
+        _ => unreachable!(),
+    };
+    let abs_digits: Vec<u32> = s.chars().map(|c| c.to_digit(base).unwrap()).collect();
+    let mut complement: Vec<u32> = abs_digits.iter().map(|&d| max_digit - d).collect();
+    let mut carry = 1u32;
+    for d in complement.iter_mut().rev() {
+        let sum = *d + carry;
+        *d = sum % base;
+        carry = sum / base;
+    }
+    let result: String = complement
+        .iter()
+        .map(|&d| {
+            let c = char::from_digit(d, base).unwrap();
+            if uppercase { c.to_ascii_uppercase() } else { c }
+        })
+        .collect();
+    let stripped = result.trim_start_matches(fill_char);
+    if stripped.is_empty() {
+        format!("..{}", fill_char)
+    } else {
+        format!("..{}{}", fill_char, stripped)
+    }
+}
 /// Format a negative integer in base for Ruby's two's complement representation.
 /// Ruby uses `..f01` style for negative hex, `..7401` for negative octal, etc.
 ///
@@ -610,6 +734,7 @@ impl Executor {
                 }
                 cache.unwrap()
             };
+        let mut tracker = ArgTracker::default();
 
         while i < flen {
             if fchars[i] != '%' {
@@ -630,15 +755,18 @@ impl Executor {
                 continue;
             }
 
-            // `%<name>spec` and `%{name}` — named references. The
-            // `<name>` token may appear anywhere within the spec
-            // (`%<x>d`, `%+15<x>.5f`, `%<x>+15.5f`, `%-15.5<x>f`),
-            // so we accept it before flags, between flags and width,
-            // between width and precision, and just before the type
-            // char (handled inline below). The `{name}` token is the
-            // to_s-only form and may be preceded by flags / width /
-            // precision (e.g. `%-20.5{foo}`); we recognize it where
-            // the type char would be expected.
+            // Positional reference (`%N$...`) immediately after `%`.
+            // CRuby also tolerates flags before the `N$`, so we look
+            // again after parsing flags below.
+            let mut positional_arg = None;
+            if let Some(num) = try_consume_positional_dollar(&fchars, &mut i, flen)? {
+                tracker.note_positional()?;
+                positional_arg = Some(resolve_positional(arguments, num)?);
+            }
+
+            // `%<name>spec` — named ref. May appear before flags,
+            // between flags and width, between width and precision,
+            // and just before the type char.
             let mut named_val = try_consume_angle_named(
                 self,
                 globals,
@@ -648,36 +776,6 @@ impl Executor {
                 &mut i,
                 flen,
             )?;
-
-            // Check for positional argument: non-zero digit(s) followed by '$'
-            let positional_arg = if named_val.is_none()
-                && i < flen
-                && fchars[i].is_ascii_digit()
-                && fchars[i] != '0'
-            {
-                // Look ahead: collect digits then check for '$'
-                let mut j = i;
-                while j < flen && fchars[j].is_ascii_digit() {
-                    j += 1;
-                }
-                if j < flen && fchars[j] == '$' {
-                    // Parse the number
-                    let mut num = 0usize;
-                    for k in i..j {
-                        num = num * 10 + (fchars[k] as usize) - ('0' as usize);
-                    }
-                    i = j + 1; // skip past '$'
-                    if num == 0 || num > arguments.len() {
-                        return Err(MonorubyErr::argumenterr("too few arguments"));
-                    }
-                    Some(arguments[num - 1])
-                } else {
-                    // Not positional — digits are part of width, don't advance i
-                    None
-                }
-            } else {
-                None
-            };
 
             if i >= flen {
                 return Err(MonorubyErr::argumenterr(
@@ -729,6 +827,20 @@ impl Executor {
                     }
                 }
             }
+            // Positional reference may also appear after flags (e.g.
+            // `%-2$d`).
+            if positional_arg.is_none() {
+                if let Some(num) = try_consume_positional_dollar(&fchars, &mut i, flen)? {
+                    tracker.note_positional()?;
+                    positional_arg = Some(resolve_positional(arguments, num)?);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
             // Left-align overrides zero-fill
             if minus_flag {
                 zero_flag = false;
@@ -737,29 +849,36 @@ impl Executor {
             if plus_flag {
                 space_flag = false;
             }
-            // Width (may be '*')
+            // Width (may be '*' or '*N$')
             let mut width = 0usize;
             if ch == '*' {
-                if arguments.len() <= arg_no {
-                    return Err(MonorubyErr::argumenterr("too few arguments"));
-                }
-                let w = arguments[arg_no].coerce_to_integer(self, globals)?;
-                arg_no += 1;
-                match w {
-                    IntegerBase::Fixnum(v) => {
-                        if v < 0 {
-                            minus_flag = true;
-                            zero_flag = false;
-                            width = (-v) as usize;
-                        } else {
-                            width = v as usize;
-                        }
-                    }
-                    IntegerBase::BigInt(_) => {
-                        return Err(MonorubyErr::argumenterr("width too big"));
-                    }
-                }
                 i += 1;
+                if i >= flen {
+                    return Err(MonorubyErr::argumenterr(
+                        "Invalid termination of format string",
+                    ));
+                }
+                let w_val = if let Some(num) = try_consume_positional_dollar(&fchars, &mut i, flen)?
+                {
+                    tracker.note_positional()?;
+                    resolve_positional(arguments, num)?
+                } else {
+                    tracker.note_sequential()?;
+                    if arguments.len() <= arg_no {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    let v = arguments[arg_no];
+                    arg_no += 1;
+                    v
+                };
+                let v = w_val.coerce_to_int_i64(self, globals)?;
+                if v < 0 {
+                    minus_flag = true;
+                    zero_flag = false;
+                    width = v.unsigned_abs() as usize;
+                } else {
+                    width = v as usize;
+                }
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
                         "Invalid termination of format string",
@@ -801,7 +920,7 @@ impl Executor {
                     ch = fchars[i];
                 }
             }
-            // Precision
+            // Precision (may be '.*' or '.*N$')
             let mut precision = None;
             if ch == '.' {
                 i += 1;
@@ -811,24 +930,31 @@ impl Executor {
                     ));
                 }
                 ch = fchars[i];
-                let mut prec = 0usize;
                 if ch == '*' {
-                    if arguments.len() <= arg_no {
-                        return Err(MonorubyErr::argumenterr("too few arguments"));
-                    }
-                    let p = arguments[arg_no].coerce_to_integer(self, globals)?;
-                    arg_no += 1;
-                    match p {
-                        IntegerBase::Fixnum(v) => {
-                            if v >= 0 {
-                                prec = v as usize;
-                            }
-                        }
-                        IntegerBase::BigInt(_) => {
-                            return Err(MonorubyErr::argumenterr("precision too big"));
-                        }
-                    }
                     i += 1;
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    let p_val =
+                        if let Some(num) = try_consume_positional_dollar(&fchars, &mut i, flen)? {
+                            tracker.note_positional()?;
+                            resolve_positional(arguments, num)?
+                        } else {
+                            tracker.note_sequential()?;
+                            if arguments.len() <= arg_no {
+                                return Err(MonorubyErr::argumenterr("too few arguments"));
+                            }
+                            let v = arguments[arg_no];
+                            arg_no += 1;
+                            v
+                        };
+                    let v = p_val.coerce_to_int_i64(self, globals)?;
+                    // CRuby silently ignores negative precision.
+                    if v >= 0 {
+                        precision = Some(v as usize);
+                    }
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
                             "Invalid termination of format string",
@@ -836,6 +962,7 @@ impl Executor {
                     }
                     ch = fchars[i];
                 } else {
+                    let mut prec = 0usize;
                     while ch.is_ascii_digit() {
                         prec = prec
                             .checked_mul(10)
@@ -849,8 +976,8 @@ impl Executor {
                         }
                         ch = fchars[i];
                     }
+                    precision = Some(prec);
                 }
-                precision = Some(prec);
             }
             // `<name>` may appear between precision and the type char.
             if ch == '<' {
@@ -864,6 +991,20 @@ impl Executor {
                     flen,
                 )? {
                     named_val = Some(v);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
+            // Positional reference may also appear here, e.g.
+            // `%*1$.*2$3$d` puts the `3$` between precision and `d`.
+            if positional_arg.is_none() {
+                if let Some(num) = try_consume_positional_dollar(&fchars, &mut i, flen)? {
+                    tracker.note_positional()?;
+                    positional_arg = Some(resolve_positional(arguments, num)?);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
                             "Invalid termination of format string",
@@ -912,6 +1053,7 @@ impl Executor {
             } else if let Some(v) = named_val {
                 v
             } else {
+                tracker.note_sequential()?;
                 if arguments.len() <= arg_no {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
@@ -954,8 +1096,8 @@ impl Executor {
                         ));
                     };
                     if let Some(prec) = precision {
-                        if s.len() > prec {
-                            s.truncate(prec);
+                        if s.chars().count() > prec {
+                            s = truncate_to_chars(&s, prec);
                         }
                     }
                     apply_width(&s, width, minus_flag, ' ')
@@ -963,7 +1105,7 @@ impl Executor {
                 'p' => {
                     // `%p` dispatches to `Object#inspect` (Ruby-level)
                     // so user-defined `inspect` overrides are honoured.
-                    let s = if let Some(func_id) = globals.check_method(val, IdentId::INSPECT) {
+                    let mut s = if let Some(func_id) = globals.check_method(val, IdentId::INSPECT) {
                         let result = self.invoke_func_inner(
                             globals, func_id, val, &[], None, None,
                         )?;
@@ -975,6 +1117,11 @@ impl Executor {
                     } else {
                         val.inspect(&globals.store)
                     };
+                    if let Some(prec) = precision {
+                        if s.chars().count() > prec {
+                            s = truncate_to_chars(&s, prec);
+                        }
+                    }
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 'd' | 'i' | 'u' => {
@@ -990,23 +1137,59 @@ impl Executor {
                 }
                 'b' | 'B' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
-                        IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 2, ch == 'B');
+                    // `+` / space force the signed form (e.g. `% b`,
+                    // `%+b` on -10 → `-1010`). Otherwise CRuby uses
+                    // two's-complement notation for negatives, even
+                    // with explicit precision (`%.7b % -5` →
+                    // `..11011`).
+                    let signed_form = plus_flag || space_flag;
+                    let neg_tc = if !signed_form {
+                        match &ival {
+                            IntegerBase::Fixnum(v) if *v < 0 => {
+                                Some(format_neg_twos_complement(*v, 2, ch == 'B'))
+                            }
+                            IntegerBase::BigInt(v)
+                                if v.sign() == num::bigint::Sign::Minus =>
+                            {
+                                Some(format_neg_twos_complement_bigint(v, 2, ch == 'B'))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    match neg_tc {
+                        Some(tc) => {
                             let prefix = if hash_flag {
                                 if ch == 'B' { "0B" } else { "0b" }
                             } else {
                                 ""
                             };
                             let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
-                        }
-                        _ => {
-                            let digits = match ival {
-                                IntegerBase::Fixnum(v) => format!("{:b}", v),
-                                IntegerBase::BigInt(v) => format!("{:b}", v),
+                            let body = if let Some(p) = precision {
+                                apply_twos_complement_precision(&body, p, '1')
+                            } else {
+                                body
                             };
-                            let digits = apply_int_precision(&digits, precision);
+                            apply_twos_complement_width(
+                                &body, width, zero_flag, minus_flag, '1',
+                            )
+                        }
+                        None => {
+                            let (is_neg, abs_digits) = match &ival {
+                                IntegerBase::Fixnum(v) => {
+                                    if *v < 0 {
+                                        (true, format!("{:b}", (*v as i128).unsigned_abs()))
+                                    } else {
+                                        (false, format!("{:b}", *v))
+                                    }
+                                }
+                                IntegerBase::BigInt(v) => (
+                                    v.sign() == num::bigint::Sign::Minus,
+                                    format!("{:b}", v.magnitude()),
+                                ),
+                            };
+                            let digits = apply_int_precision(&abs_digits, precision);
                             let is_zero = digits == "0";
                             let prefix = if hash_flag && !is_zero {
                                 if ch == 'B' { "0B" } else { "0b" }
@@ -1014,7 +1197,7 @@ impl Executor {
                                 ""
                             };
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                                is_neg, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
                                 space_flag,
                             )
                         }
@@ -1022,24 +1205,55 @@ impl Executor {
                 }
                 'o' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
-                        IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 8, false);
-                            apply_width(&tc, width, minus_flag, ' ')
+                    let signed_form = plus_flag || space_flag;
+                    let neg_tc = if !signed_form {
+                        match &ival {
+                            IntegerBase::Fixnum(v) if *v < 0 => {
+                                Some(format_neg_twos_complement(*v, 8, false))
+                            }
+                            IntegerBase::BigInt(v)
+                                if v.sign() == num::bigint::Sign::Minus =>
+                            {
+                                Some(format_neg_twos_complement_bigint(v, 8, false))
+                            }
+                            _ => None,
                         }
-                        _ => {
-                            let digits = match ival {
-                                IntegerBase::Fixnum(v) => format!("{:o}", v),
-                                IntegerBase::BigInt(v) => format!("{:o}", v),
+                    } else {
+                        None
+                    };
+                    match neg_tc {
+                        Some(tc) => {
+                            let body = if let Some(p) = precision {
+                                apply_twos_complement_precision(&tc, p, '7')
+                            } else {
+                                tc
                             };
-                            let digits = apply_int_precision(&digits, precision);
+                            apply_twos_complement_width(
+                                &body, width, zero_flag, minus_flag, '7',
+                            )
+                        }
+                        None => {
+                            let (is_neg, abs_digits) = match &ival {
+                                IntegerBase::Fixnum(v) => {
+                                    if *v < 0 {
+                                        (true, format!("{:o}", (*v as i128).unsigned_abs()))
+                                    } else {
+                                        (false, format!("{:o}", *v))
+                                    }
+                                }
+                                IntegerBase::BigInt(v) => (
+                                    v.sign() == num::bigint::Sign::Minus,
+                                    format!("{:o}", v.magnitude()),
+                                ),
+                            };
+                            let digits = apply_int_precision(&abs_digits, precision);
                             let prefix = if hash_flag {
                                 if digits.starts_with('0') { "" } else { "0" }
                             } else {
                                 ""
                             };
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                                is_neg, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
                                 space_flag,
                             )
                         }
@@ -1047,35 +1261,61 @@ impl Executor {
                 }
                 'x' | 'X' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
-                        IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 16, ch == 'X');
+                    let signed_form = plus_flag || space_flag;
+                    let neg_tc = if !signed_form {
+                        match &ival {
+                            IntegerBase::Fixnum(v) if *v < 0 => {
+                                Some(format_neg_twos_complement(*v, 16, ch == 'X'))
+                            }
+                            IntegerBase::BigInt(v)
+                                if v.sign() == num::bigint::Sign::Minus =>
+                            {
+                                Some(format_neg_twos_complement_bigint(v, 16, ch == 'X'))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    match neg_tc {
+                        Some(tc) => {
                             let prefix = if hash_flag {
                                 if ch == 'X' { "0X" } else { "0x" }
                             } else {
                                 ""
                             };
                             let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
+                            let fill = if ch == 'X' { 'F' } else { 'f' };
+                            let body = if let Some(p) = precision {
+                                apply_twos_complement_precision(&body, p, fill)
+                            } else {
+                                body
+                            };
+                            apply_twos_complement_width(
+                                &body, width, zero_flag, minus_flag, fill,
+                            )
                         }
-                        _ => {
-                            let digits = match ival {
+                        None => {
+                            let (is_neg, abs_digits) = match &ival {
                                 IntegerBase::Fixnum(v) => {
+                                    let abs = (*v as i128).unsigned_abs();
                                     if ch == 'X' {
-                                        format!("{:X}", v)
+                                        (*v < 0, format!("{:X}", abs))
                                     } else {
-                                        format!("{:x}", v)
+                                        (*v < 0, format!("{:x}", abs))
                                     }
                                 }
                                 IntegerBase::BigInt(v) => {
-                                    if ch == 'X' {
-                                        format!("{:X}", v)
+                                    let abs = v.magnitude();
+                                    let s = if ch == 'X' {
+                                        format!("{:X}", abs)
                                     } else {
-                                        format!("{:x}", v)
-                                    }
+                                        format!("{:x}", abs)
+                                    };
+                                    (v.sign() == num::bigint::Sign::Minus, s)
                                 }
                             };
-                            let digits = apply_int_precision(&digits, precision);
+                            let digits = apply_int_precision(&abs_digits, precision);
                             let is_zero = digits == "0";
                             let prefix = if hash_flag && !is_zero {
                                 if ch == 'X' { "0X" } else { "0x" }
@@ -1083,7 +1323,7 @@ impl Executor {
                                 ""
                             };
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                                is_neg, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
                                 space_flag,
                             )
                         }
@@ -1097,7 +1337,13 @@ impl Executor {
                     } else if f.is_nan() {
                         "NaN".to_string()
                     } else {
-                        format!("{:.p$}", f.abs(), p = prec)
+                        let mut s = format!("{:.p$}", f.abs(), p = prec);
+                        // `#` flag: keep `.` even at precision 0
+                        // (`%#.0f % 123.4 == "123."`).
+                        if hash_flag && !s.contains('.') {
+                            s.push('.');
+                        }
+                        s
                     };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
@@ -1110,10 +1356,18 @@ impl Executor {
                         "Inf".to_string()
                     } else if f.is_nan() {
                         "NaN".to_string()
-                    } else if ch == 'E' {
-                        normalize_sci_exponent(&format!("{:.p$E}", f.abs(), p = prec))
                     } else {
-                        normalize_sci_exponent(&format!("{:.p$e}", f.abs(), p = prec))
+                        let raw = if ch == 'E' {
+                            format!("{:.p$E}", f.abs(), p = prec)
+                        } else {
+                            format!("{:.p$e}", f.abs(), p = prec)
+                        };
+                        let s = if hash_flag {
+                            ensure_decimal_point_scientific(&raw)
+                        } else {
+                            raw
+                        };
+                        normalize_sci_exponent(&s)
                     };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
@@ -1123,7 +1377,7 @@ impl Executor {
                     let f = val.coerce_to_float(self, globals)?;
                     let prec = precision.unwrap_or(6);
                     let prec = if prec == 0 { 1 } else { prec };
-                    let s = format_g(f.abs(), prec, ch == 'G');
+                    let s = format_g(f.abs(), prec, ch == 'G', hash_flag);
                     let s = normalize_sci_exponent(&s);
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
@@ -1131,7 +1385,19 @@ impl Executor {
                 }
                 'a' | 'A' => {
                     let f = val.coerce_to_float(self, globals)?;
-                    let s = format_hex_float(f.abs(), precision, ch == 'A');
+                    let mut s = format_hex_float(f.abs(), precision, ch == 'A');
+                    // `#` flag forces a decimal point even when the
+                    // mantissa has no fractional digits (`%#.0a` on
+                    // 16.25 → `"0x1.p+4"`).
+                    if hash_flag {
+                        let p_char = if ch == 'A' { 'P' } else { 'p' };
+                        if let Some(p_idx) = s.find(p_char) {
+                            let mantissa = &s[..p_idx];
+                            if !mantissa.contains('.') {
+                                s = format!("{}.{}", mantissa, &s[p_idx..]);
+                            }
+                        }
+                    }
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )

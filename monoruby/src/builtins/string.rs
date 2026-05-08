@@ -6252,6 +6252,55 @@ mod tests {
     }
 
     #[test]
+    fn string_format_positional() {
+        // `%N$type` references the Nth argument (1-based) instead of
+        // consuming the next sequential one. CRuby allows reuse and
+        // arbitrary ordering of positional refs.
+        run_test2(r###""%1$s %2$d" % ["x", 3]"###);
+        run_test2(r###""%2$s %1$d" % [3, "x"]"###);
+        run_test2(r###""%1$s %1$s" % ["foo"]"###);
+        // Flags before `N$` are tolerated.
+        run_test2(r###""%-2$d" % [1, 2, 3]"###);
+        // `*N$` for width, `*N$` for precision, and trailing `N$`
+        // for the value ref.
+        run_test2(r###""%*1$.*2$3$d" % [10, 5, 1]"###);
+        run_test2(r###""%*1$.*2$3$d" % [-10, 5, 1]"###);
+        run_test2(r###""%*1$.*2$3$d" % [10, -5, 1]"###);
+    }
+
+    #[test]
+    fn string_format_named() {
+        // `%{name}` substitutes `to_s(hash[:name])`; `%<name>spec`
+        // formats `hash[:name]` with the given spec.
+        run_test2(r###""%{name}" % {name: "x"}"###);
+        run_test2(r###""%<foo>d" % {foo: 123}"###);
+        run_test2(r###""%+20.10<foo>f" % {foo: 10.952}"###);
+        run_test2(r###""%-20.5{foo}" % {foo: "123456789"}"###);
+        // Hash#default is honoured for missing keys (no KeyError).
+        run_test2(r###""%{foo}" % Hash.new(123)"###);
+        run_test2(r###""%{foo}" % Hash.new { 123 }"###);
+        // Explicit nil value: returns "" (existing key, value is nil).
+        run_test2(r###""%{foo}" % {foo: nil}"###);
+    }
+
+    #[test]
+    fn string_format_two_complement() {
+        // `%b/%o/%x/%X` use two's-complement notation for negative
+        // integers; `+`/space flags switch to signed form. Precision
+        // pads the body length (between `..` and digits) with the
+        // radix-1 fill char.
+        run_test2(r###""%b" % -5"###);
+        run_test2(r###""%.7b" % -5"###);
+        run_test2(r###""%010b" % -10"###);
+        run_test2(r###""%+b" % -5"###);
+        run_test2(r###""% b" % -5"###);
+        run_test2(r###""%o" % -5"###);
+        run_test2(r###""%x" % -5"###);
+        run_test2(r###""%X" % -5"###);
+        run_test2(r###""%b" % -(2 ** 64 + 5)"###);
+    }
+
+    #[test]
     fn string_format_g() {
         // %g and %G: shortest representation
         run_test2(r###""%g" % 100.0"###);
