@@ -3365,24 +3365,18 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     }
 
-    // Check encoding compatibility
-    match (self_enc, str_enc) {
-        (Encoding::Utf8 | Encoding::UsAscii, Encoding::Ascii8) => {
-            if !replacement.is_ascii() && !self_.as_rstring_inner().as_bytes().is_ascii() {
-                return Err(MonorubyErr::runtimeerr(
-                    "incompatible character encodings: UTF-8 and ASCII-8BIT",
-                ));
-            }
-        }
-        (Encoding::Ascii8, Encoding::Utf8 | Encoding::UsAscii) => {
-            // OK
-        }
-        _ => {}
-    }
-
+    // Encoding-compatibility is delegated to `bytesplice_with`,
+    // which raises `Encoding::CompatibilityError` (matching CRuby)
+    // when the receiver and replacement disagree. The bytes were
+    // already extracted as a sub-slice, so we wrap them with the
+    // source string's encoding to preserve its semantics — the
+    // splice can promote the receiver's encoding (e.g. US-ASCII
+    // target + UTF-8 replacement → UTF-8 result, mirroring
+    // `String#+`).
+    let repl_inner = RStringInner::from_encoding_scanned(replacement, str_enc);
     self_
         .as_rstring_inner_mut()
-        .bytesplice(start, splice_len, replacement);
+        .bytesplice_with(start, splice_len, &repl_inner, &globals.store)?;
 
     Ok(self_)
 }

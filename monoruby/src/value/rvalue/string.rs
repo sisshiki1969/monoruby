@@ -1227,74 +1227,10 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_vec(self.content.repeat(len)), self.ty, cr)
     }
 
-    /// Replace byte range `start..start+len` with `replacement` bytes.
-    /// After replacement, validates encoding consistency.
-    pub fn bytesplice(&mut self, start: usize, len: usize, replacement: &[u8]) {
-        let end = start + len;
-        let prev_cr = self.cr.get();
-        let prev_ty = self.ty;
-
-        // Test BEFORE we mutate: if the receiver is valid UTF-8 and both
-        // splice endpoints fall on character boundaries in the original
-        // buffer, then by UTF-8's prefix-free property the result will
-        // still be valid UTF-8 as long as `replacement` itself is valid
-        // UTF-8. This lets us skip the O(N) from_utf8 walk below.
-        let utf8_boundaries_ok = matches!(prev_ty, Encoding::Utf8)
-            && matches!(prev_cr, CodeRange::Valid | CodeRange::SevenBit)
-            && is_utf8_char_boundary(&self.content, start)
-            && is_utf8_char_boundary(&self.content, end);
-
-        self.splice_bytes(start, end, replacement);
-        // Fast path 1: if the receiver was already SevenBit and the
-        // spliced bytes are all ASCII, the SevenBit invariant survives
-        // and we can skip the O(n) from_utf8 walk below.
-        if matches!(prev_cr, CodeRange::SevenBit)
-            && prev_ty.is_ascii_compatible()
-            && replacement.iter().all(|&b| b < 0x80)
-        {
-            self.cr.set(CodeRange::SevenBit);
-            return;
-        }
-        // Fast path 2: UTF-8 receiver where the splice both starts and
-        // ends on character boundaries -- if `replacement` is valid
-        // UTF-8 the whole thing is still valid (prefix-free property of
-        // UTF-8). `from_utf8(replacement)` is O(|replacement|), which is
-        // typically << |content|.
-        if utf8_boundaries_ok && std::str::from_utf8(replacement).is_ok() {
-            // Promote SevenBit only when both sides are pure ASCII;
-            // any non-ASCII byte demotes to Valid.
-            let cr = if matches!(prev_cr, CodeRange::SevenBit)
-                && replacement.iter().all(|&b| b < 0x80)
-            {
-                CodeRange::SevenBit
-            } else {
-                CodeRange::Valid
-            };
-            self.cr.set(cr);
-            return;
-        }
-        // Slow path: re-classify the whole buffer. We used to set
-        // cr = Unknown here unconditionally, which forced the next
-        // bytesplice to re-walk the buffer too -- a stream of in-place
-        // splices on the same string thus ran in O(N²). Cache the
-        // classification result instead so subsequent calls hit the
-        // fast paths above.
-        let cr = self.ty.classify(&self.content);
-        if matches!(cr, CodeRange::Broken) && self.ty.is_utf8_compatible() {
-            // CRuby downgrades to ASCII-8BIT when UTF-8-tagged content
-            // becomes invalid; under that tag every byte is Valid.
-            self.ty = Encoding::Ascii8;
-            self.cr.set(CodeRange::Valid);
-        } else {
-            self.cr.set(cr);
-        }
-    }
-
     /// Mutate `self.content` in place: replace bytes `start..end` with
     /// `replacement`. Encoding tag and `cr` are *not* touched — the
     /// caller is responsible for re-classifying or otherwise updating
-    /// them. Pure data shuffling so it can be reused by the upcoming
-    /// `bytesplice_with(&RStringInner)` API.
+    /// them. The shared low-level shuffling used by `bytesplice_with`.
     fn splice_bytes(&mut self, start: usize, end: usize, replacement: &[u8]) {
         debug_assert!(start <= end);
         debug_assert!(end <= self.content.len());
