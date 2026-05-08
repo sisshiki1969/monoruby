@@ -5417,17 +5417,14 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
     let bytes = parse_undump(s)?;
-    // The dumped form is always ASCII-compatible. If the resulting
-    // bytes happen to be valid UTF-8, return UTF-8; otherwise return
-    // the bytes tagged as US-ASCII (so encoding survives the round
-    // trip and `valid_encoding?` reports correctly).
-    let enc = if std::str::from_utf8(&bytes).is_ok() {
-        Encoding::Utf8
-    } else {
-        Encoding::Utf8
-    };
-    Ok(Value::string_from_inner(RStringInner::from_encoding(
-        &bytes, enc,
+    // The dumped form is always ASCII-compatible and we tag the
+    // result as UTF-8. `from_encoding_scanned` classifies the
+    // bytes once at construction so subsequent cr queries are
+    // O(1); skipping the eager scan would force every later
+    // operation to re-walk the buffer through `Encoding::classify`.
+    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+        &bytes,
+        Encoding::Utf8,
     )))
 }
 

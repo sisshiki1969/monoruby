@@ -666,7 +666,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             &mut out,
             &mut enc,
         )?;
-        Ok(Value::string_from_inner(RStringInner::from_encoding(
+        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
             &out, enc,
         )))
     } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
@@ -686,7 +686,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             &mut out,
             &mut enc,
         )?;
-        Ok(Value::string_from_inner(RStringInner::from_encoding(
+        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
             &out, enc,
         )))
     } else {
@@ -1623,7 +1623,11 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         &mut result,
         &mut enc,
     )?;
-    let inner = RStringInner::from_encoding(&result, enc);
+    // Eager-classify so the join's result has its cr cached.
+    // `Encoding::classify` is cheap relative to the byte concat we
+    // just did, and avoids forcing every subsequent code-range
+    // query on the joined string to re-walk the buffer.
+    let inner = RStringInner::from_encoding_scanned(&result, enc);
     Ok(Value::string_from_inner(inner))
 }
 
