@@ -1315,6 +1315,97 @@ impl RStringInner {
         self.content[start..start + replacement.len()].copy_from_slice(replacement);
     }
 
+    /// Replace byte range `start..start+len` with the bytes of
+    /// `replacement`, taking the replacement's encoding and cached
+    /// code range into account. Returns
+    /// `Encoding::CompatibilityError` (rather than ignoring the
+    /// mismatch the way `bytesplice(&[u8])` does) when the receiver
+    /// and `replacement` carry incompatible encodings.
+    ///
+    /// The cached `code_range()` of `replacement` lets us short-cut
+    /// the post-mutation classification: when both sides are
+    /// SevenBit/Valid and the splice falls on UTF-8 character
+    /// boundaries we set the result cr in O(1) without re-walking
+    /// the whole buffer. Broken results on UTF-8-compatible
+    /// encodings demote to ASCII-8BIT, matching CRuby and
+    /// `bytesplice`.
+    pub fn bytesplice_with(
+        &mut self,
+        start: usize,
+        len: usize,
+        replacement: &RStringInner,
+        store: &Store,
+    ) -> Result<()> {
+        let result_enc = self
+            .compatible_encoding(replacement)
+            .ok_or_else(|| MonorubyErr::incompatible_encoding(store, self.ty, replacement.ty))?;
+
+        let end = start + len;
+        let prev_cr = self.cr.get();
+        let prev_ty = self.ty;
+        let repl_cr = replacement.code_range();
+        let repl_bytes = replacement.as_bytes();
+
+        // Test BEFORE we mutate: if the receiver is valid UTF-8 and
+        // both splice endpoints fall on character boundaries, the
+        // prefix-free property of UTF-8 lets the receiver-side stay
+        // valid as long as the replacement is itself valid (which
+        // its cached cr tells us in O(1)).
+        let utf8_boundaries_ok = matches!(prev_ty, Encoding::Utf8)
+            && matches!(prev_cr, CodeRange::Valid | CodeRange::SevenBit)
+            && is_utf8_char_boundary(&self.content, start)
+            && is_utf8_char_boundary(&self.content, end);
+
+        self.splice_bytes(start, end, repl_bytes);
+        self.ty = result_enc;
+
+        // Fast path 1: SevenBit + ASCII-compatible encoding +
+        // ASCII-only replacement (its cr already says SevenBit).
+        if matches!(prev_cr, CodeRange::SevenBit)
+            && matches!(repl_cr, CodeRange::SevenBit)
+            && result_enc.is_ascii_compatible()
+        {
+            self.cr.set(CodeRange::SevenBit);
+            return Ok(());
+        }
+        // Fast path 2: receiver and replacement are both well-formed
+        // UTF-8 (or pure ASCII) and the splice respects character
+        // boundaries — the result is well-formed UTF-8 too.
+        if utf8_boundaries_ok
+            && matches!(repl_cr, CodeRange::SevenBit | CodeRange::Valid)
+        {
+            self.cr.set(CodeRange::Valid);
+            return Ok(());
+        }
+        // Slow path: re-classify the whole buffer. Caching the
+        // result keeps a chain of in-place splices O(N) rather than
+        // O(N²).
+        let cr = self.ty.classify(&self.content);
+        if matches!(cr, CodeRange::Broken) && self.ty.is_utf8_compatible() {
+            // CRuby downgrades to ASCII-8BIT when UTF-8-tagged
+            // content becomes invalid; under that tag every byte is
+            // valid.
+            self.ty = Encoding::Ascii8;
+            self.cr.set(CodeRange::Valid);
+        } else {
+            self.cr.set(cr);
+        }
+        Ok(())
+    }
+
+    /// Build an empty `RStringInner` tagged with the given encoding
+    /// and pre-allocated for `cap` bytes. Empty content is always
+    /// SevenBit (the empty byte sequence is trivially ASCII), so
+    /// callers can append into the result without paying for an
+    /// initial classification.
+    pub fn with_encoding_capacity(encoding: Encoding, cap: usize) -> Self {
+        RStringInner::from(
+            SmallVec::with_capacity(cap),
+            encoding,
+            CodeRange::SevenBit,
+        )
+    }
+
     pub fn first_code(&self) -> Result<u32> {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
@@ -2002,5 +2093,107 @@ mod encoding_tests {
         let mut out = String::new();
         utf8_dump_with_lookahead(&mut out, "\u{1F600}".as_bytes());
         assert_eq!(out, "\\u{1F600}");
+    }
+
+    #[test]
+    fn with_encoding_capacity_starts_seven_bit() {
+        // The empty byte sequence is trivially ASCII, so a freshly
+        // allocated empty buffer should advertise SevenBit
+        // regardless of the declared encoding.
+        let s = RStringInner::with_encoding_capacity(Encoding::Sjis(0), 16);
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+        assert_eq!(s.encoding(), Encoding::Sjis(0));
+        assert_eq!(s.as_bytes().len(), 0);
+
+        let s = RStringInner::with_encoding_capacity(Encoding::Utf16Le, 0);
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+        assert_eq!(s.encoding(), Encoding::Utf16Le);
+    }
+
+    #[test]
+    fn bytesplice_with_seven_bit_combines_to_seven_bit() {
+        let mut globals = Globals::new_test();
+        let mut s = RStringInner::from_str_scanned("abcdef");
+        let repl = RStringInner::from_str_scanned("XY");
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        assert_eq!(repl.code_range(), CodeRange::SevenBit);
+
+        s.bytesplice_with(2, 2, &repl, &globals.store).unwrap();
+        assert_eq!(s.as_bytes(), b"abXYef");
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+        assert_eq!(s.encoding(), Encoding::Utf8);
+    }
+
+    #[test]
+    fn bytesplice_with_seven_bit_plus_valid_is_valid() {
+        let mut globals = Globals::new_test();
+        let mut s = RStringInner::from_str_scanned("abcdef");
+        let repl = RStringInner::from_str_scanned("あ"); // 3 bytes, Valid
+        assert_eq!(s.code_range(), CodeRange::SevenBit);
+        assert_eq!(repl.code_range(), CodeRange::Valid);
+
+        s.bytesplice_with(2, 2, &repl, &globals.store).unwrap();
+        assert_eq!(s.as_bytes(), "abあef".as_bytes());
+        // SevenBit + Valid on aligned UTF-8 boundaries → Valid in O(1).
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+    }
+
+    #[test]
+    fn bytesplice_with_valid_plus_valid_keeps_valid() {
+        let mut globals = Globals::new_test();
+        let mut s = RStringInner::from_str_scanned("xあy");
+        let repl = RStringInner::from_str_scanned("いう");
+        assert_eq!(s.code_range(), CodeRange::Valid);
+        assert_eq!(repl.code_range(), CodeRange::Valid);
+
+        // Replace the middle 3 bytes ("あ") with the 6-byte replacement.
+        s.bytesplice_with(1, 3, &repl, &globals.store).unwrap();
+        assert_eq!(s.as_bytes(), "xいうy".as_bytes());
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+    }
+
+    #[test]
+    fn bytesplice_with_us_ascii_and_utf8_combine() {
+        // Pure-ASCII Utf8 and UsAscii are compatible; CRuby keeps
+        // the receiver's encoding when both sides are SevenBit. The
+        // important guarantees here are (a) the call succeeds and
+        // (b) cr stays SevenBit, since both sides are pure ASCII
+        // and the result encoding is ASCII-compatible.
+        let mut globals = Globals::new_test();
+        let mut s = RStringInner::from_str_scanned("hi");
+        s.set_encoding(Encoding::UsAscii);
+        let repl = RStringInner::from_str_scanned("X");
+        assert_eq!(s.encoding(), Encoding::UsAscii);
+        assert_eq!(repl.encoding(), Encoding::Utf8);
+
+        s.bytesplice_with(0, 1, &repl, &globals.store).unwrap();
+        assert_eq!(s.as_bytes(), b"Xi");
+        assert!(s.encoding().is_ascii_compatible());
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+    }
+
+    #[test]
+    fn bytesplice_with_incompatible_encodings_errors() {
+        // Sjis with a non-ASCII byte cannot be combined with a
+        // non-ASCII UTF-8 replacement.
+        let globals = Globals::new_test();
+        let mut s = RStringInner::from_encoding_scanned(b"\x82\xa0", Encoding::Sjis(0)); // "あ" in Sjis
+        let repl = RStringInner::from_str_scanned("え");
+        assert!(s.bytesplice_with(0, 0, &repl, &globals.store).is_err());
+    }
+
+    #[test]
+    fn bytesplice_with_breaks_utf8_boundary_demotes_to_ascii8() {
+        // Splicing into the middle of a multi-byte UTF-8 character
+        // produces broken bytes; under Utf8 tagging CRuby (and our
+        // implementation) demotes to ASCII-8BIT.
+        let mut globals = Globals::new_test();
+        let mut s = RStringInner::from_str_scanned("あ"); // 3 bytes
+        let repl = RStringInner::from_str_scanned("X");
+
+        // Replace byte 1 (middle of "あ") — boundary check fails.
+        s.bytesplice_with(1, 0, &repl, &globals.store).unwrap();
+        assert_eq!(s.encoding(), Encoding::Ascii8);
+        assert_eq!(s.cr.get(), CodeRange::Valid);
     }
 }
