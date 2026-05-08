@@ -208,7 +208,18 @@ impl Executor {
             (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
             (RV::Symbol(_), _) => false,
             (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
-            (RV::String(_), _) => false,
+            (RV::String(_), _) => {
+                // CRuby's `String#==` dispatches to `rhs == self` when
+                // the rhs *responds to* `to_str` (it does NOT actually
+                // call `to_str`). Without this branch, the fast path
+                // would short-circuit to `false` and never reach the
+                // builtin, masking custom `==` defined alongside
+                // `to_str` on a mock.
+                if globals.check_method(rhs, IdentId::TO_STR).is_some() {
+                    return self.invoke_eq(globals, rhs, lhs);
+                }
+                false
+            }
             _ => self.invoke_eq(globals, lhs, rhs)?,
         };
         Ok(b)
