@@ -661,41 +661,6 @@ fn utf8_dump_one(s: &mut String, ch: char, next_ch: char) {
     utf8_escape(s, ch);
 }
 
-/// Process a byte slice as UTF-8, applying `escape_fn` to valid characters
-/// and escaping invalid bytes as `\xHH`. This avoids panicking on non-UTF-8
-/// byte sequences in UTF-8 encoded strings.
-fn utf8_escape_bytes(res: &mut String, bytes: &[u8], escape_fn: fn(&mut String, char)) {
-    let mut i = 0;
-    while i < bytes.len() {
-        match std::str::from_utf8(&bytes[i..]) {
-            Ok(valid) => {
-                for c in valid.chars() {
-                    escape_fn(res, c);
-                }
-                break;
-            }
-            Err(err) => {
-                let valid_up_to = err.valid_up_to();
-                // Process valid UTF-8 prefix
-                if valid_up_to > 0 {
-                    // SAFETY: from_utf8 confirmed these bytes are valid UTF-8.
-                    let valid_str =
-                        unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) };
-                    for c in valid_str.chars() {
-                        escape_fn(res, c);
-                    }
-                }
-                // Escape the invalid byte(s)
-                let error_len = err.error_len().unwrap_or(bytes.len() - i - valid_up_to);
-                for b in &bytes[i + valid_up_to..i + valid_up_to + error_len] {
-                    res.push_str(&format!("\\x{:0>2X}", b));
-                }
-                i += valid_up_to + error_len;
-            }
-        }
-    }
-}
-
 impl RStringInner {
     /// Low-level constructor. Callers pass the `cr` they want to
     /// record — either `Unknown` (defer classification to the first
@@ -770,9 +735,7 @@ impl RStringInner {
             // from_utf8 -- a SevenBit string can answer in O(1).
             Encoding::Utf8 => match self.code_range() {
                 CodeRange::SevenBit => self.content.len(),
-                CodeRange::Valid => {
-                    self.content.iter().filter(|&&b| (b & 0xC0) != 0x80).count()
-                }
+                CodeRange::Valid => self.content.iter().filter(|&&b| (b & 0xC0) != 0x80).count(),
                 CodeRange::Broken => self.iter_char_bytes().count(),
                 // code_range() always populates `cr` to a concrete
                 // variant before returning; Unknown is unreachable.
@@ -855,9 +818,7 @@ impl RStringInner {
         }
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
-            Err(_) => Err(MonorubyErr::argumenterr(
-                "invalid byte sequence in UTF-8",
-            )),
+            Err(_) => Err(MonorubyErr::argumenterr("invalid byte sequence in UTF-8")),
         }
     }
 
@@ -1196,10 +1157,7 @@ impl RStringInner {
         // ~5.7s before this change vs 5.6ms in CRuby.)
         let new_cr = match (self.cr.get(), other.cr.get()) {
             (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
-            (
-                CodeRange::SevenBit | CodeRange::Valid,
-                CodeRange::SevenBit | CodeRange::Valid,
-            ) => {
+            (CodeRange::SevenBit | CodeRange::Valid, CodeRange::SevenBit | CodeRange::Valid) => {
                 // compatible_encoding already verified the encodings agree,
                 // so two well-formed pieces concatenate to a well-formed
                 // whole. (Multi-byte boundaries can only collide at the
@@ -1238,10 +1196,9 @@ impl RStringInner {
         };
         let new_cr = match (self.cr.get(), slice_cr) {
             (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
-            (
-                CodeRange::SevenBit | CodeRange::Valid,
-                CodeRange::SevenBit | CodeRange::Valid,
-            ) => CodeRange::Valid,
+            (CodeRange::SevenBit | CodeRange::Valid, CodeRange::SevenBit | CodeRange::Valid) => {
+                CodeRange::Valid
+            }
             _ => CodeRange::Unknown,
         };
         self.content.extend_from_slice(slice);
@@ -1657,27 +1614,15 @@ mod encoding_tests {
         // sub-range.
         let parent = RStringInner::from_encoding(&[0xff, 0x80, 0x81], Encoding::Ascii8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(
-            RStringInner::propagated_cr(&parent, 0, 3),
-            CodeRange::Valid
-        );
-        assert_eq!(
-            RStringInner::propagated_cr(&parent, 1, 2),
-            CodeRange::Valid
-        );
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 3), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 1, 2), CodeRange::Valid);
 
         // ISO-8859-1: same — every byte represents a glyph, so any
         // cut respects character boundaries.
         let parent = RStringInner::from_encoding(&[0xc3, 0xa9, 0xfe], Encoding::Iso8859(1));
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(
-            RStringInner::propagated_cr(&parent, 0, 3),
-            CodeRange::Valid
-        );
-        assert_eq!(
-            RStringInner::propagated_cr(&parent, 1, 3),
-            CodeRange::Valid
-        );
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 3), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 1, 3), CodeRange::Valid);
     }
 
     #[test]
@@ -1709,10 +1654,8 @@ mod encoding_tests {
     #[test]
     fn propagated_cr_valid_utf16_requires_even_byte_endpoints() {
         // "abc" encoded as UTF-16LE: 6 bytes, code-unit width 2.
-        let parent = RStringInner::from_encoding(
-            &[0x61, 0x00, 0x62, 0x00, 0x63, 0x00],
-            Encoding::Utf16Le,
-        );
+        let parent =
+            RStringInner::from_encoding(&[0x61, 0x00, 0x62, 0x00, 0x63, 0x00], Encoding::Utf16Le);
         assert_eq!(parent.code_range(), CodeRange::Valid);
 
         for &(start, end) in &[(0, 2), (0, 4), (0, 6), (2, 6), (4, 6)] {
@@ -1734,10 +1677,7 @@ mod encoding_tests {
         // BE side: same parity rule.
         let parent = RStringInner::from_encoding(&[0x00, 0x61, 0x00, 0x62], Encoding::Utf16Be);
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(
-            RStringInner::propagated_cr(&parent, 0, 4),
-            CodeRange::Valid
-        );
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 4), CodeRange::Valid);
         assert_eq!(
             RStringInner::propagated_cr(&parent, 1, 4),
             CodeRange::Unknown
