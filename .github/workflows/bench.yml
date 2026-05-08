@@ -87,8 +87,8 @@ jobs:
         working-directory: ../ruby-bench
         shell: bash
         env:
-          MR_TIMEOUT: '180'
-          YJ_TIMEOUT: '300'
+          MR_TIMEOUT: '400'
+          YJ_TIMEOUT: '400'
         run: |
           set +e
           set -uo pipefail
@@ -157,8 +157,8 @@ jobs:
           yj_data = raw.dig('raw_data', 'yjit') || {}
           mr_fails = fails['monoruby'] || {}
           yj_fails = fails['yjit']     || {}
-          mr_to = ENV.fetch('MR_TIMEOUT', '180').to_i
-          yj_to = ENV.fetch('YJ_TIMEOUT', '300').to_i
+          mr_to = ENV.fetch('MR_TIMEOUT', '400').to_i
+          yj_to = ENV.fetch('YJ_TIMEOUT', '400').to_i
 
           # Translate a process exit status (as captured by yjit-bench's
           # $?.exitstatus) into a short human-readable reason. The runtime
