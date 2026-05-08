@@ -116,6 +116,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase", swapcase);
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
+    globals.define_builtin_func_with(STRING_CLASS, "delete!", delete_, 0, 0, true);
     globals.define_builtin_func_rest(STRING_CLASS, "squeeze", squeeze);
     globals.define_builtin_func_rest(STRING_CLASS, "squeeze!", squeeze_);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
@@ -4690,8 +4691,44 @@ fn tr_test() {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut res = lfp.self_val().as_str().to_string();
-    let args = lfp.arg(0).as_array();
+    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        res,
+    )))
+}
+
+///
+/// ### String#delete!
+///
+/// - delete!(*strs) -> self | nil
+///
+/// In-place form of `delete`. Returns `nil` when no characters were
+/// removed (matching CRuby), otherwise the receiver.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete=21.html]
+#[monoruby_builtin]
+fn delete_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
+    let orig_len = lfp.self_val().as_rstring_inner().len();
+    if res.len() == orig_len {
+        return Ok(Value::nil());
+    }
+    lfp.self_val()
+        .replace_with_inner(RStringInner::from_string_scanned(res));
+    Ok(lfp.self_val())
+}
+
+/// Shared body of `String#delete` / `String#delete!`. Builds the
+/// filtered string but doesn't decide between `dup` vs in-place,
+/// which the caller handles.
+fn delete_compute(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    args: Array,
+) -> Result<String> {
+    let mut res = self_val.as_str().to_string();
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr(
             "wrong number of arguments (given 0, expected 1+)",
@@ -4707,8 +4744,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         .collect::<Result<Vec<Tr>>>()?;
 
     res.retain(|c| !pred.iter().all(|tr| tr.check(c)));
-
-    Ok(Value::string(res))
+    Ok(res)
 }
 
 ///
