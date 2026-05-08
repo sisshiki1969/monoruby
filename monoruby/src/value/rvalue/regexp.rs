@@ -385,8 +385,7 @@ impl RegexpInner {
                     let mut res = RStringInner::from_str_scanned(given);
                     let matched = Value::string_from_str(matched_str);
                     let result = vm.invoke_block_once(globals, bh, &[matched])?;
-                    let s = block_result_to_string(vm, globals, result)?;
-                    let rep_inner = RStringInner::from_string_scanned(s);
+                    let rep_inner = block_result_to_inner(vm, globals, result)?;
                     res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
@@ -444,7 +443,7 @@ impl RegexpInner {
                         }
                     }
                 }
-                let replace = block_result_to_string(vm, globals, result)?;
+                let replace = block_result_to_inner(vm, globals, result)?;
 
                 range.push((m.range(), replace));
             }
@@ -452,8 +451,7 @@ impl RegexpInner {
             let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
 
-            for (r, replace) in range.into_iter().rev() {
-                let rep_inner = RStringInner::from_string_scanned(replace);
+            for (r, rep_inner) in range.into_iter().rev() {
                 res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
             }
 
@@ -480,8 +478,7 @@ impl RegexpInner {
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                     let mut res = RStringInner::from_str_scanned(given);
                     let key = Value::string_from_str(matched_str);
-                    let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
-                    let rep_inner = RStringInner::from_string_scanned(replacement);
+                    let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key)?;
                     res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
@@ -516,8 +513,7 @@ impl RegexpInner {
             let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
 
-            for (r, replace) in range.into_iter().rev() {
-                let rep_inner = RStringInner::from_string_scanned(replace);
+            for (r, rep_inner) in range.into_iter().rev() {
                 res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
             }
 
@@ -825,23 +821,33 @@ impl RegexpInner {
     }
 }
 
-/// Coerce the result of a `String#sub`/`#gsub` block to a String,
-/// calling user-defined `to_s` so a mock returning a non-String
-/// from `to_s` is exercised. Falls back to monoruby's intrinsic
-/// `to_s` rendering when the object's `to_s` doesn't return a String.
-fn block_result_to_string(
+/// Coerce the result of a `String#sub`/`#gsub` block to an
+/// `RStringInner`, calling user-defined `to_s` so a mock returning
+/// a non-String from `to_s` is exercised. Falls back to monoruby's
+/// intrinsic `to_s` rendering when the object's `to_s` doesn't
+/// return a String. Returns the `RStringInner` directly so callers
+/// don't have to round-trip through `String` and re-classify.
+///
+/// Result encoding mirrors `block_result_to_string`'s pre-existing
+/// behaviour: `is_str()` validates the bytes are UTF-8 and surfaces
+/// `ArgumentError: invalid byte sequence in UTF-8` for non-UTF-8
+/// receivers. Callers (e.g. `replace_all_block`) layer their own
+/// `Encoding::CompatibilityError` checks on top.
+fn block_result_to_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     v: Value,
-) -> Result<String> {
+) -> Result<RStringInner> {
     if let Some(s) = v.is_str() {
-        return Ok(s.to_string());
+        return Ok(RStringInner::from_str_scanned(s));
     }
     let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
     if let Some(s) = coerced.is_str() {
-        Ok(s.to_string())
+        Ok(RStringInner::from_str_scanned(s))
     } else {
-        Ok(coerced.to_s(&globals.store))
+        // Intrinsic fallback produces `String`; pre-classify it
+        // so the splice that follows lands on a fast path.
+        Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store)))
     }
 }
 
@@ -856,19 +862,19 @@ fn lookup_hash_replacement(
     globals: &mut Globals,
     hash: Value,
     key: Value,
-) -> Result<String> {
+) -> Result<RStringInner> {
     let v =
         vm.invoke_method_inner(globals, IdentId::_INDEX, hash, &[key], None, None)?;
     if v.is_nil() {
-        Ok(String::new())
+        Ok(RStringInner::from_str_scanned(""))
     } else if let Some(s) = v.is_str() {
-        Ok(s.to_string())
+        Ok(RStringInner::from_str_scanned(s))
     } else {
         // CRuby coerces non-String hash values via `Object#to_s`.
-        let s = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
-        match s.is_str() {
-            Some(s) => Ok(s.to_string()),
-            None => Ok(s.to_s(&globals.store)),
+        let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+        match coerced.is_str() {
+            Some(s) => Ok(RStringInner::from_str_scanned(s)),
+            None => Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store))),
         }
     }
 }
