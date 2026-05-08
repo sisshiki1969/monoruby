@@ -9018,4 +9018,64 @@ mod tests {
             r##"begin; (+"abc").encode!("UTF-8", xml: :other); rescue ArgumentError => e; "raised"; end"##,
         ]);
     }
+
+    #[test]
+    fn string_interpolation_preserves_invalid_utf8_bytes() {
+        // String interpolation `#{...}` must copy operand bytes
+        // verbatim rather than route them through
+        // `String::from_utf8_lossy`, which would silently rewrite
+        // invalid UTF-8 sequences as U+FFFD.
+        run_tests(&[
+            // Single broken byte appended.
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("abc#{x81}").bytes"##,
+            // Broken byte sandwiched between valid prefixes.
+            r##"x80 = [0x80].pack("C").force_encoding("utf-8"); ("a#{x80}b").bytes"##,
+            // Empty operand still works.
+            r##"empty = "".dup.force_encoding("ASCII-8BIT"); ("abc#{empty}").bytes"##,
+            // Valid multibyte UTF-8 operand.
+            r##"jp = "あ"; ("hi#{jp}").bytes"##,
+            // The result keeps the operand encoding when only one
+            // string operand is non-empty.
+            r##"x81 = [0x81].pack("C").force_encoding("utf-8"); ("#{x81}").encoding.name"##,
+        ]);
+    }
+
+    #[test]
+    fn string_interpolation_falls_back_when_to_s_returns_non_string() {
+        // Exercises `concatenate_string_inner`'s else branch:
+        // `invoke_tos` returns the user-defined `to_s` result
+        // verbatim, so a `to_s` override that returns a non-String
+        // forces the bogus result to be discarded and replaced by
+        // the default `Object#to_s` form (`#<ClassName:0xADDR>`),
+        // matching CRuby's `rb_obj_as_string` semantics.
+        //
+        // Address bytes are non-deterministic, so each case asserts
+        // structural shape via a regex match rather than the raw
+        // concatenation.
+        run_test(
+            r##"
+            class MTosInt; def to_s; 42; end; end
+            class MTosNil; def to_s; nil; end; end
+            class MTosAry; def to_s; [1, 2]; end; end
+            class MTosNum; def to_s; 7; end; end
+            class MTosOk;  def to_s; "ok"; end; end
+            r1 = ("abc#{MTosInt.new}" =~ /\A abc\#<MTosInt:0x[0-9a-f]+> \z/x) ? "ok" : "fail"
+            r2 = ("abc#{MTosNil.new}" =~ /\A abc\#<MTosNil:0x[0-9a-f]+> \z/x) ? "ok" : "fail"
+            r3 = ("abc#{MTosAry.new}" =~ /\A abc\#<MTosAry:0x[0-9a-f]+> \z/x) ? "ok" : "fail"
+            # Array instance with a singleton `to_s` falls back to its
+            # real class (Array), not the singleton class.
+            a = [1, 2]; def a.to_s; 99; end
+            r4 = ("x#{a}y" =~ /\A x\#<Array:0x[0-9a-f]+>y \z/x) ? "ok" : "fail"
+            # Sandwiched between String operands so the loop hits both
+            # the String branch and the fallback branch in one call;
+            # the fix must not desync the running encoding either.
+            s = "lhs " + "rhs#{MTosNum.new}!"
+            r5 = (s =~ /\A lhs\ rhs\#<MTosNum:0x[0-9a-f]+>! \z/x) ? "ok" : "fail"
+            # Sanity: a `to_s` that *does* return a String still takes
+            # the non-fallback (is_rstring_inner) path.
+            r6 = "abc#{MTosOk.new}"
+            [r1, r2, r3, r4, r5, r6]
+            "##,
+        );
+    }
 }
