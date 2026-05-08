@@ -5827,9 +5827,13 @@ fn unicode_normalize_(
         _ => unreachable!(),
     };
     let old_len = lfp.self_val().as_rstring_inner().len();
+    // NFC/NFD/NFKC/NFKD output is well-formed UTF-8 by construction,
+    // so `from_string_scanned` lets the splice land in the Valid /
+    // SevenBit fast path without re-classifying afterwards.
+    let repl = RStringInner::from_string_scanned(result);
     lfp.self_val()
         .as_rstring_inner_mut()
-        .bytesplice(0, old_len, result.as_bytes());
+        .bytesplice_with(0, old_len, &repl, &globals.store)?;
     Ok(lfp.self_val())
 }
 
