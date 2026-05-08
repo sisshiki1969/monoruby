@@ -843,60 +843,29 @@ impl ClassInfoTable {
             .collect()
     }
 
-    /// Public-only walk of the ancestor chain. Closer-ancestor wins
-    /// the visibility race so a `private`/`protected` modifier on a
-    /// nearer module doesn't surface as public via a deeper public
-    /// definition.
-    pub(crate) fn get_public_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        let mut names = HashSet::default();
-        let mut module = self.get_module(class_id);
-        let mut exclude = HashSet::default();
-        loop {
-            for (name, entry) in &self[module.id()].methods {
-                if exclude.contains(name) || names.contains(name) {
-                    continue;
-                }
-                match entry.visibility {
-                    Visibility::Undefined | Visibility::Private | Visibility::Protected => {
-                        exclude.insert(*name);
-                    }
-                    Visibility::Public => {
-                        if entry.func_id().is_some() {
-                            names.insert(*name);
-                        } else {
-                            exclude.insert(*name);
-                        }
-                    }
-                }
-            }
-            match module.superclass() {
-                Some(superclass) => {
-                    if superclass.id() == OBJECT_CLASS {
-                        break;
-                    }
-                    module = superclass;
-                }
-                None => break,
-            }
-        }
-        names.into_iter().map(|sym| Value::symbol(sym)).collect()
-    }
-
-    /// Walk the class chain to gather method names with `visibility_filter`,
-    /// stopping after the first non-singleton, non-iclass class is processed.
+    /// Walk the class chain starting at *class_id*, gathering method names
+    /// that match `visibility_filter`. The walk stops after the current
+    /// module when `stop_after(module)` returns true, or when there is no
+    /// further superclass.
     ///
-    /// CRuby's `Kernel#{public,protected,private}_methods(false)` semantics:
-    /// "non-inherited" means the receiver's singleton class chain (singleton
-    /// itself plus any iclasses inserted by `extend`) and the receiver's
-    /// actual class itself, but NOT the class's superclass nor modules
-    /// `include`d into the class.
-    fn get_method_names_direct<F>(&self, class_id: ClassId, visibility_filter: F) -> Vec<Value>
+    /// Closer-ancestor wins: once a name is resolved at one level (matched
+    /// into `names`, or rejected as `Visibility::Undefined` / different
+    /// visibility), deeper ancestors cannot shadow it. This is what makes
+    /// `private :foo` on `Kernel` not surface `:foo` as private through
+    /// `Object` — `Object`'s own public entry has already classified it.
+    fn walk_method_names<F, G>(
+        &self,
+        class_id: ClassId,
+        visibility_filter: F,
+        stop_after: G,
+    ) -> Vec<Value>
     where
         F: Fn(&MethodTableEntry) -> bool,
+        G: Fn(Module) -> bool,
     {
         let mut names = HashSet::default();
-        let mut module = self.get_module(class_id);
         let mut exclude = HashSet::default();
+        let mut module = self.get_module(class_id);
         loop {
             for (name, entry) in &self[module.id()].methods {
                 if exclude.contains(name) || names.contains(name) {
@@ -910,10 +879,7 @@ impl ClassInfoTable {
                     exclude.insert(*name);
                 }
             }
-            // Stop after the first real (non-singleton, non-iclass) class
-            // has been processed. For a non-singleton, non-iclass starting
-            // point this means we only walk that one entry.
-            if module.is_singleton().is_none() && !module.is_iclass() {
+            if stop_after(module) {
                 break;
             }
             match module.superclass() {
@@ -924,21 +890,54 @@ impl ClassInfoTable {
         names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
+    /// Stop predicate for `(true)` / inherited variants — process every
+    /// ancestor up to but excluding `OBJECT_CLASS`.
+    fn stop_before_object(module: Module) -> bool {
+        module
+            .superclass()
+            .is_none_or(|superclass| superclass.id() == OBJECT_CLASS)
+    }
+
+    /// Stop predicate for `(false)` / direct variants — process the
+    /// singleton-class chain (singleton + iclasses inserted by `extend`)
+    /// plus the first non-singleton, non-iclass class, then stop.
+    fn stop_after_first_real_class(module: Module) -> bool {
+        module.is_singleton().is_none() && !module.is_iclass()
+    }
+
+    fn is_protected(entry: &MethodTableEntry) -> bool {
+        entry.func_id().is_some() && entry.visibility() == Visibility::Protected
+    }
+
+    /// Public-only walk of the ancestor chain. Closer-ancestor wins
+    /// the visibility race so a `private`/`protected` modifier on a
+    /// nearer module doesn't surface as public via a deeper public
+    /// definition.
+    pub(crate) fn get_public_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
+        self.walk_method_names(class_id, MethodTableEntry::is_public, Self::stop_before_object)
+    }
+
     /// Public-only "non-inherited" view used by `Kernel#public_methods(false)`.
     pub(crate) fn get_public_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
-        self.get_method_names_direct(class_id, |entry| entry.is_public())
+        self.walk_method_names(
+            class_id,
+            MethodTableEntry::is_public,
+            Self::stop_after_first_real_class,
+        )
     }
 
     /// Private-only "non-inherited" view used by `Kernel#private_methods(false)`.
     pub(crate) fn get_private_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
-        self.get_method_names_direct(class_id, |entry| entry.is_private())
+        self.walk_method_names(
+            class_id,
+            MethodTableEntry::is_private,
+            Self::stop_after_first_real_class,
+        )
     }
 
     /// Protected-only "non-inherited" view used by `Kernel#protected_methods(false)`.
     pub(crate) fn get_protected_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
-        self.get_method_names_direct(class_id, |entry| {
-            entry.func_id().is_some() && entry.visibility() == Visibility::Protected
-        })
+        self.walk_method_names(class_id, Self::is_protected, Self::stop_after_first_real_class)
     }
 
     ///
@@ -1056,45 +1055,7 @@ impl ClassInfoTable {
     /// Get private method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        let mut names = HashSet::default();
-        let mut module = self.get_module(class_id);
-        let mut exclude = HashSet::default();
-        loop {
-            for (name, entry) in &self[module.id()].methods {
-                // Earlier entries in the lookup chain take precedence
-                // for visibility queries: once a name has been resolved
-                // (here or in `Undefined`), don't let a later, deeper
-                // ancestor's different visibility shadow it. This is
-                // why `Object.private_instance_methods` does NOT
-                // include a method that's public on Object even if
-                // `Kernel` (a deeper iclass entry) has marked it
-                // private — Object's own entry wins.
-                if exclude.contains(name) || names.contains(name) {
-                    // Already resolved by a closer ancestor.
-                    continue;
-                }
-                if matches!(entry.visibility, Visibility::Undefined) {
-                    exclude.insert(*name);
-                } else if entry.is_private() {
-                    names.insert(*name);
-                } else {
-                    // Public/protected at this level; don't report it
-                    // as private even if a deeper ancestor has a
-                    // private modifier.
-                    exclude.insert(*name);
-                }
-            }
-            match module.superclass() {
-                Some(superclass) => {
-                    if superclass.id() == OBJECT_CLASS {
-                        break;
-                    }
-                    module = superclass;
-                }
-                None => break,
-            }
-        }
-        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+        self.walk_method_names(class_id, MethodTableEntry::is_private, Self::stop_before_object)
     }
 
     ///
@@ -1118,38 +1079,7 @@ impl ClassInfoTable {
     /// Get protected method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_protected_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        let mut names = HashSet::default();
-        let mut module = self.get_module(class_id);
-        let mut exclude = HashSet::default();
-        loop {
-            for (name, entry) in &self[module.id()].methods {
-                // Closer ancestor wins (see private/public siblings).
-                if exclude.contains(name) || names.contains(name) {
-                    continue;
-                }
-                if matches!(entry.visibility, Visibility::Undefined) {
-                    exclude.insert(*name);
-                } else if entry.func_id().is_some()
-                    && entry.visibility() == Visibility::Protected
-                {
-                    names.insert(*name);
-                } else {
-                    // Public/private classification at this depth ends
-                    // the lookup for `name`.
-                    exclude.insert(*name);
-                }
-            }
-            match module.superclass() {
-                Some(superclass) => {
-                    if superclass.id() == OBJECT_CLASS {
-                        break;
-                    }
-                    module = superclass;
-                }
-                None => break,
-            }
-        }
-        names.into_iter().map(|sym| Value::symbol(sym)).collect()
+        self.walk_method_names(class_id, Self::is_protected, Self::stop_before_object)
     }
 
     fn generate_class_obj(
