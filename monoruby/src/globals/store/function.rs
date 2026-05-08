@@ -1005,6 +1005,13 @@ impl FuncInfo {
         self.ext.params.is_rest().is_some()
     }
 
+    /// True only when the rest slot is an explicit `*name` / `*`.
+    /// `|a,|` (Prism's `ImplicitRestNode`) returns false here even
+    /// though `is_rest()` is true — see `ParamsInfo::is_explicit_rest`.
+    pub(crate) fn is_explicit_rest(&self) -> bool {
+        self.ext.params.is_explicit_rest().is_some()
+    }
+
     pub(crate) fn rest_pos(&self) -> Option<u16> {
         self.ext.params.is_rest()
     }
@@ -1042,12 +1049,16 @@ impl FuncInfo {
     ///
     /// Calculate Ruby arity for this function.
     ///
-    /// - No optional/rest: arity = required + post
-    /// - Optional or rest: arity = -(required + post + 1)
+    /// - No optional / explicit rest: arity = required + post
+    /// - Optional or explicit rest: arity = -(required + post + 1)
+    ///
+    /// An *implicit* trailing-comma rest (`|a,|`) doesn't shift
+    /// arity to the negative form — CRuby reports `arity = 1` for
+    /// `|a,|` while `|a, *|` reports `-2`, and `|a, *r|` likewise.
     ///
     pub(crate) fn arity(&self) -> i64 {
         let min = self.min_positional_args() as i64;
-        if self.opt_num() > 0 || self.is_rest() {
+        if self.opt_num() > 0 || self.is_explicit_rest() {
             -(min + 1)
         } else {
             min

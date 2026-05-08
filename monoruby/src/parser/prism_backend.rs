@@ -3043,15 +3043,17 @@ impl<'pr> Lowerer<'pr> {
                     });
                 }
                 prism::Node::ImplicitRestNode { .. } => {
-                    // `|k, v,|` — trailing comma in block params
-                    // forces destructure of a single yielded array
-                    // argument (block-arg auto-splat). ruruby
-                    // models the trailing comma as a single
-                    // anonymous `Post(None)` entry that bumps the
-                    // positional arity but allocates no local; we
-                    // do the same.
+                    // `|a,|` — trailing comma in block params. Acts
+                    // like an anonymous rest *only* under block
+                    // dispatch (extras absorbed, single Array
+                    // auto-splat fires); under method-style dispatch
+                    // (`define_method`) it's invisible — `arity` is
+                    // unchanged and extras raise `ArgumentError`.
+                    // `ParamKind::ImplicitRest` carries that two-faced
+                    // semantic; it lowers to a `rest`-slot in
+                    // `ParamsInfo` with `rest_is_implicit = true`.
                     out.push(ruruby_parse::FormalParam {
-                        kind: ParamKind::Post(None),
+                        kind: ParamKind::ImplicitRest,
                         loc: location_to_loc(&rest.location()),
                     });
                 }

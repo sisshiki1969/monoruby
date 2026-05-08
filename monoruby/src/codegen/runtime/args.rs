@@ -299,7 +299,12 @@ fn fill_positional_args(
     let min_args = callee.min_positional_args();
     let max_args = callee.max_positional_args();
     let is_block_style = callee.is_block_style();
-    if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_rest())) {
+    // For the method-style strict check, an *implicit* (trailing-
+    // comma) rest doesn't accept extras — CRuby's
+    // `define_method(:m) { |a,| }; m(1, 2)` raises ArgumentError.
+    // Only an *explicit* `*rest`/`*` lifts the upper bound.
+    if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_explicit_rest()))
+    {
         return Err(MonorubyErr::wrong_number_of_arg_range(
             buf_len,
             min_args..=max_args,
