@@ -5509,11 +5509,12 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
     let bytes = inner.as_bytes();
     let enc = inner.encoding();
     if inner.is_valid_encoding() {
-        // Already valid — copy through unchanged. `from_encoding`'s
-        // cr=Unknown is harmless here since the next access still
-        // takes the cached path of `inner` itself; this is the
-        // only branch that doesn't synthesise a fresh buffer.
-        return Ok(RStringInner::from_encoding(bytes, enc));
+        // Already valid — clone the receiver so the result inherits
+        // its cached cr instead of reverting to Unknown. Same alloc
+        // cost as `from_encoding(bytes, enc)` (both copy `bytes`),
+        // but preserves the SevenBit/Valid classification the caller
+        // had already paid for.
+        return Ok(inner.clone());
     }
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     match enc {
@@ -5551,7 +5552,8 @@ fn scrub_inner_with_block(
     let bytes = inner.as_bytes();
     let enc = inner.encoding();
     if inner.is_valid_encoding() {
-        return Ok(RStringInner::from_encoding(bytes, enc));
+        // Same cr-preservation rationale as `scrub_inner` above.
+        return Ok(inner.clone());
     }
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let data = vm.get_block_data(globals, bh)?;
