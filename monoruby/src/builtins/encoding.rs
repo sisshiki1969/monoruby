@@ -214,6 +214,23 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     let enc_error_module = enc_error_val.expect_class(globals).unwrap();
     let compat_error = globals.define_class("CompatibilityError", enc_error_module, OBJECT_CLASS);
     globals.set_constant_by_str(enc.id(), "CompatibilityError", compat_error.get());
+    // Encoding::ConverterNotFoundError < EncodingError. Stubbed so
+    // specs that reference the constant (e.g.
+    // `String#encode` expectations) don't fail with NameError before
+    // we get to the actual encode behaviour.
+    let conv_not_found =
+        globals.define_class("ConverterNotFoundError", enc_error_module, OBJECT_CLASS);
+    globals.set_constant_by_str(enc.id(), "ConverterNotFoundError", conv_not_found.get());
+    // Encoding::UndefinedConversionError < EncodingError. Same
+    // motivation — referenced by `String#encode` specs.
+    let undef_conv =
+        globals.define_class("UndefinedConversionError", enc_error_module, OBJECT_CLASS);
+    globals.set_constant_by_str(enc.id(), "UndefinedConversionError", undef_conv.get());
+    // Encoding::InvalidByteSequenceError < EncodingError. Same
+    // motivation.
+    let invalid_byte =
+        globals.define_class("InvalidByteSequenceError", enc_error_module, OBJECT_CLASS);
+    globals.set_constant_by_str(enc.id(), "InvalidByteSequenceError", invalid_byte.get());
 
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);

@@ -116,6 +116,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase", swapcase);
     globals.define_builtin_func_rest(STRING_CLASS, "swapcase!", swapcase_);
     globals.define_builtin_func_with(STRING_CLASS, "delete", delete, 0, 0, true);
+    globals.define_builtin_func_with(STRING_CLASS, "delete!", delete_, 0, 0, true);
     globals.define_builtin_func_rest(STRING_CLASS, "squeeze", squeeze);
     globals.define_builtin_func_rest(STRING_CLASS, "squeeze!", squeeze_);
     globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
@@ -631,6 +632,11 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if let Some(ary) = result.try_array_ty() {
             ary.to_vec()
+        } else if result.is_nil() {
+            // CRuby: when `to_ary` returns nil, fall back to wrapping
+            // the original object in a single-element array (so
+            // `"%s" % obj` becomes `"%s" % [obj]`).
+            vec![arg]
         } else {
             return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
         }
@@ -650,13 +656,28 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let given = self_val.expect_str(globals)?;
-    let regex = &lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
-    let res = match regex.find_one(vm, given)? {
-        Some(r) => Value::integer(r.start as i64),
-        None => Value::nil(),
-    };
-    Ok(res)
+    let other = lfp.arg(0);
+    // Fast path: rhs is already a Regexp or String — go through the
+    // standard regex match.
+    if other.is_regex().is_some() || other.is_str().is_some() {
+        let given = self_val.expect_str(globals)?;
+        let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
+        let res = match regex.find_one(vm, given)? {
+            Some(r) => Value::integer(r.start as i64),
+            None => Value::nil(),
+        };
+        return Ok(res);
+    }
+    // CRuby: when rhs is neither Regexp nor String, dispatch to
+    // `rhs =~ self` so a user-defined `=~` (e.g. on a Mock) is
+    // honoured. This must come BEFORE `to_str` coercion — CRuby
+    // doesn't try `to_str` for `=~` at all.
+    if let Some(fid) = globals.check_method(other, IdentId::_MATCH) {
+        return vm.invoke_func_inner(globals, fid, other, &[self_val], None, None);
+    }
+    // Last resort: surface the original "is not a regexp nor a
+    // string" error.
+    Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, other))
 }
 
 ///
@@ -1886,32 +1907,45 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
-fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
+/// Compute the new byte-end after `chomp(rs)`. Operates on raw
+/// bytes so that strings with invalid encoding (e.g.
+/// `"\xa0\xa1\n"` — invalid UTF-8 but with a literal trailing
+/// `\n`) still get their separator stripped, matching CRuby.
+fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
     if rs.is_empty() {
-        let mut s = self_;
-        let mut len = s.len();
+        // Paragraph mode: iteratively strip trailing `\r\n` / `\n`.
+        let mut end = bytes.len();
         loop {
-            s = s.trim_end_matches("\r\n");
-            if s.ends_with('\n') {
-                s = &s[0..s.len() - 1];
+            let prev = end;
+            while end >= 2 && &bytes[end - 2..end] == b"\r\n" {
+                end -= 2;
             }
-            if len == s.len() {
+            if end >= 1 && bytes[end - 1] == b'\n' {
+                end -= 1;
+            }
+            if end == prev {
                 break;
             }
-            len = s.len();
         }
-        s
-    } else if rs == "\n" {
-        // Default separator: remove one trailing \r\n, \n, or \r.
-        if self_.ends_with("\r\n") {
-            &self_[..self_.len() - 2]
-        } else if self_.ends_with('\n') || self_.ends_with('\r') {
-            &self_[..self_.len() - 1]
+        end
+    } else if rs == b"\n" {
+        // Default: remove ONE trailing `\r\n` / `\n` / `\r`.
+        let end = bytes.len();
+        if end >= 2 && &bytes[end - 2..end] == b"\r\n" {
+            end - 2
+        } else if end >= 1 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
+            end - 1
         } else {
-            self_
+            end
         }
     } else {
-        self_.trim_end_matches(rs)
+        // Explicit separator: strip iteratively. Matches the
+        // pre-existing behaviour of `&str::trim_end_matches(rs)`.
+        let mut end = bytes.len();
+        while end >= rs.len() && &bytes[end - rs.len()..end] == rs {
+            end -= rs.len();
+        }
+        end
     }
 }
 
@@ -1925,25 +1959,24 @@ fn chomp_sub<'a>(self_: &'a str, rs: &str) -> &'a str {
 fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.try_arg(0);
     let rs_owned;
-    let rs = if let Some(arg0) = &arg0 {
+    let rs_bytes: &[u8] = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             // `chomp(nil)` returns a copy of `self` per CRuby — never
             // the same instance, even when there's nothing to strip.
             return Ok(lfp.self_val().dup());
         }
-        rs_owned = arg0.coerce_to_string(vm, globals)?;
-        rs_owned.as_str()
+        rs_owned = arg0.coerce_to_rstring(vm, globals)?;
+        rs_owned.as_bytes()
     } else {
-        "\n"
+        b"\n"
     };
 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let self_s = self_.expect_str(globals)?;
-    // `chomp_sub` returns a prefix of `self_s`; its length is the
-    // byte-end of the substring. `from_substring` propagates the
-    // parent's cached cr in O(1) on a single-byte trim.
-    let new_end = chomp_sub(self_s, rs).len();
+    // Operate on bytes so that strings whose declared encoding
+    // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
+    // have their trailing newline stripped.
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
     Ok(Value::string_from_inner(RStringInner::from_substring(
         inner, 0, new_end,
     )))
@@ -1960,21 +1993,21 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let arg0 = lfp.try_arg(0);
     let rs_owned;
-    let rs = if let Some(arg0) = &arg0 {
+    let rs_bytes: &[u8] = if let Some(arg0) = &arg0 {
         if arg0.is_nil() {
             return Ok(Value::nil());
         }
-        rs_owned = arg0.coerce_to_string(vm, globals)?;
-        rs_owned.as_str()
+        rs_owned = arg0.coerce_to_rstring(vm, globals)?;
+        rs_owned.as_bytes()
     } else {
-        "\n"
+        b"\n"
     };
 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let self_s = self_.expect_str(globals)?;
-    let new_end = chomp_sub(self_s, rs).len();
-    if new_end == self_s.len() {
+    let self_len = inner.as_bytes().len();
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
+    if new_end == self_len {
         Ok(Value::nil())
     } else {
         let trimmed = RStringInner::from_substring(inner, 0, new_end);
@@ -4690,8 +4723,44 @@ fn tr_test() {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut res = lfp.self_val().as_str().to_string();
-    let args = lfp.arg(0).as_array();
+    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
+    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
+        res,
+    )))
+}
+
+///
+/// ### String#delete!
+///
+/// - delete!(*strs) -> self | nil
+///
+/// In-place form of `delete`. Returns `nil` when no characters were
+/// removed (matching CRuby), otherwise the receiver.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete=21.html]
+#[monoruby_builtin]
+fn delete_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
+    let orig_len = lfp.self_val().as_rstring_inner().len();
+    if res.len() == orig_len {
+        return Ok(Value::nil());
+    }
+    lfp.self_val()
+        .replace_with_inner(RStringInner::from_string_scanned(res));
+    Ok(lfp.self_val())
+}
+
+/// Shared body of `String#delete` / `String#delete!`. Builds the
+/// filtered string but doesn't decide between `dup` vs in-place,
+/// which the caller handles.
+fn delete_compute(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    args: Array,
+) -> Result<String> {
+    let mut res = self_val.as_str().to_string();
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr(
             "wrong number of arguments (given 0, expected 1+)",
@@ -4707,8 +4776,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         .collect::<Result<Vec<Tr>>>()?;
 
     res.retain(|c| !pred.iter().all(|tr| tr.check(c)));
-
-    Ok(Value::string(res))
+    Ok(res)
 }
 
 ///
