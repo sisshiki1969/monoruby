@@ -1,6 +1,7 @@
 use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
 use std::io::{BufWriter, Stdout, stdout};
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 
@@ -106,8 +107,13 @@ pub struct Globals {
     load_path: Value,
     /// standard PRNG
     random: Box<Prng>,
-    /// loaded libraries (canonical path).
-    pub(crate) loaded_canonicalized_files: indexmap::IndexSet<PathBuf>,
+    /// `$LOADED_FEATURES` / `$"` — Array of canonicalised paths
+    /// (Strings) that have already been loaded. Stored as a live Ruby
+    /// Value so mutations from Ruby code (`$".replace(arr)`,
+    /// `$".delete(path)`, `$".clear`) propagate back to the runtime's
+    /// dedup tracking. Membership checks scan the array linearly,
+    /// which is fine because `require` is not on a hot path.
+    pub(crate) loaded_features: Value,
     /// cache for Symbol#name (frozen strings keyed by IdentId).
     pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// address of invokers.
@@ -140,6 +146,7 @@ impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.main_object.mark(alloc);
         self.load_path.mark(alloc);
+        self.loaded_features.mark(alloc);
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
         self.symbol_names.values().for_each(|v| v.mark(alloc));
@@ -154,10 +161,9 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
-        let mut loaded_canonicalized_files = indexmap::IndexSet::default();
-        ["thread.rb"].iter().for_each(|f| {
-            loaded_canonicalized_files.insert(std::path::PathBuf::from(f));
-        });
+        let loaded_features = Value::array_from_iter(
+            ["thread.rb"].iter().map(|s| Value::string_from_str(s)),
+        );
 
         let invokers = CODEGEN.with(|codegen| {
             let codegen = codegen.borrow();
@@ -181,7 +187,7 @@ impl Globals {
             stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
-            loaded_canonicalized_files,
+            loaded_features,
             symbol_names: HashMap::default(),
             invokers,
             #[cfg(feature = "profile")]
@@ -623,11 +629,53 @@ impl Globals {
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {
-        let iter = self
-            .loaded_canonicalized_files
-            .iter()
-            .map(|s| Value::string_from_str(s.to_string_lossy().as_ref()));
-        Value::array_from_iter(iter)
+        self.loaded_features
+    }
+
+    /// Linear scan of `$LOADED_FEATURES` / `$"` for `path`. Used by
+    /// `require` / autoload to skip files already loaded. Both the
+    /// array entries and `path` are compared via their `OsStr` bytes
+    /// so that Ruby-side `$".replace(...)` semantics are honoured.
+    pub(crate) fn is_feature_loaded(&self, path: &std::path::Path) -> bool {
+        let target = path.as_os_str().as_bytes();
+        for v in self.loaded_features.as_array().iter() {
+            if let Some(s) = v.is_str()
+                && s.as_bytes() == target
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Append `path` to `$LOADED_FEATURES` if it isn't already
+    /// present. Returns `true` if the path was newly added.
+    pub(crate) fn add_loaded_feature(&mut self, path: &std::path::Path) -> bool {
+        if self.is_feature_loaded(path) {
+            return false;
+        }
+        let value = Value::string_from_str(path.to_string_lossy().as_ref());
+        let mut array = self.loaded_features.as_array();
+        array.push(value);
+        true
+    }
+
+    /// Remove the first occurrence of `path` from `$LOADED_FEATURES`,
+    /// returning whether anything was removed. Used after a failed
+    /// `require` body so the same file can be retried.
+    pub(crate) fn remove_loaded_feature(&mut self, path: &std::path::Path) -> bool {
+        let target = path.as_os_str().as_bytes();
+        let mut array = self.loaded_features.as_array();
+        let pos = array.iter().position(|v| {
+            v.is_str().is_some_and(|s| s.as_bytes() == target)
+        });
+        match pos {
+            Some(idx) => {
+                array.remove(idx);
+                true
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {

@@ -19,14 +19,14 @@ impl Globals {
             let mut file = PathBuf::from(file_name);
             if file.extension().is_none() {
                 file.set_extension("rb");
-                if self.loaded_canonicalized_files.get(&file).is_some() {
+                if self.is_feature_loaded(&file) {
                     return Ok(None);
                 }
                 file.set_extension("so");
-                if self.loaded_canonicalized_files.get(&file).is_some() {
+                if self.is_feature_loaded(&file) {
                     return Ok(None);
                 }
-            } else if self.loaded_canonicalized_files.get(&file).is_some() {
+            } else if self.is_feature_loaded(&file) {
                 return Ok(None);
             }
             // Try the file with its given extension first.
@@ -75,15 +75,15 @@ impl Globals {
             return Err(MonorubyErr::cant_load(None, file_name));
         }
 
-        // Bare path: check loaded_canonicalized_files, then search $LOAD_PATH.
+        // Bare path: check $LOADED_FEATURES, then search $LOAD_PATH.
         if !is_relative {
             let mut file = PathBuf::from(file_name);
             file.set_extension("rb");
-            if self.loaded_canonicalized_files.get(&file).is_some() {
+            if self.is_feature_loaded(&file) {
                 return Ok(None);
             }
             file.set_extension("so");
-            if self.loaded_canonicalized_files.get(&file).is_some() {
+            if self.is_feature_loaded(&file) {
                 return Ok(None);
             }
 
@@ -147,11 +147,7 @@ impl Globals {
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
         let canonicalized_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if self
-            .loaded_canonicalized_files
-            .get(&canonicalized_path)
-            .is_some()
-        {
+        if self.is_feature_loaded(&canonicalized_path) {
             return Ok(None);
         }
         let res = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
@@ -172,8 +168,7 @@ impl Globals {
         } else {
             load_file(&canonicalized_path)?
         };
-        self.loaded_canonicalized_files
-            .insert(canonicalized_path.to_path_buf());
+        self.add_loaded_feature(&canonicalized_path);
         Ok(Some(res))
     }
 
@@ -181,7 +176,7 @@ impl Globals {
     /// Find and read a file for `Kernel#load`.
     ///
     /// Unlike `require_lib`, this function:
-    /// - Does NOT check or update `loaded_canonicalized_files`.
+    /// - Does NOT check or update `$LOADED_FEATURES`.
     /// - Does NOT add `.rb` / `.so` extensions automatically.
     /// - Absolute paths are loaded directly.
     /// - Paths starting with `./` or `../` are resolved relative to CWD.

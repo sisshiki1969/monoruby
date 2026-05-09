@@ -63,10 +63,16 @@ pub(crate) struct AutoloadEntry {
 /// references raise `NameError` rather than retrying. If `require`
 /// itself raises (e.g. `LoadError`), the state is reverted to `Idle`
 /// so a future reference may try again.
+///
+/// `Consumed` is the post-`require` state used when a *direct* `require`
+/// of the autoload's file completed without defining the constant.
+/// CRuby keeps the entry's name visible in `Module#constants(false)`
+/// but reports `const_defined?` as false and `autoload?` as nil.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoloadState {
     Idle,
     Loading,
+    Consumed,
 }
 
 impl AutoloadEntry {
@@ -165,9 +171,16 @@ impl ClassInfoTable {
                 // Re-registering autoload updates the path; visibility is
                 // preserved. CRuby leaves an in-progress load alone here
                 // and only swaps the feature, so we mirror that by keeping
-                // the existing `state` untouched.
+                // an in-flight `Loading` state but reviving a previously
+                // `Consumed` slot back to `Idle` so the next reference
+                // re-triggers the autoload (matching the "after the
+                // autoload is triggered by require, a new autoload with
+                // the same path is considered" spec).
                 ConstStateKind::Autoload(entry) => {
                     entry.feature = file_name.into();
+                    if let AutoloadState::Consumed = entry.state {
+                        entry.state = AutoloadState::Idle;
+                    }
                 }
             },
             None => {
@@ -194,6 +207,63 @@ impl ClassInfoTable {
                 entry.state = state;
             }
         }
+    }
+
+    /// Walk every class's constant table looking for `Autoload` entries
+    /// whose `feature` matches one of `paths`. Returns a list of
+    /// `(ClassId, IdentId)` pairs identifying those entries. Used by
+    /// `Executor::require` so that direct `require <file>` calls can
+    /// flip every matching autoload slot to `Loading` for the duration
+    /// of the load and clean them up afterwards (matching CRuby's
+    /// behaviour: a same-file direct require "consumes" the autoload).
+    pub(crate) fn find_autoload_entries_for_paths(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Vec<(ClassId, IdentId)> {
+        let mut result = Vec::new();
+        for idx in 1..self.classinfo_len() {
+            let class_id = ClassId::new(idx as u32);
+            for (name, state) in self[class_id].constants.iter() {
+                if let ConstStateKind::Autoload(entry) = &state.kind {
+                    if Self::autoload_feature_matches_path(&entry.feature, paths) {
+                        result.push((class_id, *name));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn autoload_feature_matches_path(
+        feature: &std::path::Path,
+        paths: &[std::path::PathBuf],
+    ) -> bool {
+        // Direct match: feature == path.
+        if paths.iter().any(|p| p == feature) {
+            return true;
+        }
+        // Canonicalised match: try resolving the feature path.
+        if let Ok(canon) = feature.canonicalize() {
+            if paths.iter().any(|p| p == &canon) {
+                return true;
+            }
+        }
+        // Extension-less feature: try `.rb` and `.so` variants.
+        if feature.extension().is_none() {
+            for ext in ["rb", "so"] {
+                let mut with_ext = feature.to_path_buf();
+                with_ext.set_extension(ext);
+                if paths.iter().any(|p| p == &with_ext) {
+                    return true;
+                }
+                if let Ok(canon) = with_ext.canonicalize() {
+                    if paths.iter().any(|p| p == &canon) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     ///

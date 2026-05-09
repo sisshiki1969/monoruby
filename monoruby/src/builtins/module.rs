@@ -667,7 +667,19 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     if feature.is_empty() {
         return Err(MonorubyErr::argumenterr("empty file name"));
     }
+    // CRuby raises a `FrozenError` *before* recording any autoload state so
+    // that `frozen_module.autoload :Foo, ...` neither installs the entry
+    // nor stores the constant name.
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let class_id = lfp.self_val().as_class_id();
+    // CRuby treats `autoload :Foo, path` as a no-op when `path` resolves
+    // to a file that is already loaded (`$LOADED_FEATURES`) or is the
+    // current `require`'s in-flight file. Mirrors `rb_autoload_str`'s
+    // `rb_feature_p` short-circuit: the constant stays "not autoloaded"
+    // and `autoload?` returns `nil`.
+    if autoload_feature_already_loaded(vm, globals, &feature) {
+        return Ok(Value::nil());
+    }
     let was_autoload = match globals.store.get_constant(class_id, const_name) {
         None => true,
         Some(state) => state.is_autoload(),
@@ -729,6 +741,9 @@ fn autoload_query(
                     // already in progress, so there's nothing left to
                     // schedule).
                     AutoloadState::Loading => return Ok(Value::nil()),
+                    // Direct `require` already ran the file without
+                    // defining the constant — autoload is consumed.
+                    AutoloadState::Consumed => return Ok(Value::nil()),
                     AutoloadState::Idle => {
                         return Ok(Value::string(
                             entry.feature.to_string_lossy().into_owned(),
@@ -746,6 +761,81 @@ fn autoload_query(
             None => return Ok(Value::nil()),
         }
     }
+}
+
+/// Resolve `feature` to a candidate path (absolute, relative, or
+/// $LOAD_PATH-searched) and check whether that path is already a member
+/// of `$LOADED_FEATURES` *or* is currently being executed by an
+/// in-flight `require`. This is what CRuby's `rb_autoload_str` checks
+/// before installing an autoload entry — if the file is already
+/// loaded/loading, the autoload registration is a no-op.
+fn autoload_feature_already_loaded(vm: &Executor, globals: &Globals, feature: &str) -> bool {
+    let candidates = autoload_resolution_candidates(globals, feature);
+    for path in &candidates {
+        if globals.is_feature_loaded(path) || vm.is_loading_path(path) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Build the list of candidate canonical paths that the given autoload
+/// `feature` might resolve to. Mirrors the search rules in
+/// `Globals::require_lib`/`search_lib` but only returns the paths so we
+/// can probe for already-loadedness without performing I/O.
+fn autoload_resolution_candidates(
+    globals: &Globals,
+    feature: &str,
+) -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut out: Vec<PathBuf> = Vec::new();
+    let push = |out: &mut Vec<PathBuf>, p: PathBuf| {
+        if !out.iter().any(|q| *q == p) {
+            out.push(p);
+        }
+    };
+    let raw = PathBuf::from(feature);
+    let with_ext = |p: &std::path::Path| -> Vec<PathBuf> {
+        if p.extension().is_some() {
+            vec![p.to_path_buf()]
+        } else {
+            let mut rb = p.to_path_buf();
+            rb.set_extension("rb");
+            let mut so = p.to_path_buf();
+            so.set_extension("so");
+            vec![rb, so]
+        }
+    };
+    if feature.starts_with('/') {
+        for c in with_ext(&raw) {
+            let canon = c.canonicalize().unwrap_or(c);
+            push(&mut out, canon);
+        }
+        return out;
+    }
+    if feature.starts_with("./") || feature.starts_with("../") {
+        if let Ok(cwd) = std::env::current_dir() {
+            let resolved = cwd.join(&raw);
+            for c in with_ext(&resolved) {
+                let canon = c.canonicalize().unwrap_or(c);
+                push(&mut out, canon);
+            }
+        }
+        return out;
+    }
+    // Bare feature: search every $LOAD_PATH entry.
+    for lib in globals.get_load_path().as_array().iter() {
+        let lib = match lib.is_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        let joined = PathBuf::from(lib).join(&raw);
+        for c in with_ext(&joined) {
+            let canon = c.canonicalize().unwrap_or(c);
+            push(&mut out, canon);
+        }
+    }
+    out
 }
 
 /// Validate that *name* is a syntactically valid Ruby constant name.
@@ -5050,6 +5140,81 @@ mod tests {
             r#"
             m = Module.new { autoload :X, "/p" }
             [m.autoload?("X"), m.autoload?("Y")]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_autoload_on_frozen_module_raises_frozen_error() {
+        // `Module#autoload` must raise `FrozenError` *before* recording
+        // any state when the receiver is frozen. The constant must NOT
+        // appear in `Module#constants` afterwards.
+        run_test(
+            r#"
+            m = Module.new
+            m.freeze
+            ok = false
+            begin
+              m.autoload :Foo, "/dev/null"
+            rescue FrozenError
+              ok = true
+            end
+            [ok, m.constants.include?(:Foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_autoload_on_currently_loading_file_is_noop() {
+        // Registering `autoload :Foo, __FILE__` from inside the file
+        // currently being executed by `require` is a no-op (the file
+        // is treated as already loaded). `autoload?` returns nil.
+        run_test_once(
+            r#"
+            body = "module SelfRegister; end\nSelfRegister.autoload(:Foo, __FILE__)\n$autoload_self_register_result = SelfRegister.autoload?(:Foo)\n"
+            File.write('/tmp/monoruby_autoload_self_register.rb', body)
+            require '/tmp/monoruby_autoload_self_register.rb'
+            $autoload_self_register_result
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_autoload_state_consumed_after_direct_require() {
+        // When the file registered for an autoload is loaded directly
+        // via `require`, the autoload entry is "consumed": its name
+        // remains in `Module#constants(false)` but `const_defined?`
+        // returns `false` and `autoload?` returns `nil`.
+        run_test_once(
+            r##"
+            File.write('/tmp/monoruby_autoload_no_const.rb', "# defines nothing")
+            module ConsumedHost
+              autoload :NoSuchConst, '/tmp/monoruby_autoload_no_const.rb'
+            end
+            require '/tmp/monoruby_autoload_no_const.rb'
+            [
+              ConsumedHost.constants(false).include?(:NoSuchConst),
+              ConsumedHost.const_defined?(:NoSuchConst),
+              ConsumedHost.autoload?(:NoSuchConst),
+            ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn module_loaded_features_replace_resyncs_require() {
+        // Mutating `$LOADED_FEATURES` from Ruby (here via `replace`)
+        // propagates to the require-tracking layer, so a subsequent
+        // `require` of the same file actually re-executes the body.
+        run_test_once(
+            r#"
+            File.write('/tmp/monoruby_resync.rb', "$resync_counter = ($resync_counter || 0) + 1")
+            $resync_counter = 0
+            require '/tmp/monoruby_resync.rb'
+            first = $resync_counter
+            $LOADED_FEATURES.replace($LOADED_FEATURES - ['/tmp/monoruby_resync.rb'])
+            require '/tmp/monoruby_resync.rb'
+            [first, $resync_counter]
             "#,
         );
     }

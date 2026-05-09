@@ -50,6 +50,12 @@ impl Executor {
                     // recursion guard. The caller will surface
                     // NameError or const_missing.
                     AutoloadState::Loading => return Ok(None),
+                    // The autoload was already consumed by a direct
+                    // `require` that did not define the constant.
+                    // CRuby reports the slot as missing for the
+                    // purposes of value lookup; the name remains in
+                    // `Module#constants(false)` only.
+                    AutoloadState::Consumed => return Ok(None),
                     AutoloadState::Idle => entry.feature.clone(),
                 },
             },
@@ -96,6 +102,30 @@ impl Executor {
             Some(state) => match &state.kind {
                 ConstStateKind::Loaded(v) => Ok(Some(*v)),
                 ConstStateKind::Autoload(_) => {
+                    // CRuby's verbose mode (`$VERBOSE = true`) emits
+                    // `warning: Expected <file> to define
+                    // <Owner::Name> but it didn't` whenever an
+                    // autoload's file completed without defining the
+                    // expected constant. Surface the same message via
+                    // `$stderr.write` so mspec's `complain` matcher
+                    // catches it.
+                    let verbose = globals
+                        .get_gvar(IdentId::get_id("$VERBOSE"))
+                        .is_some_and(|v| v == Value::bool(true));
+                    if verbose {
+                        let parent_name = globals.store.qualified_name(class_id);
+                        let qualified = if parent_name.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{parent_name}::{}", name)
+                        };
+                        let msg = format!(
+                            "Expected {} to define {} but it didn't",
+                            feature.display(),
+                            qualified
+                        );
+                        crate::value::emit_verbose_warning(self, globals, &msg)?;
+                    }
                     globals.remove_constant(class_id, name);
                     Ok(None)
                 }
@@ -286,6 +316,7 @@ impl Executor {
                 ConstStateKind::Autoload(entry) => match entry.state {
                     AutoloadState::Idle => true,
                     AutoloadState::Loading => false,
+                    AutoloadState::Consumed => false,
                 },
             },
         }
@@ -469,7 +500,16 @@ impl Executor {
             .collect::<Vec<_>>();
         for module in stack {
             if globals.store.get_constant(module, name).is_some() {
-                return self.get_constant(globals, module, name);
+                // Trigger autoload / read the value. If the autoload
+                // resolved to "no constant" (e.g. the file did not
+                // define the symbol on this lexical class), fall
+                // through to the next outer scope so a parent-scope
+                // definition can satisfy the lookup. This matches
+                // CRuby's "looks up in parent scope after failed
+                // autoload" behaviour.
+                if let Some(v) = self.get_constant(globals, module, name)? {
+                    return Ok(Some(v));
+                }
             }
         }
         Ok(None)
