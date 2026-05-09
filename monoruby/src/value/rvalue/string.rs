@@ -241,7 +241,14 @@ impl Encoding {
         // Normalize: uppercase, replace '-' / '.' with '_'.
         let normalized = s.to_uppercase().replace('-', "_").replace('.', "_");
         match normalized.as_str() {
-            "UTF_8" | "UTF8" | "CP65001" => Ok(Encoding::Utf8),
+            // `UTF8-MAC` and the legacy `UTF_8_MAC` are CRuby's
+            // HFS+/macOS-NFD UTF-8 variants. We don't apply the
+            // NFD normalisation, so they're treated as plain
+            // UTF-8 — sufficient for transcoding round-trips
+            // through `encoding_rs`.
+            "UTF_8" | "UTF8" | "CP65001" | "UTF8_MAC" | "UTF_8_MAC" | "CESU_8" | "CESU8" => {
+                Ok(Encoding::Utf8)
+            }
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
             "US_ASCII" | "ASCII" | "ANSI_X3_4_1968" | "646" => Ok(Encoding::UsAscii),
             "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
