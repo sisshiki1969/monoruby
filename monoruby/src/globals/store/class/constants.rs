@@ -225,19 +225,43 @@ impl ClassInfoTable {
     }
 
     ///
-    /// Get constant names in the class of *class_id*.
-    ///
+    /// Get constant names in the class of *class_id*. Skips
+    /// private constants (those marked via `Module#private_constant`)
+    /// since CRuby's `Module#constants` reports public-only.
     pub fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id].constants.keys().cloned().collect()
+        self[class_id]
+            .constants
+            .iter()
+            .filter_map(|(name, state)| {
+                if state.is_private() {
+                    None
+                } else {
+                    Some(*name)
+                }
+            })
+            .collect()
     }
 
     ///
-    /// Get constant names in the class of *class_id* and its superclasses and included Modules except Object class and its superclasses.
-    ///
+    /// Get constant names in the class of *class_id* and its
+    /// superclasses and included Modules except Object class and its
+    /// superclasses. Duplicates (the same constant name reachable
+    /// through multiple ancestors via `include`) are reported once,
+    /// matching CRuby — `Module#constants` keeps the closer-ancestor
+    /// occurrence and discards farther duplicates. Private constants
+    /// (from `Module#private_constant`) are also excluded.
     pub fn get_constant_names_inherit(&self, mut class: Module) -> Vec<IdentId> {
-        let mut names = vec![];
+        let mut names = Vec::new();
+        let mut seen = HashSet::default();
         loop {
-            names.extend(self[class.id()].constants.keys().cloned());
+            for (name, state) in self[class.id()].constants.iter() {
+                if state.is_private() {
+                    continue;
+                }
+                if seen.insert(*name) {
+                    names.push(*name);
+                }
+            }
             match class.superclass() {
                 Some(superclass) => {
                     if superclass.id() == OBJECT_CLASS {

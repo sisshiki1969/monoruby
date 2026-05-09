@@ -568,8 +568,13 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             if let Some(iseq) = globals.store[func_id].is_iseq() {
                 let loc = globals.store[iseq].get_location();
                 let desc = globals.store.func_description(func_id);
+                // CRuby 3.4+ delimits the label with single quotes
+                // ("…:in '<main>'") instead of the legacy backticks;
+                // monoruby targets Ruby 4.0 so we follow suit. Keeps
+                // `caller_locations` (which regex-parses these
+                // strings) able to extract the label.
                 v.push(Value::string_from_vec(
-                    format!("{loc}:in `{desc}`").into_bytes(),
+                    format!("{loc}:in '{desc}'").into_bytes(),
                 ));
             }
         }
