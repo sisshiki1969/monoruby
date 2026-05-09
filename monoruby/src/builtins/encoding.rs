@@ -3930,4 +3930,335 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn primitive_convert_basic_finished() {
+        // ASCII round-trip through the all-ASCII fast path: returns
+        // `:finished`, clears `src`, writes the converted bytes to `dst`,
+        // and tags `dst` with the destination encoding.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              src = "hello"
+              dst = ""
+              [ec.primitive_convert(src, dst), src, dst, dst.encoding == Encoding::ISO_8859_1]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_accepts_nil_source() {
+        // `primitive_convert(nil, "")` is a no-op that returns `:finished`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert(nil, "")
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_accepts_empty_string_source() {
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "")
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_frozen_dst_raises() {
+        run_test_error(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "".freeze)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_default_appends() {
+        // Default `dst_offset` (omitted or nil) is "end of dst" so the
+        // converter appends rather than overwrites.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "aa"
+              ec.primitive_convert("bc", dst)
+              dst
+            "#,
+        );
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "aa"
+              ec.primitive_convert("bc", dst, nil)
+              dst
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_explicit_truncates() {
+        // An explicit `dst_offset` truncates `dst` to that prefix and
+        // appends the converted bytes there.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "abc"
+              ec.primitive_convert("XY", dst, 1)
+              dst
+            "#,
+        );
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "abc"
+              ec.primitive_convert("XY", dst, 0)
+              dst
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_to_int() {
+        // Non-Integer `dst_offset` is coerced via `to_int`.
+        run_test(
+            r#"
+              klass = Class.new do
+                def initialize(n); @n = n; end
+                def to_int; @n; end
+              end
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "   "
+              result = ec.primitive_convert("abc", dst, klass.new(2))
+              [result, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_out_of_range_raises() {
+        // `dst_offset > dst.bytesize` raises ArgumentError.
+        run_test_error(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "am", 3)
+            "#,
+        );
+        // Offsets within range (0..bytesize) succeed.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "am", 0)
+              ec.primitive_convert("", "am", 1)
+              ec.primitive_convert("", "am", 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_caps_output() {
+        // `dst_bytesize` caps how many bytes can be written and yields
+        // `:destination_buffer_full` when the source needs more room.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = ""
+              result = ec.primitive_convert("glark", dst, nil, 1)
+              [result, dst.bytesize, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_to_int() {
+        // Non-Integer `dst_bytesize` is coerced via `to_int`.
+        run_test(
+            r#"
+              klass = Class.new do
+                def initialize(n); @n = n; end
+                def to_int; @n; end
+              end
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "   "
+              result = ec.primitive_convert("abc", dst, 0, klass.new(2))
+              [result, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_unlimited_when_nil() {
+        // Nil `dst_bytesize` means unlimited; the full source is written.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = ""
+              ec.primitive_convert("glark", dst, nil, nil)
+              dst.bytesize
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_streaming_pending_buffer() {
+        // The cross-call pending buffer carries unwritten source bytes
+        // forward when `dst_bytesize` caps output. The progression
+        // matches the spec's "uses the destination byte offset" test:
+        // dst stays "aa", then becomes "aab", then "aabbb".
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dest = "aa"
+              s1 = ec.primitive_convert("b", dest, nil, 0); after1 = dest.dup
+              s2 = ec.primitive_convert("b", dest, nil, 1); after2 = dest.dup
+              s3 = ec.primitive_convert("b", dest, nil, 2); after3 = dest.dup
+              [s1, after1, s2, after2, s3, after3]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_undefined_conversion() {
+        // A character unrepresentable in the destination yields
+        // `:undefined_conversion` and bytes after the offending
+        // codepoint stay in `src`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              s = "\u{9878}abcd"
+              dst = ""
+              result = ec.primitive_convert(s, dst)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_encoding_tagged_after_failure() {
+        // Even when the call returns `:undefined_conversion`, dst is
+        // re-tagged with the destination encoding (CRuby contract).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "".force_encoding("UTF-8")
+              ec.primitive_convert("\u{9878}", dst)
+              dst.encoding == Encoding::ISO_8859_1
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_invalid_byte_sequence_returns_symbol() {
+        // Stray UTF-8 continuation bytes trigger
+        // `:invalid_byte_sequence` and the bytes after the malformed
+        // run stay in `src`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+              s = "\xC3\xA1\x80\x80\xC3\xA1".force_encoding("UTF-8")
+              dest = "".force_encoding("UTF-8")
+              result = ec.primitive_convert(s, dest)
+              [result, s.bytes]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_keeps_removing_invalid_bytes() {
+        // Repeated calls peel one malformed byte off the front each
+        // call until `src` is empty.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+              s = "\x80\x80\x80"
+              dest = "".force_encoding(Encoding::UTF_8_MAC)
+              ec.primitive_convert(s, dest); a = s.bytes
+              ec.primitive_convert(s, dest); b = s.bytes
+              ec.primitive_convert(s, dest); c = s.bytes
+              [a, b, c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_partial_input_true_buffer_empty() {
+        // EUC-JP `\xa4` is an incomplete lead byte; with
+        // `partial_input: true` the call returns `:source_buffer_empty`
+        // (the decoder is willing to wait for more input).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+              s = "\xa4"
+              result = ec.primitive_convert(s, "", nil, nil, partial_input: true)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_partial_input_false_incomplete_input() {
+        // Same lead byte without `partial_input` yields
+        // `:incomplete_input` (the decoder was told this is the
+        // final input).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+              s = "\xa4"
+              result = ec.primitive_convert(s, "", nil, nil, partial_input: false)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_after_output_option_accepted() {
+        // `after_output:` is recognised (read off the opts hash) and
+        // does not raise even though monoruby doesn't suspend on it.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "", nil, nil, after_output: true)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_destination_buffer_full_clears_src() {
+        // `:destination_buffer_full` clears `src` (the leftover goes
+        // into the converter's pending buffer, not the user's `src`).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-2022-JP")
+              s = "\u{9999}"
+              destination_bytesize = s.bytesize - 1
+              result = ec.primitive_convert(s, "", 0, destination_bytesize)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_errinfo_reflects_last_primitive_convert() {
+        // `primitive_errinfo` returns the 5-tuple
+        // `[result, src_enc_name, dst_enc_name, error_bytes, readagain_bytes]`
+        // of the most recent `primitive_convert`. The exact
+        // `error_bytes` / `readagain_bytes` diverge from CRuby
+        // (monoruby stores empty strings), so check structure rather
+        // than full equality.
+        run_test_no_result_check(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("hello", "")
+              info = ec.primitive_errinfo
+              raise unless info.is_a?(Array)
+              raise unless info.length == 5
+              raise unless info[0] == :finished
+              raise unless info[1] == "UTF-8"
+              raise unless info[2] == "ISO-8859-1"
+            "#,
+        );
+    }
 }
