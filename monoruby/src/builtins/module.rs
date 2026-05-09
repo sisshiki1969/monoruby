@@ -1533,6 +1533,13 @@ fn define_method(
     }
     let class_id = self_val.as_class_id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // For proc-based define_method, the runtime LFP has the *block*'s
+    // FuncId (the wrapper jumps directly to the block code, only
+    // tagging the meta with `PROC_METHOD_MASK`). For `super` to work
+    // we need that block FuncId itself to (a) have a `name` we can
+    // look up and (b) have its owner_class registered so
+    // `check_super`'s walk recognises the method's home class.
+    let block_fid_to_decorate: Option<FuncId>;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
             let fid = globals.define_proc_method(proc);
@@ -1540,12 +1547,16 @@ fn define_method(
             // (no destructuring of a single Array argument, ArgumentError
             // on count mismatch), unlike the underlying Proc.
             globals.store[fid].set_method_style();
+            globals.store[fid].set_name(name);
+            block_fid_to_decorate = Some(proc.func_id());
             fid
         } else if let Some(method) = method.is_method() {
             validate_bind_target(globals, method.owner(), class_id)?;
+            block_fid_to_decorate = None;
             method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
             validate_bind_target(globals, umethod.owner(), class_id)?;
+            block_fid_to_decorate = None;
             umethod.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
@@ -1558,6 +1569,8 @@ fn define_method(
         let proc = vm.generate_proc(globals, bh, pc)?;
         let fid = globals.define_proc_method(proc);
         globals.store[fid].set_method_style();
+        globals.store[fid].set_name(name);
+        block_fid_to_decorate = Some(proc.func_id());
         fid
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
@@ -1575,6 +1588,33 @@ fn define_method(
         vm.add_singleton_method(globals, class_id, name, func_id, Visibility::Public)?;
     } else {
         vm.add_method(globals, class_id, name, func_id, visibility)?;
+    }
+    // For proc-based define_method: also decorate the block iseq's
+    // FuncInfo with the installed name and owner so `find_super`
+    // (which looks at the runtime LFP's block FuncId, not the
+    // proc-method wrapper FuncId) can resolve correctly.
+    if let Some(block_fid) = block_fid_to_decorate {
+        if globals.store[block_fid].name().is_none() {
+            globals.store[block_fid].set_name(name);
+        }
+        // `set_owner_class` appends — but only push when this owner
+        // isn't already recorded, to avoid an unbounded grow on
+        // repeated re-registration of the same proc under the same
+        // class (e.g. `define_method` inside a hot loop).
+        if !globals.store[block_fid]
+            .owner_class()
+            .contains(&class_id)
+        {
+            globals.store[block_fid].set_owner_class(class_id);
+        }
+        // Tag the block's static Meta with the proc-method bit.
+        // The dynamic OR in `gen_wrapper` only fires for the
+        // unspecialised dispatch path; JIT-specialised calls copy
+        // this static Meta verbatim into LFP_META, so without this
+        // bit `Lfp::outermost` would walk past the method boundary
+        // once JIT compilation kicks in (manifested as
+        // `undefined method '/main'` from `super`).
+        globals.store[block_fid].set_proc_method();
     }
     Ok(Value::symbol(name))
 }
@@ -1899,6 +1939,15 @@ fn prepend_features(
     base.as_val().ensure_not_frozen(&globals.store)?;
     let prepend_module = lfp.self_val().as_class();
     base.prepend_module(prepend_module)?;
+    // CRuby propagates a `Module#prepend` to every class that has
+    // already mixed in `base` — without this, an existing
+    // `subclass.include(base)` silently shadows the new prepend
+    // because subclass's chain still points at the un-modified
+    // include-iclass. Walk the class store and splice an iclass for
+    // `prepend_module` in above each iclass that wraps `base`.
+    globals
+        .store
+        .propagate_prepend_to_subclasses(base.id(), prepend_module);
     Ok(lfp.self_val())
 }
 
@@ -4020,6 +4069,81 @@ mod tests {
         end
         $res
         "##,
+        );
+    }
+
+    #[test]
+    fn prepend_chain_order() {
+        // Multiple prepends layer in CRuby's expected order: the
+        // *most recently prepended* iclass sits closest to the class.
+        // ruby/spec `core/module/prepend_spec.rb` "prepends multiple
+        // modules in the right order".
+        run_test(
+            r##"
+            m1 = Module.new { def chain; super << :m1; end }
+            m2 = Module.new { def chain; super << :m2; end; prepend(m1) }
+            c  = Class.new  { def chain; [:c]; end; prepend(m2) }
+            c.new.chain
+            "##,
+        );
+    }
+
+    #[test]
+    fn prepend_propagates_to_subclass_chain() {
+        // A class that already includes a module observes a later
+        // prepend on that module — `b.include(a); a.prepend(m)` must
+        // splice `m` into `b`'s chain. ruby/spec
+        // `core/module/prepend_spec.rb` "adds the module in the
+        // subclass chains" + "modifies the ancestor chain".
+        run_test(
+            r##"
+            m = Module.new { def chain; super << :m; end }
+            a = Module.new
+            b = Class.new   { def chain; [:b]; end }
+            b.include(a)
+            a.prepend(m)
+            [b.ancestors.take(4).map { |x| x.equal?(m) ? :m : x.equal?(a) ? :a : x.equal?(b) ? :b : x.name },
+             b.new.chain]
+            "##,
+        );
+    }
+
+    #[test]
+    fn prepend_dup_class() {
+        // Duping a class that has prepended modules must keep the
+        // prepended module reachable via the dup, and the dup must
+        // still be a Class (so `c.dup.new` works). ruby/spec
+        // `core/module/prepend_spec.rb` "keeps the module in the chain
+        // when dupping the class".
+        run_test(
+            r##"
+            m = Module.new { def hello; :from_m; end }
+            c = Class.new { prepend m }
+            d = c.dup
+            [d.is_a?(Class), d.new.kind_of?(m), d.new.hello]
+            "##,
+        );
+    }
+
+    #[test]
+    fn prepend_define_method_super() {
+        // `define_method` inside a class with a prepended module:
+        // `super` from the proc body must resolve through the
+        // surrounding class's super, not the enclosing toplevel
+        // block. ruby/spec `core/module/prepend_spec.rb` "does not
+        // interfere with a define_method super in the original class".
+        run_test(
+            r##"
+            base = Class.new { def foo(ary); ary << 1; end }
+            child = Class.new(base) {
+              define_method(:foo) { |ary| ary << 2; super(ary) }
+            }
+            mod = Module.new { def foo(ary); ary << 3; super(ary); end }
+            child.prepend(mod)
+            ary = []
+            child.new.foo(ary)
+            ary
+            "##,
         );
     }
 

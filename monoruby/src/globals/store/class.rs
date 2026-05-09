@@ -975,6 +975,101 @@ impl ClassInfoTable {
         result
     }
 
+    /// After `base.prepend_module(prepend_module)` runs (modifying
+    /// `base`'s own chain), splice an iclass for `prepend_module` into
+    /// every other class/module whose chain already contains an iclass
+    /// that wraps `base`. This mirrors CRuby's
+    /// `rb_prepend_module` → subclass-iteration propagation step (class.c
+    /// ~L2070 in 4.0.2). Without it, a pattern like
+    ///
+    /// ```text
+    /// b.include(a)   # b -> IA -> ...
+    /// a.prepend(m)   # only a's own chain changes
+    /// ```
+    ///
+    /// silently shadows `m` from `b`'s view because `b`'s chain still
+    /// points at the un-modified `IA`.
+    ///
+    /// Implementation: brute-force scan the class table. For each
+    /// class/module C ≠ `base_id`, walk C's superclass chain. If we
+    /// encounter an iclass whose `class_id == base_id` and
+    /// `prepend_module` is not already in the prepend region above it,
+    /// insert a new iclass for `prepend_module` immediately above that
+    /// iclass.
+    pub(crate) fn propagate_prepend_to_subclasses(
+        &mut self,
+        base_id: ClassId,
+        prepend_module: Module,
+    ) {
+        let prepend_id = prepend_module.id();
+        // Snapshot which class objects exist now — `prepend_module`
+        // might create new iclasses below as a side effect, but we only
+        // want to update *pre-existing* subclasses, not iclasses we add.
+        let candidates: Vec<Module> = self
+            .table
+            .iter()
+            .filter_map(|info| info.object)
+            .filter(|m| {
+                // Skip iclasses (we walk via super through them) and
+                // singleton classes (they carry their own metaclass
+                // semantics; CRuby's propagation skips them too).
+                !m.is_iclass() && m.is_singleton().is_none() && m.id() != base_id
+            })
+            .collect();
+
+        for module in candidates {
+            // Find the iclass node `IA` (wrapping base_id) in module's
+            // chain, walking head→super. We need a `&mut` reference to
+            // the predecessor of IA so we can re-link it through a new
+            // prepend iclass. Track predecessor in `prev`.
+            let mut prev = module;
+            let mut cur = match module.superclass() {
+                Some(s) => s,
+                None => continue,
+            };
+            // Track whether we've seen `prepend_id` in the prepend
+            // region of `module` above `IA` — if so, skip insertion to
+            // avoid duplicate iclasses. (The prepend region of a class
+            // with origin sits between head and origin; for a class
+            // without origin, the whole chain.)
+            let module_origin = module.origin();
+            let mut already_present = false;
+            let target_iclass = loop {
+                if cur.is_iclass() && cur.id() == prepend_id {
+                    already_present = true;
+                }
+                if cur.is_iclass() && cur.id() == base_id {
+                    break Some(cur);
+                }
+                if let Some(o) = module_origin
+                    && cur.as_val() == o.as_val()
+                {
+                    // Reached `module`'s origin without finding IA;
+                    // base isn't in `module`'s prepend-side chain, so
+                    // there is nothing to propagate to here.
+                    break None;
+                }
+                match cur.superclass() {
+                    Some(next) => {
+                        prev = cur;
+                        cur = next;
+                    }
+                    None => break None,
+                }
+            };
+            let Some(target) = target_iclass else { continue };
+            if already_present {
+                continue;
+            }
+            // Insert a fresh iclass for `prepend_module` between `prev`
+            // and `target`. `prev.superclass = new_iclass`,
+            // `new_iclass.superclass = target`.
+            let new_iclass = Value::iclass(prepend_id, Some(target)).as_class();
+            let mut prev_mut = prev;
+            prev_mut.set_superclass(Some(new_iclass));
+        }
+    }
+
     pub(crate) fn get_private_method_names(&self, class_id: ClassId) -> Vec<Value> {
         self[class_id]
             .methods
@@ -1203,7 +1298,7 @@ impl ClassInfoTable {
     /// producing an anonymous duplicate usable for `include`.
     pub(crate) fn duplicate_module(&mut self, original_class: ClassId) -> Module {
         let orig = &self[original_class];
-        let superclass = self.get_module(original_class).superclass();
+        let orig_module = self.get_module(original_class);
         let is_module = orig.instance_ty.is_none();
         let instance_ty = orig.instance_ty;
         // Snapshot data we need to copy before borrowing mut.
@@ -1213,11 +1308,41 @@ impl ClassInfoTable {
         let class_variables = orig.class_variables.clone();
         let alloc_func = orig.alloc_func;
 
+        // The original may have prepended modules. In that case its
+        // `superclass` chain looks like: head -> IM_p1 -> IM_p2 -> ...
+        // -> origin -> real_super. Cloning `superclass` directly would
+        // make the dup share the original's prepend iclasses (bad: the
+        // dup's content would still surface via the original's origin).
+        // Instead, take the dup's *real* super (the part below the
+        // origin) and re-prepend each module on the dup so it gets its
+        // own iclass set.
+        let (real_super, prepended_module_ids): (Option<Module>, Vec<ClassId>) = {
+            if let Some(origin) = orig_module.origin() {
+                // Collect prepended module ids in chain order: walk
+                // head.super through origin, gathering iclasses.
+                let mut ids = Vec::new();
+                let mut cur = orig_module.superclass();
+                while let Some(node) = cur {
+                    if node.id() == origin.id() && node.is_iclass() {
+                        // reached origin iclass — stop
+                        break;
+                    }
+                    if node.is_iclass() {
+                        ids.push(node.id());
+                    }
+                    cur = node.superclass();
+                }
+                (origin.superclass(), ids)
+            } else {
+                (orig_module.superclass(), Vec::new())
+            }
+        };
+
         let new_id = self.add_class();
         let class_obj = if is_module {
-            Value::module_empty(new_id, superclass)
+            Value::module_empty(new_id, real_super)
         } else {
-            Value::class_empty(new_id, superclass)
+            Value::class_empty(new_id, real_super)
         };
         let info = &mut self[new_id];
         info.object = Some(class_obj.as_class());
@@ -1233,8 +1358,23 @@ impl ClassInfoTable {
         // Duplicate the singleton class too: CRuby's Module#initialize_copy
         // clones the singleton class so `def self.foo` and `extend`-ed modules
         // on the original are reachable through the dup.
+        //
+        // NOTE: must happen *before* re-prepending modules below — the
+        // metaclass's super is built from the dup's superclass at the
+        // moment `get_metaclass` runs. If we prepended first, the
+        // dup's super would already be a prepend iclass, throwing the
+        // metaclass chain off (and breaking `is_a?(Class)`).
         let orig_meta = self.get_metaclass(original_class);
         let new_meta = self.get_metaclass(new_id);
+
+        // Re-prepend the original's prepended modules, in reverse so
+        // the resulting chain order matches the original (the iclass
+        // closest to head was the last to be prepended).
+        let mut new_module = class_obj.as_class();
+        for mod_id in prepended_module_ids.into_iter().rev() {
+            let m = self.get_module(mod_id);
+            let _ = new_module.prepend_module(m);
+        }
 
         // Copy singleton-class method/constant/cvar tables.
         let orig_meta_info = &self[orig_meta.id()];

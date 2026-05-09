@@ -269,12 +269,24 @@ impl Lfp {
     ///
     /// Get the outermost LFP and the depth.
     ///
+    /// A frame tagged with `is_proc_method` (the `define_method`-installed
+    /// proc body) is its own outermost — even though it has an `outer`
+    /// pointer for closure variable access, semantically it's a method
+    /// boundary. Stopping there lets `method_func_id` return the actual
+    /// method's `FuncId` instead of the enclosing toplevel/class iseq's,
+    /// so `super` inside `define_method { ... }` looks up the right name.
     pub(crate) fn outermost(&self) -> (Lfp, usize) {
         let mut lfp = *self;
         let mut depth = 0;
+        if lfp.meta().is_proc_method() {
+            return (lfp, depth);
+        }
         while let Some(outer) = lfp.outer() {
             lfp = outer;
             depth += 1;
+            if lfp.meta().is_proc_method() {
+                break;
+            }
         }
         (lfp, depth)
     }

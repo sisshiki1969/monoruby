@@ -216,10 +216,23 @@ impl Store {
         // purposes, so the naive walk would include
         // `[M, Object, Kernel, BasicObject]`. Stop the walk when leaving
         // the iclass-included region under a non-class receiver.
+        //
+        // For prepend support we follow CRuby's rule: a class/module that
+        // has an `origin` pointer (i.e. has been the target of a
+        // `prepend`) is *not* rendered at its head position; instead it
+        // shows up where its origin iclass sits in the chain. Iclass
+        // entries are rendered as the underlying module/class that they
+        // wrap so `[Klass, Module, Klass]` becomes `[Module, Klass]` —
+        // matching CRuby's `[m, c, Object, ...]` output.
         let start = self[class_id].get_module();
         let receiver_is_class = start.as_val().ty() == Some(ObjTy::CLASS);
         let mut class = start;
-        let mut v = vec![class];
+        let mut v = Vec::new();
+        // Decide whether to push the head node: skip if it has an
+        // origin (its content surfaces via the origin iclass later).
+        if !class.has_origin() {
+            v.push(class);
+        }
         while let Some(super_class) = class.superclass() {
             // For a Module receiver, stop walking once we leave the
             // mixed-in iclass chain — i.e. once the next ancestor is the
@@ -233,7 +246,18 @@ impl Store {
             {
                 break;
             }
-            v.push(super_class);
+            // Render this node. For an iclass, render the wrapped
+            // module/class (look up by class_id) so a prepended class
+            // doesn't surface as a `Module` value. For a real
+            // class/module, push it directly — but if it has an origin
+            // it's already shadowed by its origin iclass and should be
+            // skipped (matching CRuby's `p == RCLASS_ORIGIN(p)` test).
+            if super_class.is_iclass() {
+                let underlying = self[super_class.id()].get_module();
+                v.push(underlying);
+            } else if !super_class.has_origin() {
+                v.push(super_class);
+            }
             class = super_class;
         }
         v
