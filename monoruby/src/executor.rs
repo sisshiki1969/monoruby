@@ -501,6 +501,37 @@ impl Executor {
             .push(Cref::new_instance_eval(receiver, Visibility::Public));
     }
 
+    /// Push a duplicate of the current top cref. Used by `Kernel#eval`
+    /// (no-binding form) so that flag mutations inside the eval'd
+    /// code (`module_function`, `private`, …) stay scoped to the
+    /// eval body and don't leak to the surrounding module/class.
+    /// CRuby's `rb_vm_cref_dup_without_refinements` does the same.
+    /// Returns `true` when a cref was actually pushed; the matching
+    /// `pop_eval_cref(true)` then balances it. At the top level —
+    /// where `lexical_class.last()` is an empty frame — there's no
+    /// cref to dup so we return `false` and the pop is a no-op.
+    pub(crate) fn push_eval_cref(&mut self) -> bool {
+        if let Some(crefs) = self.lexical_class.last_mut()
+            && let Some(top) = crefs.last().copied()
+        {
+            crefs.push(top);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Pop the cref pushed by `push_eval_cref`. Pass through the
+    /// boolean returned by the matching push so a top-level eval
+    /// (no top cref to dup) skips the pop too.
+    pub(crate) fn pop_eval_cref(&mut self, was_pushed: bool) {
+        if was_pushed
+            && let Some(crefs) = self.lexical_class.last_mut()
+        {
+            crefs.pop();
+        }
+    }
+
     pub(crate) fn pop_class_context(&mut self) {
         self.lexical_class.last_mut().unwrap().pop();
     }

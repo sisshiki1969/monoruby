@@ -6376,4 +6376,59 @@ mod tests {
             "#,
         );
     }
+
+    // -- module_function eval-boundary isolation --------------------------
+
+    #[test]
+    fn module_function_inside_eval_does_not_leak_outside() {
+        // CRuby: `eval "module_function"` mutates the eval's *own*
+        // cref copy, so `def test1` outside the eval is a regular
+        // instance method (not a module function). Without the
+        // cref-dup before `Kernel#eval`'s block invocation, the
+        // toggle would leak through to the surrounding module body.
+        run_test(
+            r#"
+            m = Module.new do
+              eval "module_function"
+              def test1; end
+            end
+            m.respond_to?(:test1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_function_inside_eval_works_for_local_defs() {
+        // Counterpart to the boundary test: when `module_function`
+        // *and* the `def`s live inside the same eval, the toggle
+        // does apply (as expected).
+        run_test(
+            r##"
+            m = Module.new do
+              eval <<-CODE
+                module_function
+                def test1; end
+                def test2; end
+              CODE
+            end
+            [m.respond_to?(:test1), m.respond_to?(:test2)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn private_inside_eval_does_not_leak_outside() {
+        // Same isolation rule applies to `private` (no args). A
+        // `private` toggled inside an eval must not turn the outer
+        // module body's subsequent `def` into a private method.
+        run_test(
+            r#"
+            c = Class.new do
+              eval "private"
+              def public_after_eval; :ok; end
+            end
+            c.public_method_defined?(:public_after_eval)
+            "#,
+        );
+    }
 }
