@@ -145,6 +145,17 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "MacThai",
         "MacTurkish",
         "MacUkraine",
+        // `UTF8_MAC` (and the legacy `UTF_8_MAC` spelling) is
+        // CRuby's HFS+/macOS-NFD UTF-8 variant. We expose both
+        // constant identifiers so spec setup resolves; the
+        // underlying transcoder treats them as a UTF-8 alias.
+        "UTF8_MAC",
+        "UTF_8_MAC",
+        // `CESU-8` is a UTF-8 variant used by some legacy systems
+        // (encodes supplementary chars as surrogate pairs in
+        // UTF-8). We don't transcode it specially; the constant
+        // exists so `Encoding::CESU_8` resolves.
+        "CESU_8",
     ] {
         let canonical = canonical_encoding_name(name);
         // If a constant with the same canonical name has already been
@@ -240,6 +251,70 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         globals.define_class("InvalidByteSequenceError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "InvalidByteSequenceError", invalid_byte.get());
 
+    // Instance accessors on the encoding-error subclasses, exposed
+    // by parsing the canonical `"U+XXXX from SRC to DST"` /
+    // `"\"\\xXX\" on SRC"` message strings monoruby formats in
+    // `transcode_bytes_with_opts`. Threading the structured data
+    // through the `MonorubyErr` → exception materialisation
+    // pipeline would need a new `MonorubyErrKind` variant; the
+    // message-parse approach gets the same observable behaviour
+    // for the cases the spec exercises without that surgery.
+    globals.define_builtin_func(
+        undef_conv.id(),
+        "source_encoding_name",
+        enc_err_source_encoding_name,
+        0,
+    );
+    globals.define_builtin_func(
+        undef_conv.id(),
+        "destination_encoding_name",
+        enc_err_destination_encoding_name,
+        0,
+    );
+    globals.define_builtin_func(
+        undef_conv.id(),
+        "source_encoding",
+        enc_err_source_encoding,
+        0,
+    );
+    globals.define_builtin_func(
+        undef_conv.id(),
+        "destination_encoding",
+        enc_err_destination_encoding,
+        0,
+    );
+    globals.define_builtin_func(undef_conv.id(), "error_char", enc_err_error_char, 0);
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "source_encoding_name",
+        enc_err_source_encoding_name,
+        0,
+    );
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "destination_encoding_name",
+        enc_err_destination_encoding_name,
+        0,
+    );
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "source_encoding",
+        enc_err_source_encoding,
+        0,
+    );
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "destination_encoding",
+        enc_err_destination_encoding,
+        0,
+    );
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "incomplete_input?",
+        enc_err_incomplete_input_p,
+        0,
+    );
+
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
     globals.define_builtin_class_func(enc.id(), "default_external=", enc_set_default_external, 1);
@@ -259,9 +334,76 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     let object_class = globals.store.object_class();
     let converter = globals.define_class("Converter", object_class, enc.id());
     globals.set_constant_by_str(enc.id(), "Converter", converter.get());
-    globals.define_builtin_class_func(converter.id(), "new", converter_new, 2);
+    // Mirror CRuby's Encoding::Converter::* flag constants. monoruby
+    // doesn't implement the underlying behaviour (decorators / output
+    // pacing) — exposing the integers is enough for spec setup like
+    // `Encoding::Converter.new(src, dst, INVALID_REPLACE | UNDEF_REPLACE)`
+    // not to NameError on constant lookup.
+    for (name, val) in [
+        ("INVALID_MASK", 0x0000_000fi64),
+        ("INVALID_REPLACE", 0x0000_0002),
+        ("UNDEF_MASK", 0x0000_00f0),
+        ("UNDEF_REPLACE", 0x0000_0020),
+        ("UNDEF_HEX_CHARREF", 0x0000_0030),
+        ("PARTIAL_INPUT", 0x0002_0000),
+        ("AFTER_OUTPUT", 0x0004_0000),
+        ("UNIVERSAL_NEWLINE_DECORATOR", 0x0000_0100),
+        ("CRLF_NEWLINE_DECORATOR", 0x0000_1000),
+        ("CR_NEWLINE_DECORATOR", 0x0000_2000),
+        ("XML_TEXT_DECORATOR", 0x0000_8000),
+        ("XML_ATTR_CONTENT_DECORATOR", 0x0001_0000),
+        ("XML_ATTR_QUOTE_DECORATOR", 0x0010_0000),
+    ] {
+        globals.set_constant_by_str(converter.id(), name, Value::integer(val));
+    }
+    // 2..3 positional args: (src, dst, opts?). `opts` accepts an
+    // Integer flag mask or an option Hash; both are tolerated and
+    // ignored beyond construction-time validation.
+    globals.define_builtin_class_func_with(converter.id(), "new", converter_new, 2, 3, false);
+    globals.define_builtin_class_func(
+        converter.id(),
+        "asciicompat_encoding",
+        converter_asciicompat_encoding,
+        1,
+    );
+    globals.define_builtin_class_func(
+        converter.id(),
+        "search_convpath",
+        converter_search_convpath,
+        2,
+    );
+    globals.define_builtin_func(converter.id(), "source_encoding", converter_source_encoding, 0);
+    globals.define_builtin_func(
+        converter.id(),
+        "destination_encoding",
+        converter_destination_encoding,
+        0,
+    );
+    globals.define_builtin_func(converter.id(), "replacement", converter_replacement, 0);
+    globals.define_builtin_func(converter.id(), "replacement=", converter_replacement_set, 1);
+    globals.define_builtin_func(converter.id(), "convert", converter_convert, 1);
+    globals.define_builtin_func(converter.id(), "finish", converter_finish, 0);
+    globals.define_builtin_func(converter.id(), "inspect", converter_inspect, 0);
+    // Streaming-API stubs. monoruby's transcoder is single-shot
+    // (`convert` runs the whole input at once and either succeeds
+    // or raises), so the chunked / partial-output variants
+    // (`primitive_convert`, `last_error`, `primitive_errinfo`)
+    // can't faithfully report mid-stream state. We expose them
+    // anyway so spec setup like
+    // `ec.primitive_errinfo[0]` doesn't NoMethodError before the
+    // assertion we actually care about runs.
+    globals.define_builtin_func(
+        converter.id(),
+        "primitive_errinfo",
+        converter_primitive_errinfo,
+        0,
+    );
+    globals.define_builtin_func(converter.id(), "last_error", converter_last_error, 0);
+    globals.define_builtin_func(converter.id(), "putback", converter_putback, 0);
+    globals.define_builtin_func(converter.id(), "==", converter_eq, 1);
     globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
     globals.define_builtin_class_func(enc.id(), "find", enc_find, 1);
+    globals.define_builtin_class_func(enc.id(), "locale_charmap", enc_locale_charmap, 0);
     globals.define_builtin_class_func(enc.id(), "aliases", enc_aliases, 0);
     globals.define_builtin_class_func(enc.id(), "name_list", enc_name_list, 0);
     globals.define_builtin_class_func(enc.id(), "compatible?", enc_compatible, 2);
@@ -1102,15 +1244,132 @@ fn enc_default_internal(
 }
 
 ///
+/// Names used as ivar keys on a `Encoding::Converter` instance to
+/// stash its source / destination encoding and current
+/// replacement string. `/`-prefixed keys are a monoruby convention
+/// for "internal" ivars that user code can't accidentally read or
+/// write.
+const CONVERTER_SRC_IVAR: &str = "/converter_src";
+const CONVERTER_DST_IVAR: &str = "/converter_dst";
+const CONVERTER_REPLACE_IVAR: &str = "/converter_replace";
+const CONVERTER_FINISHED_IVAR: &str = "/converter_finished";
+
+/// Validate that `(src, dst)` is a transcoder monoruby can run.
+/// Raises `Encoding::ConverterNotFoundError` for anything
+/// `encoding_rs` doesn't cover (UTF-32, dummy CRuby encodings).
+/// Identical encodings are always allowed.
+fn validate_converter_pair(
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+    store: &Store,
+) -> Result<()> {
+    if src == dst {
+        return Ok(());
+    }
+    let src_supported = encoding_to_rs(src).is_some()
+        || matches!(
+            src,
+            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
+        );
+    let dst_supported = encoding_to_rs(dst).is_some()
+        || matches!(
+            dst,
+            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
+        );
+    if !src_supported || !dst_supported {
+        return Err(MonorubyErr::converter_not_found_error(
+            store,
+            format!(
+                "code converter not found ({} to {})",
+                src.name(),
+                dst.name()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Look up the `Encoding::<NAME>` constant whose `_ENCODING` ivar
+/// holds `enc.name()`. Used by accessor methods that return an
+/// `Encoding` object.
+fn encoding_value(globals: &Globals, enc: crate::value::Encoding) -> Value {
+    let enc_class = encoding_class(globals);
+    let const_name = encoding_constant_name(enc);
+    globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id(const_name))
+        .unwrap_or(Value::nil())
+}
+
+/// Pull the source encoding out of a `Encoding::Converter`
+/// instance's stashed ivar. Returns `Encoding::Ascii8` as a
+/// best-effort fallback if the ivar is missing or unparseable —
+/// `converter_new` always sets it, so the fallback shouldn't
+/// fire in practice.
+fn converter_get_src(globals: &Globals, recv: Value) -> crate::value::Encoding {
+    globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_SRC_IVAR))
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .and_then(|s| crate::value::Encoding::try_from_str(&s).ok())
+        .unwrap_or(crate::value::Encoding::Ascii8)
+}
+
+fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
+    globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_DST_IVAR))
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .and_then(|s| crate::value::Encoding::try_from_str(&s).ok())
+        .unwrap_or(crate::value::Encoding::Ascii8)
+}
+
+/// Default replacement string used by `Encoding::Converter#replacement`
+/// when none has been set explicitly. CRuby uses `"�"` (encoded
+/// in the destination encoding) when the dest is UTF-8 / UTF-16 /
+/// UTF-32, and `"?"` (US-ASCII) for everything else.
+fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
+    match dst {
+        crate::value::Encoding::Utf8 => {
+            // U+FFFD as UTF-8 bytes.
+            let mut s = crate::value::RStringInner::from_string_scanned("\u{FFFD}".to_string());
+            s.set_encoding(crate::value::Encoding::Utf8);
+            Value::string_from_inner(s)
+        }
+        crate::value::Encoding::Utf16Be | crate::value::Encoding::Utf16Le => {
+            // Encode U+FFFD via encoding_rs.
+            let label = match dst {
+                crate::value::Encoding::Utf16Be => b"utf-16be" as &[u8],
+                _ => b"utf-16le",
+            };
+            let enc_rs = encoding_rs::Encoding::for_label(label).unwrap();
+            let (bytes, _, _) = enc_rs.encode("\u{FFFD}");
+            let mut s = crate::value::RStringInner::from_encoding(&bytes, dst);
+            s.set_encoding(dst);
+            Value::string_from_inner(s)
+        }
+        _ => {
+            // Plain `?` tagged as US-ASCII.
+            let mut s = crate::value::RStringInner::from_string_scanned("?".to_string());
+            s.set_encoding(crate::value::Encoding::UsAscii);
+            Value::string_from_inner(s)
+        }
+    }
+}
+
+///
 /// ### Encoding::Converter.new
 /// - Encoding::Converter.new(src, dst) -> Encoding::Converter
+/// - Encoding::Converter.new(src, dst, opts) -> Encoding::Converter
 ///
-/// Minimal implementation: validates that monoruby can transcode
-/// the (src, dst) pair, raising `Encoding::ConverterNotFoundError`
-/// if not. The returned object is opaque — there are no instance
-/// methods yet. mspec exercises this path mostly to assert that
-/// unsupported pairs (e.g. `Encoding::Emacs_Mule` ↔ `BINARY`)
-/// raise the right error class.
+/// Validates the (src, dst) pair (raising
+/// `Encoding::ConverterNotFoundError` if unsupported) and stashes
+/// the encoding tags as instance variables so the accessor and
+/// `convert` / `finish` methods can read them back. The third
+/// `opts` argument (Integer flag mask or option Hash) is accepted
+/// but ignored — only the basic `convert`/`finish` flow is
+/// implemented.
+///
 #[monoruby_builtin]
 fn converter_new(
     vm: &mut Executor,
@@ -1120,36 +1379,401 @@ fn converter_new(
 ) -> Result<Value> {
     let src = resolve_dst_encoding(vm, globals, lfp.arg(0))?;
     let dst = resolve_dst_encoding(vm, globals, lfp.arg(1))?;
-    // Same encoding always converts (identity).
-    if src != dst {
-        // ASCII-only fast path is valid for any pair, but at
-        // construction time we don't know the input bytes —
-        // require both ends to be supported by encoding_rs (or be
-        // BINARY / UsAscii, handled as fast paths in
-        // transcode_bytes). Reject UTF-32, Emacs-Mule, etc.
-        let src_supported = encoding_to_rs(src).is_some()
-            || matches!(
-                src,
-                crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-            );
-        let dst_supported = encoding_to_rs(dst).is_some()
-            || matches!(
-                dst,
-                crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-            );
-        if !src_supported || !dst_supported {
-            return Err(MonorubyErr::converter_not_found_error(
+    validate_converter_pair(src, dst, &globals.store)?;
+    let class = lfp.self_val();
+    let obj = Value::object(class.as_class_id());
+    // Stash the encodings as their canonical *names* so
+    // `encoding_value` and `try_from_str` can round-trip without
+    // a separate Encoding-to-id table.
+    let _ = globals.store.set_ivar(
+        obj,
+        IdentId::get_id(CONVERTER_SRC_IVAR),
+        Value::string_from_str(src.name()),
+    );
+    let _ = globals.store.set_ivar(
+        obj,
+        IdentId::get_id(CONVERTER_DST_IVAR),
+        Value::string_from_str(dst.name()),
+    );
+    Ok(obj)
+}
+
+///
+/// ### Encoding::Converter#source_encoding
+/// - source_encoding -> Encoding
+///
+#[monoruby_builtin]
+fn converter_source_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let src = converter_get_src(globals, lfp.self_val());
+    Ok(encoding_value(globals, src))
+}
+
+///
+/// ### Encoding::Converter#destination_encoding
+/// - destination_encoding -> Encoding
+///
+#[monoruby_builtin]
+fn converter_destination_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let dst = converter_get_dst(globals, lfp.self_val());
+    Ok(encoding_value(globals, dst))
+}
+
+///
+/// ### Encoding::Converter#replacement
+/// - replacement -> String
+///
+/// Returns the configured replacement string (or the destination
+/// encoding's default — `"�"` for UTF-* destinations, `"?"`
+/// for everything else).
+///
+#[monoruby_builtin]
+fn converter_replacement(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    if let Some(v) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR))
+    {
+        return Ok(v);
+    }
+    let dst = converter_get_dst(globals, recv);
+    Ok(converter_default_replacement(dst))
+}
+
+///
+/// ### Encoding::Converter#replacement=
+/// - replacement = str -> str
+///
+/// Sets the replacement string. Must be a `String`; the bytes are
+/// validated by transcoding through the destination encoder so
+/// that calling `replacement = "..."` with characters
+/// unrepresentable in the destination raises
+/// `Encoding::UndefinedConversionError` instead of silently
+/// stashing an unusable replacement.
+///
+#[monoruby_builtin]
+fn converter_replacement_set(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let s = arg
+        .is_str()
+        .ok_or_else(|| MonorubyErr::typeerr(format!("no implicit conversion into String")))?;
+    // Validate that the new replacement is encodable in dst.
+    let recv = lfp.self_val();
+    let dst = converter_get_dst(globals, recv);
+    if let Some(dst_rs) = encoding_to_rs(dst) {
+        let (_bytes, _, encode_err) = dst_rs.encode(s);
+        if encode_err {
+            return Err(MonorubyErr::undefined_conversion_error(
                 &globals.store,
                 format!(
-                    "code converter not found ({} to {})",
-                    src.name(),
+                    "U+{:04X} from UTF-8 to {}",
+                    s.chars()
+                        .find(|c| !c.is_ascii())
+                        .map(|c| c as u32)
+                        .unwrap_or(0),
                     dst.name()
                 ),
             ));
         }
     }
-    let class = lfp.self_val();
-    Ok(Value::object(class.as_class_id()))
+    // Tag the stored value with the destination's encoding so a
+    // subsequent `replacement` call returns it correctly classified.
+    let mut inner = crate::value::RStringInner::from_string_scanned(s.to_string());
+    inner.set_encoding(dst);
+    let val = Value::string_from_inner(inner);
+    let _ = globals
+        .store
+        .set_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR), val);
+    Ok(arg)
+}
+
+///
+/// ### Encoding::Converter#convert
+/// - convert(string) -> String
+///
+/// Transcodes `string` from the converter's source encoding to its
+/// destination encoding. The argument is reinterpreted under the
+/// configured source encoding (CRuby's behaviour — its `encoding`
+/// tag is ignored), and the result is tagged with the destination
+/// encoding. Raises
+/// `Encoding::InvalidByteSequenceError` /
+/// `Encoding::UndefinedConversionError` on bad / unmappable input,
+/// and `ArgumentError` after `#finish` has been called on this
+/// converter.
+///
+#[monoruby_builtin]
+fn converter_convert(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    if globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_FINISHED_IVAR))
+        .is_some()
+    {
+        return Err(MonorubyErr::argumenterr(
+            "convert called after finish".to_string(),
+        ));
+    }
+    let arg = lfp.arg(0);
+    let bytes = arg
+        .is_rstring_inner()
+        .ok_or_else(|| MonorubyErr::typeerr("expected String".to_string()))?
+        .as_bytes()
+        .to_vec();
+    let src = converter_get_src(globals, recv);
+    let dst = converter_get_dst(globals, recv);
+    // Plumb the configured replacement through the transcoder so a
+    // user-set `replacement = "..."` is honoured by `convert`.
+    let mut opts = TranscodeOpts::default();
+    if let Some(v) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR))
+        && let Some(s) = v.is_str()
+    {
+        opts.replace = Some(s.to_string());
+    }
+    let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+    Ok(Value::string_from_inner(
+        crate::value::RStringInner::from_encoding_scanned(&out, dst),
+    ))
+}
+
+///
+/// ### Encoding::Converter#finish
+/// - finish -> String
+///
+/// Marks the converter as drained and returns the trailing bytes
+/// (always empty in monoruby — none of the `encoding_rs`
+/// transcoders are stateful). Subsequent `convert` calls raise
+/// `ArgumentError`.
+///
+#[monoruby_builtin]
+fn converter_finish(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    let _ = globals.store.set_ivar(
+        recv,
+        IdentId::get_id(CONVERTER_FINISHED_IVAR),
+        Value::bool(true),
+    );
+    let dst = converter_get_dst(globals, recv);
+    Ok(Value::string_from_inner(
+        crate::value::RStringInner::from_encoding_scanned(b"", dst),
+    ))
+}
+
+///
+/// ### Encoding::Converter#inspect
+/// - inspect -> String
+///
+/// CRuby renders Converters as `#<Encoding::Converter: SRC to DST>`.
+///
+#[monoruby_builtin]
+fn converter_inspect(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    let src = converter_get_src(globals, recv);
+    let dst = converter_get_dst(globals, recv);
+    Ok(Value::string(format!(
+        "#<Encoding::Converter: {} to {}>",
+        src.name(),
+        dst.name()
+    )))
+}
+
+///
+/// ### Encoding::Converter#primitive_errinfo
+/// - primitive_errinfo -> [Symbol, String, String, String, String]
+///
+/// CRuby returns the last `primitive_convert` status as a 5-tuple
+/// `[result, src_enc, dst_enc, error_bytes, readagain_bytes]`.
+/// monoruby's `convert` doesn't surface mid-stream state, so we
+/// report `[:source_buffer_empty, "", "", "", ""]` — the value
+/// CRuby returns when there's nothing pending.
+///
+#[monoruby_builtin]
+fn converter_primitive_errinfo(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::array_from_iter(
+        [
+            Value::symbol_from_str("source_buffer_empty"),
+            Value::string_from_str(""),
+            Value::string_from_str(""),
+            Value::string_from_str(""),
+            Value::string_from_str(""),
+        ]
+        .into_iter(),
+    ))
+}
+
+///
+/// ### Encoding::Converter#last_error
+/// - last_error -> Exception | nil
+///
+/// CRuby returns the most recent `Encoding::*Error` raised by
+/// `primitive_convert`. monoruby's `convert` raises immediately
+/// on errors instead of stashing them, so there's never a stored
+/// last-error to report — return `nil`.
+///
+#[monoruby_builtin]
+fn converter_last_error(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::nil())
+}
+
+///
+/// ### Encoding::Converter#putback
+/// - putback -> String
+/// - putback(max_numbytes) -> String
+///
+/// CRuby returns the bytes left in the converter's input buffer
+/// after a `primitive_convert` step. monoruby's `convert` is
+/// single-shot, so the buffer is always drained — return an
+/// empty BINARY string to match CRuby's "nothing left" answer.
+///
+#[monoruby_builtin]
+fn converter_putback(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut s = crate::value::RStringInner::from_string_scanned(String::new());
+    s.set_encoding(crate::value::Encoding::Ascii8);
+    Ok(Value::string_from_inner(s))
+}
+
+///
+/// ### Encoding::Converter#==
+/// - == other -> bool
+///
+/// Two converters compare equal iff they share source and
+/// destination encodings.
+///
+#[monoruby_builtin]
+fn converter_eq(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    if rhs.class() != lhs.class() {
+        return Ok(Value::bool(false));
+    }
+    let same = converter_get_src(globals, lhs) == converter_get_src(globals, rhs)
+        && converter_get_dst(globals, lhs) == converter_get_dst(globals, rhs);
+    Ok(Value::bool(same))
+}
+
+///
+/// ### Encoding::Converter.asciicompat_encoding
+/// - asciicompat_encoding(enc) -> Encoding | nil
+///
+/// Maps a non-ASCII-compatible / dummy encoding to its
+/// ASCII-compatible counterpart (the encoding CRuby would internally
+/// pivot through). Returns `nil` for encodings that are already
+/// ASCII-compatible. monoruby covers the spec-exercised cases —
+/// UTF-16/32 → UTF-8, ISO-2022-JP → stateless-ISO-2022-JP — and
+/// returns `nil` for everything else (matching CRuby's default for
+/// unknown / ASCII-compat inputs).
+///
+#[monoruby_builtin]
+fn converter_asciicompat_encoding(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    // Accept Encoding objects as well as String / Symbol names. We
+    // need the canonical name so we can dispatch on it.
+    let enc_name: String = if arg.class() == encoding_class(globals) {
+        globals
+            .store
+            .get_ivar(arg, IdentId::_ENCODING)
+            .and_then(|v| v.is_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    } else {
+        arg.coerce_to_string(vm, globals)?
+    };
+    let target = match enc_name.as_str() {
+        "UTF-16BE" | "UTF-16LE" | "UTF-32BE" | "UTF-32LE" | "UTF-16" | "UTF-32" => Some("UTF_8"),
+        "ISO-2022-JP" => Some("STATELESS_ISO_2022_JP"),
+        _ => None,
+    };
+    let Some(const_name) = target else {
+        return Ok(Value::nil());
+    };
+    let enc_class = encoding_class(globals);
+    Ok(globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id(const_name))
+        .unwrap_or(Value::nil()))
+}
+
+///
+/// ### Encoding::Converter.search_convpath
+/// - search_convpath(src, dst) -> Array
+///
+/// Returns the list of encoding pairs the converter would walk
+/// through. monoruby's transcoder is direct (decode src → UTF-8 →
+/// encode dst, all in a single step), so for any supported pair
+/// we report `[[src, dst]]`. Pairs `Encoding::Converter.new`
+/// would reject raise `ConverterNotFoundError`, mirroring CRuby.
+///
+#[monoruby_builtin]
+fn converter_search_convpath(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let src = resolve_dst_encoding(vm, globals, lfp.arg(0))?;
+    let dst = resolve_dst_encoding(vm, globals, lfp.arg(1))?;
+    validate_converter_pair(src, dst, &globals.store)?;
+    let pair = Value::array2(encoding_value(globals, src), encoding_value(globals, dst));
+    Ok(Value::array1(pair))
 }
 
 ///
@@ -1177,6 +1801,177 @@ fn enc_set_default_internal(
     };
     globals.set_gvar(IdentId::get_id("$DEFAULT_INTERNAL"), enc_val);
     Ok(enc_val)
+}
+
+///
+/// ### Encoding.locale_charmap
+/// - locale_charmap -> String
+///
+/// Returns the locale's character map name. CRuby reads this from
+/// the C locale via `nl_langinfo(CODESET)`. monoruby is locale-
+/// agnostic so we return `"UTF-8"` — the de-facto default on
+/// modern Linux desktops and the value `Encoding.find("locale")`
+/// also resolves to.
+///
+#[monoruby_builtin]
+fn enc_locale_charmap(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::string_from_str("UTF-8"))
+}
+
+// -------------------------------------------------------
+// Instance-method helpers on Encoding::*Error subclasses
+// -------------------------------------------------------
+
+/// Read the exception's message via the standard `Exception#message`
+/// pipeline. Errors raised by `transcode_bytes_with_opts` have
+/// canonical message shapes that the `enc_err_*` accessors below
+/// pattern-match against.
+fn enc_err_message(globals: &Globals, exc: Value) -> Option<String> {
+    exc.is_exception()
+        .map(|inner| inner.message().to_string())
+        .or_else(|| {
+            globals
+                .store
+                .get_ivar(exc, IdentId::get_id("/message"))
+                .and_then(|v| v.is_str().map(|s| s.to_string()))
+        })
+}
+
+/// Extract `(src_enc_name, dst_enc_name)` from the canonical
+/// monoruby-format error messages:
+///
+/// - `"U+XXXX from SRC to DST"` (UndefinedConversionError)
+/// - `"\"\\xXX\" from SRC to DST"`
+///   (BINARY → ASCII-compat dest UndefinedConversionError)
+/// - `"invalid byte sequence on SRC (SRC → DST)"`
+///   (InvalidByteSequenceError)
+fn parse_enc_err_pair(msg: &str) -> Option<(String, String)> {
+    if let Some(rest) = msg.split_once(" from ").map(|(_, b)| b)
+        && let Some((src, rest)) = rest.split_once(" to ")
+    {
+        return Some((src.trim().to_string(), rest.trim().to_string()));
+    }
+    if let Some(open) = msg.find('(')
+        && let Some(close) = msg.find(')')
+        && open < close
+    {
+        let inner = &msg[open + 1..close];
+        if let Some((src, dst)) = inner.split_once(" → ") {
+            return Some((src.trim().to_string(), dst.trim().to_string()));
+        }
+        if let Some((src, dst)) = inner.split_once(" -> ") {
+            return Some((src.trim().to_string(), dst.trim().to_string()));
+        }
+    }
+    None
+}
+
+#[monoruby_builtin]
+fn enc_err_source_encoding_name(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if let Some(msg) = enc_err_message(globals, lfp.self_val())
+        && let Some((src, _)) = parse_enc_err_pair(&msg)
+    {
+        return Ok(Value::string(src));
+    }
+    Ok(Value::string_from_str(""))
+}
+
+#[monoruby_builtin]
+fn enc_err_destination_encoding_name(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if let Some(msg) = enc_err_message(globals, lfp.self_val())
+        && let Some((_, dst)) = parse_enc_err_pair(&msg)
+    {
+        return Ok(Value::string(dst));
+    }
+    Ok(Value::string_from_str(""))
+}
+
+#[monoruby_builtin]
+fn enc_err_source_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if let Some(msg) = enc_err_message(globals, lfp.self_val())
+        && let Some((src, _)) = parse_enc_err_pair(&msg)
+        && let Ok(enc) = crate::value::Encoding::try_from_str(&src)
+    {
+        return Ok(encoding_value(globals, enc));
+    }
+    Ok(Value::nil())
+}
+
+#[monoruby_builtin]
+fn enc_err_destination_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if let Some(msg) = enc_err_message(globals, lfp.self_val())
+        && let Some((_, dst)) = parse_enc_err_pair(&msg)
+        && let Ok(enc) = crate::value::Encoding::try_from_str(&dst)
+    {
+        return Ok(encoding_value(globals, enc));
+    }
+    Ok(Value::nil())
+}
+
+/// `Encoding::UndefinedConversionError#error_char` — the source
+/// character that couldn't be represented in the destination.
+/// Parses the leading `U+XXXX ` prefix monoruby formats into
+/// `transcode_bytes_with_opts`'s message.
+#[monoruby_builtin]
+fn enc_err_error_char(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let Some(msg) = enc_err_message(globals, lfp.self_val()) else {
+        return Ok(Value::string_from_str(""));
+    };
+    if let Some(rest) = msg.strip_prefix("U+") {
+        let hex_end = rest.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(rest.len());
+        let hex = &rest[..hex_end];
+        if let Ok(cp) = u32::from_str_radix(hex, 16)
+            && let Some(c) = char::from_u32(cp)
+        {
+            return Ok(Value::string(c.to_string()));
+        }
+    }
+    Ok(Value::string_from_str(""))
+}
+
+/// `Encoding::InvalidByteSequenceError#incomplete_input?` —
+/// whether the bad bytes were a (partial) leading prefix of a
+/// valid sequence rather than an outright invalid byte. monoruby's
+/// transcoder doesn't track partial-vs-complete; report `false`
+/// to match the more conservative answer.
+#[monoruby_builtin]
+fn enc_err_incomplete_input_p(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(false))
 }
 
 ///
@@ -1298,9 +2093,19 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "ISO_2022_JP" | "ISO2022_JP" => Some("ISO_2022_JP"),
         "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Some("Windows_31J"),
         "MACJAPANESE" | "MACJAPAN" => Some("MACJAPANESE"),
-        "EUCJP_MS" | "EUCJP_WIN" => Some("EUCJP_MS"),
+        // `eucJP-ms` is the canonical CRuby spelling; the lower-case
+        // and partly-hyphenated user inputs (`euc-jp-ms`,
+        // `eucjp-ms`, `EUCJP-MS`) all normalise to `EUC_JP_MS` /
+        // `EUCJP_MS` here, so cover both.
+        "EUCJP_MS" | "EUCJP_WIN" | "EUC_JP_MS" | "EUC_JP_WIN" => Some("EUCJP_MS"),
         "CP51932" => Some("CP51932"),
         "STATELESS_ISO_2022_JP" => Some("STATELESS_ISO_2022_JP"),
+        // `UTF8-MAC` is CRuby's identifier for HFS+ NFD-normalised
+        // UTF-8 (used on macOS filesystems); we don't actually do
+        // the NFD trick but the constant has to exist for spec
+        // setup like `Encoding::UTF8_MAC` to resolve.
+        "UTF8_MAC" | "UTF_8_MAC" => Some("UTF8_MAC"),
+        "CESU_8" | "CESU8" => Some("CESU_8"),
 
         // Windows code pages
         "WINDOWS_1250" | "CP1250" => Some("Windows_1250"),
@@ -1347,6 +2152,20 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         // Other
         "EUC_TW" | "EUCTW" => Some("EUC_TW"),
         "TIS_620" | "TIS620" => Some("TIS_620"),
+
+        // Mac-family encoding aliases. CRuby exposes these with
+        // the `Mac…` mixed-case prefix; the user-facing string
+        // names go through this lookup with hyphens already
+        // collapsed to underscores by the `normalized` step
+        // above, so a single uppercase arm covers all spellings.
+        "MACCYRILLIC" => Some("MacCyrillic"),
+        "MACGREEK" => Some("MacGreek"),
+        "MACICELAND" => Some("MacIceland"),
+        "MACROMAN" => Some("MacRoman"),
+        "MACROMANIA" => Some("MacRomania"),
+        "MACTHAI" => Some("MacThai"),
+        "MACTURKISH" => Some("MacTurkish"),
+        "MACUKRAINE" => Some("MacUkraine"),
 
         _ => None,
     }
@@ -1533,22 +2352,31 @@ fn enc_compatible(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // Resolve each argument to an (Encoding, CodeRange) pair. String
-    // arguments use their actual byte content for code-range
-    // classification; Encoding objects (or non-strings) report
-    // SevenBit as a placeholder since they have no bytes —
-    // matching CRuby's "two Encoding objects compatible iff equal".
-    let lhs = resolve_compat_arg(globals, lfp.arg(0));
-    let rhs = resolve_compat_arg(globals, lfp.arg(1));
-    let (a_enc, a_cr) = match lhs {
-        Some(p) => p,
-        None => return Ok(Value::nil()),
+    let result = if let (Some(a), Some(b)) =
+        (lfp.arg(0).is_rstring_inner(), lfp.arg(1).is_rstring_inner())
+    {
+        // String / String: route through the inner-aware
+        // `compatible_encoding` so the empty-side rules
+        // (`compatible?("", x)` adopts `x`'s encoding even when
+        // `x.encoding` isn't ASCII-compatible) are honoured.
+        // `Encoding::compatible` alone takes only the
+        // `(encoding, code_range)` pair and can't distinguish
+        // empty from "ASCII-only but non-empty".
+        a.compatible_encoding(b)
+    } else {
+        let lhs = resolve_compat_arg(globals, lfp.arg(0));
+        let rhs = resolve_compat_arg(globals, lfp.arg(1));
+        let (a_enc, a_cr) = match lhs {
+            Some(p) => p,
+            None => return Ok(Value::nil()),
+        };
+        let (b_enc, b_cr) = match rhs {
+            Some(p) => p,
+            None => return Ok(Value::nil()),
+        };
+        Encoding::compatible(a_enc, a_cr, b_enc, b_cr)
     };
-    let (b_enc, b_cr) = match rhs {
-        Some(p) => p,
-        None => return Ok(Value::nil()),
-    };
-    match Encoding::compatible(a_enc, a_cr, b_enc, b_cr) {
+    match result {
         Some(enc) => {
             let const_name = encoding_constant_name(enc);
             let enc_class = encoding_class(globals);
@@ -2272,6 +3100,299 @@ mod tests {
             raise unless "abc".force_encoding("Emacs-Mule").is_a?(String)
             raise unless "abc".force_encoding("CP50220").is_a?(String)
             raise unless "abc".force_encoding("MacCyrillic").is_a?(String)
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_basic_round_trip() {
+        // src/dst encodings round-trip through the stashed ivars, and
+        // a basic ASCII-only convert returns the input bytes tagged
+        // with the destination encoding.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").source_encoding == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").destination_encoding == Encoding::Shift_JIS"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello")"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello").encoding == Encoding::Shift_JIS"#);
+    }
+
+    #[test]
+    fn converter_inspect_form() {
+        // CRuby formats Converters as `#<Encoding::Converter: SRC to DST>`.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").inspect"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").inspect"#);
+    }
+
+    #[test]
+    fn converter_finish_then_convert_raises() {
+        // After `#finish`, subsequent `#convert` raises ArgumentError.
+        // `finish` itself returns an empty string in the dst encoding.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish.encoding == Encoding::Shift_JIS"#);
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              ec.finish
+              begin
+                ec.convert("x")
+                :no_raise
+              rescue ArgumentError
+                :ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_replacement_default_and_set() {
+        // Default replacement: "?" tagged US-ASCII for non-UTF dst,
+        // "�" tagged UTF-8 for UTF-8 dst.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement.encoding == Encoding::US_ASCII"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement.encoding == Encoding::UTF_8"#);
+        // Setter validates encodability against the destination.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              ec.replacement = "?"
+              ec.replacement
+            "#,
+        );
+        // Unencodable replacement raises Encoding::UndefinedConversionError.
+        // ISO-8859-1 has an `encoding_rs` entry, so the encodability
+        // check actually runs (US-ASCII would skip it because monoruby
+        // routes UsAscii through a fast path that bypasses
+        // `encoding_to_rs`).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              begin
+                ec.replacement = "日"
+                :no_raise
+              rescue Encoding::UndefinedConversionError
+                :ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_equality() {
+        // Two Converters compare equal iff they share src and dst.
+        run_test(
+            r#"
+              a = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              b = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              a == b
+            "#,
+        );
+        run_test(
+            r#"
+              a = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              b = Encoding::Converter.new("Shift_JIS", "UTF-8")
+              a == b
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_unsupported_pair_raises() {
+        // Pairs that have no `encoding_rs` transcoder raise
+        // ConverterNotFoundError. UTF-32 is the test vehicle because
+        // monoruby explicitly returns `None` from `encoding_to_rs`
+        // for it; CRuby implements UTF-32 transcoders so this
+        // diverges (CRuby would not raise) — assert monoruby's
+        // behaviour without the round-trip CRuby comparison.
+        run_test_no_result_check(
+            r#"
+              begin
+                Encoding::Converter.new("UTF-8", "UTF-32BE")
+                raise "expected ConverterNotFoundError"
+              rescue Encoding::ConverterNotFoundError
+                # ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_accepts_third_opts_arg() {
+        // The 3rd arg (Integer flag mask) is tolerated; constructor
+        // succeeds.
+        run_test(
+            r#"
+              flags = Encoding::Converter::INVALID_REPLACE | Encoding::Converter::UNDEF_REPLACE
+              Encoding::Converter.new("UTF-8", "Shift_JIS", flags).is_a?(Encoding::Converter)
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_flag_constants_are_integers() {
+        // The Encoding::Converter::* flag constants exist as Integers
+        // (the values themselves don't have to match CRuby — only
+        // that they're defined and integer-typed so spec setup
+        // like `INVALID_REPLACE | UNDEF_REPLACE` works).
+        run_test(r#"Encoding::Converter::INVALID_REPLACE.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_REPLACE.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_HEX_CHARREF.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::PARTIAL_INPUT.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::AFTER_OUTPUT.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNIVERSAL_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::CRLF_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::CR_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_TEXT_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_ATTR_CONTENT_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_ATTR_QUOTE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::INVALID_MASK.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_MASK.is_a?(Integer)"#);
+    }
+
+    #[test]
+    fn converter_asciicompat_encoding() {
+        // UTF-16/32 → UTF-8, ISO-2022-JP → STATELESS_ISO_2022_JP,
+        // ASCII-compatible inputs → nil. Accepts both Encoding
+        // objects and string names.
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16BE) == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16LE) == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding("UTF-16LE") == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_8)"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding("Shift_JIS")"#);
+    }
+
+    #[test]
+    fn converter_search_convpath() {
+        // Single-step path for any directly supported pair. The
+        // returned array round-trips Encoding objects, which aren't
+        // re-parseable Ruby literals — observe its shape via
+        // accessors that yield comparable scalars.
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS").length"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0].length"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][0] == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][1] == Encoding::Shift_JIS"#);
+        // Unsupported pair raises ConverterNotFoundError, matching
+        // `.new` — UTF-32 has no `encoding_rs` transcoder in monoruby.
+        run_test_no_result_check(
+            r#"
+              begin
+                Encoding::Converter.search_convpath("UTF-8", "UTF-32BE")
+                raise "expected ConverterNotFoundError"
+              rescue Encoding::ConverterNotFoundError
+                # ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_streaming_stubs_callable() {
+        // The streaming-API stubs (`primitive_errinfo`, `last_error`,
+        // `putback`) exist and return non-erroring values so spec setup
+        // that touches them doesn't NoMethodError. Their *exact* return
+        // values diverge from CRuby (monoruby is single-shot, CRuby
+        // tracks mid-stream state), so we only assert callability and
+        // shape, not output equality.
+        run_test_no_result_check(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              raise unless ec.last_error.nil?
+              raise unless ec.putback.is_a?(String)
+              info = ec.primitive_errinfo
+              raise unless info.is_a?(Array)
+              raise unless info.length == 5
+              raise unless info[0] == :source_buffer_empty
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_undefined_conversion_error_metadata() {
+        // `Encoding::UndefinedConversionError` exposes parsed
+        // source/destination encoding info on instances. monoruby
+        // recovers these by pattern-matching its canonical error
+        // message; the message text itself diverges from CRuby's, so
+        // we assert structurally rather than via `run_test`.
+        run_test_no_result_check(
+            r#"
+              begin
+                "日本".encode("US-ASCII")
+              rescue Encoding::UndefinedConversionError => e
+                raise unless e.respond_to?(:source_encoding_name)
+                raise unless e.respond_to?(:destination_encoding_name)
+                raise unless e.respond_to?(:source_encoding)
+                raise unless e.respond_to?(:destination_encoding)
+                raise unless e.respond_to?(:error_char)
+                raise unless e.source_encoding_name == "UTF-8"
+                raise unless e.destination_encoding_name == "US-ASCII"
+                raise unless e.source_encoding == Encoding::UTF_8
+                raise unless e.destination_encoding == Encoding::US_ASCII
+                raise unless e.error_char == "日"
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_invalid_byte_sequence_error_metadata() {
+        // `Encoding::InvalidByteSequenceError` exposes the parsed
+        // source/destination encoding pair and `incomplete_input?`
+        // (always `false` in monoruby — the transcoder doesn't
+        // distinguish partial-vs-invalid).
+        run_test_no_result_check(
+            r#"
+              begin
+                "\xff".force_encoding("UTF-8").encode("Shift_JIS")
+              rescue Encoding::InvalidByteSequenceError => e
+                raise unless e.respond_to?(:source_encoding_name)
+                raise unless e.respond_to?(:destination_encoding_name)
+                raise unless e.respond_to?(:source_encoding)
+                raise unless e.respond_to?(:destination_encoding)
+                raise unless e.respond_to?(:incomplete_input?)
+                raise unless e.source_encoding == Encoding::UTF_8
+                raise unless e.destination_encoding == Encoding::Shift_JIS
+                raise unless e.incomplete_input? == false
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_compatible_empty_string_adopts_other_encoding() {
+        // The PR routes the String/String case through the inner-aware
+        // `compatible_encoding` so the empty-side rule for
+        // ASCII-incompatible encodings is honoured. Pre-PR, the
+        // legacy `Encoding::compatible(SevenBit, SevenBit, ...)` path
+        // returned `nil` for any pair whose encodings weren't *both*
+        // ASCII-compatible — these cases now agree with CRuby:
+        // empty UTF-16LE + non-empty UTF-8 → UTF-8 (non-empty side
+        // wins), and the symmetric arrangement.
+        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "abc") == Encoding::UTF_8"#);
+        run_test(r#"Encoding.compatible?("abc", "".force_encoding("UTF-16LE")) == Encoding::UTF_8"#);
+        // Both empty UTF-16LE → UTF-16LE (empty/empty rule).
+        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+        // Two non-empty UTF-16LE strings stay UTF-16LE.
+        run_test(r#"Encoding.compatible?("abc".force_encoding("UTF-16LE"), "def".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+    }
+
+    #[test]
+    fn encoding_extra_constant_aliases() {
+        // New constant aliases added by the PR — `Encoding::UTF8_MAC`,
+        // `Encoding::UTF_8_MAC`, `Encoding::CESU_8` — exist as
+        // Encoding instances.
+        run_test(r#"Encoding::UTF8_MAC.is_a?(Encoding)"#);
+        run_test(r#"Encoding::UTF_8_MAC.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CESU_8.is_a?(Encoding)"#);
+    }
+
+    #[test]
+    fn encoding_locale_charmap() {
+        // `Encoding.locale_charmap` is locale-dependent in CRuby; in
+        // monoruby it always returns "UTF-8". Assert only that it
+        // returns a String to stay portable across CI environments.
+        run_test_no_result_check(
+            r#"
+              raise unless Encoding.locale_charmap.is_a?(String)
+              raise unless Encoding.locale_charmap == "UTF-8"
             "#,
         );
     }
