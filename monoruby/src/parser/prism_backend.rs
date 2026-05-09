@@ -1178,6 +1178,10 @@ impl<'pr> Lowerer<'pr> {
                 let implicit = node.as_implicit_node().unwrap();
                 return self.lower_node(&implicit.value());
             }
+            prism::Node::ShareableConstantNode { .. } => {
+                let sc = node.as_shareable_constant_node().unwrap();
+                return self.lower_node(&sc.write());
+            }
             other => return Err(self.unsupported("expression", other)),
         })
     }
@@ -3572,6 +3576,7 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         NumberedParametersNode { .. } => "NumberedParametersNode",
         ImplicitNode { .. } => "ImplicitNode",
         ImplicitRestNode { .. } => "ImplicitRestNode",
+        ShareableConstantNode { .. } => "ShareableConstantNode",
         FlipFlopNode { .. } => "FlipFlopNode",
         SourceFileNode { .. } => "SourceFileNode",
         SourceLineNode { .. } => "SourceLineNode",
@@ -3597,6 +3602,7 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         ArrayPatternNode { .. } => "ArrayPatternNode",
         HashPatternNode { .. } => "HashPatternNode",
         FindPatternNode { .. } => "FindPatternNode",
+        CapturePatternNode { .. } => "CapturePatternNode",
         PinnedExpressionNode { .. } => "PinnedExpressionNode",
         PinnedVariableNode { .. } => "PinnedVariableNode",
         SplatNode { .. } => "SplatNode",
@@ -3631,6 +3637,8 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         InstanceVariableOrWriteNode { .. } => "InstanceVariableOrWriteNode",
         InstanceVariableAndWriteNode { .. } => "InstanceVariableAndWriteNode",
         InstanceVariableTargetNode { .. } => "InstanceVariableTargetNode",
+        GlobalVariableReadNode { .. } => "GlobalVariableReadNode",
+        GlobalVariableWriteNode { .. } => "GlobalVariableWriteNode",
         GlobalVariableOperatorWriteNode { .. } => "GlobalVariableOperatorWriteNode",
         GlobalVariableOrWriteNode { .. } => "GlobalVariableOrWriteNode",
         GlobalVariableAndWriteNode { .. } => "GlobalVariableAndWriteNode",
@@ -3667,5 +3675,321 @@ fn node_kind_name(node: &prism::Node<'_>) -> &'static str {
         InterpolatedXStringNode { .. } => "InterpolatedXStringNode",
         ArgumentsNode { .. } => "ArgumentsNode",
         _ => "<other>",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prism::Visit;
+    use std::collections::HashSet;
+
+    /// `Visit`or that records every `node_kind_name` it sees, plus
+    /// the `Debug`-formatted prefix of any node that landed in the
+    /// catch-all `<other>` arm so the failure message names the
+    /// missing variant.
+    ///
+    /// Most variants flow through the generic `visit_branch_node_enter`
+    /// / `visit_leaf_node_enter` hooks. A handful (e.g.
+    /// `ParametersNode`, `ArgumentsNode`) are dispatched via typed
+    /// callbacks from their parents and bypass the enum hook, so we
+    /// override those typed hooks individually.
+    #[derive(Default)]
+    struct Collector {
+        names: HashSet<&'static str>,
+        unknown: Vec<String>,
+    }
+    impl Collector {
+        fn record(&mut self, node: &prism::Node<'_>) {
+            let name = node_kind_name(node);
+            if name == "<other>" {
+                self.unknown
+                    .push(format!("{:?}", node).chars().take(80).collect());
+            }
+            self.names.insert(name);
+        }
+    }
+    impl<'pr> Visit<'pr> for Collector {
+        fn visit_branch_node_enter(&mut self, node: prism::Node<'pr>) {
+            self.record(&node);
+        }
+        fn visit_leaf_node_enter(&mut self, node: prism::Node<'pr>) {
+            self.record(&node);
+        }
+        fn visit_parameters_node(&mut self, node: &prism::ParametersNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_parameters_node(self, node);
+        }
+        fn visit_arguments_node(&mut self, node: &prism::ArgumentsNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_arguments_node(self, node);
+        }
+        fn visit_block_parameter_node(&mut self, node: &prism::BlockParameterNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_block_parameter_node(self, node);
+        }
+        fn visit_else_node(&mut self, node: &prism::ElseNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_else_node(self, node);
+        }
+        fn visit_ensure_node(&mut self, node: &prism::EnsureNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_ensure_node(self, node);
+        }
+        fn visit_rescue_node(&mut self, node: &prism::RescueNode<'pr>) {
+            self.record(&node.as_node());
+            prism::visit_rescue_node(self, node);
+        }
+    }
+
+    fn collect_names(source: &str) -> HashSet<&'static str> {
+        collect(source).0
+    }
+
+    fn collect(source: &str) -> (HashSet<&'static str>, Vec<String>) {
+        let result = prism::parse(source.as_bytes());
+        let node = result.node();
+        let mut visitor = Collector::default();
+        visitor.visit(&node);
+        (visitor.names, visitor.unknown)
+    }
+
+    fn assert_contains(names: &HashSet<&'static str>, expected: &[&'static str]) {
+        for name in expected {
+            assert!(
+                names.contains(name),
+                "expected node_kind_name to yield `{name}`; got: {:?}",
+                names
+            );
+        }
+    }
+
+    /// PR #439: prism wraps the body of a file with a
+    /// `# shareable_constant_value:` magic comment in a
+    /// `ShareableConstantNode`. The lowerer must unwrap it; without
+    /// the handler, parsing fatally errors with "unsupported node".
+    #[test]
+    fn shareable_constant_value_literal_parses() {
+        let source = "# shareable_constant_value: literal\nFOO = [1, 2, 3]\n".to_owned();
+        let result = parse_program(source, PathBuf::from("test.rb"));
+        assert!(
+            result.is_ok(),
+            "parse_program should succeed; got {:?}",
+            result.err().map(|e| format!("{:?}", e.kind))
+        );
+    }
+
+    /// And confirm the AST really contains a `ShareableConstantNode`,
+    /// so this test would notice if prism stopped emitting one.
+    #[test]
+    fn shareable_constant_value_emits_shareable_constant_node() {
+        let names = collect_names("# shareable_constant_value: literal\nFOO = [1, 2, 3]\n");
+        assert_contains(&names, &["ShareableConstantNode", "ConstantWriteNode"]);
+    }
+
+    /// Drive a wide swath of Ruby syntax through prism and check that
+    /// `node_kind_name` returns a real name (not `<other>`) for every
+    /// variant the parser produces. This pins the match arms so a
+    /// future prism bump that introduces a new node type forces us
+    /// to extend the function.
+    #[test]
+    fn node_kind_name_no_other_for_broad_syntax() {
+        // Multiple snippets so each magic comment / construct lives
+        // at the position prism expects.
+        let snippets: &[&str] = &[
+            // Literals, control flow, classes, methods, parameters.
+            r#"
+module M
+  CONST = 42
+  @ivar = 1
+  @@cvar = 2
+  $gvar = 3
+  class C < Object
+    def self.foo(x, y = 1, *r, k:, kk: 2, **kw, &b)
+      return nil if x.nil?
+      unless y
+        while true; break; end
+        until false; next; end
+        loop { redo }
+      end
+      begin
+        raise "oops"
+      rescue StandardError => e
+        retry
+      ensure
+      end
+      yield 1, 2
+    end
+  end
+end
+puts "string", :sym, :"sy#{1}m", 1.5, 1r, 1i, /re/i, %r{x}, `cmd`, "i#{1}p", `e#{1}c`
+[1, 2, *a]
+{k: 1, **h, "x" => 1}
+x..y; x...y
+x = 1; x ||= 1; x &&= 1; x += 1
+@i ||= 1; @i &&= 1; @i += 1
+@@c ||= 1; @@c &&= 1; @@c += 1
+$g ||= 1; $g &&= 1; $g += 1
+C ||= 1; C &&= 1; C += 1
+A::B = 1; A::B ||= 1; A::B &&= 1; A::B += 1
+arr[0] = 1; arr[0] ||= 1; arr[0] &&= 1; arr[0] += 1
+o.x = 1; o.x ||= 1; o.x &&= 1; o.x += 1
+a, b = 1, 2; a, *b, c = [1, 2, 3, 4]
+__FILE__; __LINE__; __ENCODING__
+@ivar; @@cvar; $gvar; FOO
+super; super(1, &b)
+-> (a) { a }
+class << obj; end
+defined?(x)
+alias :a :b
+alias_method :a, :b
+undef :a
+$1; $`; $&
+nil; true; false; self
+case x
+when 1, 2 then 0
+else 1
+end
+case x
+in [a, b]
+in {k: v}
+in Integer => n
+end
+for i in 1..3; end
+$0 =~ /pat/
+$1
+"#,
+            // BEGIN/END (pre/post execution) need to be at top level.
+            "BEGIN { 1 }\nEND { 2 }\n",
+            // Magic-comment-driven nodes need to be at top of file.
+            "# shareable_constant_value: literal\nFOO = [1, 2, 3]\n",
+            // Numbered / `it` block parameters.
+            "[1].each { _1 + _2 }\n[1].each { it + 1 }\n",
+            // Forwarding parameters.
+            "def f(...); g(...); end\n",
+            // Pinned vars / find pattern in a pattern match.
+            "x = 1; case [1,2,3]; in [*, ^x, *]; end\n",
+            // Flip-flop. Prism emits this only inside a conditional.
+            "if (x..y); end\n",
+            // `ImplicitRestNode` is the trailing-comma rest in
+            // multi-assignment (`a, = [1]`).
+            "a, = [1, 2]\n",
+        ];
+
+        let mut all = HashSet::new();
+        let mut unknown = Vec::new();
+        for s in snippets {
+            let (names, unk) = collect(s);
+            all.extend(names);
+            unknown.extend(unk);
+        }
+
+        assert!(
+            unknown.is_empty(),
+            "node_kind_name returned `<other>` for these prism nodes — extend the match arm:\n{:#?}",
+            unknown
+        );
+
+        // Spot-check a representative cross-section of variants.
+        assert_contains(
+            &all,
+            &[
+                "ProgramNode",
+                "StatementsNode",
+                "ModuleNode",
+                "ClassNode",
+                "DefNode",
+                "ParametersNode",
+                "RequiredParameterNode",
+                "OptionalParameterNode",
+                "RestParameterNode",
+                "RequiredKeywordParameterNode",
+                "OptionalKeywordParameterNode",
+                "KeywordRestParameterNode",
+                "BlockParameterNode",
+                "ConstantWriteNode",
+                "InstanceVariableWriteNode",
+                "ClassVariableWriteNode",
+                "GlobalVariableReadNode",
+                "GlobalVariableWriteNode",
+                "LocalVariableWriteNode",
+                "CapturePatternNode",
+                "ConstantPathWriteNode",
+                "IndexOperatorWriteNode",
+                "CallOperatorWriteNode",
+                "LocalVariableOperatorWriteNode",
+                "InstanceVariableOperatorWriteNode",
+                "ClassVariableOperatorWriteNode",
+                "GlobalVariableOperatorWriteNode",
+                "ConstantOperatorWriteNode",
+                "IfNode",
+                "UnlessNode",
+                "WhileNode",
+                "UntilNode",
+                "BreakNode",
+                "NextNode",
+                "RedoNode",
+                "RetryNode",
+                "ReturnNode",
+                "YieldNode",
+                "BeginNode",
+                "RescueNode",
+                "EnsureNode",
+                "ArrayNode",
+                "HashNode",
+                "AssocNode",
+                "SplatNode",
+                "RangeNode",
+                "StringNode",
+                "InterpolatedStringNode",
+                "SymbolNode",
+                "InterpolatedSymbolNode",
+                "RegularExpressionNode",
+                "XStringNode",
+                "RationalNode",
+                "ImaginaryNode",
+                "FloatNode",
+                "IntegerNode",
+                "NilNode",
+                "TrueNode",
+                "FalseNode",
+                "SelfNode",
+                "LambdaNode",
+                "BlockNode",
+                "BlockParametersNode",
+                "SingletonClassNode",
+                "DefinedNode",
+                "AliasMethodNode",
+                "UndefNode",
+                "SuperNode",
+                "CaseNode",
+                "CaseMatchNode",
+                "WhenNode",
+                "InNode",
+                "ArrayPatternNode",
+                "HashPatternNode",
+                "ForNode",
+                "PreExecutionNode",
+                "PostExecutionNode",
+                "SourceFileNode",
+                "SourceLineNode",
+                "SourceEncodingNode",
+                "ForwardingArgumentsNode",
+                "ForwardingParameterNode",
+                "ImplicitRestNode",
+                "ShareableConstantNode",
+                "NumberedParametersNode",
+                "ItParametersNode",
+                "MultiWriteNode",
+                "ArgumentsNode",
+                "BackReferenceReadNode",
+                "NumberedReferenceReadNode",
+                "ConstantReadNode",
+                "InstanceVariableReadNode",
+                "ClassVariableReadNode",
+                "LocalVariableReadNode",
+                "CallNode",
+            ],
+        );
     }
 }
