@@ -36,6 +36,14 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_class_func(MODULE_CLASS, "nesting", module_nesting, 0);
+    globals.define_builtin_class_func_with(
+        MODULE_CLASS,
+        "constants",
+        module_class_constants,
+        0,
+        1,
+        false,
+    );
 
     // instance methods
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
@@ -322,6 +330,44 @@ fn module_nesting(
         .map(|class_id| globals.store[class_id].get_module().as_val())
         .collect();
     Ok(Value::array_from_vec(ary))
+}
+
+///
+/// ### Module.constants
+///
+/// - constants -> [Symbol]
+///
+/// Returns the list of constants visible from the current lexical
+/// scope. With no inner-class context this matches `Object.constants`
+/// — the toplevel constant table.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/constants.html]
+#[monoruby_builtin]
+fn module_class_constants(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // No-arg: return toplevel (`Object`) constants — CRuby's
+    // `Module.constants` returns the constants visible from the
+    // current lexical scope; at top-level that's `Object`'s
+    // constants table.
+    //
+    // With an argument: behave like `Module#constants(inherit)` on
+    // the `Module` class itself (`Module.constants(true)` walks the
+    // ancestor chain, `(false)` returns direct constants only). The
+    // ruby/spec exercises both forms.
+    let names = if lfp.try_arg(0).is_none() {
+        globals.store.get_constant_names(OBJECT_CLASS)
+    } else if lfp.arg(0).as_bool() {
+        let class = globals.store[MODULE_CLASS].get_module();
+        globals.store.get_constant_names_inherit(class)
+    } else {
+        globals.store.get_constant_names(MODULE_CLASS)
+    };
+    let iter = names.into_iter().map(Value::symbol);
+    Ok(Value::array_from_iter(iter))
 }
 
 ///
@@ -1496,8 +1542,10 @@ fn define_method(
             globals.store[fid].set_method_style();
             fid
         } else if let Some(method) = method.is_method() {
+            validate_bind_target(globals, method.owner(), class_id)?;
             method.func_id()
         } else if let Some(umethod) = method.is_umethod() {
+            validate_bind_target(globals, umethod.owner(), class_id)?;
             umethod.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
@@ -1515,8 +1563,61 @@ fn define_method(
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     let visibility = define_method_visibility(vm, class_id, name);
-    vm.add_method(globals, class_id, name, func_id, visibility)?;
+    // Honor the `module_function` toggle (set via `module_function`
+    // with no arguments earlier in the same body): when the target
+    // matches the current lexical class AND the toggle is on, the
+    // method is installed as a private instance method *and* a
+    // module-level singleton method, exactly like a `def` in the
+    // same scope. Cross-class `klass.send(:define_method, ...)`
+    // never enters module-function mode (the toggle is per-cref).
+    if vm.context_class_id() == class_id && vm.is_module_function() {
+        vm.add_method(globals, class_id, name, func_id, Visibility::Private)?;
+        vm.add_singleton_method(globals, class_id, name, func_id, Visibility::Public)?;
+    } else {
+        vm.add_method(globals, class_id, name, func_id, visibility)?;
+    }
     Ok(Value::symbol(name))
+}
+
+/// Validate that a `Method` / `UnboundMethod` from `owner` may be
+/// reinstalled on `target` via `define_method`. Mirrors CRuby's
+/// `bind_check`:
+///
+/// - **Module owner** (e.g. `mixin.instance_method(:bar)`): any
+///   class/module may receive the rebound method, since the module
+///   could be included into target. No further check.
+/// - **Class owner**: `target`'s ancestor chain must include `owner`
+///   (target inherits from or *is* `owner`). The singleton-class
+///   chain mirrors the instance chain, so `child.singleton_class`
+///   accepts methods from `parent.singleton_class`.
+/// - **Singleton-class owner unrelated to target**: error message
+///   uses CRuby's "can't bind singleton method to a different class"
+///   wording instead of the generic "subclass of …" form.
+fn validate_bind_target(globals: &Globals, owner: ClassId, target: ClassId) -> Result<()> {
+    let owner_module = globals.store[owner].get_module();
+    // Module owners (not Class) bind freely — the module can be
+    // included on any receiver. CRuby's `rb_obj_method_arity` and
+    // `method_def_iseq` skip the subclass check in that case.
+    if owner_module.as_val().ty() == Some(ObjTy::MODULE) {
+        return Ok(());
+    }
+    if globals
+        .store
+        .ancestors(target)
+        .iter()
+        .any(|m| m.id() == owner)
+    {
+        return Ok(());
+    }
+    if owner_module.is_singleton().is_some() {
+        return Err(MonorubyErr::typeerr(
+            "can't bind singleton method to a different class",
+        ));
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "bind argument must be a subclass of {}",
+        globals.store.get_class_name(owner)
+    )))
 }
 
 /// Compute the visibility for a `define_method` call.
@@ -2715,6 +2816,12 @@ pub(super) fn change_visi(
 ) -> Result<Value> {
     if arg.len() == 0 {
         vm.set_context_visibility(visi);
+        // CRuby's `public`/`protected`/`private` (no arguments) also
+        // turns off the `module_function` toggle, so subsequent `def`s
+        // become regular instance methods again. Without this clear,
+        // `m { module_function; def t1; end; public; def t3; end }`
+        // would still install `t3` as a module function.
+        vm.clear_module_function();
         return Ok(Value::nil());
     }
     let (res, names) = extract_names(globals, arg)?;
@@ -6100,6 +6207,172 @@ mod tests {
             r#"
             class C; define_method(:m) { |a, *| a }; end
             C.new.method(:m).arity
+            "#,
+        );
+    }
+
+    // -- define_method Method/UnboundMethod bind validation ----------------
+
+    #[test]
+    fn define_method_unbound_subclass_ok() {
+        // Binding a parent's UnboundMethod onto a subclass is OK
+        // because the subclass's ancestors include the parent.
+        run_test(
+            r#"
+            parent = Class.new { def foo; :p; end }
+            child  = Class.new(parent) { define_method(:bar, parent.instance_method(:foo)) }
+            child.new.bar
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_unbound_unrelated_class_typeerror() {
+        // Binding `M::C.instance_method(:foo)` onto an unrelated
+        // class raises TypeError mentioning the qualified owner.
+        run_test_error(
+            r#"
+            module Mod1; class Owner1; def foo; end; end; end
+            Class.new { define_method(:bar, Mod1::Owner1.instance_method(:foo)) }
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_unbound_singleton_to_other_typeerror() {
+        // A singleton-class method bound onto an unrelated regular
+        // class raises with the "can't bind singleton method to a
+        // different class" wording.
+        run_test_error(
+            r#"
+            c = Class.new { class << self; def foo; end; end }
+            um = c.method(:foo).unbind
+            Class.new { define_method(:bar, um) }
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_module_owner_binds_freely() {
+        // A method whose owner is a Module (not Class) can be
+        // re-bound to any receiver — CRuby skips the subclass check
+        // because the module could be included anywhere.
+        run_test(
+            r#"
+            mod = Module.new { def foo; :ok; end }
+            obj = Object.new
+            obj.singleton_class.define_method(:bar, mod.instance_method(:foo))
+            obj.bar
+            "#,
+        );
+    }
+
+    // -- module_function toggle state machine ------------------------------
+
+    #[test]
+    fn module_function_toggle_off_by_public_no_args() {
+        // `module_function` then `public` (no args) resets the
+        // module-function toggle, so subsequent `def`s become
+        // regular instance methods (not module functions).
+        run_test(
+            r#"
+            m = Module.new do
+              module_function
+              def t1; end
+              public
+              def t2; end
+            end
+            [m.respond_to?(:t1), m.respond_to?(:t2)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_function_with_define_method_block() {
+        // Methods installed via `define_method` after a
+        // `module_function` toggle become module functions too.
+        run_test(
+            r#"
+            m = Module.new do
+              module_function
+              define_method(:t1) { }
+            end
+            m.respond_to?(:t1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_function_with_define_method_unbound() {
+        run_test(
+            r#"
+            src = Module.new { def t1; end }
+            m = Module.new do
+              module_function
+              define_method(:t2, src.instance_method(:t1))
+            end
+            m.respond_to?(:t2)
+            "#,
+        );
+    }
+
+    // -- caller format ----------------------------------------------------
+
+    #[test]
+    fn caller_locations_returns_a_location() {
+        // `caller` formats labels with single quotes (Ruby 3.4+),
+        // so `caller_locations`'s regex split (`['`](.+)'`) actually
+        // matches and the result is a `CallerLocation` rather than
+        // the unmatched-string fallback. We assert on a property
+        // that's stable across CRuby versions: lineno is non-nil.
+        run_test(
+            r#"
+            def f; caller_locations(1, 1)[0].lineno.is_a?(Integer); end
+            f
+            "#,
+        );
+    }
+
+    // -- constants helpers ------------------------------------------------
+
+    #[test]
+    fn module_constants_class_method_returns_toplevel() {
+        // No-arg `Module.constants` includes a freshly-defined
+        // toplevel constant.
+        run_test(
+            r#"
+            count = Module.constants.size
+            module ModConstSpec1; end
+            after = Module.constants.size
+            Object.send(:remove_const, :ModConstSpec1)
+            after - count
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_constants_inherits_dedups() {
+        // Inheritance through multiple includes is deduped.
+        run_test(
+            r#"
+            m = Module.new { CONST_DEDUP = 1 }
+            c = Class.new { include m }
+            c.constants.count(:CONST_DEDUP)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_constants_filters_private() {
+        // `private_constant`-marked entries don't appear in
+        // `Module#constants`.
+        run_test(
+            r#"
+            c = Class.new
+            c.const_set(:PUB_CONST, 1)
+            c.const_set(:PRIV_CONST, 2)
+            c.send(:private_constant, :PRIV_CONST)
+            c.constants.sort
             "#,
         );
     }

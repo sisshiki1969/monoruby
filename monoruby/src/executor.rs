@@ -514,6 +514,31 @@ impl Executor {
             .module_function = true;
     }
 
+    /// Clear the `module_function` toggle on the innermost cref.
+    /// Called by `public` / `protected` / `private` (no arguments)
+    /// so the toggle behaves as a state machine — turning off
+    /// module-function mode and restoring regular `def` semantics
+    /// for subsequent definitions.
+    pub(crate) fn clear_module_function(&mut self) {
+        if let Some(crefs) = self.lexical_class.last_mut()
+            && let Some(cref) = crefs.last_mut()
+        {
+            cref.module_function = false;
+        }
+    }
+
+    /// True when the innermost cref has `module_function` toggled on.
+    /// Read by `Module#define_method` so block / Method / UnboundMethod
+    /// definitions installed inside a `module_function` body get the
+    /// same dual-installation (private instance + module singleton)
+    /// that a `def` would receive.
+    pub(crate) fn is_module_function(&self) -> bool {
+        self.lexical_class
+            .last()
+            .and_then(|crefs| crefs.last())
+            .is_some_and(|cref| cref.module_function)
+    }
+
     fn get_class_context(&self) -> Cref {
         self.lexical_class
             .last()
