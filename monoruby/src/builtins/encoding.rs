@@ -180,11 +180,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
                 .unwrap();
             globals
                 .store
-                .set_ivar(
-                    val,
-                    IdentId::_ENCODING,
-                    Value::string_from_str(canonical),
-                )
+                .set_ivar(val, IdentId::_ENCODING, Value::string_from_str(canonical))
                 .unwrap();
             val
         };
@@ -208,12 +204,16 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     // constant — `Encoding::ASCII == Encoding::US_ASCII` and
     // `Encoding::CP65001 == Encoding::UTF_8` per CRuby. (BINARY ↔
     // ASCII-8BIT is already wired above.)
-    if let Some(us_ascii) =
-        globals.store.get_constant_noautoload(enc.id(), IdentId::get_id("US_ASCII"))
+    if let Some(us_ascii) = globals
+        .store
+        .get_constant_noautoload(enc.id(), IdentId::get_id("US_ASCII"))
     {
         globals.set_constant_by_str(enc.id(), "ASCII", us_ascii);
     }
-    if let Some(utf8) = globals.store.get_constant_noautoload(enc.id(), IdentId::UTF_8) {
+    if let Some(utf8) = globals
+        .store
+        .get_constant_noautoload(enc.id(), IdentId::UTF_8)
+    {
         globals.set_constant_by_str(enc.id(), "CP65001", utf8);
     }
 
@@ -237,18 +237,15 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     // specs that reference the constant (e.g.
     // `String#encode` expectations) don't fail with NameError before
     // we get to the actual encode behaviour.
-    let conv_not_found =
-        globals.define_class("ConverterNotFoundError", enc_error_module, enc.id());
+    let conv_not_found = globals.define_class("ConverterNotFoundError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "ConverterNotFoundError", conv_not_found.get());
     // Encoding::UndefinedConversionError < EncodingError. Same
     // motivation — referenced by `String#encode` specs.
-    let undef_conv =
-        globals.define_class("UndefinedConversionError", enc_error_module, enc.id());
+    let undef_conv = globals.define_class("UndefinedConversionError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "UndefinedConversionError", undef_conv.get());
     // Encoding::InvalidByteSequenceError < EncodingError. Same
     // motivation.
-    let invalid_byte =
-        globals.define_class("InvalidByteSequenceError", enc_error_module, enc.id());
+    let invalid_byte = globals.define_class("InvalidByteSequenceError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "InvalidByteSequenceError", invalid_byte.get());
 
     // Instance accessors on the encoding-error subclasses, exposed
@@ -372,7 +369,12 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         converter_search_convpath,
         2,
     );
-    globals.define_builtin_func(converter.id(), "source_encoding", converter_source_encoding, 0);
+    globals.define_builtin_func(
+        converter.id(),
+        "source_encoding",
+        converter_source_encoding,
+        0,
+    );
     globals.define_builtin_func(
         converter.id(),
         "destination_encoding",
@@ -513,15 +515,6 @@ impl TranscodeOpts {
     }
 }
 
-pub(super) fn transcode_bytes(
-    src_bytes: &[u8],
-    src_enc: crate::value::Encoding,
-    dst_enc: crate::value::Encoding,
-    store: &Store,
-) -> Result<Vec<u8>> {
-    transcode_bytes_with_opts(src_bytes, src_enc, dst_enc, &TranscodeOpts::default(), store)
-}
-
 pub(super) fn transcode_bytes_with_opts(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -554,11 +547,7 @@ pub(super) fn transcode_bytes_with_opts(
             store,
             format!(
                 "\"\\x{:02X}\" from ASCII-8BIT to {}",
-                src_bytes
-                    .iter()
-                    .copied()
-                    .find(|&b| b >= 0x80)
-                    .unwrap_or(0),
+                src_bytes.iter().copied().find(|&b| b >= 0x80).unwrap_or(0),
                 dst_enc.name()
             ),
         ));
@@ -576,10 +565,7 @@ pub(super) fn transcode_bytes_with_opts(
             if decode_err {
                 return Err(MonorubyErr::invalid_byte_sequence_error(
                     store,
-                    format!(
-                        "invalid byte sequence on {} → ASCII-8BIT",
-                        src_enc.name()
-                    ),
+                    format!("invalid byte sequence on {} → ASCII-8BIT", src_enc.name()),
                 ));
             }
             return Ok(decoded.into_owned().into_bytes());
@@ -632,11 +618,7 @@ pub(super) fn transcode_bytes_with_opts(
                 let bad = decoded.chars().find(|c| !c.is_ascii()).unwrap();
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    format!(
-                        "U+{:04X} from {} to US-ASCII",
-                        bad as u32,
-                        src_enc.name()
-                    ),
+                    format!("U+{:04X} from {} to US-ASCII", bad as u32, src_enc.name()),
                 ));
             }
             let replace = opts.replace_str(dst_enc);
@@ -1954,7 +1936,9 @@ fn enc_err_error_char(
         return Ok(Value::string_from_str(""));
     };
     if let Some(rest) = msg.strip_prefix("U+") {
-        let hex_end = rest.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(rest.len());
+        let hex_end = rest
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(rest.len());
         let hex = &rest[..hex_end];
         if let Ok(cp) = u32::from_str_radix(hex, 16)
             && let Some(c) = char::from_u32(cp)
@@ -1986,12 +1970,7 @@ fn enc_err_incomplete_input_p(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/list.html]
 #[monoruby_builtin]
-fn enc_list(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let enc_class = encoding_class(globals);
     let utf8 = globals
         .store
@@ -2452,7 +2431,11 @@ fn enc_inspect(
     if name == "ASCII-8BIT" {
         return Ok(Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"));
     }
-    let suffix = if is_cruby_dummy_name(&name) { " (dummy)" } else { "" };
+    let suffix = if is_cruby_dummy_name(&name) {
+        " (dummy)"
+    } else {
+        ""
+    };
     Ok(Value::string(format!("#<Encoding:{name}{suffix}>")))
 }
 
@@ -2674,12 +2657,8 @@ mod tests {
     fn force_encoding_via_encoding_object() {
         // Accept an `Encoding` object as the argument, not just a
         // String.
-        run_test(
-            r#""Ruby".force_encoding(Encoding::ISO_8859_1).encoding == Encoding::ISO_8859_1"#,
-        );
-        run_test(
-            r#""Ruby".force_encoding(Encoding::UTF_16LE).encoding == Encoding::UTF_16LE"#,
-        );
+        run_test(r#""Ruby".force_encoding(Encoding::ISO_8859_1).encoding == Encoding::ISO_8859_1"#);
+        run_test(r#""Ruby".force_encoding(Encoding::UTF_16LE).encoding == Encoding::UTF_16LE"#);
     }
 
     #[test]
@@ -2781,9 +2760,7 @@ mod tests {
     #[test]
     fn string_concat_raises_compat_error() {
         // Two distinct broken sides cannot be concatenated.
-        run_test_error(
-            r#""\xff".force_encoding("UTF-8") + "\xff".force_encoding("ASCII-8BIT")"#,
-        );
+        run_test_error(r#""\xff".force_encoding("UTF-8") + "\xff".force_encoding("ASCII-8BIT")"#);
         run_test_error(
             r#"
               s = "\xff".force_encoding("UTF-8")
@@ -2796,9 +2773,7 @@ mod tests {
     fn string_concat_empty_adopts_other_encoding() {
         // Empty side adopts the other side's encoding (matters for
         // non-ASCII-compatible encodings).
-        run_test(
-            r#"("".force_encoding("UTF-16LE") + "abc").encoding == Encoding::UTF_8"#,
-        );
+        run_test(r#"("".force_encoding("UTF-16LE") + "abc").encoding == Encoding::UTF_8"#);
         run_test(
             r#"
               s = "".force_encoding("UTF-16LE")
@@ -2812,9 +2787,7 @@ mod tests {
     fn gsub_raises_compat_error_on_replacement() {
         // Receiver is UTF-8 with non-ASCII content, replacement is
         // an ASCII-8BIT broken byte → CompatibilityError.
-        run_test_error(
-            r#""é".gsub(/é/, "\xff".force_encoding("ASCII-8BIT"))"#,
-        );
+        run_test_error(r#""é".gsub(/é/, "\xff".force_encoding("ASCII-8BIT"))"#);
     }
 
     #[test]
@@ -2871,23 +2844,29 @@ mod tests {
     fn encoding_default_internal() {
         run_test(r#"Encoding.default_internal"#);
         // setter and getter round-trip
-        run_test(r#"
+        run_test(
+            r#"
             Encoding.default_internal = Encoding::UTF_8
             res = Encoding.default_internal == Encoding::UTF_8
             Encoding.default_internal = nil
             res
-        "#);
-        run_test(r#"
+        "#,
+        );
+        run_test(
+            r#"
             Encoding.default_internal = nil
             Encoding.default_internal
-        "#);
+        "#,
+        );
         // string argument to setter
-        run_test(r#"
+        run_test(
+            r#"
             Encoding.default_internal = "UTF-8"
             res = Encoding.default_internal == Encoding::UTF_8
             Encoding.default_internal = nil
             res
-        "#);
+        "#,
+        );
     }
 
     #[test]
@@ -2967,13 +2946,15 @@ mod tests {
         run_test("Warning[:experimental]");
         run_test("Warning[:performance]");
         // Warning[]= sets category
-        run_test(r#"
+        run_test(
+            r#"
             old = Warning[:deprecated]
             Warning[:deprecated] = false
             res = Warning[:deprecated]
             Warning[:deprecated] = old
             res
-        "#);
+        "#,
+        );
         // Invalid category raises ArgumentError
         run_test_error("Warning[:nonexistent]");
     }
@@ -3115,10 +3096,16 @@ mod tests {
         // src/dst encodings round-trip through the stashed ivars, and
         // a basic ASCII-only convert returns the input bytes tagged
         // with the destination encoding.
-        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").source_encoding == Encoding::UTF_8"#);
-        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").destination_encoding == Encoding::Shift_JIS"#);
+        run_test(
+            r#"Encoding::Converter.new("UTF-8", "Shift_JIS").source_encoding == Encoding::UTF_8"#,
+        );
+        run_test(
+            r#"Encoding::Converter.new("UTF-8", "Shift_JIS").destination_encoding == Encoding::Shift_JIS"#,
+        );
         run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello")"#);
-        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello").encoding == Encoding::Shift_JIS"#);
+        run_test(
+            r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello").encoding == Encoding::Shift_JIS"#,
+        );
     }
 
     #[test]
@@ -3133,7 +3120,9 @@ mod tests {
         // After `#finish`, subsequent `#convert` raises ArgumentError.
         // `finish` itself returns an empty string in the dst encoding.
         run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish"#);
-        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish.encoding == Encoding::Shift_JIS"#);
+        run_test(
+            r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish.encoding == Encoding::Shift_JIS"#,
+        );
         run_test(
             r#"
               ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
@@ -3153,9 +3142,13 @@ mod tests {
         // Default replacement: "?" tagged US-ASCII for non-UTF dst,
         // "�" tagged UTF-8 for UTF-8 dst.
         run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement"#);
-        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement.encoding == Encoding::US_ASCII"#);
+        run_test(
+            r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement.encoding == Encoding::US_ASCII"#,
+        );
         run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement"#);
-        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement.encoding == Encoding::UTF_8"#);
+        run_test(
+            r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement.encoding == Encoding::UTF_8"#,
+        );
         // Setter validates encodability against the destination.
         run_test(
             r#"
@@ -3259,8 +3252,12 @@ mod tests {
         // UTF-16/32 → UTF-8, ISO-2022-JP → STATELESS_ISO_2022_JP,
         // ASCII-compatible inputs → nil. Accepts both Encoding
         // objects and string names.
-        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16BE) == Encoding::UTF_8"#);
-        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16LE) == Encoding::UTF_8"#);
+        run_test(
+            r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16BE) == Encoding::UTF_8"#,
+        );
+        run_test(
+            r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16LE) == Encoding::UTF_8"#,
+        );
         run_test(r#"Encoding::Converter.asciicompat_encoding("UTF-16LE") == Encoding::UTF_8"#);
         run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_8)"#);
         run_test(r#"Encoding::Converter.asciicompat_encoding("Shift_JIS")"#);
@@ -3274,8 +3271,12 @@ mod tests {
         // accessors that yield comparable scalars.
         run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS").length"#);
         run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0].length"#);
-        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][0] == Encoding::UTF_8"#);
-        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][1] == Encoding::Shift_JIS"#);
+        run_test(
+            r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][0] == Encoding::UTF_8"#,
+        );
+        run_test(
+            r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][1] == Encoding::Shift_JIS"#,
+        );
         // Unsupported pair raises ConverterNotFoundError, matching
         // `.new` — UTF-32 has no `encoding_rs` transcoder in monoruby.
         run_test_no_result_check(
@@ -3372,12 +3373,20 @@ mod tests {
         // ASCII-compatible — these cases now agree with CRuby:
         // empty UTF-16LE + non-empty UTF-8 → UTF-8 (non-empty side
         // wins), and the symmetric arrangement.
-        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "abc") == Encoding::UTF_8"#);
-        run_test(r#"Encoding.compatible?("abc", "".force_encoding("UTF-16LE")) == Encoding::UTF_8"#);
+        run_test(
+            r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "abc") == Encoding::UTF_8"#,
+        );
+        run_test(
+            r#"Encoding.compatible?("abc", "".force_encoding("UTF-16LE")) == Encoding::UTF_8"#,
+        );
         // Both empty UTF-16LE → UTF-16LE (empty/empty rule).
-        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+        run_test(
+            r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#,
+        );
         // Two non-empty UTF-16LE strings stay UTF-16LE.
-        run_test(r#"Encoding.compatible?("abc".force_encoding("UTF-16LE"), "def".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+        run_test(
+            r#"Encoding.compatible?("abc".force_encoding("UTF-16LE"), "def".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#,
+        );
     }
 
     #[test]

@@ -497,96 +497,6 @@ fn hash_lookup_or_keyerror(
     Err(MonorubyErr::keyerr_with(msg, receiver, key_val))
 }
 
-/// Try to consume an `N$` positional argument reference at
-/// `fchars[*i..]`. Recognized only when one or more digits (with a
-/// leading non-zero digit) are followed immediately by `$`. On
-/// match, advances `*i` past the `$` and returns the 1-based index
-/// (or an error if it would be out of range / 0). On no-match,
-/// leaves `*i` unchanged and returns `Ok(None)`.
-fn try_consume_positional_dollar(
-    fchars: &[char],
-    i: &mut usize,
-    flen: usize,
-) -> Result<Option<usize>> {
-    if *i >= flen || !fchars[*i].is_ascii_digit() || fchars[*i] == '0' {
-        return Ok(None);
-    }
-    let mut j = *i;
-    while j < flen && fchars[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j >= flen || fchars[j] != '$' {
-        return Ok(None);
-    }
-    let mut num = 0usize;
-    for k in *i..j {
-        num = num
-            .checked_mul(10)
-            .and_then(|n| n.checked_add(fchars[k] as usize - '0' as usize))
-            .ok_or_else(|| MonorubyErr::argumenterr("argument number too big"))?;
-    }
-    if num == 0 {
-        return Err(MonorubyErr::argumenterr(
-            "invalid absolute argument number",
-        ));
-    }
-    *i = j + 1;
-    Ok(Some(num))
-}
-
-/// Resolve a positional-arg reference to its value, validating range.
-fn resolve_positional(arguments: &[Value], num: usize) -> Result<Value> {
-    if num == 0 || num > arguments.len() {
-        return Err(MonorubyErr::argumenterr("too few arguments"));
-    }
-    Ok(arguments[num - 1])
-}
-
-/// Truncate `s` to at most `prec` *characters* (not bytes). Matches
-/// CRuby's `%.Ns` semantics, where the precision counts characters.
-fn truncate_to_chars(s: &str, prec: usize) -> String {
-    let mut count = 0;
-    let mut end = s.len();
-    for (i, _) in s.char_indices() {
-        if count == prec {
-            end = i;
-            break;
-        }
-        count += 1;
-    }
-    s[..end].to_string()
-}
-
-/// Tracks whether positional (`%N$x`) and/or sequential (`%x`) args
-/// have been consumed so that mixing can be flagged as an error.
-#[derive(Default)]
-struct ArgTracker {
-    used_positional: bool,
-    used_sequential: bool,
-}
-
-impl ArgTracker {
-    fn note_positional(&mut self) -> Result<()> {
-        if self.used_sequential {
-            return Err(MonorubyErr::argumenterr(
-                "numbered(2) after unnumbered(1)",
-            ));
-        }
-        self.used_positional = true;
-        Ok(())
-    }
-
-    fn note_sequential(&mut self) -> Result<()> {
-        if self.used_positional {
-            return Err(MonorubyErr::argumenterr(
-                "unnumbered(1) mixed with numbered",
-            ));
-        }
-        self.used_sequential = true;
-        Ok(())
-    }
-}
-
 impl Executor {
     pub(crate) fn format_by_args(
         &mut self,
@@ -938,9 +848,8 @@ impl Executor {
                     let mut s = if let Some(string) = val.is_str() {
                         string.to_string()
                     } else if let Some(func_id) = globals.check_method(val, IdentId::TO_S) {
-                        let result = self.invoke_func_inner(
-                            globals, func_id, val, &[], None, None,
-                        )?;
+                        let result =
+                            self.invoke_func_inner(globals, func_id, val, &[], None, None)?;
                         if let Some(string) = result.is_str() {
                             string.to_string()
                         } else {
@@ -964,9 +873,8 @@ impl Executor {
                     // `%p` dispatches to `Object#inspect` (Ruby-level)
                     // so user-defined `inspect` overrides are honoured.
                     let s = if let Some(func_id) = globals.check_method(val, IdentId::INSPECT) {
-                        let result = self.invoke_func_inner(
-                            globals, func_id, val, &[], None, None,
-                        )?;
+                        let result =
+                            self.invoke_func_inner(globals, func_id, val, &[], None, None)?;
                         if let Some(string) = result.is_str() {
                             string.to_string()
                         } else {

@@ -137,11 +137,7 @@ impl Encoding {
     pub fn is_ascii_compatible(self) -> bool {
         !matches!(
             self,
-            Self::Utf16Le
-                | Self::Utf16Be
-                | Self::Utf32Le
-                | Self::Utf32Be
-                | Self::Iso2022Jp
+            Self::Utf16Le | Self::Utf16Be | Self::Utf32Le | Self::Utf32Be | Self::Iso2022Jp
         )
     }
 
@@ -308,8 +304,14 @@ impl Encoding {
             "ISO_8859_15" | "ISO8859_15" | "LATIN9" => Ok(Encoding::Iso8859(15)),
             "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Iso8859(16)),
 
-            "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "EUC_JP_MS" | "EUC_JP_WIN"
-            | "CP51932" | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
+            "EUC_JP"
+            | "EUCJP"
+            | "EUCJP_MS"
+            | "EUCJP_WIN"
+            | "EUC_JP_MS"
+            | "EUC_JP_WIN"
+            | "CP51932"
+            | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
             "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
             | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
             "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
@@ -329,9 +331,9 @@ impl Encoding {
             | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869" | "CP869" | "KOI8_R"
             | "KOI8_U" | "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
             | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW" | "EUCTW"
-            | "TIS_620" | "TIS620" | "CESU_8" | "CESU8" | "UTF_7" | "EMACS_MULE" | "CP50220"
-            | "CP50221" | "GB12345" | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
-            | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            | "TIS_620" | "TIS620" | "UTF_7" | "EMACS_MULE" | "CP50220" | "CP50221" | "GB12345"
+            | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
+            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -791,8 +793,7 @@ impl RStringInner {
             Encoding::Iso2022Jp => {
                 let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
                     .expect("encoding_rs always supports iso-2022-jp");
-                let (decoded, had_errors) =
-                    enc_rs.decode_without_bom_handling(&self.content);
+                let (decoded, had_errors) = enc_rs.decode_without_bom_handling(&self.content);
                 if had_errors {
                     self.content.len()
                 } else {
@@ -1032,10 +1033,9 @@ impl RStringInner {
                 // an ESC sequence — a sub-range that's syntactically
                 // separate from the parent's escape state and would
                 // need re-decoding to classify.
-                Encoding::UsAscii
-                | Encoding::EucJp
-                | Encoding::Sjis(_)
-                | Encoding::Iso2022Jp => CodeRange::Unknown,
+                Encoding::UsAscii | Encoding::EucJp | Encoding::Sjis(_) | Encoding::Iso2022Jp => {
+                    CodeRange::Unknown
+                }
             },
             // Broken parents are never safe to propagate — a sub-
             // range could be Valid (if the broken bytes are outside
@@ -1369,9 +1369,7 @@ impl RStringInner {
         // Fast path 2: receiver and replacement are both well-formed
         // UTF-8 (or pure ASCII) and the splice respects character
         // boundaries — the result is well-formed UTF-8 too.
-        if utf8_boundaries_ok
-            && matches!(repl_cr, CodeRange::SevenBit | CodeRange::Valid)
-        {
+        if utf8_boundaries_ok && matches!(repl_cr, CodeRange::SevenBit | CodeRange::Valid) {
             self.cr.set(CodeRange::Valid);
             return Ok(());
         }
@@ -1397,11 +1395,7 @@ impl RStringInner {
     /// callers can append into the result without paying for an
     /// initial classification.
     pub fn with_encoding_capacity(encoding: Encoding, cap: usize) -> Self {
-        RStringInner::from(
-            SmallVec::with_capacity(cap),
-            encoding,
-            CodeRange::SevenBit,
-        )
+        RStringInner::from(SmallVec::with_capacity(cap), encoding, CodeRange::SevenBit)
     }
 
     pub fn first_code(&self) -> Result<u32> {
@@ -2110,7 +2104,7 @@ mod encoding_tests {
 
     #[test]
     fn bytesplice_with_seven_bit_combines_to_seven_bit() {
-        let mut globals = Globals::new_test();
+        let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("abcdef");
         let repl = RStringInner::from_str_scanned("XY");
         assert_eq!(s.code_range(), CodeRange::SevenBit);
@@ -2124,7 +2118,7 @@ mod encoding_tests {
 
     #[test]
     fn bytesplice_with_seven_bit_plus_valid_is_valid() {
-        let mut globals = Globals::new_test();
+        let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("abcdef");
         let repl = RStringInner::from_str_scanned("あ"); // 3 bytes, Valid
         assert_eq!(s.code_range(), CodeRange::SevenBit);
@@ -2138,7 +2132,7 @@ mod encoding_tests {
 
     #[test]
     fn bytesplice_with_valid_plus_valid_keeps_valid() {
-        let mut globals = Globals::new_test();
+        let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("xあy");
         let repl = RStringInner::from_str_scanned("いう");
         assert_eq!(s.code_range(), CodeRange::Valid);
@@ -2157,7 +2151,7 @@ mod encoding_tests {
         // important guarantees here are (a) the call succeeds and
         // (b) cr stays SevenBit, since both sides are pure ASCII
         // and the result encoding is ASCII-compatible.
-        let mut globals = Globals::new_test();
+        let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("hi");
         s.set_encoding(Encoding::UsAscii);
         let repl = RStringInner::from_str_scanned("X");
@@ -2185,7 +2179,7 @@ mod encoding_tests {
         // Splicing into the middle of a multi-byte UTF-8 character
         // produces broken bytes; under Utf8 tagging CRuby (and our
         // implementation) demotes to ASCII-8BIT.
-        let mut globals = Globals::new_test();
+        let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("あ"); // 3 bytes
         let repl = RStringInner::from_str_scanned("X");
 
