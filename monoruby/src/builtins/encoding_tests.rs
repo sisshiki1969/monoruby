@@ -233,36 +233,19 @@ mod tests {
 
     #[test]
     fn encode_unknown_encoding_raises_converter_not_found() {
-        // Catch by class so the assertion doesn't depend on the
-        // namespace-qualification of `e.class.name` — monoruby's
-        // `Module#name` for classes opened inside `class Encoding ...
-        // end` (in `startup.rb`) sometimes returns the bare leaf
-        // string (`"ConverterNotFoundError"`) rather than the
-        // fully-qualified form (`"Encoding::ConverterNotFoundError"`),
-        // depending on parent-chain bookkeeping. The `is-a` check
-        // (CRuby and monoruby both implement it via the class
-        // hierarchy, not the name string) is stable regardless.
-        run_test_no_result_check(
-            r#"
-              begin
-                "abc".encode("xyz")
-                raise "expected ConverterNotFoundError"
-              rescue Encoding::ConverterNotFoundError
-                # ok
-              end
-            "#,
+        run_test(
+            r#"begin; "abc".encode("xyz"); rescue => e; e.class.name; end"#,
         );
     }
 
     #[test]
     fn encode_unmappable_to_us_ascii_raises_undefined_conversion() {
-        run_test_no_result_check(
+        run_test(
             r#"
               begin
                 "\xE3\x81\x82".force_encoding("UTF-8").encode("US-ASCII")
-                raise "expected UndefinedConversionError"
-              rescue Encoding::UndefinedConversionError
-                # ok
+              rescue => e
+                e.class.name
               end
             "#,
         );
@@ -271,13 +254,48 @@ mod tests {
     #[test]
     fn encode_unmappable_to_iso8859_1_raises_undefined_conversion() {
         // U+3042 (HIRAGANA A) isn't representable in Latin-1.
-        run_test_no_result_check(
+        run_test(
             r#"
               begin
                 "\xE3\x81\x82".force_encoding("UTF-8").encode("ISO-8859-1")
-                raise "expected UndefinedConversionError"
-              rescue Encoding::UndefinedConversionError
-                # ok
+              rescue => e
+                e.class.name
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_subclass_names_are_qualified() {
+        // Regression test for a `Module#name` bug where the five
+        // `Encoding::*` classes registered by `init_encoding` in
+        // Rust rendered as bare leaf strings
+        // (`"CompatibilityError"` instead of
+        // `"Encoding::CompatibilityError"`).
+        //
+        // The Rust call sites passed `OBJECT_CLASS` as the
+        // lexical-parent argument to `define_class`, so the class
+        // had `parent = Object`. `set_constant`'s re-parenting
+        // logic only fires for anonymous / non-permanent targets
+        // (it deliberately doesn't touch already-named classes —
+        // CRuby's `M::X = Foo` doesn't rename `Foo`), so the
+        // qualified path never got reattached after the
+        // `set_constant_by_str(enc.id(), …)` call. Pass `enc.id()`
+        // as the parent and `Module#name` walks back to `Encoding`
+        // correctly.
+        run_test(r#"Encoding::CompatibilityError.name"#);
+        run_test(r#"Encoding::ConverterNotFoundError.name"#);
+        run_test(r#"Encoding::UndefinedConversionError.name"#);
+        run_test(r#"Encoding::InvalidByteSequenceError.name"#);
+        run_test(r#"Encoding::Converter.name"#);
+        // The end-to-end `rescue => e; e.class.name` path that
+        // PR #443's CI run flagged as failing.
+        run_test(
+            r#"
+              begin
+                "\xE3\x81\x82".force_encoding("UTF-8").encode("ISO-8859-1")
+              rescue Encoding::UndefinedConversionError => e
+                e.class.name
               end
             "#,
         );
