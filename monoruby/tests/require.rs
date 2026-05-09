@@ -112,9 +112,15 @@ fn const_defined_preserves_autoload_query() {
 // the `require` runs and the constant binds to the value the file
 // defined. After that, `autoload?` reports nil and `const_defined?`
 // is still true.
+//
+// Uses `run_test_once` because the operation is stateful: re-running
+// `autoload :D, path` after `a.rb` is already in `$LOADED_FEATURES`
+// is a no-op in CRuby (matches `rb_autoload_str`'s `rb_feature_provided`
+// short-circuit), so iteration 1 returns `[true, nil]` while iterations
+// 2+ return `[false, nil]`.
 #[test]
 fn autoload_triggers_on_reference() {
-    run_test(
+    run_test_once(
         r#"
         class AutoLazy
           autoload :D, File.expand_path("a")
