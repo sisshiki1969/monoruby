@@ -208,32 +208,4 @@ class String
   end
   alias_method :dedup, :-@
 
-  def encode(*args, **opts)
-    if opts.key?(:xml) && opts[:xml] != :attr && opts[:xml] != :text
-      raise ArgumentError, "unexpected value for xml option: #{opts[:xml].inspect}"
-    end
-    if opts[:xml] == :attr
-      s = gsub("&", "&amp;")
-      s = s.gsub("<", "&lt;")
-      s = s.gsub(">", "&gt;")
-      s = s.gsub("\"", "&quot;")
-      "\"#{s}\""
-    elsif opts[:xml] == :text
-      s = gsub("&", "&amp;")
-      s = s.gsub("<", "&lt;")
-      s = s.gsub(">", "&gt;")
-      s
-    elsif args.empty?
-      dup
-    else
-      dup.force_encoding(args[0])
-    end
-  end
-
-  def encode!(*args, **opts)
-    if opts.key?(:xml) && opts[:xml] != :attr && opts[:xml] != :text
-      raise ArgumentError, "unexpected value for xml option: #{opts[:xml].inspect}"
-    end
-    replace(encode(*args, **opts))
-  end
 end
