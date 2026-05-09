@@ -3103,4 +3103,297 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn converter_basic_round_trip() {
+        // src/dst encodings round-trip through the stashed ivars, and
+        // a basic ASCII-only convert returns the input bytes tagged
+        // with the destination encoding.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").source_encoding == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").destination_encoding == Encoding::Shift_JIS"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello")"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").convert("hello").encoding == Encoding::Shift_JIS"#);
+    }
+
+    #[test]
+    fn converter_inspect_form() {
+        // CRuby formats Converters as `#<Encoding::Converter: SRC to DST>`.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").inspect"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").inspect"#);
+    }
+
+    #[test]
+    fn converter_finish_then_convert_raises() {
+        // After `#finish`, subsequent `#convert` raises ArgumentError.
+        // `finish` itself returns an empty string in the dst encoding.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").finish.encoding == Encoding::Shift_JIS"#);
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              ec.finish
+              begin
+                ec.convert("x")
+                :no_raise
+              rescue ArgumentError
+                :ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_replacement_default_and_set() {
+        // Default replacement: "?" tagged US-ASCII for non-UTF dst,
+        // "�" tagged UTF-8 for UTF-8 dst.
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement"#);
+        run_test(r#"Encoding::Converter.new("UTF-8", "Shift_JIS").replacement.encoding == Encoding::US_ASCII"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement"#);
+        run_test(r#"Encoding::Converter.new("Shift_JIS", "UTF-8").replacement.encoding == Encoding::UTF_8"#);
+        // Setter validates encodability against the destination.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              ec.replacement = "?"
+              ec.replacement
+            "#,
+        );
+        // Unencodable replacement raises Encoding::UndefinedConversionError.
+        // ISO-8859-1 has an `encoding_rs` entry, so the encodability
+        // check actually runs (US-ASCII would skip it because monoruby
+        // routes UsAscii through a fast path that bypasses
+        // `encoding_to_rs`).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              begin
+                ec.replacement = "日"
+                :no_raise
+              rescue Encoding::UndefinedConversionError
+                :ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_equality() {
+        // Two Converters compare equal iff they share src and dst.
+        run_test(
+            r#"
+              a = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              b = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              a == b
+            "#,
+        );
+        run_test(
+            r#"
+              a = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              b = Encoding::Converter.new("Shift_JIS", "UTF-8")
+              a == b
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_unsupported_pair_raises() {
+        // Pairs that have no `encoding_rs` transcoder raise
+        // ConverterNotFoundError. UTF-32 is the test vehicle because
+        // monoruby explicitly returns `None` from `encoding_to_rs`
+        // for it; CRuby implements UTF-32 transcoders so this
+        // diverges (CRuby would not raise) — assert monoruby's
+        // behaviour without the round-trip CRuby comparison.
+        run_test_no_result_check(
+            r#"
+              begin
+                Encoding::Converter.new("UTF-8", "UTF-32BE")
+                raise "expected ConverterNotFoundError"
+              rescue Encoding::ConverterNotFoundError
+                # ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_accepts_third_opts_arg() {
+        // The 3rd arg (Integer flag mask) is tolerated; constructor
+        // succeeds.
+        run_test(
+            r#"
+              flags = Encoding::Converter::INVALID_REPLACE | Encoding::Converter::UNDEF_REPLACE
+              Encoding::Converter.new("UTF-8", "Shift_JIS", flags).is_a?(Encoding::Converter)
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_flag_constants_are_integers() {
+        // The Encoding::Converter::* flag constants exist as Integers
+        // (the values themselves don't have to match CRuby — only
+        // that they're defined and integer-typed so spec setup
+        // like `INVALID_REPLACE | UNDEF_REPLACE` works).
+        run_test(r#"Encoding::Converter::INVALID_REPLACE.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_REPLACE.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_HEX_CHARREF.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::PARTIAL_INPUT.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::AFTER_OUTPUT.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNIVERSAL_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::CRLF_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::CR_NEWLINE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_TEXT_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_ATTR_CONTENT_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::XML_ATTR_QUOTE_DECORATOR.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::INVALID_MASK.is_a?(Integer)"#);
+        run_test(r#"Encoding::Converter::UNDEF_MASK.is_a?(Integer)"#);
+    }
+
+    #[test]
+    fn converter_asciicompat_encoding() {
+        // UTF-16/32 → UTF-8, ISO-2022-JP → STATELESS_ISO_2022_JP,
+        // ASCII-compatible inputs → nil. Accepts both Encoding
+        // objects and string names.
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16BE) == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_16LE) == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding("UTF-16LE") == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding(Encoding::UTF_8)"#);
+        run_test(r#"Encoding::Converter.asciicompat_encoding("Shift_JIS")"#);
+    }
+
+    #[test]
+    fn converter_search_convpath() {
+        // Single-step path for any directly supported pair. The
+        // returned array round-trips Encoding objects, which aren't
+        // re-parseable Ruby literals — observe its shape via
+        // accessors that yield comparable scalars.
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS").length"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0].length"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][0] == Encoding::UTF_8"#);
+        run_test(r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][1] == Encoding::Shift_JIS"#);
+        // Unsupported pair raises ConverterNotFoundError, matching
+        // `.new` — UTF-32 has no `encoding_rs` transcoder in monoruby.
+        run_test_no_result_check(
+            r#"
+              begin
+                Encoding::Converter.search_convpath("UTF-8", "UTF-32BE")
+                raise "expected ConverterNotFoundError"
+              rescue Encoding::ConverterNotFoundError
+                # ok
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_streaming_stubs_callable() {
+        // The streaming-API stubs (`primitive_errinfo`, `last_error`,
+        // `putback`) exist and return non-erroring values so spec setup
+        // that touches them doesn't NoMethodError. Their *exact* return
+        // values diverge from CRuby (monoruby is single-shot, CRuby
+        // tracks mid-stream state), so we only assert callability and
+        // shape, not output equality.
+        run_test_no_result_check(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS")
+              raise unless ec.last_error.nil?
+              raise unless ec.putback.is_a?(String)
+              info = ec.primitive_errinfo
+              raise unless info.is_a?(Array)
+              raise unless info.length == 5
+              raise unless info[0] == :source_buffer_empty
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_undefined_conversion_error_metadata() {
+        // `Encoding::UndefinedConversionError` exposes parsed
+        // source/destination encoding info on instances. monoruby
+        // recovers these by pattern-matching its canonical error
+        // message; the message text itself diverges from CRuby's, so
+        // we assert structurally rather than via `run_test`.
+        run_test_no_result_check(
+            r#"
+              begin
+                "日本".encode("US-ASCII")
+              rescue Encoding::UndefinedConversionError => e
+                raise unless e.respond_to?(:source_encoding_name)
+                raise unless e.respond_to?(:destination_encoding_name)
+                raise unless e.respond_to?(:source_encoding)
+                raise unless e.respond_to?(:destination_encoding)
+                raise unless e.respond_to?(:error_char)
+                raise unless e.source_encoding_name == "UTF-8"
+                raise unless e.destination_encoding_name == "US-ASCII"
+                raise unless e.source_encoding == Encoding::UTF_8
+                raise unless e.destination_encoding == Encoding::US_ASCII
+                raise unless e.error_char == "日"
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_invalid_byte_sequence_error_metadata() {
+        // `Encoding::InvalidByteSequenceError` exposes the parsed
+        // source/destination encoding pair and `incomplete_input?`
+        // (always `false` in monoruby — the transcoder doesn't
+        // distinguish partial-vs-invalid).
+        run_test_no_result_check(
+            r#"
+              begin
+                "\xff".force_encoding("UTF-8").encode("Shift_JIS")
+              rescue Encoding::InvalidByteSequenceError => e
+                raise unless e.respond_to?(:source_encoding_name)
+                raise unless e.respond_to?(:destination_encoding_name)
+                raise unless e.respond_to?(:source_encoding)
+                raise unless e.respond_to?(:destination_encoding)
+                raise unless e.respond_to?(:incomplete_input?)
+                raise unless e.source_encoding == Encoding::UTF_8
+                raise unless e.destination_encoding == Encoding::Shift_JIS
+                raise unless e.incomplete_input? == false
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_compatible_empty_string_adopts_other_encoding() {
+        // The PR routes the String/String case through the inner-aware
+        // `compatible_encoding` so the empty-side rule for
+        // ASCII-incompatible encodings is honoured. Pre-PR, the
+        // legacy `Encoding::compatible(SevenBit, SevenBit, ...)` path
+        // returned `nil` for any pair whose encodings weren't *both*
+        // ASCII-compatible — these cases now agree with CRuby:
+        // empty UTF-16LE + non-empty UTF-8 → UTF-8 (non-empty side
+        // wins), and the symmetric arrangement.
+        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "abc") == Encoding::UTF_8"#);
+        run_test(r#"Encoding.compatible?("abc", "".force_encoding("UTF-16LE")) == Encoding::UTF_8"#);
+        // Both empty UTF-16LE → UTF-16LE (empty/empty rule).
+        run_test(r#"Encoding.compatible?("".force_encoding("UTF-16LE"), "".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+        // Two non-empty UTF-16LE strings stay UTF-16LE.
+        run_test(r#"Encoding.compatible?("abc".force_encoding("UTF-16LE"), "def".force_encoding("UTF-16LE")) == Encoding::UTF_16LE"#);
+    }
+
+    #[test]
+    fn encoding_extra_constant_aliases() {
+        // New constant aliases added by the PR — `Encoding::UTF8_MAC`,
+        // `Encoding::UTF_8_MAC`, `Encoding::CESU_8` — exist as
+        // Encoding instances.
+        run_test(r#"Encoding::UTF8_MAC.is_a?(Encoding)"#);
+        run_test(r#"Encoding::UTF_8_MAC.is_a?(Encoding)"#);
+        run_test(r#"Encoding::CESU_8.is_a?(Encoding)"#);
+    }
+
+    #[test]
+    fn encoding_locale_charmap() {
+        // `Encoding.locale_charmap` is locale-dependent in CRuby; in
+        // monoruby it always returns "UTF-8". Assert only that it
+        // returns a String to stay portable across CI environments.
+        run_test_no_result_check(
+            r#"
+              raise unless Encoding.locale_charmap.is_a?(String)
+              raise unless Encoding.locale_charmap == "UTF-8"
+            "#,
+        );
+    }
 }
