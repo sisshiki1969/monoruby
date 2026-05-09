@@ -4257,4 +4257,93 @@ mod tests {
     fn kernel_format_error() {
         run_test_error("sprintf()");
     }
+
+    // --- tests for Kernel#catch / Kernel#throw added in PR #440 ---
+
+    #[test]
+    fn kernel_catch_basic() {
+        // Matching tag → catch returns the throw value.
+        run_test("catch(:done) { throw :done, 42 }");
+        // No throw → catch returns the block's value.
+        run_test("catch(:done) { 99 }");
+        // throw with no value defaults to nil.
+        run_test("catch(:done) { throw :done }.inspect");
+    }
+
+    #[test]
+    fn kernel_catch_yields_tag() {
+        // The block receives the tag as its argument.
+        run_test("catch(:t) { |x| x }");
+        // catch with no argument allocates a fresh Object as the tag and
+        // yields it; throwing that exact object lets catch return the value.
+        run_test("catch { |t| throw t, :ok }");
+    }
+
+    #[test]
+    fn kernel_throw_across_method() {
+        // throw unwinds across method boundaries up to the matching catch.
+        run_test(
+            r#"
+            def emit(tag); throw tag, :from_emit; end
+            catch(:x) { emit(:x) }
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_runs_ensure_not_rescue() {
+        // `ensure` runs on the throw path; `rescue` does NOT intercept it.
+        run_test(
+            r#"
+            log = []
+            result = catch(:done) do
+              begin
+                throw :done, 42
+              rescue => e
+                log << "rescued: #{e.class}"
+              ensure
+                log << "ensure"
+              end
+            end
+            [result, log]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_nested_different_tags() {
+        // Inner catch's tag does not match → the throw skips it and is
+        // intercepted by the outer catch.
+        run_test(
+            r#"
+            catch(:outer) do
+              catch(:inner) do
+                throw :outer, "to_outer"
+              end
+              "inner_returned"
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_nested_same_tag() {
+        // Same symbolic tag at both levels → the innermost matching catch
+        // wins; the outer catch then completes normally with the value of
+        // the expression that follows it.
+        run_test(
+            r#"
+            catch(:t) do
+              catch(:t) { throw :t, "innermost" }
+              "outer_after_inner"
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_uncaught_throw() {
+        // Throwing a tag with no matching catch raises an error.
+        run_test_error("throw :nope");
+    }
 }
