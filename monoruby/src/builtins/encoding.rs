@@ -206,30 +206,38 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         globals.set_constant_by_str(enc.id(), "CP65001", utf8);
     }
 
-    // Encoding::CompatibilityError < EncodingError < StandardError
+    // Encoding::CompatibilityError < EncodingError < StandardError.
+    // The fourth `define_class` argument is the *lexical parent* —
+    // pass `enc.id()` so `Module#name` walks back through `Encoding`
+    // and renders `"Encoding::CompatibilityError"`. (Passing
+    // `OBJECT_CLASS` would still register the class as the
+    // `Encoding::CompatibilityError` *constant*, but its `parent`
+    // field would point at `Object`, and `set_constant` only
+    // re-parents anonymous / non-permanent classes — so the bare
+    // leaf `"CompatibilityError"` would leak through.)
     let enc_error_val = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EncodingError"))
         .unwrap();
     let enc_error_module = enc_error_val.expect_class(globals).unwrap();
-    let compat_error = globals.define_class("CompatibilityError", enc_error_module, OBJECT_CLASS);
+    let compat_error = globals.define_class("CompatibilityError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "CompatibilityError", compat_error.get());
     // Encoding::ConverterNotFoundError < EncodingError. Stubbed so
     // specs that reference the constant (e.g.
     // `String#encode` expectations) don't fail with NameError before
     // we get to the actual encode behaviour.
     let conv_not_found =
-        globals.define_class("ConverterNotFoundError", enc_error_module, OBJECT_CLASS);
+        globals.define_class("ConverterNotFoundError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "ConverterNotFoundError", conv_not_found.get());
     // Encoding::UndefinedConversionError < EncodingError. Same
     // motivation — referenced by `String#encode` specs.
     let undef_conv =
-        globals.define_class("UndefinedConversionError", enc_error_module, OBJECT_CLASS);
+        globals.define_class("UndefinedConversionError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "UndefinedConversionError", undef_conv.get());
     // Encoding::InvalidByteSequenceError < EncodingError. Same
     // motivation.
     let invalid_byte =
-        globals.define_class("InvalidByteSequenceError", enc_error_module, OBJECT_CLASS);
+        globals.define_class("InvalidByteSequenceError", enc_error_module, enc.id());
     globals.set_constant_by_str(enc.id(), "InvalidByteSequenceError", invalid_byte.get());
 
     // Encoding class methods
@@ -242,7 +250,14 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     // dst)` validates that monoruby can transcode the pair (mostly
     // used in spec setup expectations). The runtime `convert` /
     // `primitive_convert` API is not exposed yet.
-    let converter = globals.define_class("Converter", None, OBJECT_CLASS);
+    // Inherit from `Object` explicitly so `Encoding::Converter#class`
+    // and the Kernel methods inherited via Object (`is_a?`,
+    // `inspect`, …) work on Converter instances. Passing `None`
+    // produces a class with no superclass, which monoruby renders
+    // as an empty string for `Converter.superclass` (CRuby shows
+    // `Object`).
+    let object_class = globals.store.object_class();
+    let converter = globals.define_class("Converter", object_class, enc.id());
     globals.set_constant_by_str(enc.id(), "Converter", converter.get());
     globals.define_builtin_class_func(converter.id(), "new", converter_new, 2);
     globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
