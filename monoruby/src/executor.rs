@@ -113,6 +113,11 @@ pub struct Executor {
     sp_match_haystack: Option<String>, // haystack for MatchData
     temp_stack: Vec<Value>,
     require_level: usize,
+    /// Stack of canonical paths currently being executed via `require` /
+    /// autoload. Used so that `Module#autoload :Foo, path` can detect
+    /// "registering an autoload whose feature is the file currently
+    /// being loaded" and treat it as a no-op (matches CRuby).
+    loading_paths: Vec<std::path::PathBuf>,
     /// error information.
     exception: Option<MonorubyErr>,
 }
@@ -133,6 +138,7 @@ impl std::default::Default for Executor {
             sp_match_haystack: None,
             temp_stack: vec![],
             require_level: 0,
+            loading_paths: vec![],
             exception: None,
         }
     }
@@ -402,12 +408,61 @@ impl Executor {
         if let Some((file_body, canonicalized_path)) =
             globals.require_lib(file_name, is_relative)?
         {
-            match self.load_impl(globals, file_body, &canonicalized_path, None) {
-                Ok(()) => {}
+            // Find every autoload-registered constant whose `feature`
+            // resolves to the file we're about to execute. CRuby's
+            // direct-require-of-an-autoload-target case flips those
+            // entries to "loading" for the duration of the require —
+            // `defined?` reports nil, `autoload?` returns nil, and if
+            // the require returns without defining the constant the
+            // entry is dropped so subsequent references raise
+            // `NameError` rather than re-entering the (now already
+            // loaded) file.
+            let matching = globals
+                .store
+                .find_autoload_entries_for_paths(&[canonicalized_path.clone()]);
+            for (class_id, name) in &matching {
+                globals
+                    .store
+                    .set_autoload_state(*class_id, *name, AutoloadState::Loading);
+            }
+            let res = self.load_impl(globals, file_body, &canonicalized_path, None);
+            match res {
+                Ok(()) => {
+                    // require body finished. Any `matching` slot still
+                    // sitting in `Autoload(Loading)` means the file
+                    // did not define that constant. Mark each as
+                    // `Consumed` so `const_defined?`/`autoload?` /
+                    // `defined?` report it as missing while the name
+                    // still appears in `Module#constants(false)` —
+                    // CRuby's "the autoload is triggered when the
+                    // same file is required directly does not raise
+                    // an error if the autoload constant was not
+                    // defined" behaviour.
+                    for (class_id, name) in &matching {
+                        if let Some(state) = globals.store.get_constant(*class_id, *name)
+                            && state.is_autoload()
+                        {
+                            globals.store.set_autoload_state(
+                                *class_id,
+                                *name,
+                                AutoloadState::Consumed,
+                            );
+                        }
+                    }
+                }
                 Err(err) => {
-                    globals
-                        .loaded_canonicalized_files
-                        .shift_remove(&canonicalized_path);
+                    // require raised. Revert each still-Autoload slot
+                    // back to `Idle` so a future reference may try
+                    // again, matching CRuby's "preserve the
+                    // registration across a failed load" behaviour
+                    // (per `does not remove the constant from
+                    // Module#constants if load raises ...` specs).
+                    for (class_id, name) in &matching {
+                        globals
+                            .store
+                            .set_autoload_state(*class_id, *name, AutoloadState::Idle);
+                    }
+                    globals.remove_loaded_feature(&canonicalized_path);
                     return Err(err);
                 }
             };
@@ -455,7 +510,9 @@ impl Executor {
         if let Some(wrap) = wrap {
             self.push_class_context(wrap.id());
         }
+        self.loading_paths.push(path.to_path_buf());
         let res = self.exec_script(globals, file_body, path);
+        self.loading_paths.pop();
         self.exit_class_context();
 
         #[cfg(feature = "dump-require")]
@@ -465,6 +522,14 @@ impl Executor {
 
         res?;
         Ok(())
+    }
+
+    /// Returns `true` if `path` (or its `.rb`/`.so` extended form) is
+    /// currently being executed by `Executor::require` / `Executor::load`.
+    /// Used by `Module#autoload` to detect the "register an autoload for
+    /// the file currently being loaded" case (treated as a no-op).
+    pub(crate) fn is_loading_path(&self, path: &std::path::Path) -> bool {
+        self.loading_paths.iter().any(|p| p == path)
     }
 
     pub(crate) fn enter_class_context(&mut self) {
