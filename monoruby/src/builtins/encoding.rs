@@ -403,6 +403,19 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.define_builtin_func(converter.id(), "last_error", converter_last_error, 0);
     globals.define_builtin_func(converter.id(), "putback", converter_putback, 0);
     globals.define_builtin_func(converter.id(), "==", converter_eq, 1);
+    // `primitive_convert(src, dst, dst_offset = 0, dst_bytesize = nil, opts = {})`
+    // — chunked variant of `convert` that mutates `src` and `dst`
+    // in place and returns a Symbol describing the outcome.
+    globals.define_builtin_func_with_kw(
+        converter.id(),
+        "primitive_convert",
+        converter_primitive_convert,
+        2,
+        4,
+        false,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func(enc.id(), "list", enc_list, 0);
     globals.define_builtin_class_func(enc.id(), "find", enc_find, 1);
     globals.define_builtin_class_func(enc.id(), "locale_charmap", enc_locale_charmap, 0);
@@ -1241,6 +1254,16 @@ const CONVERTER_SRC_IVAR: &str = "/converter_src";
 const CONVERTER_DST_IVAR: &str = "/converter_dst";
 const CONVERTER_REPLACE_IVAR: &str = "/converter_replace";
 const CONVERTER_FINISHED_IVAR: &str = "/converter_finished";
+/// Most recent `primitive_convert` outcome as the
+/// `[result, src_enc_name, dst_enc_name, error_bytes, readagain_bytes]`
+/// 5-tuple `Encoding::Converter#primitive_errinfo` returns.
+const CONVERTER_ERRINFO_IVAR: &str = "/converter_errinfo";
+/// Source bytes that the previous `primitive_convert` call accepted
+/// but couldn't produce output for (typically because the
+/// destination buffer hit its `dst_bytesize` cap mid-conversion).
+/// Prepended to the next call's source bytes so streaming works
+/// across multiple calls. Stored as a binary String value.
+const CONVERTER_PENDING_IVAR: &str = "/converter_pending";
 
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
@@ -1600,23 +1623,519 @@ fn converter_inspect(
     )))
 }
 
+/// Outcome of `stream_convert`. Maps 1:1 to the Symbol returned
+/// from `Encoding::Converter#primitive_convert`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamConvertResult {
+    /// All input consumed, output written; no more conversion to do.
+    Finished,
+    /// Filled the destination buffer up to its max bytesize before
+    /// finishing the input. The remaining input is still in `src`.
+    DestinationBufferFull,
+    /// Encountered bytes that aren't valid in the source encoding.
+    /// The malformed run has been removed from `src`.
+    InvalidByteSequence,
+    /// Encountered a code point that the destination encoding can't
+    /// represent. The triggering byte sequence has been removed from
+    /// `src`.
+    UndefinedConversion,
+    /// `partial_input: false` and the input ended mid-multi-byte-
+    /// sequence. The trailing partial bytes have been removed from
+    /// `src`.
+    IncompleteInput,
+    /// `partial_input: true` and the input ended on a sequence
+    /// boundary (or mid-sequence — the decoder is happy to keep
+    /// waiting for more). All consumed bytes removed from `src`.
+    SourceBufferEmpty,
+}
+
+impl StreamConvertResult {
+    fn symbol_name(self) -> &'static str {
+        match self {
+            Self::Finished => "finished",
+            Self::DestinationBufferFull => "destination_buffer_full",
+            Self::InvalidByteSequence => "invalid_byte_sequence",
+            Self::UndefinedConversion => "undefined_conversion",
+            Self::IncompleteInput => "incomplete_input",
+            Self::SourceBufferEmpty => "source_buffer_empty",
+        }
+    }
+}
+
+/// Streamed transcoder for `Encoding::Converter#primitive_convert`.
+/// Decodes `src_bytes` from `src_enc` to UTF-8 in chunks, then
+/// encodes UTF-8 to `dst_enc`, stopping early on error / output-
+/// buffer-full / partial-input. Returns:
+///
+/// - `result` — what stopped us (see `StreamConvertResult`).
+/// - `src_consumed` — number of bytes from the front of `src_bytes`
+///   the caller should drain. Includes any malformed / unmappable
+///   bytes that triggered an error symbol so they don't get
+///   re-fed on the next call.
+/// - `out_bytes` — bytes to append to the destination buffer at
+///   `dst_offset`.
+fn stream_convert(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+) -> (StreamConvertResult, usize, Vec<u8>) {
+    use crate::value::Encoding as E;
+    // Identity-copy fast path: only safe when the *source* is
+    // known-valid for its declared encoding. Same-encoding pairs
+    // (UTF-8 → UTF_8_MAC alias, UTF-8 → UTF-8, …) still need
+    // validation because the spec requires
+    // `:invalid_byte_sequence` reporting on bad input. Restrict
+    // the fast path to the all-ASCII / ASCII-compatible case
+    // where every byte is unambiguously valid.
+    let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
+    if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
+        let limit = max_dst_bytes.unwrap_or(src_bytes.len()).min(src_bytes.len());
+        let result = if limit < src_bytes.len() {
+            StreamConvertResult::DestinationBufferFull
+        } else {
+            StreamConvertResult::Finished
+        };
+        return (result, limit, src_bytes[..limit].to_vec());
+    }
+    // Resolve the encoding_rs encoders. The Converter constructor
+    // already validated this pair, so the lookups should succeed —
+    // bail with `Finished` for any unsupported pair to be safe.
+    let (Some(src_rs), Some(dst_rs)) = (encoding_to_rs(src_enc), encoding_to_rs(dst_enc)) else {
+        // BINARY → ascii-compat with non-ASCII bytes → undefined
+        // (matches `transcode_bytes_with_opts`'s behaviour).
+        if src_enc == E::Ascii8 && dst_enc.is_ascii_compatible() && !all_ascii {
+            return (StreamConvertResult::UndefinedConversion, 1, Vec::new());
+        }
+        // Anything else falls through as a no-op pass.
+        return (StreamConvertResult::Finished, src_bytes.len(), src_bytes.to_vec());
+    };
+
+    let mut decoder = src_rs.new_decoder();
+    let mut encoder = dst_rs.new_encoder();
+
+    // UTF-8 intermediate buffer. encoding_rs's
+    // `decode_to_utf8_without_replacement` returns
+    // `DecoderResult::Malformed` on bad input rather than substituting
+    // a replacement char (which is what we want for the symbol-based
+    // outcome to be useful).
+    let mut utf8_buf = vec![0u8; src_bytes.len() + 16];
+    let last = !partial_input;
+    let (decode_result, src_read, utf8_written) = decoder
+        .decode_to_utf8_without_replacement(src_bytes, &mut utf8_buf, last);
+
+    // Encode whatever UTF-8 we got so far into the destination.
+    // When `max_dst_bytes` is `Some`, size the buffer to exactly
+    // that number of bytes — encoding_rs's encoder respects the
+    // buffer length and returns `EncoderResult::OutputFull` when
+    // it can't fit the next codepoint, which is what triggers
+    // `:destination_buffer_full`. When unbounded, allocate
+    // generously so the encoder runs to completion in one go.
+    let max_out = max_dst_bytes.unwrap_or(utf8_written * 4 + 16);
+    let mut out_buf = vec![0u8; max_out];
+    let utf8_str = std::str::from_utf8(&utf8_buf[..utf8_written]).unwrap_or("");
+    let (encode_result, utf8_read, out_written) = encoder
+        .encode_from_utf8_without_replacement(utf8_str, &mut out_buf, last);
+    out_buf.truncate(out_written);
+
+    use encoding_rs::DecoderResult;
+    use encoding_rs::EncoderResult;
+    match (decode_result, encode_result) {
+        // Unmappable codepoint on the encode side wins regardless of
+        // decoder state — that's the next thing the caller would hit.
+        // We compute the *src* offset that corresponds to "the
+        // unmappable codepoint and everything before it" so the
+        // caller can leave the bytes after that error in `src` for
+        // the next call (matching CRuby's behaviour). For UTF-8 src
+        // this is identity (`utf8_read + unmappable.len_utf8()`);
+        // for other source encodings the decoder consumes a
+        // variable number of bytes per codepoint, so we re-feed
+        // src incrementally to a probe decoder until it produces
+        // exactly the matching utf8 prefix.
+        (_, EncoderResult::Unmappable(_c)) => {
+            // encoding_rs's `utf8_read` already advances *past* the
+            // unmappable codepoint (the encoder consumes the bytes
+            // and then reports the char it couldn't map). So
+            // `utf8_read` itself is the offset of the first UTF-8
+            // byte the user-visible "leftover" should start at.
+            let src_through_error =
+                src_offset_for_utf8_prefix(src_rs, src_bytes, utf8_read);
+            (
+                StreamConvertResult::UndefinedConversion,
+                src_through_error.unwrap_or(src_read),
+                out_buf,
+            )
+        }
+        // Output buffer hit its cap. Caller should grow it and call
+        // again on the remaining `src`.
+        (_, EncoderResult::OutputFull) => {
+            // We may have consumed *all* src bytes already (the encoder
+            // ran out before the decoder did). Report dst-full so the
+            // caller knows.
+            (
+                StreamConvertResult::DestinationBufferFull,
+                src_read,
+                out_buf,
+            )
+        }
+        // Decoder hit an invalid sequence in the middle of the input.
+        // `bad_len` is the length of the malformed run; the decoder
+        // already advanced past it as part of `src_read`.
+        (DecoderResult::Malformed(_, _), EncoderResult::InputEmpty) => {
+            // Distinguish "incomplete tail" from "junk in middle":
+            // if there are bytes after the malformed run, it's junk;
+            // otherwise the partial_input flag picks between
+            // incomplete (`last=true`) and source_buffer_empty
+            // (`last=false`, but we asked for last=true so this branch
+            // means truly invalid-at-end).
+            let kind = if src_read < src_bytes.len() {
+                StreamConvertResult::InvalidByteSequence
+            } else if !last {
+                StreamConvertResult::SourceBufferEmpty
+            } else if probe_incomplete_tail(src_rs, src_bytes, src_read) {
+                StreamConvertResult::IncompleteInput
+            } else {
+                StreamConvertResult::InvalidByteSequence
+            };
+            (kind, src_read, out_buf)
+        }
+        // Decoder finished cleanly. With `last=false` (partial_input
+        // mode) report source_buffer_empty so the caller knows
+        // they may feed more; otherwise it's a clean finish.
+        (DecoderResult::InputEmpty, EncoderResult::InputEmpty) => {
+            if !last {
+                (
+                    StreamConvertResult::SourceBufferEmpty,
+                    src_read,
+                    out_buf,
+                )
+            } else {
+                (StreamConvertResult::Finished, src_read, out_buf)
+            }
+        }
+        // Decoder ran out of room in the UTF-8 staging buffer. Our
+        // staging buffer is sized to `src_bytes.len() + 16`, which is
+        // enough for any encoding_rs source / dest pair, so this
+        // shouldn't fire — treat it as DestinationBufferFull defensively.
+        (DecoderResult::OutputFull, _) => (
+            StreamConvertResult::DestinationBufferFull,
+            src_read,
+            out_buf,
+        ),
+    }
+}
+
+/// Did `src_bytes[..end]` cut off mid-multi-byte-sequence (i.e.
+/// would the same bytes have decoded cleanly if we'd told the
+/// decoder there's more input coming)? Used to differentiate
+/// `:incomplete_input` from `:invalid_byte_sequence` when the
+/// terminal decode result is `Malformed` and there's nothing
+/// after it.
+/// Walk a fresh decoder over `src_bytes` byte-by-byte and stop
+/// the moment it has produced exactly `target_utf8_len` UTF-8
+/// bytes; return the corresponding src position. Used to map
+/// the encoder's "unmappable codepoint" position back into
+/// source-encoding bytes so the caller can leave the post-error
+/// tail in the user's `src` buffer.
+///
+/// Returns `None` for inputs the decoder can't satisfy (target
+/// not exactly hit before src is exhausted) so the caller can
+/// fall back to a coarser strategy.
+fn src_offset_for_utf8_prefix(
+    src_rs: &'static encoding_rs::Encoding,
+    src_bytes: &[u8],
+    target_utf8_len: usize,
+) -> Option<usize> {
+    if target_utf8_len == 0 {
+        return Some(0);
+    }
+    let mut probe = src_rs.new_decoder();
+    let mut utf8_buf = vec![0u8; target_utf8_len + 16];
+    let mut utf8_so_far = 0usize;
+    let mut src_pos = 0usize;
+    while src_pos < src_bytes.len() && utf8_so_far < target_utf8_len {
+        let chunk_end = (src_pos + 1).min(src_bytes.len());
+        let (_, src_read, utf8_n) = probe.decode_to_utf8_without_replacement(
+            &src_bytes[src_pos..chunk_end],
+            &mut utf8_buf[utf8_so_far..],
+            false,
+        );
+        src_pos += src_read;
+        utf8_so_far += utf8_n;
+        if utf8_so_far >= target_utf8_len {
+            return Some(src_pos);
+        }
+    }
+    if utf8_so_far == target_utf8_len {
+        Some(src_pos)
+    } else {
+        None
+    }
+}
+
+fn probe_incomplete_tail(
+    src_rs: &'static encoding_rs::Encoding,
+    src_bytes: &[u8],
+    end: usize,
+) -> bool {
+    if end == 0 {
+        return false;
+    }
+    let mut probe = src_rs.new_decoder();
+    let mut probe_dst = vec![0u8; src_bytes.len() + 16];
+    // Re-feed the bytes up to (and not including) the malformed run
+    // first, so the decoder is in the same internal state, then feed
+    // the malformed bytes with `last=false`. If the decoder reports
+    // `InputEmpty` it's still hopeful — the bytes are an incomplete
+    // prefix.
+    let _ = probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
+    let (probe_result, _, _) = probe.decode_to_utf8_without_replacement(&[], &mut probe_dst, false);
+    matches!(probe_result, encoding_rs::DecoderResult::InputEmpty)
+}
+
+///
+/// ### Encoding::Converter#primitive_convert
+/// - primitive_convert(src, dst) -> Symbol
+/// - primitive_convert(src, dst, dst_offset) -> Symbol
+/// - primitive_convert(src, dst, dst_offset, dst_bytesize) -> Symbol
+/// - primitive_convert(src, dst, dst_offset, dst_bytesize, opts) -> Symbol
+///
+/// Streamed sibling of `Encoding::Converter#convert`. Returns one
+/// of `:finished`, `:source_buffer_empty`, `:destination_buffer_full`,
+/// `:invalid_byte_sequence`, `:undefined_conversion`,
+/// `:incomplete_input`. Mutates `src` (drains consumed bytes) and
+/// `dst` (writes converted bytes starting at `dst_offset`, capped at
+/// `dst_bytesize`). The `opts` hash supports `partial_input:` and
+/// `after_output:` (the latter is accepted but ignored — monoruby's
+/// stream loop runs to completion in one call rather than yielding
+/// after each character).
+///
+#[monoruby_builtin]
+fn converter_primitive_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    let mut src_arg = lfp.arg(0);
+    let mut dst_arg = lfp.arg(1);
+    let dst_offset_arg = lfp.try_arg(2);
+    let dst_bytesize_arg = lfp.try_arg(3);
+    let opts_arg = lfp.try_arg(4);
+
+    // dst must be a writable String — frozen / chilled strings are
+    // rejected before we look at the rest of the args.
+    if dst_arg.is_rstring_inner().is_none() {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion of nil into String".to_string(),
+        ));
+    }
+    dst_arg.ensure_string_mutable(vm, globals)?;
+
+    // Source is allowed to be nil (CRuby treats it as an empty
+    // string, which means the call is just a "drain whatever the
+    // converter has buffered" with nothing more to push). We don't
+    // hold per-call decoder state across `primitive_convert`
+    // invocations, so nil + empty src + last=true just yields
+    // `:finished` with no output.
+    // `is_rstring_inner()` (not `is_str()`) — the source may carry
+    // bytes that aren't valid UTF-8 (e.g. partial EUC-JP / SJIS
+    // codepoints). `is_str()` would return `None` for those and
+    // the spec's `partial_input` tests would TypeError.
+    let new_src_bytes: Vec<u8> = if src_arg.is_nil() {
+        Vec::new()
+    } else {
+        src_arg
+            .is_rstring_inner()
+            .ok_or_else(|| MonorubyErr::typeerr("expected String".to_string()))?
+            .as_bytes()
+            .to_vec()
+    };
+    if !src_arg.is_nil() {
+        src_arg.ensure_string_mutable(vm, globals)?;
+    }
+    // Pending bytes from the previous `primitive_convert` that the
+    // dst-bytesize cap held back. Prepend them to the new src so
+    // multi-call streaming with `dst_bytesize` works (the spec
+    // test "uses the destination byte offset" hits this path).
+    let pending: Vec<u8> = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    let mut src_bytes = pending;
+    src_bytes.extend_from_slice(&new_src_bytes);
+
+    // Existing dst content (we'll truncate to `dst_offset` and
+    // append the new bytes).
+    let dst_initial: Vec<u8> = dst_arg
+        .is_rstring_inner()
+        .map(|s| s.as_bytes().to_vec())
+        .unwrap_or_default();
+
+    // Resolve dst_offset. nil → end-of-buffer (append). Default
+    // when the arg is omitted is also "end-of-buffer" per the spec
+    // (`primitive_convert(src, dst)` writes at the *end*; the
+    // mocking-test "uses the destination byte offset" overrides
+    // explicitly).
+    let dst_offset = match dst_offset_arg {
+        None => dst_initial.len(),
+        Some(v) if v.is_nil() => dst_initial.len(),
+        Some(v) => match v.coerce_to_integer(vm, globals)? {
+            crate::value::IntegerBase::Fixnum(n) if n >= 0 => n as usize,
+            _ => {
+                return Err(MonorubyErr::argumenterr(
+                    "negative or too-large integer".to_string(),
+                ));
+            }
+        },
+    };
+    if dst_offset > dst_initial.len() {
+        return Err(MonorubyErr::argumenterr(
+            "destination byte offset is greater than bytesize".to_string(),
+        ));
+    }
+
+    // Resolve dst_bytesize. nil → unlimited.
+    let max_dst_bytes = match dst_bytesize_arg {
+        None => None,
+        Some(v) if v.is_nil() => None,
+        Some(v) => Some(match v.coerce_to_integer(vm, globals)? {
+            crate::value::IntegerBase::Fixnum(n) if n >= 0 => n as usize,
+            _ => {
+                return Err(MonorubyErr::argumenterr(
+                    "negative or too-large integer".to_string(),
+                ));
+            }
+        }),
+    };
+
+    // Resolve `partial_input:` from the options hash. Default false.
+    let partial_input = match opts_arg {
+        Some(v) if !v.is_nil() => v
+            .try_hash_ty()
+            .and_then(|h| find_hash_value_for_symbol(&h, "partial_input"))
+            .map(|v| !v.is_nil() && v != Value::bool(false))
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    let src_enc = converter_get_src(globals, recv);
+    let dst_enc = converter_get_dst(globals, recv);
+
+    let (result, src_consumed, out_bytes) =
+        stream_convert(&src_bytes, src_enc, dst_enc, max_dst_bytes, partial_input);
+
+    // After-call mutation rules (CRuby observed behaviour):
+    //
+    //   - `:invalid_byte_sequence` / `:undefined_conversion`:
+    //     bytes after the error point stay in the user's
+    //     `src_arg`. The bytes up to and including the error are
+    //     consumed (and visible via `primitive_errinfo`); they're
+    //     also the offset of the user's "putback" via
+    //     `Encoding::Converter#putback`, but we don't yet support
+    //     that. Don't promote anything to the pending buffer —
+    //     only clean transient buffer-full / partial-input
+    //     interruptions are buffered.
+    //   - everything else (`:finished`, `:source_buffer_empty`,
+    //     `:destination_buffer_full`, `:incomplete_input`):
+    //     `src_arg` is cleared completely, and any tail
+    //     (`src_bytes[src_consumed..]`) goes into the per-
+    //     converter pending buffer for the next call to consume.
+    let leave_remaining_in_src = matches!(
+        result,
+        StreamConvertResult::InvalidByteSequence
+            | StreamConvertResult::UndefinedConversion
+    );
+    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
+    if leave_remaining_in_src {
+        // Put bytes after the error back into `src_arg`. Pending
+        // buffer is dropped — the converter has nothing it
+        // could write next call without more user input.
+        let leftover: Vec<u8> = src_bytes[src_consumed..].to_vec();
+        if !src_arg.is_nil() {
+            let mut new_src =
+                crate::value::RStringInner::from_encoding_scanned(&leftover, src_enc);
+            new_src.set_encoding(src_enc);
+            src_arg.replace_with_inner(new_src);
+        }
+        let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+    } else {
+        // Clear src and stash the unconverted tail (if any) in
+        // pending for the next call.
+        let pending_after: Vec<u8> = src_bytes[src_consumed..].to_vec();
+        if !src_arg.is_nil() {
+            let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_enc);
+            src_arg.replace_with_inner(cleared);
+        }
+        if pending_after.is_empty() {
+            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+        } else {
+            let mut pending_inner =
+                crate::value::RStringInner::from_encoding_scanned(&pending_after, src_enc);
+            pending_inner.set_encoding(crate::value::Encoding::Ascii8);
+            let _ = globals
+                .store
+                .set_ivar(recv, pending_id, Value::string_from_inner(pending_inner));
+        }
+    }
+
+    // Mutate dst: truncate to dst_offset, append converted bytes,
+    // tag with destination encoding (CRuby always re-tags dst on
+    // a primitive_convert call, success or failure).
+    let mut new_dst_bytes = dst_initial[..dst_offset].to_vec();
+    new_dst_bytes.extend_from_slice(&out_bytes);
+    let new_dst = crate::value::RStringInner::from_encoding_scanned(&new_dst_bytes, dst_enc);
+    dst_arg.replace_with_inner(new_dst);
+
+    // Stash the errinfo tuple for `Encoding::Converter#primitive_errinfo`.
+    let errinfo = Value::array_from_iter(
+        [
+            Value::symbol_from_str(result.symbol_name()),
+            Value::string_from_str(src_enc.name()),
+            Value::string_from_str(dst_enc.name()),
+            Value::string_from_str(""),
+            Value::string_from_str(""),
+        ]
+        .into_iter(),
+    );
+    let _ = globals.store.set_ivar(
+        recv,
+        IdentId::get_id(CONVERTER_ERRINFO_IVAR),
+        errinfo,
+    );
+
+    Ok(Value::symbol_from_str(result.symbol_name()))
+}
+
 ///
 /// ### Encoding::Converter#primitive_errinfo
 /// - primitive_errinfo -> [Symbol, String, String, String, String]
 ///
 /// CRuby returns the last `primitive_convert` status as a 5-tuple
 /// `[result, src_enc, dst_enc, error_bytes, readagain_bytes]`.
-/// monoruby's `convert` doesn't surface mid-stream state, so we
-/// report `[:source_buffer_empty, "", "", "", ""]` — the value
-/// CRuby returns when there's nothing pending.
+/// `primitive_convert` stashes the latest result here so callers
+/// can read the 5-tuple back out:
+///   `[result, src_enc_name, dst_enc_name, error_bytes, readagain_bytes]`
+/// We default to `[:source_buffer_empty, "", "", "", ""]` (CRuby's
+/// "nothing pending" form) when no `primitive_convert` has run yet.
 ///
 #[monoruby_builtin]
 fn converter_primitive_errinfo(
     _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let recv = lfp.self_val();
+    if let Some(v) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_ERRINFO_IVAR))
+    {
+        return Ok(v);
+    }
     Ok(Value::array_from_iter(
         [
             Value::symbol_from_str("source_buffer_empty"),
@@ -3408,6 +3927,337 @@ mod tests {
             r#"
               raise unless Encoding.locale_charmap.is_a?(String)
               raise unless Encoding.locale_charmap == "UTF-8"
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_basic_finished() {
+        // ASCII round-trip through the all-ASCII fast path: returns
+        // `:finished`, clears `src`, writes the converted bytes to `dst`,
+        // and tags `dst` with the destination encoding.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              src = "hello"
+              dst = ""
+              [ec.primitive_convert(src, dst), src, dst, dst.encoding == Encoding::ISO_8859_1]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_accepts_nil_source() {
+        // `primitive_convert(nil, "")` is a no-op that returns `:finished`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert(nil, "")
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_accepts_empty_string_source() {
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "")
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_frozen_dst_raises() {
+        run_test_error(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "".freeze)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_default_appends() {
+        // Default `dst_offset` (omitted or nil) is "end of dst" so the
+        // converter appends rather than overwrites.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "aa"
+              ec.primitive_convert("bc", dst)
+              dst
+            "#,
+        );
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "aa"
+              ec.primitive_convert("bc", dst, nil)
+              dst
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_explicit_truncates() {
+        // An explicit `dst_offset` truncates `dst` to that prefix and
+        // appends the converted bytes there.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "abc"
+              ec.primitive_convert("XY", dst, 1)
+              dst
+            "#,
+        );
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "abc"
+              ec.primitive_convert("XY", dst, 0)
+              dst
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_to_int() {
+        // Non-Integer `dst_offset` is coerced via `to_int`.
+        run_test(
+            r#"
+              klass = Class.new do
+                def initialize(n); @n = n; end
+                def to_int; @n; end
+              end
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "   "
+              result = ec.primitive_convert("abc", dst, klass.new(2))
+              [result, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_offset_out_of_range_raises() {
+        // `dst_offset > dst.bytesize` raises ArgumentError.
+        run_test_error(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "am", 3)
+            "#,
+        );
+        // Offsets within range (0..bytesize) succeed.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "am", 0)
+              ec.primitive_convert("", "am", 1)
+              ec.primitive_convert("", "am", 2)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_caps_output() {
+        // `dst_bytesize` caps how many bytes can be written and yields
+        // `:destination_buffer_full` when the source needs more room.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = ""
+              result = ec.primitive_convert("glark", dst, nil, 1)
+              [result, dst.bytesize, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_to_int() {
+        // Non-Integer `dst_bytesize` is coerced via `to_int`.
+        run_test(
+            r#"
+              klass = Class.new do
+                def initialize(n); @n = n; end
+                def to_int; @n; end
+              end
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "   "
+              result = ec.primitive_convert("abc", dst, 0, klass.new(2))
+              [result, dst]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_bytesize_unlimited_when_nil() {
+        // Nil `dst_bytesize` means unlimited; the full source is written.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = ""
+              ec.primitive_convert("glark", dst, nil, nil)
+              dst.bytesize
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_streaming_pending_buffer() {
+        // The cross-call pending buffer carries unwritten source bytes
+        // forward when `dst_bytesize` caps output. The progression
+        // matches the spec's "uses the destination byte offset" test:
+        // dst stays "aa", then becomes "aab", then "aabbb".
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dest = "aa"
+              s1 = ec.primitive_convert("b", dest, nil, 0); after1 = dest.dup
+              s2 = ec.primitive_convert("b", dest, nil, 1); after2 = dest.dup
+              s3 = ec.primitive_convert("b", dest, nil, 2); after3 = dest.dup
+              [s1, after1, s2, after2, s3, after3]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_undefined_conversion() {
+        // A character unrepresentable in the destination yields
+        // `:undefined_conversion` and bytes after the offending
+        // codepoint stay in `src`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              s = "\u{9878}abcd"
+              dst = ""
+              result = ec.primitive_convert(s, dst)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_dst_encoding_tagged_after_failure() {
+        // Even when the call returns `:undefined_conversion`, dst is
+        // re-tagged with the destination encoding (CRuby contract).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              dst = "".force_encoding("UTF-8")
+              ec.primitive_convert("\u{9878}", dst)
+              dst.encoding == Encoding::ISO_8859_1
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_invalid_byte_sequence_returns_symbol() {
+        // Stray UTF-8 continuation bytes trigger
+        // `:invalid_byte_sequence` and the bytes after the malformed
+        // run stay in `src`.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+              s = "\xC3\xA1\x80\x80\xC3\xA1".force_encoding("UTF-8")
+              dest = "".force_encoding("UTF-8")
+              result = ec.primitive_convert(s, dest)
+              [result, s.bytes]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_keeps_removing_invalid_bytes() {
+        // Repeated calls peel one malformed byte off the front each
+        // call until `src` is empty.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+              s = "\x80\x80\x80"
+              dest = "".force_encoding(Encoding::UTF_8_MAC)
+              ec.primitive_convert(s, dest); a = s.bytes
+              ec.primitive_convert(s, dest); b = s.bytes
+              ec.primitive_convert(s, dest); c = s.bytes
+              [a, b, c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_partial_input_true_buffer_empty() {
+        // EUC-JP `\xa4` is an incomplete lead byte; with
+        // `partial_input: true` the call returns `:source_buffer_empty`
+        // (the decoder is willing to wait for more input).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+              s = "\xa4"
+              result = ec.primitive_convert(s, "", nil, nil, partial_input: true)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_partial_input_false_incomplete_input() {
+        // Same lead byte without `partial_input` yields
+        // `:incomplete_input` (the decoder was told this is the
+        // final input).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+              s = "\xa4"
+              result = ec.primitive_convert(s, "", nil, nil, partial_input: false)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_after_output_option_accepted() {
+        // `after_output:` is recognised (read off the opts hash) and
+        // does not raise even though monoruby doesn't suspend on it.
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("", "", nil, nil, after_output: true)
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_convert_destination_buffer_full_clears_src() {
+        // `:destination_buffer_full` clears `src` (the leftover goes
+        // into the converter's pending buffer, not the user's `src`).
+        run_test(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-2022-JP")
+              s = "\u{9999}"
+              destination_bytesize = s.bytesize - 1
+              result = ec.primitive_convert(s, "", 0, destination_bytesize)
+              [result, s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_errinfo_reflects_last_primitive_convert() {
+        // `primitive_errinfo` returns the 5-tuple
+        // `[result, src_enc_name, dst_enc_name, error_bytes, readagain_bytes]`
+        // of the most recent `primitive_convert`. The exact
+        // `error_bytes` / `readagain_bytes` diverge from CRuby
+        // (monoruby stores empty strings), so check structure rather
+        // than full equality.
+        run_test_no_result_check(
+            r#"
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              ec.primitive_convert("hello", "")
+              info = ec.primitive_errinfo
+              raise unless info.is_a?(Array)
+              raise unless info.length == 5
+              raise unless info[0] == :finished
+              raise unless info[1] == "UTF-8"
+              raise unless info[2] == "ISO-8859-1"
             "#,
         );
     }
