@@ -992,6 +992,13 @@ mod tests {
     }
 
     #[test]
+    fn match_nil() {
+        run_test(r#"/foo/.match?(nil)"#);
+        run_test(r#"/foo/.match?(nil, 0)"#);
+        run_test(r#"//.match?(nil)"#);
+    }
+
+    #[test]
     fn r#match() {
         run_test(r##"/(.).(.)/.match("foobar", 3).captures"##);
         run_test(r##"/(.).(.)/.match("foobar", -3).captures"##);
