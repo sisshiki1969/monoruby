@@ -216,3 +216,103 @@ fn autoload_private_constant_carries_through_load() {
         "#,
     );
 }
+
+// In `$VERBOSE = true` mode, an autoload whose `require` finished
+// without defining the expected constant must emit the CRuby warning
+// `Expected <file> to define <Owner::Const> but it didn't` to
+// `$stderr.write`. Captures via an IOStub-style replacement so we can
+// assert against the message contents (CRuby prefixes the line with
+// `<file>:<lineno>:`, monoruby does not — both append the warning text
+// itself, so we substring-check rather than equality-check).
+//
+// `run_test_once` because the assertion is order-sensitive: after the
+// first reference, `b.rb` is in `$LOADED_FEATURES`, so re-running the
+// same code in iteration 2 hits the autoload's `rb_feature_p`
+// short-circuit and the warning never fires.
+#[test]
+fn autoload_verbose_warning_on_missing_define() {
+    run_test_once(
+        r#"
+        # IOStub: capture writes through `$stderr.write(s)`.
+        class IOStub
+          def initialize; @buf = String.new; end
+          def write(s); @buf << s.to_s; nil; end
+          def to_s; @buf; end
+        end
+        err = IOStub.new
+        saved_err = $stderr
+        saved_verbose = $VERBOSE
+        $stderr = err
+        $VERBOSE = true
+
+        # `b.rb` is the standard fixture from this directory; it does
+        # not define VerboseAutoload::Bogus, so triggering the autoload
+        # causes the verbose-mode "Expected … but it didn't" warning.
+        module VerboseAutoload
+          autoload :Bogus, File.expand_path("b")
+        end
+        begin
+          VerboseAutoload::Bogus
+        rescue NameError
+          # expected: file failed to define the constant
+        end
+
+        $VERBOSE = saved_verbose
+        $stderr = saved_err
+        captured = err.to_s
+        [captured.include?("Expected"),
+         captured.include?("VerboseAutoload::Bogus"),
+         captured.include?("but it didn't")]
+        "#,
+    );
+}
+
+// Failed `require`: when the file body raises, the canonicalised path
+// must be removed from `$LOADED_FEATURES` so a subsequent `require`
+// of the same file re-runs the body (matches CRuby; this is exactly
+// the path `Globals::remove_loaded_feature` was introduced for in this
+// PR).
+//
+// `run_test` (default 25 iters) is fine here: each iteration ends with
+// `$LOADED_FEATURES` *not* containing the failing path (because the
+// failed-require cleanup removed it), so iteration N+1 starts from the
+// same state as iteration 1.
+#[test]
+fn require_removes_loaded_feature_on_failure() {
+    run_test(
+        r#"
+        require "tmpdir"
+        # Use a per-process unique path so parallel test runs don't
+        # collide on the same file. Both monoruby and CRuby see
+        # different absolute paths, but the test only inspects
+        # *whether* the path is present in $LOADED_FEATURES, not its
+        # exact value.
+        path = File.join(Dir.tmpdir, "monoruby_require_failure_#{Process.pid}.rb")
+        File.write(path, "raise 'boom'\n")
+
+        first = begin
+          require path
+          :no_error
+        rescue RuntimeError => e
+          e.message
+        end
+
+        # `remove_loaded_feature` must have run: a substring scan of
+        # $LOADED_FEATURES turns up nothing matching the file we just
+        # tried to load.
+        in_loaded = $LOADED_FEATURES.any? { |p| p.include?("monoruby_require_failure") }
+
+        # The require is retriable because the feature was removed —
+        # this should re-execute the file (and re-raise).
+        second = begin
+          require path
+          :no_error
+        rescue RuntimeError => e
+          e.message
+        end
+
+        File.unlink(path) rescue nil
+        [first, in_loaded, second]
+        "#,
+    );
+}
