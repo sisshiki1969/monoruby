@@ -459,6 +459,7 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
         },
         E::EucJp => b"euc-jp",
         E::Sjis(_) => b"shift_jis",
+        E::Iso2022Jp => b"iso-2022-jp",
         // Handled by callers as fast paths.
         E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii => return None,
     };
@@ -532,14 +533,18 @@ pub(super) fn transcode_bytes_with_opts(
     if src_enc == dst_enc {
         return Ok(src_bytes.to_vec());
     }
-    // Fast path: 7-bit content + ascii-compatible destination
-    // copies through unchanged. Covers both the "BINARY ASCII →
-    // UTF-8" and "UsAscii → X" cases. Required because
-    // encoding_rs's `us-ascii` → `windows-1252` mapping isn't
-    // what CRuby does, and BINARY isn't a real encoding_rs
-    // encoding.
+    // Fast path: 7-bit content + ascii-compatible source AND
+    // destination copies through unchanged. Covers both the
+    // "BINARY ASCII → UTF-8" and "UsAscii → X" cases. Required
+    // because encoding_rs's `us-ascii` → `windows-1252` mapping
+    // isn't what CRuby does, and BINARY isn't a real encoding_rs
+    // encoding. We require the *source* to also be
+    // ASCII-compatible — `Iso2022Jp` looks like 7-bit input on
+    // the wire (it's a 7-bit encoding), but its bytes carry ESC
+    // sequences that change interpretation, so the identity copy
+    // would silently retag escape codes as ASCII characters.
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
-    if all_ascii && dst_enc.is_ascii_compatible() {
+    if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
         return Ok(src_bytes.to_vec());
     }
     // BINARY → ascii-compat with non-ASCII bytes is "undef":
@@ -1101,6 +1106,7 @@ pub(super) fn encoding_constant_name(enc: Encoding) -> &'static str {
         Encoding::EucJp => "EUC_JP",
         Encoding::Sjis(0) => "SHIFT_JIS",
         Encoding::Sjis(_) => "Windows_31J",
+        Encoding::Iso2022Jp => "ISO_2022_JP",
     }
 }
 

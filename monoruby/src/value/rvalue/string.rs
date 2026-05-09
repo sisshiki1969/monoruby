@@ -34,7 +34,13 @@ impl<'a> Iterator for CharByteIter<'a> {
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
             | Encoding::EucJp
-            | Encoding::Sjis(_) => 1,
+            | Encoding::Sjis(_)
+            // ISO-2022-JP groups bytes 1-at-a-time at the codepoint
+            // iterator level — the actual char-vs-ESC-sequence
+            // chunking happens further up via `encoding_rs`. This
+            // matches the behaviour of `String#bytes.length` ==
+            // `String#bytesize` for stateful encodings.
+            | Encoding::Iso2022Jp => 1,
             Encoding::Utf16Le | Encoding::Utf16Be => 2,
             Encoding::Utf32Le | Encoding::Utf32Be => 4,
             Encoding::Utf8 => {
@@ -114,6 +120,13 @@ pub enum Encoding {
     /// implementation, but the canonical name is preserved). The
     /// `u8` distinguishes the alias for `name()`/`==`.
     Sjis(u8),
+    /// ISO-2022-JP. Stateful 7-bit encoding using ESC sequences
+    /// (`ESC ( B`, `ESC $ B`, `ESC ( J`) to switch between
+    /// ASCII / JIS X 0208 / JIS X 0201 character sets. Not
+    /// ASCII-compatible — a literal `0x42` byte may decode as
+    /// either `'B'` or part of a JIS X 0208 codepoint depending
+    /// on the surrounding ESC state.
+    Iso2022Jp,
 }
 
 impl Encoding {
@@ -124,7 +137,11 @@ impl Encoding {
     pub fn is_ascii_compatible(self) -> bool {
         !matches!(
             self,
-            Self::Utf16Le | Self::Utf16Be | Self::Utf32Le | Self::Utf32Be
+            Self::Utf16Le
+                | Self::Utf16Be
+                | Self::Utf32Le
+                | Self::Utf32Be
+                | Self::Iso2022Jp
         )
     }
 
@@ -174,6 +191,7 @@ impl Encoding {
             // 0 = canonical Shift_JIS, 1 = Windows-31J / CP932.
             Encoding::Sjis(0) => "Shift_JIS",
             Encoding::Sjis(_) => "Windows-31J",
+            Encoding::Iso2022Jp => "ISO-2022-JP",
         }
     }
 
@@ -231,6 +249,22 @@ impl Encoding {
                 }
             }
             Encoding::EucJp | Encoding::Sjis(_) => CodeRange::Valid,
+            // ISO-2022-JP: validate via encoding_rs's decoder so
+            // truncated escape sequences / invalid JIS X 0208
+            // codepoints aren't silently accepted as Valid. The
+            // ASCII-only fast path above already handled the
+            // common (`SevenBit`) case, so we're decoding non-
+            // trivial input here.
+            Encoding::Iso2022Jp => {
+                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
+                    .expect("encoding_rs always supports iso-2022-jp");
+                let (_, had_errors) = enc_rs.decode_without_bom_handling(bytes);
+                if had_errors {
+                    CodeRange::Broken
+                } else {
+                    CodeRange::Valid
+                }
+            }
         }
     }
 
@@ -274,12 +308,11 @@ impl Encoding {
             "ISO_8859_15" | "ISO8859_15" | "LATIN9" => Ok(Encoding::Iso8859(15)),
             "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Iso8859(16)),
 
-            "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932" | "STATELESS_ISO_2022_JP" => {
-                Ok(Encoding::EucJp)
-            }
-            "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" | "ISO_2022_JP" | "ISO2022_JP" => {
-                Ok(Encoding::Sjis(0))
-            }
+            "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "EUC_JP_MS" | "EUC_JP_WIN"
+            | "CP51932" | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
+            "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
+            | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
+            "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
             "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Ok(Encoding::Sjis(1)),
 
             // Other byte-oriented encodings without native support
@@ -751,6 +784,21 @@ impl RStringInner {
             // EUC-JP / Shift_JIS: byte count (no native multibyte
             // decoder yet).
             Encoding::EucJp | Encoding::Sjis(_) => self.content.len(),
+            // ISO-2022-JP: route through `encoding_rs` to get an
+            // accurate count of *characters* (escape sequences
+            // shouldn't count). Falls back to byte length on
+            // decode failure, matching the EucJp/Sjis policy.
+            Encoding::Iso2022Jp => {
+                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
+                    .expect("encoding_rs always supports iso-2022-jp");
+                let (decoded, had_errors) =
+                    enc_rs.decode_without_bom_handling(&self.content);
+                if had_errors {
+                    self.content.len()
+                } else {
+                    decoded.chars().count()
+                }
+            }
         }
     }
 
@@ -979,8 +1027,15 @@ impl RStringInner {
                     }
                 }
                 // No native multibyte decoder; defer to lazy
-                // re-classify on first use.
-                Encoding::UsAscii | Encoding::EucJp | Encoding::Sjis(_) => CodeRange::Unknown,
+                // re-classify on first use. ISO-2022-JP joins this
+                // bucket because the cut points might land inside
+                // an ESC sequence — a sub-range that's syntactically
+                // separate from the parent's escape state and would
+                // need re-decoding to classify.
+                Encoding::UsAscii
+                | Encoding::EucJp
+                | Encoding::Sjis(_)
+                | Encoding::Iso2022Jp => CodeRange::Unknown,
             },
             // Broken parents are never safe to propagate — a sub-
             // range could be Valid (if the broken bytes are outside
@@ -1104,9 +1159,9 @@ impl RStringInner {
             Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => Some(1),
             Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
             Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
-            // EUC-JP / Shift_JIS currently iterate byte-wise too, so
-            // a fixed-1-byte shortcut is fine.
-            Encoding::EucJp | Encoding::Sjis(_) => Some(1),
+            // EUC-JP / Shift_JIS / ISO-2022-JP currently iterate
+            // byte-wise too, so a fixed-1-byte shortcut is fine.
+            Encoding::EucJp | Encoding::Sjis(_) | Encoding::Iso2022Jp => Some(1),
             Encoding::Utf8 => None,
         };
         if let Some(u) = unit {
