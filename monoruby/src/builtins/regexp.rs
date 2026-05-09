@@ -461,7 +461,11 @@ fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
+    let arg0 = lfp.arg(0);
+    if arg0.is_nil() {
+        return Ok(Value::bool(false));
+    }
+    let given = arg0.expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
@@ -985,6 +989,13 @@ mod tests {
         /\A#{SEPARATOR_PAT}?\z/.match?("")
         "#,
         );
+    }
+
+    #[test]
+    fn match_nil() {
+        run_test(r#"/foo/.match?(nil)"#);
+        run_test(r#"/foo/.match?(nil, 0)"#);
+        run_test(r#"//.match?(nil)"#);
     }
 
     #[test]
