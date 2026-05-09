@@ -279,6 +279,66 @@ fn keyword_rest() {
     run_test_error("def f(**a, **b); end");
 }
 
+// Ruby 3.1+ shorthand keyword argument syntax: `foo(handled:)` is
+// equivalent to `foo(handled: handled)`. Prism wraps the implicit value
+// in an `ImplicitNode` that the lowerer must unwrap.
+#[test]
+fn keyword_shorthand() {
+    run_test_with_prelude(
+        r#"
+        handled = 42
+        f(handled:)
+        "#,
+        r#"
+        def f(handled:)
+          handled
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        a = 1
+        b = 2
+        f(a:, b:)
+        "#,
+        r#"
+        def f(a:, b:)
+          [a, b]
+        end
+        "#,
+    );
+    run_test_with_prelude(
+        r#"
+        x = 10
+        z = 30
+        f(1, x:, y: 20, z:)
+        "#,
+        r#"
+        def f(p, x:, y:, z:)
+          [p, x, y, z]
+        end
+        "#,
+    );
+    // Shorthand referencing a method, not a local variable.
+    run_test_with_prelude(
+        r#"
+        f(name:)
+        "#,
+        r#"
+        def name; "ruby"; end
+        def f(name:); name; end
+        "#,
+    );
+    // Hash literal: `{x:, y:}` desugars to `{x: x, y: y}`.
+    run_test(
+        r#"
+        x = "hello"
+        y = 99
+        {x:, y:}
+        "#,
+    );
+}
+
 #[test]
 fn keyword_to_hash() {
     run_test_with_prelude(
