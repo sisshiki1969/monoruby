@@ -1281,7 +1281,14 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     } else {
         let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
-        vm.invoke_block(globals, &proc, &[])
+        // Isolate the eval's cref so toggles like `module_function`,
+        // `private`, … set inside the eval'd source don't leak to
+        // the surrounding class/module body. Mirrors CRuby's
+        // `rb_vm_cref_dup_without_refinements`.
+        let pushed = vm.push_eval_cref();
+        let res = vm.invoke_block(globals, &proc, &[]);
+        vm.pop_eval_cref(pushed);
+        res
     }
 }
 
