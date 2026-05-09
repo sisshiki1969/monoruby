@@ -39,7 +39,15 @@ impl Module {
     ///
     /// class_version is incremented.
     ///
-    pub(crate) fn include_module(&mut self, mut module: Module) -> Result<()> {
+    pub(crate) fn include_module(&mut self, module: Module) -> Result<()> {
+        self.include_or_prepend_module(module, false)
+    }
+
+    fn include_or_prepend_module(
+        &mut self,
+        mut module: Module,
+        for_prepend: bool,
+    ) -> Result<()> {
         if self.check_cyclic(module) {
             return Err(MonorubyErr::argumenterr("cyclic include detected"));
         }
@@ -49,9 +57,36 @@ impl Module {
         // against `self`'s ancestor chain. Invalidate the constant
         // cache so cached lookups re-walk the new chain.
         Globals::const_version_inc();
+        // If the module being included/prepended has its own origin
+        // (i.e. one or more modules were prepended into it), the head
+        // node represents the prepend-most position — its method table
+        // is intentionally empty in CRuby; the module's actual content
+        // lives at the origin iclass. Skip the head and start the walk
+        // at the first iclass of its prepend chain so the resulting
+        // chain order matches CRuby's: prepended modules first, the
+        // module itself last.
+        if module.has_origin() {
+            if let Some(superclass) = module.superclass()
+                && superclass.is_iclass()
+            {
+                module = superclass;
+            } else {
+                return Ok(());
+            }
+        }
         let mut base = *self;
         loop {
-            if !module.is_ancestor_of(*self) {
+            // For prepend: only treat the module as already-an-ancestor
+            // if it's in the prepend region (between head and origin).
+            // CRuby intentionally lets you prepend a module that's also
+            // included down the chain — both iclass entries appear in
+            // ancestors, and method dispatch sees the prepend first.
+            let already_present = if for_prepend {
+                module.is_ancestor_of_before_origin(*self)
+            } else {
+                module.is_ancestor_of(*self)
+            };
+            if !already_present {
                 base.include(module);
             }
             base = base.superclass().unwrap();
@@ -64,6 +99,35 @@ impl Module {
             }
         }
         Ok(())
+    }
+
+    /// Like `is_ancestor_of`, but only checks the prepend region of
+    /// `class` (the chain segment between `class`'s head and its
+    /// origin iclass). Used by `prepend_module` to avoid duplicate
+    /// inserts in the prepend region while still allowing the same
+    /// module to surface again via an existing include further down
+    /// the chain.
+    ///
+    /// Returns true iff `self` (a module) is reachable from `class`
+    /// via super-walk, stopping at `class`'s origin iclass (exclusive).
+    fn is_ancestor_of_before_origin(self, class: Module) -> bool {
+        let origin = class.origin();
+        let mut cur = class;
+        while let Some(superclass) = cur.superclass() {
+            if let Some(o) = origin
+                && superclass.as_val() == o.as_val()
+            {
+                // Reached the origin iclass — stop. Anything past this
+                // point is either `class`'s own methods (origin) or
+                // included modules below origin.
+                return false;
+            }
+            if superclass.id() == self.id() {
+                return true;
+            }
+            cur = superclass;
+        }
+        false
     }
 
     fn include(&mut self, module: Module) {
@@ -117,7 +181,7 @@ impl Module {
             self.superclass = Some(origin);
             self.origin = Some(origin);
         }
-        self.include_module(module)
+        self.include_or_prepend_module(module, true)
     }
 
     pub fn get_real_class(&self) -> Module {

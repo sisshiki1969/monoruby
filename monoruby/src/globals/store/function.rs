@@ -228,6 +228,16 @@ impl Meta {
         self.kind &= !0b100
     }
 
+    /// Set the static `is_proc_method` bit. The runtime wrapper for a
+    /// `FuncKind::Proc` already OR's `PROC_METHOD_MASK` into the LFP at
+    /// call time, but JIT-specialised call sites bypass that wrapper
+    /// and copy the underlying block iseq's static Meta directly. Pre-
+    /// setting the bit here ensures `Lfp::outermost` can detect a
+    /// `define_method` proc body in either call path.
+    fn set_proc_method(&mut self) {
+        self.kind |= 0b0010_0000
+    }
+
     /// True when this frame is a define_method proc-method entry;
     /// `handle_error` treats it as the target for `MethodReturn`.
     pub(crate) fn is_proc_method(&self) -> bool {
@@ -907,6 +917,15 @@ impl FuncInfo {
         self.ext.name
     }
 
+    /// Override the function's reported name. Used by `Module#define_method`
+    /// to label a proc-method with its installed method name (otherwise the
+    /// FuncInfo's name remains the placeholder `"proc"`, which makes
+    /// `find_super` look up the wrong identifier and surface a misleading
+    /// `NoMethodError`).
+    pub(crate) fn set_name(&mut self, name: IdentId) {
+        self.ext.name = Some(name);
+    }
+
     ///
     /// Whether this function is a method.
     ///
@@ -934,7 +953,7 @@ impl FuncInfo {
         &self.ext.owner
     }
 
-    pub(super) fn set_owner_class(&mut self, class: ClassId) {
+    pub(crate) fn set_owner_class(&mut self, class: ClassId) {
         self.ext.owner.push(class);
     }
 
@@ -951,6 +970,14 @@ impl FuncInfo {
 
     pub(crate) fn set_method_style(&mut self) {
         self.data.meta.set_method_style();
+    }
+
+    /// Mark the underlying iseq's static Meta as a `define_method`
+    /// proc-method body. See `Meta::set_proc_method` — this is what
+    /// makes `Lfp::outermost` (and thus `super`) detect the method
+    /// boundary even when the JIT inlines the call.
+    pub(crate) fn set_proc_method(&mut self) {
+        self.data.meta.set_proc_method();
     }
 
     ///
