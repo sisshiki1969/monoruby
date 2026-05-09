@@ -95,6 +95,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
+    globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
@@ -1609,6 +1611,48 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
     globals.store[fid]
         .name()
         .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
+}
+
+///
+/// Kernel.#catch
+///
+/// - catch(tag = Object.new) { |tag| ... } -> object
+///
+#[monoruby_builtin]
+fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let tag = match lfp.try_arg(0) {
+        Some(v) => v,
+        None => Value::object(OBJECT_CLASS),
+    };
+    let bh = lfp.expect_block()?;
+    match vm.invoke_block_once(globals, bh, &[tag]) {
+        Ok(val) => Ok(val),
+        Err(err) => {
+            if let MonorubyErrKind::Throw(throw_tag, throw_val) = err.kind() {
+                if tag.id() == throw_tag.id() {
+                    return Ok(*throw_val);
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+///
+/// Kernel.#throw
+///
+/// - throw(tag, value = nil) -> void
+///
+#[monoruby_builtin]
+fn throw_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let tag = lfp.arg(0);
+    let value = lfp.try_arg(1).unwrap_or(Value::nil());
+    Err(MonorubyErr::throw(tag, value))
 }
 
 ///
@@ -4212,5 +4256,94 @@ mod tests {
     #[test]
     fn kernel_format_error() {
         run_test_error("sprintf()");
+    }
+
+    // --- tests for Kernel#catch / Kernel#throw added in PR #440 ---
+
+    #[test]
+    fn kernel_catch_basic() {
+        // Matching tag → catch returns the throw value.
+        run_test("catch(:done) { throw :done, 42 }");
+        // No throw → catch returns the block's value.
+        run_test("catch(:done) { 99 }");
+        // throw with no value defaults to nil.
+        run_test("catch(:done) { throw :done }.inspect");
+    }
+
+    #[test]
+    fn kernel_catch_yields_tag() {
+        // The block receives the tag as its argument.
+        run_test("catch(:t) { |x| x }");
+        // catch with no argument allocates a fresh Object as the tag and
+        // yields it; throwing that exact object lets catch return the value.
+        run_test("catch { |t| throw t, :ok }");
+    }
+
+    #[test]
+    fn kernel_throw_across_method() {
+        // throw unwinds across method boundaries up to the matching catch.
+        run_test(
+            r#"
+            def emit(tag); throw tag, :from_emit; end
+            catch(:x) { emit(:x) }
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_runs_ensure_not_rescue() {
+        // `ensure` runs on the throw path; `rescue` does NOT intercept it.
+        run_test(
+            r#"
+            log = []
+            result = catch(:done) do
+              begin
+                throw :done, 42
+              rescue => e
+                log << "rescued: #{e.class}"
+              ensure
+                log << "ensure"
+              end
+            end
+            [result, log]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_nested_different_tags() {
+        // Inner catch's tag does not match → the throw skips it and is
+        // intercepted by the outer catch.
+        run_test(
+            r#"
+            catch(:outer) do
+              catch(:inner) do
+                throw :outer, "to_outer"
+              end
+              "inner_returned"
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_catch_nested_same_tag() {
+        // Same symbolic tag at both levels → the innermost matching catch
+        // wins; the outer catch then completes normally with the value of
+        // the expression that follows it.
+        run_test(
+            r#"
+            catch(:t) do
+              catch(:t) { throw :t, "innermost" }
+              "outer_after_inner"
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_uncaught_throw() {
+        // Throwing a tag with no matching catch raises an error.
+        run_test_error("throw :nope");
     }
 }

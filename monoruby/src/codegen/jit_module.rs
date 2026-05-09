@@ -370,6 +370,13 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
+            if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
+                return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    ErrorReturn::goto(bc_base + ensure)
+                } else {
+                    ErrorReturn::return_err()
+                };
+            }
             let sourceinfo = info.sourceinfo.clone();
             let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
@@ -401,6 +408,9 @@ pub(super) extern "C" fn handle_error(
                 } else {
                     ErrorReturn::return_err()
                 };
+            }
+            if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
+                return ErrorReturn::return_err();
             }
             vm.push_internal_error_location(meta.func_id());
         }
