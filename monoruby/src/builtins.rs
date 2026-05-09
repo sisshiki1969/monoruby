@@ -6,6 +6,8 @@ mod bool_class;
 mod class;
 mod dir;
 mod encoding;
+#[cfg(test)]
+mod encoding_tests;
 pub(crate) mod enumerator;
 mod exception;
 mod false_class;

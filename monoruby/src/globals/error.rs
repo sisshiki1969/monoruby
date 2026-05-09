@@ -572,6 +572,38 @@ impl MonorubyErr {
         MonorubyErr::runtimeerr(msg)
     }
 
+    /// Build an `Encoding::<SubclassName>` error. Falls back to
+    /// `RuntimeError` when the subclass constant isn't registered yet
+    /// (e.g. very early during boot).
+    fn encoding_subclass_error(store: &Store, subclass: &str, msg: String) -> MonorubyErr {
+        if let Some(enc_const) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING) {
+            if let Some(sub_const) = store
+                .get_constant_noautoload(enc_const.as_class_id(), IdentId::get_id(subclass))
+            {
+                return MonorubyErr::new(MonorubyErrKind::Other(sub_const.as_class_id()), msg);
+            }
+        }
+        MonorubyErr::runtimeerr(msg)
+    }
+
+    /// `Encoding::ConverterNotFoundError` — raised when the source /
+    /// destination encoding pair has no transcoder available.
+    pub(crate) fn converter_not_found_error(store: &Store, msg: String) -> MonorubyErr {
+        Self::encoding_subclass_error(store, "ConverterNotFoundError", msg)
+    }
+
+    /// `Encoding::UndefinedConversionError` — raised when a source
+    /// character cannot be represented in the destination encoding.
+    pub(crate) fn undefined_conversion_error(store: &Store, msg: String) -> MonorubyErr {
+        Self::encoding_subclass_error(store, "UndefinedConversionError", msg)
+    }
+
+    /// `Encoding::InvalidByteSequenceError` — raised when the input
+    /// bytes are ill-formed under the source encoding.
+    pub(crate) fn invalid_byte_sequence_error(store: &Store, msg: String) -> MonorubyErr {
+        Self::encoding_subclass_error(store, "InvalidByteSequenceError", msg)
+    }
+
     pub fn cant_convert_error_ary(store: &Store, v: Value, result: Value) -> MonorubyErr {
         Self::cant_convert_error(store, v, result, "Array", IdentId::TO_ARY)
     }

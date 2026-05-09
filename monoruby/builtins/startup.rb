@@ -826,6 +826,7 @@ class Encoding
   class CompatibilityError < EncodingError; end
   class InvalidByteSequenceError < EncodingError; end
   class UndefinedConversionError < EncodingError; end
+  class ConverterNotFoundError < EncodingError; end
   class Converter; end
 
   def self.default_internal
