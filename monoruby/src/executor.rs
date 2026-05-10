@@ -2160,8 +2160,18 @@ impl Executor {
     }
 
     pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
+        // `MatchData#[]` (and therefore `Regexp.last_match(n)`)
+        // negative-indexes within `captures` only — `sp_matches[0]`
+        // (the full match) is *not* reachable through a negative
+        // index. For `(\w)(\w)(\w)` matched against "abc",
+        // `last_match(-3)` is "a" but `last_match(-4)` is nil even
+        // though `to_a` has 4 entries.
         if nth < 0 {
-            nth += self.sp_matches.len() as i64
+            let captures_len = self.sp_matches.len() as i64 - 1;
+            if -nth > captures_len {
+                return None;
+            }
+            nth += self.sp_matches.len() as i64;
         }
         if nth >= 0
             && let Some(Some(s)) = self.sp_matches.get(nth as usize)
