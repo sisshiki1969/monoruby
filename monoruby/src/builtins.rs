@@ -6,6 +6,7 @@ mod bool_class;
 mod class;
 mod dir;
 mod encoding;
+pub(crate) mod errno;
 #[cfg(test)]
 mod encoding_tests;
 pub(crate) mod enumerator;
@@ -68,6 +69,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 
     let kernel = kernel::init(globals);
     exception::init(globals);
+    errno::init(globals);
     numeric::init(globals);
     string::init(globals);
     array::init(globals);
