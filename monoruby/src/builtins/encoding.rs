@@ -2856,61 +2856,148 @@ fn enc_compatible(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let result = if let (Some(a), Some(b)) =
-        (lfp.arg(0).is_rstring_inner(), lfp.arg(1).is_rstring_inner())
-    {
-        // String / String: route through the inner-aware
-        // `compatible_encoding` so the empty-side rules
-        // (`compatible?("", x)` adopts `x`'s encoding even when
-        // `x.encoding` isn't ASCII-compatible) are honoured.
-        // `Encoding::compatible` alone takes only the
-        // `(encoding, code_range)` pair and can't distinguish
-        // empty from "ASCII-only but non-empty".
-        a.compatible_encoding(b)
-    } else {
-        let lhs = resolve_compat_arg(globals, lfp.arg(0));
-        let rhs = resolve_compat_arg(globals, lfp.arg(1));
-        let (a_enc, a_cr) = match lhs {
-            Some(p) => p,
-            None => return Ok(Value::nil()),
-        };
-        let (b_enc, b_cr) = match rhs {
-            Some(p) => p,
-            None => return Ok(Value::nil()),
-        };
-        Encoding::compatible(a_enc, a_cr, b_enc, b_cr)
-    };
+    let a = lfp.arg(0);
+    let b = lfp.arg(1);
+    let result = compute_encoding_compatibility(globals, a, b);
     match result {
-        Some(enc) => {
-            let const_name = encoding_constant_name(enc);
-            let enc_class = encoding_class(globals);
-            Ok(globals
-                .store
-                .get_constant_noautoload(enc_class, IdentId::get_id(const_name))
-                .unwrap_or(Value::nil()))
-        }
+        Some(enc) => Ok(encoding_value_for(globals, enc)),
         None => Ok(Value::nil()),
     }
 }
 
-/// Resolve a value (`String` or `Encoding` object) to the
-/// `(encoding, code_range)` pair `Encoding::compatible` consumes.
-/// Other types return `None`, which the caller treats as
-/// "incompatible".
-fn resolve_compat_arg(globals: &Globals, v: Value) -> Option<(Encoding, CodeRange)> {
+/// Resolve `Encoding.compatible?(a, b)` to either an `Encoding` or
+/// `None` (meaning the spec returns `nil`). Mirrors CRuby's
+/// `rb_enc_compatible` (string/symbol/regexp) plus the
+/// `rb_enc_check`-style Encoding/Encoding pair handling — this is
+/// the truth table that `core/encoding/compatible_spec.rb` exercises.
+fn compute_encoding_compatibility(
+    globals: &Globals,
+    a: Value,
+    b: Value,
+) -> Option<Encoding> {
+    let enc_class = encoding_class(globals);
+    // `Encoding` × `Encoding` follows a different rule set: only the
+    // "second is US-ASCII" exception, no ASCII-only-content
+    // accommodation (since Encoding objects carry no bytes). Dummy
+    // encodings are rejected outright (except when both sides are
+    // the same dummy — `compatible?(UTF_7, UTF_7) == UTF_7`).
+    if a.class() == enc_class && b.class() == enc_class {
+        let a_enc = pure_encoding_value(globals, a)?;
+        let b_enc = pure_encoding_value(globals, b)?;
+        return compatible_encoding_pair(a_enc, b_enc);
+    }
+    // String / Symbol / Regexp: route through the "value with
+    // bytes" view. Anything else (Object, nil, …) → nil.
+    let lhs = encoded_view(globals, a)?;
+    let rhs = encoded_view(globals, b)?;
+    let l_inner = RStringInner::from_encoding_scanned(&lhs.bytes, lhs.encoding);
+    let r_inner = RStringInner::from_encoding_scanned(&rhs.bytes, rhs.encoding);
+    l_inner.compatible_encoding(&r_inner)
+}
+
+/// A `(bytes, encoding)` view of a value that carries an encoding.
+/// String / Symbol / Regexp resolve to one; everything else doesn't.
+struct EncodedView {
+    bytes: Vec<u8>,
+    encoding: Encoding,
+}
+
+fn encoded_view(globals: &Globals, v: Value) -> Option<EncodedView> {
     if let Some(s) = v.is_rstring_inner() {
-        return Some((s.encoding(), s.code_range()));
+        return Some(EncodedView {
+            bytes: s.as_bytes().to_vec(),
+            encoding: s.encoding(),
+        });
+    }
+    if let Some(sym) = v.try_symbol() {
+        let ident = sym.get_ident_name_clone();
+        let (bytes, encoding) = match &ident {
+            crate::id_table::IdentName::Utf8(s) => {
+                let enc = if s.is_ascii() {
+                    Encoding::UsAscii
+                } else {
+                    Encoding::Utf8
+                };
+                (s.as_bytes().to_vec(), enc)
+            }
+            crate::id_table::IdentName::Bytes(b) => (b.clone(), Encoding::Ascii8),
+        };
+        return Some(EncodedView { bytes, encoding });
+    }
+    if let Some(re) = v.is_regex() {
+        let src = re.as_str().as_bytes().to_vec();
+        return Some(EncodedView {
+            bytes: src,
+            encoding: re.declared_encoding(),
+        });
     }
     if v.class() == encoding_class(globals) {
-        let name = globals.store.get_ivar(v, IdentId::_ENCODING)?;
-        let s = name.is_str()?;
-        let enc = Encoding::try_from_str(s).ok()?;
-        // Pure Encoding object — pretend the byte stream is empty,
-        // so the code range is SevenBit (compatible with anything
-        // ASCII-compatible).
-        return Some((enc, CodeRange::SevenBit));
+        // Bare `Encoding` object — treat as an empty string in
+        // that encoding. CRuby's String/Encoding combination
+        // matches `String#<<("".encode(enc))` semantics: the
+        // encoding alone tags the (empty) byte stream so the
+        // empty-side rules in `compatible_encoding` produce
+        // the right result.
+        if let Some(enc) = pure_encoding_value(globals, v) {
+            return Some(EncodedView {
+                bytes: Vec::new(),
+                encoding: enc,
+            });
+        }
     }
     None
+}
+
+fn pure_encoding_value(globals: &Globals, v: Value) -> Option<Encoding> {
+    let name = globals.store.get_ivar(v, IdentId::_ENCODING)?;
+    let s = name.is_str()?;
+    Encoding::try_from_str(s).ok()
+}
+
+/// CRuby's `Encoding × Encoding` compatibility rule:
+///   - identical encoding → that encoding (even if dummy);
+///   - either side dummy → nil;
+///   - second is US-ASCII (and first isn't) → first;
+///   - otherwise (two different non-US-ASCII encodings) → nil.
+///
+/// Used both by the bare-`Encoding` case in
+/// `Encoding.compatible?(enc1, enc2)` and by various
+/// `Encoding::CompatibilityError`-raising sites that work with
+/// abstract encoding pairs.
+pub(crate) fn compatible_encoding_pair(a: Encoding, b: Encoding) -> Option<Encoding> {
+    if a == b {
+        return Some(a);
+    }
+    if is_cruby_dummy(a) || is_cruby_dummy(b) {
+        return None;
+    }
+    if b == Encoding::UsAscii {
+        return Some(a);
+    }
+    None
+}
+
+/// True for the encodings CRuby flags as "dummy" (no decoder
+/// available). Narrower than `Encoding::is_dummy` — the latter
+/// covers any encoding monoruby doesn't decode natively, which is
+/// too eager (ISO-8859 / EUC-JP / SJIS have decoders even if
+/// monoruby doesn't use them in compat checks).
+pub(crate) fn is_cruby_dummy(enc: Encoding) -> bool {
+    matches!(enc, Encoding::Iso2022Jp)
+        || is_cruby_dummy_name(enc.name())
+}
+
+/// Materialise an `Encoding` Value (the `Encoding::NAME` constant)
+/// from an internal `Encoding`. Falls back to `nil` if the constant
+/// isn't registered (shouldn't happen in practice — every encoding
+/// monoruby tracks has a corresponding `Encoding::*` constant).
+fn encoding_value_for(globals: &Globals, enc: Encoding) -> Value {
+    let const_name = encoding_constant_name(enc);
+    let enc_class = encoding_class(globals);
+    globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::get_id(const_name))
+        .unwrap_or(Value::nil())
 }
 
 ///
@@ -4260,5 +4347,97 @@ mod tests {
               raise unless info[2] == "ISO-8859-1"
             "#,
         );
+    }
+
+    // ----- E1: Encoding.compatible? matrix -----
+
+    #[test]
+    fn compatible_string_string_basic() {
+        // Two strings same encoding → that encoding.
+        run_test(r#"Encoding.compatible?("abc", "def").to_s"#);
+        // ASCII-only UTF-8 vs ASCII-only US-ASCII → US-ASCII (right's
+        // when right has US-ASCII, both 7-bit).
+        run_test(
+            r#"
+              a = "abc".encode("us-ascii")
+              b = "def".encode("us-ascii")
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+        // UTF-8 7-bit + Shift_JIS 7-bit → first wins (UTF-8).
+        run_test(
+            r#"
+              a = "abc".dup.force_encoding("UTF-8")
+              b = "def".dup.force_encoding("Shift_JIS")
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn compatible_with_empty_string() {
+        // Both empty: left wins unconditionally.
+        run_test(
+            r#"
+              a = "".dup.force_encoding("UTF-8")
+              b = "".dup.force_encoding("US-ASCII")
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+        run_test(
+            r#"
+              a = "".dup.force_encoding("UTF-16BE")
+              b = "".dup.force_encoding("US-ASCII")
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+        // One empty, other 7-bit ASCII: left wins.
+        run_test(
+            r#"
+              a = "".dup.force_encoding("UTF-8")
+              b = "abc".dup.force_encoding("US-ASCII")
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+        // Empty + non-ASCII content: non-empty side's encoding wins.
+        run_test(
+            r#"
+              a = "".dup.force_encoding("UTF-8")
+              b = "café"
+              Encoding.compatible?(a, b).to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn compatible_encoding_pair() {
+        // Encoding × Encoding pair: same encoding round-trips.
+        run_test(r#"Encoding.compatible?(Encoding::UTF_8, Encoding::UTF_8).to_s"#);
+        // Encoding × Encoding: second is US-ASCII → first wins.
+        run_test(r#"Encoding.compatible?(Encoding::UTF_8, Encoding::US_ASCII).to_s"#);
+        // Encoding × Encoding: two distinct non-US-ASCII → nil.
+        run_test(r#"Encoding.compatible?(Encoding::UTF_8, Encoding::EUC_JP).inspect"#);
+    }
+
+    #[test]
+    fn compatible_with_object_returns_nil() {
+        // Non-encoding-aware values yield nil per spec.
+        run_test(r#"Encoding.compatible?(Object.new, "abc").inspect"#);
+        run_test(r#"Encoding.compatible?(nil, nil).inspect"#);
+        run_test(r#"Encoding.compatible?("abc", Object.new).inspect"#);
+        run_test(r#"Encoding.compatible?(:sym, Object.new).inspect"#);
+    }
+
+    #[test]
+    fn compatible_with_symbol() {
+        // Symbol pairs work like Strings of the symbol's name.
+        run_test(r#"Encoding.compatible?(:abc, :def).to_s"#);
+    }
+
+    #[test]
+    fn compatible_with_regexp() {
+        // Regexp pairs use the declared encoding of the source.
+        run_test(r#"Encoding.compatible?(/abc/, /def/).to_s"#);
+        run_test(r#"Encoding.compatible?("abc", /def/).to_s"#);
     }
 }

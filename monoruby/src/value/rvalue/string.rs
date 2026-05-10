@@ -820,34 +820,49 @@ impl RStringInner {
     /// Returns `None` if the two encodings are not compatible —
     /// callers should raise `Encoding::CompatibilityError`.
     pub fn compatible_encoding(&self, other: &Self) -> Option<Encoding> {
-        // CRuby's `rb_enc_compatible` empty-side rules:
-        //   - both empty → self's encoding (left wins).
-        //   - empty self, 7-bit other AND self is ASCII-compatible
-        //     → self's encoding (`"".encode("UTF-8") << "hello".force_encoding(BINARY)"`
-        //     keeps UTF-8).
-        //   - otherwise (one side empty) → the non-empty side's
-        //     encoding wins (matters for ASCII-incompatible enc on
-        //     the empty side, e.g.
-        //     `"".force_encoding("UTF-16LE") + "abc"` → UTF-8).
-        if self.content.is_empty() {
-            if other.content.is_empty() {
-                return Some(self.encoding());
-            }
-            if matches!(other.code_range(), CodeRange::SevenBit)
-                && self.encoding().is_ascii_compatible()
+        // Equal encodings always compatible (even dummy / non-ASCII-
+        // compatible — `"".force_encoding("UTF-7") +
+        // "".force_encoding("UTF-7")` keeps UTF-7).
+        if self.encoding() == other.encoding() {
+            return Some(self.encoding());
+        }
+        let self_empty = self.content.is_empty();
+        let other_empty = other.content.is_empty();
+        // Both empty: left wins unconditionally (CRuby preserves
+        // the receiver's declared encoding when both sides carry
+        // no bytes — even when the encodings are non-ASCII-compat
+        // or dummy, e.g. `"".encode("UTF-16BE") << "".encode("US-ASCII")`
+        // ⇒ UTF-16BE).
+        if self_empty && other_empty {
+            return Some(self.encoding());
+        }
+        // One side empty (E), other non-empty (N) — CRuby's
+        // `rb_enc_compatible` rule:
+        //   - If N is 7-bit ASCII-only AND E.encoding is
+        //     ASCII-compatible → the *left*-most encoding wins.
+        //   - Otherwise → N's encoding wins (covers both "N has
+        //     non-ASCII content" and "E is non-ASCII-compat").
+        // The "left wins on 7-bit" branch matches behaviour like
+        // `"".encode("UTF-8") << "abc".encode("US-ASCII")` ⇒ UTF-8
+        // and its mirror `"abc".encode("US-ASCII") << "".encode("UTF-8")`
+        // ⇒ US-ASCII.
+        if self_empty {
+            if self.encoding().is_ascii_compatible()
+                && matches!(other.code_range(), CodeRange::SevenBit)
             {
                 return Some(self.encoding());
             }
             return Some(other.encoding());
         }
-        if other.content.is_empty() {
-            if matches!(self.code_range(), CodeRange::SevenBit)
-                && other.encoding().is_ascii_compatible()
+        if other_empty {
+            if other.encoding().is_ascii_compatible()
+                && matches!(self.code_range(), CodeRange::SevenBit)
             {
-                return Some(other.encoding());
+                return Some(self.encoding());
             }
             return Some(self.encoding());
         }
+        // Both non-empty: route through the encoding-only rule.
         Encoding::compatible(
             self.encoding(),
             self.code_range(),

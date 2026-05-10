@@ -347,7 +347,15 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let lhs = self_.as_rstring_inner();
     let rhs = lfp.arg(0);
     if let Some(rhs_inner) = rhs.is_rstring_inner() {
-        return Ok(Value::bool(lhs == rhs_inner));
+        // CRuby `==` is content-equal AND encoding-compatible. Two
+        // strings with identical bytes but encodings that can't be
+        // negotiated (e.g. UTF-8 + UTF-32LE) compare *unequal*. The
+        // empty-string special case in `compatible_encoding`
+        // already handles `"".compat("".encode("ISO-2022-JP"))`.
+        if lhs != rhs_inner {
+            return Ok(Value::bool(false));
+        }
+        return Ok(Value::bool(lhs.compatible_encoding(&rhs_inner).is_some()));
     }
     // CRuby's `String#==` short-circuits on `to_str`: if the rhs
     // *responds to* `to_str`, dispatch to `rhs == self` and let the
@@ -450,19 +458,25 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn casecmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    let rhs_inner = if let Some(inner) = rhs.is_rstring_inner() {
-        inner.as_bytes().to_vec()
+    // CRuby returns nil if the receiver isn't string-like; otherwise
+    // returns nil for any pair whose encodings can't be negotiated.
+    let rhs_owned;
+    let rhs_inner_ref = if let Some(inner) = rhs.is_rstring_inner() {
+        inner
     } else if let Ok(s) = rhs.coerce_to_rstring(vm, globals) {
-        s.as_bytes().to_vec()
+        rhs_owned = s;
+        &rhs_owned
     } else {
         return Ok(Value::nil());
     };
     let lhs_inner = lhs.as_rstring_inner();
-    // ASCII case-insensitive byte comparison (matches CRuby behavior)
+    if lhs_inner.compatible_encoding(rhs_inner_ref).is_none() {
+        return Ok(Value::nil());
+    }
     let ord = lhs_inner
         .iter()
         .map(|b| b.to_ascii_lowercase())
-        .cmp(rhs_inner.iter().map(|b| b.to_ascii_lowercase()));
+        .cmp(rhs_inner_ref.iter().map(|b| b.to_ascii_lowercase()));
     Ok(Value::from_ord(ord))
 }
 
@@ -1545,6 +1559,11 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         0
     };
+    // Element constructor that copies the receiver's encoding tag
+    // onto each split fragment. Skips going through `Value::string`
+    // (which would default to UTF-8) so an EUC-JP / SJIS receiver
+    // gets back fragments tagged with its own encoding.
+    let mk = |s: &str| Value::string_from_str_with_encoding_of(s, self_);
     let arg0 = lfp.try_arg(0).unwrap_or(Value::string_from_str(" "));
     if let Some(sep_inner) = arg0.is_rstring_inner() {
         let sep = sep_inner.check_utf8()?;
@@ -1559,14 +1578,14 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             let v: Vec<Value> = if lim <= 0 || (lim as usize) >= chars.len() {
                 let lim_pos = if lim > 0 { Some(lim as usize) } else { None };
                 let chars_len = chars.len();
-                let mut v: Vec<Value> = chars.into_iter().map(Value::string_from_str).collect();
+                let mut v: Vec<Value> = chars.into_iter().map(mk).collect();
                 // Trailing empty field is added when:
                 //   * lim is negative, or
                 //   * lim is positive and strictly greater than the
                 //     number of characters (so we still have "room"
                 //     in the limit).
                 if lim < 0 || matches!(lim_pos, Some(l) if l > chars_len) {
-                    v.push(Value::string_from_str(""));
+                    v.push(mk(""));
                 }
                 v
             } else {
@@ -1574,13 +1593,13 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 let mut v: Vec<Value> = chars
                     .iter()
                     .take(take)
-                    .map(|s| Value::string_from_str(s))
+                    .map(|s| mk(s))
                     .collect();
                 let tail_start = chars
                     .get(take)
                     .map(|s| s.as_ptr() as usize - string.as_ptr() as usize)
                     .unwrap_or(string.len());
-                v.push(Value::string_from_str(&string[tail_start..]));
+                v.push(mk(&string[tail_start..]));
                 v
             };
             return match lfp.block() {
@@ -1600,10 +1619,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
                     let mut v: Vec<_> = string
                         .split_ascii_whitespace()
-                        .map(Value::string_from_str)
+                        .map(mk)
                         .collect();
                     if end_with {
-                        v.push(Value::string_from_str(""))
+                        v.push(mk(""))
                     }
                     v
                 }
@@ -1616,17 +1635,17 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                             break;
                         }
                     }
-                    vec.into_iter().map(Value::string_from_str).collect()
+                    vec.into_iter().map(mk).collect()
                 }
                 _ => string
                     .trim_start()
                     .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
                     .map(|s| s.trim_start())
-                    .map(Value::string_from_str)
+                    .map(mk)
                     .collect(),
             }
         } else if lim < 0 {
-            string.split(sep).map(Value::string_from_str).collect()
+            string.split(sep).map(mk).collect()
         } else if lim == 0 {
             let mut vec: Vec<&str> = string.split(sep).collect();
             while let Some(s) = vec.last() {
@@ -1636,11 +1655,11 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     break;
                 }
             }
-            vec.into_iter().map(Value::string_from_str).collect()
+            vec.into_iter().map(mk).collect()
         } else {
             string
                 .splitn(lim as usize, sep)
-                .map(Value::string_from_str)
+                .map(mk)
                 .collect()
         };
         match lfp.block() {
@@ -1701,7 +1720,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 }
             }
         }
-        let iter = res.into_iter().map(|r| Value::string_from_str(&string[r]));
+        let iter = res.into_iter().map(|r| mk(&string[r]));
         match lfp.block() {
             Some(bh) => {
                 vm.invoke_block_iter1(globals, bh, iter)?;
@@ -1718,10 +1737,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
                     let mut v: Vec<_> = string
                         .split_ascii_whitespace()
-                        .map(Value::string_from_str)
+                        .map(mk)
                         .collect();
                     if end_with {
-                        v.push(Value::string_from_str(""))
+                        v.push(mk(""))
                     }
                     v
                 }
@@ -1734,19 +1753,19 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                             break;
                         }
                     }
-                    vec.into_iter().map(Value::string_from_str).collect()
+                    vec.into_iter().map(mk).collect()
                 }
                 _ => string
                     .trim_start()
                     .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
                     .map(|s| s.trim_start())
-                    .map(Value::string_from_str)
+                    .map(mk)
                     .collect(),
             }
         } else if lim < 0 {
             string
                 .split(&*coerced)
-                .map(Value::string_from_str)
+                .map(mk)
                 .collect()
         } else if lim == 0 {
             let mut vec: Vec<&str> = string.split(&*coerced).collect();
@@ -1757,11 +1776,11 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     break;
                 }
             }
-            vec.into_iter().map(Value::string_from_str).collect()
+            vec.into_iter().map(mk).collect()
         } else {
             string
                 .splitn(lim as usize, &*coerced)
-                .map(Value::string_from_str)
+                .map(mk)
                 .collect()
         };
         match lfp.block() {
@@ -2152,7 +2171,9 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     require_sub_block_or_replacement(&lfp, "sub")?;
-    let (res, _) = sub_main(vm, globals, lfp.self_val(), lfp)?;
+    let self_ = lfp.self_val();
+    let (mut res, _) = sub_main(vm, globals, self_, lfp)?;
+    apply_template_encoding(&mut res, self_);
     Ok(Value::string_from_inner(res))
 }
 
@@ -2168,10 +2189,22 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     require_sub_block_or_replacement(&lfp, "sub!")?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
-    let (res, changed) = sub_main(vm, globals, self_, lfp)?;
+    let (mut res, changed) = sub_main(vm, globals, self_, lfp)?;
+    apply_template_encoding(&mut res, self_);
     self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
+}
+
+/// Re-tag `result`'s encoding to match `template`'s. The string
+/// helpers (`replace_all`, `replace_one`, etc.) build their output
+/// `RStringInner` as UTF-8 by default; this restores the original
+/// receiver's declared encoding so `gsub`/`sub`/`scan` results
+/// inherit it instead of silently switching to UTF-8.
+fn apply_template_encoding(result: &mut RStringInner, template: Value) {
+    if let Some(t) = template.is_rstring_inner() {
+        result.set_encoding(t.encoding());
+    }
 }
 
 /// `String#sub` / `#sub!` requires either a block or a replacement
@@ -2264,7 +2297,9 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
             pc,
         );
     }
-    let (res, _) = gsub_main(vm, globals, lfp.self_val(), lfp)?;
+    let self_ = lfp.self_val();
+    let (mut res, _) = gsub_main(vm, globals, self_, lfp)?;
+    apply_template_encoding(&mut res, self_);
     Ok(Value::string_from_inner(res))
 }
 
@@ -2288,7 +2323,8 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     }
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
-    let (res, changed) = gsub_main(vm, globals, self_, lfp)?;
+    let (mut res, changed) = gsub_main(vm, globals, self_, lfp)?;
+    apply_template_encoding(&mut res, self_);
     self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
@@ -2349,13 +2385,14 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         coerced_re = RegexpInner::from_escaped(&coerced)?;
         &coerced_re
     };
+    let result_enc = self_.is_rstring_inner().map(|r| r.encoding());
     match lfp.block() {
         None => {
-            let vec = re.scan(vm, given)?;
+            let vec = re.scan(vm, given, result_enc)?;
             Ok(Value::array_from_vec(vec))
         }
         Some(block) => {
-            scan_with_block(vm, globals, re, given, block)?;
+            scan_with_block(vm, globals, re, given, block, result_enc)?;
             Ok(lfp.self_val())
         }
     }
@@ -2367,19 +2404,24 @@ fn scan_with_block(
     re: &RegexpInner,
     given: &str,
     block: BlockHandler,
+    result_enc: Option<Encoding>,
 ) -> Result<()> {
     // We must own the string since `given` borrows from self_val,
     // and invoke_block may mutate self_val.
     let given = given.to_string();
     let data = vm.get_block_data(globals, block)?;
     vm.clear_capture_special_variables();
+    let str_with_enc = |s: &str| match result_enc {
+        Some(e) => Value::string_from_inner(RStringInner::from_encoding_scanned(s.as_bytes(), e)),
+        None => Value::string(s.to_string()),
+    };
     for cap in re.captures_iter(&given) {
         let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
         vm.save_capture_special_variables(&cap, &given);
         match cap.len() {
             0 => unreachable!(),
             1 => {
-                let val = Value::string(cap.get(0).unwrap().to_string());
+                let val = str_with_enc(cap.get(0).unwrap().as_str());
                 vm.invoke_block(globals, &data, &[val])?;
             }
             len => {
@@ -2387,7 +2429,7 @@ fn scan_with_block(
                 for i in 1..len {
                     match cap.get(i) {
                         Some(m) => {
-                            vec.push(Value::string(m.as_str().to_string()));
+                            vec.push(str_with_enc(m.as_str()));
                         }
                         None => vec.push(Value::nil()),
                     }
@@ -2968,10 +3010,13 @@ fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Ok(Value::string(lhs.to_string()));
+        return Ok(Value::string_from_str_with_encoding_of(lhs, self_));
     }
     let tail = width as usize - str_len;
-    Ok(Value::string(format!("{}{}", lhs, gen_pad(padding, tail))))
+    Ok(Value::string_from_str_with_encoding_of(
+        &format!("{}{}", lhs, gen_pad(padding, tail)),
+        self_,
+    ))
 }
 
 ///
@@ -2998,10 +3043,13 @@ fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Ok(Value::string(lhs.to_string()));
+        return Ok(Value::string_from_str_with_encoding_of(lhs, self_));
     }
     let tail = width as usize - str_len;
-    Ok(Value::string(format!("{}{}", gen_pad(padding, tail), lhs)))
+    Ok(Value::string_from_str_with_encoding_of(
+        &format!("{}{}", gen_pad(padding, tail), lhs),
+        self_,
+    ))
 }
 
 ///
@@ -4158,9 +4206,10 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // output is well-formed UTF-8 by construction; pre-scan it so
     // the cr lands as SevenBit/Valid up front and the next access
     // doesn't have to walk the buffer again.
-    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
-        apply_case(s, CaseOp::Upcase, mode),
-    )))
+    Ok(Value::string_from_str_with_encoding_of(
+        &apply_case(s, CaseOp::Upcase, mode),
+        self_val,
+    ))
 }
 
 ///
@@ -4177,7 +4226,11 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Upcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
+    let enc = self_val
+        .is_rstring_inner()
+        .map(|r| r.encoding())
+        .unwrap_or(crate::value::Encoding::Utf8);
+    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
 
     Ok(if changed {
         lfp.self_val()
@@ -4197,9 +4250,10 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
-        apply_case(s, CaseOp::Downcase, mode),
-    )))
+    Ok(Value::string_from_str_with_encoding_of(
+        &apply_case(s, CaseOp::Downcase, mode),
+        self_val,
+    ))
 }
 
 ///
@@ -4216,7 +4270,11 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Downcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
+    let enc = self_val
+        .is_rstring_inner()
+        .map(|r| r.encoding())
+        .unwrap_or(crate::value::Encoding::Utf8);
+    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
 
     Ok(if changed {
         lfp.self_val()
@@ -4241,9 +4299,10 @@ fn capitalize(
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
-        apply_case(s, CaseOp::Capitalize, mode),
-    )))
+    Ok(Value::string_from_str_with_encoding_of(
+        &apply_case(s, CaseOp::Capitalize, mode),
+        self_val,
+    ))
 }
 
 ///
@@ -4265,7 +4324,11 @@ fn capitalize_(
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Capitalize, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
+    let enc = self_val
+        .is_rstring_inner()
+        .map(|r| r.encoding())
+        .unwrap_or(crate::value::Encoding::Utf8);
+    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -4284,9 +4347,10 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     let self_val = lfp.self_val();
     let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
-        apply_case(s, CaseOp::Swapcase, mode),
-    )))
+    Ok(Value::string_from_str_with_encoding_of(
+        &apply_case(s, CaseOp::Swapcase, mode),
+        self_val,
+    ))
 }
 
 ///
@@ -4303,7 +4367,11 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Swapcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
-    self_val.replace_with_inner(RStringInner::from_string_scanned(result));
+    let enc = self_val
+        .is_rstring_inner()
+        .map(|r| r.encoding())
+        .unwrap_or(crate::value::Encoding::Utf8);
+    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -4723,10 +4791,9 @@ fn tr_test() {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
-    Ok(Value::string_from_inner(RStringInner::from_string_scanned(
-        res,
-    )))
+    let self_ = lfp.self_val();
+    let res = delete_compute(vm, globals, self_, lfp.arg(0).as_array())?;
+    Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
 ///
@@ -4742,13 +4809,17 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn delete_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
-    let orig_len = lfp.self_val().as_rstring_inner().len();
+    let mut self_ = lfp.self_val();
+    let orig_len = self_.as_rstring_inner().len();
     if res.len() == orig_len {
         return Ok(Value::nil());
     }
-    lfp.self_val()
-        .replace_with_inner(RStringInner::from_string_scanned(res));
-    Ok(lfp.self_val())
+    let enc = self_
+        .is_rstring_inner()
+        .map(|r| r.encoding())
+        .unwrap_or(crate::value::Encoding::Utf8);
+    self_.replace_with_inner(RStringInner::from_encoding_scanned(res.as_bytes(), enc));
+    Ok(self_)
 }
 
 /// Shared body of `String#delete` / `String#delete!`. Builds the
@@ -4792,7 +4863,7 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let rec = self_.expect_str(globals)?;
     let (res, _changed) = tr_translate(rec, &from, &to, false)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
 ///
@@ -4833,7 +4904,7 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let rec = self_.expect_str(globals)?;
     let (res, _changed) = tr_translate(rec, &from, &to, true)?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
 ///
@@ -5060,7 +5131,7 @@ fn squeeze(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
     let res = squeeze_impl(vm, globals, s, lfp.arg(0))?;
-    Ok(Value::string(res))
+    Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
 ///
@@ -5371,12 +5442,15 @@ fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let head = (width as usize - str_len) / 2;
     let tail = width as usize - str_len - head;
-    Ok(Value::string(format!(
-        "{}{}{}",
-        gen_pad(padding, head),
-        lhs.as_str(),
-        gen_pad(padding, tail)
-    )))
+    Ok(Value::string_from_str_with_encoding_of(
+        &format!(
+            "{}{}{}",
+            gen_pad(padding, head),
+            lhs.as_str(),
+            gen_pad(padding, tail)
+        ),
+        lhs,
+    ))
 }
 
 ///
@@ -5390,8 +5464,7 @@ fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
-    let res = Value::string(str_next(recv));
-    Ok(res)
+    Ok(Value::string_from_str_with_encoding_of(&str_next(recv), self_))
 }
 
 ///
@@ -9458,5 +9531,150 @@ mod tests {
             [r1, r2, r3, r4, r5]
             "##,
         );
+    }
+
+    // ----- S2: encoding propagation through string-producing ops -----
+
+    #[test]
+    fn case_methods_preserve_encoding() {
+        run_test(r#""hello".encode("US-ASCII").upcase.encoding.to_s"#);
+        run_test(r#""HELLO".encode("US-ASCII").downcase.encoding.to_s"#);
+        run_test(r#""hello".encode("US-ASCII").capitalize.encoding.to_s"#);
+        run_test(r#""Hello".encode("US-ASCII").swapcase.encoding.to_s"#);
+        // ASCII-8BIT receivers stay binary after case mapping.
+        run_test(r#""abc".dup.force_encoding("ASCII-8BIT").upcase.encoding.to_s"#);
+        // Bang variants too.
+        run_test(
+            r#"
+              s = "hello".encode("US-ASCII")
+              s.upcase!
+              s.encoding.to_s
+            "#,
+        );
+        run_test(
+            r#"
+              s = "Hello".encode("US-ASCII")
+              s.swapcase!
+              s.encoding.to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn padding_methods_preserve_encoding() {
+        run_test(r#""abc".encode("US-ASCII").ljust(5).encoding.to_s"#);
+        run_test(r#""abc".encode("US-ASCII").rjust(5).encoding.to_s"#);
+        run_test(r#""abc".encode("US-ASCII").center(5).encoding.to_s"#);
+        // Width <= length: still preserves encoding.
+        run_test(r#""abc".encode("US-ASCII").ljust(2).encoding.to_s"#);
+        run_test(r#""abc".encode("US-ASCII").rjust(2).encoding.to_s"#);
+    }
+
+    #[test]
+    fn succ_preserves_encoding() {
+        run_test(r#""a".encode("US-ASCII").succ.encoding.to_s"#);
+        run_test(r#""z".encode("US-ASCII").next.encoding.to_s"#);
+    }
+
+    // ----- S3: encoding-aware == / casecmp -----
+
+    #[test]
+    fn equality_considers_encoding_compatibility() {
+        // Same content + ASCII-compat encodings → equal.
+        run_test(
+            r#""hello".dup.force_encoding("UTF-8") == "hello".dup.force_encoding("ISO-8859-1")"#,
+        );
+        // Both empty even with non-ASCII-compat → equal (compat returns the left).
+        run_test(r#""".dup.force_encoding("UTF-16BE") == "".dup.force_encoding("UTF-8")"#);
+    }
+
+    #[test]
+    fn casecmp_returns_nil_on_incompatible_encoding() {
+        // ASCII-only content with mismatched non-ASCII-compat side
+        // → nil (encoding compat check).
+        run_test(
+            r#"
+              a = "abc".dup.force_encoding("UTF-8")
+              b = "abc".dup.force_encoding("UTF-16BE")
+              a.casecmp(b)
+            "#,
+        );
+    }
+
+    #[test]
+    fn equality_fast_path_checks_encoding() {
+        // The runtime `eq_values_bool` fast path used to skip the
+        // encoding compat check, so non-ASCII bytes with different
+        // encodings compared `true` even though they represent
+        // different code points. CRuby returns `false`.
+        run_test(
+            r#""\xff".dup.force_encoding("UTF-8") == "\xff".dup.force_encoding("ISO-8859-1")"#,
+        );
+        // The receiver's `==` and the bypass-able `send(:==, ...)`
+        // path agree.
+        run_test(
+            r#"
+              a = "\xff".dup.force_encoding("UTF-8")
+              b = "\xff".dup.force_encoding("ISO-8859-1")
+              [a == b, a.eql?(b), a.send(:==, b)]
+            "#,
+        );
+    }
+
+    // ----- S2 expansion: gsub / sub / scan / split / delete / tr / squeeze -----
+
+    #[test]
+    fn gsub_preserves_encoding() {
+        // gsub with String pattern + String replacement.
+        run_test(r#""abc".dup.force_encoding("US-ASCII").gsub("b", "x").encoding.to_s"#);
+        // gsub with Regexp + String.
+        run_test(r#""abc".dup.force_encoding("US-ASCII").gsub(/b/, "x").encoding.to_s"#);
+        // gsub with Regexp + block.
+        run_test(
+            r#""abc".dup.force_encoding("US-ASCII").gsub(/b/) { |m| "X" }.encoding.to_s"#,
+        );
+        // sub variants too.
+        run_test(r#""abc".dup.force_encoding("US-ASCII").sub("a", "z").encoding.to_s"#);
+        run_test(r#""abc".dup.force_encoding("US-ASCII").sub(/a/) { "Z" }.encoding.to_s"#);
+    }
+
+    #[test]
+    fn scan_preserves_encoding() {
+        // Single-capture: each match string carries the receiver's encoding.
+        run_test(
+            r#"
+              s = "abcabc".dup.force_encoding("US-ASCII")
+              s.scan(/[ab]/).map(&:encoding).map(&:to_s).uniq
+            "#,
+        );
+        // Multi-capture: nested array elements likewise.
+        run_test(
+            r#"
+              s = "ab12cd34".dup.force_encoding("US-ASCII")
+              s.scan(/(\w)(\d)/).flatten.map(&:encoding).map(&:to_s).uniq
+            "#,
+        );
+    }
+
+    #[test]
+    fn split_preserves_encoding() {
+        run_test(
+            r#""a,b,c".dup.force_encoding("US-ASCII").split(",").map(&:encoding).map(&:to_s).uniq"#,
+        );
+        run_test(
+            r#""abc".dup.force_encoding("US-ASCII").split("").map(&:encoding).map(&:to_s).uniq"#,
+        );
+        // Regexp split too.
+        run_test(
+            r#""a1b2c".dup.force_encoding("US-ASCII").split(/\d/).map(&:encoding).map(&:to_s).uniq"#,
+        );
+    }
+
+    #[test]
+    fn delete_squeeze_tr_preserve_encoding() {
+        run_test(r#""abcabc".dup.force_encoding("US-ASCII").delete("b").encoding.to_s"#);
+        run_test(r#""aabbcc".dup.force_encoding("US-ASCII").squeeze.encoding.to_s"#);
+        run_test(r#""abc".dup.force_encoding("US-ASCII").tr("ab", "xy").encoding.to_s"#);
+        run_test(r#""abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s"#);
     }
 }
