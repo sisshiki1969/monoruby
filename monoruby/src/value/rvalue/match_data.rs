@@ -25,6 +25,16 @@ impl MatchDataInner {
         }
     }
 
+    /// Builder helper: attach a `Regexp` to a freshly-constructed
+    /// `MatchDataInner`. Used when reconstructing a `MatchData`
+    /// from `Executor`'s special-variable stash so named-capture
+    /// lookup (`md["name"]` / `md[:name]`) finds the regex's
+    /// group table.
+    pub fn with_regex(mut self, regex: Regexp) -> Self {
+        self.regex = Some(regex);
+        self
+    }
+
     pub fn from_capture(captures: Captures, heystack: String, regex: Regexp) -> Self {
         let matches = captures
             .iter()

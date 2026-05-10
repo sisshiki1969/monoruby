@@ -1127,7 +1127,12 @@ impl<'a> BytecodeGen<'a> {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
-        Ok(Value::regexp(re))
+        // Regexp literals are frozen in CRuby; the spec battery
+        // checks that `//.frozen?` is true and that
+        // `//.send(:initialize, "")` raises `FrozenError`.
+        let mut val = Value::regexp(re);
+        val.set_frozen();
+        Ok(val)
     }
 }
 

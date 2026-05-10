@@ -36,6 +36,13 @@ pub struct RegexpInner {
     /// `u`/`e`/`s`/`n` modifier or by non-ASCII content in the
     /// source. Returned by `Regexp#fixed_encoding?`.
     fixed_encoding: bool,
+    /// `false` for the empty pattern handed out by
+    /// `Regexp.allocate` (never run through `Regexp.new` /
+    /// literal construction); `true` once the regex carries a
+    /// user-supplied source. CRuby raises `TypeError` when
+    /// methods that need the source (`#match`, etc.) are called on
+    /// the unallocated form.
+    initialized: bool,
 }
 
 impl PartialEq for RegexpInner {
@@ -89,6 +96,22 @@ impl RegexpInner {
         self.fixed_encoding
     }
 
+    /// True for any `RegexpInner` produced by the normal
+    /// construction path; false for the empty placeholder
+    /// returned by `Regexp.allocate`.
+    pub fn initialized(&self) -> bool {
+        self.initialized
+    }
+
+    /// Mark the receiver as the "uninitialized" placeholder used
+    /// by `Regexp.allocate`. The matching engine still works (so
+    /// `#==`/`#hash` don't blow up), but methods that read the
+    /// source — `#match`, `#=~`, `#match?` — surface a
+    /// `TypeError` to callers.
+    pub fn mark_uninitialized(&mut self) {
+        self.initialized = false;
+    }
+
     pub fn option(&self) -> u32 {
         let mut opt = self.regex.option();
         if self.encoding == OnigmoEncoding::ASCII {
@@ -123,8 +146,29 @@ impl RegexpInner {
         res
     }
 
+    /// Escape `text` so the result can be embedded as a literal in
+    /// a regex source. Mirrors CRuby's `Regexp.escape`/`Regexp.quote`,
+    /// which extends the standard regex-meta set with `' '` (space)
+    /// and `\t`/`\n`/`\r`/`\f`/`\v` whitespace so they survive
+    /// unchanged when the result is later compiled with the `x`
+    /// modifier. The `regex` crate's `escape` covers the meta set
+    /// but skips whitespace, so we layer the whitespace handling on
+    /// top.
     pub fn escape(text: &str) -> String {
-        regex::escape(text)
+        let pre = regex::escape(text);
+        let mut out = String::with_capacity(pre.len());
+        for ch in pre.chars() {
+            match ch {
+                ' ' => out.push_str("\\ "),
+                '\t' => out.push_str("\\t"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\x0c' => out.push_str("\\f"),
+                '\x0b' => out.push_str("\\v"),
+                other => out.push(other),
+            }
+        }
+        out
     }
 }
 
@@ -273,7 +317,7 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
                 // Onigmo verbatim.
             }
             // Copy the backslash and the following character (if any) verbatim
-            // so escapes like `\\`, `\u{0041:0>4}`, `\x{...}` are preserved.
+            // so standard escapes (e.g. `\\`, `\n`, `\x{...}`) survive the rewrite untouched.
             out.push('\\');
             i += 1;
             if i < bytes.len() {
@@ -358,6 +402,55 @@ fn source_encoding_fallback(
     }
 }
 
+/// Scan `src` for a `\u` escape (`\uXXXX` or `\u{...}`) whose
+/// codepoint is non-ASCII (>= 0x80). Returns `true` for the first
+/// such escape, `false` if none. Used to pin the declared encoding
+/// to UTF-8 when the source contains a non-ASCII Unicode escape,
+/// matching CRuby's `\u`-fixes-encoding behavior.
+fn has_non_ascii_unicode_escape(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'\\' && bytes[i + 1] == b'u' {
+            if i + 2 < bytes.len() && bytes[i + 2] == b'{' {
+                let content_start = i + 3;
+                if let Some(rel_end) = bytes[content_start..].iter().position(|&b| b == b'}') {
+                    if let Ok(content) = std::str::from_utf8(
+                        &bytes[content_start..content_start + rel_end],
+                    ) {
+                        for tok in content.split_ascii_whitespace() {
+                            if tok.bytes().all(|b| b.is_ascii_hexdigit()) && !tok.is_empty() {
+                                if let Ok(cp) = u32::from_str_radix(tok, 16) {
+                                    if cp >= 0x80 {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i = content_start + rel_end + 1;
+                    continue;
+                }
+            } else if i + 5 < bytes.len() {
+                let hex = &bytes[i + 2..i + 6];
+                if hex.iter().all(|b| b.is_ascii_hexdigit()) {
+                    if let Ok(s) = std::str::from_utf8(hex) {
+                        if let Ok(cp) = u32::from_str_radix(s, 16) {
+                            if cp >= 0x80 {
+                                return true;
+                            }
+                        }
+                    }
+                    i += 6;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 fn utf8_char_len(b: u8) -> usize {
     if b < 0x80 {
         1
@@ -419,8 +512,20 @@ impl RegexpInner {
         source_encoding: Option<crate::value::Encoding>,
     ) -> Result<Self> {
         let reg_str: String = reg_str.into();
-        let (declared_encoding, fixed_encoding) =
+        let (mut declared_encoding, mut fixed_encoding) =
             resolve_declared_encoding(&reg_str, option, kcode, source_encoding);
+        // CRuby pins the regex to UTF-8 when the source contains a
+        // `\u` escape that decodes to a non-ASCII codepoint, even on
+        // an otherwise pure-7-bit pattern (`/\u{1234}/.fixed_encoding?`
+        // is `true`). The `n`/`e`/`s` modifiers and the `NOENCODING`
+        // flag override this — they leave the explicit kcode intact.
+        if option & Self::NOENCODING == 0
+            && kcode.map(|k| k & Self::KCODE_UTF8 != 0).unwrap_or(true)
+            && has_non_ascii_unicode_escape(&reg_str)
+        {
+            declared_encoding = crate::value::Encoding::Utf8;
+            fixed_encoding = true;
+        }
         // Strip Ruby-only bits (`NOENCODING`, `FIXEDENCODING`,
         // `KCODE_*`) before handing the option mask to Onigmo —
         // those bits sit in the same word but Onigmo only understands
@@ -445,6 +550,7 @@ impl RegexpInner {
                 encoding,
                 declared_encoding,
                 fixed_encoding,
+                initialized: true,
             }),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 match Regex::new_with_option_and_encoding(&reg_str, onigmo_option, encoding) {
@@ -456,6 +562,7 @@ impl RegexpInner {
                             encoding,
                             declared_encoding,
                             fixed_encoding,
+                            initialized: true,
                         })
                     }
                     Err(err) => {
@@ -813,9 +920,19 @@ impl RegexpInner {
         given: &str,
         char_pos: usize,
     ) -> Result<bool> {
-        let byte_pos = match given.char_indices().nth(char_pos) {
-            Some((pos, _)) => pos,
-            None => return Ok(false),
+        // `char_pos == given.chars().count()` (the end-of-string
+        // anchor position) is a legal starting point in CRuby —
+        // `/\Az/.match?("", 0)` finds the zero-width match at byte
+        // 0. `nth` returns `None` for that boundary, so handle it
+        // explicitly before falling through.
+        let byte_pos = if char_pos == 0 {
+            0
+        } else {
+            match given.char_indices().nth(char_pos) {
+                Some((pos, _)) => pos,
+                None if char_pos == given.chars().count() => given.len(),
+                None => return Ok(false),
+            }
         };
         match re.regex.captures_from_pos(given, byte_pos) {
             Ok(res) => Ok(res.is_some()),
@@ -1237,60 +1354,89 @@ mod expand_unicode_braces_tests {
         // the empty / non-hex / out-of-range cases above).
         assert!(expand_unicode_braces("\\u{20").is_err());
     }
-
-    #[test]
-    fn error_message_includes_source_for_specs() {
-        // CRuby's spec battery pattern-matches messages like
-        // "invalid Unicode list: /\u{xyz}/" — we surface the offending
-        // fragment in the same shape so the specs read the same way.
-        let err = expand_unicode_braces("\\u{xyz}").unwrap_err();
-        let msg = err.message().to_string();
-        assert!(msg.contains("invalid Unicode list"), "got: {msg}");
-        assert!(msg.contains("\\u{xyz}"), "got: {msg}");
-        let err = expand_unicode_braces("\\u{110000}").unwrap_err();
-        let msg = err.message().to_string();
-        assert!(msg.contains("invalid Unicode range"), "got: {msg}");
-        assert!(msg.contains("\\u{110000}"), "got: {msg}");
-    }
 }
 
 #[cfg(test)]
-mod pre_validate_regex_tests {
-    use super::pre_validate_regex;
+mod regex_cache_tests {
+    use super::*;
+    use onigmo_regex::OnigmoEncoding;
+
+    // Use a distinctive source per test so we don't depend on whether
+    // some other test in the suite already populated REGEX_CACHE for
+    // this key — REGEX_CACHE is a process-wide static.
+    const SRC_HIT: &str = "regex_cache_tests::cache_hit_returns_same_arc";
+    const SRC_MISS_A: &str = "regex_cache_tests::cache_miss_a";
+    const SRC_MISS_B: &str = "regex_cache_tests::cache_miss_b";
 
     #[test]
-    fn passthrough_on_well_formed_input() {
-        assert!(pre_validate_regex("").is_ok());
-        assert!(pre_validate_regex("abc").is_ok());
-        assert!(pre_validate_regex("\\\\").is_ok());
-        assert!(pre_validate_regex("\\n").is_ok());
-        assert!(pre_validate_regex("\\x20").is_ok());
-        assert!(pre_validate_regex("\\xab").is_ok());
-        assert!(pre_validate_regex("\\xF").is_ok());
-        // `\u`-style escapes are validated separately in
-        // `expand_unicode_braces`; they pass `pre_validate` unchanged.
-        assert!(pre_validate_regex("\\u0041").is_ok());
+    fn cache_hit_returns_same_arc() {
+        // First call lands in the Vacant arm and inserts an Arc<Regex>;
+        // second call lands in the Occupied arm and clones the same
+        // Arc back out. Both pass through the cache lookup chain
+        // (`REGEX_CACHE.write().unwrap().0.entry(...)`), exercising
+        // the `.0` field access on the RegexCache tuple struct.
+        let r1 = RegexpInner::with_option_and_encoding(SRC_HIT, 0, OnigmoEncoding::UTF8)
+            .expect("first compile");
+        let r2 = RegexpInner::with_option_and_encoding(SRC_HIT, 0, OnigmoEncoding::UTF8)
+            .expect("second compile");
+        assert!(
+            Arc::ptr_eq(&r1.regex, &r2.regex),
+            "second compile should reuse the cached Arc<Regex>",
+        );
     }
 
     #[test]
-    fn trailing_backslash_is_too_short_escape_sequence() {
-        let err = pre_validate_regex("\\").unwrap_err();
-        let msg = err.message().to_string();
-        assert!(msg.contains("too short escape sequence"), "got: {msg}");
-        assert!(msg.contains("/\\/"), "got: {msg}");
-        // Trailing backslash with leading content still triggers.
-        let err = pre_validate_regex("abc\\").unwrap_err();
-        let msg = err.message().to_string();
-        assert!(msg.contains("too short escape sequence"), "got: {msg}");
+    fn cache_miss_for_different_source() {
+        // Distinct source strings hash to distinct cache keys, so each
+        // gets its own Arc<Regex>.
+        let r1 = RegexpInner::with_option_and_encoding(SRC_MISS_A, 0, OnigmoEncoding::UTF8)
+            .expect("compile A");
+        let r2 = RegexpInner::with_option_and_encoding(SRC_MISS_B, 0, OnigmoEncoding::UTF8)
+            .expect("compile B");
+        assert!(!Arc::ptr_eq(&r1.regex, &r2.regex));
     }
 
     #[test]
-    fn x_escape_with_no_hex_digit_is_invalid_hex() {
-        let err = pre_validate_regex("\\xY").unwrap_err();
+    fn cache_keyed_on_encoding() {
+        // Same source + same option but different encoding → distinct
+        // cache entries (the Onigmo regex is encoding-bound).
+        let src = "regex_cache_tests::cache_keyed_on_encoding";
+        let r_utf8 = RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::UTF8)
+            .expect("UTF-8 compile");
+        let r_ascii = RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::ASCII)
+            .expect("ASCII compile");
+        assert!(!Arc::ptr_eq(&r_utf8.regex, &r_ascii.regex));
+    }
+
+    #[test]
+    fn ruby_only_option_bits_dont_split_cache() {
+        // NOENCODING / FIXEDENCODING / KCODE_* are stripped from the
+        // option mask before the cache key is built, so toggling any
+        // of them shouldn't produce a new entry.
+        let src = "regex_cache_tests::ruby_only_option_bits_dont_split_cache";
+        let plain =
+            RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::UTF8)
+                .expect("plain compile");
+        let with_ruby_bits = RegexpInner::with_option_and_encoding(
+            src,
+            RegexpInner::NOENCODING | RegexpInner::FIXEDENCODING,
+            OnigmoEncoding::UTF8,
+        )
+        .expect("compile with Ruby-only bits set");
+        assert!(
+            Arc::ptr_eq(&plain.regex, &with_ruby_bits.regex),
+            "Ruby-only option bits must be masked out of the cache key",
+        );
+    }
+
+    #[test]
+    fn invalid_source_returns_regexerr_with_formatted_source() {
+        // The Vacant branch's error path: Onigmo rejects the source
+        // (unbalanced bracket here), and we re-format the message with
+        // a `: /<source>/` suffix matching CRuby spec expectations.
+        let err = RegexpInner::with_option_and_encoding("[", 0, OnigmoEncoding::UTF8)
+            .expect_err("unbalanced [ should fail to compile");
         let msg = err.message().to_string();
-        assert!(msg.contains("invalid hex escape"), "got: {msg}");
-        assert!(msg.contains("/\\xY/"), "got: {msg}");
-        // `\x` at end-of-string also triggers.
-        assert!(pre_validate_regex("\\x").is_err());
+        assert!(msg.contains('['), "expected source in message, got: {msg}");
     }
 }

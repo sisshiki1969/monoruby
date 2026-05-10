@@ -50,6 +50,13 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(REGEXP_CLASS, "match?", match_, 1, 2, false);
     globals.define_builtin_func_with(REGEXP_CLASS, "match", rmatch, 1, 2, false);
     globals.define_builtin_func(REGEXP_CLASS, "names", names, 0);
+    // `Regexp#initialize` is a private method that always raises:
+    // - `FrozenError` if the receiver is frozen (literals are frozen);
+    // - `TypeError` otherwise (CRuby treats every monoruby Regexp as
+    //   "already initialized" since `Regexp.new` is the sole entry
+    //   point and produces a fully-built instance).
+    let init_id = globals.define_private_builtin_func(REGEXP_CLASS, "initialize", regexp_initialize, 1);
+    let _ = init_id;
     globals.store[REGEXP_CLASS].set_alloc_func(regexp_alloc_func);
 }
 
@@ -80,10 +87,33 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 // Class methods
 
 /// Allocator for `Regexp` and its subclasses. An empty pattern with no
-/// options cannot fail to compile, so unwrap is safe.
+/// options cannot fail to compile, so unwrap is safe. The result is
+/// flagged "uninitialized" so that `#match`/`#=~`/`#match?` raise
+/// `TypeError` on the bare `Regexp.allocate` form (matches CRuby).
 pub(crate) extern "C" fn regexp_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    let regexp = RegexpInner::with_option("", 0).expect("empty regexp compile cannot fail");
+    let mut regexp = RegexpInner::with_option("", 0).expect("empty regexp compile cannot fail");
+    regexp.mark_uninitialized();
     Value::regexp_with_class(regexp, class_id)
+}
+
+/// Private `Regexp#initialize` that always rejects re-initialisation.
+/// `Regexp.new` builds a fully-formed instance via the alloc function +
+/// internal construction path, so any subsequent `.send(:initialize, …)`
+/// must be either a frozen literal (FrozenError) or an already-built
+/// instance (TypeError "already initialized regexp"). matches CRuby
+/// (the `< 4.1` branch of `initialize_spec.rb`).
+#[monoruby_builtin]
+fn regexp_initialize(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if self_.is_frozen() {
+        return Err(MonorubyErr::frozenerr("can't modify frozen Regexp"));
+    }
+    Err(MonorubyErr::typeerr("already initialized regexp"))
 }
 
 ///
@@ -101,11 +131,27 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // caller passes an explicit second argument. We also forward the
     // existing regex's declared encoding so the new copy renders
     // the same `Regexp#encoding` even though we re-parse the source.
-    let (string, default_option, source_encoding) = if let Some(re) = arg0.is_regex() {
+    // When the source is a Regexp, also forward the kcode bits
+    // derived from its declared encoding so that `Regexp.new(/abc/u)`
+    // ends up with `encoding == UTF-8` and `fixed_encoding? == true`.
+    // `raw_option()` doesn't carry KCODE/NOENCODING/FIXEDENCODING
+    // bits (those live in `RegexpInner`, not in Onigmo's option word).
+    let (string, default_option, source_encoding, default_kcode) = if let Some(re) = arg0.is_regex()
+    {
+        let kc = if re.fixed_encoding() {
+            kcode_from_encoding(re.declared_encoding())
+        } else {
+            None
+        };
+        let mut opt = re.raw_option();
+        if let Some(bits) = kc {
+            opt |= bits;
+        }
         (
             re.as_str().to_string(),
-            Some(re.raw_option()),
+            Some(opt),
             Some(re.declared_encoding()),
+            kc,
         )
     } else {
         let s = arg0.coerce_to_string(vm, globals)?;
@@ -113,10 +159,20 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             .is_rstring_inner()
             .map(|r| r.encoding())
             .unwrap_or(crate::value::Encoding::Utf8);
-        (s, None, Some(enc))
+        (s, None, Some(enc), None)
     };
+    let option_provided = lfp.try_arg(1).is_some_and(|v| !v.is_nil());
+    if arg0.is_regex().is_some() && option_provided {
+        // CRuby emits "warning: flags ignored" (without raising) when
+        // a Regexp arg is combined with explicit options. The original
+        // regex's flags are preserved.
+        warn_flags_ignored(vm, globals);
+    }
     let option = if let Some(option) = lfp.try_arg(1) {
         if option.is_nil() {
+            default_option.unwrap_or(onigmo_regex::ONIG_OPTION_NONE)
+        } else if arg0.is_regex().is_some() {
+            // Flags ignored; use the source regex's options unchanged.
             default_option.unwrap_or(onigmo_regex::ONIG_OPTION_NONE)
         } else if let Some(option) = option.try_fixnum() {
             option as i32 as u32
@@ -141,10 +197,50 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Pull the kcode bit out of the option mask before passing to
     // onigmo (which doesn't understand the modifier letters).
     let kcode_bits = option & RegexpInner::KCODE_MASK;
-    let kcode = if kcode_bits != 0 { Some(kcode_bits) } else { None };
+    let kcode = if kcode_bits != 0 {
+        Some(kcode_bits)
+    } else {
+        default_kcode
+    };
     let regexp =
         RegexpInner::with_option_kcode(string, option, encoding, kcode, source_encoding)?;
     Ok(Value::regexp(regexp))
+}
+
+/// Map a Ruby-visible encoding to the matching KCODE_* bit, mirroring
+/// what `n`/`u`/`e`/`s` modifiers would set. Used when reconstructing
+/// a Regexp from another Regexp so the new one's `encoding`/
+/// `fixed_encoding?` mirrors the original.
+fn kcode_from_encoding(enc: crate::value::Encoding) -> Option<u32> {
+    use crate::value::Encoding;
+    match enc {
+        Encoding::Utf8 => Some(RegexpInner::KCODE_UTF8),
+        Encoding::EucJp => Some(RegexpInner::KCODE_EUCJP),
+        Encoding::Sjis(_) => Some(RegexpInner::KCODE_SJIS),
+        _ => None,
+    }
+}
+
+/// Emit CRuby's "flags ignored" warning to `$stderr`, used when
+/// `Regexp.new(/.../, opt)` is called with a Regexp source — the
+/// options in the second arg are discarded and the source regex's
+/// flags are preserved.
+fn warn_flags_ignored(vm: &mut Executor, globals: &mut Globals) {
+    let stderr_id = IdentId::get_id("$stderr");
+    let stderr = match globals.get_gvar(stderr_id) {
+        Some(v) => v,
+        None => return,
+    };
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(
+            "warning: flags ignored\n".to_string(),
+        )],
+        None,
+        None,
+    );
 }
 
 /// Parse a Ruby flag string like "im" into an Onigmo options bitmap.
@@ -216,15 +312,36 @@ fn regexp_escape(
     let arg0 = lfp.arg(0);
     // CRuby accepts both String and Symbol; for a Symbol we use its
     // textual form. Other types still go through `to_str`.
-    let string = if let Some(s) = arg0.is_str() {
-        s.to_string()
+    let (string, src_enc) = if let Some(s) = arg0.is_str() {
+        let enc = arg0
+            .is_rstring_inner()
+            .map(|r| r.encoding())
+            .unwrap_or(crate::value::Encoding::Utf8);
+        (s.to_string(), enc)
     } else if let Some(sym) = arg0.try_symbol() {
-        sym.to_string()
+        (sym.to_string(), crate::value::Encoding::Utf8)
     } else {
-        arg0.coerce_to_str(vm, globals)?
+        (
+            arg0.coerce_to_str(vm, globals)?,
+            crate::value::Encoding::Utf8,
+        )
     };
-    let val = Value::string(RegexpInner::escape(&string));
-    Ok(val)
+    let escaped = RegexpInner::escape(&string);
+    // CRuby tags the result US-ASCII when it contains only ASCII
+    // bytes (otherwise it inherits the source's encoding). The
+    // escape itself only adds ASCII metacharacters, so the result
+    // is ASCII-only iff the input is.
+    let result_enc = if escaped.is_ascii() {
+        crate::value::Encoding::UsAscii
+    } else {
+        src_enc
+    };
+    Ok(Value::string_from_inner(
+        crate::value::rvalue::RStringInner::from_encoding_scanned(
+            escaped.as_bytes(),
+            result_enc,
+        ),
+    ))
 }
 
 ///
@@ -497,8 +614,9 @@ fn format_union_member(
 
 ///
 /// ### Regexp.last_match
-/// - last_match -> MatchData (not supported)
-/// - last_match(nth) -> String | nil
+/// - last_match -> MatchData
+/// - last_match(nth) -> String | nil           (Integer nth)
+/// - last_match(name) -> String | nil          (Symbol / String name)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
 #[monoruby_builtin]
@@ -508,18 +626,48 @@ fn regexp_last_match(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    if let Some(arg0) = lfp.try_arg(0) {
-        let nth = arg0.coerce_to_int_i64(vm, globals)?;
-        Ok(vm.get_special_matches(nth).unwrap_or_default())
-    } else {
-        Ok(vm.get_last_matchdata())
+    let Some(arg0) = lfp.try_arg(0) else {
+        return Ok(vm.get_last_matchdata());
+    };
+    // CRuby short-circuits to `nil` when there is no last match,
+    // even for arguments that would otherwise raise (e.g. an
+    // arbitrary `Object` that doesn't respond to `to_int`). Test
+    // the no-match case before dispatching so we don't surface
+    // a coercion `TypeError` that wouldn't fire on CRuby.
+    let md = vm.get_last_matchdata();
+    if md.is_nil() {
+        return Ok(Value::nil());
     }
+    // Symbol / String name → look up as a named capture in the
+    // most recent MatchData. CRuby raises `IndexError` on a
+    // missing name *only* when there is a current match;
+    // when the last match is `nil` we just propagate `nil`.
+    let is_name = arg0.try_symbol().is_some() || arg0.is_str().is_some();
+    if is_name {
+        // Dispatch to `MatchData#[]` so the name-lookup logic
+        // (and the IndexError on missing name) lives in one
+        // place rather than duplicating it here.
+        return vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("[]"),
+            md,
+            &[arg0],
+            None,
+            None,
+        );
+    }
+    // Integer / `to_int`-coercible arg: treat as an Nth-capture
+    // index. CRuby silently returns `nil` when the index is out of
+    // range; `get_special_matches` already does that.
+    let nth = arg0.coerce_to_int_i64(vm, globals)?;
+    Ok(vm.get_special_matches(nth).unwrap_or_default())
 }
 
 /// Mask of Onigmo options that participate in `Regexp#==` / `#eql?` /
-/// `#hash`. Encoding flags (NOENCODING / FIXEDENCODING) are
-/// intentionally excluded so that `// == //n`, `/abc/ix == /abc/ixn`,
-/// etc. — matching CRuby and `equal_value_spec`.
+/// `#hash`. Only the `m`/`i`/`x` flags belong here; encoding bits
+/// participate via the separately-tracked `declared_encoding` field
+/// so that, e.g., `/abc/u == /abc/n` is `false` while `// == //n`
+/// is `true` (empty source ⇒ both resolve to US-ASCII).
 const REGEXP_EQ_OPTION_MASK: u32 = onigmo_regex::ONIG_OPTION_MULTILINE
     | onigmo_regex::ONIG_OPTION_IGNORECASE
     | onigmo_regex::ONIG_OPTION_EXTEND;
@@ -529,28 +677,37 @@ const REGEXP_EQ_OPTION_MASK: u32 = onigmo_regex::ONIG_OPTION_MULTILINE
 /// - self == other -> bool
 /// - self.eql?(other) -> bool
 ///
-/// True when both are regexps with the same source pattern and the
-/// same `m`/`i`/`x` options. Encoding flags (`n`, `u`, `e`, `s`) and
-/// FIXEDENCODING do not participate.
+/// True when both are regexps with the same source pattern, the
+/// same `m`/`i`/`x` options, and the same declared encoding.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d.html]
 #[monoruby_builtin]
 fn regexp_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_regexp_inner();
+    if !lhs.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
     let rhs = match lfp.arg(0).is_regex() {
         Some(r) => r,
         None => return Ok(Value::bool(false)),
     };
+    if !rhs.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
     let same_source = lhs.as_str() == rhs.as_str();
     let same_options =
         (lhs.raw_option() & REGEXP_EQ_OPTION_MASK) == (rhs.raw_option() & REGEXP_EQ_OPTION_MASK);
-    Ok(Value::bool(same_source && same_options))
+    let same_encoding = lhs.declared_encoding() == rhs.declared_encoding();
+    Ok(Value::bool(same_source && same_options && same_encoding))
 }
 
 /// ### Regexp#hash
-/// Returns a hash code based on the source pattern and `m`/`i`/`x`
-/// options. Two regexps that are `==` produce the same hash.
+/// Returns a hash code based on the source pattern and the `m`/`i`/`x`
+/// options. CRuby intentionally hashes only `source` + onigmo options
+/// (encoding flags don't participate), so `/abc/u.hash == /abc/n.hash`
+/// even though `/abc/u != /abc/n` — collisions are fine for hash
+/// semantics.
 #[monoruby_builtin]
 fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::{Hash, Hasher};
@@ -570,10 +727,34 @@ fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = match lfp.arg(0).expect_symbol_or_string(globals) {
-        Ok(s) => s.to_string(),
-        Err(_) => return Ok(Value::bool(false)),
+    let arg0 = lfp.arg(0);
+    // CRuby returns false (without matching) for nil / Regexp
+    // and other non-string-like args. For string-like args
+    // (responds to `to_str`), it coerces and matches.
+    let given = if let Some(s) = arg0.is_str() {
+        s.to_string()
+    } else if let Some(sym) = arg0.try_symbol() {
+        sym.to_string()
+    } else if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
+        // `to_str` coercion path: call the method, then accept the
+        // result iff it's a String. CRuby raises TypeError on a
+        // non-String return value (`can't convert X to String
+        // (X#to_str gives Y)`); we mirror that.
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        match result.is_str() {
+            Some(s) => s.to_string(),
+            None => {
+                let class = arg0.get_real_class_name(&globals.store);
+                let res_class = result.get_real_class_name(&globals.store);
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {class} to String ({class}#to_str gives {res_class})"
+                )));
+            }
+        }
+    } else {
+        return Ok(Value::bool(false));
     };
+    vm.set_match_regex(self_);
     let res = Value::bool(regex.find_one(vm, &given)?.is_some());
     Ok(res)
 }
@@ -596,7 +777,11 @@ fn regexp_match(
     }
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
+    if !regex.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
     let given = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
+    vm.set_match_regex(self_);
     let res = match regex.find_one(vm, &given)? {
         Some(mat) => Value::integer(mat.start as i64),
         None => Value::nil(),
@@ -656,6 +841,9 @@ fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
+    if !regex.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
     let arg0 = lfp.arg(0);
     if arg0.is_nil() {
         return Ok(Value::bool(false));
@@ -669,13 +857,13 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         0
     };
-    let byte_pos = match given.char_indices().nth(char_pos) {
-        Some((pos, _)) => pos,
-        None => 0, //return Ok(Value::bool(false)),
-    };
-    Ok(Value::bool(
-        regex.captures_from_pos(&given, byte_pos, vm)?.is_some(),
-    ))
+    // CRuby's `Regexp#match?` is documented as "doesn't update
+    // `$~` and friends". Route through the predicate helper so we
+    // skip both the special-var save (`save_capture_special_variables`)
+    // and the per-vm match-regex stash that `set_match_regex`
+    // would otherwise leave behind for `Regexp.last_match`.
+    let _ = vm;
+    Ok(Value::bool(RegexpInner::match_pred(&regex, &given, char_pos)?))
 }
 
 ///
@@ -687,15 +875,28 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
 fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let regex = lfp.self_val().as_regexp();
-    let heystack = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
+    let self_ = lfp.self_val();
+    let regex = self_.as_regexp();
+    if !regex.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
+    let arg0 = lfp.arg(0);
+    // CRuby's `Regexp#match(nil)` clears `$~` and returns nil.
+    if arg0.is_nil() {
+        vm.clear_capture_special_variables();
+        return Ok(Value::nil());
+    }
+    let heystack = arg0.expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(
             pos.coerce_to_int_i64(vm, globals)?,
             heystack.chars().count(),
         ) {
             Some(pos) => pos,
-            None => return Ok(Value::bool(false)),
+            // Out-of-range position ⇒ no match. CRuby returns
+            // `nil` here (we used to return `false`, which mixed
+            // poorly with downstream `nil`-checks).
+            None => return Ok(Value::nil()),
         }
     } else {
         0
@@ -704,13 +905,25 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Some((pos, _)) => pos,
         None => 0, //return Ok(Value::bool(false)),
     };
-    Ok(
-        if let Some(captures) = regex.captures_from_pos(&heystack, byte_pos, vm)? {
-            Value::new_matchdata(captures, &heystack, regex)
-        } else {
-            Value::nil()
-        },
-    )
+    vm.set_match_regex(self_);
+    let md = if let Some(captures) = regex.captures_from_pos(&heystack, byte_pos, vm)? {
+        Value::new_matchdata(captures, &heystack, regex)
+    } else {
+        Value::nil()
+    };
+    // `Regexp#match(str) { |m| … }` block form: yield the
+    // MatchData (or skip the block when there's no match) and
+    // return whatever the block returned. CRuby calls the block
+    // with `nil` when the match fails — but it returns `nil` to
+    // the caller without yielding, so a missing `m` doesn't
+    // surface inside the block.
+    if let Some(bh) = lfp.block() {
+        if md.is_nil() {
+            return Ok(Value::nil());
+        }
+        return vm.invoke_block_once(globals, bh, &[md]);
+    }
+    Ok(md)
 }
 
 ///
@@ -1411,149 +1624,390 @@ mod tests {
         run_test(r#"Regexp.escape("a.b")"#);
     }
 
-    // ----- PR #455 Phase A: kcode modifiers + encoding tracking -----
-
     #[test]
-    fn regexp_kcode_modifiers_set_encoding() {
-        // /.../u → UTF-8, fixed.
-        run_test(r#"/abc/u.encoding.name"#);
-        run_test(r#"/abc/u.fixed_encoding?"#);
-        // /.../e → EUC-JP, fixed.
-        run_test(r#"/abc/e.encoding.name"#);
-        run_test(r#"/abc/e.fixed_encoding?"#);
-        // /.../s → Windows-31J, fixed.
-        run_test(r#"/abc/s.encoding.name"#);
-        run_test(r#"/abc/s.fixed_encoding?"#);
-        // /.../n on ASCII source → US-ASCII, NOT fixed.
-        run_test(r#"/abc/n.encoding.name"#);
-        run_test(r#"/abc/n.fixed_encoding?"#);
+    fn regexp_escape_encoding_tagging() {
+        // ASCII-only result tags as US-ASCII regardless of source.
+        run_test(r#"Regexp.escape("abc").encoding.to_s"#);
+        run_test(r#"Regexp.escape("a.b*c+").encoding.to_s"#);
+        run_test(r#"Regexp.escape("hello world").encoding.to_s"#);
+        // Non-ASCII content keeps the source's UTF-8 tag.
+        run_test(r#"Regexp.escape("café").encoding.to_s"#);
+        run_test(r#"Regexp.escape("日本語").encoding.to_s"#);
     }
 
     #[test]
-    fn regexp_kcode_does_not_leak_internal_flags() {
-        // The internal `KCODE_*` bits monoruby uses to remember the
-        // n/u/e/s modifier must not bleed through to user-visible
-        // options. We verify by combining a kcode modifier with `i`
-        // and checking IGNORECASE is the only bit added relative to
-        // a plain literal.
-        run_test(r#"(/abc/iu.options & Regexp::IGNORECASE) != 0"#);
-        run_test(r#"/abc/iu.casefold?"#);
-        run_test(r#"/abc/ie.casefold?"#);
-        run_test(r#"/abc/is.casefold?"#);
+    fn regexp_last_match_named_capture() {
+        // Symbol / String key: dispatches to MatchData#[].
+        run_test(
+            r#"
+            /(?<word>\w+)/ =~ "hello"
+            [Regexp.last_match(:word), Regexp.last_match("word"),
+             Regexp.last_match(0), Regexp.last_match(1)]
+            "#,
+        );
+        // Symbol with no match propagates nil.
+        run_test(
+            r#"
+            /(?<word>\w+)/ =~ ""
+            Regexp.last_match(:word).inspect
+            "#,
+        );
     }
 
     #[test]
-    fn regexp_new_string_flag_unknown_reports_whole_input() {
-        // CRuby's `unknown regexp option: <whole>` error reports the
-        // *entire* flag string, not just the first offending letter.
-        run_test_error(r#"Regexp.new("Hi", "mjx")"#);
-        run_test_error(r#"Regexp.new("Hi", "j")"#);
-        // The kcode letters n/u/e/s are literal-only — passing them
-        // via Regexp.new's String flag arg raises ArgumentError.
-        run_test_error(r#"Regexp.new("Hi", "u")"#);
-        run_test_error(r#"Regexp.new("Hi", "n")"#);
+    fn regexp_match_block_form() {
+        // Match success: block runs, return value comes from block.
+        run_test(r#"/(\d+)/.match("hello 42") { |m| m[1].to_i + 1 }"#);
+        // Match failure: block does NOT run, returns nil.
+        run_test(r#"/(\d+)/.match("hello") { |m| "should not run" }.inspect"#);
+        // nil arg: returns nil without raising.
+        run_test(r#"/abc/.match(nil).inspect"#);
     }
 
     #[test]
-    fn regexp_non_ascii_source_pins_encoding() {
-        // Non-ASCII content in the source pins the encoding even
-        // without an explicit modifier.
-        run_test(r#"/©/.encoding.name"#);
-        run_test(r#"/©/.fixed_encoding?"#);
-        // Pure-ASCII source remains US-ASCII / not fixed.
-        run_test(r#"/abc/.encoding.name"#);
-        run_test(r#"/abc/.fixed_encoding?"#);
+    fn regexp_new_from_regexp_propagates_encoding() {
+        // Regexp.compile/new should preserve encoding+fixed_encoding
+        // from the source Regexp argument.
+        run_test(r#"Regexp.compile(/abc/u).encoding.to_s"#);
+        run_test(r#"Regexp.new(/abc/u).encoding.to_s"#);
+        run_test(r#"Regexp.compile(/abc/u).fixed_encoding?"#);
+        run_test(r#"Regexp.compile(/abc/).encoding.to_s"#);
+        run_test(r#"Regexp.compile(/abc/).fixed_encoding?"#);
+        // n flag preserves NOENCODING.
+        run_test(r#"Regexp.compile(/abc/n).encoding.to_s"#);
+        run_test(r#"Regexp.compile(/abc/n).fixed_encoding?"#);
     }
 
     #[test]
-    fn regexp_new_with_noencoding_flag() {
-        // Regexp::NOENCODING (the integer flag, mirror of /.../n) on
-        // an ASCII-only source produces US-ASCII / not fixed — same
-        // resolution as `/abc/n`.
-        run_test(r#"Regexp.new("abc", Regexp::NOENCODING).encoding.name"#);
-        run_test(r#"Regexp.new("abc", Regexp::NOENCODING).fixed_encoding?"#);
+    fn regexp_unicode_escape_pins_encoding() {
+        // \u escape with non-ASCII codepoint pins to UTF-8.
+        run_test(r#"/\u{1234}/.encoding.to_s"#);
+        run_test(r#"/\u{1234}/.fixed_encoding?"#);
+        run_test(r#"/é/.encoding.to_s"#);
+        run_test(r#"/é/.fixed_encoding?"#);
+        // \u escape with ASCII codepoint stays US-ASCII (not pinned).
+        run_test(r#"/A/.encoding.to_s"#);
+        run_test(r#"/A/.fixed_encoding?"#);
+        run_test(r#"/\u{41}/.encoding.to_s"#);
+        run_test(r#"/\u{41}/.fixed_encoding?"#);
     }
 
-    // ----- PR #455 Phase B: Regexp.union encoding compat -----
+    // ----- Phase D follow-ups -----
 
     #[test]
-    fn regexp_union_encoding_all_ascii_downgrades_to_us_ascii() {
-        // CRuby downgrades the result encoding to US-ASCII when every
-        // arg's content is 7-bit, regardless of any pinning modifiers
-        // on the individual args.
-        run_test(r#"Regexp.union(/a/, /b/).encoding.name"#);
-        run_test(r#"Regexp.union(/a/u, /b/u).encoding.name"#);
-        run_test(r#"Regexp.union(/a/e, /b/e).encoding.name"#);
-        run_test(r#"Regexp.union(/a/n, /b/n).encoding.name"#);
-        run_test(r#"Regexp.union("abc", /def/).encoding.name"#);
-    }
-
-    #[test]
-    fn regexp_union_encoding_keeps_non_ascii_encoding() {
-        // Non-ASCII content keeps the source's encoding through
-        // union.
-        run_test(r#"Regexp.union(/©/, /b/).encoding.name"#);
-    }
-
-    #[test]
-    fn regexp_union_encoding_incompatible_raises() {
-        // Two args with disagreeing pinned encodings (and either
-        // having non-ASCII content) is an ArgumentError. This
-        // doesn't fire for all-ASCII content because of the all-
-        // ASCII downgrade above.
-        run_test_error(r#"Regexp.union(/©/u, /中/e)"#);
+    fn regexp_last_match_no_match_returns_nil_for_any_arg() {
+        // Once `Regexp.last_match` is `nil`, *any* arg short-circuits
+        // to `nil` (CRuby semantics). Including args that would
+        // normally raise from `to_int` coercion.
+        run_test(
+            r#"
+              /foo/ =~ "TEST123"
+              [Regexp.last_match(:test),
+               Regexp.last_match(1),
+               Regexp.last_match(Object.new),
+               Regexp.last_match("test")]
+            "#,
+        );
     }
 
     #[test]
-    fn regexp_union_string_arg_with_meta_chars() {
-        // String args are escape-quoted and joined with `|`. Meta
-        // chars like `(`, `)`, `[`, `]`, `?`, `*`, `+`, `^`, `$` and
-        // `.` get backslash-escaped.
-        run_test(r##"Regexp.union("a.b").to_s"##);
-        run_test(r##"Regexp.union("a(b)c").to_s"##);
-        run_test(r##"Regexp.union(/x/, "y.z", /w/).to_s"##);
-    }
-
-    // ----- PR #455 Phase C: parse-time error messages -----
-
-    #[test]
-    fn regexp_parse_error_too_short_escape_sequence() {
-        // A trailing `\` is a "too short escape sequence" — checked
-        // in our pre-pass before Onigmo sees the source.
-        run_test_error(r#"Regexp.new("\\")"#);
+    fn regexp_initialize_is_private_and_raises() {
+        // The instance method exists, is private, and always raises.
+        run_test(r#"Regexp.private_instance_methods.include?(:initialize)"#);
+        run_test_error(r#"//.send(:initialize, "")"#);
+        run_test_error(r#"Regexp.new("").send(:initialize, "")"#);
+        run_test_error(r#"Class.new(Regexp).new("").send(:initialize, "")"#);
     }
 
     #[test]
-    fn regexp_parse_error_invalid_hex_escape() {
-        // `\x` followed by a non-hex character / nothing is an
-        // "invalid hex escape" in CRuby.
-        run_test_error(r#"Regexp.new("\\xY")"#);
-        run_test_error(r#"Regexp.new("\\x")"#);
+    fn regexp_literal_is_frozen() {
+        run_test(r#"//.frozen?"#);
+        run_test(r#"/abc/.frozen?"#);
+        // `Regexp.new(...)` instances are not auto-frozen.
+        run_test(r#"Regexp.new("abc").frozen?"#);
     }
 
     #[test]
-    fn regexp_parse_error_invalid_unicode_list() {
-        // `\u{}` (empty), `\u{xyz}` (non-hex digits) and `\u{`
-        // (unterminated) all surface as "invalid Unicode list".
-        run_test_error(r#"Regexp.new("\\u{}")"#);
-        run_test_error(r#"Regexp.new("\\u{xyz}")"#);
-        run_test_error(r#"Regexp.new("\\u{")"#);
+    fn regexp_escape_quotes_whitespace() {
+        // CRuby escapes ` ` / `\t`/`\n`/`\r`/`\f`/`\v` so the result
+        // round-trips through the `x` modifier.
+        run_test(r#"Regexp.escape("a b")"#);
+        run_test(r#"Regexp.escape("a\tb\nc")"#);
+        // Mixed meta + whitespace.
+        run_test(r#"Regexp.escape("\\*?{}.+^$[]()- \t\n\r")"#);
     }
 
     #[test]
-    fn regexp_parse_error_invalid_unicode_range() {
-        // Codepoint > 0x10FFFF or > 6 hex digits → "invalid
-        // Unicode range".
-        run_test_error(r#"Regexp.new("\\u{110000}")"#);
-        run_test_error(r#"Regexp.new("\\u{1234567}")"#);
+    fn regexp_teq_uses_to_str() {
+        // `Regexp#===` coerces string-like objects via `#to_str`.
+        run_test(
+            r#"
+              c = Class.new { def to_str; "abc"; end }
+              /abc/ === c.new
+            "#,
+        );
+        // `nil` and `Regexp` args still return false.
+        run_test(r#"/abc/ === nil"#);
+        run_test(r#"/abc/ === /abc/"#);
+        // `to_str` returning a non-String raises TypeError, matching CRuby.
+        run_test_error(
+            r#"
+              c = Class.new { def to_str; 42; end }
+              /abc/ === c.new
+            "#,
+        );
     }
 
     #[test]
-    fn regexp_parse_error_invalid_unicode_escape_short() {
-        // Bare `\uXYZ` with fewer than 4 hex digits → "invalid
-        // Unicode escape".
-        run_test_error(r#"Regexp.new("\\u")"#);
-        run_test_error(r#"Regexp.new("\\uX")"#);
-        run_test_error(r#"Regexp.new("\\u12Z")"#);
+    fn regexp_match_uninitialized_raises_typeerror() {
+        run_test_error(r#"Regexp.allocate.match("foo")"#);
+        run_test_error(r#"Regexp.allocate.match?("foo")"#);
+        run_test_error(r#"Regexp.allocate =~ "foo""#);
+    }
+
+    #[test]
+    fn regexp_match_pred_does_not_set_special_vars() {
+        // `Regexp#match?` is documented as "doesn't update `$~` and
+        // friends". The previous match's `$~` should survive a
+        // subsequent `match?` call.
+        run_test(
+            r#"
+              "abc" =~ /(a)/
+              before = $~[0]
+              /x/.match?("xyz")
+              [before, $~[0]]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_eq_includes_encoding() {
+        // Different declared encoding ⇒ not equal.
+        run_test(r#"/abc/u == /abc/n"#);
+        // Same kcode ⇒ equal.
+        run_test(r#"/abc/u == /abc/u"#);
+        run_test(r#"/abc/n == /abc/n"#);
+        // Empty / pure-ASCII source: the `n` modifier doesn't shift
+        // the resolved encoding away from US-ASCII, so // == //n.
+        run_test(r#"// == //n"#);
+        run_test(r#"//n == //"#);
+    }
+
+    // ----- Phase D: extended coverage -----
+
+    #[test]
+    fn regexp_last_match_indexing() {
+        // Positive / negative / out-of-range Integer indices off
+        // a match — including the `$~`-style negatives that wrap
+        // from the end of the captures list.
+        run_test(
+            r#"
+              /(\w)(\w)(\w)/ =~ "abcdef"
+              [Regexp.last_match(0),
+               Regexp.last_match(1),
+               Regexp.last_match(2),
+               Regexp.last_match(3),
+               Regexp.last_match(4),
+               Regexp.last_match(-1),
+               Regexp.last_match(-3),
+               Regexp.last_match(-4),
+               Regexp.last_match(-100)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_last_match_named_with_duplicate_names() {
+        // When two capture groups share a name, `MatchData#[]` (and
+        // therefore `Regexp.last_match(:name)`) returns the *last
+        // participating* group. CRuby's named-group lookup is
+        // last-wins on collisions.
+        run_test(
+            r#"
+              /(?<x>a)(?<x>b)/ =~ "ab"
+              [Regexp.last_match(:x), Regexp.last_match("x")]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_last_match_clears_on_failed_match() {
+        // A failed `=~` clears `$~` to nil; subsequent
+        // `Regexp.last_match` reads as `nil` regardless of arg type.
+        run_test(
+            r#"
+              /(\w+)/ =~ "abc"
+              before = Regexp.last_match(1)
+              /xyz/ =~ "abc"
+              [before, Regexp.last_match, Regexp.last_match(0), Regexp.last_match(:nope)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_match_block_return_value() {
+        // The block's return value becomes the `match { ... }` value.
+        run_test(r#"/(\d+)/.match("count: 42") { |m| m[1].to_i * 2 }"#);
+        // Returning an arbitrary object works.
+        run_test(r#"/(\w)/.match("z") { |m| [m[0], 99, :sym] }"#);
+        // The match object is the block's only argument.
+        run_test(r#"/(.)/.match("a") { |m| m.class.name }"#);
+    }
+
+    #[test]
+    fn regexp_match_position_argument() {
+        // Match starting at a positive char position.
+        run_test(r#"/(.).(.)/.match("foobar", 3).captures"#);
+        // Negative position counts from the end.
+        run_test(r#"/(.).(.)/.match("foobar", -3).captures"#);
+        // Position past end of string returns nil.
+        run_test(r#"/x/.match("abc", 100)"#);
+    }
+
+    #[test]
+    fn regexp_match_pred_position() {
+        // `match?` accepts the same position arg as `match`.
+        run_test(r#"/foo/.match?("xfooy", 1)"#);
+        run_test(r#"/foo/.match?("xfooy", -3)"#);
+        // `\Az/.match?("", 0)` finds the zero-width match at the end.
+        run_test(r#"/\Az/.match?("", 0)"#);
+        // `\z/` on a non-empty string with `match?(s, len)` finds
+        // the end-of-string match.
+        run_test(r#"/\z/.match?("abc", 3)"#);
+    }
+
+    #[test]
+    fn regexp_compile_with_regexp_arg_and_nil_option() {
+        // `Regexp.compile(re, nil)` is the same as `Regexp.compile(re)`
+        // — no warning, options preserved.
+        run_test(r#"Regexp.compile(/abc/i, nil) == /abc/i"#);
+        run_test(r#"Regexp.compile(/abc/u, nil).encoding.name"#);
+        run_test(r#"Regexp.compile(/abc/u, nil).fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_new_modifier_propagation_through_class() {
+        // `Regexp.new(/.../e)` keeps the EUC-JP declared encoding;
+        // `/.../s` keeps Windows-31J. `Regexp.compile` is an alias
+        // for `Regexp.new`.
+        run_test(r#"Regexp.new(/abc/e).encoding.name"#);
+        run_test(r#"Regexp.new(/abc/s).encoding.name"#);
+        run_test(r#"Regexp.compile(/abc/e).fixed_encoding?"#);
+        run_test(r#"Regexp.compile(/abc/s).fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_unicode_escape_in_character_class() {
+        // `\u` escapes inside a character class still pin encoding.
+        run_test(r#"/[\u{1234}]/.encoding.name"#);
+        run_test(r#"/[\u{1234}]/.fixed_encoding?"#);
+        // Range with `\u{...}` endpoints.
+        run_test(r#"/[\u{20}-\u{1234}]/.fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_unicode_escape_combined_with_modifiers() {
+        // `i`/`m`/`x` modifiers combine with `\u`-pinning without
+        // disturbing the encoding result.
+        run_test(r#"/\u{1234}/i.encoding.name"#);
+        run_test(r#"/\u{1234}/i.fixed_encoding?"#);
+        run_test(r#"/\u{1234}/m.encoding.name"#);
+        run_test(r#"/\u{1234}/x.encoding.name"#);
+        // `n` modifier overrides the `\u` codepoint check (would
+        // also be a SyntaxError if the source actually contained
+        // non-ASCII bytes; here the source is pure-ASCII).
+    }
+
+    #[test]
+    fn regexp_escape_empty_and_ascii() {
+        // Empty input round-trips US-ASCII.
+        run_test(r#"Regexp.escape("").encoding.name"#);
+        run_test(r#"Regexp.escape("")"#);
+        // `Regexp.escape` of meta-only ASCII is US-ASCII.
+        run_test(r#"Regexp.escape(".+*?").encoding.name"#);
+        // Symbol path produces US-ASCII too (when ASCII-only).
+        run_test(r#"Regexp.escape(:abc).encoding.name"#);
+        run_test(r#"Regexp.escape(:abc)"#);
+    }
+
+    #[test]
+    fn regexp_escape_round_trip_through_regexp() {
+        // The escaped form recompiles into a regex that matches the
+        // original input verbatim — the whole point of `Regexp.escape`.
+        run_test(
+            r#"
+              s = "a.b*c+ d?"
+              Regexp.new(Regexp.escape(s)) =~ s
+            "#,
+        );
+        // With whitespace + the `x` modifier (which would otherwise
+        // skip whitespace), the escaped form still matches.
+        run_test(
+            r#"
+              s = "a b\tc"
+              Regexp.new(Regexp.escape(s), Regexp::EXTENDED) =~ s
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_initialize_with_no_arg_succeeds() {
+        // The `initialize` method only raises on a *previously
+        // initialized* receiver. `Regexp.new` itself goes through
+        // the C-side construction and never invokes `#initialize`,
+        // so the public surface stays usable.
+        run_test(r#"Regexp.new("abc").source"#);
+        run_test(r#"Regexp.new("abc").options"#);
+        run_test(r#"Regexp.new(/abc/i).options & Regexp::IGNORECASE != 0"#);
+    }
+
+    #[test]
+    fn regexp_allocate_observable_metadata() {
+        // `Regexp.allocate` produces a real Regexp instance (so
+        // `#class`, `#frozen?`, etc. work) but methods that read
+        // the source raise `TypeError`. CRuby behaves the same way.
+        run_test(r#"Regexp.allocate.class.name"#);
+        run_test(r#"Regexp.allocate.frozen?"#);
+        // Source-reading method `#==` raises TypeError.
+        run_test_error(r#"Regexp.allocate == /abc/"#);
+        run_test_error(r#"Regexp.allocate == Regexp.allocate"#);
+    }
+
+    #[test]
+    fn regexp_hash_ignores_encoding() {
+        // CRuby's `#hash` is keyed on source + onigmo options only;
+        // the declared encoding does not participate. Two regexps
+        // can hash equal yet `==` false (hash collisions are fine).
+        run_test(r#"/abc/.hash == /abc/.hash"#);
+        run_test(r#"/abc/u.hash == /abc/u.hash"#);
+        run_test(r#"/abc/u.hash == /abc/n.hash"#);
+        // Different `mix` bits change the hash.
+        run_test(r#"/abc/.hash == /abc/i.hash"#);
+    }
+
+    #[test]
+    fn regexp_teq_string_path() {
+        // Plain happy paths exercising the String / Symbol fast paths
+        // alongside the new `#to_str` fallback.
+        run_test(r#"/abc/ === "xabcx""#);
+        run_test(r#"/abc/ === :abc"#);
+        run_test(r#"/abc/ === "no""#);
+    }
+
+    #[test]
+    fn regexp_match_pred_clears_no_special_vars() {
+        // Even when `match?` is called *with* a previous successful
+        // match in `$~`, `$~` is unchanged regardless of the
+        // `match?` result. Both true and false paths share this
+        // contract in CRuby.
+        run_test(
+            r#"
+              "abc" =~ /(b)/
+              kept = $~[0]
+              ok = /b/.match?("xyzb")
+              fail = /q/.match?("xyz")
+              [kept, $~[0], ok, fail]
+            "#,
+        );
     }
 }
