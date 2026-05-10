@@ -399,14 +399,14 @@ fn string_cmp(
     let lhs = self_.as_rstring_inner();
     let other = lfp.arg(0);
     if let Some(rhs) = other.is_rstring() {
-        return Ok(Some(lhs.cmp(&rhs)));
+        return Ok(Some(string_byte_then_encoding_cmp(lhs, &rhs)));
     }
     // Try `to_str` coercion first; CRuby uses it in preference to
     // `<=>` (`String#<=>` only inverts via `<=>` when `to_str` is
     // not defined).
     if globals.check_method(other, IdentId::TO_STR).is_some() {
         if let Ok(rhs) = other.coerce_to_rstring(vm, globals) {
-            return Ok(Some(lhs.cmp(&rhs)));
+            return Ok(Some(string_byte_then_encoding_cmp(lhs, &rhs)));
         }
     }
     // Fall back to `other <=> self` and invert the result. Returns
@@ -420,6 +420,49 @@ fn string_cmp(
         }
     }
     Ok(None)
+}
+
+/// `String#<=>` core comparison. Like the byte-level cmp on
+/// `RStringInner`, but adds a tie-breaker on encoding ordinal so that
+/// `"\xff".force_encoding("UTF-8") <=> "\xff".force_encoding("ISO-8859-1")`
+/// is `-1` (CRuby orders by `rb_enc_index`). For 7-bit ASCII content
+/// across distinct encodings the result stays 0 — encoding only
+/// breaks the tie when the strings carry non-ASCII bytes.
+fn string_byte_then_encoding_cmp(lhs: &RStringInner, rhs: &RStringInner) -> std::cmp::Ordering {
+    let ord = lhs.cmp(rhs);
+    if ord != std::cmp::Ordering::Equal {
+        return ord;
+    }
+    if lhs.encoding() == rhs.encoding() {
+        return std::cmp::Ordering::Equal;
+    }
+    let lhs_seven = matches!(lhs.code_range(), CodeRange::SevenBit);
+    let rhs_seven = matches!(rhs.code_range(), CodeRange::SevenBit);
+    if lhs_seven && rhs_seven {
+        return std::cmp::Ordering::Equal;
+    }
+    encoding_ordinal(lhs.encoding()).cmp(&encoding_ordinal(rhs.encoding()))
+}
+
+/// Stable ordinal that matches CRuby's `rb_enc_index` ordering for
+/// the small set of encodings monoruby tracks. Used by
+/// `string_byte_then_encoding_cmp` to break byte-equal ties — only
+/// observable when the receivers carry non-ASCII bytes (otherwise
+/// the byte-level cmp + 7-bit short-circuit already returns 0).
+fn encoding_ordinal(enc: Encoding) -> i32 {
+    match enc {
+        Encoding::Ascii8 => 0,
+        Encoding::UsAscii => 1,
+        Encoding::Utf8 => 2,
+        Encoding::Utf16Be => 3,
+        Encoding::Utf16Le => 4,
+        Encoding::Utf32Be => 5,
+        Encoding::Utf32Le => 6,
+        Encoding::EucJp => 7,
+        Encoding::Sjis(_) => 8,
+        Encoding::Iso8859(n) => 100 + n as i32,
+        Encoding::Iso2022Jp => 200,
+    }
 }
 
 fn string_cmp2(lfp: Lfp, vm: &mut Executor, globals: &mut Globals) -> Result<std::cmp::Ordering> {
@@ -657,8 +700,32 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         vec![arg]
     };
+    // Negotiate the result encoding before formatting: start from
+    // the format string's encoding and fold each String/Symbol
+    // argument's encoding via `compatible_encoding`. Incompatible
+    // pairs raise `Encoding::CompatibilityError` (CRuby semantics).
+    let mut result_inner = self_.as_rstring_inner().clone();
+    for v in &arguments {
+        if let Some(arg_inner) = v.is_rstring_inner() {
+            if let Some(combined) = result_inner.compatible_encoding(&arg_inner) {
+                if combined != result_inner.encoding() {
+                    result_inner.set_encoding(combined);
+                }
+            } else {
+                return Err(MonorubyErr::incompatible_encoding(
+                    &globals.store,
+                    result_inner.encoding(),
+                    arg_inner.encoding(),
+                ));
+            }
+        }
+    }
+    let result_enc = result_inner.encoding();
     let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
-    Ok(Value::string(format_str))
+    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+        format_str.as_bytes(),
+        result_enc,
+    )))
 }
 
 ///
@@ -809,16 +876,16 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // (named capture group).
         if let Some(arg1) = lfp.try_arg(1) {
             if let Some(name) = arg1.is_str() {
-                return string_match_named(vm, lhs, &re, name);
+                return string_match_named(vm, lhs, &re, name, enc);
             }
             if let Some(sym) = arg1.try_symbol() {
                 let name = sym.get_name();
-                return string_match_named(vm, lhs, &re, &name);
+                return string_match_named(vm, lhs, &re, &name, enc);
             }
             let nth = arg1.coerce_to_int_i64(vm, globals)?;
-            string_match_index(vm, lhs, &re, nth)
+            string_match_index(vm, lhs, &re, nth, enc)
         } else {
-            string_match_index(vm, lhs, &re, 0)
+            string_match_index(vm, lhs, &re, 0, enc)
         }
     } else if let Some(s) = lfp.arg(0).is_str() {
         // `str[other_str, len]` is intentionally unsupported by CRuby.
@@ -829,10 +896,21 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 INTEGER_CLASS,
             ));
         }
-        // String argument: return the string if it's a substring
+        // String argument: return a copy of the matched substring
+        // tagged with the *argument's* encoding, matching CRuby
+        // (`"abc".force_encoding("US-ASCII")["bc".force_encoding("BINARY")]`
+        // returns a BINARY string).
         let given = lhs.check_utf8()?;
         if given.contains(s) {
-            Ok(Value::string_from_str(s))
+            let arg_enc = lfp
+                .arg(0)
+                .is_rstring_inner()
+                .map(|r| r.encoding())
+                .unwrap_or(Encoding::Utf8);
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
+                s.as_bytes(),
+                arg_enc,
+            )))
         } else {
             Ok(Value::nil())
         }
@@ -873,7 +951,16 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             if let Some(s) = result.is_str() {
                 let given = lhs.check_utf8()?;
                 if given.contains(s) {
-                    return Ok(Value::string_from_str(s));
+                    // Match CRuby: tag with the coerced result's
+                    // encoding (the argument's), not the receiver's.
+                    let arg_enc = result
+                        .is_rstring_inner()
+                        .map(|r| r.encoding())
+                        .unwrap_or(Encoding::Utf8);
+                    return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                        s.as_bytes(),
+                        arg_enc,
+                    )));
                 } else {
                     return Ok(Value::nil());
                 }
@@ -892,6 +979,7 @@ fn string_match_index(
     s: &RStringInner,
     re: &RegexpInner,
     nth: i64,
+    enc: Encoding,
 ) -> Result<Value> {
     let lhs = s.check_utf8()?;
     match re.captures(lhs, vm)? {
@@ -907,7 +995,10 @@ fn string_match_index(
                 }
             };
             match captures.get(nth) {
-                Some(m) => Ok(Value::string_from_str(m.as_str())),
+                Some(m) => Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    m.as_str().as_bytes(),
+                    enc,
+                ))),
                 None => Ok(Value::nil()),
             }
         }
@@ -919,6 +1010,7 @@ fn string_match_named(
     s: &RStringInner,
     re: &RegexpInner,
     name: &str,
+    enc: Encoding,
 ) -> Result<Value> {
     let members = re.get_group_members(name);
     if members.is_empty() {
@@ -934,7 +1026,10 @@ fn string_match_named(
     // Pick the rightmost matched group sharing the name (matches CRuby).
     for &idx in members.iter().rev() {
         if let Some(Some(m)) = captures.iter().nth(idx as usize) {
-            return Ok(Value::string_from_str(m.as_str()));
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                m.as_str().as_bytes(),
+                enc,
+            )));
         }
     }
     Ok(Value::nil())
@@ -9676,5 +9771,142 @@ mod tests {
         run_test(r#""aabbcc".dup.force_encoding("US-ASCII").squeeze.encoding.to_s"#);
         run_test(r#""abc".dup.force_encoding("US-ASCII").tr("ab", "xy").encoding.to_s"#);
         run_test(r#""abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s"#);
+    }
+
+    // ----- S2 broader rollout -----
+
+    #[test]
+    fn partition_preserves_encoding() {
+        // Found-separator path: returns String pieces (already
+        // encoding-correct via slicing) — sanity-check.
+        run_test(
+            r#"
+              s = "ab,cd".dup.force_encoding("US-ASCII")
+              s.partition(",").map(&:encoding).map(&:to_s)
+            "#,
+        );
+        // Not-found path used to return UTF-8 empty strings.
+        run_test(
+            r#"
+              s = "abc".dup.force_encoding("US-ASCII")
+              s.partition("X").map(&:encoding).map(&:to_s)
+            "#,
+        );
+        run_test(
+            r#"
+              s = "abc".dup.force_encoding("US-ASCII")
+              s.rpartition("X").map(&:encoding).map(&:to_s)
+            "#,
+        );
+    }
+
+    #[test]
+    fn unpack_h_b_returns_us_ascii() {
+        // CRuby tags `H`/`h`/`B`/`b` unpack results as US-ASCII,
+        // regardless of the receiver's encoding. monoruby used to
+        // return UTF-8.
+        run_test(r#""\x01".unpack("H")[0].encoding.to_s"#);
+        run_test(r#""\x01".unpack("h")[0].encoding.to_s"#);
+        run_test(r#""\x01".unpack("B")[0].encoding.to_s"#);
+        run_test(r#""\x01".unpack("b")[0].encoding.to_s"#);
+        // Non-UTF-8 receiver still produces US-ASCII output.
+        run_test(
+            r#"
+              s = "abc".dup.force_encoding("ASCII-8BIT")
+              s.unpack("H4").first.encoding.to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn slice_regexp_preserves_encoding() {
+        // `String#[]` / `slice` with a Regexp arg preserves the
+        // receiver's encoding on the matched substring.
+        run_test(
+            r#"
+              s = "hello".dup.force_encoding("US-ASCII")
+              s[/ell/].encoding.to_s
+            "#,
+        );
+        run_test(
+            r#"
+              s = "hello".dup.force_encoding("US-ASCII")
+              s[/(ll)/, 1].encoding.to_s
+            "#,
+        );
+        run_test(
+            r#"
+              s = "abc".dup.force_encoding("US-ASCII")
+              s[/(?<x>b)/, "x"].encoding.to_s
+            "#,
+        );
+        // String-substring form: the result inherits the
+        // *argument's* encoding (matching CRuby —
+        // `s[bin_string]` is BINARY even when `s` is US-ASCII).
+        run_test(
+            r#"
+              s = "abcdef".dup.force_encoding("US-ASCII")
+              arg = "bcd".dup.force_encoding("BINARY")
+              s[arg].encoding.to_s
+            "#,
+        );
+    }
+
+    // ----- S3 broader rollout -----
+
+    #[test]
+    fn modulo_preserves_format_encoding() {
+        // The format string's encoding wins when args are compat.
+        run_test(r#"("abc %s".dup.force_encoding("US-ASCII") % "x").encoding.to_s"#);
+        // Negotiation between BINARY/UTF-8: passing a non-ASCII
+        // chr (0xC3 single byte = invalid UTF-8) keeps BINARY.
+        run_test(r#"("hello %s" % 195.chr).encoding.to_s"#);
+    }
+
+    #[test]
+    fn modulo_raises_on_incompatible_encodings() {
+        // UTF-8 format + UTF-16LE arg → CompatibilityError.
+        run_test_error(
+            r#""hello %s".encode("utf-8") % "world".encode("UTF-16LE")"#,
+        );
+    }
+
+    #[test]
+    fn cmp_breaks_ties_by_encoding() {
+        // Same bytes, different non-ASCII encodings → encoding
+        // ordinal breaks the tie. UTF-8 < ISO-8859-1.
+        run_test(
+            r#"
+              a = [0xFF].pack("C").force_encoding("UTF-8")
+              b = [0xFF].pack("C").force_encoding("ISO-8859-1")
+              [a <=> b, b <=> a]
+            "#,
+        );
+        // 7-bit ASCII content tied across encodings stays 0.
+        run_test(
+            r#"
+              a = "abc".dup.force_encoding("UTF-8")
+              b = "abc".dup.force_encoding("US-ASCII")
+              a <=> b
+            "#,
+        );
+        // Empty strings in incompatible encodings are 0
+        // (compatible_encoding returns the left side).
+        run_test(
+            r#"
+              ("" <=> "".dup.force_encoding("ISO-2022-JP"))
+            "#,
+        );
+    }
+
+    #[test]
+    fn upto_raises_on_incompatible_encodings() {
+        run_test_error(
+            r#"
+              char1 = "a".dup.force_encoding("EUC-JP")
+              char2 = "b".dup.force_encoding("ISO-2022-JP")
+              char1.upto(char2) {}
+            "#,
+        );
     }
 }

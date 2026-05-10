@@ -256,7 +256,12 @@ pub(crate) fn unpack(
                         s.push_str(&format!("{:02x}", u));
                     }
                 }
-                ary.push(Value::string(s));
+                ary.push(Value::string_from_inner(
+                    crate::value::rvalue::string::RStringInner::from_encoding_scanned(
+                        s.as_bytes(),
+                        crate::value::Encoding::UsAscii,
+                    ),
+                ));
             }
             Template::Null => {
                 if let Some(repeat) = repeat {
@@ -395,7 +400,12 @@ pub(crate) fn unpack(
                         }
                     }
                 }
-                ary.push(Value::string(s));
+                ary.push(Value::string_from_inner(
+                    crate::value::rvalue::string::RStringInner::from_encoding_scanned(
+                        s.as_bytes(),
+                        crate::value::Encoding::UsAscii,
+                    ),
+                ));
             }
             Template::Utf8 => {
                 // 'U' — UTF-8 characters to codepoints
