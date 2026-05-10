@@ -10,6 +10,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(BINDING_CLASS, "local_variables", local_variables, 0);
     globals.define_builtin_func(BINDING_CLASS, "source_location", source_location, 0);
     globals.define_builtin_func(BINDING_CLASS, "receiver", receiver, 0);
+    globals.define_builtin_func(
+        BINDING_CLASS,
+        "local_variable_defined?",
+        local_variable_defined,
+        1,
+    );
+    globals.define_builtin_func(BINDING_CLASS, "local_variable_get", local_variable_get, 1);
+    globals.define_builtin_funcs_with_effect(
+        BINDING_CLASS,
+        "local_variable_set",
+        &[],
+        local_variable_set,
+        2,
+        2,
+        false,
+        Effect::EVAL,
+    );
     globals.define_builtin_funcs_with_effect(
         BINDING_CLASS,
         "eval",
@@ -54,7 +71,7 @@ fn source_location(
                 if bc_index.to_usize() < iseq_info.sourcemap.len() {
                     let loc = iseq_info.sourcemap[bc_index.to_usize()];
                     let file_name =
-                        Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+                        Value::string(iseq_info.sourceinfo.file_name().into_owned());
                     let line = Value::integer(iseq_info.sourceinfo.get_line(&loc) as i64);
                     return Ok(Value::array2(file_name, line));
                 }
@@ -69,7 +86,7 @@ fn source_location(
         binding.outer_fid()
     };
     let iseq = globals.store.iseq(fid);
-    let file_name = Value::string(iseq.sourceinfo.short_file_name().to_string());
+    let file_name = Value::string(iseq.sourceinfo.file_name().into_owned());
     let line = Value::integer(iseq.sourceinfo.get_line(&iseq.loc) as i64);
     Ok(Value::array2(file_name, line))
 }
@@ -126,6 +143,170 @@ fn local_variables(
     };
     let v = globals.store.local_variables(globals.store[fid].as_iseq());
     Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Binding#local_variable_defined?
+///
+/// - local_variable_defined?(symbol) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/local_variable_defined=3f.html]
+#[monoruby_builtin]
+fn local_variable_defined(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let name = arg_to_local_name(arg, vm, globals)?
+        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    let self_val = lfp.self_val();
+    let inner = self_val.as_binding_inner();
+    Ok(Value::bool(
+        lookup_local_in_binding(globals, inner, name).is_some(),
+    ))
+}
+
+///
+/// ### Binding#local_variable_get
+///
+/// - local_variable_get(symbol) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/local_variable_get.html]
+#[monoruby_builtin]
+fn local_variable_get(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let name = arg_to_local_name(arg, vm, globals)?
+        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    let self_val = lfp.self_val();
+    let inner = self_val.as_binding_inner();
+    match lookup_local_in_binding(globals, inner, name) {
+        Some((host, slot)) => Ok(host.register(slot).unwrap_or_default()),
+        None => Err(MonorubyErr::nameerr_with_name(
+            format!(
+                "local variable `{}' is not defined for {}",
+                name,
+                self_val.to_s(&globals.store)
+            ),
+            name,
+        )),
+    }
+}
+
+///
+/// ### Binding#local_variable_set
+///
+/// - local_variable_set(symbol, obj) -> obj
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/local_variable_set.html]
+#[monoruby_builtin]
+fn local_variable_set(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let name = arg_to_local_name(arg, vm, globals)?
+        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    let val = lfp.arg(1);
+    let self_val = lfp.self_val();
+    let inner = self_val.as_binding_inner();
+    if let Some((mut host, slot)) = lookup_local_in_binding(globals, inner, name) {
+        // SAFETY: `slot` came from this iseq's `locals` table, so it is
+        // a valid register slot for `host`.
+        unsafe { host.set_register(slot, Some(val)) };
+        return Ok(val);
+    }
+    // Not yet bound — introduce the local in the binding's eval scope by
+    // compiling a stub `<name> = nil`, then write the actual value.
+    let binding = Binding::try_new(self_val).expect("self is Binding");
+    let stub = format!("{} = nil", name);
+    globals.compile_script_binding(stub, "(local_variable_set)", binding, 1)?;
+    vm.invoke_binding(globals, binding.binding().unwrap())?;
+    let inner = self_val.as_binding_inner();
+    let (mut host, slot) = lookup_local_in_binding(globals, inner, name)
+        .expect("stub eval registered the new local");
+    // SAFETY: see above.
+    unsafe { host.set_register(slot, Some(val)) };
+    Ok(val)
+}
+
+/// Coerce a `local_variable_*` argument to an interned name. Returns
+/// `Ok(None)` when the value parses to something that cannot be a local
+/// variable (e.g. `:$0`, `:@x`, `:Foo`); callers decide whether that
+/// becomes `false` (defined?) or a NameError (get/set).
+fn arg_to_local_name(
+    arg: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Option<IdentId>> {
+    let name = if let Some(sym) = arg.try_symbol() {
+        sym
+    } else {
+        let s = arg.coerce_to_string(vm, globals)?;
+        IdentId::get_id(&s)
+    };
+    let s = name.get_name();
+    if is_valid_local_name(&s) {
+        Ok(Some(name))
+    } else {
+        Ok(None)
+    }
+}
+
+fn name_not_local_err(arg: Value, store: &Store) -> MonorubyErr {
+    MonorubyErr::nameerr(format!(
+        "wrong local variable name `{}' for {}",
+        arg.to_s(store),
+        "Binding"
+    ))
+}
+
+fn is_valid_local_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let valid_first = first.is_ascii_lowercase() || first == '_' || !first.is_ascii();
+    if !valid_first {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii())
+}
+
+/// Walk the lfp chain captured by the binding looking for `name` in
+/// each iseq's `locals` table. Returns the lfp that hosts the slot and
+/// the slot index, or `None` if the name is not bound anywhere along
+/// the chain.
+fn lookup_local_in_binding(
+    globals: &Globals,
+    inner: &BindingInner,
+    name: IdentId,
+) -> Option<(Lfp, SlotId)> {
+    let mut lfp = match inner.binding() {
+        Some(l) => l,
+        None => inner.outer_lfp(),
+    };
+    loop {
+        let fid = lfp.func_id();
+        if let Some(iseq_id) = globals.store[fid].is_iseq() {
+            let iseq = &globals.store[iseq_id];
+            if let Some(bc_local) = iseq.locals.get(&name) {
+                return Some((lfp, SlotId(1 + bc_local.0)));
+            }
+        }
+        match lfp.outer() {
+            Some(outer) => lfp = outer,
+            None => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +541,132 @@ mod tests {
         run_test_error(
             r#"
             binding.eval
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_defined() {
+        run_test(
+            r#"
+            x = 1
+            b = binding
+            [
+              b.local_variable_defined?(:x),
+              b.local_variable_defined?(:y),
+              b.local_variable_defined?("x"),
+              b.local_variable_defined?("y"),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_defined_invalid_name() {
+        // Names that can't be locals (`:$0`, `:@x`, `:Foo`, …) raise
+        // NameError, matching CRuby's `Binding#local_variable_defined?`.
+        run_test_error(
+            r#"
+            binding.local_variable_defined?(:$0)
+            "#,
+        );
+        run_test_error(
+            r#"
+            binding.local_variable_defined?(:@x)
+            "#,
+        );
+        run_test_error(
+            r#"
+            binding.local_variable_defined?(:Foo)
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_defined_after_eval() {
+        run_test(
+            r#"
+            b = binding
+            b.eval("z = 1")
+            b.local_variable_defined?(:z)
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_get() {
+        run_test(
+            r#"
+            x = 42
+            binding.local_variable_get(:x)
+            "#,
+        );
+        run_test(
+            r#"
+            x = 42
+            binding.local_variable_get("x")
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_get_missing() {
+        // Asking for an unbound name raises NameError.
+        run_test_error(
+            r#"
+            binding.local_variable_get(:no_such)
+            "#,
+        );
+        // Reserved-prefix names are rejected as not-a-local.
+        run_test_error(
+            r#"
+            binding.local_variable_get(:$0)
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_set_existing() {
+        // Writes through to the outer local the binding captured.
+        run_test(
+            r#"
+            x = 1
+            binding.local_variable_set(:x, 42)
+            x
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_set_introduces_new_local() {
+        // Setting a name not already bound creates it in the binding's
+        // eval scope (does not leak to the surrounding method).
+        run_test(
+            r#"
+            b = binding
+            b.local_variable_set(:foo, 7)
+            [b.local_variable_get(:foo), b.eval("foo"), b.local_variables.include?(:foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_set_string_name() {
+        run_test(
+            r#"
+            b = binding
+            b.local_variable_set("bar", 99)
+            b.local_variable_get(:bar)
+            "#,
+        );
+    }
+
+    #[test]
+    fn binding_local_variable_set_invalid_name() {
+        // `:$0` is not a local-variable name → NameError on set.
+        run_test_error(
+            r#"
+            binding.local_variable_set(:$0, "x")
             "#,
         );
     }
