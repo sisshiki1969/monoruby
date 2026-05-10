@@ -881,9 +881,15 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 &format!("fd {}", fd),
             ));
         }
-        let name = format!("fd {}", fd);
+        // Scan trailing args for an options Hash and pick up `:path`
+        // (display name) and `:autoclose` (fd ownership) — required by
+        // patterns like `File.new(io.fileno, autoclose: false, path: "")`
+        // (logger/log_device.rb feature-detection code) where the caller
+        // explicitly disclaims ownership of the borrowed fd.
+        let (name, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
         // SAFETY: fd has been validated as a valid file descriptor above.
         let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        io_inner.set_autoclose(autoclose);
         let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
         if let Some(bh) = lfp.block() {
             let r = vm.invoke_block_once(globals, bh, &[res]);

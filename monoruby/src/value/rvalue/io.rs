@@ -1,6 +1,8 @@
 use std::{
+    cell::Cell,
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write},
-    os::fd::{AsRawFd, FromRawFd},
+    mem::ManuallyDrop,
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd},
     os::unix::process::ExitStatusExt,
     rc::Rc,
 };
@@ -17,8 +19,33 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
 
 #[derive(Debug)]
 pub struct FileDescriptor {
-    reader: std::io::BufReader<std::fs::File>,
+    reader: ManuallyDrop<std::io::BufReader<std::fs::File>>,
     name: String,
+    /// CRuby's `IO#autoclose=` semantics. When `true` (the default), the
+    /// underlying fd is closed when this `FileDescriptor` is dropped. When
+    /// `false`, ownership is released via `into_raw_fd` so the fd is *not*
+    /// closed — required for the `File.new(other_io.fileno, ...)` pattern
+    /// (see `logger/log_device.rb#fixup_mode`) where the original IO is
+    /// expected to relinquish ownership of the fd to the new wrapper.
+    autoclose: Cell<bool>,
+}
+
+impl Drop for FileDescriptor {
+    fn drop(&mut self) {
+        // SAFETY: `reader` is wrapped in `ManuallyDrop` and is only taken
+        // here, exactly once, in `Drop`. After this, `self.reader` must not
+        // be accessed.
+        let reader = unsafe { ManuallyDrop::take(&mut self.reader) };
+        if self.autoclose.get() {
+            // Normal case: dropping the `BufReader<File>` closes the fd via
+            // `OwnedFd::drop`.
+            drop(reader);
+        } else {
+            // Borrowed-fd case: release ownership without closing. Some
+            // other Ruby IO is responsible for the fd's lifetime.
+            let _fd = reader.into_inner().into_raw_fd();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -129,8 +156,9 @@ impl IoInner {
 
     pub(super) fn file(file: std::fs::File, name: String) -> Self {
         Self::File(Rc::new(FileDescriptor {
-            reader: std::io::BufReader::new(file),
+            reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            autoclose: Cell::new(true),
         }))
     }
 
@@ -155,8 +183,9 @@ impl IoInner {
         // SAFETY: fd is a valid file descriptor obtained from pipe().
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         Self::File(Rc::new(FileDescriptor {
-            reader: std::io::BufReader::new(file),
+            reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            autoclose: Cell::new(true),
         }))
     }
 
@@ -217,7 +246,11 @@ impl IoInner {
             Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
-                let file = &mut Rc::get_mut(file).unwrap().reader;
+                // `&mut *...reader` peels the ManuallyDrop wrapper to yield
+                // `&mut BufReader<File>`, which is needed because `Read::bytes`
+                // takes `self` by value and would otherwise try to move out of
+                // the ManuallyDrop.
+                let file = &mut *Rc::get_mut(file).unwrap().reader;
                 if let Some(length) = length {
                     let buf = match file.bytes().take(length).collect() {
                         Ok(buf) => buf,
@@ -265,7 +298,7 @@ impl IoInner {
             Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
-                let file = &mut Rc::get_mut(file).unwrap().reader;
+                let file = &mut *Rc::get_mut(file).unwrap().reader;
                 let mut buf = String::new();
                 let size = file
                     .read_line(&mut buf)
@@ -352,6 +385,23 @@ impl IoInner {
         match self {
             Self::File(file) => Some(&file.name),
             _ => None,
+        }
+    }
+
+    /// Set the autoclose flag for a File IO. No-op for stdio/pipe/popen/closed
+    /// because their fd lifetime is not owned by this `IoInner`.
+    pub fn set_autoclose(&self, value: bool) {
+        if let Self::File(file) = self {
+            file.autoclose.set(value);
+        }
+    }
+
+    /// Read the autoclose flag. Always `true` for variants whose fd is owned
+    /// elsewhere (stdio inherits the process fd, popen owns its own ends).
+    pub fn is_autoclose(&self) -> bool {
+        match self {
+            Self::File(file) => file.autoclose.get(),
+            _ => true,
         }
     }
 }
