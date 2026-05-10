@@ -899,6 +899,36 @@ impl Value {
         RValue::new_string_from_str(s).pack()
     }
 
+    /// Build a String whose encoding tag is copied from `template`.
+    /// Used by string-producing operations (case mapping, reverse,
+    /// succ, gsub-without-regex, partition, scan, …) to preserve
+    /// the receiver's declared encoding rather than always returning
+    /// a UTF-8 result. Fall back to UTF-8 when `template` isn't a
+    /// String — non-String receivers don't carry an encoding tag.
+    pub fn string_from_str_with_encoding_of(s: &str, template: Value) -> Self {
+        let enc = template
+            .is_rstring_inner()
+            .map(|r| r.encoding())
+            .unwrap_or(crate::value::Encoding::Utf8);
+        Self::string_from_inner(crate::value::RStringInner::from_encoding_scanned(
+            s.as_bytes(),
+            enc,
+        ))
+    }
+
+    /// Same as `string_from_str_with_encoding_of` but for raw byte
+    /// slices. The byte stream is interpreted under the
+    /// receiver's encoding (no UTF-8 validation), so this is the
+    /// right choice when `s` may legitimately contain non-UTF-8
+    /// bytes (e.g. `byteslice`'s output of an EUC-JP haystack).
+    pub fn string_from_bytes_with_encoding_of(s: &[u8], template: Value) -> Self {
+        let enc = template
+            .is_rstring_inner()
+            .map(|r| r.encoding())
+            .unwrap_or(crate::value::Encoding::Utf8);
+        Self::string_from_inner(crate::value::RStringInner::from_encoding_scanned(s, enc))
+    }
+
     pub fn bytes_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
     }

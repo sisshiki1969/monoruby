@@ -207,7 +207,15 @@ impl Executor {
             (RV::Bool(_), _) => false,
             (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
             (RV::Symbol(_), _) => false,
-            (RV::String(lhs), RV::String(rhs)) => lhs.eq(rhs),
+            (RV::String(lhs), RV::String(rhs)) => {
+                // CRuby `String#==` is content-equal AND encoding-
+                // compatible: same bytes with incompatible encodings
+                // (e.g. UTF-8 vs UTF-32LE on non-ASCII content)
+                // compare *unequal*. The empty-string special case
+                // in `compatible_encoding` keeps `"".UTF-16BE ==
+                // "".UTF-8` true.
+                lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
+            }
             (RV::String(_), _) => {
                 // CRuby's `String#==` dispatches to `rhs == self` when
                 // the rhs *responds to* `to_str` (it does NOT actually
