@@ -100,11 +100,12 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::RImaginary(n, d) => self.emit_rimaginary(dst, &n, &d),
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b),
+            NodeKind::EncodedString(b, enc) => self.emit_encoded_string(dst, b, enc),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
             NodeKind::Hash(nodes, splat) => self.gen_hash(dst, nodes, splat, loc)?,
             NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
             NodeKind::Array(_, true) | NodeKind::Range { is_const: true, .. } => {
-                let val = Value::from_const_ast(&rhs);
+                let val = Value::from_const_ast(&rhs, self.source_encoding());
                 self.emit_literal(dst, val);
             }
             NodeKind::RegExp(nodes, op, true) => {
@@ -329,7 +330,8 @@ impl<'a> BytecodeGen<'a> {
                 | NodeKind::Imaginary(_)
                 | NodeKind::Rational(..)
                 | NodeKind::RImaginary(..)
-                | NodeKind::String(_) => return Ok(()),
+                | NodeKind::String(_)
+                | NodeKind::EncodedString(..) => return Ok(()),
                 _ => {}
             }
         }
@@ -349,6 +351,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::RImaginary(..)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
+            | NodeKind::EncodedString(..)
             | NodeKind::Array(..)
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }

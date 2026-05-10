@@ -936,18 +936,36 @@ impl Value {
     ///
     /// Build a String from a source-file byte literal (e.g. `"\xC3\xA9"`).
     ///
-    /// The result is tagged as UTF-8, matching CRuby's source-encoding
-    /// semantics where string literals inherit the source file encoding
-    /// regardless of whether `\xNN` escapes produce valid UTF-8. The bytes
-    /// may be invalid UTF-8, in which case `#valid_encoding?` returns
-    /// false and byte-level operations still work.
+    /// `enc` is the encoding declared by the source file's `# encoding:`
+    /// magic comment (defaulting to UTF-8 when the source has no magic
+    /// comment, per Ruby 2.0+ semantics). The bytes are *not* re-validated
+    /// against `enc` — invalid byte sequences survive verbatim, so e.g.
+    /// `"\x80"` in a `# encoding: utf-8` file is tagged UTF-8 but
+    /// `valid_encoding?` returns false, exactly like CRuby.
     ///
-    pub fn string_from_source_bytes(b: &[u8]) -> Self {
+    pub fn string_from_source_bytes(b: &[u8], enc: Encoding) -> Self {
         // Source-byte literals are bytecode-time templates that get
         // `deep_copy`-cloned at every literal-load. Pre-classify so
         // the cr is fixed on the template; clones inherit it for free
         // instead of each one re-running the encoding check.
-        Self::string_from_inner(RStringInner::from_encoding_scanned(b, Encoding::Utf8))
+        Self::string_from_inner(RStringInner::from_encoding_scanned(b, enc))
+    }
+
+    ///
+    /// Build a String literal carrying the file's declared source
+    /// encoding. The Prism lowerer hands us a Rust `String` (i.e. valid
+    /// UTF-8 bytes) when the literal's bytes happened to UTF-8-decode,
+    /// but the *declared* source encoding may still be e.g. binary or
+    /// US-ASCII — so we honour `enc` rather than always tagging UTF-8.
+    /// Pre-scanned so deep_copy clones inherit `cr` for free.
+    ///
+    pub fn string_from_source_str(s: &str, enc: Encoding) -> Self {
+        if matches!(enc, Encoding::Utf8) {
+            // Hot path: the common case (no magic comment) reuses the
+            // existing UTF-8 scanned constructor verbatim.
+            return Self::string_scanned(s.to_owned());
+        }
+        Self::string_from_inner(RStringInner::from_encoding_scanned(s.as_bytes(), enc))
     }
 
     pub fn string_from_vec(b: Vec<u8>) -> Self {
@@ -2334,16 +2352,21 @@ impl Value {
 impl Value {
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
         let mut vm = Executor::default();
-        Self::from_ast_inner(node, &mut vm, globals)
+        Self::from_ast_inner(node, &mut vm, globals, Encoding::Utf8)
     }
 
-    fn from_ast_inner(node: &Node, vm: &mut Executor, globals: &mut Globals) -> Value {
+    fn from_ast_inner(
+        node: &Node,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        src_enc: Encoding,
+    ) -> Value {
         use crate::ast::NReal;
 
         match &node.kind {
             NodeKind::CompStmt(stmts) => {
                 assert_eq!(1, stmts.len(), "multiple statements {stmts:?}");
-                Self::from_ast_inner(&stmts[0], vm, globals)
+                Self::from_ast_inner(&stmts[0], vm, globals, src_enc)
             }
             NodeKind::Integer(num) => Value::integer(*num),
             NodeKind::Bignum(num) => Value::bigint(num.clone()),
@@ -2361,10 +2384,16 @@ impl Value {
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
-            NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
+            NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
+            NodeKind::EncodedString(b, name) => {
+                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::Utf8);
+                Value::string_from_source_bytes(b, enc)
+            }
             NodeKind::Array(v, ..) => {
-                let iter = v.iter().map(|node| Self::from_ast_inner(node, vm, globals));
+                let iter = v
+                    .iter()
+                    .map(|node| Self::from_ast_inner(node, vm, globals, src_enc));
                 Value::array_from_iter(iter)
             }
             NodeKind::Const {
@@ -2407,12 +2436,12 @@ impl Value {
                 ..
             } => {
                 let start = if let Some(start) = start {
-                    Self::from_ast_inner(start, vm, globals)
+                    Self::from_ast_inner(start, vm, globals, src_enc)
                 } else {
                     Value::nil()
                 };
                 let end = if let Some(end) = end {
-                    Self::from_ast_inner(end, vm, globals)
+                    Self::from_ast_inner(end, vm, globals, src_enc)
                 } else {
                     Value::nil()
                 };
@@ -2421,8 +2450,8 @@ impl Value {
             NodeKind::Hash(v, _splat) => {
                 let mut map = RubyMap::default();
                 for (k, v) in v.iter() {
-                    let k = Self::from_ast_inner(k, vm, globals);
-                    let v = Self::from_ast_inner(v, vm, globals);
+                    let k = Self::from_ast_inner(k, vm, globals, src_enc);
+                    let v = Self::from_ast_inner(v, vm, globals, src_enc);
                     map.insert(k, v, vm, globals).unwrap();
                 }
                 Value::hash(map)
@@ -2442,7 +2471,7 @@ impl Value {
                 }
             }
             NodeKind::BinOp(crate::ast::BinOp::Add, box lhs, box rhs) => {
-                let lhs = Self::from_ast_inner(lhs, vm, globals);
+                let lhs = Self::from_ast_inner(lhs, vm, globals, src_enc);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(Real::try_from(globals, lhs).unwrap(), im.clone())
                 } else {
@@ -2450,7 +2479,7 @@ impl Value {
                 }
             }
             NodeKind::BinOp(crate::ast::BinOp::Sub, box lhs, box rhs) => {
-                let lhs = Self::from_ast_inner(lhs, vm, globals);
+                let lhs = Self::from_ast_inner(lhs, vm, globals, src_enc);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(
                         Real::try_from(globals, lhs).unwrap(),
@@ -2464,7 +2493,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn from_const_ast(node: &Node) -> Value {
+    pub(crate) fn from_const_ast(node: &Node, src_enc: Encoding) -> Value {
         use crate::ast::NReal;
         match &node.kind {
             NodeKind::Integer(num) => Value::integer(*num),
@@ -2483,10 +2512,14 @@ impl Value {
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
-            NodeKind::String(s) => Value::string_from_str(s),
-            NodeKind::Bytes(b) => Value::string_from_source_bytes(b),
+            NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
+            NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
+            NodeKind::EncodedString(b, name) => {
+                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::Utf8);
+                Value::string_from_source_bytes(b, enc)
+            }
             NodeKind::Array(v, ..) => {
-                let iter = v.iter().map(|node| Self::from_const_ast(node));
+                let iter = v.iter().map(|node| Self::from_const_ast(node, src_enc));
                 Value::array_from_iter(iter)
             }
             NodeKind::Range {
@@ -2496,12 +2529,12 @@ impl Value {
                 ..
             } => {
                 let start = if let Some(start) = start {
-                    Self::from_const_ast(start)
+                    Self::from_const_ast(start, src_enc)
                 } else {
                     Value::nil()
                 };
                 let end = if let Some(end) = end {
-                    Self::from_const_ast(end)
+                    Self::from_const_ast(end, src_enc)
                 } else {
                     Value::nil()
                 };

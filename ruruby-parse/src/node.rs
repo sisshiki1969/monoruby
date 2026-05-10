@@ -16,6 +16,21 @@ pub enum NodeKind {
     Bool(bool),
     String(String),
     Bytes(Vec<u8>),
+    /// String literal whose encoding is *forced* to a specific value
+    /// regardless of the source file's `# encoding:` directive.
+    ///
+    /// CRuby upgrades a non-UTF-8 source's string literal to UTF-8
+    /// when it contains a `\u` escape (the bytes the escape produces
+    /// are valid UTF-8, so the literal is no longer representable in
+    /// the source encoding). Prism surfaces this via the
+    /// `PM_STRING_FLAGS_FORCED_UTF8_ENCODING` flag on `StringNode`.
+    /// The lowerer emits this variant only when prism flags the
+    /// literal — the common case stays on `String` / `Bytes`.
+    ///
+    /// `(content_bytes, encoding_name)` — encoding name is one of
+    /// `"UTF-8"` or `"ASCII-8BIT"`, lowercased aliases also accepted
+    /// by the consumer.
+    EncodedString(Vec<u8>, &'static str),
     InterporatedString(Vec<Node>),
     Command(Box<Node>),
     Symbol(String),

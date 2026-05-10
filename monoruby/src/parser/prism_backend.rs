@@ -135,16 +135,28 @@ fn try_prism_inner(
     line_offset: i64,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
-    let source_info: SourceInfoRef = std::rc::Rc::new(ruruby_parse::SourceInfo::new_eval(
-        path,
-        code.to_owned(),
-        line_offset,
-    ));
 
     let result = match options.as_ref() {
         Some(opts) => prism::parse_with_options(code.as_bytes(), opts),
         None => prism::parse(code.as_bytes()),
     };
+
+    // Pull `# encoding: NAME` / `# coding: NAME` (also Emacs-style
+    // `# -*- coding: NAME -*-`) out of the magic comment list before
+    // we touch any string literals. Prism normalises all of these
+    // into one entry per key=value pair, so we just look for the
+    // canonical key. If both are present (rare), the first wins —
+    // matching CRuby's "first magic comment line" semantics.
+    let source_encoding: Option<String> = result
+        .magic_comments()
+        .find(|c| matches!(c.key(), b"encoding" | b"coding"))
+        .and_then(|c| std::str::from_utf8(c.value()).ok().map(str::to_owned));
+
+    let source_info: SourceInfoRef = std::rc::Rc::new(
+        ruruby_parse::SourceInfo::new_eval(path, code.to_owned(), line_offset)
+            .with_source_encoding(source_encoding),
+    );
+
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
         return Err(MonorubyErr::parse(ruruby_parse::ParseErr {
@@ -1248,6 +1260,26 @@ impl<'pr> Lowerer<'pr> {
     fn lower_string(&self, node: &StringNode<'pr>) -> Node {
         let bytes: &[u8] = node.unescaped();
         let loc = location_to_loc(&node.location());
+        // CRuby upgrades a non-UTF-8 source's literal to UTF-8 the
+        // moment it contains a `\u` escape (the bytes the escape
+        // produces are valid UTF-8, so they no longer fit the source
+        // encoding). Prism flags this via
+        // `PM_STRING_FLAGS_FORCED_UTF8_ENCODING`; surface it as the
+        // dedicated `EncodedString` variant so bytecodegen tags the
+        // literal UTF-8 regardless of the file's `# encoding:`.
+        // Likewise `forced_binary` (rare) overrides to ASCII-8BIT.
+        if node.is_forced_utf8_encoding() {
+            return Node {
+                kind: NodeKind::EncodedString(bytes.to_vec(), "UTF-8"),
+                loc,
+            };
+        }
+        if node.is_forced_binary_encoding() {
+            return Node {
+                kind: NodeKind::EncodedString(bytes.to_vec(), "ASCII-8BIT"),
+                loc,
+            };
+        }
         match std::str::from_utf8(bytes) {
             Ok(s) => Node {
                 kind: NodeKind::String(s.to_owned()),
@@ -3420,6 +3452,7 @@ fn is_constant_literal(kind: &NodeKind) -> bool {
             | NodeKind::RImaginary(_, _)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
+            | NodeKind::EncodedString(..)
             | NodeKind::Symbol(_)
     )
 }
@@ -3996,5 +4029,155 @@ $1
                 "CallNode",
             ],
         );
+    }
+
+    // ----- # encoding: / # coding: magic-comment handling -----------------
+    //
+    // Source encoding flows: prism's `magic_comments()` -> SourceInfo's
+    // `source_encoding` field -> bytecodegen's `emit_string` / `emit_bytes`
+    // -> the resulting `String` literal's `encoding` tag at runtime.
+    //
+    // These tests pin the end-to-end behaviour by running short scripts
+    // through the full parse → bytecode → eval pipeline and reading back
+    // `String#encoding.to_s`. Going through the live runtime keeps the
+    // test honest: it would notice if any layer (parser, bytecodegen,
+    // value constructors) lost the encoding on the way through.
+    //
+    // We force the prism backend explicitly rather than going through
+    // `Globals::run` (which routes via `MONORUBY_PARSER`): magic-comment
+    // handling is prism-only, and `bin/test` runs the suite a second
+    // time with `MONORUBY_PARSER=ruruby` for coverage of the legacy
+    // backend — every test in this module is prism-specific by design.
+
+    /// Drive a short Ruby script through the prism backend explicitly,
+    /// returning the final `Value` and the `Globals` it ran against.
+    /// Callers inspect the value with the returned `Globals` (needed
+    /// for `Value::inspect`).
+    fn run_prism_source(source: &str) -> (crate::Globals, crate::Value) {
+        let path = std::path::Path::new("(test)");
+        let mut globals = crate::Globals::new_test();
+        let parsed = crate::parser::parse_program_with(
+            crate::parser::Backend::Prism,
+            source.to_owned(),
+            path,
+        )
+        .expect("parse_program_with(Prism)");
+        let fid = crate::bytecodegen::bytecode_compile_script(&mut globals, parsed)
+            .expect("bytecode_compile_script");
+        let mut executor = crate::executor::Executor::init(&mut globals, "(test)")
+            .expect("Executor::init");
+        executor.init_stack_limit(&mut globals);
+        let val = executor
+            .eval_toplevel(&mut globals, fid)
+            .expect("eval_toplevel");
+        (globals, val)
+    }
+
+    fn run_encoding_query(source: &str) -> String {
+        let (globals, val) = run_prism_source(source);
+        val.inspect(&globals.store)
+            .trim_matches('"')
+            .to_owned()
+    }
+
+    /// `# encoding: binary` makes every string literal in the file
+    /// ASCII-8BIT. Without honouring the comment, `pack`-style spec
+    /// files (which all open with `# encoding: binary`) compare a
+    /// pack output (ASCII-8BIT) against a literal we'd tagged UTF-8
+    /// and the encoding-aware `String#==` returns false.
+    #[test]
+    fn magic_comment_encoding_binary_tags_literal_ascii8bit() {
+        let enc = run_encoding_query("# encoding: binary\n\"hello\".encoding.to_s\n");
+        assert_eq!(enc, "ASCII-8BIT");
+    }
+
+    /// `# coding: NAME` is the legacy form prism still emits.
+    #[test]
+    fn magic_comment_coding_alias_resolves() {
+        let enc = run_encoding_query("# coding: us-ascii\n\"abc\".encoding.to_s\n");
+        assert_eq!(enc, "US-ASCII");
+    }
+
+    /// Emacs-style `# -*- coding: NAME -*-` — prism normalises the
+    /// `-*-` decoration away and surfaces the same `coding` key.
+    #[test]
+    fn magic_comment_emacs_style_resolves() {
+        let enc = run_encoding_query("# -*- coding: shift_jis -*-\n\"abc\".encoding.to_s\n");
+        assert_eq!(enc, "Shift_JIS");
+    }
+
+    /// No magic comment -> UTF-8 (Ruby 2.0+ default source encoding).
+    #[test]
+    fn magic_comment_default_is_utf8() {
+        let enc = run_encoding_query("\"abc\".encoding.to_s\n");
+        assert_eq!(enc, "UTF-8");
+    }
+
+    /// `\xNN` byte escapes in a `# encoding: binary` source come out
+    /// of the lowerer as `NodeKind::Bytes` (their bytes don't UTF-8
+    /// decode). The bytecodegen must still tag those as ASCII-8BIT,
+    /// not silently UTF-8.
+    #[test]
+    fn magic_comment_binary_byte_literal_is_ascii8bit() {
+        let enc = run_encoding_query("# encoding: binary\n\"\\x80\".encoding.to_s\n");
+        assert_eq!(enc, "ASCII-8BIT");
+    }
+
+    /// The proximate fix for PR #462: pack output (ASCII-8BIT) and a
+    /// `# encoding: binary` literal with the same bytes must compare
+    /// equal under the encoding-aware `String#==`. This is the exact
+    /// shape of every `core/array/pack/*_spec.rb` assertion.
+    #[test]
+    fn magic_comment_pack_output_eq_binary_literal() {
+        let (_globals, val) =
+            run_prism_source("# encoding: binary\n[\"1\"].pack(\"B\") == \"\\x80\"\n");
+        assert!(val.as_bool(), "pack output should equal binary literal");
+    }
+
+    /// Sanity check on the parser layer in isolation: prism reports
+    /// the magic comment, and `parse_program` stashes its value on
+    /// the `SourceInfo` for downstream consumers.
+    #[test]
+    fn parse_program_extracts_source_encoding_from_magic_comment() {
+        let result = parse_program(
+            "# encoding: binary\nx = 1\n".to_owned(),
+            PathBuf::from("test.rb"),
+        )
+        .expect("parse_program");
+        assert_eq!(
+            result.source_info.source_encoding.as_deref(),
+            Some("binary")
+        );
+
+        let result =
+            parse_program("x = 1\n".to_owned(), PathBuf::from("test.rb")).expect("parse_program");
+        assert_eq!(result.source_info.source_encoding, None);
+    }
+
+    /// CRuby promotes a string literal to UTF-8 the moment it contains
+    /// a `\u` escape, even when the source file declares a non-UTF-8
+    /// encoding. Prism flags this case via
+    /// `PM_STRING_FLAGS_FORCED_UTF8_ENCODING`; the lowerer must lower
+    /// it as `EncodedString("UTF-8")` so bytecodegen tags the result
+    /// UTF-8 instead of inheriting the file's `# encoding: binary`.
+    /// Tested cases: `\u` in binary source, `\u` in shift_jis source,
+    /// and the negative — a plain ASCII literal in binary source
+    /// stays ASCII-8BIT (no spurious upgrade).
+    #[test]
+    fn magic_comment_unicode_escape_forces_utf8_in_binary_source() {
+        let enc = run_encoding_query("# encoding: binary\n\"\\u{9819}\".encoding.to_s\n");
+        assert_eq!(enc, "UTF-8");
+    }
+
+    #[test]
+    fn magic_comment_unicode_escape_forces_utf8_in_shift_jis_source() {
+        let enc = run_encoding_query("# encoding: shift_jis\n\"\\u{1234}\".encoding.to_s\n");
+        assert_eq!(enc, "UTF-8");
+    }
+
+    #[test]
+    fn magic_comment_no_unicode_escape_keeps_source_encoding() {
+        let enc = run_encoding_query("# encoding: binary\n\"abc\".encoding.to_s\n");
+        assert_eq!(enc, "ASCII-8BIT");
     }
 }
