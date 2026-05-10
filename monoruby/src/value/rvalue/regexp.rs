@@ -1355,3 +1355,88 @@ mod expand_unicode_braces_tests {
         assert!(expand_unicode_braces("\\u{20").is_err());
     }
 }
+
+#[cfg(test)]
+mod regex_cache_tests {
+    use super::*;
+    use onigmo_regex::OnigmoEncoding;
+
+    // Use a distinctive source per test so we don't depend on whether
+    // some other test in the suite already populated REGEX_CACHE for
+    // this key — REGEX_CACHE is a process-wide static.
+    const SRC_HIT: &str = "regex_cache_tests::cache_hit_returns_same_arc";
+    const SRC_MISS_A: &str = "regex_cache_tests::cache_miss_a";
+    const SRC_MISS_B: &str = "regex_cache_tests::cache_miss_b";
+
+    #[test]
+    fn cache_hit_returns_same_arc() {
+        // First call lands in the Vacant arm and inserts an Arc<Regex>;
+        // second call lands in the Occupied arm and clones the same
+        // Arc back out. Both pass through the cache lookup chain
+        // (`REGEX_CACHE.write().unwrap().0.entry(...)`), exercising
+        // the `.0` field access on the RegexCache tuple struct.
+        let r1 = RegexpInner::with_option_and_encoding(SRC_HIT, 0, OnigmoEncoding::UTF8)
+            .expect("first compile");
+        let r2 = RegexpInner::with_option_and_encoding(SRC_HIT, 0, OnigmoEncoding::UTF8)
+            .expect("second compile");
+        assert!(
+            Arc::ptr_eq(&r1.regex, &r2.regex),
+            "second compile should reuse the cached Arc<Regex>",
+        );
+    }
+
+    #[test]
+    fn cache_miss_for_different_source() {
+        // Distinct source strings hash to distinct cache keys, so each
+        // gets its own Arc<Regex>.
+        let r1 = RegexpInner::with_option_and_encoding(SRC_MISS_A, 0, OnigmoEncoding::UTF8)
+            .expect("compile A");
+        let r2 = RegexpInner::with_option_and_encoding(SRC_MISS_B, 0, OnigmoEncoding::UTF8)
+            .expect("compile B");
+        assert!(!Arc::ptr_eq(&r1.regex, &r2.regex));
+    }
+
+    #[test]
+    fn cache_keyed_on_encoding() {
+        // Same source + same option but different encoding → distinct
+        // cache entries (the Onigmo regex is encoding-bound).
+        let src = "regex_cache_tests::cache_keyed_on_encoding";
+        let r_utf8 = RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::UTF8)
+            .expect("UTF-8 compile");
+        let r_ascii = RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::ASCII)
+            .expect("ASCII compile");
+        assert!(!Arc::ptr_eq(&r_utf8.regex, &r_ascii.regex));
+    }
+
+    #[test]
+    fn ruby_only_option_bits_dont_split_cache() {
+        // NOENCODING / FIXEDENCODING / KCODE_* are stripped from the
+        // option mask before the cache key is built, so toggling any
+        // of them shouldn't produce a new entry.
+        let src = "regex_cache_tests::ruby_only_option_bits_dont_split_cache";
+        let plain =
+            RegexpInner::with_option_and_encoding(src, 0, OnigmoEncoding::UTF8)
+                .expect("plain compile");
+        let with_ruby_bits = RegexpInner::with_option_and_encoding(
+            src,
+            RegexpInner::NOENCODING | RegexpInner::FIXEDENCODING,
+            OnigmoEncoding::UTF8,
+        )
+        .expect("compile with Ruby-only bits set");
+        assert!(
+            Arc::ptr_eq(&plain.regex, &with_ruby_bits.regex),
+            "Ruby-only option bits must be masked out of the cache key",
+        );
+    }
+
+    #[test]
+    fn invalid_source_returns_regexerr_with_formatted_source() {
+        // The Vacant branch's error path: Onigmo rejects the source
+        // (unbalanced bracket here), and we re-format the message with
+        // a `: /<source>/` suffix matching CRuby spec expectations.
+        let err = RegexpInner::with_option_and_encoding("[", 0, OnigmoEncoding::UTF8)
+            .expect_err("unbalanced [ should fail to compile");
+        let msg = err.message().to_string();
+        assert!(msg.contains('['), "expected source in message, got: {msg}");
+    }
+}
