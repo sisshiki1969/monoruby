@@ -271,6 +271,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Bool(_)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
+            | NodeKind::EncodedString(..)
             | NodeKind::Symbol(_)
             | NodeKind::Ident(_)
             | NodeKind::InstanceVar(_)

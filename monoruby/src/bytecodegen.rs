@@ -1094,20 +1094,51 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::complex(0, f));
     }
 
+    /// Resolve the file's `# encoding: NAME` magic comment to an
+    /// `Encoding`. Falls back to UTF-8 — Ruby 2.0+'s default source
+    /// encoding — when the source has no magic comment or the name
+    /// isn't recognised. Used by `emit_string` / `emit_bytes` and the
+    /// const-AST literal builder so every literal in this file gets
+    /// the right tag at bytecode-emission time.
+    pub(crate) fn source_encoding(&self) -> crate::value::Encoding {
+        match self.sourceinfo.source_encoding.as_deref() {
+            Some(name) => crate::value::Encoding::try_from_str(name)
+                .unwrap_or(crate::value::Encoding::Utf8),
+            None => crate::value::Encoding::Utf8,
+        }
+    }
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
         // String literals become long-lived templates: `Literal`
         // dispatch `deep_copy`s the template into a fresh RValue on
         // every execution, and the clone preserves the template's
         // `cr`. Pre-classify here so each clone gets `cr` for free
         // instead of re-running classify on first use.
-        self.emit_literal(dst, Value::string_scanned(s));
+        let enc = self.source_encoding();
+        self.emit_literal(dst, Value::string_from_source_str(&s, enc));
     }
 
     fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
         // `NodeKind::Bytes` comes from source literals containing `\xNN`
-        // escapes. Tag as UTF-8 so it inherits the source encoding like
-        // CRuby, rather than being forced to BINARY.
-        self.emit_literal(dst, Value::string_from_source_bytes(&b));
+        // escapes. Tag with the file's `# encoding:` magic-comment value
+        // (defaulting to UTF-8 — Ruby's default source encoding since
+        // 2.0). The bytes are passed through verbatim; if they're
+        // invalid under the declared encoding `valid_encoding?` returns
+        // false but byte-level operations still work, matching CRuby.
+        let enc = self.source_encoding();
+        self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
+    }
+
+    /// Emit a string literal whose encoding was *forced* by prism —
+    /// e.g. a `\u` escape inside a `# encoding: binary` source forces
+    /// the literal to UTF-8 in CRuby. `enc_name` is the static
+    /// override the lowerer extracted from prism's flags
+    /// (`"UTF-8"` / `"ASCII-8BIT"`); falls back to UTF-8 if monoruby
+    /// doesn't recognise the alias (shouldn't happen for these two).
+    fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str) {
+        let enc = crate::value::Encoding::try_from_str(enc_name)
+            .unwrap_or(crate::value::Encoding::Utf8);
+        self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
     }
 
     fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {

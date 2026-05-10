@@ -41,6 +41,13 @@ pub struct SourceInfo {
     pub code: String,
     /// line number offset for eval (0-based: e.g. lineno=1 means offset=0, lineno=42 means offset=41).
     pub line_offset: i64,
+    /// Source encoding declared by a magic comment
+    /// (`# encoding: NAME` / `# coding: NAME`). `None` means no
+    /// magic comment was present, in which case callers should
+    /// default to UTF-8 (Ruby's default source encoding since 2.0).
+    /// Stored verbatim as written in the source so consumers can
+    /// resolve aliases through their own normaliser.
+    pub source_encoding: Option<String>,
 }
 
 impl Default for SourceInfo {
@@ -62,6 +69,7 @@ impl SourceInfo {
             path: path.into(),
             code,
             line_offset: 0,
+            source_encoding: None,
         }
     }
 
@@ -78,7 +86,16 @@ impl SourceInfo {
             path: path.into(),
             code,
             line_offset,
+            source_encoding: None,
         }
+    }
+
+    /// Return a copy of this `SourceInfo` with `source_encoding` set
+    /// to `enc`. Used by parsers to attach the magic-comment-derived
+    /// source encoding after the source has already been wrapped.
+    pub fn with_source_encoding(mut self, enc: Option<String>) -> Self {
+        self.source_encoding = enc;
+        self
     }
 
     pub fn get_line(&self, loc: &Loc) -> i64 {
