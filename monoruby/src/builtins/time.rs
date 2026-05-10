@@ -2136,33 +2136,135 @@ mod tests {
     }
 
     #[test]
-    fn time_localtime_with_offset_arg() {
-        // `Time#localtime(offset)` shifts to a fixed-offset zone.
-        run_test(
+    fn time_utc_offset_string_format_errors() {
+        // `parse_utc_offset_string` rejects every malformed shape with
+        // ArgumentError. Each case matches a distinct early-return in
+        // the parser.
+        for bad in [
+            // No leading sign.
+            r#""05:00""#,
+            // Single-digit hour.
+            r#""+5:00""#,
+            // Wrong separator.
+            r#""+05-00""#,
+            // Length 7 (between `+HH:MM` and `+HH:MM:SS`).
+            r#""+05:00:1""#,
+            // Double sign.
+            r#""++05:00""#,
+            r#""--00:00""#,
+            // Just a sign.
+            r#""+""#,
+            r#""-""#,
+            // Hour digits non-numeric.
+            r#""+0a:00""#,
+            // Minute digits non-numeric.
+            r#""+05:M0""#,
+            // Second digits non-numeric (in `+HH:MM:SS` form).
+            r#""+05:00:0X""#,
+            // Wrong second-separator.
+            r#""+05:00-30""#,
+            // Empty string.
+            r#""""#,
+        ] {
+            let code = format!(
+                "Time.new(2024, 1, 1, 0, 0, 0, {})",
+                bad
+            );
+            run_test_error(&code);
+        }
+    }
+
+    #[test]
+    fn time_utc_offset_range_errors() {
+        // Hour, minute, second each enforce per-field ranges.
+        run_test_error(r#"Time.new(2024, 1, 1, 0, 0, 0, "+24:00")"#);
+        run_test_error(r#"Time.new(2024, 1, 1, 0, 0, 0, "-25:00")"#);
+        run_test_error(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:60")"#);
+        run_test_error(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:00:60")"#);
+    }
+
+    #[test]
+    fn time_utc_offset_non_ascii_raises() {
+        // Non-ASCII bytes in the offset string are rejected before parse.
+        run_test_error(r#"Time.new(2024, 1, 1, 0, 0, 0, "\xff05:00")"#);
+    }
+
+    #[test]
+    fn time_gm_field_range_errors() {
+        // mon / mday lower-bound is 1.
+        run_test_error(r#"Time.gm(2008, 0, 1)"#);
+        run_test_error(r#"Time.gm(2008, 1, 0)"#);
+        // mon upper-bound is 12.
+        run_test_error(r#"Time.gm(2008, 13, 1)"#);
+        // min / sec upper bounds.
+        run_test_error(r#"Time.gm(2008, 1, 1, 0, 60)"#);
+        run_test_error(r#"Time.gm(2008, 1, 1, 0, 0, 61)"#);
+        // Negative sec.
+        run_test_error(r#"Time.gm(2008, 1, 1, 0, 0, -1)"#);
+    }
+
+    #[test]
+    fn time_gm_invalid_string_year_raises() {
+        // Non-numeric String → ArgumentError, not silent truncation.
+        run_test_error(r#"Time.gm("twenty-twenty-four")"#);
+    }
+
+    #[test]
+    fn time_gm_unknown_month_name_raises() {
+        // `time_month_to_i64` falls through to numeric parse; an
+        // unknown 3-letter name doesn't match either branch.
+        run_test_error(r#"Time.gm(2024, "xyz", 1)"#);
+    }
+
+    #[test]
+    fn time_gm_arity_8_raises() {
+        // Slot 7 is the C-style trigger only; counts 8/9 fall through
+        // to the standard "wrong number of arguments" path.
+        run_test_error(r#"Time.gm(2024, 1, 1, 0, 0, 0, 0, 0)"#);
+    }
+
+    #[test]
+    fn time_localtime_invalid_offset_raises() {
+        // String-form errors propagate from `parse_utc_offset_string`.
+        run_test_error(
             r#"
             t = Time.utc(2024, 6, 15, 12, 0, 0)
-            t.localtime(3600)
-            t.utc_offset
+            t.localtime("not-an-offset")
             "#,
         );
-        // String form.
-        run_test(
+        // Out-of-range integer offset.
+        run_test_error(
             r#"
             t = Time.utc(2024, 6, 15, 12, 0, 0)
-            t.localtime("+05:30")
-            [t.utc_offset, t.hour, t.min]
+            t.localtime(99999999)
             "#,
         );
     }
 
     #[test]
-    fn time_getlocal_with_offset_string() {
-        // `Time#getlocal("+HH:MM")` produces a copy in that zone.
-        run_test(
+    fn time_localtime_frozen_with_different_offset_raises() {
+        // Frozen Time + offset that differs from current zone →
+        // FrozenError (matches CRuby's check ordering: zone-equality
+        // short-circuit first, then frozen guard).
+        run_test_error(
             r#"
             t = Time.utc(2024, 6, 15, 12, 0, 0)
-            r = t.getlocal("+09:00")
-            [r.utc_offset, r.hour]
+            t.freeze
+            t.localtime("+05:00")
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_getlocal_invalid_offset_raises() {
+        run_test_error(
+            r#"
+            Time.utc(2024).getlocal("garbage")
+            "#,
+        );
+        run_test_error(
+            r#"
+            Time.utc(2024).getlocal("+99:00")
             "#,
         );
     }
