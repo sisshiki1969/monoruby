@@ -273,7 +273,7 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
                 // Onigmo verbatim.
             }
             // Copy the backslash and the following character (if any) verbatim
-            // so escapes like `\\`, `A`, `\x{...}` are preserved.
+            // so escapes like `\\`, `\u{0041:0>4}`, `\x{...}` are preserved.
             out.push('\\');
             i += 1;
             if i < bytes.len() {
