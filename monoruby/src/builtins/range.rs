@@ -40,9 +40,30 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn range_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let exclude_end = lfp.try_arg(2).map(|v| v.as_bool()).unwrap_or(false);
-    globals.generate_range(lfp.arg(0), lfp.arg(1), exclude_end)
+    let class_id = lfp.self_val().as_class_id();
+    let start = lfp.arg(0);
+    let end = lfp.arg(1);
+    // Explicit `Range.new` is strict: CRuby probes `start <=> end` once,
+    // propagates any raised exception, and turns a `nil` result into
+    // `ArgumentError`. We do the same. Range *literals* are more lax
+    // (see `gen_range`) so monoruby's incomplete user-type comparators
+    // don't reject hand-written ranges.
+    if !start.is_nil() && !end.is_nil() {
+        let cmp = vm.compare_values_inner(globals, start, end)?;
+        if cmp.is_none() {
+            return Err(MonorubyErr::argumenterr("bad value for range"));
+        }
+    }
+    if class_id != RANGE_CLASS {
+        // Subclass of Range: build directly with the subclass's class id
+        // and leave it unfrozen (CRuby only freezes direct Range
+        // instances).
+        Ok(Value::range_with_class(start, end, exclude_end, class_id))
+    } else {
+        Ok(Value::range(start, end, exclude_end))
+    }
 }
 
 /// Allocator for `Range` and its subclasses.
@@ -145,6 +166,11 @@ fn range_end(
 fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
+    if range.start().is_nil() {
+        return Err(MonorubyErr::rangeerr(
+            "cannot get the first element of beginless range",
+        ));
+    }
     if let Some(n_val) = lfp.try_arg(0) {
         let n = n_val.coerce_to_int_i64(vm, globals)?;
         if n < 0 {
@@ -173,6 +199,11 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
+    if range.end().is_nil() {
+        return Err(MonorubyErr::rangeerr(
+            "cannot get the last element of endless range",
+        ));
+    }
     if let Some(n_val) = lfp.try_arg(0) {
         let n = n_val.coerce_to_int_i64(vm, globals)?;
         if n < 0 {
@@ -793,12 +824,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         if range.exclude_end() {
             // For exclusive ranges, need integer end or string end
             if let Some(i) = end.try_fixnum() {
-                // For beginless exclusive integer ranges, raise TypeError
-                if start.is_nil() {
-                    return Err(MonorubyErr::typeerr(
-                        "cannot exclude end value with non Integer begin value",
-                    ));
-                }
+                // Ruby 4.0+: beginless exclusive Integer ranges return end - 1.
                 return Ok(Value::integer(i - 1));
             } else if let RV::BigInt(b) = end.unpack() {
                 return Ok(Value::bigint(b - 1));

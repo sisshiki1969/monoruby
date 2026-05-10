@@ -273,13 +273,28 @@ pub(super) extern "C" fn gen_range(
     globals: &mut Globals,
     exclude_end: bool,
 ) -> Option<Value> {
-    match globals.generate_range(start, end, exclude_end) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
+    // Validate with `<=>` only when the endpoints are different classes
+    // — same-class endpoints are always allowed (matches CRuby for
+    // user-defined types, and avoids false positives when monoruby's
+    // own `<=>` is incomplete e.g. on Time). Different-class endpoints
+    // like `9155.."s"` still need to be rejected (`<=>` returns nil).
+    if !start.is_nil()
+        && !end.is_nil()
+        && start.real_class(&globals.store).id() != end.real_class(&globals.store).id()
+    {
+        match vm.compare_values_inner(globals, start, end) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                vm.set_error(MonorubyErr::argumenterr("bad value for range"));
+                return None;
+            }
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
         }
     }
+    Some(Value::range(start, end, exclude_end))
 }
 
 pub(super) extern "C" fn concatenate_string(

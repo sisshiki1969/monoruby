@@ -1047,7 +1047,10 @@ impl Value {
     }
 
     pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {
-        RValue::new_range(start, end, exclude_end).pack()
+        // Range objects are frozen since Ruby 3.0.
+        let mut v = RValue::new_range(start, end, exclude_end).pack();
+        v.set_frozen();
+        v
     }
 
     pub fn range_with_class(
@@ -1056,6 +1059,10 @@ impl Value {
         exclude_end: bool,
         class_id: ClassId,
     ) -> Self {
+        // Not frozen: this constructor is used by `Range.allocate` and by
+        // the allocator for `Range` subclasses. CRuby only freezes direct
+        // `Range` instances (literal, `Range.new`, marshal load) — those
+        // go through `Value::range`.
         RValue::new_range_with_class(start, end, exclude_end, class_id).pack()
     }
 
