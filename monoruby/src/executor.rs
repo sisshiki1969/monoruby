@@ -111,6 +111,11 @@ pub struct Executor {
     sp_matches: Vec<Option<String>>, // $&, $1 ... $n : Regexp.last_match(n)
     sp_match_positions: Vec<Option<(usize, usize)>>, // byte positions for MatchData
     sp_match_haystack: Option<String>, // haystack for MatchData
+    /// The Regexp Value the most recent successful match was
+    /// performed against. Stashed here so `Regexp.last_match`
+    /// constructs a `MatchData` with `regex` populated, which the
+    /// `MatchData#[]` named-capture path needs.
+    sp_match_regex: Option<Value>,
     temp_stack: Vec<Value>,
     require_level: usize,
     /// Stack of canonical paths currently being executed via `require` /
@@ -136,6 +141,7 @@ impl std::default::Default for Executor {
             sp_matches: vec![],
             sp_match_positions: vec![],
             sp_match_haystack: None,
+            sp_match_regex: None,
             temp_stack: vec![],
             require_level: 0,
             loading_paths: vec![],
@@ -2099,6 +2105,16 @@ impl Executor {
         self.sp_matches.clear();
         self.sp_match_positions.clear();
         self.sp_match_haystack = None;
+        self.sp_match_regex = None;
+    }
+
+    /// Stash the Regexp the next `save_capture_special_variables`
+    /// call should associate with the captures. Set by every
+    /// `RegexpInner::captures_*` / `find_*` entry point so
+    /// `Regexp.last_match` can later return a `MatchData` whose
+    /// `regexp` slot is populated (named-capture lookup needs it).
+    pub(crate) fn set_match_regex(&mut self, regex: Value) {
+        self.sp_match_regex = Some(regex);
     }
     ///
     /// Save captured strings to special variables.
@@ -2160,7 +2176,12 @@ impl Executor {
             return Value::nil();
         }
         let haystack = self.sp_match_haystack.as_deref().unwrap_or("");
-        let md = MatchDataInner::new(haystack.to_string(), self.sp_match_positions.clone());
+        let mut md = MatchDataInner::new(haystack.to_string(), self.sp_match_positions.clone());
+        if let Some(regex_val) = self.sp_match_regex
+            && let Some(regex) = regex_val.is_regex()
+        {
+            md = md.with_regex(regex);
+        }
         RValue::new_match_data_from_inner(md).pack()
     }
 }
