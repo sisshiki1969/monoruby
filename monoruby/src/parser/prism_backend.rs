@@ -4038,16 +4038,43 @@ $1
     // -> the resulting `String` literal's `encoding` tag at runtime.
     //
     // These tests pin the end-to-end behaviour by running short scripts
-    // through `Globals::run` and reading back `String#encoding.to_s`.
-    // Going through the live runtime keeps the test honest: it would
-    // notice if any layer (parser, bytecodegen, value constructors) lost
-    // the encoding on the way through.
+    // through the full parse → bytecode → eval pipeline and reading back
+    // `String#encoding.to_s`. Going through the live runtime keeps the
+    // test honest: it would notice if any layer (parser, bytecodegen,
+    // value constructors) lost the encoding on the way through.
+    //
+    // We force the prism backend explicitly rather than going through
+    // `Globals::run` (which routes via `MONORUBY_PARSER`): magic-comment
+    // handling is prism-only, and `bin/test` runs the suite a second
+    // time with `MONORUBY_PARSER=ruruby` for coverage of the legacy
+    // backend — every test in this module is prism-specific by design.
+
+    /// Drive a short Ruby script through the prism backend explicitly,
+    /// returning the final `Value` and the `Globals` it ran against.
+    /// Callers inspect the value with the returned `Globals` (needed
+    /// for `Value::inspect`).
+    fn run_prism_source(source: &str) -> (crate::Globals, crate::Value) {
+        let path = std::path::Path::new("(test)");
+        let mut globals = crate::Globals::new_test();
+        let parsed = crate::parser::parse_program_with(
+            crate::parser::Backend::Prism,
+            source.to_owned(),
+            path,
+        )
+        .expect("parse_program_with(Prism)");
+        let fid = crate::bytecodegen::bytecode_compile_script(&mut globals, parsed)
+            .expect("bytecode_compile_script");
+        let mut executor = crate::executor::Executor::init(&mut globals, "(test)")
+            .expect("Executor::init");
+        executor.init_stack_limit(&mut globals);
+        let val = executor
+            .eval_toplevel(&mut globals, fid)
+            .expect("eval_toplevel");
+        (globals, val)
+    }
 
     fn run_encoding_query(source: &str) -> String {
-        let mut globals = crate::Globals::new_test();
-        let val = globals
-            .run(source.to_owned(), std::path::Path::new("(test)"))
-            .expect("script should run");
+        let (globals, val) = run_prism_source(source);
         val.inspect(&globals.store)
             .trim_matches('"')
             .to_owned()
@@ -4102,13 +4129,8 @@ $1
     /// shape of every `core/array/pack/*_spec.rb` assertion.
     #[test]
     fn magic_comment_pack_output_eq_binary_literal() {
-        let mut globals = crate::Globals::new_test();
-        let val = globals
-            .run(
-                "# encoding: binary\n[\"1\"].pack(\"B\") == \"\\x80\"\n".to_owned(),
-                std::path::Path::new("(test)"),
-            )
-            .expect("script should run");
+        let (_globals, val) =
+            run_prism_source("# encoding: binary\n[\"1\"].pack(\"B\") == \"\\x80\"\n");
         assert!(val.as_bool(), "pack output should equal binary literal");
     }
 
