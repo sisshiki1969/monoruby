@@ -8,8 +8,12 @@ pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Random").id();
     globals.define_builtin_class_func_with(klass, "srand", random_srand, 0, 1, false);
     globals.define_builtin_class_func_with(klass, "rand", random_rand, 0, 1, false);
+    globals.define_builtin_class_func_with(klass, "random_number", random_rand, 0, 1, false);
     globals.define_builtin_class_func(klass, "urandom", urandom, 1);
+    globals.define_builtin_class_func(klass, "bytes", random_bytes, 1);
+    globals.define_builtin_class_func(klass, "new_seed", new_seed, 0);
     globals.define_builtin_func_with(klass, "rand", rand, 0, 1, false);
+    globals.define_builtin_func(klass, "bytes", instance_bytes, 1);
 }
 
 ///
@@ -57,19 +61,20 @@ fn random_srand(
 /// ### Random.rand
 ///
 /// - rand -> Float
-/// - [NOT SUPPORTED] rand(max) -> Integer | Float
+/// - rand(max) -> Integer | Float
 /// - [NOT SUPPORTED] rand(range) -> Integer | Float
+///
+/// Also bound as `Random.random_number`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
 #[monoruby_builtin]
 fn random_rand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let f = globals.random_gen();
-    Ok(Value::float(f))
+    rand_with_arg(globals, lfp.try_arg(0))
 }
 
 ///
@@ -82,42 +87,109 @@ fn random_rand(
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/i/rand.html]
 #[monoruby_builtin]
 fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    if let Some(arg) = lfp.try_arg(0) {
-        if let Some(max) = arg.try_fixnum() {
-            if max <= 0 {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid argument - {}",
-                    max
-                )));
-            }
-            let f: f64 = globals.random_gen();
-            Ok(Value::integer((f * max as f64) as i64))
-        } else if let Some(max) = arg.try_float() {
-            if max < 0.0 {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid argument - {}",
-                    max
-                )));
-            }
-            let f: f64 = globals.random_gen();
-            if max == 0.0 {
-                Ok(Value::float(f))
-            } else {
-                Ok(Value::float(f * max))
-            }
-        } else if let Some(_) = arg.is_range() {
-            return Err(MonorubyErr::runtimeerr(
-                "Range argument is not supported in Random#rand",
-            ));
-        } else {
-            return Err(MonorubyErr::runtimeerr(
-                "the argument is not supported in Random#rand",
-            ));
+    rand_with_arg(globals, lfp.try_arg(0))
+}
+
+/// Shared implementation for `Random.rand`, `Random.random_number`,
+/// and `Random#rand`. monoruby's per-instance state is not yet
+/// distinct from the global PRNG, so all three currently share it.
+fn rand_with_arg(globals: &mut Globals, arg: Option<Value>) -> Result<Value> {
+    let arg = match arg {
+        Some(v) => v,
+        None => return Ok(Value::float(globals.random_gen())),
+    };
+    if let Some(max) = arg.try_fixnum() {
+        if max <= 0 {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid argument - {}",
+                max
+            )));
         }
-    } else {
         let f: f64 = globals.random_gen();
-        Ok(Value::float(f))
+        Ok(Value::integer((f * max as f64) as i64))
+    } else if let Some(max) = arg.try_float() {
+        if max < 0.0 {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid argument - {}",
+                max
+            )));
+        }
+        let f: f64 = globals.random_gen();
+        if max == 0.0 {
+            Ok(Value::float(f))
+        } else {
+            Ok(Value::float(f * max))
+        }
+    } else if arg.is_range().is_some() {
+        Err(MonorubyErr::runtimeerr(
+            "Range argument is not supported in Random#rand",
+        ))
+    } else {
+        Err(MonorubyErr::runtimeerr(
+            "the argument is not supported in Random#rand",
+        ))
     }
+}
+
+///
+/// ### Random.bytes
+///
+/// - bytes(size) -> String
+///
+/// Returns a binary string of `size` random bytes drawn from the
+/// global PRNG. Equivalent to monoruby's `Random.urandom` but uses
+/// the seeded global PRNG (for reproducibility under `Random.srand`)
+/// rather than the OS entropy source.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Random/s/bytes.html]
+#[monoruby_builtin]
+fn random_bytes(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    random_bytes_inner(vm, globals, lfp.arg(0))
+}
+
+///
+/// ### Random#bytes
+///
+/// - bytes(size) -> String
+///
+/// Per-instance state is not yet distinct from `Random.bytes`; both
+/// currently draw from the global PRNG.
+#[monoruby_builtin]
+fn instance_bytes(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    random_bytes_inner(vm, globals, lfp.arg(0))
+}
+
+///
+/// ### Random.new_seed
+///
+/// - new_seed -> Integer
+///
+/// Returns a fresh, non-deterministic integer suitable as a seed for
+/// `Random.new`. Drawn from OS entropy so it is unaffected by
+/// `Kernel#srand` / `Random.srand`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Random/s/new_seed.html]
+#[monoruby_builtin]
+fn new_seed(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut buf = [0u8; 16];
+    if let Err(e) = getrandom::fill(&mut buf) {
+        return Err(MonorubyErr::runtimeerr(format!(
+            "Random.new_seed: {}",
+            e
+        )));
+    }
+    let bytes = num::BigInt::from_bytes_le(num::bigint::Sign::Plus, &buf);
+    Ok(Value::bigint(bytes))
 }
 
 ///
@@ -126,12 +198,16 @@ fn rand(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// - urandom(size) -> String
 #[monoruby_builtin]
 fn urandom(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let size = if let Some(size) = lfp.arg(0).try_fixnum() {
+    random_bytes_inner(vm, globals, lfp.arg(0))
+}
+
+fn random_bytes_inner(vm: &mut Executor, globals: &mut Globals, size_arg: Value) -> Result<Value> {
+    let size = if let Some(size) = size_arg.try_fixnum() {
         size
-    } else if let Some(size) = lfp.arg(0).try_float() {
+    } else if let Some(size) = size_arg.try_float() {
         size.round() as i64
     } else {
-        lfp.arg(0).coerce_to_int_i64(vm, globals)?
+        size_arg.coerce_to_int_i64(vm, globals)?
     };
     if size == 0 {
         return Ok(Value::bytes(vec![]));
@@ -215,6 +291,60 @@ mod tests {
         Random.srand(42)
         results = 10.times.map { Random.rand }
         results.all? { |x| x.is_a?(Float) && x >= 0.0 && x < 1.0 } && results.uniq.size == results.size
+        "#,
+        );
+        // Class-form `Random.rand(n)` honors the int max — used to be ignored.
+        run_test(
+            r#"
+        Random.srand(42)
+        a = Random.rand(100)
+        a.is_a?(Integer) && a >= 0 && a < 100
+        "#,
+        );
+    }
+
+    #[test]
+    fn random_random_number() {
+        run_test(
+            r#"
+        Random.srand(42)
+        a = Random.random_number
+        b = Random.random_number(50)
+        a.is_a?(Float) && a >= 0.0 && a < 1.0 && b.is_a?(Integer) && b >= 0 && b < 50
+        "#,
+        );
+    }
+
+    #[test]
+    fn random_class_bytes() {
+        run_test(
+            r#"
+        s = Random.bytes(8)
+        [s.is_a?(String), s.bytesize, s.encoding == Encoding::BINARY]
+        "#,
+        );
+        run_test_error("Random.bytes(-1)");
+    }
+
+    #[test]
+    fn random_instance_bytes() {
+        run_test(
+            r#"
+        s = Random.new.bytes(15)
+        [s.is_a?(String), s.bytesize]
+        "#,
+        );
+    }
+
+    #[test]
+    fn random_new_seed() {
+        // `Random.new_seed` returns an Integer (Bignum) and varies
+        // between calls.
+        run_test(
+            r#"
+        a = Random.new_seed
+        b = Random.new_seed
+        [a.is_a?(Integer), b.is_a?(Integer), a != b]
         "#,
         );
     }
