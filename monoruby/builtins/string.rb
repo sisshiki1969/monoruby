@@ -76,12 +76,13 @@ class String
   end
 
   def partition(sep)
+    empty = "".dup.force_encoding(self.encoding)
     if sep.is_a?(Regexp)
       m = match(sep)
       if m
         [m.pre_match, m[0], m.post_match]
       else
-        [self, "", ""]
+        [self.dup, empty, empty.dup]
       end
     else
       s = sep.is_a?(String) ? sep : __to_str(sep)
@@ -89,12 +90,13 @@ class String
       if i
         [self[0, i], s, self[i + s.length..-1]]
       else
-        [self, "", ""]
+        [self.dup, empty, empty.dup]
       end
     end
   end
 
   def rpartition(sep)
+    empty = "".dup.force_encoding(self.encoding)
     if sep.is_a?(Regexp)
       # Find the last match
       last_match = nil
@@ -107,7 +109,7 @@ class String
       if last_match
         [last_match.pre_match, last_match[0], last_match.post_match]
       else
-        ["", "", self]
+        [empty, empty.dup, self.dup]
       end
     else
       s = sep.is_a?(String) ? sep : __to_str(sep)
@@ -115,7 +117,7 @@ class String
       if i
         [self[0, i], s, self[i + s.length..-1]]
       else
-        ["", "", self]
+        [empty, empty.dup, self.dup]
       end
     end
   end
@@ -147,6 +149,14 @@ class String
       end
     end
     return to_enum(:upto, max, exclusive) unless block
+    # Encoding compatibility: CRuby raises `Encoding::CompatibilityError`
+    # when the receiver and `max` have incompatible encodings (matters
+    # for non-ASCII content; pure-ASCII strings remain compatible
+    # across all ASCII-compatible encodings).
+    if Encoding.compatible?(self, max).nil?
+      raise Encoding::CompatibilityError,
+            "incompatible character encodings: #{self.encoding} and #{max.encoding}"
+    end
     # Two CRuby special cases:
     #   1. Both ends are all-digit strings → iterate as integers
     #      (`"8".upto("11")` yields "8".."11"). Falls through to
