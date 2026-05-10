@@ -98,11 +98,22 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // When given an existing Regexp, carry over both source and
     // options so `Regexp.new(/abc/i) == /abc/i`. CRuby's `rb_reg_init`
     // copies the source verbatim and inherits the options unless the
-    // caller passes an explicit second argument.
-    let (string, default_option) = if let Some(re) = arg0.is_regex() {
-        (re.as_str().to_string(), Some(re.raw_option()))
+    // caller passes an explicit second argument. We also forward the
+    // existing regex's declared encoding so the new copy renders
+    // the same `Regexp#encoding` even though we re-parse the source.
+    let (string, default_option, source_encoding) = if let Some(re) = arg0.is_regex() {
+        (
+            re.as_str().to_string(),
+            Some(re.raw_option()),
+            Some(re.declared_encoding()),
+        )
     } else {
-        (arg0.coerce_to_string(vm, globals)?, None)
+        let s = arg0.coerce_to_string(vm, globals)?;
+        let enc = arg0
+            .is_rstring_inner()
+            .map(|r| r.encoding())
+            .unwrap_or(crate::value::Encoding::Utf8);
+        (s, None, Some(enc))
     };
     let option = if let Some(option) = lfp.try_arg(1) {
         if option.is_nil() {
@@ -110,18 +121,12 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         } else if let Some(option) = option.try_fixnum() {
             option as i32 as u32
         } else if let Some(s) = option.is_str() {
-            // Ruby accepts a string of flag characters as the option
-            // argument: each char selects a flag, unknown chars
-            // raise ArgumentError. Encoding-letter flags (n/u/e/s)
-            // are accepted but currently ignored.
             parse_option_string(s)?
         } else if option == Value::bool(false) {
             onigmo_regex::ONIG_OPTION_NONE
         } else if option == Value::bool(true) {
             onigmo_regex::ONIG_OPTION_IGNORECASE
         } else {
-            // CRuby warns "expected true or false as ignorecase: <obj>"
-            // and treats the argument as truthy → IGNORECASE.
             warn_unexpected_regexp_option(vm, globals, option);
             onigmo_regex::ONIG_OPTION_IGNORECASE
         }
@@ -133,29 +138,38 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         onigmo_regex::OnigmoEncoding::UTF8
     };
-    // Strip Ruby-specific encoding flags before passing to onigmo
-    let onigmo_option = option & !(RegexpInner::NOENCODING | RegexpInner::FIXEDENCODING);
-    let regexp = RegexpInner::with_option_and_encoding(string, onigmo_option, encoding)?;
-    let val = Value::regexp(regexp);
-    Ok(val)
+    // Pull the kcode bit out of the option mask before passing to
+    // onigmo (which doesn't understand the modifier letters).
+    let kcode_bits = option & RegexpInner::KCODE_MASK;
+    let kcode = if kcode_bits != 0 { Some(kcode_bits) } else { None };
+    let regexp =
+        RegexpInner::with_option_kcode(string, option, encoding, kcode, source_encoding)?;
+    Ok(Value::regexp(regexp))
 }
 
 /// Parse a Ruby flag string like "im" into an Onigmo options bitmap.
-/// Only `i`/`m`/`x` are accepted; encoding selectors (`n`/`u`/`e`/
-/// `s`) are *not* — they're literal-only flags. Anything else raises
-/// `ArgumentError: unknown regexp option: <c>`, matching CRuby.
+/// Only `i`/`m`/`x` are accepted; the kcode letters
+/// (`n`/`u`/`e`/`s`) are *literal-only* flags in CRuby — passing
+/// them via `Regexp.new("...", "u")` raises
+/// `ArgumentError: unknown regexp option: u`. Anything else also
+/// raises `ArgumentError`.
 fn parse_option_string(s: &str) -> Result<u32> {
+    // First pass: scan for any non-`i`/`m`/`x` char. If we hit
+    // one, CRuby reports the *whole* string in the error message
+    // (`Regexp.new("...", "mjx")` → "unknown regexp option: mjx",
+    // not just "j") — we replicate that here.
+    if !s.chars().all(|c| matches!(c, 'i' | 'm' | 'x')) {
+        return Err(MonorubyErr::argumenterr(format!(
+            "unknown regexp option: {s}"
+        )));
+    }
     let mut opt = onigmo_regex::ONIG_OPTION_NONE;
     for c in s.chars() {
         match c {
             'i' => opt |= onigmo_regex::ONIG_OPTION_IGNORECASE,
             'm' => opt |= onigmo_regex::ONIG_OPTION_MULTILINE,
             'x' => opt |= onigmo_regex::ONIG_OPTION_EXTEND,
-            other => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "unknown regexp option: {other}"
-                )));
-            }
+            _ => unreachable!(),
         }
     }
     Ok(opt)
@@ -226,22 +240,14 @@ fn regexp_union(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
-    // No arguments: produce `/(?!)/`, a regex that never matches —
-    // matches CRuby's `Regexp.union` documentation.
     if rest.is_empty() {
         return Ok(Value::regexp(RegexpInner::with_option("(?!)", 0)?));
     }
-    // A single argument has special handling.
     if rest.len() == 1 {
         let arg = rest[0];
         if let Some(arr) = arg.try_array_ty() {
-            // `Regexp.union([...])` flattens the one Array.
             rest = arr;
         } else {
-            // Direct Regexp or `#to_regexp`-coercible argument is
-            // returned as-is, matching CRuby's `rb_check_regexp_type`
-            // path. Otherwise fall through to the standard escape-
-            // and-wrap path.
             if let Some(re) = arg.is_regex() {
                 return Ok(re.into());
             }
@@ -252,16 +258,201 @@ fn regexp_union(
                 }
             }
             let s = format_union_member(vm, globals, arg)?;
-            return Ok(Value::regexp(RegexpInner::with_option(s, 0)?));
+            // Single non-Regexp arg: pin the encoding to the
+            // arg's source encoding (CRuby behaviour), rendering
+            // through the same compat-check pipeline so a
+            // non-ASCII-compatible source produces a
+            // non-ASCII-compatible regex.
+            let combined = UnionEnc::Free.combine(union_arg_encoding(globals, arg), &globals.store)?;
+            return Ok(Value::regexp(union_inner_with_encoding(s, combined)?));
         }
     }
-    let mut v = vec![];
+    let mut parts = Vec::with_capacity(rest.len());
+    let mut combined: UnionEnc = UnionEnc::Free;
+    let mut all_ascii_only = true;
     for arg in rest.iter() {
-        v.push(format_union_member(vm, globals, *arg)?);
+        let enc = union_arg_encoding(globals, *arg);
+        if !enc.ascii_only {
+            all_ascii_only = false;
+        }
+        combined = combined.combine(enc, &globals.store)?;
+        parts.push(format_union_member(vm, globals, *arg)?);
     }
-    let s = v.join("|");
+    let s = parts.join("|");
+    // CRuby's `Regexp.union` downgrades the result to US-ASCII
+    // when *every* arg was 7-bit ASCII content, even if
+    // individual args were declared as a pinned encoding via a
+    // `/.../e`-style modifier. Honour that downgrade unless an
+    // ASCII-incompatible encoding is in play (UTF-16, UTF-32),
+    // which we always pin.
+    let resolved_combined = if all_ascii_only
+        && !matches!(combined, UnionEnc::Pinned(e) if !e.is_ascii_compatible())
+    {
+        UnionEnc::Free
+    } else {
+        combined
+    };
+    Ok(Value::regexp(union_inner_with_encoding(s, resolved_combined)?))
+}
 
-    Ok(Value::regexp(RegexpInner::with_option(s, 0)?))
+/// Tracks the running encoding state of a `Regexp.union` build:
+///   - `Free`: nothing requires a particular encoding yet (only
+///     ASCII-only / not-fixed args seen).
+///   - `Pinned(enc)`: at least one arg pinned the result to a
+///     specific encoding; subsequent fixed args must agree.
+#[derive(Clone, Copy)]
+enum UnionEnc {
+    Free,
+    Pinned(crate::value::Encoding),
+}
+
+/// Encoding info extracted from a single `Regexp.union` argument.
+/// `fixed` is true when the arg's encoding is non-negotiable (a
+/// Regexp with `fixed_encoding?` true, or a String with non-ASCII
+/// content / a non-ASCII-compatible source encoding).
+struct ArgEnc {
+    encoding: crate::value::Encoding,
+    fixed: bool,
+    /// Whether the arg's *content* is all 7-bit ASCII. Tracked
+    /// separately from `fixed` because CRuby's `Regexp.union`
+    /// downgrades a string of all-ASCII-only args to `US-ASCII`
+    /// even when individual args were pinned by an
+    /// `e`/`u`/`s`/`n` modifier.
+    ascii_only: bool,
+}
+
+impl UnionEnc {
+    fn combine(self, arg: ArgEnc, store: &Store) -> Result<Self> {
+        let _ = store;
+        // An ASCII-incompatible encoding (UTF-16LE/BE, UTF-32LE/BE,
+        // …) can't share a regex with anything else: even pure-
+        // ASCII strings/Regexps live in a 1-byte-per-char world
+        // that an ASCII-incompatible encoding doesn't speak.
+        // CRuby raises ArgumentError for any mix.
+        let prev_pinned = matches!(self, UnionEnc::Pinned(prev) if !prev.is_ascii_compatible());
+        let arg_ascii_incompat = !arg.encoding.is_ascii_compatible();
+        if prev_pinned && arg_ascii_incompat {
+            // both sides have an explicit non-ASCII-compat encoding —
+            // they must match exactly, otherwise raise.
+            if let UnionEnc::Pinned(prev) = self
+                && prev != arg.encoding
+            {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "incompatible encodings: {} and {}",
+                    prev.name(),
+                    arg.encoding.name()
+                )));
+            }
+        } else if prev_pinned {
+            // Previous side is non-ASCII-compat; arg is anything
+            // else (even pure-ASCII). CRuby still rejects.
+            if let UnionEnc::Pinned(prev) = self {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "incompatible encodings: {} and {}",
+                    prev.name(),
+                    arg.encoding.name()
+                )));
+            }
+        } else if arg_ascii_incompat {
+            // Arg is non-ASCII-compat. Pin to it — but a previous
+            // ASCII-only value already in `self` (Free or pinned-
+            // ASCII) is incompatible with it.
+            if !matches!(self, UnionEnc::Free) {
+                if let UnionEnc::Pinned(prev) = self {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "incompatible encodings: {} and {}",
+                        prev.name(),
+                        arg.encoding.name()
+                    )));
+                }
+            }
+            return Ok(UnionEnc::Pinned(arg.encoding));
+        }
+        if !arg.fixed {
+            return Ok(self);
+        }
+        match self {
+            UnionEnc::Free => Ok(UnionEnc::Pinned(arg.encoding)),
+            UnionEnc::Pinned(prev) if prev == arg.encoding => Ok(self),
+            UnionEnc::Pinned(prev) => Err(MonorubyErr::argumenterr(format!(
+                "incompatible encodings: {} and {}",
+                prev.name(),
+                arg.encoding.name()
+            ))),
+        }
+    }
+
+    fn resolved(self) -> crate::value::Encoding {
+        match self {
+            UnionEnc::Free => crate::value::Encoding::UsAscii,
+            UnionEnc::Pinned(e) => e,
+        }
+    }
+}
+
+/// Read encoding info off a `Regexp.union` argument: Regexp uses
+/// its declared encoding + `fixed_encoding?`, String uses the
+/// content's actual encoding + "non-ASCII content / non-ASCII-
+/// compat source" as the fixed bit. Other types fall back to a
+/// non-fixed US-ASCII bucket.
+fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
+    if let Some(re) = arg.is_regex() {
+        let ascii_only = re.as_str().bytes().all(|b| b < 0x80);
+        return ArgEnc {
+            encoding: re.declared_encoding(),
+            fixed: re.fixed_encoding(),
+            ascii_only,
+        };
+    }
+    if let Some(s) = arg.is_rstring_inner() {
+        let enc = s.encoding();
+        let has_non_ascii = s.as_bytes().iter().any(|&b| b >= 0x80);
+        let fixed = has_non_ascii || !enc.is_ascii_compatible();
+        return ArgEnc {
+            encoding: enc,
+            fixed,
+            ascii_only: !has_non_ascii && enc.is_ascii_compatible(),
+        };
+    }
+    let _ = globals;
+    ArgEnc {
+        encoding: crate::value::Encoding::UsAscii,
+        fixed: false,
+        ascii_only: true,
+    }
+}
+
+/// Build the resulting `RegexpInner` for `Regexp.union`, picking
+/// the matching engine (`OnigmoEncoding::ASCII` for BINARY,
+/// `OnigmoEncoding::UTF8` for everything else) and faking the
+/// kcode bit so the declared encoding round-trips through
+/// `Regexp#encoding`.
+fn union_inner_with_encoding(
+    pattern: String,
+    union_enc: UnionEnc,
+) -> Result<RegexpInner> {
+    use crate::value::Encoding;
+    let enc = union_enc.resolved();
+    let onigmo_enc = if matches!(enc, Encoding::Ascii8) {
+        onigmo_regex::OnigmoEncoding::ASCII
+    } else {
+        onigmo_regex::OnigmoEncoding::UTF8
+    };
+    let pinned = matches!(union_enc, UnionEnc::Pinned(_));
+    // For pinned encodings without a kcode equivalent (UTF-16LE,
+    // UTF-32, ISO-8859-*, …) we can't piggy-back on the
+    // `KCODE_*` bits — set `FIXEDENCODING` instead so the source-
+    // encoding fallback branch in `resolve_declared_encoding`
+    // honours the encoding we computed.
+    let (option, kcode) = match enc {
+        Encoding::Utf8 => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
+        Encoding::EucJp => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
+        Encoding::Sjis(_) => (RegexpInner::KCODE_SJIS, Some(RegexpInner::KCODE_SJIS)),
+        Encoding::Ascii8 => (RegexpInner::NOENCODING, None),
+        _ if pinned => (RegexpInner::FIXEDENCODING, None),
+        _ => (0u32, None),
+    };
+    RegexpInner::with_option_kcode(pattern, option, onigmo_enc, kcode, Some(enc))
 }
 
 /// Render a single `Regexp.union` argument into its embedded form.
@@ -273,8 +464,12 @@ fn format_union_member(
     globals: &mut Globals,
     arg: Value,
 ) -> Result<String> {
-    if let Some(s) = arg.is_str() {
-        return Ok(RegexpInner::escape(s));
+    // `is_rstring_inner()` (not `is_str()`) — a String tagged as
+    // an ASCII-incompatible encoding (UTF-16LE etc.) or one
+    // carrying invalid UTF-8 bytes shows up here, and `is_str()`
+    // would reject it for not being valid UTF-8.
+    if let Some(s) = arg.is_rstring_inner() {
+        return Ok(RegexpInner::escape(&String::from_utf8_lossy(s.as_bytes())));
     }
     if let Some(re) = arg.is_regex() {
         return Ok(re.tos());
@@ -711,17 +906,7 @@ fn fixed_encoding_p(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    // NOENCODING (`/.../n` and only ASCII source) → not fixed.
-    // Otherwise: any UTF-8 source pins the encoding to UTF-8.
-    let opt = regex.option();
-    let fixed = if opt & RegexpInner::NOENCODING != 0 {
-        false
-    } else {
-        // UTF-8 with non-ASCII bytes is always fixed-encoding.
-        // For pure-ASCII source the regex is encoding-flexible.
-        regex.as_str().bytes().any(|b| b >= 0x80)
-    };
-    Ok(Value::bool(fixed))
+    Ok(Value::bool(regex.fixed_encoding()))
 }
 
 ///
@@ -758,25 +943,14 @@ fn named_captures(
 }
 
 /// Resolve the `Encoding::<NAME>` Value for a `RegexpInner`.
+/// Reads the declared (CRuby-visible) encoding `RegexpInner` set
+/// at construction time — this honours `n`/`u`/`e`/`s` modifiers
+/// and the source-string's own encoding tag, which the older
+/// "infer from `OnigmoEncoding` + content scan" path couldn't
+/// distinguish.
 fn regexp_encoding_value(globals: &Globals, regex: &RegexpInner) -> Value {
-    use crate::value::rvalue::Encoding;
     let enc_class = encoding::encoding_class(globals);
-    let encoding = match regex.encoding() {
-        onigmo_regex::OnigmoEncoding::ASCII => {
-            if regex.as_str().bytes().any(|b| b >= 0x80) {
-                Encoding::Ascii8
-            } else {
-                Encoding::UsAscii
-            }
-        }
-        onigmo_regex::OnigmoEncoding::UTF8 => {
-            if regex.as_str().bytes().any(|b| b >= 0x80) {
-                Encoding::Utf8
-            } else {
-                Encoding::UsAscii
-            }
-        }
-    };
+    let encoding = regex.declared_encoding();
     let const_name = encoding::encoding_constant_name(encoding);
     globals
         .store
@@ -1235,5 +1409,151 @@ mod tests {
         run_test(r#"Regexp.escape(:"a.b")"#);
         run_test(r#"Regexp.quote(:"a.b")"#);
         run_test(r#"Regexp.escape("a.b")"#);
+    }
+
+    // ----- PR #455 Phase A: kcode modifiers + encoding tracking -----
+
+    #[test]
+    fn regexp_kcode_modifiers_set_encoding() {
+        // /.../u → UTF-8, fixed.
+        run_test(r#"/abc/u.encoding.name"#);
+        run_test(r#"/abc/u.fixed_encoding?"#);
+        // /.../e → EUC-JP, fixed.
+        run_test(r#"/abc/e.encoding.name"#);
+        run_test(r#"/abc/e.fixed_encoding?"#);
+        // /.../s → Windows-31J, fixed.
+        run_test(r#"/abc/s.encoding.name"#);
+        run_test(r#"/abc/s.fixed_encoding?"#);
+        // /.../n on ASCII source → US-ASCII, NOT fixed.
+        run_test(r#"/abc/n.encoding.name"#);
+        run_test(r#"/abc/n.fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_kcode_does_not_leak_internal_flags() {
+        // The internal `KCODE_*` bits monoruby uses to remember the
+        // n/u/e/s modifier must not bleed through to user-visible
+        // options. We verify by combining a kcode modifier with `i`
+        // and checking IGNORECASE is the only bit added relative to
+        // a plain literal.
+        run_test(r#"(/abc/iu.options & Regexp::IGNORECASE) != 0"#);
+        run_test(r#"/abc/iu.casefold?"#);
+        run_test(r#"/abc/ie.casefold?"#);
+        run_test(r#"/abc/is.casefold?"#);
+    }
+
+    #[test]
+    fn regexp_new_string_flag_unknown_reports_whole_input() {
+        // CRuby's `unknown regexp option: <whole>` error reports the
+        // *entire* flag string, not just the first offending letter.
+        run_test_error(r#"Regexp.new("Hi", "mjx")"#);
+        run_test_error(r#"Regexp.new("Hi", "j")"#);
+        // The kcode letters n/u/e/s are literal-only — passing them
+        // via Regexp.new's String flag arg raises ArgumentError.
+        run_test_error(r#"Regexp.new("Hi", "u")"#);
+        run_test_error(r#"Regexp.new("Hi", "n")"#);
+    }
+
+    #[test]
+    fn regexp_non_ascii_source_pins_encoding() {
+        // Non-ASCII content in the source pins the encoding even
+        // without an explicit modifier.
+        run_test(r#"/©/.encoding.name"#);
+        run_test(r#"/©/.fixed_encoding?"#);
+        // Pure-ASCII source remains US-ASCII / not fixed.
+        run_test(r#"/abc/.encoding.name"#);
+        run_test(r#"/abc/.fixed_encoding?"#);
+    }
+
+    #[test]
+    fn regexp_new_with_noencoding_flag() {
+        // Regexp::NOENCODING (the integer flag, mirror of /.../n) on
+        // an ASCII-only source produces US-ASCII / not fixed — same
+        // resolution as `/abc/n`.
+        run_test(r#"Regexp.new("abc", Regexp::NOENCODING).encoding.name"#);
+        run_test(r#"Regexp.new("abc", Regexp::NOENCODING).fixed_encoding?"#);
+    }
+
+    // ----- PR #455 Phase B: Regexp.union encoding compat -----
+
+    #[test]
+    fn regexp_union_encoding_all_ascii_downgrades_to_us_ascii() {
+        // CRuby downgrades the result encoding to US-ASCII when every
+        // arg's content is 7-bit, regardless of any pinning modifiers
+        // on the individual args.
+        run_test(r#"Regexp.union(/a/, /b/).encoding.name"#);
+        run_test(r#"Regexp.union(/a/u, /b/u).encoding.name"#);
+        run_test(r#"Regexp.union(/a/e, /b/e).encoding.name"#);
+        run_test(r#"Regexp.union(/a/n, /b/n).encoding.name"#);
+        run_test(r#"Regexp.union("abc", /def/).encoding.name"#);
+    }
+
+    #[test]
+    fn regexp_union_encoding_keeps_non_ascii_encoding() {
+        // Non-ASCII content keeps the source's encoding through
+        // union.
+        run_test(r#"Regexp.union(/©/, /b/).encoding.name"#);
+    }
+
+    #[test]
+    fn regexp_union_encoding_incompatible_raises() {
+        // Two args with disagreeing pinned encodings (and either
+        // having non-ASCII content) is an ArgumentError. This
+        // doesn't fire for all-ASCII content because of the all-
+        // ASCII downgrade above.
+        run_test_error(r#"Regexp.union(/©/u, /中/e)"#);
+    }
+
+    #[test]
+    fn regexp_union_string_arg_with_meta_chars() {
+        // String args are escape-quoted and joined with `|`. Meta
+        // chars like `(`, `)`, `[`, `]`, `?`, `*`, `+`, `^`, `$` and
+        // `.` get backslash-escaped.
+        run_test(r##"Regexp.union("a.b").to_s"##);
+        run_test(r##"Regexp.union("a(b)c").to_s"##);
+        run_test(r##"Regexp.union(/x/, "y.z", /w/).to_s"##);
+    }
+
+    // ----- PR #455 Phase C: parse-time error messages -----
+
+    #[test]
+    fn regexp_parse_error_too_short_escape_sequence() {
+        // A trailing `\` is a "too short escape sequence" — checked
+        // in our pre-pass before Onigmo sees the source.
+        run_test_error(r#"Regexp.new("\\")"#);
+    }
+
+    #[test]
+    fn regexp_parse_error_invalid_hex_escape() {
+        // `\x` followed by a non-hex character / nothing is an
+        // "invalid hex escape" in CRuby.
+        run_test_error(r#"Regexp.new("\\xY")"#);
+        run_test_error(r#"Regexp.new("\\x")"#);
+    }
+
+    #[test]
+    fn regexp_parse_error_invalid_unicode_list() {
+        // `\u{}` (empty), `\u{xyz}` (non-hex digits) and `\u{`
+        // (unterminated) all surface as "invalid Unicode list".
+        run_test_error(r#"Regexp.new("\\u{}")"#);
+        run_test_error(r#"Regexp.new("\\u{xyz}")"#);
+        run_test_error(r#"Regexp.new("\\u{")"#);
+    }
+
+    #[test]
+    fn regexp_parse_error_invalid_unicode_range() {
+        // Codepoint > 0x10FFFF or > 6 hex digits → "invalid
+        // Unicode range".
+        run_test_error(r#"Regexp.new("\\u{110000}")"#);
+        run_test_error(r#"Regexp.new("\\u{1234567}")"#);
+    }
+
+    #[test]
+    fn regexp_parse_error_invalid_unicode_escape_short() {
+        // Bare `\uXYZ` with fewer than 4 hex digits → "invalid
+        // Unicode escape".
+        run_test_error(r#"Regexp.new("\\u")"#);
+        run_test_error(r#"Regexp.new("\\uX")"#);
+        run_test_error(r#"Regexp.new("\\u12Z")"#);
     }
 }

@@ -3479,7 +3479,12 @@ fn regex_flags_from_closing(closing: &Location<'_>) -> String {
     let tail = if bytes.is_empty() { bytes } else { &bytes[1..] };
     tail.iter()
         .copied()
-        .filter(|b| matches!(b, b'i' | b'm' | b'x' | b'n'))
+        // Onigmo flags (`i` / `m` / `x`) plus the encoding-pin
+        // letters (`n` / `u` / `e` / `s`) — `const_regexp` /
+        // `gen_regexp` decode the latter into the
+        // `RegexpInner::KCODE_*` bits the encoding resolver
+        // reads.
+        .filter(|b| matches!(b, b'i' | b'm' | b'x' | b'n' | b'u' | b'e' | b's'))
         .map(|b| b as char)
         .collect()
 }
