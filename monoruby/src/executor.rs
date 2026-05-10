@@ -2013,8 +2013,8 @@ impl Executor {
 
 impl Executor {
     pub(crate) fn generate_proc(
-        &self,
-        globals: &Globals,
+        &mut self,
+        globals: &mut Globals,
         bh: BlockHandler,
         pc: BytecodePtr,
     ) -> Result<Proc> {
@@ -2024,9 +2024,20 @@ impl Executor {
     /// Build a long-lived `Proc` from a BlockHandler. The resulting
     /// Proc may outlive the current frame, so any on-stack outer lfp
     /// is moved to the heap here.
+    ///
+    /// `BlockHandler` can hold an arbitrary `Value` because the
+    /// bytecode for `&expr` (when `expr` isn't a Lambda / LocalVar)
+    /// pushes the raw expression result without a `to_proc`
+    /// conversion, and `set_frame_block` wraps it as-is. So in
+    /// addition to the proxy / Proc / Symbol fast paths, we fall
+    /// back to invoking `to_proc` on the value — covering Method
+    /// objects (`Method#to_proc` returns a Proc) and any user class
+    /// that implements `to_proc`. This mirrors `get_block_data`'s
+    /// fallback so `define_method(:m, &Time.method(:now))` and the
+    /// `&blk` proxy promotion behave consistently with `yield`.
     pub(crate) fn generate_proc_inner(
-        &self,
-        globals: &Globals,
+        &mut self,
+        globals: &mut Globals,
         cfp: Cfp,
         bh: BlockHandler,
         pc: BytecodePtr,
@@ -2043,6 +2054,15 @@ impl Executor {
             // call.
             let outer = outer.move_frame_to_heap();
             return Ok(Proc::from_outer(outer, fid, pc));
+        }
+        // `to_proc` fallback. If the value responds, use the resulting
+        // Proc; otherwise propagate the original "not yet implemented"
+        // diagnostic so unrecognised cases stay loud.
+        if let Some(result) =
+            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
+            && let Some(proc) = result.is_proc()
+        {
+            return Ok(proc);
         }
         Err(MonorubyErr::runtimeerr(format!(
             "not yet implemented: block handler {bh:?}"

@@ -6720,4 +6720,46 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn define_method_with_method_via_block_amp() {
+        // `&Method` as a block argument needs `Method#to_proc` to fire
+        // before `define_method` can install it. The bytecode for
+        // `&expr` (where `expr` isn't a Lambda / LocalVar) doesn't
+        // emit a `to_proc` call, so the runtime fallback in
+        // `Executor::generate_proc_inner` covers it. Surfaced by
+        // `core/time/fixtures/classes.rb:7`'s
+        // `define_method(:now, &Time.method(:now))` — without the
+        // fallback it raised `RuntimeError: not yet implemented:
+        // block handler unknown handler ...`.
+        run_test(
+            r#"
+            class Holder
+              class << self
+                define_method(:now, &Time.method(:now))
+              end
+            end
+            Holder.now.is_a?(Time)
+            "#,
+        );
+    }
+
+    #[test]
+    fn define_method_with_user_to_proc_via_block_amp() {
+        // Same fallback also accepts user-defined `to_proc`. The
+        // returned Proc determines the installed method body.
+        run_test(
+            r#"
+            class Coercible
+              def to_proc
+                proc { |x| x * 10 }
+              end
+            end
+            class Box
+              define_method(:scale, &Coercible.new)
+            end
+            Box.new.scale(7)
+            "#,
+        );
+    }
 }
