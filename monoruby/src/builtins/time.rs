@@ -98,19 +98,15 @@ fn deconstruct_keys_(
 ) -> Result<Value> {
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
-    let is_utc = self_.as_time().is_utc();
-    let (year, month, day, yday, wday, hour, min, sec, subsec_ns) = match self_.as_time() {
-        TimeInner::Local(t) => (
-            t.year(), t.month(), t.day(), t.ordinal(),
-            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
-            t.nanosecond(),
-        ),
-        TimeInner::Utc(t) => (
-            t.year(), t.month(), t.day(), t.ordinal(),
-            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
-            t.nanosecond(),
-        ),
+    let t = self_.as_time();
+    let is_utc = t.is_utc();
+    let (yday, wday) = match t {
+        TimeInner::Local(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
+        TimeInner::Utc(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
     };
+    let (year, month, day, hour, min, sec, subsec_ns) = (
+        t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), t.nanosecond(),
+    );
     let zone_val = if is_utc { Value::string_from_str("UTC") } else { Value::nil() };
     let subsec_val = if subsec_ns == 0 {
         Value::integer(0)
@@ -331,18 +327,16 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let t = lfp.self_val();
-    let is_utc = t.as_time().is_utc();
-    let (sec, min, hour, day, mon, year, wday, yday) = match t.as_time() {
-        TimeInner::Local(t) => (
-            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
-            t.weekday().num_days_from_sunday(), t.ordinal(),
-        ),
-        TimeInner::Utc(t) => (
-            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
-            t.weekday().num_days_from_sunday(), t.ordinal(),
-        ),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let is_utc = t.is_utc();
+    let (wday, yday) = match t {
+        TimeInner::Local(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
+        TimeInner::Utc(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
     };
+    let (sec, min, hour, day, mon, year) = (
+        t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
+    );
     let zone = if is_utc {
         Value::string_from_str("UTC")
     } else {
@@ -390,28 +384,18 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// trailing extension blob.
 #[monoruby_builtin]
 fn _dump(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (year, month, day, hour, min, sec, usec, is_utc) = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => (
-            t.year(),
-            t.month(),
-            t.day(),
-            t.hour(),
-            t.minute(),
-            t.second(),
-            t.nanosecond() / 1000,
-            false,
-        ),
-        TimeInner::Utc(t) => (
-            t.year(),
-            t.month(),
-            t.day(),
-            t.hour(),
-            t.minute(),
-            t.second(),
-            t.nanosecond() / 1000,
-            true,
-        ),
-    };
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let (year, month, day, hour, min, sec, usec, is_utc) = (
+        t.year(),
+        t.month(),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second(),
+        t.nanosecond() / 1000,
+        t.is_utc(),
+    );
     let high: u32 = (1u32 << 31)
         | ((is_utc as u32) << 30)
         | (((year - 1900) as u32 & 0xFFFF) << 14)
@@ -502,28 +486,15 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         0
     };
-    let (year, mon, mday, h, mi, s, nsec, suffix) = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => (
-            t.year(),
-            t.month(),
-            t.day(),
-            t.hour(),
-            t.minute(),
-            t.second(),
-            t.nanosecond(),
-            t.format("%:z").to_string(),
-        ),
-        TimeInner::Utc(t) => (
-            t.year(),
-            t.month(),
-            t.day(),
-            t.hour(),
-            t.minute(),
-            t.second(),
-            t.nanosecond(),
-            "Z".to_string(),
-        ),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let suffix = match t {
+        TimeInner::Local(t) => t.format("%:z").to_string(),
+        TimeInner::Utc(_) => "Z".to_string(),
     };
+    let (year, mon, mday, h, mi, s, nsec) = (
+        t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), t.nanosecond(),
+    );
     let year_str = if year < 0 {
         format!("-{:04}", -year)
     } else {
@@ -589,10 +560,11 @@ fn rescale_nsec(ns: u32, precision: u32, mode: i8) -> u32 {
 }
 
 fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
-    match lfp.self_val().as_time() {
+    let self_ = lfp.self_val();
+    let inner = self_.as_time();
+    let new_ns = rescale_nsec(inner.nanosecond(), precision, mode);
+    match inner {
         TimeInner::Local(t) => {
-            let ns = t.nanosecond();
-            let new_ns = rescale_nsec(ns, precision, mode);
             let mut result = t.with_nanosecond(0).unwrap();
             if new_ns >= 1_000_000_000 {
                 result = result + Duration::seconds(1);
@@ -602,8 +574,6 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
             TimeInner::Local(result)
         }
         TimeInner::Utc(t) => {
-            let ns = t.nanosecond();
-            let new_ns = rescale_nsec(ns, precision, mode);
             let mut result = t.with_nanosecond(0).unwrap();
             if new_ns >= 1_000_000_000 {
                 result = result + Duration::seconds(1);
@@ -1097,10 +1067,7 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
 
     // Get nanoseconds from the time value for Ruby-specific format specifiers.
-    let nanos = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.timestamp_subsec_nanos(),
-        TimeInner::Utc(t) => t.timestamp_subsec_nanos(),
-    };
+    let nanos = lfp.self_val().as_time().nanosecond();
 
     // Replace Ruby-specific nanosecond specifiers that chrono doesn't support.
     let fmt = fmt_str
@@ -1148,11 +1115,7 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/year.html]
 #[monoruby_builtin]
 fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let year = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.year(),
-        TimeInner::Utc(t) => t.year(),
-    };
-    Ok(Value::integer(year as _))
+    Ok(Value::integer(lfp.self_val().as_time().year() as _))
 }
 
 ///
@@ -1163,11 +1126,7 @@ fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/mon.html]
 #[monoruby_builtin]
 fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let month = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.month(),
-        TimeInner::Utc(t) => t.month(),
-    };
-    Ok(Value::integer(month as _))
+    Ok(Value::integer(lfp.self_val().as_time().month() as _))
 }
 
 ///
@@ -1178,11 +1137,7 @@ fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/day.html]
 #[monoruby_builtin]
 fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let day = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.day(),
-        TimeInner::Utc(t) => t.day(),
-    };
-    Ok(Value::integer(day as _))
+    Ok(Value::integer(lfp.self_val().as_time().day() as _))
 }
 
 ///
@@ -1217,65 +1172,42 @@ fn wday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#hour
 #[monoruby_builtin]
 fn hour(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let h = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.hour(),
-        TimeInner::Utc(t) => t.hour(),
-    };
-    Ok(Value::integer(h as _))
+    Ok(Value::integer(lfp.self_val().as_time().hour() as _))
 }
 
 ///
 /// ### Time#min
 #[monoruby_builtin]
 fn min_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let m = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.minute(),
-        TimeInner::Utc(t) => t.minute(),
-    };
-    Ok(Value::integer(m as _))
+    Ok(Value::integer(lfp.self_val().as_time().minute() as _))
 }
 
 ///
 /// ### Time#sec
 #[monoruby_builtin]
 fn sec_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.second(),
-        TimeInner::Utc(t) => t.second(),
-    };
-    Ok(Value::integer(s as _))
+    Ok(Value::integer(lfp.self_val().as_time().second() as _))
 }
 
 ///
 /// ### Time#usec
 #[monoruby_builtin]
 fn usec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
-    Ok(Value::integer((ns / 1_000) as _))
+    Ok(Value::integer((lfp.self_val().as_time().nanosecond() / 1_000) as _))
 }
 
 ///
 /// ### Time#nsec
 #[monoruby_builtin]
 fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
-    Ok(Value::integer(ns as _))
+    Ok(Value::integer(lfp.self_val().as_time().nanosecond() as _))
 }
 
 ///
 /// ### Time#subsec
 #[monoruby_builtin]
 fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
+    let ns = lfp.self_val().as_time().nanosecond();
     // Returns a Rational in CRuby; monoruby doesn't have Rational, so
     // approximate with a Float. ActiveModel only compares against 0.
     if ns == 0 {
@@ -1300,11 +1232,13 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#to_f
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (s, ns) = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => (t.timestamp(), t.nanosecond()),
-        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let s = match t {
+        TimeInner::Local(t) => t.timestamp(),
+        TimeInner::Utc(t) => t.timestamp(),
     };
-    Ok(Value::float(s as f64 + ns as f64 / 1_000_000_000.0))
+    Ok(Value::float(s as f64 + t.nanosecond() as f64 / 1_000_000_000.0))
 }
 
 ///
@@ -1431,6 +1365,55 @@ impl TimeInner {
         match self {
             TimeInner::Local(_) => false,
             TimeInner::Utc(_) => true,
+        }
+    }
+
+    pub fn year(&self) -> i32 {
+        match self {
+            TimeInner::Local(t) => t.year(),
+            TimeInner::Utc(t) => t.year(),
+        }
+    }
+
+    pub fn month(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.month(),
+            TimeInner::Utc(t) => t.month(),
+        }
+    }
+
+    pub fn day(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.day(),
+            TimeInner::Utc(t) => t.day(),
+        }
+    }
+
+    pub fn hour(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.hour(),
+            TimeInner::Utc(t) => t.hour(),
+        }
+    }
+
+    pub fn minute(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.minute(),
+            TimeInner::Utc(t) => t.minute(),
+        }
+    }
+
+    pub fn second(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.second(),
+            TimeInner::Utc(t) => t.second(),
+        }
+    }
+
+    pub fn nanosecond(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.nanosecond(),
+            TimeInner::Utc(t) => t.nanosecond(),
         }
     }
 }
