@@ -17,10 +17,10 @@ pub(super) fn init(globals: &mut Globals) {
         &["mktime"],
         time_local,
         1,
-        7,
+        10,
         false,
     );
-    globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 7, false);
+    globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 10, false);
     globals.define_builtin_class_func(TIME_CLASS, "now", time_now, 0);
     globals.define_builtin_class_func_with(TIME_CLASS, "at", time_at, 1, 2, false);
     globals.store[TIME_CLASS].set_alloc_func(time_alloc_func);
@@ -562,70 +562,86 @@ fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
-    let year = if let Ok(i) = i32::try_from(lfp.arg(0).coerce_to_int_i64(vm, globals)?) {
-        i
+    // Reorder args when the 10-arg C-style form is used:
+    // `Time.gm(sec, min, hour, mday, mon, year, wday, yday, isdst, tz)`.
+    // The trailing four args (wday, yday, isdst, tz) are intentionally
+    // ignored — CRuby treats them as advisory.
+    let arg_count = (0..10).filter(|i| lfp.try_arg(*i).is_some()).count();
+    let (year_arg, mon_arg, day_arg, hour_arg, min_arg, sec_arg, usec_arg) = if arg_count == 10 {
+        (
+            lfp.try_arg(5),
+            lfp.try_arg(4),
+            lfp.try_arg(3),
+            lfp.try_arg(2),
+            lfp.try_arg(1),
+            lfp.try_arg(0),
+            None,
+        )
+    } else if arg_count >= 8 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "wrong number of arguments (given {}, expected 1..7)",
+            arg_count
+        )));
     } else {
-        return Ok(None);
+        (
+            lfp.try_arg(0),
+            lfp.try_arg(1),
+            lfp.try_arg(2),
+            lfp.try_arg(3),
+            lfp.try_arg(4),
+            lfp.try_arg(5),
+            lfp.try_arg(6),
+        )
     };
-    let mon = if let Some(mon) = lfp.try_arg(1) {
-        let i = mon.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        1
+
+    let year = match year_arg {
+        Some(v) => match i32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        None => return Err(MonorubyErr::typeerr("no implicit conversion of nil into Integer")),
     };
-    let day = if let Some(day) = lfp.try_arg(2) {
-        let i = day.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        1
+    let mon = match mon_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_month_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 1,
     };
-    let hour = if let Some(hour) = lfp.try_arg(3) {
-        let i = hour.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        0
+    let day = match day_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 1,
     };
-    let min = if let Some(min) = lfp.try_arg(4) {
-        let i = min.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        0
+    let hour = match hour_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 0,
     };
-    let sec = if let Some(sec) = lfp.try_arg(5) {
-        let i = sec.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        0
+    let min = match min_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 0,
     };
-    let usec = if let Some(usec) = lfp.try_arg(6) {
-        let i = usec.coerce_to_int_i64(vm, globals)?;
-        if let Ok(i) = u32::try_from(i) {
-            i
-        } else {
-            return Ok(None);
-        }
-    } else {
-        0
+    let sec = match sec_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 0,
+    };
+    let usec = match usec_arg {
+        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => 0,
     };
     Ok(Some(NaiveDateTime::new(
         NaiveDate::from_ymd_opt(year, mon, day)
@@ -633,6 +649,52 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         NaiveTime::from_hms_micro_opt(hour, min, sec, usec)
             .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?,
     )))
+}
+
+/// Coerce a `Time.gm` / `Time.local` numeric argument to `i64`.
+/// Accepts Integer / Float / `to_int`-respondent objects (delegated
+/// to `coerce_to_int_i64`) as well as numeric Strings — CRuby parses
+/// `"2000"` / `"08"` as base-10 integers here. Surrounding whitespace
+/// is stripped (matching `String#to_i`).
+fn time_arg_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
+    if let Some(s) = v.is_str() {
+        let trimmed = s.trim();
+        return trimmed.parse::<i64>().map_err(|_| {
+            MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed))
+        });
+    }
+    v.coerce_to_int_i64(vm, globals)
+}
+
+/// Coerce the `mon` argument to an `i64` month number. Same rules as
+/// `time_arg_to_i64` plus a short-name lookup: `"jan"`/`"Jan"` → 1,
+/// `"dec"` → 12, etc. Names that don't match still fall through to the
+/// numeric parse so `"12"` works.
+fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
+    if let Some(s) = v.is_str() {
+        let trimmed = s.trim();
+        if let Some(n) = month_name_to_num(trimmed) {
+            return Ok(n);
+        }
+        return trimmed.parse::<i64>().map_err(|_| {
+            MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed))
+        });
+    }
+    v.coerce_to_int_i64(vm, globals)
+}
+
+fn month_name_to_num(s: &str) -> Option<i64> {
+    const NAMES: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    if s.len() != 3 {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    NAMES
+        .iter()
+        .position(|n| *n == lower.as_str())
+        .map(|i| (i + 1) as i64)
 }
 
 fn generate_time<Tz: TimeZone>(vm: &mut Executor, globals: &mut Globals, tz: Tz, lfp: Lfp) -> Result<DateTime<Tz>> {
@@ -1242,6 +1304,34 @@ mod tests {
     #[test]
     fn time_zone() {
         run_test("Time.utc(2000).zone");
+    }
+
+    #[test]
+    fn time_gm_string_args() {
+        // String args parse as base-10 numerals, mirroring CRuby.
+        run_test(r#"Time.gm("2000", "12", "1", "5", "8", "8").inspect"#);
+        // Short month-name lookup ("jan" → 1, "Dec" → 12, …).
+        run_test(r#"Time.gm(2000, "jan").inspect"#);
+        run_test(r#"Time.gm(2000, "dec").inspect"#);
+    }
+
+    #[test]
+    fn time_gm_c_style_10_args() {
+        // 10-arg form: (sec, min, hour, mday, mon, year, wday, yday, isdst, tz).
+        // Trailing wday/yday/isdst/tz are ignored.
+        run_test(
+            r#"Time.gm(1, 15, 20, 1, 1, 2000, :ignored, :ignored, :ignored, :ignored).inspect"#,
+        );
+        // Float-form 10-arg (numeric to_int truncation).
+        run_test(
+            r#"Time.gm(1.0, 15.0, 20.0, 1.0, 1.0, 2000.0, nil, nil, false, nil).inspect"#,
+        );
+    }
+
+    #[test]
+    fn time_gm_nil_defaults() {
+        // Trailing nil month/day/etc default to 1/0.
+        run_test("Time.gm(2000, nil, nil, nil, nil, nil).inspect");
     }
 
     #[test]
