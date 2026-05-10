@@ -5,29 +5,35 @@ use jitgen::JitContext;
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 
 // ---------------------------------------------------------------------------
-// Fiddle type codes  (must match startup/fiddle.rb and startup/ffi_c.rb)
+// Fiddle type codes  (must match stdlib/fiddle.rb and gem/ffi_c.rb)
+//
+// We use CRuby's Fiddle convention: each canonical type has a small positive
+// integer code, and the unsigned variant is its negation. opengl-bindings2
+// and other CRuby-targeted gems write `-Fiddle::TYPE_INT` to mean
+// "unsigned int", so we need the same convention.
+//
+// Platform aliases (INTPTR_T / SIZE_T / SSIZE_T / PTRDIFF_T / UINTPTR_T)
+// alias to LONG / ULONG on x86-64 Linux; they are not separate Rust
+// constants because match arms would collide.
 // ---------------------------------------------------------------------------
-const TYPE_VOID: i64 = 0;
-const TYPE_VOIDP: i64 = -1;
-const TYPE_CHAR: i64 = -2;
-const TYPE_UCHAR: i64 = -3;
-const TYPE_SHORT: i64 = -4;
-const TYPE_USHORT: i64 = -5;
-const TYPE_INT: i64 = -6;
-const TYPE_UINT: i64 = -7;
-const TYPE_LONG: i64 = -8;
-const TYPE_ULONG: i64 = -9;
-const TYPE_LONG_LONG: i64 = -10;
-const TYPE_ULONG_LONG: i64 = -11;
-const TYPE_FLOAT: i64 = -12;
-const TYPE_DOUBLE: i64 = -13;
-const TYPE_BOOL: i64 = -14;
-// Platform-specific aliases (all 8 bytes on x86-64)
-const TYPE_INTPTR_T: i64 = -15;
-const TYPE_UINTPTR_T: i64 = -16;
-const TYPE_PTRDIFF_T: i64 = -17;
-const TYPE_SIZE_T: i64 = -18;
-const TYPE_SSIZE_T: i64 = -19;
+const TYPE_VOID:       i64 =  0;
+const TYPE_VOIDP:      i64 =  1;
+const TYPE_CHAR:       i64 =  2;
+const TYPE_UCHAR:      i64 = -2;
+const TYPE_SHORT:      i64 =  3;
+const TYPE_USHORT:     i64 = -3;
+const TYPE_INT:        i64 =  4;
+const TYPE_UINT:       i64 = -4;
+const TYPE_LONG:       i64 =  5;
+const TYPE_ULONG:      i64 = -5;
+const TYPE_LONG_LONG:  i64 =  6;
+const TYPE_ULONG_LONG: i64 = -6;
+const TYPE_FLOAT:      i64 =  7;
+const TYPE_DOUBLE:     i64 =  8;
+// CRuby's Fiddle (1.1) doesn't expose TYPE_BOOL; we keep it for FFI's
+// `:bool` arg and treat it like a 32-bit int, matching libffi's `bool` ABI
+// on x86-64. Picked an unused value (9) to avoid clashes.
+const TYPE_BOOL:       i64 =  9;
 
 // ---------------------------------------------------------------------------
 // Argument storage (keeps values alive while libffi call is running)
@@ -48,26 +54,9 @@ enum CArg {
     U64(u64),
     F32(f32),
     F64(f64),
-    /// Ruby String passed as a C `char*`. Owns a heap buffer with an
-    /// appended NUL terminator (Ruby strings are not NUL-terminated) and
-    /// caches its pointer as a u64 so `as_libffi_arg` can reference a
-    /// stable location. Moving the `CArg` is safe because the `Vec<u8>`
-    /// move leaves the heap allocation in place.
-    CStr {
-        _buf: Vec<u8>,
-        ptr: u64,
-    },
 }
 
 impl CArg {
-    fn from_bytes_nul_terminated(bytes: &[u8]) -> Self {
-        let mut buf = Vec::with_capacity(bytes.len() + 1);
-        buf.extend_from_slice(bytes);
-        buf.push(0);
-        let ptr = buf.as_ptr() as u64;
-        CArg::CStr { _buf: buf, ptr }
-    }
-
     /// Return a libffi Arg pointing into this CArg.
     /// SAFETY: `self` must not be moved or dropped while the Arg is in use.
     fn as_libffi_arg(&'_ self) -> Arg<'_> {
@@ -82,7 +71,6 @@ impl CArg {
             CArg::U64(v) => Arg::new(v),
             CArg::F32(v) => Arg::new(v),
             CArg::F64(v) => Arg::new(v),
-            CArg::CStr { ptr, .. } => Arg::new(ptr),
         }
     }
 
@@ -98,7 +86,6 @@ impl CArg {
             CArg::U64(_) => Type::u64(),
             CArg::F32(_) => Type::f32(),
             CArg::F64(_) => Type::f64(),
-            CArg::CStr { .. } => Type::pointer(),
         }
     }
 }
@@ -108,18 +95,19 @@ impl CArg {
 // ---------------------------------------------------------------------------
 
 fn type_code_to_ret_ffi_type(ty: i64) -> Result<Type> {
+    // INTPTR_T / PTRDIFF_T / SSIZE_T alias TYPE_LONG (positive 5);
+    // UINTPTR_T / SIZE_T alias TYPE_ULONG (negative -5). Those alias paths
+    // hit the LONG/ULONG arms automatically without separate constants.
     match ty {
         TYPE_VOID => Ok(Type::void()),
-        TYPE_VOIDP | TYPE_UINTPTR_T | TYPE_SIZE_T => Ok(Type::pointer()),
+        TYPE_VOIDP => Ok(Type::pointer()),
         TYPE_CHAR => Ok(Type::i8()),
         TYPE_UCHAR => Ok(Type::u8()),
         TYPE_SHORT => Ok(Type::i16()),
         TYPE_USHORT => Ok(Type::u16()),
         TYPE_INT | TYPE_BOOL => Ok(Type::i32()),
         TYPE_UINT => Ok(Type::u32()),
-        TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
-            Ok(Type::i64())
-        }
+        TYPE_LONG | TYPE_LONG_LONG => Ok(Type::i64()),
         TYPE_ULONG | TYPE_ULONG_LONG => Ok(Type::u64()),
         TYPE_FLOAT => Ok(Type::f32()),
         TYPE_DOUBLE => Ok(Type::f64()),
@@ -132,9 +120,19 @@ fn type_code_to_ret_ffi_type(ty: i64) -> Result<Type> {
 
 /// Convert a Ruby Value and a Fiddle type code into a `CArg`.
 ///
-/// For `TYPE_VOIDP`, a Ruby String value is accepted: its raw byte-buffer
-/// pointer is passed to the C function.  An Integer is treated as an address.
-fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
+/// For `TYPE_VOIDP`, a Ruby String value is accepted: a pointer to its
+/// actual byte buffer is passed to the C function. We mutate the String
+/// to ensure a trailing NUL in spare capacity (so `strlen`-style reads
+/// stop at `len`) but the visible content is unchanged. Writes the C
+/// function makes within `[0, len)` are visible to subsequent Ruby reads
+/// — this is required for callers like `glGenTextures(1, buf)` and
+/// `memcpy(buf, src, n)` that fill `buf` in place.
+///
+/// `mut val` is taken by value (Value is Copy) so we can freely take an
+/// `&mut` to its underlying RValue without disturbing the caller.
+fn value_to_carg(globals: &mut Globals, mut val: Value, ty: i64) -> Result<CArg> {
+    // Same alias note as type_code_to_ret_ffi_type: INTPTR_T family
+    // collapses to LONG/ULONG codes in CRuby's convention.
     match ty {
         TYPE_VOID => Ok(CArg::I64(0)), // should not appear as argument
         TYPE_CHAR => Ok(CArg::I8(val.expect_integer(globals)? as i8)),
@@ -143,12 +141,8 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
         TYPE_USHORT => Ok(CArg::U16(val.expect_integer(globals)? as u16)),
         TYPE_INT | TYPE_BOOL => Ok(CArg::I32(val.expect_integer(globals)? as i32)),
         TYPE_UINT => Ok(CArg::U32(val.expect_integer(globals)? as u32)),
-        TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
-            Ok(CArg::I64(val.expect_integer(globals)?))
-        }
-        TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
-            Ok(CArg::U64(val.expect_integer(globals)? as u64))
-        }
+        TYPE_LONG | TYPE_LONG_LONG => Ok(CArg::I64(val.expect_integer(globals)?)),
+        TYPE_ULONG | TYPE_ULONG_LONG => Ok(CArg::U64(val.expect_integer(globals)? as u64)),
         TYPE_VOIDP => {
             // Accept: nil → NULL, Integer → address, String → raw bytes ptr
             match val.unpack() {
@@ -156,14 +150,16 @@ fn value_to_carg(globals: &mut Globals, val: Value, ty: i64) -> Result<CArg> {
                 RV::BigInt(b) => Ok(CArg::U64(num::ToPrimitive::to_u64(b).unwrap_or(0))),
                 RV::Nil => Ok(CArg::U64(0)),
                 RV::String(_) => {
-                    // Ruby strings are not NUL-terminated, so passing
-                    // `as_ptr()` directly to a C function expecting a
-                    // `char*` (e.g. `SDL_SetWindowTitle`, `strlen`)
-                    // causes a read past the end of the string buffer.
-                    // Copy into a NUL-terminated buffer owned by the
-                    // CArg for the duration of the libffi call.
-                    let inner = val.as_rstring_inner();
-                    Ok(CArg::from_bytes_nul_terminated(inner.as_bytes()))
+                    // Hand the C function the actual String buffer (so
+                    // it can write back into Ruby-visible memory) but
+                    // first ensure a trailing NUL in spare capacity
+                    // (read-only callers like strlen need it). The
+                    // String stays alive via the args slice in
+                    // fiddle_call_inner, so the pointer is valid for
+                    // the duration of the call.
+                    let inner = val.as_rstring_inner_mut();
+                    let ptr = inner.nul_terminated_buf_ptr();
+                    Ok(CArg::U64(ptr as u64))
                 }
                 _ => {
                     // Other objects (e.g. FFI::Pointer): coerce via to_i
@@ -255,11 +251,11 @@ fn fiddle_call_inner(
             let v: u32 = unsafe { cif.call(func, &ffi_args) };
             Value::integer(v as i64)
         }
-        TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
+        TYPE_LONG | TYPE_LONG_LONG => {
             let v: i64 = unsafe { cif.call(func, &ffi_args) };
             Value::integer(v)
         }
-        TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
+        TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
             let v: u64 = unsafe { cif.call(func, &ffi_args) };
             Value::integer(v as i64)
         }
@@ -341,10 +337,10 @@ fn fiddle_read(
             TYPE_USHORT => Value::integer(*(ptr as *const u16) as i64),
             TYPE_INT | TYPE_BOOL => Value::integer(*(ptr as *const i32) as i64),
             TYPE_UINT => Value::integer(*(ptr as *const u32) as i64),
-            TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
+            TYPE_LONG | TYPE_LONG_LONG => {
                 Value::integer(*(ptr as *const i64))
             }
-            TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
+            TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
                 Value::integer(*(ptr as *const u64) as i64)
             }
             TYPE_FLOAT => Value::float(*(ptr as *const f32) as f64),
@@ -385,10 +381,10 @@ fn fiddle_write(
             TYPE_USHORT => *(ptr as *mut u16) = val.expect_integer(globals)? as u16,
             TYPE_INT | TYPE_BOOL => *(ptr as *mut i32) = val.expect_integer(globals)? as i32,
             TYPE_UINT => *(ptr as *mut u32) = val.expect_integer(globals)? as u32,
-            TYPE_LONG | TYPE_LONG_LONG | TYPE_INTPTR_T | TYPE_PTRDIFF_T | TYPE_SSIZE_T => {
+            TYPE_LONG | TYPE_LONG_LONG => {
                 *(ptr as *mut i64) = val.expect_integer(globals)?;
             }
-            TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG | TYPE_UINTPTR_T | TYPE_SIZE_T => {
+            TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
                 *(ptr as *mut u64) = val.expect_integer(globals)? as u64;
             }
             TYPE_FLOAT => *(ptr as *mut f32) = val.coerce_to_f64_no_convert(globals)? as f32,
@@ -722,13 +718,15 @@ mod tests {
     // surfaces as a monoruby-side exception and fails the test.
     //
     // Type codes match the constants defined at the top of this file
-    // (kept in sync with `startup/ffi_c.rb`).
+    // (kept in sync with `gem/ffi_c.rb` and `stdlib/fiddle.rb`).
+    // CRuby's Fiddle convention: positive=signed, negation=unsigned.
+    // SIZE_T is an alias of ULONG (= -LONG = -5) on x86-64.
     const TYPE_PRELUDE: &str = r#"
-        TY_VOIDP = -1
-        TY_INT   = -6
-        TY_LLONG = -10
-        TY_DOUBLE = -13
-        TY_SIZE_T = -18
+        TY_VOIDP  = 1
+        TY_INT    = 4
+        TY_LLONG  = 6
+        TY_DOUBLE = 8
+        TY_SIZE_T = -5
         LIBC = FFI.___dlopen("libc.so.6")
         LIBM = FFI.___dlopen("libm.so.6") || FFI.___dlopen("libc.so.6")
     "#;
@@ -866,11 +864,11 @@ mod tests {
     fn fiddle_read_write_inline_jit() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            TY_CHAR   = -2
-            TY_UCHAR  = -3
-            TY_SHORT  = -4
-            TY_USHORT = -5
-            TY_UINT   = -7
+            TY_CHAR   = 2
+            TY_UCHAR  = -2
+            TY_SHORT  = 3
+            TY_USHORT = -3
+            TY_UINT   = -4
             ptr = FFI.___malloc(16)
             raise "malloc returned NULL" if ptr == 0
             begin

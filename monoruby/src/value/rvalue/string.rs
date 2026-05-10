@@ -1072,6 +1072,34 @@ impl RStringInner {
         &self.content
     }
 
+    /// Make the buffer C-string compatible without changing the visible
+    /// Ruby content: ensure capacity ≥ `len + 1` and write a NUL byte at
+    /// `content[len]` (in spare capacity, *not* part of `as_bytes`).
+    /// Returns a raw pointer to the start of the buffer.
+    ///
+    /// Used by the Fiddle / FFI bridge so a Ruby String passed where
+    /// C expects `char*` / `void*` can be:
+    ///   * read by `strlen`-style C code (the trailing NUL stops the scan
+    ///     at `len`), and
+    ///   * written into by `memcpy`-style C code (writes within the first
+    ///     `len` bytes are visible to subsequent Ruby reads of the same
+    ///     String, because we expose the actual backing buffer instead of
+    ///     a copy).
+    ///
+    /// SAFETY: The pointer is valid until the next mutation of `self`
+    /// (which may reallocate). `as_bytes`, `len`, `hash`, and equality
+    /// of `self` are unchanged — the NUL lives in spare capacity.
+    pub fn nul_terminated_buf_ptr(&mut self) -> *mut u8 {
+        let len = self.content.len();
+        if self.content.capacity() <= len {
+            self.content.reserve(1);
+        }
+        // SAFETY: capacity > len after the reserve above, so the byte at
+        // offset `len` is owned spare capacity that we can write to.
+        unsafe { self.content.as_mut_ptr().add(len).write(0) };
+        self.content.as_mut_ptr()
+    }
+
     pub fn set_byte(&mut self, index: usize, byte: u8) {
         self.content[index] = byte;
         // Phase 1 lets a UTF-8-tagged buffer hold invalid bytes,
