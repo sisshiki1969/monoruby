@@ -59,13 +59,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(TIME_CLASS, "getutc", &["getgm"], getutc, 0);
     globals.define_builtin_func_with(TIME_CLASS, "getlocal", getlocal, 0, 1, false);
     globals.define_builtin_func(TIME_CLASS, "to_a", to_a, 0);
-    globals.define_builtin_funcs(TIME_CLASS, "iso8601", &["xmlschema"], iso8601, 0);
+    globals.define_builtin_funcs_with(TIME_CLASS, "iso8601", &["xmlschema"], iso8601, 0, 1, false);
     globals.define_builtin_func(TIME_CLASS, "asctime", asctime, 0);
     globals.define_builtin_func(TIME_CLASS, "ctime", asctime, 0);
     globals.define_builtin_func_with(TIME_CLASS, "floor", floor_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "ceil", ceil_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "round", round_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "deconstruct_keys", deconstruct_keys_, 1, 1, false);
+    globals.define_private_builtin_func(TIME_CLASS, "_dump", _dump, 0);
+    globals.define_builtin_class_func(TIME_CLASS, "_load", _load, 1);
+    // Mark `_load` private at the metaclass level so
+    // `Time.private_methods.include?(:_load)` is true and `Time._load(...)`
+    // raises NoMethodError, matching CRuby's `private_class_method :_load`.
+    let metaclass = globals.store.get_metaclass(TIME_CLASS).id();
+    let _ = globals.store.change_method_visibility_for_class(
+        metaclass,
+        &[IdentId::get_id("_load")],
+        Visibility::Private,
+    );
 }
 
 ///
@@ -87,19 +98,15 @@ fn deconstruct_keys_(
 ) -> Result<Value> {
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
-    let is_utc = self_.as_time().is_utc();
-    let (year, month, day, yday, wday, hour, min, sec, subsec_ns) = match self_.as_time() {
-        TimeInner::Local(t) => (
-            t.year(), t.month(), t.day(), t.ordinal(),
-            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
-            t.nanosecond(),
-        ),
-        TimeInner::Utc(t) => (
-            t.year(), t.month(), t.day(), t.ordinal(),
-            t.weekday().num_days_from_sunday(), t.hour(), t.minute(), t.second(),
-            t.nanosecond(),
-        ),
+    let t = self_.as_time();
+    let is_utc = t.is_utc();
+    let (yday, wday) = match t {
+        TimeInner::Local(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
+        TimeInner::Utc(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
     };
+    let (year, month, day, hour, min, sec, subsec_ns) = (
+        t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), t.nanosecond(),
+    );
     let zone_val = if is_utc { Value::string_from_str("UTC") } else { Value::nil() };
     let subsec_val = if subsec_ns == 0 {
         Value::integer(0)
@@ -320,18 +327,16 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_a.html]
 #[monoruby_builtin]
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let t = lfp.self_val();
-    let is_utc = t.as_time().is_utc();
-    let (sec, min, hour, day, mon, year, wday, yday) = match t.as_time() {
-        TimeInner::Local(t) => (
-            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
-            t.weekday().num_days_from_sunday(), t.ordinal(),
-        ),
-        TimeInner::Utc(t) => (
-            t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
-            t.weekday().num_days_from_sunday(), t.ordinal(),
-        ),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let is_utc = t.is_utc();
+    let (wday, yday) = match t {
+        TimeInner::Local(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
+        TimeInner::Utc(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
     };
+    let (sec, min, hour, day, mon, year) = (
+        t.second(), t.minute(), t.hour(), t.day(), t.month(), t.year(),
+    );
     let zone = if is_utc {
         Value::string_from_str("UTC")
     } else {
@@ -352,22 +357,160 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
+/// ### Time#_dump (private)
+///
+/// - _dump(*) -> String
+///
+/// Marshal-format hook. Returns the 8-byte little-endian
+/// representation CRuby uses for `Marshal.dump(time)`. Layout
+/// (CRuby `time.c`, `time_mdump`):
+///
+/// ```text
+/// high u32:
+///   bit 31      : 1 (new format marker)
+///   bit 30      : 1 if UTC, else 0
+///   bits 14..29 : year - 1900
+///   bits 10..13 : month - 1
+///   bits 5..9   : mday
+///   bits 0..4   : hour
+/// low u32:
+///   bits 26..31 : min
+///   bits 20..25 : sec
+///   bits 0..19  : usec
+/// ```
+///
+/// Sub-microsecond precision and non-UTC offsets are not encoded;
+/// matches CRuby's "old marshal format" path that doesn't add the
+/// trailing extension blob.
+#[monoruby_builtin]
+fn _dump(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let (year, month, day, hour, min, sec, usec, is_utc) = (
+        t.year(),
+        t.month(),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second(),
+        t.nanosecond() / 1000,
+        t.is_utc(),
+    );
+    let high: u32 = (1u32 << 31)
+        | ((is_utc as u32) << 30)
+        | (((year - 1900) as u32 & 0xFFFF) << 14)
+        | ((month - 1) << 10)
+        | (day << 5)
+        | hour;
+    let low: u32 = (min << 26) | (sec << 20) | (usec & 0xFFFFF);
+    let mut bytes = Vec::with_capacity(8);
+    bytes.extend_from_slice(&high.to_le_bytes());
+    bytes.extend_from_slice(&low.to_le_bytes());
+    Ok(Value::bytes(bytes))
+}
+
+///
+/// ### Time._load (private class method)
+///
+/// - _load(string) -> Time
+///
+/// Reverse of `Time#_dump`. Accepts both the "new" format (bit 31
+/// of the high word is set) and the legacy UNIX-timestamp format
+/// (bit 31 clear; high = epoch seconds, low = usec).
+#[monoruby_builtin]
+fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let bytes = arg.expect_bytes(&globals.store)?;
+    if bytes.len() != 8 {
+        return Err(MonorubyErr::typeerr("marshaled time format error".to_string()));
+    }
+    let high = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let low = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if (high >> 31) & 1 == 0 {
+        // Legacy UNIX-timestamp format: high = secs, low = usec.
+        let secs = high as i64;
+        let nsec = low.saturating_mul(1000);
+        let dt = DateTime::<Utc>::from_timestamp(secs, nsec).ok_or_else(|| {
+            MonorubyErr::argumenterr("marshaled time data has out-of-range secs")
+        })?;
+        return Ok(Value::new_time(TimeInner::Utc(dt)));
+    }
+    let is_utc = (high >> 30) & 1 == 1;
+    let year = ((high >> 14) & 0xFFFF) as i32 + 1900;
+    let month = (high >> 10) & 0xF;
+    let day = (high >> 5) & 0x1F;
+    let hour = high & 0x1F;
+    let min = (low >> 26) & 0x3F;
+    let sec = (low >> 20) & 0x3F;
+    let usec = low & 0xFFFFF;
+    let naive = NaiveDate::from_ymd_opt(year, month + 1, day)
+        .and_then(|d| d.and_hms_micro_opt(hour, min, sec, usec))
+        .ok_or_else(|| MonorubyErr::argumenterr("marshaled time data out of range"))?;
+    if is_utc {
+        Ok(Value::new_time(TimeInner::Utc(Utc.from_utc_datetime(&naive))))
+    } else {
+        let local = match Local.from_local_datetime(&naive) {
+            LocalResult::Single(t) => t,
+            LocalResult::Ambiguous(t, _) => t,
+            LocalResult::None => {
+                return Err(MonorubyErr::argumenterr(
+                    "marshaled time data does not exist in local time",
+                ))
+            }
+        };
+        Ok(Value::new_time(TimeInner::Local(local.into())))
+    }
+}
+
+///
 /// ### Time#iso8601
 ///
-/// - iso8601 -> String
-/// - xmlschema -> String
+/// - iso8601(fraction_digits = 0) -> String
+/// - xmlschema(fraction_digits = 0) -> String
 ///
-/// Returns an ISO 8601 / XML Schema representation such as
-/// `"2000-01-02T03:04:05+09:00"` or `"2000-01-02T03:04:05Z"`.
+/// Returns an ISO 8601 / XML Schema representation. With a positive
+/// `fraction_digits` argument, appends sub-second precision —
+/// `t.iso8601(2)` → `"2000-01-02T03:04:05.52+09:00"`. The year is
+/// emitted with at least four digits and may be longer (`12` → `0012`,
+/// `40000` → `40000`), matching CRuby ≥ 3.4.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/iso8601.html]
 #[monoruby_builtin]
-fn iso8601(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-        TimeInner::Utc(t) => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let digits = if let Some(a) = lfp.try_arg(0) {
+        let v = a.coerce_to_int_i64(vm, globals)?;
+        if !(0..=9).contains(&v) {
+            return Err(MonorubyErr::argumenterr("fraction_digits out of range"));
+        }
+        v as u32
+    } else {
+        0
     };
-    Ok(Value::string(s))
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let suffix = match t {
+        TimeInner::Local(t) => t.format("%:z").to_string(),
+        TimeInner::Utc(_) => "Z".to_string(),
+    };
+    let (year, mon, mday, h, mi, s, nsec) = (
+        t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), t.nanosecond(),
+    );
+    let year_str = if year < 0 {
+        format!("-{:04}", -year)
+    } else {
+        format!("{:04}", year)
+    };
+    let mut out = format!(
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        year_str, mon, mday, h, mi, s
+    );
+    if digits > 0 {
+        let frac = nsec / 10u32.pow(9 - digits);
+        out.push('.');
+        out.push_str(&format!("{:0width$}", frac, width = digits as usize));
+    }
+    out.push_str(&suffix);
+    Ok(Value::string(out))
 }
 
 ///
@@ -417,10 +560,11 @@ fn rescale_nsec(ns: u32, precision: u32, mode: i8) -> u32 {
 }
 
 fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
-    match lfp.self_val().as_time() {
+    let self_ = lfp.self_val();
+    let inner = self_.as_time();
+    let new_ns = rescale_nsec(inner.nanosecond(), precision, mode);
+    match inner {
         TimeInner::Local(t) => {
-            let ns = t.nanosecond();
-            let new_ns = rescale_nsec(ns, precision, mode);
             let mut result = t.with_nanosecond(0).unwrap();
             if new_ns >= 1_000_000_000 {
                 result = result + Duration::seconds(1);
@@ -430,8 +574,6 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
             TimeInner::Local(result)
         }
         TimeInner::Utc(t) => {
-            let ns = t.nanosecond();
-            let new_ns = rescale_nsec(ns, precision, mode);
             let mut result = t.with_nanosecond(0).unwrap();
             if new_ns >= 1_000_000_000 {
                 result = result + Duration::seconds(1);
@@ -629,26 +771,99 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         },
         _ => 0,
     };
-    let sec = match sec_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        _ => 0,
+    // `sec` accepts Float / Rational and cascades the fractional part
+    // down into nanoseconds (CRuby semantics).
+    // `Time.gm(2000,1,1,20,15,1.75)` yields `sec=1, usec=750_000`,
+    // and `Time.gm(.., "25.0123456789".to_r)` preserves all 9 fractional
+    // digits — used by `Time#ceil(N)` / `Time#round(N)` specs.
+    // An explicit `usec`/sub-sec argument overrides the cascade
+    // *including its own fractional remainder added to nsec*.
+    let (sec, sec_fractional_nsec) = match sec_arg {
+        Some(v) if !v.is_nil() => time_sec_to_i64_nsec(vm, globals, v)?,
+        _ => (0, 0),
     };
-    let usec = match usec_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
+    let nsec: u32 = match usec_arg {
+        Some(v) if !v.is_nil() => match time_usec_to_nsec(vm, globals, v)? {
+            Some(u) => u,
+            None => return Ok(None),
         },
-        _ => 0,
+        _ => sec_fractional_nsec,
     };
-    Ok(Some(NaiveDateTime::new(
-        NaiveDate::from_ymd_opt(year, mon, day)
-            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?,
-        NaiveTime::from_hms_micro_opt(hour, min, sec, usec)
-            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?,
-    )))
+    let sec_u32 = match u32::try_from(sec) {
+        Ok(i) => i,
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(build_naive_datetime(year, mon, day, hour, min, sec_u32, nsec)?))
+}
+
+/// Build a `NaiveDateTime` honouring CRuby's "carry forward" rules:
+/// - `sec == 60` carries to `+1` minute (leap-second tolerance);
+/// - a `mday` that exceeds the month's actual length carries into the
+///   next month, provided `mday <= 31` (the spec's hard ceiling — `day=32`
+///   is rejected even though `Dec 32` would arithmetically be Jan 1).
+fn build_naive_datetime(
+    year: i32,
+    mon: u32,
+    day: u32,
+    hour: u32,
+    min: u32,
+    sec: u32,
+    nsec: u32,
+) -> Result<NaiveDateTime> {
+    if !(1..=12).contains(&mon) {
+        return Err(MonorubyErr::argumenterr("argument out of range."));
+    }
+    if !(1..=31).contains(&day) {
+        return Err(MonorubyErr::argumenterr("argument out of range."));
+    }
+    if hour > 23 || min > 59 || sec > 60 || nsec >= 1_000_000_000 {
+        return Err(MonorubyErr::argumenterr("argument out of range."));
+    }
+    // `sec == 60` builds with sec=0 and then adds one minute, matching
+    // CRuby's leap-second normalisation. Carrying past midnight cascades
+    // through `chrono::Duration` so day/month/year roll over correctly.
+    let (sec_real, leap_carry) = if sec == 60 { (0, true) } else { (sec, false) };
+    let date = match NaiveDate::from_ymd_opt(year, mon, day) {
+        Some(d) => d,
+        None => {
+            // Day exceeds days-in-month; carry the excess into the next
+            // month if `day <= 31`.
+            let dim = days_in_month(year, mon);
+            if day <= dim {
+                // shouldn't happen — `from_ymd_opt` only fails for invalid combos.
+                return Err(MonorubyErr::argumenterr("argument out of range."));
+            }
+            let excess = day - dim;
+            let (next_year, next_mon) = if mon == 12 {
+                (year + 1, 1)
+            } else {
+                (year, mon + 1)
+            };
+            NaiveDate::from_ymd_opt(next_year, next_mon, excess)
+                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?
+        }
+    };
+    let time = NaiveTime::from_hms_nano_opt(hour, min, sec_real, nsec)
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+    let mut dt = NaiveDateTime::new(date, time);
+    if leap_carry {
+        dt = dt
+            .checked_add_signed(Duration::minutes(1))
+            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+    }
+    Ok(dt)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            if leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
 }
 
 /// Coerce a `Time.gm` / `Time.local` numeric argument to `i64`.
@@ -681,6 +896,77 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
         });
     }
     v.coerce_to_int_i64(vm, globals)
+}
+
+/// Coerce the `sec` argument to `(integer_seconds, fractional_nsec)`.
+/// `Float` / `Rational` cascade their fractional part into nanoseconds
+/// that propagate to the caller, matching CRuby's
+/// `Time.gm(2000, 1, 1, 0, 0, 1.75)` → `sec=1, usec=750_000` (and
+/// the analogous nsec case for high-precision Rationals like
+/// `"25.0123456789".to_r`).
+fn time_sec_to_i64_nsec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<(i64, u32)> {
+    if let Some(f) = v.try_float() {
+        let secs = f.trunc() as i64;
+        let frac = f - f.trunc();
+        let nsec = (frac * 1_000_000_000.0).round() as i64;
+        return Ok((secs, nsec.clamp(0, 999_999_999) as u32));
+    }
+    if let Some(r) = v.try_rational() {
+        return Ok(rational_split_sec_nsec(r));
+    }
+    if let Some(s) = v.is_str() {
+        let trimmed = s.trim();
+        return Ok((
+            trimmed.parse::<i64>().map_err(|_| {
+                MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed))
+            })?,
+            0,
+        ));
+    }
+    Ok((v.coerce_to_int_i64(vm, globals)?, 0))
+}
+
+/// Split a `Rational` into `(integer_part, fractional_nanoseconds)`
+/// using BigInt arithmetic so values like `"25.0123456789".to_r`
+/// survive full nine-digit precision (Float intermediate would
+/// truncate at ~16 significant digits).
+fn rational_split_sec_nsec(r: &RationalInner) -> (i64, u32) {
+    use num::Integer;
+    let num = r.num();
+    let den = r.den();
+    let (sec_big, rem) = num.div_mod_floor(den);
+    let secs = sec_big.to_i64().unwrap_or(0);
+    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
+    let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
+    (secs, nsec)
+}
+
+/// Coerce a `usec` argument (microseconds) to nanoseconds for the
+/// internal `NaiveTime` representation. Float / Rational fractions
+/// extend below the microsecond boundary — `Time.gm(.., 1.75)` for
+/// the usec slot stores `1_750` ns.
+fn time_usec_to_nsec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<u32>> {
+    if let Some(f) = v.try_float() {
+        let nsec = (f * 1_000.0).round() as i64;
+        return Ok(u32::try_from(nsec).ok());
+    }
+    if let Some(r) = v.try_rational() {
+        use num::Integer;
+        let num = r.num() * num::BigInt::from(1_000i64);
+        let den = r.den();
+        let val = num.div_floor(den).to_i64().unwrap_or(-1);
+        return Ok(u32::try_from(val).ok());
+    }
+    let i = time_arg_to_i64(vm, globals, v)?;
+    Ok(u32::try_from(i.saturating_mul(1_000)).ok())
 }
 
 fn month_name_to_num(s: &str) -> Option<i64> {
@@ -723,11 +1009,20 @@ fn gmt_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// - gmt -> self
 /// - utc -> self
 ///
+/// A frozen time that's already UTC is a no-op (CRuby short-circuits
+/// before the frozen check); a frozen time in a non-UTC zone raises
+/// `FrozenError`.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/gmtime.html]
 #[monoruby_builtin]
-fn gmtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_time_mut().utc();
-    Ok(lfp.self_val())
+fn gmtime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    if self_val.as_time().is_utc() {
+        return Ok(self_val);
+    }
+    self_val.ensure_not_frozen(&globals.store)?;
+    self_val.as_time_mut().utc();
+    Ok(self_val)
 }
 
 ///
@@ -735,11 +1030,20 @@ fn gmtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - localtime -> self
 /// - [NOT SUPPORTED] localtime(utc_offset) -> self
 ///
+/// `Time#localtime` on a frozen time that's already in the local zone
+/// is a no-op; otherwise it raises `FrozenError`, matching CRuby.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/localtime.html]
 #[monoruby_builtin]
-fn localtime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_time_mut().local();
-    Ok(lfp.self_val())
+fn localtime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    if !self_val.as_time().is_utc() && lfp.try_arg(0).is_none() {
+        // Already local, no offset arg → no-op.
+        return Ok(self_val);
+    }
+    self_val.ensure_not_frozen(&globals.store)?;
+    self_val.as_time_mut().local();
+    Ok(self_val)
 }
 
 ///
@@ -763,10 +1067,7 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
 
     // Get nanoseconds from the time value for Ruby-specific format specifiers.
-    let nanos = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.timestamp_subsec_nanos(),
-        TimeInner::Utc(t) => t.timestamp_subsec_nanos(),
-    };
+    let nanos = lfp.self_val().as_time().nanosecond();
 
     // Replace Ruby-specific nanosecond specifiers that chrono doesn't support.
     let fmt = fmt_str
@@ -814,11 +1115,7 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/year.html]
 #[monoruby_builtin]
 fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let year = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.year(),
-        TimeInner::Utc(t) => t.year(),
-    };
-    Ok(Value::integer(year as _))
+    Ok(Value::integer(lfp.self_val().as_time().year() as _))
 }
 
 ///
@@ -829,11 +1126,7 @@ fn year(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/mon.html]
 #[monoruby_builtin]
 fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let month = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.month(),
-        TimeInner::Utc(t) => t.month(),
-    };
-    Ok(Value::integer(month as _))
+    Ok(Value::integer(lfp.self_val().as_time().month() as _))
 }
 
 ///
@@ -844,11 +1137,7 @@ fn month(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/day.html]
 #[monoruby_builtin]
 fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let day = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.day(),
-        TimeInner::Utc(t) => t.day(),
-    };
-    Ok(Value::integer(day as _))
+    Ok(Value::integer(lfp.self_val().as_time().day() as _))
 }
 
 ///
@@ -883,65 +1172,42 @@ fn wday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#hour
 #[monoruby_builtin]
 fn hour(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let h = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.hour(),
-        TimeInner::Utc(t) => t.hour(),
-    };
-    Ok(Value::integer(h as _))
+    Ok(Value::integer(lfp.self_val().as_time().hour() as _))
 }
 
 ///
 /// ### Time#min
 #[monoruby_builtin]
 fn min_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let m = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.minute(),
-        TimeInner::Utc(t) => t.minute(),
-    };
-    Ok(Value::integer(m as _))
+    Ok(Value::integer(lfp.self_val().as_time().minute() as _))
 }
 
 ///
 /// ### Time#sec
 #[monoruby_builtin]
 fn sec_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.second(),
-        TimeInner::Utc(t) => t.second(),
-    };
-    Ok(Value::integer(s as _))
+    Ok(Value::integer(lfp.self_val().as_time().second() as _))
 }
 
 ///
 /// ### Time#usec
 #[monoruby_builtin]
 fn usec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
-    Ok(Value::integer((ns / 1_000) as _))
+    Ok(Value::integer((lfp.self_val().as_time().nanosecond() / 1_000) as _))
 }
 
 ///
 /// ### Time#nsec
 #[monoruby_builtin]
 fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
-    Ok(Value::integer(ns as _))
+    Ok(Value::integer(lfp.self_val().as_time().nanosecond() as _))
 }
 
 ///
 /// ### Time#subsec
 #[monoruby_builtin]
 fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.nanosecond(),
-        TimeInner::Utc(t) => t.nanosecond(),
-    };
+    let ns = lfp.self_val().as_time().nanosecond();
     // Returns a Rational in CRuby; monoruby doesn't have Rational, so
     // approximate with a Float. ActiveModel only compares against 0.
     if ns == 0 {
@@ -966,11 +1232,13 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#to_f
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (s, ns) = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => (t.timestamp(), t.nanosecond()),
-        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let s = match t {
+        TimeInner::Local(t) => t.timestamp(),
+        TimeInner::Utc(t) => t.timestamp(),
     };
-    Ok(Value::float(s as f64 + ns as f64 / 1_000_000_000.0))
+    Ok(Value::float(s as f64 + t.nanosecond() as f64 / 1_000_000_000.0))
 }
 
 ///
@@ -1097,6 +1365,55 @@ impl TimeInner {
         match self {
             TimeInner::Local(_) => false,
             TimeInner::Utc(_) => true,
+        }
+    }
+
+    pub fn year(&self) -> i32 {
+        match self {
+            TimeInner::Local(t) => t.year(),
+            TimeInner::Utc(t) => t.year(),
+        }
+    }
+
+    pub fn month(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.month(),
+            TimeInner::Utc(t) => t.month(),
+        }
+    }
+
+    pub fn day(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.day(),
+            TimeInner::Utc(t) => t.day(),
+        }
+    }
+
+    pub fn hour(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.hour(),
+            TimeInner::Utc(t) => t.hour(),
+        }
+    }
+
+    pub fn minute(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.minute(),
+            TimeInner::Utc(t) => t.minute(),
+        }
+    }
+
+    pub fn second(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.second(),
+            TimeInner::Utc(t) => t.second(),
+        }
+    }
+
+    pub fn nanosecond(&self) -> u32 {
+        match self {
+            TimeInner::Local(t) => t.nanosecond(),
+            TimeInner::Utc(t) => t.nanosecond(),
         }
     }
 }
@@ -1407,5 +1724,107 @@ mod tests {
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
         ]);
+    }
+
+    #[test]
+    fn time_dump_load_roundtrip() {
+        // The published bytestring for Time.at(946812800).gmtime is fixed
+        // by ruby/spec; we match it exactly.
+        run_test(
+            r#"
+            t = Time.at(946812800).gmtime
+            t.send(:_dump).bytes
+            "#,
+        );
+        // Round-trip a UTC Time through _dump / _load.
+        run_test(
+            r#"
+            t = Time.utc(2000, 1, 15, 20, 1, 1, 203)
+            r = Time.send(:_load, t.send(:_dump))
+            [r.year, r.month, r.day, r.hour, r.min, r.sec, r.usec, r.utc?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_load_is_private() {
+        // `Time._load(...)` from outside the class raises NoMethodError;
+        // calling via `send` bypasses the private check.
+        run_test_error(r#"Time._load("\x00" * 8)"#);
+    }
+
+    #[test]
+    fn time_gm_carry_over() {
+        // sec=60 carries to next minute (leap-second tolerance).
+        run_test(
+            r#"
+            t = Time.gm(1972, 6, 30, 23, 59, 60)
+            [t.year, t.mon, t.mday, t.hour, t.min, t.sec]
+            "#,
+        );
+        // mday=31 in Feb carries forward (Feb has 28 days in 1999).
+        run_test(r#"Time.gm(1999, 2, 31).inspect"#);
+        // mday=32 still rejected (hard ceiling).
+        run_test_error(r#"Time.gm(2008, 1, 32)"#);
+    }
+
+    #[test]
+    fn time_gm_fractional_sec() {
+        // Float fractional sec → usec.
+        run_test(
+            r#"
+            t = Time.gm(2000, 1, 1, 20, 15, 1.75)
+            [t.sec, t.usec]
+            "#,
+        );
+        // Rational preserves nanosecond precision.
+        run_test(
+            r#"
+            t = Time.utc(2010, 3, 30, 5, 43, "25.0123456789".to_r)
+            [t.sec, t.nsec]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_ceil_with_digits() {
+        run_test(
+            r#"
+            t = Time.utc(2010, 3, 30, 5, 43, "25.0123456789".to_r)
+            t.ceil(4).iso8601(4)
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_iso8601_year_padding() {
+        // Year < 4 digits is zero-padded to 4 digits.
+        run_test(r#"Time.utc(12, 4, 12).iso8601"#);
+        // Year > 4 digits emits all of them.
+        run_test(r#"Time.utc(40000, 4, 12).iso8601"#);
+    }
+
+    #[test]
+    fn time_iso8601_with_precision() {
+        run_test(r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(2)"#);
+        run_test(r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(9)"#);
+    }
+
+    #[test]
+    fn time_gmtime_frozen_no_op() {
+        // Already-UTC frozen time: gmtime is a no-op.
+        run_test(r#"Time.utc(2000).freeze.gmtime.utc?"#);
+    }
+
+    #[test]
+    fn time_gmtime_frozen_raises() {
+        // Frozen non-UTC time raises FrozenError.
+        run_test_error(
+            r#"
+            t = Time.local(2000, 1, 1)
+            t.freeze
+            t.gmtime
+            "#,
+        );
     }
 }
