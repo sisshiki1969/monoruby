@@ -12,29 +12,44 @@
 module Fiddle
   # ---------------------------------------------------------------------------
   # Fiddle::Types — authoritative type-code constants.
-  # The ffi gem will mirror these as Fiddle::TYPE_* after loading.
+  #
+  # Uses CRuby's Fiddle convention: each canonical type has a small positive
+  # integer code, and the unsigned variant is its arithmetic negation. Code
+  # written for CRuby (e.g. opengl-bindings2) commonly writes
+  # `-Fiddle::TYPE_INT` to mean "unsigned int", which only works under this
+  # convention. The Rust backend (src/builtins/fiddle.rs) decodes the same
+  # values.
   # ---------------------------------------------------------------------------
   module Types
     VOID       =  0
-    VOIDP      = -1
-    CHAR       = -2
-    UCHAR      = -3
-    SHORT      = -4
-    USHORT     = -5
-    INT        = -6
-    UINT       = -7
-    LONG       = -8
-    ULONG      = -9
-    LONG_LONG  = -10
-    ULONG_LONG = -11
-    FLOAT      = -12
-    DOUBLE     = -13
-    BOOL       = -14
-    INTPTR_T   = -15
-    UINTPTR_T  = -16
-    PTRDIFF_T  = -17
-    SIZE_T     = -18
-    SSIZE_T    = -19
+    VOIDP      =  1
+    CHAR       =  2
+    SHORT      =  3
+    INT        =  4
+    LONG       =  5
+    LONG_LONG  =  6
+    FLOAT      =  7
+    DOUBLE     =  8
+
+    # Unsigned variants: the negation of the corresponding signed code.
+    UCHAR      = -CHAR
+    USHORT     = -SHORT
+    UINT       = -INT
+    ULONG      = -LONG
+    ULONG_LONG = -LONG_LONG
+
+    # Platform aliases — on x86-64 Linux these all resolve to LONG/ULONG
+    # (8-byte) so the Rust backend's match arms collapse cleanly.
+    INTPTR_T   = LONG
+    UINTPTR_T  = ULONG
+    PTRDIFF_T  = LONG
+    SIZE_T     = ULONG
+    SSIZE_T    = LONG
+
+    # CRuby's Fiddle (1.1) doesn't expose TYPE_BOOL but FFI's `:bool`
+    # arg goes through Fiddle. Picked an unused positive value (9) so it
+    # doesn't clash with the canonical signed/unsigned codes above.
+    BOOL       =  9
   end
 
   # ---------------------------------------------------------------------------
@@ -48,6 +63,25 @@ module Fiddle
   WINDOWS = false
 
   # ---------------------------------------------------------------------------
+  # ALIGN_* — C type alignments for x86-64 Linux. fiddle/pack.rb relies on
+  # them. SIZEOF_* counterparts come from src/builtins/fiddle.rs.
+  # ---------------------------------------------------------------------------
+  ALIGN_VOIDP         = 8
+  ALIGN_CHAR          = 1
+  ALIGN_SHORT         = 2
+  ALIGN_INT           = 4
+  ALIGN_LONG          = 8
+  ALIGN_LONG_LONG     = 8
+  ALIGN_FLOAT         = 4
+  ALIGN_DOUBLE        = 8
+  ALIGN_BOOL          = 1
+  ALIGN_INTPTR_T      = 8
+  ALIGN_UINTPTR_T     = 8
+  ALIGN_PTRDIFF_T     = 8
+  ALIGN_SIZE_T        = 8
+  ALIGN_SSIZE_T       = 8
+
+  # ---------------------------------------------------------------------------
   # Errors
   # ---------------------------------------------------------------------------
   class Error < StandardError; end
@@ -57,7 +91,10 @@ module Fiddle
   # Fiddle::Pointer – wraps a raw memory address
   # ---------------------------------------------------------------------------
   class Pointer
-    attr_reader :size
+    # CRuby's Fiddle::Pointer exposes `size` both for read and write —
+    # fiddle/struct.rb's CStructEntity does `undef_method :size=` which
+    # requires the writer to exist. We follow the same shape.
+    attr_accessor :size
 
     def initialize(addr, size = 0)
       @ptr  = addr.respond_to?(:to_i) ? addr.to_i : 0

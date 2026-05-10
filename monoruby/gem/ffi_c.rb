@@ -13,28 +13,38 @@ module FFI
   # VERSION is set by the ffi gem's lib/ffi/version.rb
 
   # =========================================================================
-  # Type codes – integer constants matching the Rust backend (builtins/ffi.rs)
+  # Type codes – integer constants matching the Rust backend
+  # (src/builtins/fiddle.rs). They follow CRuby's Fiddle convention so that
+  # `-Fiddle::TYPE_INT` (used by opengl-bindings2 and friends) means
+  # "unsigned int". Keep these in sync with stdlib/fiddle.rb.
   # =========================================================================
   TYPE_VOID       =  0
-  TYPE_VOIDP      = -1
-  TYPE_CHAR       = -2
-  TYPE_UCHAR      = -3
-  TYPE_SHORT      = -4
-  TYPE_USHORT     = -5
-  TYPE_INT        = -6
-  TYPE_UINT       = -7
-  TYPE_LONG       = -8
-  TYPE_ULONG      = -9
-  TYPE_LONG_LONG  = -10
-  TYPE_ULONG_LONG = -11
-  TYPE_FLOAT      = -12
-  TYPE_DOUBLE     = -13
-  TYPE_BOOL       = -14
-  TYPE_INTPTR_T   = -15
-  TYPE_UINTPTR_T  = -16
-  TYPE_PTRDIFF_T  = -17
-  TYPE_SIZE_T     = -18
-  TYPE_SSIZE_T    = -19
+  TYPE_VOIDP      =  1
+  TYPE_CHAR       =  2
+  TYPE_SHORT      =  3
+  TYPE_INT        =  4
+  TYPE_LONG       =  5
+  TYPE_LONG_LONG  =  6
+  TYPE_FLOAT      =  7
+  TYPE_DOUBLE     =  8
+
+  # Unsigned variants — CRuby convention is to negate the signed code.
+  TYPE_UCHAR      = -TYPE_CHAR
+  TYPE_USHORT     = -TYPE_SHORT
+  TYPE_UINT       = -TYPE_INT
+  TYPE_ULONG      = -TYPE_LONG
+  TYPE_ULONG_LONG = -TYPE_LONG_LONG
+
+  # Platform aliases (8 bytes on x86-64 Linux).
+  TYPE_INTPTR_T   = TYPE_LONG
+  TYPE_UINTPTR_T  = TYPE_ULONG
+  TYPE_PTRDIFF_T  = TYPE_LONG
+  TYPE_SIZE_T     = TYPE_ULONG
+  TYPE_SSIZE_T    = TYPE_LONG
+
+  # Picked an unused positive value for TYPE_BOOL — CRuby's Fiddle 1.1
+  # doesn't expose one, but FFI's `:bool` argument routes through Fiddle.
+  TYPE_BOOL       =  9
 
   # =========================================================================
   # FFI::Platform – minimal constants needed before the gem's platform.rb
@@ -141,6 +151,33 @@ module FFI
       end
     end
 
+    # Type::Struct – wraps an FFI::Struct subclass so it can appear as a field
+    # type in another struct's layout. Mirrors the C-extension class.
+    class Struct < Type
+      attr_reader :struct_class
+
+      def initialize(struct_class)
+        @struct_class = struct_class
+        super("struct(#{struct_class.name})",
+              struct_class.size,
+              struct_class.respond_to?(:alignment) ? struct_class.alignment : 8)
+      end
+    end
+
+    # Type::Array – inline fixed-length array of `elem_type` repeated `length`
+    # times. Used for layout entries like `:filters, [:pointer, 10]`.
+    class Array < Type
+      attr_reader :elem_type, :length
+
+      def initialize(elem_type, length)
+        @elem_type = elem_type
+        @length    = length
+        super("array(#{elem_type.name}, #{length})",
+              elem_type.size * length,
+              elem_type.alignment)
+      end
+    end
+
     # Map from ffi gem symbol names to Type objects
     NAMES = {
       void:       VOID,
@@ -170,9 +207,21 @@ module FFI
       NAMES[name] or raise TypeError, "unknown FFI type: #{name.inspect}"
     end
 
-    # Resolve a type descriptor to an FFI::Type
+    # Resolve a type descriptor to an FFI::Type. Mirrors the lookup the
+    # ffi gem's `find_field_type` does (struct.rb), so Symbol, Struct
+    # subclass, `Struct.by_value` (StructByValue), and `[type, count]`
+    # array literals all work.
     def self.find(type, type_map = nil)
       return type if type.is_a?(FFI::Type)
+      if type.is_a?(FFI::StructByValue)
+        return FFI::Type::Struct.new(type.struct_class)
+      end
+      if type.is_a?(::Class) && type < FFI::Struct
+        return FFI::Type::Struct.new(type)
+      end
+      if type.is_a?(::Array)
+        return FFI::Type::Array.new(find(type[0], type_map), type[1])
+      end
       if type_map
         mapped = type_map[type]
         return find(mapped, nil) if mapped
@@ -790,6 +839,12 @@ module FFI
 
       # Define layout via DSL: layout :x, :int32, :y, :int32
       def layout(*spec)
+        # No-arg call is the accessor form. The gem's Struct.layout (loaded
+        # later) does the same; mirroring it here keeps things sane in case
+        # this stub is the active definition (e.g. while the gem's
+        # `ffi/struct` hasn't been required yet).
+        return @layout if spec.empty?
+
         fields = []
         offset = 0
         max_align = 1
@@ -888,24 +943,99 @@ module FFI
     private
 
     def read_field(field)
-      FFI.___read(@address + field.offset, field.type.type_code)
+      type = field.type
+      addr = @address + field.offset
+      case type
+      when FFI::Type::Struct
+        # Inline struct field: return a Struct instance pointing into our
+        # backing memory. Borrowed (not owned) so the parent owns the
+        # lifetime.
+        sub = type.struct_class.allocate
+        sub.instance_variable_set(:@address, addr)
+        sub.instance_variable_set(:@size,    type.size)
+        sub.instance_variable_set(:@owned,   false)
+        sub
+      when FFI::Type::Array
+        # Inline fixed-length array field: return an Array of the field's
+        # element type read element-by-element.
+        elem  = type.elem_type
+        ecode = elem.type_code
+        esize = elem.size
+        Array.new(type.length) { |i| FFI.___read(addr + i * esize, ecode) }
+      else
+        FFI.___read(addr, type.type_code)
+      end
     end
 
     def write_field(field, value)
-      if value.nil? && field.type.type_code == FFI::TYPE_VOIDP
-        value = 0
-      elsif value.is_a?(FFI::Pointer)
-        value = value.address
-      elsif value.respond_to?(:to_ptr)
-        value = value.to_ptr.address
+      type = field.type
+      addr = @address + field.offset
+      case type
+      when FFI::Type::Struct
+        # Copy the source struct's bytes into our slot. Source must be the
+        # same struct class (or a subclass).
+        unless value.is_a?(type.struct_class)
+          raise TypeError,
+            "wrong value type (expected #{type.struct_class})"
+        end
+        FFI.___write_bytes(addr, FFI.___read_bytes(value.instance_variable_get(:@address), type.size))
+      when FFI::Type::Array
+        ary = value.to_ary
+        elem  = type.elem_type
+        ecode = elem.type_code
+        esize = elem.size
+        ary.first(type.length).each_with_index do |v, i|
+          FFI.___write(addr + i * esize, ecode, v)
+        end
+      else
+        if value.nil? && type.type_code == FFI::TYPE_VOIDP
+          value = 0
+        elsif value.is_a?(FFI::Pointer)
+          value = value.address
+        elsif value.respond_to?(:to_ptr)
+          value = value.to_ptr.address
+        end
+        FFI.___write(addr, type.type_code, value)
       end
-      FFI.___write(@address + field.offset, field.type.type_code, value)
     end
+  end
+
+  # =========================================================================
+  # FFI::StructByValue – pass-a-struct-by-value marker.
+  #
+  # The C extension uses this to wrap an FFI::Struct subclass when a function
+  # signature passes the struct by value. monoruby doesn't yet support
+  # passing structs by value to native code, so this is a stub that records
+  # the struct class and exposes the same `struct_class`/`size` accessors the
+  # gem's `Struct.val` / `Struct.by_value` callers expect.
+  # =========================================================================
+  class StructByValue
+    attr_reader :struct_class
+
+    def initialize(struct_class)
+      unless struct_class.is_a?(::Class) && struct_class < FFI::Struct
+        raise TypeError, 'wrong type (expected subclass of FFI::Struct)'
+      end
+      @struct_class = struct_class
+    end
+
+    def size
+      @struct_class.size
+    end
+
+    def alignment
+      @struct_class.respond_to?(:alignment) ? @struct_class.alignment : 8
+    end
+    alias align alignment
   end
 
   class Union < Struct
     class << self
       def layout(*spec)
+        # No-arg call is the accessor form (matches the gem's
+        # Struct.layout). The DSL form passes an even-sized spec.
+        return @layout if spec.empty?
+
         fields = []
         max_size  = 0
         max_align = 1
@@ -998,4 +1128,41 @@ module FFI
   end
 
   class NotFoundError < LoadError; end
+
+  # =========================================================================
+  # Patch the gem's Struct.find_field_type so it can convert a
+  # FFI::StructByValue (returned by `OtherStruct.by_value`) into an inline
+  # Type::Struct field. The C extension does this implicitly when building a
+  # layout; the gem's pure-Ruby `find_field_type` doesn't, since it expects
+  # the C extension to handle that case.
+  #
+  # Prepended onto Struct's singleton so it survives the gem re-opening
+  # `class Struct` later in the load (`require 'ffi/struct'`).
+  # =========================================================================
+  class Struct
+    module FindFieldTypePatch
+      def find_field_type(type, mod = enclosing_module)
+        if type.is_a?(FFI::StructByValue)
+          return FFI::Type::Struct.new(type.struct_class)
+        end
+        super
+      end
+    end
+    singleton_class.prepend(FindFieldTypePatch)
+  end
+
+  # Same idea for `FFI.find_type` (used by `Library#attach_function` to
+  # resolve parameter / return types). The gem's pure-Ruby implementation
+  # raises `TypeError: unable to resolve type` on a StructByValue, since
+  # passing structs by value is C-extension territory. monoruby doesn't
+  # support true by-value calls yet, so we conservatively fall back to
+  # passing the struct as a pointer — matching what the gem already does
+  # for a bare `Class < Struct`.
+  module FindTypePatch
+    def find_type(name, type_map = nil)
+      return FFI::Type::POINTER if name.is_a?(FFI::StructByValue)
+      super
+    end
+  end
+  singleton_class.prepend(FindTypePatch)
 end

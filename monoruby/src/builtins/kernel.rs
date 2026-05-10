@@ -181,6 +181,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         true,
     );
     globals.define_builtin_func(kernel_class, "method", method, 1);
+    globals.define_builtin_func(kernel_class, "singleton_method", singleton_method, 1);
     globals.define_builtin_func_with(
         kernel_class,
         "define_singleton_method",
@@ -2454,6 +2455,38 @@ fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let (func_id, _, owner) = globals.find_method_for_object(receiver, method_name)?;
+    Ok(Value::new_method(receiver, func_id, owner))
+}
+
+///
+/// ### Kernel#singleton_method
+///
+/// - singleton_method(name) -> Method
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_method.html]
+#[monoruby_builtin]
+fn singleton_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let receiver = lfp.self_val();
+    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let class_id = match globals.store.has_singleton(receiver) {
+        Some(module) => module.id(),
+        None => {
+            return Err(MonorubyErr::nameerr_with_name(
+                format!(
+                    "undefined singleton method `{}' for `{}'",
+                    method_name,
+                    receiver.inspect(&globals.store)
+                ),
+                method_name,
+            ));
+        }
+    };
+    let (func_id, _, owner) = globals.store.find_method_for_class(class_id, method_name)?;
     Ok(Value::new_method(receiver, func_id, owner))
 }
 
