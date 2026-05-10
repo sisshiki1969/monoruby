@@ -923,73 +923,20 @@ impl MonorubyErrKind {
     }
 }
 
-/// Return a human-readable description for an `std::io::Error`, matching CRuby's Errno messages.
-pub(crate) fn errno_description(err: &std::io::Error) -> &'static str {
+/// Return a human-readable description for an `std::io::Error`, matching
+/// CRuby's `Errno` messages (sourced from `strerror`). Returns
+/// `"Unknown error"` for non-OS errors.
+pub(crate) fn errno_description(err: &std::io::Error) -> String {
     match err.raw_os_error() {
-        Some(1) => "Operation not permitted",
-        Some(2) => "No such file or directory",
-        Some(5) => "Input/output error",
-        Some(9) => "Bad file descriptor",
-        Some(12) => "Cannot allocate memory",
-        Some(13) => "Permission denied",
-        Some(17) => "File exists",
-        Some(20) => "Not a directory",
-        Some(21) => "Is a directory",
-        Some(22) => "Invalid argument",
-        Some(28) => "No space left on device",
-        Some(30) => "Read-only file system",
-        Some(32) => "Broken pipe",
-        Some(36) => "File name too long",
-        Some(39) => "Directory not empty",
-        _ => "Unknown error",
+        Some(errno) => crate::builtins::errno::strerror(errno),
+        None => "Unknown error".to_string(),
     }
 }
 
-/// Map a raw OS errno number to the corresponding Ruby Errno class name.
-///
-/// Returns `None` for unknown errno values.
+/// Map a raw OS errno number to the corresponding Ruby `Errno::E*` class
+/// name. Delegates to the canonical table populated by `errno::init`.
 fn errno_to_name(errno: i32) -> Option<&'static str> {
-    match errno {
-        1 => Some("EPERM"),
-        2 => Some("ENOENT"),
-        3 => Some("ESRCH"),
-        4 => Some("EINTR"),
-        5 => Some("EIO"),
-        6 => Some("ENXIO"),
-        7 => Some("E2BIG"),
-        8 => Some("ENOEXEC"),
-        9 => Some("EBADF"),
-        10 => Some("ECHILD"),
-        11 => Some("EAGAIN"),
-        12 => Some("ENOMEM"),
-        13 => Some("EACCES"),
-        14 => Some("EFAULT"),
-        16 => Some("EBUSY"),
-        17 => Some("EEXIST"),
-        18 => Some("EXDEV"),
-        19 => Some("ENODEV"),
-        20 => Some("ENOTDIR"),
-        21 => Some("EISDIR"),
-        22 => Some("EINVAL"),
-        23 => Some("ENFILE"),
-        24 => Some("EMFILE"),
-        25 => Some("ENOTTY"),
-        27 => Some("EFBIG"),
-        28 => Some("ENOSPC"),
-        29 => Some("ESPIPE"),
-        30 => Some("EROFS"),
-        31 => Some("EMLINK"),
-        32 => Some("EPIPE"),
-        33 => Some("EDOM"),
-        34 => Some("ERANGE"),
-        35 => Some("EDEADLK"),
-        36 => Some("ENAMETOOLONG"),
-        37 => Some("ENOLCK"),
-        38 => Some("ENOSYS"),
-        39 => Some("ENOTEMPTY"),
-        40 => Some("ELOOP"),
-        _ => None,
-    }
+    crate::builtins::errno::errno_to_name(errno)
 }
 
 #[cfg(test)]
