@@ -834,6 +834,12 @@ module FFI
   end
 
   class Struct < AbstractMemory
+    # Writers used by `Struct.new` and `Struct#read_field` to populate a
+    # fresh allocate'd instance in pieces. AbstractMemory already exposes
+    # `address` / `size` readers.
+    attr_writer :address, :size
+    attr_accessor :owned
+
     class << self
       attr_reader :layout
 
@@ -888,14 +894,14 @@ module FFI
           # allocate fresh memory
           addr = FFI.___malloc(size, true)
           raise NoMemoryError, "FFI::Struct malloc(#{size}) failed" if addr == 0
-          obj.instance_variable_set(:@address, addr)
-          obj.instance_variable_set(:@size,    size)
-          obj.instance_variable_set(:@owned,   true)
+          obj.address = addr
+          obj.size    = size
+          obj.owned   = true
         else
           ptr = args.first
-          obj.instance_variable_set(:@address, ptr.respond_to?(:to_i) ? ptr.to_i : 0)
-          obj.instance_variable_set(:@size,    size)
-          obj.instance_variable_set(:@owned,   false)
+          obj.address = ptr.respond_to?(:to_i) ? ptr.to_i : 0
+          obj.size    = size
+          obj.owned   = false
         end
         obj
       end
@@ -951,9 +957,9 @@ module FFI
         # backing memory. Borrowed (not owned) so the parent owns the
         # lifetime.
         sub = type.struct_class.allocate
-        sub.instance_variable_set(:@address, addr)
-        sub.instance_variable_set(:@size,    type.size)
-        sub.instance_variable_set(:@owned,   false)
+        sub.address = addr
+        sub.size    = type.size
+        sub.owned   = false
         sub
       when FFI::Type::Array
         # Inline fixed-length array field: return an Array of the field's
@@ -978,7 +984,7 @@ module FFI
           raise TypeError,
             "wrong value type (expected #{type.struct_class})"
         end
-        FFI.___write_bytes(addr, FFI.___read_bytes(value.instance_variable_get(:@address), type.size))
+        FFI.___write_bytes(addr, FFI.___read_bytes(value.address, type.size))
       when FFI::Type::Array
         ary = value.to_ary
         elem  = type.elem_type
