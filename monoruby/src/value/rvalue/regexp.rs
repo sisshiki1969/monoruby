@@ -373,7 +373,10 @@ pub(crate) fn resolve_declared_encoding(
         } else if kc & RegexpInner::KCODE_EUCJP != 0 {
             Encoding::EucJp
         } else if kc & RegexpInner::KCODE_SJIS != 0 {
-            Encoding::Sjis(0)
+            // CRuby's `/.../s` modifier sets Windows-31J (CP932),
+            // not canonical Shift_JIS. Use Sjis(1) so that
+            // `/abc/s.encoding.name == "Windows-31J"`.
+            Encoding::Sjis(1)
         } else {
             // Bit set but unknown — fall through to source-encoding logic.
             return source_encoding_fallback(source_encoding, has_non_ascii, option);
