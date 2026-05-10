@@ -86,7 +86,7 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // IO.new(fd [, mode [, opt]]) -> creates an IO object from an integer file descriptor.
     if let Some(fd) = lfp.arg(0).try_fixnum() {
         let fd_i32 = fd as i32;
@@ -99,13 +99,53 @@ fn io_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 &format!("fd {}", fd),
             ));
         }
-        let name = format!("fd {}", fd);
+        // Pick up `:autoclose` and `:path` from the options Hash. See
+        // `io_open_opts` for the rationale.
+        let (name, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
         let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        io_inner.set_autoclose(autoclose);
         return Ok(Value::new_io(io_inner));
     }
     Err(MonorubyErr::argumenterr(
         "IO.new requires an integer file descriptor",
     ))
+}
+
+/// Parse the trailing options Hash for `IO.new(fd, ...)` / `File.new(fd, ...)`,
+/// returning `(display_name, autoclose)`.
+///
+/// CRuby accepts `:path` (display name surfaced via `IO#path`) and `:autoclose`
+/// (whether the wrapping IO closes the fd on close/GC). The latter is
+/// load-bearing: `File.new(other.fileno, autoclose: false, path: ...)` (used
+/// in `logger/log_device.rb`'s feature detection and `fixup_mode`) hands a
+/// borrowed fd to a new wrapper while keeping the original IO responsible
+/// for closing it. Without honoring `:autoclose` we end up with two owners
+/// for the same fd, triggering `IO Safety violation: owned file descriptor
+/// already closed` on drop.
+pub(super) fn io_open_opts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    range: std::ops::Range<usize>,
+    fd: i64,
+) -> Result<(String, bool)> {
+    let mut autoclose = true;
+    let mut name = format!("fd {}", fd);
+    for i in range {
+        if let Some(arg) = lfp.try_arg(i)
+            && let Some(h) = arg.try_hash_ty()
+        {
+            if let Some(v) = h.get(Value::symbol(IdentId::get_id("autoclose")), vm, globals)? {
+                autoclose = v.as_bool();
+            }
+            if let Some(v) = h.get(Value::symbol(IdentId::get_id("path")), vm, globals)?
+                && !v.is_nil()
+            {
+                name = v.coerce_to_string(vm, globals)?;
+            }
+        }
+    }
+    Ok((name, autoclose))
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -1021,8 +1061,11 @@ fn io_binmode_(
 /// ### IO#autoclose=
 /// - autoclose=(bool) -> bool
 ///
-/// Tracking the autoclose flag is not currently supported; this acts as a
-/// no-op and returns the argument coerced to a Boolean.
+/// Set the autoclose flag. When `false`, the fd is NOT closed when the IO
+/// is closed or garbage-collected — the caller is then responsible for the
+/// fd's lifetime. Required by the `File.new(other.fileno, ...)` pattern
+/// (e.g. `logger/log_device.rb#fixup_mode`) where the original IO must
+/// relinquish ownership of the fd to the new wrapper.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/autoclose=3d.html]
 #[monoruby_builtin]
@@ -1032,25 +1075,28 @@ fn io_autoclose_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::bool(lfp.arg(0).as_bool()))
+    let value = lfp.arg(0).as_bool();
+    lfp.self_val().as_io_inner().set_autoclose(value);
+    Ok(Value::bool(value))
 }
 
 ///
 /// ### IO#autoclose?
 /// - autoclose? -> bool
 ///
-/// Always returns `true` — monoruby's IO does not currently track the
-/// autoclose flag.
+/// Returns the current autoclose flag. Defaults to `true`; only changes via
+/// `IO#autoclose=`. Stdio / popen / closed IOs always report `true` because
+/// their fd lifetime is not owned by the IO object.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/autoclose=3f.html]
 #[monoruby_builtin]
 fn io_autoclose_(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::bool(true))
+    Ok(Value::bool(lfp.self_val().as_io_inner().is_autoclose()))
 }
 
 ///
@@ -2605,6 +2651,41 @@ mod tests {
               [f.binmode.equal?(f), f.binmode?, f.autoclose?, (f.autoclose = false)]
             ensure
               f.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_autoclose_round_trip() {
+        // The flag must actually be tracked, not silently coerced. The
+        // `File.new(other.fileno, autoclose: false)` pattern from
+        // `logger/log_device.rb` aborts with "IO Safety violation" on GC if
+        // the new wrapper still claims ownership of the borrowed fd.
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              before = f.autoclose?
+              f.autoclose = false
+              after = f.autoclose?
+              [before, after, f.autoclose?]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_new_with_autoclose_false() {
+        // `File.new(integer_fd, autoclose: false, path: ...)` must parse the
+        // options Hash so the wrapper does not double-close the borrowed fd.
+        // This is the crash-on-GC pattern from `logger/log_device.rb`.
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              g = File.new(f.fileno, autoclose: false, path: "borrowed")
+              ac = g.autoclose?
+              g.close
+              ac
             end
             "#,
         );
