@@ -1198,14 +1198,17 @@ impl<'a> Lexer<'a> {
                 // expand "#{}" only once
                 //s.push('o');
             } else if self.consume('u') {
-                // Encoding+ utf-8
+                // Encoding-pin: UTF-8.
+                s.push('u');
             } else if self.consume('n') {
-                // Encoding+ ASCII-8bit
+                // Encoding-pin: ASCII-8BIT.
                 s.push('n');
             } else if self.consume('s') {
-                // Encoding+ Windows-31J / Shift_JIS (legacy; treated as no-op).
+                // Encoding-pin: Windows-31J / Shift_JIS.
+                s.push('s');
             } else if self.consume('e') {
-                // Encoding+ EUC-JP (legacy; treated as no-op).
+                // Encoding-pin: EUC-JP.
+                s.push('e');
             } else {
                 break;
             };

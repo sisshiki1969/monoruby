@@ -1086,29 +1086,44 @@ impl<'a> BytecodeGen<'a> {
         } else {
             onigmo_regex::OnigmoEncoding::UTF8
         };
-        let option = onigmo_regex::ONIG_OPTION_NONE
-            | if option.contains('i') {
-                onigmo_regex::ONIG_OPTION_IGNORECASE
-            } else {
-                0
-            }
-            | if option.contains('x') {
-                onigmo_regex::ONIG_OPTION_EXTEND
-            } else {
-                0
-            }
-            | if option.contains('m') {
-                onigmo_regex::ONIG_OPTION_MULTILINE
-            } else {
-                0
-            };
+        // Decode the literal-syntax modifier letters into the
+        // standard Onigmo bits *plus* monoruby's internal
+        // `KCODE_*` / `NOENCODING` bits used by
+        // `with_option_kcode` to derive the declared (CRuby-
+        // visible) encoding for `Regexp#encoding` /
+        // `Regexp#fixed_encoding?`.
+        let mut opt = onigmo_regex::ONIG_OPTION_NONE;
+        if option.contains('i') {
+            opt |= onigmo_regex::ONIG_OPTION_IGNORECASE;
+        }
+        if option.contains('x') {
+            opt |= onigmo_regex::ONIG_OPTION_EXTEND;
+        }
+        if option.contains('m') {
+            opt |= onigmo_regex::ONIG_OPTION_MULTILINE;
+        }
+        if option.contains('n') {
+            opt |= RegexpInner::NOENCODING;
+        }
+        let kcode = if option.contains('u') {
+            opt |= RegexpInner::KCODE_UTF8;
+            Some(RegexpInner::KCODE_UTF8)
+        } else if option.contains('e') {
+            opt |= RegexpInner::KCODE_EUCJP;
+            Some(RegexpInner::KCODE_EUCJP)
+        } else if option.contains('s') {
+            opt |= RegexpInner::KCODE_SJIS;
+            Some(RegexpInner::KCODE_SJIS)
+        } else {
+            None
+        };
         for node in nodes {
             match &node.kind {
                 NodeKind::String(s) => string += s,
                 _ => unreachable!(),
             }
         }
-        let re = match RegexpInner::with_option_and_encoding(string, option, encoding) {
+        let re = match RegexpInner::with_option_kcode(string, opt, encoding, kcode, None) {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
