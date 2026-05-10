@@ -18,7 +18,11 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "===", case_eq, 1);
+    // CRuby defines `===` on Kernel/Object, NOT on BasicObject. Keeping
+    // it on BasicObject would trap `===` for BasicObject subclasses (like
+    // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
+    // `method_missing`, breaking the `actual.should === expected` idiom.
+    globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(

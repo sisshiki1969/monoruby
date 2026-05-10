@@ -2,10 +2,22 @@ class Range
   include Enumerable
   
   def each
-    return self.to_enum(:each) unless block_given?
+    return self.to_enum(:each) { size rescue nil } unless block_given?
     i = self.begin
     raise TypeError, "can't iterate from NilClass" if i.nil?
     e = self.end
+    # CRuby probes `start <=> end` once before iterating non-numeric
+    # ranges so mocks that expect a single `<=>` call see it. Skip for
+    # endless or numeric (Integer/Float) starts where downstream paths
+    # already compare.
+    if !e.nil? && !i.is_a?(Numeric)
+      (i <=> e) rescue nil
+    end
+    # Reject elements that have no `succ`, even if the range is empty —
+    # CRuby validates this up front.
+    unless i.respond_to?(:succ)
+      raise TypeError, "can't iterate from #{i.class}"
+    end
     excl = self.exclude_end?
     if e.nil?
       loop do
@@ -13,13 +25,18 @@ class Range
         i = i.succ
       end
     else
-      # For String ranges, stop once succ extends past the end string's
-      # length -- monoruby's byte-wise #<=> keeps reporting -1 forever
-      # while CRuby's String#upto stops at the same-size boundary.
-      string_mode = i.is_a?(String) && e.is_a?(String)
-      end_len = e.length if string_mode
+      # For String / Symbol ranges, stop once succ extends past the end
+      # element's length — `:Z.succ == :AA` would otherwise loop past
+      # `:z` indefinitely. CRuby's String#upto applies the same
+      # same-length stopping rule.
+      seq_mode = (i.is_a?(String) && e.is_a?(String)) ||
+                 (i.is_a?(Symbol) && e.is_a?(Symbol))
+      end_len = (e.is_a?(Symbol) ? e.to_s.length : e.length) if seq_mode
       loop do
-        break if string_mode && i.length > end_len
+        if seq_mode
+          cur_len = i.is_a?(Symbol) ? i.to_s.length : i.length
+          break if cur_len > end_len
+        end
         c = (i <=> e)
         break if c.nil?
         if excl
@@ -721,10 +738,102 @@ class Range
 
   public
 
-  def to_set(klass = Set, *args, &block)
+  # Private initializer. The actual Range value is built by the Rust
+  # `Range.new` constructor (or by literal/marshal); this stub exists
+  # so spec hooks like `Range.allocate.send(:initialize, …)` see a
+  # method and to enforce CRuby's argument count, frozen-receiver, and
+  # comparability checks. We don't mutate the underlying RangeInner
+  # here — `Range.new` already populates it.
+  private def initialize(*args)
+    raise FrozenError, "can't modify frozen Range: #{inspect}" if frozen?
+    if args.length < 2 || args.length > 3
+      raise ArgumentError, "wrong number of arguments (given #{args.length}, expected 2..3)"
+    end
+    a, b = args[0], args[1]
+    unless a.nil? || b.nil?
+      cmp = (a <=> b) rescue nil
+      raise ArgumentError, "bad value for range" if cmp.nil?
+    end
+    nil
+  end
+
+  # Override the Rust `to_a` so endpoints that lack a fast path (e.g.
+  # Symbol ranges, Float ranges, beginless) get routed through `each`,
+  # producing the proper TypeError / RangeError instead of the bare
+  # "not supported" runtime error.
+  def to_a
+    raise RangeError, "cannot convert endless range to an array" if self.end.nil?
+    res = []
+    each { |x| res << x }
+    res
+  end
+  alias entries to_a
+
+  def ==(other)
+    return false unless other.is_a?(Range)
+    return false unless self.exclude_end? == other.exclude_end?
+    self.begin == other.begin && self.end == other.end
+  end
+
+  def eql?(other)
+    return false unless other.is_a?(Range)
+    return false unless self.exclude_end? == other.exclude_end?
+    self.begin.eql?(other.begin) && self.end.eql?(other.end)
+  end
+
+  def hash
+    [self.begin, self.end, self.exclude_end?].hash
+  end
+
+  def to_set(*args, &block)
     if self.end.nil?
       raise RangeError, "cannot convert endless range to a set"
     end
-    klass.new(self, *args, &block)
+    if args.empty? && block.nil?
+      ::Set.new(self)
+    else
+      # Ruby 4.0 deprecates passing arguments to Enumerable#to_set; emit
+      # the same warning so callers see the migration notice. The first
+      # positional argument is still treated as the set class.
+      Kernel.warn("warning: passing arguments to Enumerable#to_set is deprecated")
+      klass = args.shift || ::Set
+      klass.new(self, *args, &block)
+    end
+  end
+
+  # Ruby 3.4 semantics: only Integer-bounded ranges (and Integer..±Infinity)
+  # are iterable; anything else either raises TypeError or returns nil.
+  def size
+    b = self.begin
+    e = self.end
+    excl = self.exclude_end?
+
+    raise TypeError, "can't iterate from NilClass" if b.nil?
+    raise TypeError, "can't iterate from Float" if b.is_a?(Float)
+
+    if e.nil?
+      return Float::INFINITY if b.is_a?(Integer)
+      return nil if b.respond_to?(:succ)
+      raise TypeError, "can't iterate from #{b.class}"
+    end
+
+    if b.is_a?(Integer)
+      if e.is_a?(Integer)
+        diff = e - b
+        return 0 if diff < 0
+        return excl ? diff : diff + 1
+      end
+      if e.is_a?(Float)
+        if e.infinite?
+          return e > 0 ? Float::INFINITY : 0
+        end
+        raise TypeError, "can't iterate from Float"
+      end
+      return nil if e.respond_to?(:succ)
+      raise TypeError, "can't iterate from #{e.class}"
+    end
+
+    return nil if b.respond_to?(:succ)
+    raise TypeError, "can't iterate from #{b.class}"
   end
 end

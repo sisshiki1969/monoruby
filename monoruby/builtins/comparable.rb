@@ -72,9 +72,13 @@ module Comparable
   def clamp(min_val = nil, max_val = nil)
     if min_val.is_a?(Range)
       range = min_val
-      min_val = range.first
-      max_val = range.last
-      # Exclude end not supported for clamp with range that has exclude_end
+      # Use `#begin` / `#end` (raw endpoint accessors) rather than
+      # `#first` / `#last`. The latter raise RangeError on
+      # beginless / endless ranges in Ruby 3.x+, but `clamp` is
+      # supposed to interpret a missing endpoint as "no bound on
+      # that side", matching CRuby's C-level implementation.
+      min_val = range.begin
+      max_val = range.end
       if max_val && range.exclude_end?
         raise ArgumentError, "cannot clamp with an exclusive range"
       end
