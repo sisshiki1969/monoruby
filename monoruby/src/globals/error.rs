@@ -420,13 +420,6 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn bad_range(start: Value, end: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Arguments,
-            format!("bad value for range. start:{:?} end:{:?}", start, end),
-        )
-    }
-
     pub(crate) fn divide_by_zero() -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::DivideByZero, "divided by 0".to_string())
     }
@@ -577,8 +570,8 @@ impl MonorubyErr {
     /// (e.g. very early during boot).
     fn encoding_subclass_error(store: &Store, subclass: &str, msg: String) -> MonorubyErr {
         if let Some(enc_const) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING) {
-            if let Some(sub_const) = store
-                .get_constant_noautoload(enc_const.as_class_id(), IdentId::get_id(subclass))
+            if let Some(sub_const) =
+                store.get_constant_noautoload(enc_const.as_class_id(), IdentId::get_id(subclass))
             {
                 return MonorubyErr::new(MonorubyErrKind::Other(sub_const.as_class_id()), msg);
             }

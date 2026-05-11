@@ -161,9 +161,8 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
-        let loaded_features = Value::array_from_iter(
-            ["thread.rb"].iter().map(|s| Value::string_from_str(s)),
-        );
+        let loaded_features =
+            Value::array_from_iter(["thread.rb"].iter().map(|s| Value::string_from_str(s)));
 
         let invokers = CODEGEN.with(|codegen| {
             let codegen = codegen.borrow();
@@ -286,14 +285,14 @@ impl Globals {
         // CRuby exposes these as frozen Strings; ruby/spec
         // (`core/builtin_constants`) asserts both `is_a?(String)` and
         // `frozen?` for every one of them.
-        let mut ruby_description = Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]"));
+        let mut ruby_description =
+            Value::string(format!("{pcg_name} {pcg_version} [x86_64-linux]"));
         let mut ruby_engine = Value::string_from_str("ruby");
         let mut ruby_version_val = Value::string_from_str(&ruby_version);
         let mut ruby_engine_version = Value::string_from_str(&ruby_version);
         let mut ruby_platform = Value::string_from_str("x86_64-linux");
-        let mut ruby_copyright = Value::string_from_str(
-            "ruby - Copyright (C) 1993-2025 Yukihiro Matsumoto",
-        );
+        let mut ruby_copyright =
+            Value::string_from_str("ruby - Copyright (C) 1993-2025 Yukihiro Matsumoto");
         let mut ruby_release_date = Value::string_from_str("2025-12-25");
         let mut ruby_revision = Value::string_from_str("monoruby");
         let ruby_patchlevel = Value::integer(0);
@@ -422,12 +421,7 @@ impl Globals {
         };
         let external_context = self.store.scoped_locals(outer);
 
-        match crate::parser::parse_program_eval(
-            code,
-            path,
-            Some(&external_context),
-            line_offset,
-        ) {
+        match crate::parser::parse_program_eval(code, path, Some(&external_context), line_offset) {
             Ok(result) => {
                 let fid =
                     bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
@@ -666,9 +660,9 @@ impl Globals {
     pub(crate) fn remove_loaded_feature(&mut self, path: &std::path::Path) -> bool {
         let target = path.as_os_str().as_bytes();
         let mut array = self.loaded_features.as_array();
-        let pos = array.iter().position(|v| {
-            v.is_str().is_some_and(|s| s.as_bytes() == target)
-        });
+        let pos = array
+            .iter()
+            .position(|v| v.is_str().is_some_and(|s| s.as_bytes() == target));
         match pos {
             Some(idx) => {
                 array.remove(idx);
@@ -783,24 +777,6 @@ impl Globals {
                     .insert((func_id, class_id, *reason), 1);
             }
         };
-    }
-}
-
-impl Globals {
-    pub(crate) fn generate_range(
-        &mut self,
-        start: Value,
-        end: Value,
-        exclude_end: bool,
-    ) -> Result<Value> {
-        if start.is_nil()
-            || end.is_nil()
-            || start.is_linear() && end.is_linear()
-            || start.real_class(&self.store).id() == end.real_class(&self.store).id()
-        {
-            return Ok(Value::range(start, end, exclude_end));
-        }
-        return Err(MonorubyErr::bad_range(start, end));
     }
 }
 
