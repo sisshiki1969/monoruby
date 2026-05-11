@@ -3704,7 +3704,12 @@ fn find_index(
         }
         Ok(Value::nil())
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("find_index"), pc)
+        // `find_index` short-circuits on the first match, so the
+        // total yield count isn't predictable from `self.size`.
+        // CRuby leaves `.size` at `nil` here — match that with the
+        // size-less `generate_enumerator` instead of routing
+        // through `array_enumerator`.
+        vm.generate_enumerator(IdentId::get_id("find_index"), lfp.self_val(), vec![], pc)
     }
 }
 
@@ -4797,6 +4802,126 @@ mod tests {
         [res, a]
         "##,
         );
+    }
+
+    /// No-block path: every iterator that yields once per element
+    /// must return an `Enumerator` whose `.size` matches the
+    /// receiver length (and reports `nil` only when CRuby itself
+    /// reports `nil`). The same path also has to give the right
+    /// `.class` so callers that `case`-dispatch on it don't get
+    /// surprised. Mirrors the spec's `enumeratorized` shared block.
+    #[test]
+    fn no_block_enumerator_size() {
+        // Size == receiver length for the "yield once per element"
+        // family. `run_tests` compares each expression's result
+        // against CRuby.
+        run_tests(&[
+            "[1,2,3,4].each.class",
+            "[1,2,3,4].each.size",
+            "[1,2,3,4].reverse_each.class",
+            "[1,2,3,4].reverse_each.size",
+            "[1,2,3,4].each_with_index.class",
+            "[1,2,3,4].each_with_index.size",
+            "[1,2,3,4].each_index.class",
+            "[1,2,3,4].each_index.size",
+            "[1,2,3,4].map.class",
+            "[1,2,3,4].map.size",
+            "[1,2,3,4].collect.size",
+            "[1,2,3,4].map!.class",
+            "[1,2,3,4].map!.size",
+            "[1,2,3,4].collect!.size",
+            "[1,2,3,4].select.class",
+            "[1,2,3,4].select.size",
+            "[1,2,3,4].filter.size",
+            "[1,2,3,4].find_all.size",
+            "[1,2,3,4].select!.class",
+            "[1,2,3,4].select!.size",
+            "[1,2,3,4].filter!.size",
+            "[1,2,3,4].reject.class",
+            "[1,2,3,4].reject.size",
+            "[1,2,3,4].reject!.class",
+            "[1,2,3,4].reject!.size",
+            "[1,2,3,4].delete_if.class",
+            "[1,2,3,4].delete_if.size",
+            "[1,2,3,4].keep_if.class",
+            "[1,2,3,4].keep_if.size",
+            "[1,2,3,4].sort_by.class",
+            "[1,2,3,4].sort_by.size",
+            "[1,2,3,4].sort_by!.class",
+            "[1,2,3,4].sort_by!.size",
+            "[1,2,3,4].group_by.class",
+            "[1,2,3,4].group_by.size",
+            "[1,2,3,4].filter_map.class",
+            "[1,2,3,4].filter_map.size",
+            // `find_index` short-circuits, so CRuby reports `nil` size.
+            "[1,2,3,4].find_index.size",
+            // Empty receiver still returns an Enumerator with size 0.
+            "[].each.size",
+            "[].map.size",
+            "[].select.size",
+        ]);
+
+        // combination / repeated_combination: binomial coefficients
+        // with the CRuby edge cases (k < 0 ⇒ 0, k == 0 ⇒ 1, k > size
+        // ⇒ 0 for combination but k > size is valid for
+        // repeated_combination).
+        run_tests(&[
+            // C(4, k)
+            "[1,2,3,4].combination(0).size",     // => 1
+            "[1,2,3,4].combination(1).size",     // => 4
+            "[1,2,3,4].combination(2).size",     // => 6
+            "[1,2,3,4].combination(3).size",     // => 4
+            "[1,2,3,4].combination(4).size",     // => 1
+            "[1,2,3,4].combination(5).size",     // => 0 (k > size)
+            "[1,2,3,4].combination(-1).size",    // => 0
+            "[].combination(0).size",            // => 1
+            "[].combination(1).size",            // => 0
+            // repeated_combination: C(size + k - 1, k)
+            "[1,2,3].repeated_combination(0).size",   // => 1
+            "[1,2,3].repeated_combination(1).size",   // => 3
+            "[1,2,3].repeated_combination(2).size",   // => 6
+            "[1,2,3].repeated_combination(3).size",   // => 10
+            "[1,2,3].repeated_combination(-1).size",  // => 0
+            "[].repeated_combination(0).size",        // => 1
+            "[].repeated_combination(1).size",        // => 0
+        ]);
+
+        // permutation / repeated_permutation: descending factorial /
+        // size**k. `Array#permutation` argument is optional (defaults
+        // to size).
+        run_tests(&[
+            // P(4, k)
+            "[1,2,3,4].permutation.size",        // => 24
+            "[1,2,3,4].permutation(0).size",     // => 1
+            "[1,2,3,4].permutation(1).size",     // => 4
+            "[1,2,3,4].permutation(2).size",     // => 12
+            "[1,2,3,4].permutation(3).size",     // => 24
+            "[1,2,3,4].permutation(4).size",     // => 24
+            "[1,2,3,4].permutation(5).size",     // => 0 (k > size)
+            "[1,2,3,4].permutation(-1).size",    // => 0
+            "[].permutation(0).size",            // => 1
+            "[].permutation(2).size",            // => 0
+            // repeated_permutation: size ** k
+            "[1,2,3].repeated_permutation(0).size",   // => 1
+            "[1,2,3].repeated_permutation(1).size",   // => 3
+            "[1,2,3].repeated_permutation(2).size",   // => 9
+            "[1,2,3].repeated_permutation(4).size",   // => 81
+            "[1,2,3].repeated_permutation(-1).size",  // => 0
+            "[].repeated_permutation(0).size",        // => 1
+            "[].repeated_permutation(2).size",        // => 0
+        ]);
+
+        // Block-less Enumerator round-trips: `.each` should iterate
+        // back to the original array so the size and yields stay in
+        // sync — guards against the size hint accidentally short-
+        // circuiting the actual iteration.
+        run_tests(&[
+            "[1,2,3].each.to_a",
+            "[1,2,3].map.each.to_a",
+            "[1,2,3].select.to_a",
+            "[1,2,3].combination(2).to_a",
+            "[1,2,3].permutation(2).to_a.sort",
+        ]);
     }
 
     #[test]
