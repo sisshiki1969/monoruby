@@ -199,9 +199,16 @@ class Numeric
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
     unless block_given?
-      # Attach a size-computing block so `to_enum(:step).size` reports
-      # the correct value without iterating.  The block runs lazily.
-      return to_enum(:step, limit, step) { __step_size(limit, step) }
+      # Numeric step ⇒ ArithmeticSequence (introspectable via
+      # `aseq.begin/end/step`, matches CRuby and `Range#step`).
+      # Non-Numeric step (e.g. `"foo"`) keeps the plain-Enumerator
+      # contract: CRuby raises ArgumentError lazily on iteration
+      # / `.size`, but the *kind* is still Enumerator until then.
+      if step.is_a?(Numeric)
+        return Enumerator::ArithmeticSequence.__build(self, limit, step, false)
+      else
+        return to_enum(:step, limit, step) { __step_size(limit, step) }
+      end
     end
 
     # Non-numeric `step` (e.g. `"foo"`) passes through `to_enum`
