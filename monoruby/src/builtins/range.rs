@@ -963,7 +963,67 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
             Ok(Value::array_from_vec(vec![min_val, max_val]))
         } else {
-            Err(MonorubyErr::runtimeerr("not supported"))
+            // Non-numeric range with block: walk via `each`
+            // (which understands `succ` and works for Time /
+            // String / Symbol / mocked types) and apply the
+            // block as the comparator. Mirrors Enumerable#minmax.
+            let data = vm.get_block_data(globals, bh)?;
+            let mut min_val: Option<Value> = None;
+            let mut max_val: Option<Value> = None;
+            let arr = vm
+                .invoke_method_inner(
+                    globals,
+                    IdentId::get_id("to_a"),
+                    self_,
+                    &[],
+                    None,
+                    None,
+                )?
+                .as_array();
+            for v in arr.iter() {
+                let v = *v;
+                let mn = match min_val {
+                    Some(m) => m,
+                    None => {
+                        min_val = Some(v);
+                        max_val = Some(v);
+                        continue;
+                    }
+                };
+                let mx = max_val.unwrap();
+                let cmp_min = vm.invoke_block(globals, &data, &[v, mn])?;
+                if vm
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_LT,
+                        cmp_min,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
+                    .as_bool()
+                {
+                    min_val = Some(v);
+                }
+                let cmp_max = vm.invoke_block(globals, &data, &[v, mx])?;
+                if vm
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::_GT,
+                        cmp_max,
+                        &[Value::integer(0)],
+                        None,
+                        None,
+                    )?
+                    .as_bool()
+                {
+                    max_val = Some(v);
+                }
+            }
+            Ok(Value::array_from_vec(vec![
+                min_val.unwrap_or_else(Value::nil),
+                max_val.unwrap_or_else(Value::nil),
+            ]))
         }
     } else {
         // No block: compute min and max directly
@@ -1000,8 +1060,34 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 } else {
                     return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
                 }
-            } else {
+            } else if matches!(
+                start.unpack(),
+                RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_)
+            ) {
+                // Numeric start with non-numeric end (the
+                // canonical case is `(0...Float::INFINITY)`):
+                // CRuby raises immediately rather than running
+                // an unbounded loop.
                 return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
+            } else {
+                // Generic non-numeric exclusive range: iterate
+                // via `each` (uses `#succ`) and take the last
+                // yielded element. Mocked / user-defined types
+                // only need to respond to `<=>` / `succ`.
+                let arr = vm
+                    .invoke_method_inner(
+                        globals,
+                        IdentId::get_id("to_a"),
+                        self_,
+                        &[],
+                        None,
+                        None,
+                    )?
+                    .as_array();
+                if arr.is_empty() {
+                    return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
+                }
+                arr[arr.len() - 1]
             }
         } else {
             end
