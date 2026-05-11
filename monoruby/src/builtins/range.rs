@@ -1461,7 +1461,21 @@ mod tests {
 
     #[test]
     fn minmax_with_block() {
-        run_test("(1..5).minmax {|a, b| b <=> a }");
+        // Non-fixnum range with block: walks via `to_a` / `succ`
+        // and applies the block as comparator.
+        run_tests(&[
+            "(1..5).minmax {|a, b| b <=> a }",
+            r#"('a'..'e').minmax {|a, b| a <=> b }"#,
+            r#"('a'..'e').minmax {|a, b| b <=> a }"#,
+        ]);
+    }
+
+    #[test]
+    fn minmax_exclusive_non_numeric() {
+        // Exclusive non-numeric range without a block: walk via
+        // `each`/`succ` and use the last yielded element as the
+        // max (CRuby behaviour). Used to raise TypeError.
+        run_test(r#"('a'...'e').minmax"#);
     }
 
     #[test]
@@ -1512,6 +1526,10 @@ mod tests {
         run_test_error("(1..).minmax");
         // exclusive range with non-integer end
         run_test_error("(1.0...3.0).minmax");
+        // Numeric start with non-numeric (Float::INFINITY) end:
+        // CRuby raises TypeError immediately rather than running
+        // an unbounded loop.
+        run_test_error("(0...Float::INFINITY).minmax");
     }
 
     #[test]
@@ -1527,5 +1545,66 @@ mod tests {
             "(1..10).cover?(5..15)",
             "('a'..'z').cover?('m')",
         ]);
+    }
+
+    #[test]
+    fn range_step_returns_arithmetic_sequence() {
+        // `Range#step` (numeric, no block) returns an
+        // ArithmeticSequence — not a plain Enumerator. Spec
+        // sub-tests "returned Enumerator type" depend on this.
+        // Kind / introspection / size / first / last / inspect,
+        // plus beginless / endless variants.
+        run_tests(&[
+            "(1..10).step(2).class.name",
+            "(1..10).step(2).is_a?(Enumerator)",
+            "(1..10).step(2).is_a?(Enumerable)",
+            "(1..10).step(2).is_a?(Enumerator::ArithmeticSequence)",
+            "a = (1..10).step(2); [a.begin, a.end, a.step, a.exclude_end?]",
+            "a = (1...10).step(3); [a.begin, a.end, a.step, a.exclude_end?]",
+            "(0..).step(2).class.name",
+            "(0..).step(2).first(3)",
+            "(..10).step(2).class.name",
+            "(1..10).step(2).size",
+            "(1..10).step(2).first",
+            "(1..10).step(2).first(3)",
+            "(1..10).step(2).last",
+            "(1..10).step(2).last(2)",
+            "(1..10).step(2).inspect",
+        ]);
+    }
+
+    #[test]
+    fn range_step_iteration() {
+        // Iteration shape: inclusive vs exclusive end, integer vs
+        // float step. Kept on `run_test` (one CRuby invocation per
+        // case) rather than batched through `run_tests` because
+        // mixing several `to_a` calls in one wrapped block trips
+        // issue #480 under the test harness's lower
+        // `COUNT_LOOP_START_COMPILE` threshold.
+        run_test("(1..5).step(1).to_a");
+        run_test("(1...5).step(1).to_a");
+        run_test("(1..10).step(2).to_a");
+        run_test("(1.0..2.0).step(0.5).to_a");
+    }
+
+    #[test]
+    fn range_percent_arithmetic_sequence() {
+        // `Range#%` is `Range#step` with a different inspect form
+        // — `((1..10).%(2))` vs `((1..10).step(2))` — but the
+        // underlying AS otherwise behaves identically.
+        run_tests(&[
+            "(1..10).%(2).class.name",
+            "(1..10).%(2).is_a?(Enumerator::ArithmeticSequence)",
+            "(1..10).%(2).to_a",
+            "(1..10).%(2).inspect",
+            "a = (1..10).%(3); [a.begin, a.end, a.step]",
+        ]);
+    }
+
+    #[test]
+    fn range_step_zero_raises() {
+        // Inherited from the prior step contract — keep verifying
+        // it through the AS path.
+        run_test_error("(1..10).step(0).to_a");
     }
 }

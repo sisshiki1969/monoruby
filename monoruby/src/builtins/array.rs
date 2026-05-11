@@ -5249,6 +5249,27 @@ mod tests {
     }
 
     #[test]
+    fn slice_with_arithmetic_sequence() {
+        // `Array#[]` and `Array#slice` accept an
+        // `Enumerator::ArithmeticSequence` as a stride-aware index
+        // (`runtime::get_index` / `builtins::array::index` dispatch
+        // to `aseq#[]` instead of `coerce_to_int_i64`).
+        run_tests(&[
+            "[10, 20, 30, 40, 50][(0..).step(2)]",
+            "[10, 20, 30, 40, 50][(0..-1).step(2)]",
+            "[10, 20, 30, 40, 50][(1..3).step(1)]",
+            "[10, 20, 30, 40, 50][(0..3).step(2)]",
+            // Negative step walks backwards from begin.
+            "[10, 20, 30, 40, 50][(4..0).step(-1)]",
+            // Same dispatch via `Array#slice`.
+            "[10, 20, 30, 40, 50].slice((0..3).step(2))",
+            "[1, 2, 3].slice((0..).step(2))",
+            // `Range#%` produces the same kind of AS.
+            "[10, 20, 30, 40, 50][(0..-1).%(2)]",
+        ]);
+    }
+
+    #[test]
     fn pack() {
         run_test(r#"[*(0..100)].pack("C*")"#);
         run_test(r#"[0x12345678].pack("I")"#);
@@ -5349,6 +5370,78 @@ mod tests {
         run_test(r#"[0x3042, 0x3044].pack("U*")"#);
         run_test(r#"[65, 0x3042, 0x1F600].pack("U*").unpack("U*")"#);
         run_test(r#""ABC".unpack("U3")"#);
+    }
+
+    #[test]
+    fn pack_output_encoding() {
+        // `U` produces UTF-8; `M` / `m` / `u` produce US-ASCII;
+        // mixing a binary directive with text falls to ASCII-8BIT
+        // (the only encoding compatible with arbitrary bytes);
+        // pure-binary template stays ASCII-8BIT.
+        run_tests(&[
+            r#"[65, 0x3042].pack("U*").encoding.name"#,
+            r#"[128].pack("U").encoding.name"#,
+            r#"["abc"].pack("M").encoding.name"#,
+            r#"["abc"].pack("m").encoding.name"#,
+            r#"["abc"].pack("u").encoding.name"#,
+            r#"["x", 65].pack("a*U").encoding.name"#,
+            r#"[65, 66, 67].pack("CCC").encoding.name"#,
+        ]);
+    }
+
+    #[test]
+    fn pack_utf8_extended_range() {
+        // `pack("U")` extends past U+10FFFF using the extended
+        // UTF-8 byte pattern (CRuby parity). 4-byte form covers
+        // up to 0x1FFFFF; 5-/6-byte forms cover up to 2^31-1 /
+        // 2^32-1.
+        run_tests(&[
+            r#"[0x110000].pack("U").bytes"#,
+            r#"[0x1FFFFF].pack("U").bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn pack_utf8_range_errors() {
+        // CRuby raises `RangeError` (not `ArgumentError`) for
+        // negative input or values > 2^32-1.
+        run_test_error(r#"[-1].pack("U")"#);
+        run_test_error(r#"[0x100000000].pack("U")"#);
+    }
+
+    #[test]
+    fn pack_base64_uuencode_line_length() {
+        // Counts of `1` and `2` are smaller than the 3-byte
+        // Base64/uuencode group and CRuby clamps them to the
+        // default 45. `0` means "no line breaks". `>= 3` is
+        // honoured verbatim.
+        run_tests(&[
+            r#"["abcdef"].pack("m1")"#,
+            r#"["abcdef"].pack("m2")"#,
+            r#"["abcdef"].pack("m3")"#,
+            r#"["abcdef"].pack("m0")"#,
+            r#"["abcdef"].pack("u1")"#,
+            r#"["abcdef"].pack("u3")"#,
+        ]);
+    }
+
+    #[test]
+    fn pack_base64_uuencode_nil_raises() {
+        // `m` and `u` reject nil with TypeError (used to silently
+        // treat nil as "").
+        run_test_error(r#"[nil].pack("m")"#);
+        run_test_error(r#"[nil].pack("u")"#);
+    }
+
+    #[test]
+    fn pack_hex_non_hex_low_nibble() {
+        // CRuby contributes the low nibble of non-hex characters
+        // (`s[i] & 0x0F`), not zero. `^` is 0x5E → low nibble 0xE.
+        // `["^"].pack("H")` ⇒ `"\xE0"` (was `"\x00"`).
+        run_tests(&[
+            r#"["^"].pack("H").bytes"#,
+            r#"["^"].pack("h").bytes"#,
+        ]);
     }
 
     #[test]
@@ -5936,6 +6029,72 @@ mod tests {
         run_test_with_prelude(
             r#"[C.new].join("-")"#,
             r#"class C; def to_ary; [1, 2]; end; end"#,
+        );
+    }
+
+    #[test]
+    fn join_empty_array_us_ascii() {
+        // CRuby tags `[].join` (and `[].join(sep)`) as US-ASCII
+        // — the universal "no content" encoding — not UTF-8.
+        run_tests(&[
+            r#"[].join.encoding.name"#,
+            r#"[].join("xxx").encoding.name"#,
+            r#"[].join.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn join_empty_array_skips_separator_to_str() {
+        // `[].join(sep)` must not call `sep.to_str` — short-
+        // circuit before separator coercion.
+        run_test_with_prelude(
+            r#"[].join(C.new); :ok"#,
+            r#"
+            class C
+              def to_str
+                raise "to_str called on empty join separator"
+              end
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn join_left_wins_on_seven_bit() {
+        // The first emitted fragment seeds the running encoding,
+        // so a UTF-8 head + US-ASCII tail (both 7-bit clean) stays
+        // UTF-8 (used to drop to US-ASCII). Pure US-ASCII stays
+        // US-ASCII.
+        run_tests(&[
+            r#"["bar", "foo".dup.force_encoding("US-ASCII")].join.encoding.name"#,
+            r#"a = "x".dup.force_encoding("US-ASCII"); b = "y".dup.force_encoding("US-ASCII"); [a, b].join.encoding.name"#,
+        ]);
+    }
+
+    #[test]
+    fn join_incompatible_encoding_raises() {
+        // BINARY with real high bytes ⊔ UTF-8 with real multibyte
+        // ⇒ no compatible encoding. CRuby raises
+        // `Encoding::CompatibilityError`; we used to silently
+        // collapse to ASCII-8BIT.
+        run_test_error(
+            r#"
+            ["báz", "f\xff".dup.force_encoding("BINARY")].join
+            "#,
+        );
+    }
+
+    #[test]
+    fn join_undef_to_s_raises_nomethod() {
+        // An element that lacks `to_str`, `to_ary`, *and* `to_s`
+        // raises NoMethodError instead of silently falling back to
+        // the Rust-side `Value::to_s`.
+        run_test_error(
+            r#"
+            obj = Object.new
+            class << obj; undef :to_s; end
+            [obj].join("-")
+            "#,
         );
     }
 
