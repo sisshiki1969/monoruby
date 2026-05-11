@@ -1069,24 +1069,18 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         let idx = lfp.arg(0);
         // Non-fixnum, non-range index: delegate. The
-        // `Enumerator::ArithmeticSequence` case is handed off to
-        // `aseq.[](self)` — the slicing logic lives in
-        // `ArithmeticSequence#[]` (see `enumerable.rb`), keeping
-        // it independent of Array (the AS isn't an Array
-        // subclass; this code shouldn't carry its details).
+        // `Enumerator::ArithmeticSequence` case goes straight to
+        // the Rust slicer (`arithmetic_sequence_slice_array`) —
+        // no method dispatch through `aseq.[](self)`, since AS
+        // storage and slicing are both native now (Phase 3).
         // Anything else falls through to the existing `to_int`
         // coercion path.
         if idx.try_fixnum().is_none() && idx.is_range().is_none() {
-            let class_name =
-                globals.store.get_class_name(idx.real_class(&globals.store).id());
-            if class_name == "Enumerator::ArithmeticSequence" {
-                return vm.invoke_method_inner(
+            if idx.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
+                return enumerator::arithmetic_sequence_slice_array(
                     globals,
-                    IdentId::get_id("[]"),
                     idx,
-                    &[lfp.self_val()],
-                    None,
-                    None,
+                    lfp.self_val(),
                 );
             }
             let i = idx.coerce_to_int_i64(vm, globals)?;
@@ -5271,13 +5265,12 @@ mod tests {
 
     /// Regression: `Range#%` attaches a singleton method (`inspect`)
     /// to its AS result, which makes `Value::class` return the
-    /// singleton's `ClassId`. The fast-path `is_arithmetic_sequence`
-    /// check must walk past the singleton (`real_class`) instead of
-    /// comparing against the cached AS class id verbatim — otherwise
-    /// the dispatch falls through to `coerce_to_int_i64` and raises
-    /// `TypeError: no implicit conversion of
-    /// Enumerator::ArithmeticSequence into Integer`. Same hazard
-    /// hits any AS the user decorates with `define_singleton_method`.
+    /// singleton's `ClassId`. Phase 3 sidesteps that entirely by
+    /// switching the fast-path dispatch from class-id compare to a
+    /// native `ObjTy::ARITHMETIC_SEQUENCE` check (`Value::ty()`),
+    /// which is set on construction and is unaffected by singletons.
+    /// Test stays as a regression for the same shapes — anything
+    /// decorated with `define_singleton_method` must still resolve.
     #[test]
     fn slice_with_arithmetic_sequence_singleton_class() {
         run_tests(&[

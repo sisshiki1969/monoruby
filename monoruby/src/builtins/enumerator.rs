@@ -118,6 +118,12 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "[]",
+        arithmetic_sequence_index,
+        1,
+    );
     // Private aliases kept so the still-Ruby `size` / `[]` / `__each`
     // bodies in `enumerable.rb` can keep referring to the fields by
     // their internal shorthand. Phase 3 retires `[]` (and these along
@@ -259,6 +265,205 @@ fn arithmetic_sequence_first(
     } else {
         Ok(self_val.as_arithmetic_sequence_inner().begin())
     }
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#[]
+///
+/// - `[](arr)` — stride-aware Array slice
+///
+/// Extracts the slice of `arr` whose indices are the terms of
+/// this sequence.  Independent of Array's own `[]`
+/// implementation: `Array#[]` delegates here when its index
+/// argument is an ArithmeticSequence.
+///
+/// Mirrors CRuby's `rb_ary_subseq_step` behaviour:
+///   * Resolve `begin` (nil → 0 for positive step, `len-1` for
+///     negative; negative ints rebased against `len`).
+///   * Resolve `end` (nil → `len-1` / `0`; exclusive end ⇒ inner term).
+///   * Walk by `step`, collecting elements whose index is in
+///     `0...len`.
+///   * `RangeError` when the explicit end (or begin for negative
+///     step) is itself a term of the AS that lands outside the
+///     array.
+///   * Pure-`nil` return when `begin` is out of bounds for the
+///     `step == ±1` cases that fall back to plain Range slicing
+///     semantics.
+#[monoruby_builtin]
+fn arithmetic_sequence_index(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    arithmetic_sequence_slice_array(globals, lfp.self_val(), lfp.arg(0))
+}
+
+/// Direct-read slice entry point for `Array#[aseq]` — used by
+/// both `builtins::array::index` (the bytecode/slow path) and
+/// `codegen::runtime::get_index` (the JIT inline path) so that
+/// neither needs a method dispatch through `aseq.[](arr)` to
+/// reach this logic.
+pub(crate) fn arithmetic_sequence_slice_array(
+    globals: &mut Globals,
+    aseq: Value,
+    arr: Value,
+) -> Result<Value> {
+    assert_eq!(aseq.ty(), Some(ObjTy::ARITHMETIC_SEQUENCE));
+    let inner = aseq.as_arithmetic_sequence_inner();
+    let raw_b = inner.begin();
+    let raw_e = inner.end();
+    let raw_s = inner.step();
+    let excl = inner.exclude_end();
+
+    let len = arr.as_array_inner().len() as i64;
+
+    // CRuby's Array#[aseq] only handles Integer-valued AS terms.
+    // Float / non-Integer step, begin, or end raises `TypeError`.
+    let s = match raw_s.try_fixnum() {
+        Some(v) => v,
+        None => return Err(as_slice_typeerr(globals, raw_s)),
+    };
+    if s == 0 {
+        return Ok(Value::array_empty());
+    }
+
+    let b_opt: Option<i64> = if raw_b.is_nil() {
+        None
+    } else {
+        match raw_b.try_fixnum() {
+            Some(v) => Some(v),
+            None => return Err(as_slice_typeerr(globals, raw_b)),
+        }
+    };
+    let e_opt: Option<i64> = if raw_e.is_nil() {
+        None
+    } else {
+        match raw_e.try_fixnum() {
+            Some(v) => Some(v),
+            None => return Err(as_slice_typeerr(globals, raw_e)),
+        }
+    };
+
+    if s > 0 {
+        // ---- positive step ------------------------------------
+        let mut b = b_opt.unwrap_or(0);
+        if b < 0 {
+            b += len;
+        }
+        if b_opt.is_some() && b > len {
+            if s > 1 {
+                return Err(as_slice_rangeerr(globals, raw_b, raw_e, raw_s));
+            }
+            return Ok(Value::nil());
+        }
+        if b == len {
+            return Ok(Value::array_empty());
+        }
+        if b < 0 {
+            return Ok(Value::nil());
+        }
+
+        let e = if let Some(raw_e_val) = e_opt {
+            let mut e_res = raw_e_val;
+            if e_res < 0 {
+                e_res += len;
+            }
+            let end_is_term = !excl && b >= 0 && (e_res - b).rem_euclid(s) == 0;
+            if s > 1 && end_is_term && e_res >= len {
+                return Err(as_slice_rangeerr(globals, raw_b, raw_e, raw_s));
+            }
+            let e = if excl { e_res - 1 } else { e_res };
+            if e >= len { len - 1 } else { e }
+        } else {
+            len - 1
+        };
+        if e < b {
+            return Ok(Value::array_empty());
+        }
+
+        let ary = arr.as_array_inner();
+        let mut result = Vec::new();
+        let mut i = b;
+        while i <= e {
+            result.push(ary[i as usize]);
+            i += s;
+        }
+        Ok(Value::array_from_vec(result))
+    } else {
+        // ---- negative step ------------------------------------
+        let mut b = if let Some(raw_b_val) = b_opt {
+            let mut b = raw_b_val;
+            if b < 0 {
+                b += len;
+            }
+            if b > len - 1 {
+                let diff = b - (len - 1);
+                if s.unsigned_abs() as i64 > 1 && diff > s.unsigned_abs() as i64 {
+                    return Err(as_slice_rangeerr(globals, raw_b, raw_e, raw_s));
+                }
+                b = len - 1;
+            }
+            if b < 0 {
+                return Ok(Value::nil());
+            }
+            b
+        } else {
+            len - 1
+        };
+
+        let e = if let Some(raw_e_val) = e_opt {
+            let mut e_res = raw_e_val;
+            if e_res < 0 {
+                e_res += len;
+            }
+            let e = if excl { e_res + 1 } else { e_res };
+            if e < 0 { 0 } else { e }
+        } else {
+            0
+        };
+        if b < e {
+            return Ok(Value::array_empty());
+        }
+
+        let ary = arr.as_array_inner();
+        let mut result = Vec::new();
+        while b >= e {
+            result.push(ary[b as usize]);
+            b += s;
+        }
+        Ok(Value::array_from_vec(result))
+    }
+}
+
+fn as_slice_typeerr(globals: &Globals, v: Value) -> MonorubyErr {
+    let class_name = globals
+        .store
+        .get_class_name(v.real_class(&globals.store).id());
+    MonorubyErr::typeerr(format!(
+        "no implicit conversion of {class_name} into Integer"
+    ))
+}
+
+fn as_slice_rangeerr(globals: &Globals, b: Value, e: Value, s: Value) -> MonorubyErr {
+    let store = &globals.store;
+    // Match CRuby: nil endpoints elide to empty string in the
+    // error message ("((11..).step(2))" rather than
+    // "((11..nil).step(2))"). The separator is always `..`,
+    // even for an exclusive-end AS — CRuby's error formatter
+    // does not distinguish the two here.
+    let b_s = if b.is_nil() {
+        String::new()
+    } else {
+        b.inspect(store)
+    };
+    let e_s = if e.is_nil() {
+        String::new()
+    } else {
+        e.inspect(store)
+    };
+    let s_s = s.inspect(store);
+    MonorubyErr::rangeerr(format!("(({b_s}..{e_s}).step({s_s})) out of range"))
 }
 
 ///

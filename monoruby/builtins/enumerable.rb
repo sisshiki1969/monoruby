@@ -991,18 +991,16 @@ class Enumerator
   # `kind_of?` are overridden to keep `is_a?(Enumerator)` truthy
   # for spec compatibility.
   #
-  # Phase 1 of the Rust-native migration moved storage off Ruby
-  # ivars onto a dedicated `RValue` variant
-  # (`ObjTy::ARITHMETIC_SEQUENCE`).  Phase 2 then moved every
-  # accessor and the `inspect` / `to_s` / `first` / `last`
-  # formatters into Rust builtins (registered in
-  # `src/builtins/enumerator.rs`), so this Ruby class body only
-  # needs to host the parts that still depend on Ruby semantics:
+  # The Rust-native migration (phases 1–3) moved storage onto a
+  # dedicated `RValue` variant (`ObjTy::ARITHMETIC_SEQUENCE`),
+  # promoted every accessor / formatter / slicer into Rust
+  # builtins (registered in `src/builtins/enumerator.rs`), and
+  # left only the parts that still depend on Ruby semantics
+  # in this class body:
   #   * `is_a?` / `kind_of?` — lie about `Enumerator` ancestry
-  #   * `each` — block-iteration kept in Ruby per design (Phase 2)
+  #   * `each` — block-iteration in Ruby (by design)
   #   * `to_a` / `entries` — thin `__each` wrapper
   #   * `size` — Numeric-type dispatch is easier in Ruby for now
-  #   * `[]` — stride-aware Array slicer (Rust-ified in Phase 3)
   class ArithmeticSequence
     include Enumerable
 
@@ -1077,117 +1075,6 @@ class Enumerator
         n_int -= 1 if overshoot
       end
       n_int + 1
-    end
-
-    # `aseq[arr]` — extract the slice of `arr` whose indices are the
-    # terms of this sequence. Independent of Array's own `[]`
-    # implementation: Array#[] delegates here when its index argument
-    # is an ArithmeticSequence, instead of carrying AS-specific code.
-    #
-    # Mirrors CRuby's `rb_ary_subseq_step` behaviour:
-    #   * Resolve `begin` (nil → 0 for positive step, len-1 for
-    #     negative; negative ints rebased against `len`).
-    #   * Resolve `end` (nil → len-1 / 0; exclusive end ⇒ inner term).
-    #   * Walk by `step`, collecting elements whose index is in
-    #     `0...len`.
-    #   * `RangeError` when the explicit end (or begin for negative
-    #     step) is itself a term of the AS that lands outside the
-    #     array — see comments inline.
-    #   * Pure-`nil` return when `begin` is out of bounds for the
-    #     `step == ±1` cases that fall back to plain Range slicing
-    #     semantics.
-    def [](arr)
-      len = arr.length
-      raw_b = __b
-      raw_e = __e
-      s = __s
-      excl = __excl?
-      return [] if s == 0
-
-      if s > 0
-        # ---- positive step ----------------------------------------
-        b = raw_b.nil? ? 0 : raw_b
-        b += len if b < 0
-        # begin past the boundary: nil for stride 1 (matches plain
-        # `arr[N..]`), RangeError for larger strides — CRuby
-        # promotes the OOB to an error when the user explicitly
-        # asked for a non-trivial stride.
-        if !raw_b.nil? && b > len
-          if s > 1
-            raise RangeError,
-                  "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
-          end
-          return nil
-        end
-        # begin exactly at the boundary (== len): empty result.
-        return [] if b == len
-        return nil if b < 0
-
-        if raw_e.nil?
-          e = len - 1
-          end_is_term = false
-        else
-          e_res = raw_e
-          e_res += len if e_res < 0
-          # `end` is a term of the sequence iff stepping from begin
-          # lands exactly on it (and end is inclusive).
-          end_is_term = !excl && b >= 0 && (e_res - b) % s == 0
-          # CRuby raises when stride > 1 and the *user-supplied*
-          # end is itself a yielded value past the array.
-          if s > 1 && end_is_term && e_res >= len
-            raise RangeError,
-                  "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
-          end
-          e = excl ? e_res - 1 : e_res
-        end
-        e = len - 1 if e >= len
-        return [] if e < b
-        result = []
-        i = b
-        while i <= e
-          result << arr[i]
-          i += s
-        end
-        result
-      else
-        # ---- negative step ----------------------------------------
-        if raw_b.nil?
-          b = len - 1
-        else
-          b = raw_b
-          b += len if b < 0
-          # begin past the array's last index: clip to `len - 1`,
-          # but only if the gap is small enough — when
-          # `begin - (len - 1) > |step|` CRuby treats the request
-          # as out of range.
-          if b > len - 1
-            diff = b - (len - 1)
-            if s.abs > 1 && diff > s.abs
-              raise RangeError,
-                    "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
-            end
-            b = len - 1
-          end
-          return nil if b < 0
-        end
-
-        if raw_e.nil?
-          e = 0
-        else
-          e_res = raw_e
-          e_res += len if e_res < 0
-          e = excl ? e_res + 1 : e_res
-        end
-        e = 0 if e < 0
-        return [] if b < e
-        result = []
-        i = b
-        while i >= e
-          result << arr[i]
-          i += s
-        end
-        result
-      end
     end
 
     private

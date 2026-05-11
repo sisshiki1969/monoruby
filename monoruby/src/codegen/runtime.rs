@@ -586,62 +586,6 @@ pub(super) struct ClassIdSlot {
     idx: ClassId,
 }
 
-thread_local! {
-    /// Cached `ClassId` of `Enumerator::ArithmeticSequence`. The
-    /// class is defined in Ruby (`monoruby/builtins/enumerable.rb`)
-    /// so its `ClassId` isn't known at compile time, but it's
-    /// stable across the lifetime of a `Globals` once the startup
-    /// files have loaded. We pay one constant lookup the first
-    /// time, then a plain `ClassId` compare from there.
-    static AS_CLASS_ID_CACHE: std::cell::Cell<Option<ClassId>> = const {
-        std::cell::Cell::new(None)
-    };
-}
-
-/// Fast check: is `v` an instance of `Enumerator::ArithmeticSequence`?
-/// Mirrors the way Array's `[]` dispatch needs to recognise an AS
-/// index — without the per-call cost of walking the class chain and
-/// joining names into a string.
-///
-/// Uses `real_class` rather than `Value::class` so a singleton class
-/// attached to the AS (e.g. `Range#%` calls `define_singleton_method`
-/// to swap in a custom `inspect`) doesn't make the cached `ClassId`
-/// compare miss. Without this, `arr[(0..-1).%(2)]` fell through to
-/// the `to_int` path and raised `TypeError`.
-pub(crate) fn is_arithmetic_sequence(globals: &Globals, v: Value) -> bool {
-    let v_class = v.real_class(&globals.store).id();
-    AS_CLASS_ID_CACHE.with(|cell| {
-        if let Some(cached) = cell.get() {
-            return v_class == cached;
-        }
-        // First-time lookup: resolve `Enumerator::ArithmeticSequence`
-        // via the constant table. Cache the resulting `ClassId` so
-        // subsequent calls bypass the lookup entirely.
-        let Some(enum_const) = globals
-            .store
-            .get_constant(OBJECT_CLASS, IdentId::get_id("Enumerator"))
-        else {
-            return false;
-        };
-        let enum_class_id = match enum_const.loaded_value() {
-            Some(val) if val.is_class_or_module().is_some() => val.as_class_id(),
-            _ => return false,
-        };
-        let Some(as_const) = globals
-            .store
-            .get_constant(enum_class_id, IdentId::get_id("ArithmeticSequence"))
-        else {
-            return false;
-        };
-        let as_class_id = match as_const.loaded_value() {
-            Some(val) if val.is_class_or_module().is_some() => val.as_class_id(),
-            _ => return false,
-        };
-        cell.set(Some(as_class_id));
-        v_class == as_class_id
-    })
-}
-
 ///
 /// Generic index operation.
 ///
@@ -670,21 +614,17 @@ pub(super) extern "C" fn get_index(
         ARRAY_CLASS => {
             // Non-fixnum, non-range index: ask the index to slice
             // the array itself. `Enumerator::ArithmeticSequence`
-            // defines `#[]` (in `enumerable.rb`) for this — the
-            // slicing logic lives on the AS, not parasitically in
-            // Array's `[]` path. Other types fall through to the
-            // existing `to_int` coercion. Mirrors `builtins/
-            // array.rs::index`, but `vm_index` / the JIT inline
-            // path land here, so both need the dispatch.
+            // goes straight to the Rust slicer
+            // (`arithmetic_sequence_slice_array`) — no method
+            // dispatch needed since Phase 3 moved AS slicing to
+            // Rust. Other types fall through to the existing
+            // `to_int` coercion. Mirrors `builtins/array.rs::index`,
+            // but `vm_index` / the JIT inline path land here, so
+            // both need the dispatch.
             let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
-                if is_arithmetic_sequence(globals, index) {
-                    return match vm.invoke_method_inner(
-                        globals,
-                        IdentId::_INDEX,
-                        index,
-                        &[base],
-                        None,
-                        None,
+                if index.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
+                    return match crate::builtins::enumerator::arithmetic_sequence_slice_array(
+                        globals, index, base,
                     ) {
                         Ok(val) => Some(val),
                         Err(err) => {
