@@ -71,6 +71,8 @@ pub const FATAL_ERROR_CLASS: ClassId = ClassId::new(53);
 /// and `false` does not deopt on every flip.
 pub const BOOL_CLASS: ClassId = ClassId::new(54);
 
+pub const ARITHMETIC_SEQUENCE_CLASS: ClassId = ClassId::new(55);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -134,6 +136,7 @@ impl std::fmt::Debug for ClassId {
             52 => write!(f, "RATIONAL"),
             53 => write!(f, "FATAL_ERROR"),
             54 => write!(f, "BOOL"),
+            55 => write!(f, "ARITHMETIC_SEQUENCE"),
             n => write!(f, "ClassId({n})"),
         }
     }

@@ -990,37 +990,38 @@ class Enumerator
   # for Enumerators built from a real iterator), so `is_a?` /
   # `kind_of?` are overridden to keep `is_a?(Enumerator)` truthy
   # for spec compatibility.
+  #
+  # Phase 1 of the Rust-native migration: storage moved off Ruby
+  # ivars onto a dedicated `RValue` variant
+  # (`ObjTy::ARITHMETIC_SEQUENCE`).  `__build` and the private
+  # `__b` / `__e` / `__s` / `__excl?` readers are Rust builtins
+  # that operate on those fields directly; the rest of this class
+  # is still Ruby, but reaches the fields through those readers
+  # instead of `@begin` / `@end` / `@step` / `@exclude_end`.
   class ArithmeticSequence
     include Enumerable
 
-    # Bypass the standard `Enumerator#new(&block)` requirement so
-    # `Range#step` can stamp begin/end/step/exclude_end? on a fresh
-    # instance without going through the Fiber path.
-    def self.__build(b, e, step, exclude_end)
-      o = allocate
-      o.__send__(:__init, b, e, step, exclude_end)
-      o
+    def begin
+      __b
     end
 
-    def __init(b, e, step, exclude_end)
-      @begin = b
-      @end = e
-      @step = step
-      @exclude_end = exclude_end ? true : false
+    def end
+      __e
     end
-    private :__init
 
-    attr_reader :begin, :end, :step
+    def step
+      __s
+    end
+
+    def exclude_end?
+      __excl?
+    end
 
     # `first` follows Enumerator#first: with no arg returns the
     # first yielded value (== `begin` for a non-empty AS); with
     # `n` returns the first `n` yielded values.
     def first(n = nil)
-      n.nil? ? @begin : take(n)
-    end
-
-    def exclude_end?
-      @exclude_end
+      n.nil? ? __b : take(n)
     end
 
     def is_a?(klass)
@@ -1036,10 +1037,11 @@ class Enumerator
     # `inspect` separately to hit the second form; this default is
     # the `step` form.
     def inspect
-      lo = @begin.nil? ? "" : @begin.inspect
-      hi = @end.nil?  ? "" : @end.inspect
-      sep = @exclude_end ? "..." : ".."
-      step_part = @step.nil? ? "" : @step.inspect
+      b, e, s, excl = __b, __e, __s, __excl?
+      lo = b.nil? ? "" : b.inspect
+      hi = e.nil? ? "" : e.inspect
+      sep = excl ? "..." : ".."
+      step_part = s.nil? ? "" : s.inspect
       "((#{lo}#{sep}#{hi}).step(#{step_part}))"
     end
     alias to_s inspect
@@ -1064,9 +1066,10 @@ class Enumerator
     # `ArgumentError` when the step isn't `Numeric` (CRuby checks
     # this lazily on `.size`).
     def size
-      b = @begin
-      e = @end
-      s = @step
+      b = __b
+      e = __e
+      s = __s
+      excl = __excl?
       raise ArgumentError, "step must be numeric" unless s.is_a?(Numeric)
       raise ArgumentError, "step can't be 0" if s == 0
       if b.nil?
@@ -1082,9 +1085,9 @@ class Enumerator
       # (the `begin`, if it satisfies the bound), so size is 1 or 0.
       if s.is_a?(Float) && s.infinite?
         if s > 0
-          return @exclude_end ? (b < e ? 1 : 0) : (b <= e ? 1 : 0)
+          return excl ? (b < e ? 1 : 0) : (b <= e ? 1 : 0)
         else
-          return @exclude_end ? (b > e ? 1 : 0) : (b >= e ? 1 : 0)
+          return excl ? (b > e ? 1 : 0) : (b >= e ? 1 : 0)
         end
       end
       diff = e - b
@@ -1100,7 +1103,7 @@ class Enumerator
       # above). Avoid `Float::INFINITY.floor` (FloatDomainError).
       return Float::INFINITY if n.infinite?
       n_int = n.floor
-      if @exclude_end
+      if excl
         last = b + n_int * s
         overshoot = s > 0 ? last >= e : last <= e
         n_int -= 1 if overshoot
@@ -1132,21 +1135,24 @@ class Enumerator
     #     semantics.
     def [](arr)
       len = arr.length
-      s = @step
+      raw_b = __b
+      raw_e = __e
+      s = __s
+      excl = __excl?
       return [] if s == 0
 
       if s > 0
         # ---- positive step ----------------------------------------
-        b = @begin.nil? ? 0 : @begin
+        b = raw_b.nil? ? 0 : raw_b
         b += len if b < 0
         # begin past the boundary: nil for stride 1 (matches plain
         # `arr[N..]`), RangeError for larger strides — CRuby
         # promotes the OOB to an error when the user explicitly
         # asked for a non-trivial stride.
-        if !@begin.nil? && b > len
+        if !raw_b.nil? && b > len
           if s > 1
             raise RangeError,
-                  "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+                  "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
           end
           return nil
         end
@@ -1154,22 +1160,22 @@ class Enumerator
         return [] if b == len
         return nil if b < 0
 
-        if @end.nil?
+        if raw_e.nil?
           e = len - 1
           end_is_term = false
         else
-          e_res = @end
+          e_res = raw_e
           e_res += len if e_res < 0
           # `end` is a term of the sequence iff stepping from begin
           # lands exactly on it (and end is inclusive).
-          end_is_term = !@exclude_end && b >= 0 && (e_res - b) % s == 0
+          end_is_term = !excl && b >= 0 && (e_res - b) % s == 0
           # CRuby raises when stride > 1 and the *user-supplied*
           # end is itself a yielded value past the array.
           if s > 1 && end_is_term && e_res >= len
             raise RangeError,
-                  "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+                  "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
           end
-          e = @exclude_end ? e_res - 1 : e_res
+          e = excl ? e_res - 1 : e_res
         end
         e = len - 1 if e >= len
         return [] if e < b
@@ -1182,10 +1188,10 @@ class Enumerator
         result
       else
         # ---- negative step ----------------------------------------
-        if @begin.nil?
+        if raw_b.nil?
           b = len - 1
         else
-          b = @begin
+          b = raw_b
           b += len if b < 0
           # begin past the array's last index: clip to `len - 1`,
           # but only if the gap is small enough — when
@@ -1195,19 +1201,19 @@ class Enumerator
             diff = b - (len - 1)
             if s.abs > 1 && diff > s.abs
               raise RangeError,
-                    "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+                    "((#{raw_b.inspect}..#{raw_e.inspect}).step(#{s.inspect})) out of range"
             end
             b = len - 1
           end
           return nil if b < 0
         end
 
-        if @end.nil?
+        if raw_e.nil?
           e = 0
         else
-          e_res = @end
+          e_res = raw_e
           e_res += len if e_res < 0
-          e = @exclude_end ? e_res + 1 : e_res
+          e = excl ? e_res + 1 : e_res
         end
         e = 0 if e < 0
         return [] if b < e
@@ -1224,9 +1230,10 @@ class Enumerator
     private
 
     def __each
-      b = @begin
-      e = @end
-      s = @step
+      b = __b
+      e = __e
+      s = __s
+      excl = __excl?
       raise TypeError, "step can't be 0" if s == 0
       raise ArgumentError, "#each for beginless arithmetic sequences is meaningless" if b.nil?
       cur = b
@@ -1236,7 +1243,7 @@ class Enumerator
           cur += s
         end
       elsif s > 0
-        if @exclude_end
+        if excl
           while cur < e
             yield cur
             cur += s
@@ -1248,7 +1255,7 @@ class Enumerator
           end
         end
       else
-        if @exclude_end
+        if excl
           while cur > e
             yield cur
             cur += s

@@ -50,6 +50,112 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::CAPTURE,
     );
     globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
+
+    // `Enumerator::ArithmeticSequence` — Phase 1: native storage
+    // backs a Ruby class. The higher-level behaviour
+    // (`size`/`each`/`[]`/...) still lives in `enumerable.rb` and
+    // reaches the native `(begin, end, step, exclude_end?)` tuple
+    // through the private readers defined below.
+    globals.define_builtin_class(
+        "ArithmeticSequence",
+        ARITHMETIC_SEQUENCE_CLASS,
+        object_class,
+        ENUMERATOR_CLASS,
+        ObjTy::ARITHMETIC_SEQUENCE,
+    );
+    globals.define_builtin_class_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "__build",
+        arithmetic_sequence_build,
+        4,
+    );
+    globals.define_private_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "__b",
+        arithmetic_sequence_read_begin,
+        0,
+    );
+    globals.define_private_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "__e",
+        arithmetic_sequence_read_end,
+        0,
+    );
+    globals.define_private_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "__s",
+        arithmetic_sequence_read_step,
+        0,
+    );
+    globals.define_private_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "__excl?",
+        arithmetic_sequence_read_exclude_end,
+        0,
+    );
+}
+
+///
+/// ### Enumerator::ArithmeticSequence.__build
+///
+/// Internal allocator used by `Numeric#step` / `Range#step` /
+/// `Range#%`. Mirrors the original Ruby-side
+/// `allocate` + `__init` dance — bypasses `Enumerator#new`'s
+/// block requirement and stamps the native tuple directly.
+#[monoruby_builtin]
+fn arithmetic_sequence_build(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let begin = lfp.arg(0);
+    let end = lfp.arg(1);
+    let step = lfp.arg(2);
+    let exclude_end = lfp.arg(3).as_bool();
+    Ok(Value::arithmetic_sequence(begin, end, step, exclude_end))
+}
+
+#[monoruby_builtin]
+fn arithmetic_sequence_read_begin(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val().as_arithmetic_sequence_inner().begin())
+}
+
+#[monoruby_builtin]
+fn arithmetic_sequence_read_end(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val().as_arithmetic_sequence_inner().end())
+}
+
+#[monoruby_builtin]
+fn arithmetic_sequence_read_step(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.self_val().as_arithmetic_sequence_inner().step())
+}
+
+#[monoruby_builtin]
+fn arithmetic_sequence_read_exclude_end(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(
+        lfp.self_val().as_arithmetic_sequence_inner().exclude_end(),
+    ))
 }
 
 ///

@@ -9,6 +9,9 @@ use std::mem::ManuallyDrop;
 
 use crate::ast::{Loc, SourceInfoRef};
 
+pub use arithmetic_sequence::{
+    AS_BEGIN_OFFSET, AS_END_OFFSET, AS_EXCLUDE_END_OFFSET, AS_STEP_OFFSET, ArithmeticSequenceInner,
+};
 pub use array::*;
 pub use binding::*;
 pub use complex::ComplexInner;
@@ -29,6 +32,7 @@ pub(crate) use string::pack::*;
 pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
+mod arithmetic_sequence;
 mod array;
 mod binding;
 mod complex;
@@ -93,6 +97,7 @@ impl std::fmt::Debug for ObjTy {
                 22 => "MATCHDATA",
                 23 => "RATIONAL",
                 24 => "STRUCT",
+                25 => "ARITHMETIC_SEQUENCE",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -130,6 +135,7 @@ impl ObjTy {
     pub const MATCHDATA: Self = Self(std::num::NonZeroU8::new(22).unwrap());
     pub const RATIONAL: Self = Self(std::num::NonZeroU8::new(23).unwrap());
     pub const STRUCT: Self = Self(std::num::NonZeroU8::new(24).unwrap());
+    pub const ARITHMETIC_SEQUENCE: Self = Self(std::num::NonZeroU8::new(25).unwrap());
 }
 
 #[repr(C)]
@@ -164,6 +170,7 @@ pub union ObjKind {
     /// load slots without an extra Box deref. Same layout as
     /// `ArrayInner`'s `SmallVec<[Value; 5]>`.
     struct_inner: ManuallyDrop<StructInner>,
+    arithmetic_sequence: ManuallyDrop<ArithmeticSequenceInner>,
 }
 
 impl ObjKind {
@@ -388,6 +395,17 @@ impl ObjKind {
             rational: ManuallyDrop::new(Box::new(inner)),
         }
     }
+
+    fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
+        Self {
+            arithmetic_sequence: ManuallyDrop::new(ArithmeticSequenceInner::new(
+                begin,
+                end,
+                step,
+                exclude_end,
+            )),
+        }
+    }
 }
 
 /// Heap-allocated objects.
@@ -449,6 +467,9 @@ impl std::fmt::Debug for RValue {
                             ObjTy::UMETHOD => format!("{:?}", self.kind.umethod),
                             ObjTy::MATCHDATA => format!("{:?}", self.kind.matchdata),
                             ObjTy::STRUCT => format!("{:?}", self.kind.struct_inner),
+                            ObjTy::ARITHMETIC_SEQUENCE => {
+                                format!("{:?}", self.kind.arithmetic_sequence)
+                            }
                             _ => unreachable!(),
                         }
                     })
@@ -691,6 +712,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjTy::UMETHOD => {}
                 ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
                 ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
+                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
@@ -729,6 +751,9 @@ impl alloc::GCBox for RValue {
                 ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
                 ObjTy::STRUCT => ManuallyDrop::drop(&mut self.kind.struct_inner),
                 ObjTy::MATCHDATA => ManuallyDrop::drop(&mut self.kind.matchdata),
+                ObjTy::ARITHMETIC_SEQUENCE => {
+                    ManuallyDrop::drop(&mut self.kind.arithmetic_sequence)
+                }
                 _ => {}
             }
             self.set_next_none();
@@ -941,6 +966,15 @@ impl RValue {
                             lhs.exclude_end(),
                         )
                     }
+                    ObjTy::ARITHMETIC_SEQUENCE => {
+                        let lhs = self.as_arithmetic_sequence();
+                        ObjKind::arithmetic_sequence(
+                            lhs.begin().deep_copy(),
+                            lhs.end().deep_copy(),
+                            lhs.step().deep_copy(),
+                            lhs.exclude_end(),
+                        )
+                    }
                     /*ObjTy::HASH => {
                         let mut map = RubyMap::default();
                         let hash = self.as_hashmap();
@@ -1039,6 +1073,11 @@ impl RValue {
                         ObjTy::STRUCT => ObjKind {
                             struct_inner: ManuallyDrop::new((*self.kind.struct_inner).clone()),
                         },
+                        ObjTy::ARITHMETIC_SEQUENCE => ObjKind {
+                            arithmetic_sequence: ManuallyDrop::new(
+                                (*self.kind.arithmetic_sequence).clone(),
+                            ),
+                        },
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -1110,6 +1149,11 @@ impl RValue {
                         },
                         ObjTy::STRUCT => ObjKind {
                             struct_inner: ManuallyDrop::new((*self.kind.struct_inner).clone()),
+                        },
+                        ObjTy::ARITHMETIC_SEQUENCE => ObjKind {
+                            arithmetic_sequence: ManuallyDrop::new(
+                                (*self.kind.arithmetic_sequence).clone(),
+                            ),
                         },
                         ty => unreachable!("{ty:?}"),
                     }
@@ -1542,6 +1586,19 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_arithmetic_sequence(
+        begin: Value,
+        end: Value,
+        step: Value,
+        exclude_end: bool,
+    ) -> Self {
+        RValue {
+            header: Header::new(ARITHMETIC_SEQUENCE_CLASS, ObjTy::ARITHMETIC_SEQUENCE),
+            kind: ObjKind::arithmetic_sequence(begin, end, step, exclude_end),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_binding(outer_lfp: Lfp, call_site_pc: Option<BytecodePtr>) -> Self {
         let outer_lfp = outer_lfp.move_frame_to_heap();
         assert!(!outer_lfp.on_stack());
@@ -1814,6 +1871,10 @@ impl RValue {
 
     pub(super) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
         unsafe { &mut self.kind.generator }
+    }
+
+    pub(super) unsafe fn as_arithmetic_sequence(&self) -> &ArithmeticSequenceInner {
+        unsafe { &self.kind.arithmetic_sequence }
     }
 
     pub(super) unsafe fn as_binding(&self) -> &BindingInner {
