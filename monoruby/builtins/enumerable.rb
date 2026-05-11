@@ -78,6 +78,29 @@ module Enumerable
       ifnone.call
     end
   end
+  alias detect find
+
+  def find_index(*args)
+    if args.empty?
+      return self.to_enum(:find_index) unless block_given?
+      i = 0
+      self.each do |x|
+        return i if yield(x)
+        i += 1
+      end
+      nil
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
+      # When given a value, block is ignored (matches CRuby) — search by ==.
+      target = args[0]
+      i = 0
+      self.each do |x|
+        return i if x == target
+        i += 1
+      end
+      nil
+    end
+  end
 
   def filter
     return self.to_enum(:filter) unless block_given?
@@ -90,6 +113,7 @@ module Enumerable
     res
   end
   alias select filter
+  alias find_all filter
 
   def filter_map
     return self.to_enum(:filter_map) unless block_given?
@@ -588,6 +612,131 @@ module Enumerable
 
   def lazy
     Enumerator::Lazy.new(self)
+  end
+
+  ##
+  ## --- Methods added by claude/enumerable-stage1-2 ---
+  ##
+
+  # Returns a new Array with nil elements removed.
+  def compact
+    res = []
+    self.each { |x| res << x unless x.nil? }
+    res
+  end
+
+  # Returns `[truthy_array, falsey_array]`.
+  def partition
+    return self.to_enum(:partition) unless block_given?
+    yes_arr = []
+    no_arr = []
+    self.each do |x|
+      if yield(x)
+        yes_arr << x
+      else
+        no_arr << x
+      end
+    end
+    [yes_arr, no_arr]
+  end
+
+  # Returns `[obj_with_smallest_score, obj_with_largest_score]` after
+  # mapping each element through the block.
+  def minmax_by
+    return self.to_enum(:minmax_by) unless block_given?
+    min_elem = nil
+    max_elem = nil
+    min_score = nil
+    max_score = nil
+    first = true
+    self.each do |x|
+      score = yield(x)
+      if first
+        min_elem = max_elem = x
+        min_score = max_score = score
+        first = false
+      else
+        if (score <=> min_score) < 0
+          min_elem = x
+          min_score = score
+        end
+        if (score <=> max_score) > 0
+          max_elem = x
+          max_score = score
+        end
+      end
+    end
+    first ? [nil, nil] : [min_elem, max_elem]
+  end
+
+  # Pass each element of `self` to the block, treating multi-value
+  # yields as Arrays (matches CRuby's `each_entry`). Mostly useful on
+  # enumerables whose `each` yields more than one value at a time.
+  def each_entry(*args)
+    return self.to_enum(:each_entry, *args) unless block_given?
+    self.each(*args) do |*x|
+      yield(x.size == 1 ? x[0] : x)
+    end
+    self
+  end
+
+  # Walk the enumerable in reverse order. Materialises via `to_a`
+  # because a generic `Enumerable` has no random access. Objects with
+  # an efficient native `reverse_each` (Array, String, …) override
+  # this on their own class.
+  def reverse_each(*args)
+    return self.to_enum(:reverse_each, *args) unless block_given?
+    self.to_a.reverse_each { |x| yield(x) }
+    self
+  end
+
+  # Cycle through the enumerable `n` times, calling the block each
+  # round. `nil` (the default) cycles forever. Non-positive `n`
+  # returns `nil` without calling `each`.
+  def cycle(n = nil)
+    if n.nil?
+      return self.to_enum(:cycle) unless block_given?
+      cache = []
+      self.each do |x|
+        cache << x
+        yield x
+      end
+      return nil if cache.empty?
+      loop do
+        cache.each { |x| yield x }
+      end
+    else
+      n = n.to_int unless n.is_a?(Integer)
+      return self.to_enum(:cycle, n) unless block_given?
+      return nil if n <= 0
+      cache = self.to_a
+      n.times { cache.each { |x| yield x } }
+      nil
+    end
+  end
+
+  # Returns an Array of elements for which `pattern === element` is
+  # truthy. With a block, transforms each match through the block.
+  def grep(pattern)
+    res = []
+    self.each do |x|
+      if pattern === x
+        res << (block_given? ? yield(x) : x)
+      end
+    end
+    res
+  end
+
+  # Inverse of `grep`: keeps elements where `pattern === element` is
+  # false.
+  def grep_v(pattern)
+    res = []
+    self.each do |x|
+      unless pattern === x
+        res << (block_given? ? yield(x) : x)
+      end
+    end
+    res
   end
 end
 
