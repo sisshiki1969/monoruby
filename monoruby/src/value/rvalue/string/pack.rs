@@ -568,6 +568,34 @@ pub(crate) fn pack(
     let template_is_empty = template.is_empty();
     let mut iter = ary.iter();
 
+    // Track the encoding of the produced string. CRuby's rule:
+    //   * binary-oriented directives (`a`, `A`, `Z`, `B`, `b`, `H`,
+    //     `h`, `c`, `C`, `i`, `l`, `q`, `s`, …) keep / introduce
+    //     ASCII-8BIT;
+    //   * `M` (quoted-printable), `m` (Base64), `u` (uuencode)
+    //     produce text — US-ASCII;
+    //   * `U` produces UTF-8.
+    // When binary directives are mixed with text directives, the
+    // result must be ASCII-8BIT (the only encoding both sides can
+    // represent — there's no compatible non-binary encoding for
+    // an arbitrary byte sequence concatenated with US-ASCII or
+    // UTF-8 text). Pure-binary or pure-text templates use their
+    // natural encoding.
+    let mut text_encoding: Option<Encoding> = None;
+    let mut has_binary_dir = false;
+    let promote_text = |cur: Option<Encoding>, new: Encoding| -> Option<Encoding> {
+        let rank = |e: Encoding| match e {
+            Encoding::UsAscii => 1,
+            Encoding::Utf8 => 2,
+            _ => 0,
+        };
+        match cur {
+            None => Some(new),
+            Some(c) if rank(new) > rank(c) => Some(new),
+            other => other,
+        }
+    };
+
     macro_rules! pack {
         ($size: expr, $type: ident, $repeat: expr, $big_endian: expr) => {
             if let Some(repeat) = $repeat {
@@ -601,6 +629,23 @@ pub(crate) fn pack(
     for template in template {
         let endianness = matches!(template.endian, Endianness::Big);
         let repeat = template.repeat;
+        // Mark "binary-output" directives. Anything that puts raw
+        // bytes into `packed` taints the result encoding to
+        // ASCII-8BIT when mixed with `M` / `m` / `u` / `U`.
+        // `Null` (just a 0 byte), `Back` (`X`), `AtPos` (`@`) and
+        // `Offset` (`^`) reposition the cursor without producing
+        // user data, so they don't taint.
+        match template.template {
+            Template::Null
+            | Template::Back
+            | Template::AtPos
+            | Template::Offset
+            | Template::Base64
+            | Template::QuotedPrintable
+            | Template::UuEncoded
+            | Template::Utf8 => {}
+            _ => has_binary_dir = true,
+        }
         match template.template {
             Template::I64 => pack!(8, i64, repeat, endianness),
             Template::U64 => pack!(8, u64, repeat, endianness),
@@ -718,7 +763,12 @@ pub(crate) fn pack(
                                 b'0'..=b'9' => s[i] - b'0',
                                 b'a'..=b'f' => s[i] - b'a' + 10,
                                 b'A'..=b'F' => s[i] - b'A' + 10,
-                                _ => 0,
+                                // CRuby: non-hex chars contribute
+                                // their low nibble (`s[i] & 0x0F`),
+                                // not zero. e.g. `["^"].pack("H")`
+                                // ⇒ `"\xE0"` (`^` is 0x5E, low
+                                // nibble 0xE).
+                                b => b & 0x0F,
                             }
                         } else {
                             0
@@ -810,22 +860,32 @@ pub(crate) fn pack(
                 }
             }
             Template::Base64 => {
-                // 'm' — Base64 encode
+                // 'm' — Base64 encode (US-ASCII output).
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(vm, globals, *value)?;
+                    let s = get_pack_string_strict(vm, globals, *value)?;
+                    // Count `0` ⇒ no line breaks (Base64 spec). Counts
+                    // `1` and `2` are below the 3-byte Base64 grouping
+                    // boundary and are clamped to the default 45 by
+                    // CRuby; only `>= 3` is honoured verbatim. `*` /
+                    // missing also default to 45.
                     let line_len = if template.explicit_count {
-                        repeat.unwrap_or(45)
+                        match repeat {
+                            Some(0) => 0,
+                            Some(n) if n >= 3 => n,
+                            _ => 45,
+                        }
                     } else {
                         45
                     };
                     let encoded = base64_encode(&s, line_len);
                     packed.extend_from_slice(encoded.as_bytes());
+                    text_encoding = promote_text(text_encoding, Encoding::UsAscii);
                 } else {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
             Template::QuotedPrintable => {
-                // 'M' — MIME quoted-printable encode
+                // 'M' — MIME quoted-printable encode (US-ASCII output).
                 // M uses #to_s (not #to_str) for conversion.
                 if let Some(value) = iter.next() {
                     let s = get_pack_string_for_m(vm, globals, *value)?;
@@ -836,21 +896,30 @@ pub(crate) fn pack(
                     };
                     let encoded = qp_encode(&s, line_len);
                     packed.extend_from_slice(encoded.as_bytes());
+                    text_encoding = promote_text(text_encoding, Encoding::UsAscii);
                 } else {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
             }
             Template::UuEncoded => {
-                // 'u' — UU encode
+                // 'u' — UU encode (US-ASCII output).
                 if let Some(value) = iter.next() {
-                    let s = get_pack_string(vm, globals, *value)?;
+                    let s = get_pack_string_strict(vm, globals, *value)?;
+                    // Same `>= 3` rule as Base64: smaller counts get
+                    // clamped to the default 45 because uuencode also
+                    // packs 3 input bytes per 4 output chars.
                     let line_len = if template.explicit_count {
-                        repeat.unwrap_or(45)
+                        match repeat {
+                            Some(0) => 0,
+                            Some(n) if n >= 3 => n,
+                            _ => 45,
+                        }
                     } else {
                         45
                     };
                     let encoded = uu_encode(&s, line_len);
                     packed.extend_from_slice(encoded.as_bytes());
+                    text_encoding = promote_text(text_encoding, Encoding::UsAscii);
                 } else {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
@@ -889,30 +958,35 @@ pub(crate) fn pack(
                 }
             }
             Template::Utf8 => {
-                // 'U' — UTF-8 characters from codepoints
+                // 'U' — UTF-8 characters from codepoints (UTF-8 output).
+                // CRuby raises `RangeError` for negative input or for
+                // values that don't fit in an unsigned 32-bit integer
+                // — both as RangeError, not ArgumentError.
+                let mut emit = |val: Value| -> Result<()> {
+                    let i = val.coerce_to_int_i64(vm, globals)?;
+                    if i < 0 {
+                        return Err(MonorubyErr::rangeerr("pack(U): value out of range"));
+                    }
+                    if i > u32::MAX as i64 {
+                        return Err(MonorubyErr::rangeerr("pack(U): value out of range"));
+                    }
+                    utf8_encode_one(&mut packed, i as u32);
+                    Ok(())
+                };
                 if let Some(count) = repeat {
                     for _ in 0..count {
                         if let Some(value) = iter.next() {
-                            let i = value.coerce_to_int_i64(vm, globals)?;
-                            if i < 0 {
-                                return Err(MonorubyErr::argumenterr(
-                                    "pack(U): value out of range",
-                                ));
-                            }
-                            utf8_encode_one(&mut packed, i as u32);
+                            emit(*value)?;
                         } else {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
                     }
                 } else {
                     while let Some(value) = iter.next() {
-                        let i = value.coerce_to_int_i64(vm, globals)?;
-                        if i < 0 {
-                            return Err(MonorubyErr::argumenterr("pack(U): value out of range"));
-                        }
-                        utf8_encode_one(&mut packed, i as u32);
+                        emit(*value)?;
                     }
                 }
+                text_encoding = promote_text(text_encoding, Encoding::Utf8);
             }
             Template::BerCompressedInt => {
                 // 'w' — BER compressed integer
@@ -1038,7 +1112,20 @@ pub(crate) fn pack(
             Encoding::UsAscii,
         )))
     } else {
-        Ok(Value::bytes(packed))
+        // Resolve final encoding:
+        //   * Mixed binary + text: BINARY (only encoding compatible
+        //     with arbitrary bytes).
+        //   * Text-only: pick the strongest text encoding seen.
+        //   * Binary-only / no directive: BINARY.
+        let result_encoding = match (has_binary_dir, text_encoding) {
+            (true, Some(_)) => Encoding::Ascii8,
+            (false, Some(enc)) => enc,
+            (_, None) => Encoding::Ascii8,
+        };
+        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+            &packed,
+            result_encoding,
+        )))
     }
 }
 
@@ -1238,6 +1325,23 @@ fn get_pack_string(vm: &mut Executor, globals: &mut Globals, value: Value) -> Re
     if value.is_nil() {
         return Ok(Vec::new());
     }
+    if let Some(s) = value.is_rstring_inner() {
+        Ok(s.as_bytes().to_vec())
+    } else {
+        let rstr = value.coerce_to_rstring(vm, globals)?;
+        Ok(rstr.as_bytes().to_vec())
+    }
+}
+
+/// Strict variant for directives where nil is *not* a free pass to
+/// an empty string. CRuby's `pack("m")` and `pack("u")` raise
+/// `TypeError: no implicit conversion of nil into String` instead
+/// of treating nil as `""`.
+fn get_pack_string_strict(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: Value,
+) -> Result<Vec<u8>> {
     if let Some(s) = value.is_rstring_inner() {
         Ok(s.as_bytes().to_vec())
     } else {
@@ -1693,6 +1797,12 @@ fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
 // --- UTF-8 encoding/decoding ---
 
 fn utf8_encode_one(buf: &mut Vec<u8>, cp: u32) {
+    // CRuby's `pack("U")` extends past the strict Unicode range:
+    // codepoints up to 0x1FFFFF produce 4-byte sequences (above
+    // U+10FFFF, technically invalid Unicode but valid 4-byte UTF-8
+    // bit-patterns), and 5- / 6-byte forms cover up to 2^31 - 1
+    // and 2^32 - 1 respectively. Caller is responsible for the
+    // negative-value / >2^32 RangeError checks.
     if cp <= 0x7F {
         buf.push(cp as u8);
     } else if cp <= 0x7FF {
@@ -1702,8 +1812,21 @@ fn utf8_encode_one(buf: &mut Vec<u8>, cp: u32) {
         buf.push((0xE0 | (cp >> 12)) as u8);
         buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
         buf.push((0x80 | (cp & 0x3F)) as u8);
-    } else if cp <= 0x10FFFF {
+    } else if cp <= 0x1F_FFFF {
         buf.push((0xF0 | (cp >> 18)) as u8);
+        buf.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        buf.push((0x80 | (cp & 0x3F)) as u8);
+    } else if cp <= 0x3FF_FFFF {
+        buf.push((0xF8 | (cp >> 24)) as u8);
+        buf.push((0x80 | ((cp >> 18) & 0x3F)) as u8);
+        buf.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        buf.push((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        buf.push((0xFC | (cp >> 30)) as u8);
+        buf.push((0x80 | ((cp >> 24) & 0x3F)) as u8);
+        buf.push((0x80 | ((cp >> 18) & 0x3F)) as u8);
         buf.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
         buf.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
         buf.push((0x80 | (cp & 0x3F)) as u8);
