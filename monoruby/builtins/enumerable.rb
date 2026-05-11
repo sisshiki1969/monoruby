@@ -757,10 +757,10 @@ class Enumerator
       n.nil? ? arr.last : arr.last(n)
     end
 
-    # Slice `arr` by this ArithmeticSequence as if `arr[self]` had
-    # been called. Invoked from Rust (`Array#[]` / `Array#slice` in
-    # `monoruby/src/builtins/array.rs`) when the index value is
-    # detected to be an ArithmeticSequence.
+    # `aseq[arr]` — extract the slice of `arr` whose indices are the
+    # terms of this sequence. Independent of Array's own `[]`
+    # implementation: Array#[] delegates here when its index argument
+    # is an ArithmeticSequence, instead of carrying AS-specific code.
     #
     # Mirrors CRuby's `rb_ary_subseq_step` behaviour:
     #   * Resolve `begin` (nil → 0 for positive step, len-1 for
@@ -774,7 +774,7 @@ class Enumerator
     #   * Pure-`nil` return when `begin` is out of bounds for the
     #     `step == ±1` cases that fall back to plain Range slicing
     #     semantics.
-    def __as_slice(arr)
+    def [](arr)
       len = arr.length
       s = @step
       return [] if s == 0
@@ -864,6 +864,13 @@ class Enumerator
         result
       end
     end
+    # Compatibility alias: the previous PR commit shipped Rust code
+    # that calls `__as_slice` to do the Array slicing. Keep the old
+    # name pointing at `[]` for one release so a half-applied
+    # rollout (e.g. enumerable.rb landed but array.rs / runtime.rs
+    # didn't yet) still has a valid method to invoke. Remove once
+    # all callers have switched.
+    alias __as_slice []
 
     private
 
@@ -886,7 +893,7 @@ class Enumerator
             cur += s
           end
         else
-          while cur <= e
+          while cur >= e
             yield cur
             cur += s
           end
