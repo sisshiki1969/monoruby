@@ -602,8 +602,14 @@ thread_local! {
 /// Mirrors the way Array's `[]` dispatch needs to recognise an AS
 /// index — without the per-call cost of walking the class chain and
 /// joining names into a string.
+///
+/// Uses `real_class` rather than `Value::class` so a singleton class
+/// attached to the AS (e.g. `Range#%` calls `define_singleton_method`
+/// to swap in a custom `inspect`) doesn't make the cached `ClassId`
+/// compare miss. Without this, `arr[(0..-1).%(2)]` fell through to
+/// the `to_int` path and raised `TypeError`.
 pub(crate) fn is_arithmetic_sequence(globals: &Globals, v: Value) -> bool {
-    let v_class = v.class();
+    let v_class = v.real_class(&globals.store).id();
     AS_CLASS_ID_CACHE.with(|cell| {
         if let Some(cached) = cell.get() {
             return v_class == cached;
