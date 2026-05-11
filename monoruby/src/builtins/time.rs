@@ -789,7 +789,15 @@ fn parse_utc_offset(
     }
     // Integer / Rational / Float / to_int
     if let Some(f) = v.try_float() {
-        let secs = f.trunc() as i32;
+        // Round to nearest second — `Time.new(.., Rational(36645, 10))`
+        // is 3664.5 and CRuby stores it as 3665. Spec's
+        // `Time#strftime "%::z"` rounding test depends on this.
+        let secs = f.round() as i32;
+        return FixedOffset::east_opt(secs)
+            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
+    }
+    if let Some(r) = v.try_rational() {
+        let secs = r.to_f().round() as i32;
         return FixedOffset::east_opt(secs)
             .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
     }
@@ -806,6 +814,12 @@ fn parse_utc_offset(
 fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
     if !s.is_ascii() {
         return Err(MonorubyErr::argumenterr("string must be ASCII-compatible"));
+    }
+    // CRuby accepts `"Z"` and `"UTC"` as aliases for `+00:00`. The
+    // spec's `Time.new(2022, 1, 1, 0, 0, 0, "Z").strftime("%-z")`
+    // case (RFC 3339 unknown-offset) exercises this path.
+    if s == "Z" || s == "UTC" {
+        return Ok(FixedOffset::east_opt(0).unwrap());
     }
     let bytes = s.as_bytes();
     let sign = match bytes.first() {
@@ -1305,37 +1319,303 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// ### Time#strftime
 /// - strftime(format) -> String
 ///
+/// Preprocesses the format string in-house for Ruby-specific
+/// directives that chrono can't or won't reproduce
+/// (`%::z`, `%-z`, `%v`, `%^b`, `%12N`, fixed-offset `%Z`, etc.),
+/// then hands the residual format to chrono.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
 fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
-
-    // Get nanoseconds from the time value for Ruby-specific format specifiers.
-    let nanos = lfp.self_val().as_time().nanosecond();
-
-    // Replace Ruby-specific nanosecond specifiers that chrono doesn't support.
-    let fmt = fmt_str
-        .replace("%9N", &format!("{:09}", nanos))
-        .replace("%N", &format!("{:09}", nanos))
-        .replace("%6N", &format!("{:06}", nanos / 1_000))
-        .replace("%3N", &format!("{:03}", nanos / 1_000_000))
-        .replace("%L", &format!("{:03}", nanos / 1_000_000));
-
+    let inner = lfp.self_val().as_time().clone();
+    let pre = preprocess_strftime(&inner, &fmt_str);
     use std::fmt::Write;
-    let s = match lfp.self_val().as_time() {
+    let s = match &inner {
         TimeInner::Local(t) => {
             let mut result = String::new();
-            let _ = write!(result, "{}", t.format(&fmt));
+            let _ = write!(result, "{}", t.format(&pre));
             result
         }
         TimeInner::Utc(t) => {
             let mut result = String::new();
-            let _ = write!(result, "{}", t.format(&fmt));
+            let _ = write!(result, "{}", t.format(&pre));
             result
         }
     };
     Ok(Value::string(s))
 }
+
+/// Walks the format string, replacing Ruby-specific specifiers with
+/// their computed literal output. Everything else is left as-is so
+/// chrono handles it.
+///
+/// Handled here:
+/// - `%z` / `%:z` / `%::z` (zone offset, with optional `-`/`_`/`0`
+///   flag and width prefix);
+/// - `%-z` family for UTC → renders the "unknown offset" `-0000` /
+///   `-00:00` / `-00:00:00` form, matching CRuby's RFC 3339 quirk;
+/// - `%Z` for fixed-offset zones → empty string (CRuby returns ""
+///   unless the time has a named zone, which monoruby only tracks
+///   for the literal `UTC`);
+/// - `%v` → ` D-MMM-YYYY` with uppercase abbreviated month;
+/// - `%^b` / `%^B` → uppercase abbreviated / full month name;
+/// - `%[1..12]N` → arbitrary-width sub-second digits (right-pads
+///   `%9N` with zeros for `>9`).
+fn preprocess_strftime(inner: &TimeInner, fmt: &str) -> String {
+    let mut out = String::new();
+    let bytes = fmt.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        // Parse the directive: optional flag chars `-`, `_`, `0`, `^`, `#`,
+        // optional width digits, optional repeating `:` (for %z), and the
+        // conversion letter.
+        let mut j = i + 1;
+        let mut flag_minus = false;
+        let mut flag_underscore = false;
+        let mut flag_zero = false;
+        let mut flag_caret = false;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'-' => flag_minus = true,
+                b'_' => flag_underscore = true,
+                b'0' => flag_zero = true,
+                b'^' => flag_caret = true,
+                b'#' => {} // ignored
+                _ => break,
+            }
+            j += 1;
+        }
+        let width_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        let width: Option<usize> = if j > width_start {
+            std::str::from_utf8(&bytes[width_start..j])
+                .ok()
+                .and_then(|s| s.parse().ok())
+        } else {
+            None
+        };
+        let mut colons = 0usize;
+        while j < bytes.len() && bytes[j] == b':' {
+            colons += 1;
+            j += 1;
+        }
+        if j >= bytes.len() {
+            // `%...` with no conversion letter — emit verbatim.
+            out.push_str(&fmt[i..]);
+            break;
+        }
+        let conv = bytes[j];
+        let directive_end = j + 1;
+
+        // Dispatch handled cases. Anything we don't handle is emitted
+        // verbatim for chrono.
+        match (conv, colons) {
+            (b'z', _) => {
+                let txt = format_offset(
+                    inner,
+                    colons,
+                    flag_minus,
+                    flag_underscore,
+                    flag_zero,
+                    width,
+                );
+                out.push_str(&txt);
+                i = directive_end;
+                continue;
+            }
+            (b'Z', 0) => {
+                // CRuby: empty for fixed-offset / unnamed zones,
+                // "UTC" for UTC times. Local-zone names aren't
+                // tracked in monoruby.
+                let txt = match inner {
+                    TimeInner::Utc(_) => "UTC".to_string(),
+                    TimeInner::Local(_) => String::new(),
+                };
+                out.push_str(&txt);
+                i = directive_end;
+                continue;
+            }
+            (b'v', 0) => {
+                // ` D-MMM-YYYY` with uppercase abbreviated month.
+                let (y, m, d) = match inner {
+                    TimeInner::Local(t) => (t.year(), t.month(), t.day()),
+                    TimeInner::Utc(t) => (t.year(), t.month(), t.day()),
+                };
+                out.push_str(&format!(
+                    "{:>2}-{}-{:04}",
+                    d,
+                    MONTH_UPPER_ABBR[(m as usize - 1).min(11)],
+                    y
+                ));
+                i = directive_end;
+                continue;
+            }
+            // `%^b` / `%^h` / `%^B` → uppercase month name.
+            // `%h` is a CRuby synonym for `%b` (chrono doesn't accept it).
+            (b'b' | b'B' | b'h', 0) if flag_caret => {
+                let m = match inner {
+                    TimeInner::Local(t) => t.month(),
+                    TimeInner::Utc(t) => t.month(),
+                };
+                let idx = (m as usize - 1).min(11);
+                out.push_str(if conv == b'B' {
+                    MONTH_UPPER_FULL[idx]
+                } else {
+                    MONTH_UPPER_ABBR[idx]
+                });
+                i = directive_end;
+                continue;
+            }
+            // `%h` without caret falls through to chrono after the
+            // substitution `h → b` (chrono recognises `%b`).
+            (b'h', 0) if !flag_caret => {
+                // Re-emit as `%b` (preserving flags / width).
+                out.push('%');
+                if flag_minus {
+                    out.push('-');
+                }
+                if flag_underscore {
+                    out.push('_');
+                }
+                if flag_zero {
+                    out.push('0');
+                }
+                if let Some(w) = width {
+                    out.push_str(&w.to_string());
+                }
+                out.push('b');
+                i = directive_end;
+                continue;
+            }
+            (b'N', 0) => {
+                let nanos = match inner {
+                    TimeInner::Local(t) => t.nanosecond(),
+                    TimeInner::Utc(t) => t.nanosecond(),
+                };
+                let w = width.unwrap_or(9);
+                out.push_str(&format_subsec(nanos, w));
+                i = directive_end;
+                continue;
+            }
+            (b'L', 0) => {
+                let nanos = match inner {
+                    TimeInner::Local(t) => t.nanosecond(),
+                    TimeInner::Utc(t) => t.nanosecond(),
+                };
+                out.push_str(&format!("{:03}", nanos / 1_000_000));
+                i = directive_end;
+                continue;
+            }
+            _ => {}
+        }
+        // Unhandled: copy through verbatim.
+        out.push_str(&fmt[i..directive_end]);
+        i = directive_end;
+    }
+    out
+}
+
+/// Format a `%z` family directive. `colons` is the number of `:` in
+/// the directive (0, 1, or 2). UTC + `-` flag emits CRuby's RFC 3339
+/// `-0000` / `-00:00` / `-00:00:00` "unknown offset" form.
+fn format_offset(
+    inner: &TimeInner,
+    colons: usize,
+    flag_minus: bool,
+    flag_underscore: bool,
+    flag_zero: bool,
+    width: Option<usize>,
+) -> String {
+    // Total offset in seconds (signed).
+    let total_secs: i64 = match inner {
+        TimeInner::Utc(_) => 0,
+        TimeInner::Local(t) => t.offset().local_minus_utc() as i64,
+    };
+    // CRuby's `%-z` rule: any time with offset == 0 emits the
+    // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. This
+    // covers `Time.utc(...)`, `Time.new(.., "Z")`,
+    // `Time.new(.., "-00:00")`, and `Time.new(.., "+03:00").utc`.
+    // Non-zero offsets ignore the `-` flag entirely.
+    let negative_zero = flag_minus && total_secs == 0;
+    let (sign, abs) = if negative_zero {
+        ('-', 0i64)
+    } else if total_secs < 0 {
+        ('-', -total_secs)
+    } else {
+        ('+', total_secs)
+    };
+    let h = abs / 3600;
+    let m = (abs / 60) % 60;
+    let s = abs % 60;
+    let core = match colons {
+        0 => format!("{}{:02}{:02}", sign, h, m),
+        1 => format!("{}{:02}:{:02}", sign, h, m),
+        _ => format!("{}{:02}:{:02}:{:02}", sign, h, m, s),
+    };
+    if let Some(w) = width {
+        let pad = if flag_underscore { ' ' } else { '0' };
+        if core.len() < w {
+            let pad_count = w - core.len();
+            // Padding goes after the sign if zero-padding, else before
+            // the whole thing for space-padding (matches CRuby).
+            if pad == '0' {
+                // Insert `pad_count` zeros after the sign.
+                let mut padded = String::with_capacity(w);
+                padded.push(sign);
+                for _ in 0..pad_count {
+                    padded.push('0');
+                }
+                padded.push_str(&core[1..]);
+                return padded;
+            } else {
+                let mut padded = String::with_capacity(w);
+                for _ in 0..pad_count {
+                    padded.push(' ');
+                }
+                padded.push_str(&core);
+                return padded;
+            }
+        }
+    }
+    let _ = flag_zero;
+    core
+}
+
+/// Sub-second digits, width-controlled. `nanos` holds nanoseconds
+/// (9-digit precision); for `width > 9` we right-pad with zeros to
+/// emit the requested precision (storage doesn't carry picoseconds,
+/// but the spec's `%12N` test expects all 9 nanosecond digits + "000").
+fn format_subsec(nanos: u32, width: usize) -> String {
+    let nine = format!("{:09}", nanos);
+    if width >= 9 {
+        let mut out = String::with_capacity(width);
+        out.push_str(&nine);
+        for _ in 0..(width - 9) {
+            out.push('0');
+        }
+        out
+    } else {
+        let div = 10u64.pow((9 - width) as u32);
+        format!("{:0w$}", (nanos as u64) / div, w = width)
+    }
+}
+
+const MONTH_UPPER_ABBR: [&str; 12] = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+];
+
+const MONTH_UPPER_FULL: [&str; 12] = [
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER",
+    "OCTOBER", "NOVEMBER", "DECEMBER",
+];
 
 ///
 /// ### Time#to_s
@@ -2085,6 +2365,72 @@ mod tests {
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
         ]);
+    }
+
+    #[test]
+    fn time_strftime_offset_specifiers() {
+        // `%z` — `+HHMM`.
+        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%z")"#);
+        // `%:z` — `+HH:MM`.
+        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%:z")"#);
+        // `%::z` — `+HH:MM:SS` with non-zero seconds.
+        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, 3665).strftime("%::z")"#);
+        // UTC time → `+0000` family.
+        run_test(r#"Time.utc(2024).strftime("%z")"#);
+        run_test(r#"Time.utc(2024).strftime("%:z")"#);
+        run_test(r#"Time.utc(2024).strftime("%::z")"#);
+    }
+
+    #[test]
+    fn time_strftime_minus_flag_on_utc_returns_negative_zero() {
+        // CRuby's RFC 3339 "unknown offset" form: `%-z` on offset==0
+        // emits `-0000` / `-00:00` / `-00:00:00`.
+        run_test(r#"Time.utc(2022).strftime("%-z")"#);
+        run_test(r#"Time.gm(2022).strftime("%-z")"#);
+        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "Z").strftime("%-z")"#);
+        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "-00:00").strftime("%-z")"#);
+        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").utc.strftime("%-z")"#);
+        run_test(r#"Time.utc(2022).strftime("%-:z")"#);
+        run_test(r#"Time.utc(2022).strftime("%-::z")"#);
+    }
+
+    #[test]
+    fn time_strftime_minus_flag_ignored_on_nonzero_offset() {
+        // Non-zero offset: `-` flag is a no-op (matches CRuby).
+        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").strftime("%-z")"#);
+        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "-08:00").strftime("%-z")"#);
+    }
+
+    #[test]
+    fn time_strftime_z_for_fixed_offset_is_empty() {
+        // `%Z` returns "" for fixed-offset zones, "UTC" for utc Time.
+        run_test(r#"Time.new(2000, 1, 1, 0, 0, 0, 42).strftime("%Z")"#);
+        run_test(r#"Time.utc(2000).strftime("%Z")"#);
+    }
+
+    #[test]
+    fn time_strftime_v_directive_uppercase_month() {
+        // `%v` → ` D-MMM-YYYY` (uppercase abbreviated month).
+        run_test(r#"Time.gm(2001, 2, 3, 4, 5, 6).strftime("%v")"#);
+        run_test(r#"Time.gm(2024, 12, 25).strftime("%v")"#);
+    }
+
+    #[test]
+    fn time_strftime_caret_b_uppercase_abbr() {
+        run_test(r#"Time.gm(2001, 2, 3).strftime("%^b")"#);
+        run_test(r#"Time.gm(2001, 7, 4).strftime("%^B")"#);
+        // `%^h` is a CRuby synonym for `%^b`.
+        run_test(r#"Time.gm(2001, 2, 3).strftime("%^h")"#);
+    }
+
+    #[test]
+    fn time_strftime_offset_rounds_fractional_seconds() {
+        // `Time.new(.., Rational(36645, 10))` is 3664.5 seconds —
+        // CRuby rounds to 3665 (so `%::z` is `+01:01:05`, not
+        // `+01:01:04`).
+        run_test(
+            r#"Time.new(2012, 1, 1, 0, 0, 0, Rational(36645, 10)).strftime("%::z")"#,
+        );
     }
 
     #[test]
