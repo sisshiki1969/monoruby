@@ -2383,4 +2383,78 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn time_spaceship() {
+        // `<=>` of two Times → -1 / 0 / 1; non-Time other → nil.
+        // Local vs UTC at the same absolute instant compares equal
+        // (both sides normalised to UTC).
+        run_tests(&[
+            "Time.utc(1970) <=> Time.utc(1971)",
+            "Time.utc(1971) <=> Time.utc(1970)",
+            "Time.utc(1970) <=> Time.utc(1970)",
+            r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u <=> l"#,
+            r#"Time.utc(1970) <=> "foo""#,
+            "Time.utc(1970) <=> 0",
+            "Time.utc(1970) <=> nil",
+        ]);
+    }
+
+    #[test]
+    fn time_relational_ops() {
+        run_tests(&[
+            "Time.utc(1970) < Time.utc(1971)",
+            "Time.utc(1971) < Time.utc(1970)",
+            "Time.utc(1970) <= Time.utc(1970)",
+            "Time.utc(1970) <= Time.utc(1971)",
+            "Time.utc(1971) > Time.utc(1970)",
+            "Time.utc(1970) > Time.utc(1971)",
+            "Time.utc(1970) >= Time.utc(1970)",
+            "Time.utc(1971) >= Time.utc(1970)",
+        ]);
+    }
+
+    #[test]
+    fn time_relational_non_time_raises() {
+        // Unlike `<=>`, the relational operators raise ArgumentError
+        // when other isn't a Time (CRuby behaviour).
+        run_test_error(r#"Time.utc(1970) < "foo""#);
+        run_test_error("Time.utc(1970) <= 1");
+        run_test_error("Time.utc(1970) > nil");
+        run_test_error("Time.utc(1970) >= 0.5");
+    }
+
+    #[test]
+    fn time_eq_eql() {
+        // `==` is equality of absolute instant (Local vs UTC at the
+        // same moment compare equal); returns false (not nil) for
+        // non-Time arguments. `eql?` is similar but stays false for
+        // non-Time (never raises). The cross-zone same-instant
+        // `eql?` case (CRuby returns true) is intentionally omitted
+        // — see issue #479 for the divergence.
+        run_tests(&[
+            "Time.utc(1970) == Time.utc(1970)",
+            "Time.utc(1970) == Time.utc(1971)",
+            "Time.utc(1970) == 0",
+            r#"Time.utc(1970) == "foo""#,
+            "Time.utc(1970) == nil",
+            r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u == l"#,
+            "Time.utc(1970).eql?(Time.utc(1970))",
+            "Time.utc(1970).eql?(Time.utc(1971))",
+            "Time.utc(1970).eql?(0)",
+            r#"Time.utc(1970).eql?("foo")"#,
+            "Time.utc(1970).eql?(nil)",
+        ]);
+    }
+
+    #[test]
+    fn time_in_range_iteration() {
+        // `Range#each` probes `start <=> end`; without `<=>` on Time
+        // the range used to come back empty. Use a singleton `succ`
+        // so iteration terminates.
+        run_tests(&[
+            "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).to_a.size",
+            "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).include?(t)",
+        ]);
+    }
 }

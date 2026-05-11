@@ -2032,6 +2032,27 @@ mod tests {
     }
 
     #[test]
+    fn step_returns_arithmetic_sequence() {
+        // `Numeric#step` without a block returns an
+        // ArithmeticSequence when step is numeric (mirroring
+        // CRuby and `Range#step`). Non-numeric step keeps the
+        // plain-Enumerator contract — ArgumentError is raised
+        // lazily on iteration / `.size`. Direction mismatch
+        // returns size 0 (CRuby compatibility).
+        run_tests(&[
+            "1.step(10).class.name",
+            "1.step(10, 2).class.name",
+            "1.step(10).is_a?(Enumerator::ArithmeticSequence)",
+            "1.0.step(10.0, 0.5).class.name",
+            "a = 1.step(10, 2); [a.begin, a.end, a.step]",
+            "1.step(10, 2).to_a",
+            "1.step(0, 1).size",
+            "1.step(0, 1).to_a",
+            r##"1.step(10, "foo").class.name"##,
+        ]);
+    }
+
+    #[test]
     fn upto() {
         run_test(
             r##"
