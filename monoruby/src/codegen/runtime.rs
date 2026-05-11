@@ -612,8 +612,33 @@ pub(super) extern "C" fn get_index(
     class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
-            // If the index is not a fixnum or range, try to_int coercion
+            // If the index is not a fixnum or range, dispatch:
+            //   * `Enumerator::ArithmeticSequence` → call its
+            //     `__as_slice` Ruby helper so it can apply stride
+            //     and bounds (defined in `enumerable.rb`).
+            //   * Anything else → `to_int` coercion (existing
+            //     behaviour). Mirrors the same logic in
+            //     `builtins/array.rs::index`, but `vm_index` /
+            //     the JIT inline path land here, so we need both.
             let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
+                let class_name =
+                    globals.store.get_class_name(index.real_class(&globals.store).id());
+                if class_name == "Enumerator::ArithmeticSequence" {
+                    return match vm.invoke_method_inner(
+                        globals,
+                        IdentId::get_id("__as_slice"),
+                        index,
+                        &[base],
+                        None,
+                        None,
+                    ) {
+                        Ok(val) => Some(val),
+                        Err(err) => {
+                            vm.set_error(err);
+                            None
+                        }
+                    };
+                }
                 match index.coerce_to_int_i64(vm, globals) {
                     Ok(i) => Value::integer(i),
                     Err(err) => {

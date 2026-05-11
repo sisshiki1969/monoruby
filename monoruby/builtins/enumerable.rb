@@ -623,4 +623,264 @@ class Enumerator
     end
     alias kind_of? is_a?
   end
+
+  # Enumerator::ArithmeticSequence is the value `Numeric#step` and
+  # `Range#step` (and `Range#%`) return when called without a block:
+  # a thin holder for `(begin, end, step, exclude_end?)` that
+  # behaves like an Enumerator over the sequence and is also
+  # accepted by `Array#[]` / `Array#slice` as a stride-aware index.
+  #
+  # We don't subclass Enumerator (its Fiber machinery only works
+  # for Enumerators built from a real iterator), so `is_a?` /
+  # `kind_of?` are overridden to keep `is_a?(Enumerator)` truthy
+  # for spec compatibility.
+  class ArithmeticSequence
+    include Enumerable
+
+    # Bypass the standard `Enumerator#new(&block)` requirement so
+    # `Range#step` can stamp begin/end/step/exclude_end? on a fresh
+    # instance without going through the Fiber path.
+    def self.__build(b, e, step, exclude_end)
+      o = allocate
+      o.__send__(:__init, b, e, step, exclude_end)
+      o
+    end
+
+    def __init(b, e, step, exclude_end)
+      @begin = b
+      @end = e
+      @step = step
+      @exclude_end = exclude_end ? true : false
+    end
+    private :__init
+
+    attr_reader :begin, :end, :step
+
+    # `first` follows Enumerator#first: with no arg returns the
+    # first yielded value (== `begin` for a non-empty AS); with
+    # `n` returns the first `n` yielded values.
+    def first(n = nil)
+      n.nil? ? @begin : take(n)
+    end
+
+    def exclude_end?
+      @exclude_end
+    end
+
+    def is_a?(klass)
+      return true if klass == Enumerator::ArithmeticSequence
+      return true if klass == Enumerator
+      return true if klass == Enumerable
+      super
+    end
+    alias kind_of? is_a?
+
+    # CRuby format: `((begin..end).step(step))` — or `%(step)` when
+    # the sequence was produced via `Range#%`. `Range#%` overrides
+    # `inspect` separately to hit the second form; this default is
+    # the `step` form.
+    def inspect
+      lo = @begin.nil? ? "" : @begin.inspect
+      hi = @end.nil?  ? "" : @end.inspect
+      sep = @exclude_end ? "..." : ".."
+      step_part = @step.nil? ? "" : @step.inspect
+      "((#{lo}#{sep}#{hi}).step(#{step_part}))"
+    end
+    alias to_s inspect
+
+    def each(&block)
+      return self.to_enum(:each) { size } unless block
+      __each(&block)
+      self
+    end
+
+    def to_a
+      result = []
+      __each { |v| result << v }
+      result
+    end
+    alias entries to_a
+
+    # Number of elements the sequence would yield. Returns
+    # Float::INFINITY for unbounded sequences whose step matches
+    # the open end (e.g. `(0..).step(1)`), nil for the
+    # incompatible cases (`(0..).step(-1)` etc), 0 for empty.
+    def size
+      b = @begin
+      e = @end
+      s = @step
+      if b.nil?
+        # Beginless: only meaningful with a finite end.
+        return Float::INFINITY if e.nil?
+        return Float::INFINITY # spec: this is what CRuby reports
+      end
+      return Float::INFINITY if e.nil? && s > 0
+      return Float::INFINITY if e.nil? && s < 0
+      return 0 if s == 0
+      diff = e - b
+      n = (diff.to_f / s.to_f)
+      return 0 if n.nan? || n < 0
+      n_int = n.floor
+      if @exclude_end
+        last = b + n_int * s
+        overshoot = s > 0 ? last >= e : last <= e
+        n_int -= 1 if overshoot
+      end
+      n_int + 1
+    end
+
+    def last(n = nil)
+      arr = to_a
+      n.nil? ? arr.last : arr.last(n)
+    end
+
+    # Slice `arr` by this ArithmeticSequence as if `arr[self]` had
+    # been called. Invoked from Rust (`Array#[]` / `Array#slice` in
+    # `monoruby/src/builtins/array.rs`) when the index value is
+    # detected to be an ArithmeticSequence.
+    #
+    # Mirrors CRuby's `rb_ary_subseq_step` behaviour:
+    #   * Resolve `begin` (nil → 0 for positive step, len-1 for
+    #     negative; negative ints rebased against `len`).
+    #   * Resolve `end` (nil → len-1 / 0; exclusive end ⇒ inner term).
+    #   * Walk by `step`, collecting elements whose index is in
+    #     `0...len`.
+    #   * `RangeError` when the explicit end (or begin for negative
+    #     step) is itself a term of the AS that lands outside the
+    #     array — see comments inline.
+    #   * Pure-`nil` return when `begin` is out of bounds for the
+    #     `step == ±1` cases that fall back to plain Range slicing
+    #     semantics.
+    def __as_slice(arr)
+      len = arr.length
+      s = @step
+      return [] if s == 0
+
+      if s > 0
+        # ---- positive step ----------------------------------------
+        b = @begin.nil? ? 0 : @begin
+        b += len if b < 0
+        # begin past the boundary: nil for stride 1 (matches plain
+        # `arr[N..]`), RangeError for larger strides — CRuby
+        # promotes the OOB to an error when the user explicitly
+        # asked for a non-trivial stride.
+        if !@begin.nil? && b > len
+          if s > 1
+            raise RangeError,
+                  "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+          end
+          return nil
+        end
+        # begin exactly at the boundary (== len): empty result.
+        return [] if b == len
+        return nil if b < 0
+
+        if @end.nil?
+          e = len - 1
+          end_is_term = false
+        else
+          e_res = @end
+          e_res += len if e_res < 0
+          # `end` is a term of the sequence iff stepping from begin
+          # lands exactly on it (and end is inclusive).
+          end_is_term = !@exclude_end && b >= 0 && (e_res - b) % s == 0
+          # CRuby raises when stride > 1 and the *user-supplied*
+          # end is itself a yielded value past the array.
+          if s > 1 && end_is_term && e_res >= len
+            raise RangeError,
+                  "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+          end
+          e = @exclude_end ? e_res - 1 : e_res
+        end
+        e = len - 1 if e >= len
+        return [] if e < b
+        result = []
+        i = b
+        while i <= e
+          result << arr[i]
+          i += s
+        end
+        result
+      else
+        # ---- negative step ----------------------------------------
+        if @begin.nil?
+          b = len - 1
+        else
+          b = @begin
+          b += len if b < 0
+          # begin past the array's last index: clip to `len - 1`,
+          # but only if the gap is small enough — when
+          # `begin - (len - 1) > |step|` CRuby treats the request
+          # as out of range.
+          if b > len - 1
+            diff = b - (len - 1)
+            if s.abs > 1 && diff > s.abs
+              raise RangeError,
+                    "((#{@begin.inspect}..#{@end.inspect}).step(#{s.inspect})) out of range"
+            end
+            b = len - 1
+          end
+          return nil if b < 0
+        end
+
+        if @end.nil?
+          e = 0
+        else
+          e_res = @end
+          e_res += len if e_res < 0
+          e = @exclude_end ? e_res + 1 : e_res
+        end
+        e = 0 if e < 0
+        return [] if b < e
+        result = []
+        i = b
+        while i >= e
+          result << arr[i]
+          i += s
+        end
+        result
+      end
+    end
+
+    private
+
+    def __each
+      b = @begin
+      e = @end
+      s = @step
+      raise TypeError, "step can't be 0" if s == 0
+      raise ArgumentError, "#each for beginless arithmetic sequences is meaningless" if b.nil?
+      cur = b
+      if e.nil?
+        loop do
+          yield cur
+          cur += s
+        end
+      elsif s > 0
+        if @exclude_end
+          while cur < e
+            yield cur
+            cur += s
+          end
+        else
+          while cur <= e
+            yield cur
+            cur += s
+          end
+        end
+      else
+        if @exclude_end
+          while cur > e
+            yield cur
+            cur += s
+          end
+        else
+          while cur >= e
+            yield cur
+            cur += s
+          end
+        end
+      end
+    end
+  end
 end
