@@ -652,40 +652,48 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else if let Some(inner) = arg.is_rstring_inner() {
         let sep_bytes = inner.as_bytes().to_vec();
         let sep_enc = inner.encoding();
+        let sep_cr = inner.code_range();
         let mut visited: HashSet<u64> = HashSet::default();
         visited.insert(lhs.id());
         let mut out: Vec<u8> = Vec::new();
-        let mut enc = sep_enc;
+        let mut state: Option<(Encoding, CodeRange)> = None;
         array_join(
             vm,
             globals,
             lhs,
             &sep_bytes,
             sep_enc,
+            sep_cr,
             &mut visited,
             &mut out,
-            &mut enc,
+            &mut state,
         )?;
+        let enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
         Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
             &out, enc,
         )))
     } else if let Ok(s) = arg.coerce_to_str(vm, globals) {
         // Try to_str coercion for join
+        let sep_inner = RStringInner::from_str_scanned(s.as_str());
+        let sep_bytes = sep_inner.as_bytes().to_vec();
+        let sep_enc = sep_inner.encoding();
+        let sep_cr = sep_inner.code_range();
         let mut visited: HashSet<u64> = HashSet::default();
         visited.insert(lhs.id());
-        let sep_bytes = s.into_bytes();
         let mut out: Vec<u8> = Vec::new();
-        let mut enc = Encoding::Utf8;
+        let mut state: Option<(Encoding, CodeRange)> = None;
         array_join(
             vm,
             globals,
             lhs,
             &sep_bytes,
-            Encoding::Utf8,
+            sep_enc,
+            sep_cr,
             &mut visited,
             &mut out,
-            &mut enc,
+            &mut state,
         )?;
+        let enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
         Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
             &out, enc,
         )))
@@ -1606,47 +1614,87 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
 fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg0 = lfp.try_arg(0);
-    // Resolve the separator as a (bytes, encoding) pair so binary separators
-    // propagate without UTF-8 reinterpretation.
-    let (sep_bytes, sep_enc): (Vec<u8>, Encoding) = if let Some(sep) = &arg0 {
-        if sep.is_nil() {
-            match get_output_field_separator(globals) {
-                Some(s) => (s.into_bytes(), Encoding::Utf8),
-                None => (Vec::new(), Encoding::Utf8),
-            }
-        } else if let Some(inner) = sep.is_rstring_inner() {
-            (inner.as_bytes().to_vec(), inner.encoding())
-        } else {
-            let s = sep.coerce_to_string(vm, globals)?;
-            (s.into_bytes(), Encoding::Utf8)
-        }
-    } else {
-        match get_output_field_separator(globals) {
-            Some(s) => (s.into_bytes(), Encoding::Utf8),
-            None => (Vec::new(), Encoding::Utf8),
-        }
-    };
     let ary = lfp.self_val().as_array();
+    let arg0 = lfp.try_arg(0);
+
+    // Empty array shortcut: CRuby returns `""` tagged US-ASCII
+    // without ever inspecting the separator (in particular, no
+    // `#to_str` is sent to it). Doing this before separator
+    // coercion is what lets the spec's `does not call #to_str on
+    // the separator if the array is empty` test pass.
+    if ary.is_empty() {
+        let _ = arg0; // separator intentionally unused
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            b"",
+            Encoding::UsAscii,
+        )));
+    }
+
+    // Resolve the separator as a `(bytes, encoding, code_range)`
+    // triple. Carrying the code range lets the join propagate
+    // CRuby's "left-encoding wins on 7-bit content" rule even
+    // when the separator is the first non-empty thing emitted.
+    let (sep_bytes, sep_enc, sep_cr): (Vec<u8>, Encoding, CodeRange) =
+        if let Some(sep) = &arg0 {
+            if sep.is_nil() {
+                match get_output_field_separator(globals) {
+                    Some(s) => {
+                        let inner = RStringInner::from_str_scanned(&s);
+                        let bytes = inner.as_bytes().to_vec();
+                        let enc = inner.encoding();
+                        let cr = inner.code_range();
+                        (bytes, enc, cr)
+                    }
+                    None => (Vec::new(), Encoding::UsAscii, CodeRange::SevenBit),
+                }
+            } else if let Some(inner) = sep.is_rstring_inner() {
+                (
+                    inner.as_bytes().to_vec(),
+                    inner.encoding(),
+                    inner.code_range(),
+                )
+            } else {
+                let s = sep.coerce_to_string(vm, globals)?;
+                let inner = RStringInner::from_str_scanned(s.as_str());
+                let bytes = inner.as_bytes().to_vec();
+                let enc = inner.encoding();
+                let cr = inner.code_range();
+                (bytes, enc, cr)
+            }
+        } else {
+            match get_output_field_separator(globals) {
+                Some(s) => {
+                    let inner = RStringInner::from_str_scanned(s.as_str());
+                    let bytes = inner.as_bytes().to_vec();
+                    let enc = inner.encoding();
+                    let cr = inner.code_range();
+                    (bytes, enc, cr)
+                }
+                None => (Vec::new(), Encoding::UsAscii, CodeRange::SevenBit),
+            }
+        };
+
     let mut visited: HashSet<u64> = HashSet::default();
     visited.insert(ary.id());
     let mut result: Vec<u8> = Vec::new();
-    let mut enc = sep_enc;
+    // `None` means "nothing appended yet"; the first emitted
+    // fragment seeds the running encoding (CRuby's left-wins
+    // rule on 7-bit content).
+    let mut state: Option<(Encoding, CodeRange)> = None;
     array_join(
         vm,
         globals,
         ary,
         &sep_bytes,
         sep_enc,
+        sep_cr,
         &mut visited,
         &mut result,
-        &mut enc,
+        &mut state,
     )?;
+    let final_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
     // Eager-classify so the join's result has its cr cached.
-    // `Encoding::classify` is cheap relative to the byte concat we
-    // just did, and avoids forcing every subsequent code-range
-    // query on the joined string to re-walk the buffer.
-    let inner = RStringInner::from_encoding_scanned(&result, enc);
+    let inner = RStringInner::from_encoding_scanned(&result, final_enc);
     Ok(Value::string_from_inner(inner))
 }
 
@@ -1659,32 +1707,62 @@ fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
     }
 }
 
-/// Merge the encoding of an appended element into `enc`.
+/// Combine the running `(enc, cr)` state with a newly-appended
+/// fragment, using the same `Encoding::compatible` rule as
+/// `String#+` / `String#==`. Returns the new running state, or
+/// `None` when the two are incompatible (caller raises
+/// `Encoding::CompatibilityError`).
 ///
-/// CRuby's `Array#join` resolves the result encoding by combining all
-/// participants. `BINARY ⊔ X` always yields `BINARY` because raw bytes
-/// must not silently be reinterpreted as UTF-8 (which would turn high
-/// bytes into U+FFFD). Otherwise UTF-8 wins over US-ASCII.
-fn merge_encoding(enc: &mut Encoding, other: Encoding) {
-    *enc = if matches!(*enc, Encoding::Ascii8) || matches!(other, Encoding::Ascii8) {
-        Encoding::Ascii8
-    } else if !enc.is_utf8_compatible() || !other.is_utf8_compatible() {
-        // A non-UTF-8 dummy encoding (UTF-16/EUC-JP/SJIS/...) on
-        // either side joins as ASCII-8BIT for now: we don't know
-        // how to safely concatenate those character streams, so
-        // CRuby's "byte fallback" is the conservative answer.
-        Encoding::Ascii8
-    } else if matches!(*enc, Encoding::Utf8) || matches!(other, Encoding::Utf8) {
-        Encoding::Utf8
-    } else {
-        Encoding::UsAscii
+/// `cur` of `None` means "nothing appended yet" — the first
+/// fragment's encoding becomes the seed verbatim. CRuby's
+/// `Array#join` "left-wins on 7-bit content" rule depends on
+/// this: seeding the running state with US-ASCII would otherwise
+/// make a UTF-8 7-bit literal collapse into US-ASCII.
+fn merge_join_state(
+    cur: Option<(Encoding, CodeRange)>,
+    other_enc: Encoding,
+    other_cr: CodeRange,
+) -> Option<(Encoding, CodeRange)> {
+    let (cur_enc, cur_cr) = match cur {
+        Some(state) => state,
+        None => return Some((other_enc, other_cr)),
     };
+    let combined_enc = Encoding::compatible(cur_enc, cur_cr, other_enc, other_cr)?;
+    // Combined code range is the "max" of the two: SevenBit
+    // (both clean) < Valid (at least one carried real characters)
+    // < Broken / Unknown.
+    let combined_cr = match (cur_cr, other_cr) {
+        (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+        (CodeRange::Broken, _) | (_, CodeRange::Broken) => CodeRange::Broken,
+        (CodeRange::Unknown, _) | (_, CodeRange::Unknown) => CodeRange::Unknown,
+        _ => CodeRange::Valid,
+    };
+    Some((combined_enc, combined_cr))
 }
 
-/// Append `s`'s bytes to `out`, also widening `enc` to be compatible.
-fn append_string(out: &mut Vec<u8>, enc: &mut Encoding, s: &RStringInner) {
+/// Append `s`'s bytes to `out`, widening `(enc, cr)` to be compatible
+/// with `s`. Returns Err when the two encodings can't co-exist
+/// (CRuby raises `Encoding::CompatibilityError`).
+fn append_string(
+    out: &mut Vec<u8>,
+    state: &mut Option<(Encoding, CodeRange)>,
+    s: &RStringInner,
+    store: &crate::globals::Store,
+) -> Result<()> {
+    let new_state = match merge_join_state(*state, s.encoding(), s.code_range()) {
+        Some(st) => st,
+        None => {
+            let cur_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
+            return Err(MonorubyErr::incompatible_encoding(
+                store,
+                cur_enc,
+                s.encoding(),
+            ));
+        }
+    };
     out.extend_from_slice(s.as_bytes());
-    merge_encoding(enc, s.encoding());
+    *state = Some(new_state);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1694,18 +1772,26 @@ fn array_join(
     ary: Array,
     sep: &[u8],
     sep_enc: Encoding,
+    sep_cr: CodeRange,
     visited: &mut HashSet<u64>,
     out: &mut Vec<u8>,
-    enc: &mut Encoding,
+    state: &mut Option<(Encoding, CodeRange)>,
 ) -> Result<()> {
     for (i, v) in ary.iter().enumerate() {
         if i > 0 {
+            // Inline-append the separator: no temporary string,
+            // just merge `(sep_enc, sep_cr)` into the running
+            // state and copy bytes.
+            let new_state = merge_join_state(*state, sep_enc, sep_cr).ok_or_else(|| {
+                let cur_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
+                MonorubyErr::incompatible_encoding(&globals.store, cur_enc, sep_enc)
+            })?;
             out.extend_from_slice(sep);
-            merge_encoding(enc, sep_enc);
+            *state = Some(new_state);
         }
         // If element is already a string, use its raw bytes + encoding
         if let Some(inner) = v.is_rstring_inner() {
-            append_string(out, enc, inner);
+            append_string(out, state, inner, &globals.store)?;
             continue;
         }
         // If element is an array, recursively join
@@ -1713,7 +1799,9 @@ fn array_join(
             if !visited.insert(inner_ary.id()) {
                 return Err(MonorubyErr::argumenterr("recursive array join"));
             }
-            array_join(vm, globals, inner_ary, sep, sep_enc, visited, out, enc)?;
+            array_join(
+                vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
+            )?;
             visited.remove(&inner_ary.id());
             continue;
         }
@@ -1721,12 +1809,12 @@ fn array_join(
         if let Some(fid) = globals.check_method(*v, IdentId::TO_STR) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
             if let Some(inner) = ret.is_rstring_inner() {
-                append_string(out, enc, inner);
+                append_string(out, state, inner, &globals.store)?;
                 continue;
             }
             if !ret.is_nil() {
-                out.extend_from_slice(ret.to_s(&globals.store).as_bytes());
-                merge_encoding(enc, Encoding::Utf8);
+                let inner = RStringInner::from_str_scanned(&ret.to_s(&globals.store));
+                append_string(out, state, &inner, &globals.store)?;
                 continue;
             }
         }
@@ -1736,25 +1824,42 @@ fn array_join(
                 if !visited.insert(inner_ary.id()) {
                     return Err(MonorubyErr::argumenterr("recursive array join"));
                 }
-                array_join(vm, globals, inner_ary, sep, sep_enc, visited, out, enc)?;
+                array_join(
+                    vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
+                )?;
                 visited.remove(&inner_ary.id());
                 continue;
             }
             if !ret.is_nil() {
-                out.extend_from_slice(ret.to_s(&globals.store).as_bytes());
-                merge_encoding(enc, Encoding::Utf8);
+                let inner = RStringInner::from_str_scanned(&ret.to_s(&globals.store));
+                append_string(out, state, &inner, &globals.store)?;
                 continue;
             }
         }
         if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
             if let Some(inner) = ret.is_rstring_inner() {
-                append_string(out, enc, inner);
+                append_string(out, state, inner, &globals.store)?;
                 continue;
             }
+            // `to_s` returned a non-String: fall back to the
+            // default-format representation (CRuby behaviour for
+            // `Object#to_s` returning something weird).
+            let inner = RStringInner::from_str_scanned(&v.to_s(&globals.store));
+            append_string(out, state, &inner, &globals.store)?;
+            continue;
         }
-        out.extend_from_slice(v.to_s(&globals.store).as_bytes());
-        merge_encoding(enc, Encoding::Utf8);
+        // No `to_str` / `to_ary` / `to_s` defined → CRuby raises
+        // NoMethodError. (Ordinary objects always inherit
+        // `Object#to_s`, so this only fires when the class has
+        // explicitly `undef`ed it — the spec's "raises a
+        // NoMethodError if an element does not respond to ..."
+        // test exercises exactly that.)
+        return Err(MonorubyErr::method_not_found(
+            &globals.store,
+            IdentId::TO_S,
+            *v,
+        ));
     }
     Ok(())
 }
