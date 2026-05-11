@@ -1071,6 +1071,10 @@ impl Value {
         v
     }
 
+    pub fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
+        RValue::new_arithmetic_sequence(begin, end, step, exclude_end).pack()
+    }
+
     pub fn range_with_class(
         start: Value,
         end: Value,
@@ -2316,6 +2320,12 @@ impl Value {
         assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains an enumerator.
         unsafe { self.rvalue_mut().as_enumerator_mut() }
+    }
+
+    pub fn as_arithmetic_sequence_inner(&self) -> &ArithmeticSequenceInner {
+        assert_eq!(ObjTy::ARITHMETIC_SEQUENCE, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains an arithmetic sequence.
+        unsafe { self.rvalue().as_arithmetic_sequence() }
     }
 
     pub fn as_generator_inner(&self) -> &GeneratorInner {
