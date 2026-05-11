@@ -1,4 +1,30 @@
 module Enumerable
+  # Iterate `self.each`, gathering multi-value yields into a single
+  # Array per iteration. CRuby's rule (block-arity-1 semantics): a
+  # one-arg block called on a multi-value yield receives all values
+  # as an Array; a one-value yield (Array or scalar) is passed
+  # through unwrapped.
+  #
+  # `yield 1`        → 1
+  # `yield [2]`      → [2]
+  # `yield 3, 4`     → [3, 4]
+  # `yield 5, 6, 7`  → [5, 6, 7]
+  # `yield []`       → []
+  # `yield nil`      → nil
+  #
+  # Used by every Enumerable method whose CRuby contract is "treats
+  # multi-yields as a single gathered element" — `inject`, `map`,
+  # `find`, `filter`, etc. Methods that consume the multi-yield via
+  # an explicit multi-arity block (`zip`, `each_with_object`) still
+  # use `self.each` directly.
+  private def __gather_each
+    return self.to_enum(:__gather_each) unless block_given?
+    self.each do |*__ys|
+      yield(__ys.size == 1 ? __ys[0] : __ys)
+    end
+    self
+  end
+
   # `inject` (a.k.a. `reduce`) accepts five argument shapes:
   #   inject() { |acc, x| ... }            # first element seeds acc
   #   inject(init) { |acc, x| ... }        # `init` seeds acc
@@ -42,7 +68,7 @@ module Enumerable
     if sym
       if init.nil?
         first = true
-        self.each do |x|
+        __gather_each do |x|
           if first
             acc = x
             first = false
@@ -51,12 +77,12 @@ module Enumerable
           end
         end
       else
-        self.each { |x| acc = acc.send(sym, x) }
+        __gather_each { |x| acc = acc.send(sym, x) }
       end
     else
       if init.nil?
         first = true
-        self.each do |x|
+        __gather_each do |x|
           if first
             acc = x
             first = false
@@ -65,7 +91,7 @@ module Enumerable
           end
         end
       else
-        self.each { |x| acc = yield(acc, x) }
+        __gather_each { |x| acc = yield(acc, x) }
       end
     end
     acc
@@ -78,7 +104,7 @@ module Enumerable
     end
     return self.to_enum(:each_slice, n) unless block_given?
     slice = []
-    self.each do |x|
+    __gather_each do |x|
       slice << x
       if slice.size == n
         yield slice
@@ -88,11 +114,11 @@ module Enumerable
     yield slice if !slice.empty?
     self
   end
-  
+
   def each_with_index(*args)
     return self.to_enum(:each_with_index, *args) unless block_given?
     i = 0
-    self.each do |x|
+    __gather_each do |x|
       yield x, i
       i += 1
     end
@@ -101,7 +127,7 @@ module Enumerable
 
   def each_with_object(obj)
     return self.to_enum(:each_with_object) unless block_given?
-    self.each do |x|
+    __gather_each do |x|
       yield x, obj
     end
     obj
@@ -110,7 +136,7 @@ module Enumerable
   def map
     return self.to_enum(:map) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       res << yield(x)
     end
     res
@@ -119,7 +145,7 @@ module Enumerable
 
   def find(ifnone = nil)
     return self.to_enum(:find) unless block_given?
-    self.each do |x|
+    __gather_each do |x|
       if yield(x)
         return x
       end
@@ -136,7 +162,7 @@ module Enumerable
     if args.empty?
       return self.to_enum(:find_index) unless block_given?
       i = 0
-      self.each do |x|
+      __gather_each do |x|
         return i if yield(x)
         i += 1
       end
@@ -146,7 +172,7 @@ module Enumerable
       # When given a value, block is ignored (matches CRuby) — search by ==.
       target = args[0]
       i = 0
-      self.each do |x|
+      __gather_each do |x|
         return i if x == target
         i += 1
       end
@@ -157,7 +183,7 @@ module Enumerable
   def filter
     return self.to_enum(:filter) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       if yield(x)
         res << x
       end
@@ -170,7 +196,7 @@ module Enumerable
   def filter_map
     return self.to_enum(:filter_map) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       y = yield(x)
       res << y if y
     end
@@ -180,7 +206,7 @@ module Enumerable
   def take_while
     return self.to_enum(:take_while) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       break unless yield(x)
       res << x
     end
@@ -191,7 +217,7 @@ module Enumerable
     return self.to_enum(:drop_while) unless block_given?
     res = []
     dropping = true
-    self.each do |x|
+    __gather_each do |x|
       if dropping
         next if yield(x)
         dropping = false
@@ -209,7 +235,7 @@ module Enumerable
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
-    self.each do |x|
+    __gather_each do |x|
       res << x
       break if res.size >= n
     end
@@ -224,7 +250,7 @@ module Enumerable
     raise ArgumentError, "attempt to drop negative size" if n < 0
     res = []
     i = 0
-    self.each do |x|
+    __gather_each do |x|
       res << x if i >= n
       i += 1
     end
@@ -238,15 +264,15 @@ module Enumerable
       end
       warn "warning: given block not used" if block_given?
       pat = pattern[0]
-      self.each do |x|
+      __gather_each do |x|
         return true if pat === x
       end
     elsif block_given?
-      self.each do |x|
+      __gather_each do |x|
         return true if yield(x)
       end
     else
-      self.each do |x|
+      __gather_each do |x|
         return true if x
       end
     end
@@ -260,15 +286,15 @@ module Enumerable
       end
       warn "warning: given block not used" if block_given?
       pat = pattern[0]
-      self.each do |x|
+      __gather_each do |x|
         return false if pat === x
       end
     elsif block_given?
-      self.each do |x|
+      __gather_each do |x|
         return false if yield(x)
       end
     else
-      self.each do |x|
+      __gather_each do |x|
         return false if x
       end
     end
@@ -283,21 +309,21 @@ module Enumerable
       end
       warn "warning: given block not used" if block_given?
       pat = pattern[0]
-      self.each do |x|
+      __gather_each do |x|
         if pat === x
           n += 1
           return false if n > 1
         end
       end
     elsif block_given?
-      self.each do |x|
+      __gather_each do |x|
         if yield(x)
           n += 1
           return false if n > 1
         end
       end
     elsif pattern.empty?
-      self.each do |x|
+      __gather_each do |x|
         if x
           n += 1
           return false if n > 1
@@ -315,7 +341,7 @@ module Enumerable
       elem = nil
       res = nil
       first = true
-      self.each do |x|
+      __gather_each do |x|
         r = yield(x)
         if first
           elem = x
@@ -338,7 +364,7 @@ module Enumerable
   def flat_map
     return self.to_enum(:flat_map) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       r = yield(x)
       if r.is_a?(Array)
         res.concat(r)
@@ -352,7 +378,7 @@ module Enumerable
 
   def tally(hash = nil)
     h = hash || {}
-    self.each do |x|
+    __gather_each do |x|
       h[x] = (h[x] || 0) + 1
     end
     h
@@ -364,7 +390,7 @@ module Enumerable
     current_key = nil
     current_ary = nil
     first = true
-    self.each do |x|
+    __gather_each do |x|
       key = yield(x)
       if first
         current_key = key
@@ -388,7 +414,7 @@ module Enumerable
     current = nil
     prev = nil
     first = true
-    self.each do |x|
+    __gather_each do |x|
       if first
         current = [x]
         prev = x
@@ -412,7 +438,7 @@ module Enumerable
     current = nil
     prev = nil
     first = true
-    self.each do |x|
+    __gather_each do |x|
       if first
         current = [x]
         prev = x
@@ -451,7 +477,7 @@ module Enumerable
   def group_by
     return self.to_enum(:group_by) unless block_given?
     h = {}
-    self.each do |x|
+    __gather_each do |x|
       key = yield(x)
       (h[key] ||= []) << x
     end
@@ -473,7 +499,7 @@ module Enumerable
       elem = nil
       res = nil
       first = true
-      self.each do |x|
+      __gather_each do |x|
         r = yield(x)
         if first
           elem = x
@@ -496,42 +522,42 @@ module Enumerable
   def count(*args)
     if block_given?
       n = 0
-      self.each { |x| n += 1 if yield(x) }
+      __gather_each { |x| n += 1 if yield(x) }
       n
     elsif args.empty?
       n = 0
-      self.each { |_| n += 1 }
+      __gather_each { |_| n += 1 }
       n
     else
       target = args[0]
       n = 0
-      self.each { |x| n += 1 if x == target }
+      __gather_each { |x| n += 1 if x == target }
       n
     end
   end
 
   def sum(init = 0)
     if block_given?
-      self.each { |x| init = init + yield(x) }
+      __gather_each { |x| init = init + yield(x) }
     else
-      self.each { |x| init = init + x }
+      __gather_each { |x| init = init + x }
     end
     init
   end
 
   def include?(obj)
-    self.each { |x| return true if x == obj }
+    __gather_each { |x| return true if x == obj }
     false
   end
   alias member? include?
 
   def first(n = nil)
     if n.nil?
-      self.each { |x| return x }
+      __gather_each { |x| return x }
       nil
     else
       res = []
-      self.each do |x|
+      __gather_each do |x|
         break if res.size >= n
         res << x
       end
@@ -541,8 +567,8 @@ module Enumerable
 
   def to_a(*args)
     res = []
-    self.each(*args) do |x|
-      res << x
+    self.each(*args) do |*ys|
+      res << (ys.size == 1 ? ys[0] : ys)
     end
     res
   end
@@ -554,7 +580,7 @@ module Enumerable
 
   def to_h
     h = {}
-    self.each do |x|
+    __gather_each do |x|
       if block_given?
         pair = yield(x)
       else
@@ -570,7 +596,7 @@ module Enumerable
   def reject
     return self.to_enum(:reject) unless block_given?
     res = []
-    self.each do |x|
+    __gather_each do |x|
       res << x unless yield(x)
     end
     res
@@ -583,11 +609,11 @@ module Enumerable
       end
       warn "warning: given block not used" if block_given?
       pat = pattern[0]
-      self.each { |x| return false unless pat === x }
+      __gather_each { |x| return false unless pat === x }
     elsif block_given?
-      self.each { |x| return false unless yield(x) }
+      __gather_each { |x| return false unless yield(x) }
     else
-      self.each { |x| return false unless x }
+      __gather_each { |x| return false unless x }
     end
     true
   end
@@ -596,7 +622,7 @@ module Enumerable
     raise ArgumentError, "invalid size" if n <= 0
     return self.to_enum(:each_cons, n) unless block_given?
     buf = []
-    self.each do |x|
+    __gather_each do |x|
       buf << x
       buf.shift if buf.size > n
       yield buf.dup if buf.size == n
@@ -609,7 +635,7 @@ module Enumerable
       m = nil
       first = true
       if block_given?
-        self.each do |x|
+        __gather_each do |x|
           if first
             m = x
             first = false
@@ -618,7 +644,7 @@ module Enumerable
           end
         end
       else
-        self.each do |x|
+        __gather_each do |x|
           if first
             m = x
             first = false
@@ -647,7 +673,7 @@ module Enumerable
       m = nil
       first = true
       if block_given?
-        self.each do |x|
+        __gather_each do |x|
           if first
             m = x
             first = false
@@ -656,7 +682,7 @@ module Enumerable
           end
         end
       else
-        self.each do |x|
+        __gather_each do |x|
           if first
             m = x
             first = false
@@ -684,10 +710,12 @@ module Enumerable
     if block
       mn = nil
       mx = nil
-      self.each do |x|
-        if mn.nil?
+      first = true
+      __gather_each do |x|
+        if first
           mn = x
           mx = x
+          first = false
         else
           mn = x if block.call(x, mn) < 0
           mx = x if block.call(x, mx) > 0
@@ -703,7 +731,7 @@ module Enumerable
     h = {}
     res = []
     if block_given?
-      self.each do |x|
+      __gather_each do |x|
         key = yield(x)
         unless h.key?(key)
           h[key] = true
@@ -711,7 +739,7 @@ module Enumerable
         end
       end
     else
-      self.each do |x|
+      __gather_each do |x|
         unless h.key?(x)
           h[x] = true
           res << x
@@ -732,7 +760,7 @@ module Enumerable
   # Returns a new Array with nil elements removed.
   def compact
     res = []
-    self.each { |x| res << x unless x.nil? }
+    __gather_each { |x| res << x unless x.nil? }
     res
   end
 
@@ -741,7 +769,7 @@ module Enumerable
     return self.to_enum(:partition) unless block_given?
     yes_arr = []
     no_arr = []
-    self.each do |x|
+    __gather_each do |x|
       if yield(x)
         yes_arr << x
       else
@@ -760,7 +788,7 @@ module Enumerable
     min_score = nil
     max_score = nil
     first = true
-    self.each do |x|
+    __gather_each do |x|
       score = yield(x)
       if first
         min_elem = max_elem = x
@@ -808,7 +836,7 @@ module Enumerable
     if n.nil?
       return self.to_enum(:cycle) unless block_given?
       cache = []
-      self.each do |x|
+      __gather_each do |x|
         cache << x
         yield x
       end
@@ -820,7 +848,8 @@ module Enumerable
       n = n.to_int unless n.is_a?(Integer)
       return self.to_enum(:cycle, n) unless block_given?
       return nil if n <= 0
-      cache = self.to_a
+      cache = []
+      __gather_each { |x| cache << x }
       n.times { cache.each { |x| yield x } }
       nil
     end
@@ -830,7 +859,7 @@ module Enumerable
   # truthy. With a block, transforms each match through the block.
   def grep(pattern)
     res = []
-    self.each do |x|
+    __gather_each do |x|
       if pattern === x
         res << (block_given? ? yield(x) : x)
       end
@@ -842,7 +871,7 @@ module Enumerable
   # false.
   def grep_v(pattern)
     res = []
-    self.each do |x|
+    __gather_each do |x|
       unless pattern === x
         res << (block_given? ? yield(x) : x)
       end
@@ -865,7 +894,7 @@ module Enumerable
     end
     res = []
     current = nil
-    self.each do |x|
+    __gather_each do |x|
       hit = pattern.nil? ? yield(x) : (pattern === x)
       if hit
         res << current if current
@@ -892,7 +921,7 @@ module Enumerable
     end
     res = []
     current = []
-    self.each do |x|
+    __gather_each do |x|
       current << x
       hit = pattern.nil? ? yield(x) : (pattern === x)
       if hit
