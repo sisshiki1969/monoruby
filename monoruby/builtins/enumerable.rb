@@ -702,24 +702,47 @@ class Enumerator
     alias entries to_a
 
     # Number of elements the sequence would yield. Returns
-    # Float::INFINITY for unbounded sequences whose step matches
-    # the open end (e.g. `(0..).step(1)`), nil for the
-    # incompatible cases (`(0..).step(-1)` etc), 0 for empty.
+    # `Float::INFINITY` for unbounded sequences whose step matches
+    # the open end (e.g. `(0..).step(1)`), `0` for empty / direction
+    # mismatch, the integer count for finite sequences. Raises
+    # `ArgumentError` when the step isn't `Numeric` (CRuby checks
+    # this lazily on `.size`).
     def size
       b = @begin
       e = @end
       s = @step
+      raise ArgumentError, "step must be numeric" unless s.is_a?(Numeric)
+      raise ArgumentError, "step can't be 0" if s == 0
       if b.nil?
-        # Beginless: only meaningful with a finite end.
-        return Float::INFINITY if e.nil?
-        return Float::INFINITY # spec: this is what CRuby reports
+        # Beginless ⇒ no way to iterate to a finite end. CRuby
+        # reports `Float::INFINITY`.
+        return Float::INFINITY
       end
-      return Float::INFINITY if e.nil? && s > 0
-      return Float::INFINITY if e.nil? && s < 0
-      return 0 if s == 0
+      if e.nil?
+        # Endless: sequence runs forever in `step`'s direction.
+        return Float::INFINITY
+      end
+      # Float arithmetic: `infinity` step yields at most one value
+      # (the `begin`, if it satisfies the bound), so size is 1 or 0.
+      if s.is_a?(Float) && s.infinite?
+        if s > 0
+          return @exclude_end ? (b < e ? 1 : 0) : (b <= e ? 1 : 0)
+        else
+          return @exclude_end ? (b > e ? 1 : 0) : (b >= e ? 1 : 0)
+        end
+      end
       diff = e - b
-      n = (diff.to_f / s.to_f)
-      return 0 if n.nan? || n < 0
+      # Direction mismatch (e.g. `1.step(0, 1).size`) ⇒ 0 yields.
+      if (s > 0 && diff < 0) || (s < 0 && diff > 0)
+        return 0
+      end
+      n = diff.to_f / s.to_f
+      return 0 if n.nan?
+      return 0 if n < 0
+      # `e == ±Infinity` → infinite count of yields in step's
+      # direction (already handled the direction-mismatch case
+      # above). Avoid `Float::INFINITY.floor` (FloatDomainError).
+      return Float::INFINITY if n.infinite?
       n_int = n.floor
       if @exclude_end
         last = b + n_int * s
