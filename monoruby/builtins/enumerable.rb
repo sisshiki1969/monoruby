@@ -1013,13 +1013,6 @@ class Enumerator
         result
       end
     end
-    # Compatibility alias: the previous PR commit shipped Rust code
-    # that calls `__as_slice` to do the Array slicing. Keep the old
-    # name pointing at `[]` for one release so a half-applied
-    # rollout (e.g. enumerable.rb landed but array.rs / runtime.rs
-    # didn't yet) still has a valid method to invoke. Remove once
-    # all callers have switched.
-    alias __as_slice []
 
     private
 
