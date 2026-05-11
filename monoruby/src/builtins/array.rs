@@ -2213,8 +2213,24 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             Ok(ary.into())
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("sort_by!"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("sort_by!"), pc)
     }
+}
+
+/// Build an `Enumerator` for an `Array` iterator that has the same size
+/// as the receiver: every method here yields exactly `self.length`
+/// elements (`each`, `select`, `reject`, `sort_by`, …), so we attach
+/// that as the size hint so `enum.size` returns the right value
+/// without running the iteration. Mirrors the size proc CRuby ships
+/// with each builtin's no-block branch.
+fn array_enumerator(
+    vm: &mut Executor,
+    self_val: Value,
+    method: IdentId,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let size = Value::integer(self_val.as_array().len() as i64);
+    vm.generate_enumerator_with_size(method, self_val, vec![], pc, Some(size))
 }
 
 fn sort_by_collect_pairs(
@@ -2285,7 +2301,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Ok(Value::array_from_vec(sorted_elems))
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("sort_by"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("sort_by"), pc)
     }
 }
 
@@ -2314,7 +2330,7 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Ok(Value::array_from_vec(res))
     } else {
-        vm.generate_enumerator(IdentId::get_id("filter"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("filter"), pc)
     }
 }
 
@@ -2408,7 +2424,7 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Value::nil()
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("filter!"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("filter!"), pc)
     }
 }
 
@@ -2427,7 +2443,7 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("keep_if"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("keep_if"), pc)
     }
 }
 
@@ -2454,7 +2470,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Ok(Value::array_from_vec(res))
     } else {
-        vm.generate_enumerator(IdentId::get_id("reject"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("reject"), pc)
     }
 }
 
@@ -2477,7 +2493,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Value::nil()
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("reject!"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("reject!"), pc)
     }
 }
 
@@ -2496,7 +2512,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("delete_if"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("delete_if"), pc)
     }
 }
 
@@ -2523,7 +2539,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             Ok(h_val)
         })
     } else {
-        vm.generate_enumerator(IdentId::get_id("group_by"), lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("group_by"), pc)
     }
 }
 
@@ -3564,8 +3580,7 @@ fn find_index(
         }
         Ok(Value::nil())
     } else {
-        let id = IdentId::get_id("find_index");
-        vm.generate_enumerator(id, lfp.self_val(), vec![], pc)
+        array_enumerator(vm, lfp.self_val(), IdentId::get_id("find_index"), pc)
     }
 }
 

@@ -60,7 +60,7 @@ class Array
   end
 
   def each
-    return self.to_enum(:each) unless block_given?
+    return self.to_enum(:each) { self.size } unless block_given?
     i = 0
     while i < self.size
       yield self[i]
@@ -70,7 +70,7 @@ class Array
   end
 
   def reverse_each
-    return self.to_enum(:reverse_each) unless block_given?
+    return self.to_enum(:reverse_each) { self.size } unless block_given?
     len = self.size
     if len == 0
       return self
@@ -84,7 +84,7 @@ class Array
   end
 
   def each_with_index
-    return self.to_enum(:each_with_index) unless block_given?
+    return self.to_enum(:each_with_index) { self.size } unless block_given?
     i = 0
     while i < self.size
       yield self[i], i
@@ -94,7 +94,7 @@ class Array
   end
 
   def map!
-    return self.to_enum(:map!) unless block_given?
+    return self.to_enum(:map!) { self.size } unless block_given?
     raise FrozenError, "can't modify frozen #{self.class}: #{self.inspect}" if frozen?
     i = 0
     while i < self.size
@@ -106,7 +106,7 @@ class Array
   alias collect! map!
 
   def map
-    return self.to_enum(:map) unless block_given?
+    return self.to_enum(:map) { self.size } unless block_given?
     res = Array.new(self.size)
     i = 0
     while i < self.size
@@ -193,7 +193,7 @@ class Array
   end
 
   def filter_map
-    return to_enum(:filter_map) unless block_given?
+    return to_enum(:filter_map) { self.size } unless block_given?
     res = []
     each do |x|
       y = yield(x)
@@ -245,7 +245,26 @@ class Array
   end
 
   def combination(n)
-    return to_enum(:combination, n) unless block_given?
+    unless block_given?
+      # Lazily compute the binomial coefficient C(self.size, k) the
+      # same way CRuby's enumerator does: 0 for k < 0 or k > size, 1
+      # for k == 0, otherwise the multiplicative form so we never
+      # build the full factorial.
+      return to_enum(:combination, n) {
+        k = n.is_a?(Integer) ? n : n.to_int
+        len = self.size
+        if k < 0 || k > len
+          0
+        elsif k == 0
+          1
+        else
+          k = len - k if k > len - k
+          v = 1
+          1.upto(k) { |i| v = v * (len - k + i) / i }
+          v
+        end
+      }
+    end
     n = n.to_int
     len = self.size
     if n == 0
@@ -311,7 +330,23 @@ class Array
   end
 
   def permutation(n = self.size)
-    return to_enum(:permutation, n) unless block_given?
+    unless block_given?
+      # Descending factorial size = n * (n-1) * ... * (n-k+1).
+      # 0 for k < 0 or k > size; 1 for k == 0.
+      return to_enum(:permutation, n) {
+        k = n.is_a?(Integer) ? n : n.to_int
+        len = self.size
+        if k < 0 || k > len
+          0
+        elsif k == 0
+          1
+        else
+          v = 1
+          k.times { |i| v *= (len - i) }
+          v
+        end
+      }
+    end
     n = n.to_int
     if n == 0
       yield []
@@ -467,7 +502,7 @@ class Array
   end
 
   def each_index
-    return self.to_enum(:each_index) unless block_given?
+    return self.to_enum(:each_index) { self.size } unless block_given?
     i = 0
     while i < self.size
       yield i
@@ -477,7 +512,20 @@ class Array
   end
 
   def repeated_permutation(n)
-    return to_enum(:repeated_permutation, n) unless block_given?
+    unless block_given?
+      # size**n; 0 when n < 0 (no permutations); 1 when n == 0
+      # (the empty permutation), even for an empty receiver.
+      return to_enum(:repeated_permutation, n) {
+        k = n.is_a?(Integer) ? n : n.to_int
+        if k < 0
+          0
+        elsif k == 0
+          1
+        else
+          self.size ** k
+        end
+      }
+    end
     n = n.to_int
     copy = self.dup
     len = copy.size
@@ -506,7 +554,26 @@ class Array
   end
 
   def repeated_combination(n)
-    return to_enum(:repeated_combination, n) unless block_given?
+    unless block_given?
+      # C(size + k - 1, k); 0 for k < 0; 1 for k == 0; the full
+      # multiplicative form to avoid factorials of large arrays.
+      return to_enum(:repeated_combination, n) {
+        k = n.is_a?(Integer) ? n : n.to_int
+        len = self.size
+        if k < 0
+          0
+        elsif k == 0
+          1
+        elsif len == 0
+          0
+        else
+          # C(len + k - 1, k) using the multiplicative form.
+          v = 1
+          1.upto(k) { |i| v = v * (len + k - i) / i }
+          v
+        end
+      }
+    end
     n = n.to_int
     len = self.size
     if n == 0
