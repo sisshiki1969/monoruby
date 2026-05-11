@@ -5269,6 +5269,31 @@ mod tests {
         ]);
     }
 
+    /// Regression: `Range#%` attaches a singleton method (`inspect`)
+    /// to its AS result, which makes `Value::class` return the
+    /// singleton's `ClassId`. The fast-path `is_arithmetic_sequence`
+    /// check must walk past the singleton (`real_class`) instead of
+    /// comparing against the cached AS class id verbatim — otherwise
+    /// the dispatch falls through to `coerce_to_int_i64` and raises
+    /// `TypeError: no implicit conversion of
+    /// Enumerator::ArithmeticSequence into Integer`. Same hazard
+    /// hits any AS the user decorates with `define_singleton_method`.
+    #[test]
+    fn slice_with_arithmetic_sequence_singleton_class() {
+        run_tests(&[
+            // Manually-attached singleton method on a plain AS.
+            r#"
+              aseq = (0..-1).step(2)
+              aseq.define_singleton_method(:foo) { :foo }
+              [10, 20, 30, 40, 50][aseq]
+            "#,
+            // `Range#%` already calls `define_singleton_method(:inspect)`
+            // internally, so this is the natural-occurring version of
+            // the case above.
+            "[10, 20, 30, 40, 50][(0..-1).%(2)]",
+        ]);
+    }
+
     #[test]
     fn pack() {
         run_test(r#"[*(0..100)].pack("C*")"#);
