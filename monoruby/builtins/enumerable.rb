@@ -893,7 +893,7 @@ class Enumerator
             cur += s
           end
         else
-          while cur >= e
+          while cur <= e
             yield cur
             cur += s
           end
