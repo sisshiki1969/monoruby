@@ -47,6 +47,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(TIME_CLASS, "utc_offset", &["gmt_offset", "gmtoff"], utc_offset, 0);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
     globals.define_builtin_func(TIME_CLASS, "+", add, 1);
+    globals.define_builtin_func(TIME_CLASS, "<=>", cmp, 1);
+    globals.define_builtin_func(TIME_CLASS, "<", lt, 1);
+    globals.define_builtin_func(TIME_CLASS, "<=", le, 1);
+    globals.define_builtin_func(TIME_CLASS, ">", gt, 1);
+    globals.define_builtin_func(TIME_CLASS, ">=", ge, 1);
+    globals.define_builtin_func(TIME_CLASS, "==", eq, 1);
+    globals.define_builtin_func(TIME_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(TIME_CLASS, "sunday?", sunday_q, 0);
     globals.define_builtin_func(TIME_CLASS, "monday?", monday_q, 0);
     globals.define_builtin_func(TIME_CLASS, "tuesday?", tuesday_q, 0);
@@ -1537,6 +1544,114 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 pub enum TimeInner {
     Local(DateTime<FixedOffset>),
     Utc(DateTime<Utc>),
+}
+
+impl PartialOrd for TimeInner {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TimeInner {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Normalise both sides to UTC before comparing — `Local` and
+        // `Utc` variants both back onto the same `DateTime<Tz>` /
+        // `DateTime<Utc>` instants, just with a different display
+        // offset. CRuby compares Time by absolute instant.
+        let l = match self {
+            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Utc(t) => *t,
+        };
+        let r = match other {
+            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Utc(t) => *t,
+        };
+        l.cmp(&r)
+    }
+}
+
+/// Compare `self` against `other` for Time#<=>, Time#<, etc.
+/// Returns `None` when `other` isn't a Time (CRuby: `<=>` ⇒ nil,
+/// the relational operators ⇒ ArgumentError).
+fn time_cmp_opt(self_: Value, other: Value) -> Option<std::cmp::Ordering> {
+    let rv = other.try_rvalue()?;
+    if rv.ty() != ObjTy::TIME {
+        return None;
+    }
+    let lhs = self_.as_time();
+    let rhs = other.as_time();
+    Some(lhs.cmp(rhs))
+}
+
+/// `Time#<=>` — returns -1/0/1 against another Time, nil otherwise.
+#[monoruby_builtin]
+fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(std::cmp::Ordering::Less) => Value::integer(-1),
+        Some(std::cmp::Ordering::Equal) => Value::integer(0),
+        Some(std::cmp::Ordering::Greater) => Value::integer(1),
+        None => Value::nil(),
+    })
+}
+
+#[monoruby_builtin]
+fn lt(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => Value::bool(ord == std::cmp::Ordering::Less),
+        None => return Err(MonorubyErr::argumenterr("comparison of Time with non-Time")),
+    })
+}
+
+#[monoruby_builtin]
+fn le(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => Value::bool(ord != std::cmp::Ordering::Greater),
+        None => {
+            return Err(MonorubyErr::argumenterr("comparison of Time with non-Time"));
+        }
+    })
+}
+
+#[monoruby_builtin]
+fn gt(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => Value::bool(ord == std::cmp::Ordering::Greater),
+        None => return Err(MonorubyErr::argumenterr("comparison of Time with non-Time")),
+    })
+}
+
+#[monoruby_builtin]
+fn ge(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => Value::bool(ord != std::cmp::Ordering::Less),
+        None => {
+            return Err(MonorubyErr::argumenterr("comparison of Time with non-Time"));
+        }
+    })
+}
+
+#[monoruby_builtin]
+fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(
+        time_cmp_opt(lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
+    ))
+}
+
+#[monoruby_builtin]
+fn eql(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `eql?` is stricter: only true for two Times *and* equal in
+    // both instant and offset. We approximate by comparing the
+    // tagged enum directly, which captures both pieces.
+    let other = lfp.arg(0);
+    let Some(rv) = other.try_rvalue() else {
+        return Ok(Value::bool(false));
+    };
+    if rv.ty() != ObjTy::TIME {
+        return Ok(Value::bool(false));
+    }
+    Ok(Value::bool(
+        lfp.self_val().as_time() == other.as_time(),
+    ))
 }
 
 impl std::ops::Sub<Self> for TimeInner {
