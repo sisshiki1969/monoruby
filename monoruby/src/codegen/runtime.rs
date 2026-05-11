@@ -612,8 +612,33 @@ pub(super) extern "C" fn get_index(
     class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
-            // If the index is not a fixnum or range, try to_int coercion
+            // Non-fixnum, non-range index: ask the index to slice
+            // the array itself. `Enumerator::ArithmeticSequence`
+            // defines `#[]` (in `enumerable.rb`) for this — the
+            // slicing logic lives on the AS, not parasitically in
+            // Array's `[]` path. Other types fall through to the
+            // existing `to_int` coercion. Mirrors `builtins/
+            // array.rs::index`, but `vm_index` / the JIT inline
+            // path land here, so both need the dispatch.
             let idx = if index.try_fixnum().is_none() && index.is_range().is_none() {
+                let class_name =
+                    globals.store.get_class_name(index.real_class(&globals.store).id());
+                if class_name == "Enumerator::ArithmeticSequence" {
+                    return match vm.invoke_method_inner(
+                        globals,
+                        IdentId::get_id("[]"),
+                        index,
+                        &[base],
+                        None,
+                        None,
+                    ) {
+                        Ok(val) => Some(val),
+                        Err(err) => {
+                            vm.set_error(err);
+                            None
+                        }
+                    };
+                }
                 match index.coerce_to_int_i64(vm, globals) {
                     Ok(i) => Value::integer(i),
                     Err(err) => {

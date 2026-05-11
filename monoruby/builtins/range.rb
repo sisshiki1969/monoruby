@@ -274,7 +274,11 @@ class Range
       if block_given?
         raise ArgumentError, "#step iteration for beginless ranges is meaningless"
       end
-      return to_enum(:step, step_arg) { nil }
+      # Beginless + numeric still returns an ArithmeticSequence
+      # (CRuby behaviour) — `Array#[]` uses `begin`/`end`/`step`
+      # to slice from index 0.
+      s = step_arg.nil? ? 1 : step_arg
+      return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
     end
 
     if numeric_range
@@ -282,7 +286,12 @@ class Range
         raise ArgumentError, "step can't be 0"
       end
       unless block_given?
-        return to_enum(:step, step_arg) { __range_step_size(step_arg) }
+        # CRuby returns an Enumerator::ArithmeticSequence for the
+        # numeric, no-block case so callers can introspect
+        # begin/end/step and `Array#[]` can use it as a stride
+        # index.
+        s = step_arg.nil? ? 1 : step_arg
+        return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
       end
       step_val = __range_step_coerce(step_arg, b)
       __range_step_numeric(step_val, &block)
@@ -298,7 +307,23 @@ class Range
     self
   end
 
-  alias % step
+  # `Range#%` is `Range#step` with a different `inspect` form:
+  # `((1..10).%(2))` instead of `((1..10).step(2))`. The
+  # underlying ArithmeticSequence is otherwise identical, so we
+  # delegate and patch `inspect` per-instance.
+  def %(step_arg)
+    aseq = step(step_arg)
+    if aseq.is_a?(Enumerator::ArithmeticSequence)
+      aseq.define_singleton_method(:inspect) do
+        lo = self.begin.nil? ? "" : self.begin.inspect
+        hi = self.end.nil?   ? "" : self.end.inspect
+        sep = self.exclude_end? ? "..." : ".."
+        st = self.step.nil? ? "" : self.step.inspect
+        "((#{lo}#{sep}#{hi}).%(#{st}))"
+      end
+    end
+    aseq
+  end
 
   private
 
