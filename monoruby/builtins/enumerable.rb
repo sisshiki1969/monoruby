@@ -1,19 +1,71 @@
 module Enumerable
-  def inject(init = nil)
+  # `inject` (a.k.a. `reduce`) accepts five argument shapes:
+  #   inject() { |acc, x| ... }            # first element seeds acc
+  #   inject(init) { |acc, x| ... }        # `init` seeds acc
+  #   inject(sym)                          # acc.send(sym, x) per step
+  #   inject(init, sym)                    # `init` seeds; symbol form
+  #   inject(str_or_to_str)                # same as sym; `to_str` coerced
+  # Disambiguation of single-arg call: if a block is given, the arg is
+  # `init` regardless of its type — matches CRuby's
+  # `12.times.reduce("ン") { |c| c.succ }`, where `"ン"` seeds the
+  # accumulator and is *not* treated as a method name.
+  def inject(*args)
+    case args.size
+    when 0
+      raise ArgumentError, "no block given" unless block_given?
+      init = nil
+      sym = nil
+    when 1
+      a = args[0]
+      if block_given?
+        init = a
+        sym = nil
+      elsif a.is_a?(Symbol) || a.is_a?(String) || a.respond_to?(:to_str)
+        a = a.to_str if !a.is_a?(Symbol) && !a.is_a?(String)
+        raise TypeError, "#{args[0].inspect} is not a symbol nor a string" if a.nil?
+        init = nil
+        sym = a.to_sym
+      else
+        raise ArgumentError, "no block given"
+      end
+    when 2
+      init = args[0]
+      a = args[1]
+      a = a.to_str if !a.is_a?(Symbol) && !a.is_a?(String) && a.respond_to?(:to_str)
+      raise TypeError, "#{args[1].inspect} is not a symbol nor a string" unless a.is_a?(Symbol) || a.is_a?(String)
+      sym = a.to_sym
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)"
+    end
+
     acc = init
-    if init.nil?
-      flag = true
-      self.each do |x|
-        if flag
-          acc = x
-          flag = false
-        else
-          acc = yield(acc, x)
+    if sym
+      if init.nil?
+        first = true
+        self.each do |x|
+          if first
+            acc = x
+            first = false
+          else
+            acc = acc.send(sym, x)
+          end
         end
+      else
+        self.each { |x| acc = acc.send(sym, x) }
       end
     else
-      self.each do |x|
-        acc = yield(acc, x)
+      if init.nil?
+        first = true
+        self.each do |x|
+          if first
+            acc = x
+            first = false
+          else
+            acc = yield(acc, x)
+          end
+        end
+      else
+        self.each { |x| acc = yield(acc, x) }
       end
     end
     acc
@@ -258,22 +310,29 @@ module Enumerable
   end
 
   def min_by(n = nil)
-    return self.to_enum(:min_by) unless block_given?
-    elem = nil
-    res = nil
-    self.each do |x|
-      r = yield(x)
-      if res.nil?
-        elem = x
-        res = r
-      else
-        if (r <=> res) < 0
+    return self.to_enum(:min_by, n) unless block_given?
+    if n.nil?
+      elem = nil
+      res = nil
+      first = true
+      self.each do |x|
+        r = yield(x)
+        if first
+          elem = x
+          res = r
+          first = false
+        elsif (r <=> res) < 0
           elem = x
           res = r
         end
       end
+      elem
+    else
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative size (#{n})" if n < 0
+      return [] if n == 0
+      self.map { |x| [yield(x), x] }.sort_by { |pair| pair[0] }.first(n).map { |pair| pair[1] }
     end
-    elem
   end
 
   def flat_map
@@ -409,17 +468,29 @@ module Enumerable
   end
 
   def max_by(n = nil)
-    return self.to_enum(:max_by) unless block_given?
-    elem = nil
-    res = nil
-    self.each do |x|
-      r = yield(x)
-      if res.nil? || (r <=> res) > 0
-        elem = x
-        res = r
+    return self.to_enum(:max_by, n) unless block_given?
+    if n.nil?
+      elem = nil
+      res = nil
+      first = true
+      self.each do |x|
+        r = yield(x)
+        if first
+          elem = x
+          res = r
+          first = false
+        elsif (r <=> res) > 0
+          elem = x
+          res = r
+        end
       end
+      elem
+    else
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative size (#{n})" if n < 0
+      return [] if n == 0
+      self.map { |x| [yield(x), x] }.sort_by { |pair| pair[0] }.last(n).reverse.map { |pair| pair[1] }
     end
-    elem
   end
 
   def count(*args)
@@ -534,39 +605,79 @@ module Enumerable
   end
 
   def min(n = nil)
-    m = nil
-    if block_given?
-      self.each do |x|
-        if m.nil? || yield(x, m) < 0
-          m = x
+    if n.nil?
+      m = nil
+      first = true
+      if block_given?
+        self.each do |x|
+          if first
+            m = x
+            first = false
+          elsif yield(x, m) < 0
+            m = x
+          end
+        end
+      else
+        self.each do |x|
+          if first
+            m = x
+            first = false
+          elsif (cmp = (x <=> m)).nil?
+            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed"
+          elsif cmp < 0
+            m = x
+          end
         end
       end
+      m
     else
-      self.each do |x|
-        if m.nil? || (x <=> m) < 0
-          m = x
-        end
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative size (#{n})" if n < 0
+      return [] if n == 0
+      if block_given?
+        self.to_a.sort { |a, b| yield(a, b) }.first(n)
+      else
+        self.to_a.sort.first(n)
       end
     end
-    m
   end
 
   def max(n = nil)
-    m = nil
-    if block_given?
-      self.each do |x|
-        if m.nil? || yield(x, m) > 0
-          m = x
+    if n.nil?
+      m = nil
+      first = true
+      if block_given?
+        self.each do |x|
+          if first
+            m = x
+            first = false
+          elsif yield(x, m) > 0
+            m = x
+          end
+        end
+      else
+        self.each do |x|
+          if first
+            m = x
+            first = false
+          elsif (cmp = (x <=> m)).nil?
+            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed"
+          elsif cmp > 0
+            m = x
+          end
         end
       end
+      m
     else
-      self.each do |x|
-        if m.nil? || (x <=> m) > 0
-          m = x
-        end
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative size (#{n})" if n < 0
+      return [] if n == 0
+      if block_given?
+        self.to_a.sort { |a, b| yield(a, b) }.last(n).reverse
+      else
+        self.to_a.sort.last(n).reverse
       end
     end
-    m
   end
 
   def minmax(&block)
@@ -737,6 +848,73 @@ module Enumerable
       end
     end
     res
+  end
+
+  # Splits `self` into Arrays whenever the boundary triggers. With a
+  # `pattern` argument, the boundary fires before any element where
+  # `pattern === x` is truthy. With a block, the boundary fires before
+  # any element for which `yield(x)` is truthy. The two argument
+  # forms are mutually exclusive (matches CRuby's ArgumentError).
+  def slice_before(*args)
+    if block_given?
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)" unless args.empty?
+      pattern = nil
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size != 1
+      pattern = args[0]
+    end
+    res = []
+    current = nil
+    self.each do |x|
+      hit = pattern.nil? ? yield(x) : (pattern === x)
+      if hit
+        res << current if current
+        current = [x]
+      else
+        current ||= []
+        current << x
+      end
+    end
+    res << current if current
+    res.each
+  end
+
+  # Mirror of `slice_before`: the boundary fires *after* an element
+  # that matches. The first emitted chunk therefore always contains
+  # the first element (no leading empty Array).
+  def slice_after(*args)
+    if block_given?
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)" unless args.empty?
+      pattern = nil
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size != 1
+      pattern = args[0]
+    end
+    res = []
+    current = []
+    self.each do |x|
+      current << x
+      hit = pattern.nil? ? yield(x) : (pattern === x)
+      if hit
+        res << current
+        current = []
+      end
+    end
+    res << current unless current.empty?
+    res.each
+  end
+
+  # Concatenates `self` with each enumerable in `enums`. Returns an
+  # Enumerator that walks all of them in sequence. CRuby returns an
+  # `Enumerator::Chain`, but a plain `Enumerator` satisfies every
+  # `Enumerable::Chain` assertion except the class check.
+  def chain(*enums)
+    parts = [self, *enums]
+    Enumerator.new do |y|
+      parts.each do |part|
+        part.each { |x| y << x }
+      end
+    end
   end
 end
 
