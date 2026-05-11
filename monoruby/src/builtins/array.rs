@@ -1068,21 +1068,21 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         ary.get_elem2(vm, globals, arg0, arg1)
     } else {
         let idx = lfp.arg(0);
-        // If the index is not a fixnum or range, dispatch:
-        //   * `Enumerator::ArithmeticSequence` → call `__as_slice`
-        //     on the AS so it can apply its stride / bounds rules.
-        //     The AS is a pure-Ruby class (see
-        //     `monoruby/builtins/enumerable.rb`) and lives outside
-        //     the Range path, so the existing `is_range()` arm
-        //     doesn't catch it.
-        //   * Anything else → `to_int` coercion (existing behaviour).
+        // Non-fixnum, non-range index: delegate. The
+        // `Enumerator::ArithmeticSequence` case is handed off to
+        // `aseq.[](self)` — the slicing logic lives in
+        // `ArithmeticSequence#[]` (see `enumerable.rb`), keeping
+        // it independent of Array (the AS isn't an Array
+        // subclass; this code shouldn't carry its details).
+        // Anything else falls through to the existing `to_int`
+        // coercion path.
         if idx.try_fixnum().is_none() && idx.is_range().is_none() {
             let class_name =
                 globals.store.get_class_name(idx.real_class(&globals.store).id());
             if class_name == "Enumerator::ArithmeticSequence" {
                 return vm.invoke_method_inner(
                     globals,
-                    IdentId::get_id("__as_slice"),
+                    IdentId::get_id("[]"),
                     idx,
                     &[lfp.self_val()],
                     None,
