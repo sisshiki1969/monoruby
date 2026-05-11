@@ -991,38 +991,20 @@ class Enumerator
   # `kind_of?` are overridden to keep `is_a?(Enumerator)` truthy
   # for spec compatibility.
   #
-  # Phase 1 of the Rust-native migration: storage moved off Ruby
+  # Phase 1 of the Rust-native migration moved storage off Ruby
   # ivars onto a dedicated `RValue` variant
-  # (`ObjTy::ARITHMETIC_SEQUENCE`).  `__build` and the private
-  # `__b` / `__e` / `__s` / `__excl?` readers are Rust builtins
-  # that operate on those fields directly; the rest of this class
-  # is still Ruby, but reaches the fields through those readers
-  # instead of `@begin` / `@end` / `@step` / `@exclude_end`.
+  # (`ObjTy::ARITHMETIC_SEQUENCE`).  Phase 2 then moved every
+  # accessor and the `inspect` / `to_s` / `first` / `last`
+  # formatters into Rust builtins (registered in
+  # `src/builtins/enumerator.rs`), so this Ruby class body only
+  # needs to host the parts that still depend on Ruby semantics:
+  #   * `is_a?` / `kind_of?` — lie about `Enumerator` ancestry
+  #   * `each` — block-iteration kept in Ruby per design (Phase 2)
+  #   * `to_a` / `entries` — thin `__each` wrapper
+  #   * `size` — Numeric-type dispatch is easier in Ruby for now
+  #   * `[]` — stride-aware Array slicer (Rust-ified in Phase 3)
   class ArithmeticSequence
     include Enumerable
-
-    def begin
-      __b
-    end
-
-    def end
-      __e
-    end
-
-    def step
-      __s
-    end
-
-    def exclude_end?
-      __excl?
-    end
-
-    # `first` follows Enumerator#first: with no arg returns the
-    # first yielded value (== `begin` for a non-empty AS); with
-    # `n` returns the first `n` yielded values.
-    def first(n = nil)
-      n.nil? ? __b : take(n)
-    end
 
     def is_a?(klass)
       return true if klass == Enumerator::ArithmeticSequence
@@ -1031,20 +1013,6 @@ class Enumerator
       super
     end
     alias kind_of? is_a?
-
-    # CRuby format: `((begin..end).step(step))` — or `%(step)` when
-    # the sequence was produced via `Range#%`. `Range#%` overrides
-    # `inspect` separately to hit the second form; this default is
-    # the `step` form.
-    def inspect
-      b, e, s, excl = __b, __e, __s, __excl?
-      lo = b.nil? ? "" : b.inspect
-      hi = e.nil? ? "" : e.inspect
-      sep = excl ? "..." : ".."
-      step_part = s.nil? ? "" : s.inspect
-      "((#{lo}#{sep}#{hi}).step(#{step_part}))"
-    end
-    alias to_s inspect
 
     def each(&block)
       return self.to_enum(:each) { size } unless block
@@ -1109,11 +1077,6 @@ class Enumerator
         n_int -= 1 if overshoot
       end
       n_int + 1
-    end
-
-    def last(n = nil)
-      arr = to_a
-      n.nil? ? arr.last : arr.last(n)
     end
 
     # `aseq[arr]` — extract the slice of `arr` whose indices are the

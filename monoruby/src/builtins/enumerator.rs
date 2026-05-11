@@ -51,11 +51,13 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
 
-    // `Enumerator::ArithmeticSequence` — Phase 1: native storage
-    // backs a Ruby class. The higher-level behaviour
-    // (`size`/`each`/`[]`/...) still lives in `enumerable.rb` and
-    // reaches the native `(begin, end, step, exclude_end?)` tuple
-    // through the private readers defined below.
+    // `Enumerator::ArithmeticSequence` — Phase 2: accessors and
+    // formatters are Rust builtins reading directly from the
+    // `ObjTy::ARITHMETIC_SEQUENCE` native fields. Higher-level
+    // behaviour that requires Enumerable-style iteration (`size`,
+    // `each`, `to_a`, `[]`) still lives in `enumerable.rb` and
+    // reaches the fields through the private `__b`/`__e`/`__s`/
+    // `__excl?` readers, which Phase 3 will retire alongside `[]`.
     globals.define_builtin_class(
         "ArithmeticSequence",
         ARITHMETIC_SEQUENCE_CLASS,
@@ -69,6 +71,57 @@ pub(super) fn init(globals: &mut Globals) {
         arithmetic_sequence_build,
         4,
     );
+    globals.define_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "begin",
+        arithmetic_sequence_read_begin,
+        0,
+    );
+    globals.define_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "end",
+        arithmetic_sequence_read_end,
+        0,
+    );
+    globals.define_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "step",
+        arithmetic_sequence_read_step,
+        0,
+    );
+    globals.define_builtin_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "exclude_end?",
+        arithmetic_sequence_read_exclude_end,
+        0,
+    );
+    globals.define_builtin_funcs(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "inspect",
+        &["to_s"],
+        arithmetic_sequence_inspect,
+        0,
+    );
+    globals.define_builtin_func_with(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "first",
+        arithmetic_sequence_first,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "last",
+        arithmetic_sequence_last,
+        0,
+        1,
+        false,
+    );
+    // Private aliases kept so the still-Ruby `size` / `[]` / `__each`
+    // bodies in `enumerable.rb` can keep referring to the fields by
+    // their internal shorthand. Phase 3 retires `[]` (and these along
+    // with it).
     globals.define_private_builtin_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "__b",
@@ -156,6 +209,91 @@ fn arithmetic_sequence_read_exclude_end(
     Ok(Value::bool(
         lfp.self_val().as_arithmetic_sequence_inner().exclude_end(),
     ))
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#inspect / #to_s
+///
+/// Returns the CRuby format string `((begin..end).step(step))`,
+/// using `...` for an exclusive end and eliding `nil` endpoints.
+/// Goes through `RValue::inspect`, so `p [aseq]` formats the AS
+/// in place too.
+#[monoruby_builtin]
+fn arithmetic_sequence_inspect(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::string(lfp.self_val().inspect(&globals.store)))
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#first
+///
+/// - first -> object
+/// - first(n) -> Array
+///
+/// With no argument returns `begin` (the first term, or `nil`
+/// when the sequence is beginless — beginless `first` does not
+/// raise here, mirroring CRuby's behaviour for AS). With an `n`
+/// argument materialises the first `n` terms by dispatching to
+/// `Enumerable#take(n)`, which in turn drives `#each`.
+#[monoruby_builtin]
+fn arithmetic_sequence_first(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    if let Some(n) = lfp.try_arg(0) {
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("take"),
+            self_val,
+            &[n],
+            None,
+            None,
+        )
+    } else {
+        Ok(self_val.as_arithmetic_sequence_inner().begin())
+    }
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#last
+///
+/// - last -> object
+/// - last(n) -> Array
+///
+/// Materialises the sequence via `#to_a` and delegates to
+/// `Array#last`. (CRuby resolves `last` analytically for AS,
+/// but the simple-and-correct dispatch through `to_a` is enough
+/// to stop spec failures; an analytic Rust path can land later
+/// without changing this method's contract.)
+#[monoruby_builtin]
+fn arithmetic_sequence_last(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let arr = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("to_a"),
+        self_val,
+        &[],
+        None,
+        None,
+    )?;
+    let last_id = IdentId::get_id("last");
+    if let Some(n) = lfp.try_arg(0) {
+        vm.invoke_method_inner(globals, last_id, arr, &[n], None, None)
+    } else {
+        vm.invoke_method_inner(globals, last_id, arr, &[], None, None)
+    }
 }
 
 ///

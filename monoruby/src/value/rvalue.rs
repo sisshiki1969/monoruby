@@ -520,6 +520,10 @@ impl RValue {
                 // OBJECT — `Struct#inspect` (Rust builtin) is what users
                 // see; this is just for internal diagnostics.
                 ObjTy::STRUCT => self.object_debug(store),
+                ObjTy::ARITHMETIC_SEQUENCE => {
+                    let mut set = HashSet::new();
+                    self.as_arithmetic_sequence().inspect(store, &mut set)
+                }
                 _ => format!("{:016x}", self.id()),
             }
         }
@@ -546,6 +550,10 @@ impl RValue {
                 ObjTy::BINDING => self.object_tos(store),
                 ObjTy::UMETHOD => self.as_umethod().to_s(store),
                 ObjTy::MATCHDATA => self.as_match_data().to_s(),
+                ObjTy::ARITHMETIC_SEQUENCE => {
+                    let mut set = HashSet::new();
+                    self.as_arithmetic_sequence().inspect(store, &mut set)
+                }
                 _ => self.debug(store),
             }
         }
@@ -565,6 +573,7 @@ impl RValue {
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
                 ObjTy::HASH => self.hash_inspect(store, set),
                 ObjTy::RANGE => self.as_range().inspect(store, set),
+                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().inspect(store, set),
                 _ => self.to_s(store),
             }
         }

@@ -51,4 +51,29 @@ impl ArithmeticSequenceInner {
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }
+
+    /// CRuby format: `((begin..end).step(step))` — or `((begin...end).step(step))`
+    /// for exclusive end. `nil` endpoints are elided to the empty string
+    /// (so `(0..).step(2)` prints as `((0..).step(2))`, not
+    /// `((0..nil).step(2))`). `step.inspect` is used directly so a Float
+    /// step prints as `0.5` rather than `(1/2)`.
+    pub(super) fn inspect(&self, store: &Store, set: &mut HashSet<u64>) -> String {
+        let sep = if self.exclude_end() { "..." } else { ".." };
+        let lo = if self.begin.is_nil() {
+            String::new()
+        } else {
+            self.begin.inspect_inner(store, set)
+        };
+        let hi = if self.end.is_nil() {
+            String::new()
+        } else {
+            self.end.inspect_inner(store, set)
+        };
+        let step_part = if self.step.is_nil() {
+            String::new()
+        } else {
+            self.step.inspect_inner(store, set)
+        };
+        format!("(({lo}{sep}{hi}).step({step_part}))")
+    }
 }
