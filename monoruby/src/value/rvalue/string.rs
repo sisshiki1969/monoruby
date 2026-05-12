@@ -1030,9 +1030,9 @@ impl RStringInner {
     /// all 7-bit ASCII (< 0x80), recording `cr = SevenBit` directly
     /// and skipping the classification scan. The caller is
     /// responsible for the invariant — in debug builds this is
-    /// checked. Used by byte-level fast paths (padding,
-    /// concatenation, etc.) whose output is provably ASCII whenever
-    /// every input was.
+    /// checked. Used by byte-level fast paths (charset ops, case
+    /// mapping, etc.) whose output is provably ASCII whenever every
+    /// input was.
     pub fn from_ascii_bytes(bytes: SmallVec<[u8; STRING_INLINE_CAP]>, encoding: Encoding) -> Self {
         debug_assert!(
             bytes.iter().all(|b| *b < 0x80),

@@ -5068,160 +5068,6 @@ impl SmallCaseBuf {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Tr {
-    elems: Vec<TrElement>,
-    exclude: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TrElement {
-    Char(char),
-    Range(char, char),
-}
-
-impl Tr {
-    fn from_str(s: &str) -> Result<Tr> {
-        let mut elems = Vec::new();
-        let mut chars = s.chars().peekable();
-        let exclude = if let Some('^') = chars.peek() {
-            assert_eq!('^', chars.next().unwrap());
-            true
-        } else {
-            false
-        };
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                if let Some(next) = chars.next() {
-                    elems.push(TrElement::Char(next));
-                } else {
-                    elems.push(TrElement::Char(c));
-                }
-            } else if let Some('-') = chars.peek() {
-                assert_eq!('-', chars.next().unwrap());
-                if let Some(end) = chars.next() {
-                    if c as u32 > end as u32 {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "Invalid range \"{c}-{end}\" in string transliteration",
-                        )));
-                    }
-                    elems.push(TrElement::Range(c, end));
-                } else {
-                    elems.push(TrElement::Char(c));
-                    elems.push(TrElement::Char('-'));
-                }
-            } else {
-                elems.push(TrElement::Char(c));
-            }
-        }
-        Ok(Tr { elems, exclude })
-    }
-
-    fn check(&self, c: char) -> bool {
-        for elem in &self.elems {
-            match elem {
-                TrElement::Char(ch) => {
-                    if *ch == c {
-                        return !self.exclude;
-                    }
-                }
-                TrElement::Range(start, end) => {
-                    if *start <= c && c <= *end {
-                        return !self.exclude;
-                    }
-                }
-            }
-        }
-        self.exclude
-    }
-}
-
-#[test]
-fn tr_test() {
-    assert_eq!(
-        Tr::from_str("abc-def").unwrap(),
-        Tr {
-            elems: vec![
-                TrElement::Char('a'),
-                TrElement::Char('b'),
-                TrElement::Range('c', 'd'),
-                TrElement::Char('e'),
-                TrElement::Char('f')
-            ],
-            exclude: false
-        }
-    );
-
-    assert_eq!(
-        Tr::from_str("-def").unwrap(),
-        Tr {
-            elems: vec![
-                TrElement::Char('-'),
-                TrElement::Char('d'),
-                TrElement::Char('e'),
-                TrElement::Char('f')
-            ],
-            exclude: false
-        }
-    );
-
-    assert_eq!(
-        Tr::from_str("^-def").unwrap(),
-        Tr {
-            elems: vec![
-                TrElement::Char('-'),
-                TrElement::Char('d'),
-                TrElement::Char('e'),
-                TrElement::Char('f')
-            ],
-            exclude: true
-        }
-    );
-
-    assert_eq!(
-        Tr::from_str("--def").unwrap(),
-        Tr {
-            elems: vec![
-                TrElement::Range('-', 'd'),
-                TrElement::Char('e'),
-                TrElement::Char('f')
-            ],
-            exclude: false
-        }
-    );
-
-    let res = Tr::from_str("a-z");
-    assert_eq!(
-        res.unwrap(),
-        Tr {
-            elems: vec![TrElement::Range('a', 'z')],
-            exclude: false
-        }
-    );
-
-    let res = Tr::from_str("^a-z");
-    assert_eq!(
-        res.unwrap(),
-        Tr {
-            elems: vec![TrElement::Range('a', 'z')],
-            exclude: true
-        }
-    );
-    let res = Tr::from_str("a\\-z\\");
-    assert_eq!(
-        res.unwrap(),
-        Tr {
-            elems: vec![
-                TrElement::Char('a'),
-                TrElement::Char('-'),
-                TrElement::Char('z'),
-                TrElement::Char('\\'),
-            ],
-            exclude: false
-        }
-    );
-}
-
 ///
 /// ### String#delete
 ///
@@ -5231,8 +5077,8 @@ fn tr_test() {
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let res = delete_compute(vm, globals, self_, lfp.arg(0).as_array())?;
-    Ok(Value::string_from_str_with_encoding_of(&res, self_))
+    let result = delete_compute(vm, globals, self_, lfp.arg(0).as_array())?;
+    Ok(Value::string_from_inner(result))
 }
 
 ///
@@ -5247,30 +5093,24 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn delete_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let res = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
+    let result = delete_compute(vm, globals, lfp.self_val(), lfp.arg(0).as_array())?;
     let mut self_ = lfp.self_val();
-    let orig_len = self_.as_rstring_inner().len();
-    if res.len() == orig_len {
+    if result.as_bytes().len() == self_.as_rstring_inner().as_bytes().len() {
         return Ok(Value::nil());
     }
-    let enc = self_
-        .is_rstring_inner()
-        .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::Utf8);
-    self_.replace_with_inner(RStringInner::from_encoding_scanned(res.as_bytes(), enc));
+    self_.replace_with_inner(result);
     Ok(self_)
 }
 
-/// Shared body of `String#delete` / `String#delete!`. Builds the
-/// filtered string but doesn't decide between `dup` vs in-place,
-/// which the caller handles.
+/// Shared body of `String#delete` / `String#delete!`. Has a byte-level
+/// fast path for ASCII receivers and falls back to `chars()` for
+/// multibyte content.
 fn delete_compute(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     args: Array,
-) -> Result<String> {
-    let mut res = self_val.as_str().to_string();
+) -> Result<RStringInner> {
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr(
             "wrong number of arguments (given 0, expected 1+)",
@@ -5280,13 +5120,34 @@ fn delete_compute(
         .iter()
         .map(|arg| arg.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
-    let pred = strs
+    let sets: Vec<Charset> = strs
         .iter()
-        .map(|s| Tr::from_str(s))
-        .collect::<Result<Vec<Tr>>>()?;
+        .map(|s| Charset::parse(s))
+        .collect::<Result<_>>()?;
+    let inner = self_val.as_rstring_inner();
 
-    res.retain(|c| !pred.iter().all(|tr| tr.check(c)));
-    Ok(res)
+    if inner.is_ascii_only() {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        for &b in bytes {
+            if !sets.iter().all(|s| s.contains_ascii_byte(b)) {
+                out.push(b);
+            }
+        }
+        return Ok(RStringInner::from_ascii_bytes(out, inner.encoding()));
+    }
+
+    let s = inner.check_utf8()?;
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if !sets.iter().all(|set| set.contains_char(ch)) {
+            out.push(ch);
+        }
+    }
+    Ok(RStringInner::from_encoding_scanned(
+        out.as_bytes(),
+        inner.encoding(),
+    ))
 }
 
 ///
@@ -5300,8 +5161,15 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let self_ = lfp.self_val();
     let from = lfp.arg(0).coerce_to_string(vm, globals)?;
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let inner = self_.as_rstring_inner();
+    if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, false)? {
+        return Ok(Value::string_from_inner(RStringInner::from_ascii_bytes(
+            bytes,
+            inner.encoding(),
+        )));
+    }
     let rec = self_.expect_str(globals)?;
-    let (res, _changed) = tr_translate(rec, &from, &to, false)?;
+    let (res, _) = tr_translate(rec, &from, &to, false)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
@@ -5317,6 +5185,15 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let from = lfp.arg(0).coerce_to_string(vm, globals)?;
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let mut self_ = lfp.self_val();
+    let fast = ascii_tr_translate(self_.as_rstring_inner(), &from, &to, false)?;
+    if let Some((bytes, changed)) = fast {
+        if !changed {
+            return Ok(Value::nil());
+        }
+        let enc = self_.as_rstring_inner().encoding();
+        self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
     let rec = self_.expect_str(globals)?.to_string();
     let (res, changed) = tr_translate(&rec, &from, &to, false)?;
     if !changed {
@@ -5341,8 +5218,15 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_ = lfp.self_val();
     let from = lfp.arg(0).coerce_to_string(vm, globals)?;
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let inner = self_.as_rstring_inner();
+    if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, true)? {
+        return Ok(Value::string_from_inner(RStringInner::from_ascii_bytes(
+            bytes,
+            inner.encoding(),
+        )));
+    }
     let rec = self_.expect_str(globals)?;
-    let (res, _changed) = tr_translate(rec, &from, &to, true)?;
+    let (res, _) = tr_translate(rec, &from, &to, true)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
 }
 
@@ -5358,6 +5242,15 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let from = lfp.arg(0).coerce_to_string(vm, globals)?;
     let to = lfp.arg(1).coerce_to_string(vm, globals)?;
     let mut self_ = lfp.self_val();
+    let fast = ascii_tr_translate(self_.as_rstring_inner(), &from, &to, true)?;
+    if let Some((bytes, changed)) = fast {
+        if !changed {
+            return Ok(Value::nil());
+        }
+        let enc = self_.as_rstring_inner().encoding();
+        self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
     let rec = self_.expect_str(globals)?.to_string();
     let (res, changed) = tr_translate(&rec, &from, &to, true)?;
     if !changed {
@@ -5365,6 +5258,129 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     self_.replace_str(&res);
     Ok(self_)
+}
+
+/// Byte-level `tr` / `tr_s` for ASCII receivers. Returns
+/// `Some((output_bytes, changed))` when the fast path applies (self
+/// is ASCII-only AND both `from` / `to` parse to ASCII-only char
+/// lists), or `None` to fall back to the existing `chars()` walk.
+///
+/// The Rust `to_chars`-then-table construction keeps CRuby's
+/// "later-`from`-duplicate wins" semantics (`"aa".tr("aa","AB") → "BB"`)
+/// because each write to `table[b]` overwrites the previous.
+///
+/// `changed` is set both when a byte's translated value differs from
+/// itself AND when `tr_s`-mode squeeze drops a byte. CRuby's
+/// `tr_s!("a","a")` returns self for `"aabb"` even though no byte
+/// was *replaced*, only squeezed — covered by the second source of
+/// changed.
+fn ascii_tr_translate(
+    self_inner: &RStringInner,
+    from: &str,
+    to: &str,
+    squeeze: bool,
+) -> Result<Option<(SmallVec<[u8; STRING_INLINE_CAP]>, bool)>> {
+    if !self_inner.is_ascii_only() {
+        return Ok(None);
+    }
+    let (from_chars, from_negated) = expand_tr_spec(from)?;
+    if !from_chars.iter().all(|c| c.is_ascii()) {
+        return Ok(None);
+    }
+    let self_bytes = self_inner.as_bytes();
+
+    // Empty `to` ⇒ pure deletion (negation flips which bytes drop).
+    if to.is_empty() {
+        let mut bitmap = [0u64; 2];
+        for c in &from_chars {
+            let b = *c as u8;
+            bitmap[(b >> 6) as usize] |= 1u64 << (b & 63);
+        }
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(self_bytes.len());
+        let mut changed = false;
+        for &b in self_bytes {
+            let in_set = bitmap[(b >> 6) as usize] & (1u64 << (b & 63)) != 0;
+            let drop = in_set ^ from_negated;
+            if drop {
+                changed = true;
+            } else {
+                out.push(b);
+            }
+        }
+        return Ok(Some((out, changed)));
+    }
+
+    let (to_chars, _) = expand_tr_spec(to)?;
+    if !to_chars.iter().all(|c| c.is_ascii()) {
+        return Ok(None);
+    }
+    // `to_chars` is non-empty: `to` is non-empty and `expand_tr_spec`
+    // emits at least one char for any non-empty input.
+    let last_to = *to_chars.last().unwrap() as u8;
+
+    if from_negated {
+        let mut from_bitmap = [0u64; 2];
+        for c in &from_chars {
+            let b = *c as u8;
+            from_bitmap[(b >> 6) as usize] |= 1u64 << (b & 63);
+        }
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(self_bytes.len());
+        let mut changed = false;
+        let mut last_out: Option<u8> = None;
+        for &b in self_bytes {
+            let in_from = from_bitmap[(b >> 6) as usize] & (1u64 << (b & 63)) != 0;
+            if !in_from {
+                // Translated: byte b is *not* in `from`, replace with
+                // `last_to`. `changed` is set on every match, matching
+                // CRuby's "matched the negated set = modified" rule
+                // (`"a-b".tr!("^a-z", "-") → self`).
+                changed = true;
+                let r = last_to;
+                if squeeze && Some(r) == last_out {
+                    // squeeze drops this byte; still translated above.
+                } else {
+                    out.push(r);
+                }
+                last_out = Some(r);
+            } else {
+                out.push(b);
+                last_out = None;
+            }
+        }
+        return Ok(Some((out, changed)));
+    }
+
+    let mut table = [0u8; 128];
+    let mut in_from = [false; 128];
+    for (i, c) in from_chars.iter().enumerate() {
+        let b = *c as u8;
+        let r = to_chars.get(i).copied().unwrap_or(last_to as char) as u8;
+        table[b as usize] = r;
+        in_from[b as usize] = true;
+    }
+
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(self_bytes.len());
+    let mut changed = false;
+    let mut last_out: Option<u8> = None;
+    for &b in self_bytes {
+        if in_from[b as usize] {
+            // `changed` is set on every matched byte, even when the
+            // mapping is a no-op (`tr!("a","a")`) — CRuby's tr! flags
+            // the receiver as modified on any from-match.
+            changed = true;
+            let r = table[b as usize];
+            if squeeze && Some(r) == last_out {
+                // squeeze drops this byte.
+            } else {
+                out.push(r);
+            }
+            last_out = Some(r);
+        } else {
+            out.push(b);
+            last_out = None;
+        }
+    }
+    Ok(Some((out, changed)))
 }
 
 /// Expand a `tr`-style spec into a flat sequence of characters.
@@ -5502,7 +5518,11 @@ fn tr_translate(s: &str, from: &str, to: &str, squeeze: bool) -> Result<(String,
                 last_translated = None;
             }
             Some(r) => {
-                if was_translated && r != ch {
+                // CRuby's `tr!`/`tr_s!` flag the receiver as modified
+                // whenever any char *matched* the `from` set, even when
+                // the mapping is a no-op like `tr!("a","a")`. Match
+                // that — the per-byte fast path uses the same rule.
+                if was_translated {
                     changed = true;
                 }
                 if squeeze && was_translated && Some(r) == last_translated {
@@ -5539,15 +5559,30 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .iter()
         .map(|arg| arg.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
-    let sets: Vec<TrSet> = strs
+    let sets: Vec<Charset> = strs
         .iter()
-        .map(|s| TrSet::from_spec(s))
+        .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
     let self_ = lfp.self_val();
-    let target = self_.as_str();
+    let inner = self_.as_rstring_inner();
+
+    // ASCII haystack fast path: bitmap test per byte, branchless
+    // `all(...)` over the intersection of sets.
+    if inner.is_ascii_only() {
+        let bytes = inner.as_bytes();
+        let mut c = 0i64;
+        for &b in bytes {
+            if sets.iter().all(|s| s.contains_ascii_byte(b)) {
+                c += 1;
+            }
+        }
+        return Ok(Value::integer(c));
+    }
+
+    let target = inner.check_utf8()?;
     let mut c = 0i64;
     for ch in target.chars() {
-        if sets.iter().all(|s| s.contains(ch)) {
+        if sets.iter().all(|s| s.contains_char(ch)) {
             c += 1;
         }
     }
@@ -5568,9 +5603,8 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn squeeze(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.expect_str(globals)?;
-    let res = squeeze_impl(vm, globals, s, lfp.arg(0))?;
-    Ok(Value::string_from_str_with_encoding_of(&res, self_))
+    let inner = squeeze_compute(vm, globals, self_, lfp.arg(0))?;
+    Ok(Value::string_from_inner(inner))
 }
 
 ///
@@ -5582,79 +5616,145 @@ fn squeeze(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn squeeze_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let result = squeeze_compute(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let mut self_ = lfp.self_val();
-    let original = self_.expect_str(globals)?.to_string();
-    let res = squeeze_impl(vm, globals, &original, lfp.arg(0))?;
-    if res == original {
+    if result.as_bytes() == self_.as_rstring_inner().as_bytes() {
         return Ok(Value::nil());
     }
-    self_.replace_str(&res);
+    self_.replace_with_inner(result);
     Ok(self_)
 }
 
-/// Coerce the rest-args array to a `Vec<TrSet>` and apply the squeeze.
-/// Empty argument list squeezes every character.
-fn squeeze_impl(
+/// Apply the squeeze. Empty argument list squeezes every character.
+/// Has a byte-level fast path for ASCII receivers, falls back to a
+/// `chars()` walk otherwise.
+fn squeeze_compute(
     vm: &mut Executor,
     globals: &mut Globals,
-    s: &str,
+    self_val: Value,
     rest_arg: Value,
-) -> Result<String> {
+) -> Result<RStringInner> {
     let args = rest_arg.as_array();
     let strs: Vec<String> = args
         .iter()
         .map(|a| a.coerce_to_string(vm, globals))
         .collect::<Result<Vec<_>>>()?;
-    let sets: Vec<TrSet> = strs
+    let sets: Vec<Charset> = strs
         .iter()
-        .map(|s| TrSet::from_spec(s))
+        .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
+    let inner = self_val.as_rstring_inner();
+
+    // ASCII fast path: branchless byte-test against the intersection,
+    // no allocation when nothing collapses (we still allocate when
+    // building the output, but the inner loop is one bitmap test).
+    if inner.is_ascii_only() {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        let mut prev: Option<u8> = None;
+        for &b in bytes {
+            let in_squeeze_set =
+                squeeze_all || sets.iter().all(|s| s.contains_ascii_byte(b));
+            if in_squeeze_set && Some(b) == prev {
+                continue;
+            }
+            out.push(b);
+            prev = Some(b);
+        }
+        return Ok(RStringInner::from_ascii_bytes(out, inner.encoding()));
+    }
+
+    let s = inner.check_utf8()?;
     let mut out = String::with_capacity(s.len());
     let mut prev: Option<char> = None;
     for ch in s.chars() {
-        let in_squeeze_set = squeeze_all || sets.iter().all(|set| set.contains(ch));
+        let in_squeeze_set = squeeze_all || sets.iter().all(|set| set.contains_char(ch));
         if in_squeeze_set && Some(ch) == prev {
             continue;
         }
         out.push(ch);
         prev = Some(ch);
     }
-    Ok(out)
+    let enc = inner.encoding();
+    Ok(RStringInner::from_encoding_scanned(out.as_bytes(), enc))
 }
 
-/// Pre-parsed `tr`-style character set used by `String#count` and
-/// `String#delete` / `String#squeeze`. Empty sets match nothing
-/// (so `"".count("") == 0`); negation flips that.
-struct TrSet {
-    chars: std::collections::BTreeSet<char>,
+/// Pre-parsed `tr`-style character set used by `String#count` /
+/// `#delete` / `#squeeze` (and the membership half of `#tr` / `#tr_s`).
+///
+/// Two parallel representations live in one struct so callers can pick
+/// the right one for their haystack shape:
+///
+/// - `ascii_bitmap` is a 128-bit map over the ASCII range. ASCII
+///   haystacks test membership in a single bitwise op — the dominant
+///   case in the bench suite and the reason this PR exists.
+/// - `non_ascii` holds the spec's non-ASCII chars in a `BTreeSet` so
+///   char-level paths still work for receivers like `"あい".count(...)`.
+///
+/// Empty specs match nothing (`"".count("") == 0`); `negated` is the
+/// leading `^` flag from `expand_tr_spec`.
+struct Charset {
+    ascii_bitmap: [u64; 2],
+    non_ascii: std::collections::BTreeSet<char>,
     negated: bool,
     empty: bool,
 }
 
-impl TrSet {
-    fn from_spec(spec: &str) -> Result<Self> {
+impl Charset {
+    fn parse(spec: &str) -> Result<Self> {
         if spec.is_empty() {
-            return Ok(TrSet {
-                chars: std::collections::BTreeSet::new(),
+            return Ok(Self {
+                ascii_bitmap: [0; 2],
+                non_ascii: std::collections::BTreeSet::new(),
                 negated: false,
                 empty: true,
             });
         }
         let (chars, negated) = expand_tr_spec(spec)?;
-        Ok(TrSet {
-            chars: chars.into_iter().collect(),
+        let mut ascii_bitmap = [0u64; 2];
+        let mut non_ascii = std::collections::BTreeSet::new();
+        for c in chars {
+            if c.is_ascii() {
+                let b = c as u8;
+                ascii_bitmap[(b >> 6) as usize] |= 1u64 << (b & 63);
+            } else {
+                non_ascii.insert(c);
+            }
+        }
+        Ok(Self {
+            ascii_bitmap,
+            non_ascii,
             negated,
             empty: false,
         })
     }
 
-    fn contains(&self, ch: char) -> bool {
+    fn contains_char(&self, ch: char) -> bool {
         if self.empty {
             return false;
         }
-        let in_set = self.chars.contains(&ch);
-        if self.negated { !in_set } else { in_set }
+        let in_set = if ch.is_ascii() {
+            let b = ch as u8;
+            self.ascii_bitmap[(b >> 6) as usize] & (1u64 << (b & 63)) != 0
+        } else {
+            self.non_ascii.contains(&ch)
+        };
+        in_set ^ self.negated
+    }
+
+    /// Byte-level membership for ASCII haystacks. Caller must ensure
+    /// `b < 0x80`. Negated sets work correctly: `^a-z` against an
+    /// ASCII haystack still byte-tests on the 128-bit bitmap because
+    /// every ASCII byte's "not in {a..z}" answer is well-defined.
+    #[inline]
+    fn contains_ascii_byte(&self, b: u8) -> bool {
+        debug_assert!(b < 0x80);
+        if self.empty {
+            return false;
+        }
+        let in_set = self.ascii_bitmap[(b >> 6) as usize] & (1u64 << (b & 63)) != 0;
+        in_set ^ self.negated
     }
 }
 
@@ -7776,6 +7876,110 @@ mod tests {
         run_test(r#"'abcdefg'.count('c') "#);
         run_test(r#"'123456789'.count('2378') "#);
         run_test(r#"'123456789'.count('2378', '2378') "#);
+    }
+
+    #[test]
+    fn charset_ops_negation_and_ranges() {
+        // Negation and a-z ranges, ASCII fast path.
+        run_test(r#""hello, world".count("^a-z")"#);
+        run_test(r#""hello, world".delete("^a-z")"#);
+        run_test(r#""hello, world".tr("^a-z", "X")"#);
+        // tr_s squeezes the *replacement region* — non-translated
+        // chars in the middle break the run.
+        run_test(r#""hello, world".tr_s("^a-z", "X")"#);
+        // Multiple sets are intersected.
+        run_test(r#""aeIou abcde".delete("a-y", "^x-z")"#);
+    }
+
+    #[test]
+    fn charset_ops_utf8_fallback() {
+        // Non-ASCII receivers fall back to the char-level slow path.
+        run_test(r#""あいうあいう".count("あ")"#);
+        run_test(r#""あいうあいう".delete("う")"#);
+        run_test(r#""あいう".tr("あい", "AB")"#);
+        run_test(r#""あいううあい".squeeze"#);
+        // Non-ASCII chars in from-spec also force fallback.
+        run_test(r#""hello".count("héllo")"#);
+    }
+
+    #[test]
+    fn charset_ops_bang_changed_matches_cruby() {
+        // Pre-fix: `tr!("a","a")` returned nil because no byte's value
+        // changed. CRuby reports modified whenever the from-set matched
+        // any char — the new fast/slow paths follow that.
+        run_test(
+            r#"
+              s = "aabb".dup
+              [s.tr!("a", "a"), s]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "a-b".dup
+              [s.tr!("^a-z", "-"), s]
+            "#,
+        );
+        // tr_s: matched + squeezed run, no byte actually replaced.
+        run_test(
+            r#"
+              s = "aabb".dup
+              [s.tr_s!("a", "a"), s]
+            "#,
+        );
+        // No match still returns nil.
+        run_test(
+            r#"
+              s = "aabb".dup
+              [s.tr!("x", "y"), s]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "abc".dup
+              [s.tr!("^a-z", "X"), s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn charset_ops_tr_s_squeeze_semantics() {
+        // tr_s squeezes only the replacement region.
+        run_test(r#""hello".tr_s("el", "ip")"#);     // "hipo"
+        run_test(r#""aXbXa".tr_s("a", "b")"#);       // "bXbXb" — X resets run
+        run_test(r#""abcd".tr("abc", "AB")"#);       // "ABBd" — last_to fallback
+        // Deletion via empty `to`.
+        run_test(r#""aaabbb".tr_s("a", "")"#);
+    }
+
+    #[test]
+    fn charset_ops_squeeze_bang_changed() {
+        // squeeze! returns nil when no run was collapsed.
+        run_test(
+            r#"
+              s = "abcd".dup
+              [s.squeeze!, s]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "aabb".dup
+              [s.squeeze!, s]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "aabb".dup
+              [s.squeeze!("a"), s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn charset_ops_preserve_encoding() {
+        // Fast path tags the result as the receiver's encoding.
+        run_test(r#""hello".b.tr("e", "E").encoding.to_s"#);
+        run_test(r#""hello".encode("US-ASCII").delete("aeiou").encoding.to_s"#);
+        run_test(r#""hello".encode("US-ASCII").squeeze.encoding.to_s"#);
     }
 
     #[test]
