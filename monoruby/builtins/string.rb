@@ -31,14 +31,6 @@ class String
     self
   end
 
-  def reverse
-    chars.reverse.join
-  end
-
-  def reverse!
-    replace(reverse)
-  end
-
   def chop
     return "" if empty?
     if self[-1] == "\n" && length > 1 && self[-2] == "\r"

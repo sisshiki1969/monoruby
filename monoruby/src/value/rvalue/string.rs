@@ -815,6 +815,55 @@ impl RStringInner {
         }
     }
 
+    /// Codepoint-reversed copy of `self`. The declared encoding and
+    /// the cached code range are both preserved: reversing UTF-8
+    /// codepoints yields valid UTF-8, ASCII-only buffers stay
+    /// ASCII-only, and a broken UTF-8 input stays broken because
+    /// `iter_char_bytes` walks invalid bytes one-at-a-time (the
+    /// same "each invalid byte is its own char" rule CRuby's
+    /// `rb_str_reverse` applies).
+    pub fn reverse(&self) -> Self {
+        let enc = self.ty;
+        let bytes = self.as_bytes();
+        let cr = self.code_range();
+
+        // Fast path — pure byte reversal — when every char occupies
+        // a single byte: SevenBit (ASCII-only under any encoding) or
+        // genuine single-byte encodings regardless of content.
+        let byte_reversible = matches!(cr, CodeRange::SevenBit)
+            || matches!(
+                enc,
+                Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_)
+            );
+        if byte_reversible {
+            let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+            buf.extend(bytes.iter().rev().copied());
+            return RStringInner::from(buf, enc, cr);
+        }
+
+        // Encoding-aware path. Walk the source forward via
+        // `iter_char_bytes` and copy each char's bytes into the
+        // output starting from the tail. This costs one allocation
+        // and one forward pass — no intermediate Vec of slices.
+        let n = bytes.len();
+        let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(n);
+        // SAFETY: capacity is exactly `n` and the loop below writes
+        // every byte before the value is observed (each
+        // `iter_char_bytes` step consumes a disjoint slice covering
+        // the whole buffer in aggregate).
+        unsafe {
+            buf.set_len(n);
+            let dst = buf.as_mut_ptr();
+            let mut write = n;
+            for slice in self.iter_char_bytes() {
+                write -= slice.len();
+                std::ptr::copy_nonoverlapping(slice.as_ptr(), dst.add(write), slice.len());
+            }
+            debug_assert_eq!(write, 0);
+        }
+        RStringInner::from(buf, enc, cr)
+    }
+
     /// Negotiate the result encoding for an operation that combines
     /// `self` and `other` (string concatenation, replacement, …).
     /// Returns `None` if the two encodings are not compatible —

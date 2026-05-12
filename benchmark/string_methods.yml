@@ -1,0 +1,58 @@
+prelude: |
+  S  = "Hello, World!" * 8        # 104 chars
+  S2 = "Hello, World!" * 8
+  CSV = "a,b,c,d,e,f,g,h,i,j"
+  PAD = "abcdefghij"
+  NUM = "1234567890"
+  LONG = ("Lorem ipsum dolor sit amet, " * 20).freeze
+  HAY  = ("foo bar baz " * 50).freeze
+  PAT  = /bar/
+  RE_W = /\w+/
+
+benchmark:
+  add:           "S + S2"
+  mul:           "PAD * 10"
+  shl:           "(+'').<<(PAD).<<(PAD)"
+  eq:            "S == S2"
+  cmp:           "S <=> S2"
+  index_int:     "S[5]"
+  index_range:   "S[5, 20]"
+  length:        "S.length"
+  include:       "LONG.include?('amet')"
+  start_with:    "LONG.start_with?('Lorem')"
+  end_with:      "LONG.end_with?('amet, ')"
+  split_str:     "CSV.split(',')"
+  split_regex:   "HAY.split(/\\s+/)"
+  gsub_str:      "HAY.gsub('bar', 'BAR')"
+  gsub_regex:    "HAY.gsub(PAT, 'BAR')"
+  sub_str:       "HAY.sub('bar', 'BAR')"
+  sub_regex:     "HAY.sub(PAT, 'BAR')"
+  scan_regex:    "HAY.scan(RE_W)"
+  match:         "HAY.match(PAT)"
+  match_p:       "HAY.match?(PAT)"
+  chars:         "PAD.chars"
+  each_char:     "PAD.each_char { |c| c }"
+  upcase:        "LONG.upcase"
+  downcase:      "LONG.downcase"
+  swapcase:      "LONG.swapcase"
+  capitalize:    "LONG.capitalize"
+  chomp:         "(LONG + \"\\n\").chomp"
+  strip:         "(' ' + LONG + ' ').strip"
+  to_i:          "NUM.to_i"
+  to_f:          "NUM.to_f"
+  tr:            "LONG.tr('a-z', 'A-Z')"
+  index_find:    "LONG.index('amet')"
+  rindex_find:   "LONG.rindex('amet')"
+  reverse:       "LONG.reverse"
+  replace:       "(+'').replace(LONG)"
+  bytes:         "PAD.bytes"
+  count_chars:   "LONG.count('aeiou')"
+  delete_chars:  "LONG.delete('aeiou')"
+  squeeze:       "(PAD * 3).squeeze"
+  ljust:         "PAD.ljust(80)"
+  rjust:         "PAD.rjust(80)"
+  center:        "PAD.center(80)"
+  succ:          "PAD.succ"
+  hash_:         "LONG.hash"
+
+loop_count: 200000
