@@ -503,216 +503,7 @@ fn unpack_as(recv: Value) -> (Value, Value, Value, bool) {
 //
 // `each` is registered in `builtins/arithmetic_sequence.rb` rather
 // than here — benchmarks showed the JIT'd Ruby loop is on par with
-// the Rust + `invoke_block` path. The native implementation below is
-// kept for reference / future use.
-
-/*///
-/// ### Enumerator::ArithmeticSequence#each
-///
-/// - each {|elem| ... } -> self
-/// - each -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/each.html]
-#[allow(dead_code)]
-#[coverage(off)]
-#[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let recv = lfp.self_val();
-    let inner = recv.as_arithmetic_sequence_inner();
-    let b = inner.begin();
-    let e = inner.end();
-    let s = inner.step();
-    let excl = inner.exclude_end();
-
-    let Some(bh) = lfp.block() else {
-        return vm.generate_enumerator(IdentId::EACH, recv, vec![], pc);
-    };
-
-    if value_is_zero(s) {
-        return Err(MonorubyErr::typeerr("step can't be 0"));
-    }
-    if b.is_nil() {
-        return Err(MonorubyErr::argumenterr(
-            "#each for beginless arithmetic sequences is meaningless",
-        ));
-    }
-
-    let data = vm.get_block_data(globals, bh)?;
-
-    // Fixnum fast path: b, s both Fixnum AND end is nil or Fixnum.
-    if let (Some(b_i), Some(s_i)) = (b.try_fixnum(), s.try_fixnum()) {
-        if e.is_nil() {
-            return fixnum_each_endless(vm, globals, &data, b_i, s_i, recv);
-        }
-        if let Some(e_i) = e.try_fixnum() {
-            return fixnum_each_finite(vm, globals, &data, b_i, e_i, s_i, excl, recv);
-        }
-    }
-
-    // Float fast path.
-    if let (Some(b_f), Some(s_f)) = (to_f64(b), to_f64(s))
-        && (e.is_nil() || to_f64(e).is_some())
-    {
-        let e_opt = if e.is_nil() { None } else { to_f64(e) };
-        return float_each(vm, globals, &data, b_f, e_opt, s_f, excl, recv);
-    }
-
-    generic_each(vm, globals, &data, b, e, s, excl, recv)
-}
-
-#[allow(dead_code)]
-fn fixnum_each_finite(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    b: i64,
-    e: i64,
-    s: i64,
-    excl: bool,
-    recv: Value,
-) -> Result<Value> {
-    let Count::Finite(count) = fixnum_count(b, e, s, excl) else {
-        unreachable!()
-    };
-    let mut cur = b;
-    let mut remaining = count;
-    while remaining > 0 {
-        vm.invoke_block(globals, data, &[Value::integer(cur)])?;
-        remaining -= 1;
-        if remaining == 0 {
-            break;
-        }
-        match cur.checked_add(s) {
-            Some(n) => cur = n,
-            None => break,
-        }
-    }
-    Ok(recv)
-}*/
-
-/*#[allow(dead_code)]
-fn fixnum_each_endless(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    b: i64,
-    s: i64,
-    recv: Value,
-) -> Result<Value> {
-    let mut cur = b;
-    loop {
-        vm.invoke_block(globals, data, &[Value::integer(cur)])?;
-        match cur.checked_add(s) {
-            Some(n) => cur = n,
-            None => {
-                // Promote to BigInt and continue via generic path.
-                let cur_v = Value::bigint(BigInt::from(cur) + BigInt::from(s));
-                let s_v = Value::integer(s);
-                return generic_each_endless(vm, globals, data, cur_v, s_v, recv);
-            }
-        }
-    }
-}*/
-
-/*#[allow(dead_code)]
-fn float_each(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    b: f64,
-    e: Option<f64>,
-    s: f64,
-    excl: bool,
-    recv: Value,
-) -> Result<Value> {
-    if s == 0.0 {
-        return Err(MonorubyErr::typeerr("step can't be 0"));
-    }
-    let endless_loop = |vm: &mut Executor, globals: &mut Globals| -> Result<()> {
-        let mut i: i64 = 0;
-        loop {
-            vm.invoke_block(globals, data, &[Value::float(b + (i as f64) * s)])?;
-            i += 1;
-        }
-    };
-    match e {
-        None => {
-            endless_loop(vm, globals)?;
-            Ok(recv)
-        }
-        Some(e) => {
-            let cnt = float_count(b, e, s, excl);
-            match cnt {
-                Count::Finite(n) => {
-                    let mut i: i64 = 0;
-                    while i < n {
-                        vm.invoke_block(globals, data, &[Value::float(b + (i as f64) * s)])?;
-                        i += 1;
-                    }
-                    Ok(recv)
-                }
-                Count::Infinite => {
-                    endless_loop(vm, globals)?;
-                    Ok(recv)
-                }
-            }
-        }
-    }
-}*/
-
-/*#[allow(dead_code)]
-fn generic_each(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    b: Value,
-    e: Value,
-    s: Value,
-    excl: bool,
-    recv: Value,
-) -> Result<Value> {
-    if e.is_nil() {
-        return generic_each_endless(vm, globals, data, b, s, recv);
-    }
-    let s_pos = vm
-        .invoke_method_inner(globals, IdentId::_GT, s, &[Value::integer(0)], None, None)?
-        .as_bool();
-    let cmp_op = if s_pos {
-        if excl { IdentId::_LT } else { IdentId::_LE }
-    } else if excl {
-        IdentId::_GT
-    } else {
-        IdentId::_GE
-    };
-    let mut cur = b;
-    loop {
-        let ok = vm
-            .invoke_method_inner(globals, cmp_op, cur, &[e], None, None)?
-            .as_bool();
-        if !ok {
-            break;
-        }
-        vm.invoke_block(globals, data, &[cur])?;
-        cur = vm.invoke_method_inner(globals, IdentId::_ADD, cur, &[s], None, None)?;
-    }
-    Ok(recv)
-}*/
-
-/*#[allow(dead_code)]
-fn generic_each_endless(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    b: Value,
-    s: Value,
-    _recv: Value,
-) -> Result<Value> {
-    let mut cur = b;
-    loop {
-        vm.invoke_block(globals, data, &[cur])?;
-        cur = vm.invoke_method_inner(globals, IdentId::_ADD, cur, &[s], None, None)?;
-    }
-}*/
+// the Rust + `invoke_block` path.
 
 ///
 /// ### Enumerator::ArithmeticSequence#first
@@ -1025,13 +816,26 @@ fn format_oob(b: Value, e: Value, s: Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Coverage for the two error-prone helpers that aren't directly
+    // exposed: `generic_count` (the Rational / user-Numeric slow path
+    // under `finite_count`) and `format_oob` (the error builder
+    // dispatched from `index_op`).
+    //
+    // `generic_count` is reached only when the all-Fixnum and the
+    // all-`to_f64` fast paths in `finite_count` both fall through —
+    // i.e. at least one of (b, e, s) is a Rational / Complex /
+    // user-defined Numeric. Rational steps below drive `.size`
+    // through `size` → `finite_count` → `generic_count`.
+    //
+    // `format_oob` fires from `index_op` along three paths:
+    // positive-step with begin past `len`, positive-step with an
+    // `end_is_term` past `len`, and negative-step with
+    // begin − (len − 1) > |s|. Each error case uses `rescue
+    // $!.message` so the rendered string is compared against CRuby,
+    // and is paired with the in-range neighbour that escapes the
+    // check.
     use crate::tests::*;
 
-    // `generic_count` is reached only when the all-Fixnum and the
-    // all-`to_f64` fast paths both fall through, i.e. at least one of
-    // (b, e, s) is a Rational / Complex / user-defined Numeric. A
-    // Rational step is the simplest reproducer. Each `.size` call below
-    // routes through `size` → `finite_count` → `generic_count`.
     #[test]
     fn arithmetic_sequence_generic_count_via_size() {
         run_tests(&[
@@ -1063,6 +867,43 @@ mod tests {
             // Numeric#step path (b is Fixnum, s is Rational).
             "1.step(10, Rational(3,2)).size",
             "10.step(1, Rational(-3,2)).size",
+        ]);
+    }
+
+    #[test]
+    fn arithmetic_sequence_index_op_format_oob() {
+        run_tests(&[
+            // ── positive step, begin past len ──────────────────────
+            // Endless `(7..).step(2)`: raw_e is nil ⇒ rendered as
+            // empty between `..` and `).step`.
+            "arr = [10, 20, 30, 40, 50]; arr[(7..).step(2)] rescue $!.message",
+            // Boundary just past len, same path.
+            "arr = [10, 20, 30, 40, 50]; arr[(6..).step(2)] rescue $!.message",
+            // Begin past len but s == 1 ⇒ no error, returns nil
+            // (the early-return that sits inside the same branch).
+            "arr = [10, 20, 30, 40, 50]; arr[(7..).step(1)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(6..).step(1)]",
+            // Begin == len ⇒ empty result (not an error).
+            "arr = [10, 20, 30, 40, 50]; arr[(5..).step(2)]",
+
+            // ── positive step, end_is_term past len ────────────────
+            // `(0..6).step(2)`: (6 - 0) % 2 == 0 ⇒ end_is_term true,
+            // and 6 >= len(5) ⇒ raise.
+            "arr = [10, 20, 30, 40, 50]; arr[(0..6).step(2)] rescue $!.message",
+            // End exactly at len-1 ⇒ no error.
+            "arr = [10, 20, 30, 40, 50]; arr[(0..4).step(2)]",
+            // End == len, end_is_term false ((5 - 0) % 2 == 1) ⇒
+            // no error (clamped to len-1 inside the function).
+            "arr = [10, 20, 30, 40, 50]; arr[(0..3).step(2)]",
+
+            // ── negative step, begin too far past len-1 ────────────
+            // `(10..0).step(-3)`: b - (len-1) = 6, |s| = 3,
+            // diff(6) > |s|(3) ⇒ raise.
+            "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-3)] rescue $!.message",
+            // Same shape, |s| = 2.
+            "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-2)] rescue $!.message",
+            // |s| == 1 escapes the check ⇒ no error (full reverse).
+            "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-1)]",
         ]);
     }
 }
