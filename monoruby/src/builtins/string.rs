@@ -1,4 +1,5 @@
 use num::{BigInt, Zero};
+use smallvec::SmallVec;
 
 use super::*;
 use jitgen::JitContext;
@@ -4379,6 +4380,57 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(Value::symbol(id))
 }
 
+/// Byte-level case mapping for ASCII-only receivers. Returns the
+/// transformed `RStringInner` when the input's code range is
+/// `SevenBit` and `mode` is not `Turkic` (Turkic upcases `i`→`İ` /
+/// downcases `I`→`ı`, both non-ASCII, so the byte transform isn't
+/// closed under Turkic semantics).
+///
+/// For ASCII content, `Full` / `Ascii` / `Fold` all collapse to the
+/// trivial bitwise `b ^ 0x20` for letters — `Fold`'s only non-trivial
+/// expansion is `ß` → `ss`, which can't appear here. The output is
+/// provably ASCII, so we tag the result with `cr = SevenBit`
+/// directly via `from_ascii_bytes` and skip the O(N) classification
+/// scan that `from_encoding_scanned` would do.
+///
+/// The transform loop intentionally has no loop-carried `changed`
+/// flag — that branchless byte-→byte map is the part the auto-
+/// vectoriser can turn into wide SIMD, so the bang variants compute
+/// changed-vs-unchanged with a single `memcmp` afterward instead.
+fn ascii_case_fast_path(
+    inner: &RStringInner,
+    op: CaseOp,
+    mode: CaseMode,
+) -> Option<RStringInner> {
+    if !inner.is_ascii_only() || matches!(mode, CaseMode::Turkic) {
+        return None;
+    }
+    let bytes = inner.as_bytes();
+    let out: SmallVec<[u8; STRING_INLINE_CAP]> = match op {
+        CaseOp::Upcase => bytes.iter().map(|b| b.to_ascii_uppercase()).collect(),
+        CaseOp::Downcase => bytes.iter().map(|b| b.to_ascii_lowercase()).collect(),
+        CaseOp::Swapcase => bytes
+            .iter()
+            .map(|&b| if b.is_ascii_alphabetic() { b ^ 0x20 } else { b })
+            .collect(),
+        CaseOp::Capitalize => {
+            // Run the downcase vector pass over every byte (so the
+            // body of the loop has no branch the auto-vectoriser has
+            // to disentangle), then patch the leading byte to its
+            // uppercase form. A hand-rolled "first vs rest" loop
+            // doesn't vectorise — that path costs ~4× more in this
+            // benchmark.
+            let mut v: SmallVec<[u8; STRING_INLINE_CAP]> =
+                bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
+            if let Some(first) = v.first_mut() {
+                *first = first.to_ascii_uppercase();
+            }
+            v
+        }
+    };
+    Some(RStringInner::from_ascii_bytes(out, inner.encoding()))
+}
+
 ///
 /// ### String#reverse
 ///
@@ -4424,6 +4476,11 @@ fn reverse_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     let self_val = lfp.self_val();
+    if let Some(inner) = self_val.is_rstring_inner() {
+        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Upcase, mode) {
+            return Ok(Value::string_from_inner(fast));
+        }
+    }
     let s = self_val.expect_str(globals)?;
     // `apply_case` walks `chars()` and pushes whole scalars, so the
     // output is well-formed UTF-8 by construction; pre-scan it so
@@ -4446,6 +4503,15 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
+    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Upcase, mode);
+    if let Some(result) = fast {
+        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Upcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
@@ -4472,6 +4538,11 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     let self_val = lfp.self_val();
+    if let Some(inner) = self_val.is_rstring_inner() {
+        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Downcase, mode) {
+            return Ok(Value::string_from_inner(fast));
+        }
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Downcase, mode),
@@ -4490,6 +4561,15 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
+    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Downcase, mode);
+    if let Some(result) = fast {
+        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Downcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
@@ -4521,6 +4601,11 @@ fn capitalize(
 ) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     let self_val = lfp.self_val();
+    if let Some(inner) = self_val.is_rstring_inner() {
+        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Capitalize, mode) {
+            return Ok(Value::string_from_inner(fast));
+        }
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Capitalize, mode),
@@ -4544,6 +4629,15 @@ fn capitalize_(
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
+    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Capitalize, mode);
+    if let Some(result) = fast {
+        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Capitalize, mode);
     let changed = &result != self_val.expect_str(globals)?;
@@ -4569,6 +4663,11 @@ fn capitalize_(
 fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     let self_val = lfp.self_val();
+    if let Some(inner) = self_val.is_rstring_inner() {
+        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Swapcase, mode) {
+            return Ok(Value::string_from_inner(fast));
+        }
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Swapcase, mode),
@@ -4587,6 +4686,15 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
+    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Swapcase, mode);
+    if let Some(result) = fast {
+        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
     let s = self_val.expect_str(globals)?;
     let result = apply_case(s, CaseOp::Swapcase, mode);
     let changed = &result != self_val.expect_str(globals)?;
@@ -9806,6 +9914,75 @@ mod tests {
     }
 
     // ----- S2: encoding propagation through string-producing ops -----
+
+    #[test]
+    fn case_fast_path_basic() {
+        // ASCII-only inputs cover the byte-level fast path; the slow
+        // path is exercised via the UTF-8 / Turkic tests below.
+        run_test(r#""Hello, World!".upcase"#);
+        run_test(r#""Hello, World!".downcase"#);
+        run_test(r#""Hello, World!".swapcase"#);
+        run_test(r#""hello world".capitalize"#);
+        run_test(r#""".upcase"#);
+        run_test(r#""".downcase"#);
+        run_test(r#""".capitalize"#);
+        run_test(r#""".swapcase"#);
+        // Mixed letters / digits / punctuation — non-letters pass through.
+        run_test(r#""a1b2 c3!".upcase"#);
+        run_test(r#""A1B2 C3!".downcase"#);
+    }
+
+    #[test]
+    fn case_fast_path_turkic_falls_back() {
+        // Turkic mode on ASCII can still produce non-ASCII output
+        // (`i` → `İ`, `I` → `ı`), so the fast path must punt.
+        run_test(r#""istanbul".upcase(:turkic)"#);
+        run_test(r#""ISTANBUL".downcase(:turkic)"#);
+    }
+
+    #[test]
+    fn case_fast_path_utf8_slow_path() {
+        // Non-ASCII receivers always hit the slow path.
+        run_test(r#""Café".upcase"#);
+        run_test(r#""CAFÉ".downcase"#);
+        run_test(r#""ß".downcase(:fold)"#);
+    }
+
+    #[test]
+    fn case_bang_fast_path_changed_vs_nil() {
+        // CRuby contract: bang variants return self on change, nil on no-op.
+        run_test(
+            r#"
+              s = "hello".dup
+              [s.upcase!, s, s.upcase!]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "HELLO".dup
+              [s.downcase!, s, s.downcase!]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "Hello".dup
+              [s.swapcase!, s]
+            "#,
+        );
+        run_test(
+            r#"
+              s = "hello".dup
+              [s.capitalize!, s, s.capitalize!]
+            "#,
+        );
+        // Pure non-letters: no change → nil from the bang variant.
+        run_test(
+            r#"
+              s = "1234!".dup
+              [s.upcase!, s]
+            "#,
+        );
+    }
 
     #[test]
     fn case_methods_preserve_encoding() {
