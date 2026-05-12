@@ -54,6 +54,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(TIME_CLASS, ">=", ge, 1);
     globals.define_builtin_func(TIME_CLASS, "==", eq, 1);
     globals.define_builtin_func(TIME_CLASS, "eql?", eql, 1);
+    globals.define_builtin_func(TIME_CLASS, "hash", hash, 0);
     globals.define_builtin_func(TIME_CLASS, "sunday?", sunday_q, 0);
     globals.define_builtin_func(TIME_CLASS, "monday?", monday_q, 0);
     globals.define_builtin_func(TIME_CLASS, "tuesday?", tuesday_q, 0);
@@ -1919,19 +1920,28 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 
 #[monoruby_builtin]
 fn eql(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // `eql?` is stricter: only true for two Times *and* equal in
-    // both instant and offset. We approximate by comparing the
-    // tagged enum directly, which captures both pieces.
-    let other = lfp.arg(0);
-    let Some(rv) = other.try_rvalue() else {
-        return Ok(Value::bool(false));
-    };
-    if rv.ty() != ObjTy::TIME {
-        return Ok(Value::bool(false));
-    }
+    // CRuby `Time#eql?` is equality of absolute instant (matching
+    // `==` for two Times), returning false for any non-Time. The
+    // display offset is not part of identity, so a `Time.utc` and
+    // its `getlocal("+09:00")` are `eql?`.
     Ok(Value::bool(
-        lfp.self_val().as_time() == other.as_time(),
+        time_cmp_opt(lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
     ))
+}
+
+/// `Time#hash` — must agree with `eql?`, so hash the absolute
+/// instant (UTC seconds + nanoseconds), not the tagged enum.
+#[monoruby_builtin]
+fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::hash::{Hash, Hasher};
+    let (secs, nsec) = match lfp.self_val().as_time() {
+        TimeInner::Local(t) => (t.with_timezone(&Utc).timestamp(), t.nanosecond()),
+        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
+    };
+    let mut hasher = std::hash::DefaultHasher::new();
+    secs.hash(&mut hasher);
+    nsec.hash(&mut hasher);
+    Ok(Value::integer_from_u64(hasher.finish()))
 }
 
 impl std::ops::Sub<Self> for TimeInner {
@@ -2774,10 +2784,8 @@ mod tests {
     fn time_eq_eql() {
         // `==` is equality of absolute instant (Local vs UTC at the
         // same moment compare equal); returns false (not nil) for
-        // non-Time arguments. `eql?` is similar but stays false for
-        // non-Time (never raises). The cross-zone same-instant
-        // `eql?` case (CRuby returns true) is intentionally omitted
-        // — see issue #479 for the divergence.
+        // non-Time arguments. `eql?` shares the same absolute-instant
+        // semantics but stays false for non-Time (never raises).
         run_tests(&[
             "Time.utc(1970) == Time.utc(1970)",
             "Time.utc(1970) == Time.utc(1971)",
@@ -2790,6 +2798,19 @@ mod tests {
             "Time.utc(1970).eql?(0)",
             r#"Time.utc(1970).eql?("foo")"#,
             "Time.utc(1970).eql?(nil)",
+            // Cross-zone same-instant `eql?` — CRuby returns true.
+            r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u.eql?(l)"#,
+        ]);
+    }
+
+    #[test]
+    fn time_hash_matches_eql() {
+        // `hash` must agree with `eql?` on the absolute instant:
+        // same instant ⇒ same hash, regardless of display offset.
+        run_tests(&[
+            "Time.utc(1970).hash == Time.utc(1970).hash",
+            r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u.hash == l.hash"#,
+            "Time.utc(1970).hash.is_a?(Integer)",
         ]);
     }
 
