@@ -506,7 +506,7 @@ fn unpack_as(recv: Value) -> (Value, Value, Value, bool) {
 // the Rust + `invoke_block` path. The native implementation below is
 // kept for reference / future use.
 
-///
+/*///
 /// ### Enumerator::ArithmeticSequence#each
 ///
 /// - each {|elem| ... } -> self
@@ -588,9 +588,9 @@ fn fixnum_each_finite(
         }
     }
     Ok(recv)
-}
+}*/
 
-#[allow(dead_code)]
+/*#[allow(dead_code)]
 fn fixnum_each_endless(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -612,9 +612,9 @@ fn fixnum_each_endless(
             }
         }
     }
-}
+}*/
 
-#[allow(dead_code)]
+/*#[allow(dead_code)]
 fn float_each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -658,9 +658,9 @@ fn float_each(
             }
         }
     }
-}
+}*/
 
-#[allow(dead_code)]
+/*#[allow(dead_code)]
 fn generic_each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -696,9 +696,9 @@ fn generic_each(
         cur = vm.invoke_method_inner(globals, IdentId::_ADD, cur, &[s], None, None)?;
     }
     Ok(recv)
-}
+}*/
 
-#[allow(dead_code)]
+/*#[allow(dead_code)]
 fn generic_each_endless(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -712,9 +712,7 @@ fn generic_each_endless(
         vm.invoke_block(globals, data, &[cur])?;
         cur = vm.invoke_method_inner(globals, IdentId::_ADD, cur, &[s], None, None)?;
     }
-}
-
-// ─── first ─────────────────────────────────────────────────────────
+}*/
 
 ///
 /// ### Enumerator::ArithmeticSequence#first
@@ -1023,4 +1021,48 @@ fn format_oob(b: Value, e: Value, s: Value) -> String {
         render(e),
         render(s)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    // `generic_count` is reached only when the all-Fixnum and the
+    // all-`to_f64` fast paths both fall through, i.e. at least one of
+    // (b, e, s) is a Rational / Complex / user-defined Numeric. A
+    // Rational step is the simplest reproducer. Each `.size` call below
+    // routes through `size` → `finite_count` → `generic_count`.
+    #[test]
+    fn arithmetic_sequence_generic_count_via_size() {
+        run_tests(&[
+            // Normal positive-step path: s_pos && !diff_neg, non-excl,
+            // floor(diff/s) terms + 1.
+            "(1..10).step(Rational(3,2)).size",
+            "(1..10).step(Rational(1,3)).size",
+            "(1..10).step(Rational(1,1)).size",
+            // Excl with last-term-on-boundary → overshoot adjustment
+            // decrements n_int (10 == e ⇒ drop).
+            "(1...10).step(Rational(3,2)).size",
+            "(1...10).step(Rational(1,3)).size",
+            // Excl without overshoot — last computed term sits strictly
+            // below e, so n_int stays.
+            "(1...11).step(Rational(3,2)).size",
+            // Negative-step normal path (!s_pos && !diff_pos).
+            "(10..1).step(Rational(-3,2)).size",
+            "(10...1).step(Rational(-3,2)).size",
+            // Sign-mismatch early-returns: (s_pos && diff_neg) and
+            // (!s_pos && diff_pos) both ⇒ Finite(0).
+            "(1..10).step(Rational(-3,2)).size",
+            "(10..1).step(Rational(3,2)).size",
+            // Same-point endpoints: diff == 0. Inclusive ⇒ 1 term;
+            // exclusive ⇒ overshoot drives n_int below zero ⇒ 0.
+            "(5..5).step(Rational(3,2)).size",
+            "(5...5).step(Rational(3,2)).size",
+            // Range#% delegates to the same AS machinery.
+            "(1..10).%(Rational(3,2)).size",
+            // Numeric#step path (b is Fixnum, s is Rational).
+            "1.step(10, Rational(3,2)).size",
+            "10.step(1, Rational(-3,2)).size",
+        ]);
+    }
 }
