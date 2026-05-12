@@ -59,5 +59,33 @@ class Enumerator
       Array.new(cnt) { |i| b + i * s }
     end
     alias entries to_a
+
+    # `each` is implemented in Ruby (rather than Rust) so monoruby's
+    # JIT can inline the block dispatch directly into the loop —
+    # benchmarks show the JIT'd Ruby version beats the Rust+invoke_block
+    # path. `size` is native (Rust), so the count itself is O(1).
+    def each(&block)
+      return self.to_enum(:each) { size } unless block
+      b = self.begin
+      s = self.step
+      raise TypeError, "step can't be 0" if s == 0
+      raise ArgumentError, "#each for beginless arithmetic sequences is meaningless" if b.nil?
+      cnt = self.end.nil? ? Float::INFINITY : size
+      if cnt.is_a?(Float) && cnt.infinite?
+        # Endless / e == Float::INFINITY: loop until the caller breaks.
+        i = 0
+        loop do
+          yield b + i * s
+          i += 1
+        end
+      else
+        i = 0
+        while i < cnt
+          yield b + i * s
+          i += 1
+        end
+      end
+      self
+    end
   end
 end

@@ -29,23 +29,39 @@ pub(super) fn init(globals: &mut Globals) {
         arithmetic_sequence_build,
         4,
     );
-    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "begin", begin, 0);
-    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "end", end, 0);
-    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "step", step, 0);
-    globals.define_builtin_func(
+    globals.define_builtin_inline_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "begin",
+        begin,
+        Box::new(as_begin_inline),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "end",
+        end,
+        Box::new(as_end_inline),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        ARITHMETIC_SEQUENCE_CLASS,
+        "step",
+        step,
+        Box::new(as_step_inline),
+        0,
+    );
+    globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "exclude_end?",
         exclude_end,
+        Box::new(as_exclude_end_inline),
         0,
     );
-    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "each", each, 0);
-    globals.define_builtin_funcs(
-        ARITHMETIC_SEQUENCE_CLASS,
-        "size",
-        &["length"],
-        size,
-        0,
-    );
+    // `each` is intentionally NOT registered here — it's defined in
+    // `builtins/arithmetic_sequence.rb` (Ruby) so monoruby's JIT can
+    // inline the block dispatch directly into the loop. See benchmark
+    // discussion in PR comments.
+    globals.define_builtin_funcs(ARITHMETIC_SEQUENCE_CLASS, "size", &["length"], size, 0);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "[]", index_op, 1);
@@ -53,6 +69,11 @@ pub(super) fn init(globals: &mut Globals) {
 
 ///
 /// ### Enumerator::ArithmeticSequence.__build
+///
+/// monoruby-internal allocator used by `Numeric#step` / `Range#step` /
+/// `Range#%`. Stamps the native (begin, end, step, exclude_end?) tuple
+/// directly into a fresh `RValue` — bypasses `Enumerator#new`'s block
+/// requirement.
 #[monoruby_builtin]
 fn arithmetic_sequence_build(
     _vm: &mut Executor,
@@ -67,21 +88,81 @@ fn arithmetic_sequence_build(
     Ok(Value::arithmetic_sequence(begin, end, step, exclude_end))
 }
 
+///
+/// ### Enumerator::ArithmeticSequence#begin
+///
+/// - begin -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/begin.html]
 #[monoruby_builtin]
 fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_arithmetic_sequence_inner().begin())
 }
 
+fn as_begin_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    inline_field_load(state, ir, store, callid, crate::rvalue::AS_BEGIN_OFFSET)
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#end
+///
+/// - end -> Numeric | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/end.html]
 #[monoruby_builtin]
 fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_arithmetic_sequence_inner().end())
 }
 
+fn as_end_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    inline_field_load(state, ir, store, callid, crate::rvalue::AS_END_OFFSET)
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#step
+///
+/// - step -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/step.html]
 #[monoruby_builtin]
 fn step(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_arithmetic_sequence_inner().step())
 }
 
+fn as_step_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    inline_field_load(state, ir, store, callid, crate::rvalue::AS_STEP_OFFSET)
+}
+
+///
+/// ### Enumerator::ArithmeticSequence#exclude_end?
+///
+/// - exclude_end? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/exclude_end=3f.html]
 #[monoruby_builtin]
 fn exclude_end(
     _vm: &mut Executor,
@@ -92,6 +173,58 @@ fn exclude_end(
     Ok(Value::bool(
         lfp.self_val().as_arithmetic_sequence_inner().exclude_end(),
     ))
+}
+
+fn as_exclude_end_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
+            shlq rax, 3;
+            orq  rax, (FALSE_VALUE);
+        }
+    });
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
+}
+
+/// Shared inliner for the Fixnum/Value field readers
+/// (`begin` / `end` / `step`). Loads a 64-bit `Value` from the given
+/// offset within the receiver's `RValue`. AS has no source-level literal
+/// form, so unlike Range we don't fold against a literal here.
+fn inline_field_load(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+    offset: usize,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _, _| {
+        monoasm! { &mut r#gen.jit,
+            movq rax, [rdi + (offset as i32)];
+        }
+    });
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 // ─── Type-dispatched helpers ────────────────────────────────────────
@@ -211,7 +344,11 @@ fn fixnum_count(b: i64, e: i64, s: i64, excl: bool) -> Count {
     if excl {
         // last_val = b + n_int * s
         let last_val = b as i128 + n_int * s128;
-        let overshoot = if s > 0 { last_val >= e as i128 } else { last_val <= e as i128 };
+        let overshoot = if s > 0 {
+            last_val >= e as i128
+        } else {
+            last_val <= e as i128
+        };
         if overshoot {
             n_int -= 1;
         }
@@ -326,9 +463,10 @@ fn invoke_to_f(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64
 ///
 /// ### Enumerator::ArithmeticSequence#size
 ///
-/// O(1) closed-form count. `Float::INFINITY` for beginless / endless;
-/// raises ArgumentError if the step isn't Numeric or is zero (CRuby
-/// validates these lazily on `.size`).
+/// - size -> Integer | Float::INFINITY
+/// - length -> Integer | Float::INFINITY
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/size.html]
 #[monoruby_builtin]
 fn size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
@@ -353,11 +491,30 @@ fn size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// callers freely take `&mut` to vm/globals afterwards.
 fn unpack_as(recv: Value) -> (Value, Value, Value, bool) {
     let inner = recv.as_arithmetic_sequence_inner();
-    (inner.begin(), inner.end(), inner.step(), inner.exclude_end())
+    (
+        inner.begin(),
+        inner.end(),
+        inner.step(),
+        inner.exclude_end(),
+    )
 }
 
-// ─── each ──────────────────────────────────────────────────────────
+// ─── each (Ruby) ───────────────────────────────────────────────────
+//
+// `each` is registered in `builtins/arithmetic_sequence.rb` rather
+// than here — benchmarks showed the JIT'd Ruby loop is on par with
+// the Rust + `invoke_block` path. The native implementation below is
+// kept for reference / future use.
 
+///
+/// ### Enumerator::ArithmeticSequence#each
+///
+/// - each {|elem| ... } -> self
+/// - each -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/each.html]
+#[allow(dead_code)]
+#[coverage(off)]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let recv = lfp.self_val();
@@ -403,6 +560,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     generic_each(vm, globals, &data, b, e, s, excl, recv)
 }
 
+#[allow(dead_code)]
 fn fixnum_each_finite(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -432,6 +590,7 @@ fn fixnum_each_finite(
     Ok(recv)
 }
 
+#[allow(dead_code)]
 fn fixnum_each_endless(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -455,6 +614,7 @@ fn fixnum_each_endless(
     }
 }
 
+#[allow(dead_code)]
 fn float_each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -500,6 +660,7 @@ fn float_each(
     }
 }
 
+#[allow(dead_code)]
 fn generic_each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -537,6 +698,7 @@ fn generic_each(
     Ok(recv)
 }
 
+#[allow(dead_code)]
 fn generic_each_endless(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -557,9 +719,10 @@ fn generic_each_endless(
 ///
 /// ### Enumerator::ArithmeticSequence#first
 ///
-/// `first` → begin (or nil if direction-mismatch / empty).
-/// `first(n)` → first `n` yielded values via the closed-form
-/// `b + i * s` (no Enumerable#take loop, no intermediate to_a).
+/// - first -> Numeric | nil
+/// - first(n) -> [Numeric]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/first.html]
 #[monoruby_builtin]
 fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
@@ -599,9 +762,10 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// ### Enumerator::ArithmeticSequence#last
 ///
-/// `last` → last yielded value (closed-form). `last(n)` → last `n`
-/// yielded values. Never materialises the full sequence; both forms
-/// derive `count` via `finite_count` and address terms by index.
+/// - last -> Numeric | nil
+/// - last(n) -> [Numeric]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/last.html]
 #[monoruby_builtin]
 fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
@@ -683,19 +847,18 @@ fn term_or_generic(
 // ─── [] (Array stride-aware index) ─────────────────────────────────
 
 ///
-/// ### Enumerator::ArithmeticSequence#[](arr)
+/// ### Enumerator::ArithmeticSequence#[]
 ///
-/// `aseq[arr]` — extract the slice of `arr` whose indices are the
-/// terms of this sequence. Mirrors CRuby's `rb_ary_subseq_step`:
-/// integer indices only (the caller is supposed to be passing an
-/// AS built for slicing — Numeric#step / Range#step / Range#%).
+/// - self[ary] -> Array
+///
+/// `aseq[ary]` extracts the slice of `ary` whose indices are the terms
+/// of this sequence. Mirrors CRuby's `rb_ary_subseq_step`: integer
+/// indices only (the caller is expected to be passing an AS built for
+/// slicing — `Numeric#step` / `Range#step` / `Range#%`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index_op(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn index_op(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (raw_b, raw_e, s_val, excl) = unpack_as(lfp.self_val());
 
     let arr_v = lfp.arg(0);
