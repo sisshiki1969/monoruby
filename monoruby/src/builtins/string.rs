@@ -1,4 +1,5 @@
 use num::{BigInt, Zero};
+use smallvec::SmallVec;
 
 use super::*;
 use jitgen::JitContext;
@@ -3167,11 +3168,163 @@ fn append_as_bytes(
     Ok(self_)
 }
 
-fn gen_pad(padding: &str, len: usize) -> String {
-    let pad_len = padding.chars().count();
-    let pad_repeat = padding.repeat(len / pad_len);
-    let pad_end: String = padding.chars().take(len % pad_len).collect();
-    format!("{}{}", pad_repeat, pad_end)
+/// Padding direction shared by `ljust` / `rjust` / `center`.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum PadSide {
+    Left,
+    Right,
+    Center,
+}
+
+/// Compute the byte length of `n_chars` characters worth of `pad`,
+/// repeated by char count. ASCII pads short-circuit; multibyte
+/// iterates `iter_char_bytes` only across the final partial cycle.
+fn pad_byte_size(pad: &RStringInner, n_chars: usize) -> usize {
+    if n_chars == 0 {
+        return 0;
+    }
+    let pad_chars = pad.char_length();
+    let pad_bytes = pad.as_bytes().len();
+    // ASCII / fixed-width 1-byte/char encodings: char_count == byte_count.
+    if pad_chars == pad_bytes {
+        return n_chars;
+    }
+    let repeats = n_chars / pad_chars;
+    let remainder = n_chars % pad_chars;
+    let remainder_bytes: usize = pad
+        .iter_char_bytes()
+        .take(remainder)
+        .map(|s| s.len())
+        .sum();
+    repeats * pad_bytes + remainder_bytes
+}
+
+/// Append `n_chars` characters of `pad` to `out`, repeating as needed.
+/// Single-byte ASCII pads use `resize` (`memset`); multibyte pads walk
+/// `iter_char_bytes` only for the final partial cycle.
+fn write_pad(out: &mut SmallVec<[u8; STRING_INLINE_CAP]>, pad: &RStringInner, n_chars: usize) {
+    if n_chars == 0 {
+        return;
+    }
+    let pad_bytes = pad.as_bytes();
+    let pad_chars = pad.char_length();
+    // Single-byte ASCII pad — the dominant `" "` case. `resize` lowers
+    // to a `memset` and stays inline for small SmallVecs.
+    if pad_bytes.len() == 1 {
+        let new_len = out.len() + n_chars;
+        out.resize(new_len, pad_bytes[0]);
+        return;
+    }
+    // ASCII / fixed-width pad with ≥2 bytes: char==byte, repeat with
+    // memcpy for full cycles, slice for the remainder.
+    if pad_chars == pad_bytes.len() {
+        let repeats = n_chars / pad_chars;
+        let remainder = n_chars % pad_chars;
+        for _ in 0..repeats {
+            out.extend_from_slice(pad_bytes);
+        }
+        if remainder > 0 {
+            out.extend_from_slice(&pad_bytes[..remainder]);
+        }
+        return;
+    }
+    // Multibyte path: each full cycle is `pad_bytes.len()` bytes (memcpy),
+    // the partial remainder walks `iter_char_bytes`.
+    let repeats = n_chars / pad_chars;
+    let remainder = n_chars % pad_chars;
+    for _ in 0..repeats {
+        out.extend_from_slice(pad_bytes);
+    }
+    if remainder > 0 {
+        for slice in pad.iter_char_bytes().take(remainder) {
+            out.extend_from_slice(slice);
+        }
+    }
+}
+
+/// Native padding for `ljust` / `rjust` / `center`. Builds the output
+/// into a single buffer (one allocation), with a `memset`/`memcpy` fast
+/// path for ASCII pads. Encoding compatibility between `self_inner`
+/// and `pad_inner` is the caller's responsibility (typically via
+/// `check_string_encoding_compat`).
+fn pad_string_inner(
+    self_inner: &RStringInner,
+    width: i64,
+    pad_inner: &RStringInner,
+    side: PadSide,
+) -> RStringInner {
+    let self_chars = self_inner.char_length();
+    let self_bytes = self_inner.as_bytes();
+    // No padding needed: CRuby returns a *fresh* String (not self),
+    // so clone — preserves the cached code range.
+    if width <= 0 || (width as usize) <= self_chars {
+        return self_inner.clone();
+    }
+    let needed = (width as usize) - self_chars;
+    let (head, tail) = match side {
+        PadSide::Left => (0, needed),
+        PadSide::Right => (needed, 0),
+        PadSide::Center => {
+            // CRuby gives the extra character to the tail when `needed`
+            // is odd (`"x".center(10, "ab") == "ababxababa"`).
+            let h = needed / 2;
+            (h, needed - h)
+        }
+    };
+    let head_bytes = pad_byte_size(pad_inner, head);
+    let tail_bytes = pad_byte_size(pad_inner, tail);
+    let total = head_bytes + self_bytes.len() + tail_bytes;
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(total);
+    write_pad(&mut out, pad_inner, head);
+    out.extend_from_slice(self_bytes);
+    write_pad(&mut out, pad_inner, tail);
+    debug_assert_eq!(out.len(), total);
+
+    // Output ASCII-ness is closed under concatenation: SevenBit + SevenBit
+    // stays SevenBit, so we can tag the result without re-scanning.
+    if self_inner.is_ascii_only() && pad_inner.is_ascii_only() {
+        return RStringInner::from_ascii_bytes(out, self_inner.encoding());
+    }
+    // Mixed content: defer classification to first use (cr = Unknown).
+    RStringInner::from_encoding(&out, self_inner.encoding())
+}
+
+/// Common entry point shared by `ljust` / `rjust` / `center`. Handles
+/// argument coercion, encoding compatibility check, and the empty-pad
+/// `ArgumentError`, then delegates to `pad_string_inner`.
+fn pad_builtin(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    side: PadSide,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let self_inner = self_val.as_rstring_inner();
+    let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if let Some(arg) = lfp.try_arg(1) {
+        // The encoding-compat check must precede the `to_str`
+        // coercion: `coerce_to_rstring` may invoke arbitrary Ruby on
+        // a non-String pad, after which `arg`'s identity is stale.
+        if let Some(arg_inner) = arg.is_rstring_inner() {
+            check_string_encoding_compat(self_inner, arg_inner, globals)?;
+        }
+        let pad = arg.coerce_to_rstring(vm, globals)?;
+        if pad.as_bytes().is_empty() {
+            return Err(MonorubyErr::zero_width_padding());
+        }
+        let result = pad_string_inner(self_inner, width, &pad, side);
+        Ok(Value::string_from_inner(result))
+    } else {
+        // Default padding is a single US-ASCII space. Synthesise it
+        // inline rather than allocating a per-call placeholder — the
+        // 1-byte SmallVec stays inline.
+        let pad = RStringInner::from_ascii_bytes(
+            smallvec::smallvec![b' '],
+            crate::value::Encoding::UsAscii,
+        );
+        let result = pad_string_inner(self_inner, width, &pad, side);
+        Ok(Value::string_from_inner(result))
+    }
 }
 
 ///
@@ -3182,29 +3335,7 @@ fn gen_pad(padding: &str, len: usize) -> String {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
 #[monoruby_builtin]
 fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg1 = lfp.try_arg(1);
-    let padding_owned;
-    let padding = if let Some(arg1) = &arg1 {
-        padding_owned = arg1.coerce_to_string(vm, globals)?;
-        padding_owned.as_str()
-    } else {
-        " "
-    };
-    if padding.is_empty() {
-        return Err(MonorubyErr::zero_width_padding());
-    };
-    let self_ = lfp.self_val();
-    let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let str_len = lhs.chars().count();
-    if width <= 0 || width as usize <= str_len {
-        return Ok(Value::string_from_str_with_encoding_of(lhs, self_));
-    }
-    let tail = width as usize - str_len;
-    Ok(Value::string_from_str_with_encoding_of(
-        &format!("{}{}", lhs, gen_pad(padding, tail)),
-        self_,
-    ))
+    pad_builtin(vm, globals, lfp, PadSide::Left)
 }
 
 ///
@@ -3215,29 +3346,7 @@ fn ljust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
 #[monoruby_builtin]
 fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg1 = lfp.try_arg(1);
-    let padding_owned;
-    let padding = if let Some(arg1) = &arg1 {
-        padding_owned = arg1.coerce_to_string(vm, globals)?;
-        padding_owned.as_str()
-    } else {
-        " "
-    };
-    if padding.is_empty() {
-        return Err(MonorubyErr::zero_width_padding());
-    };
-    let self_ = lfp.self_val();
-    let lhs = self_.as_str();
-    let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let str_len = lhs.chars().count();
-    if width <= 0 || width as usize <= str_len {
-        return Ok(Value::string_from_str_with_encoding_of(lhs, self_));
-    }
-    let tail = width as usize - str_len;
-    Ok(Value::string_from_str_with_encoding_of(
-        &format!("{}{}", gen_pad(padding, tail), lhs),
-        self_,
-    ))
+    pad_builtin(vm, globals, lfp, PadSide::Right)
 }
 
 ///
@@ -5641,39 +5750,7 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/center.html]
 #[monoruby_builtin]
 fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let self_inner = lhs.as_rstring_inner();
-    let arg1 = lfp.try_arg(1);
-    let padding_owned;
-    let padding = if let Some(arg) = &arg1 {
-        // Pad string must be encoding-compatible with self.
-        if let Some(arg_inner) = arg.is_rstring_inner() {
-            check_string_encoding_compat(self_inner, &arg_inner, globals)?;
-        }
-        padding_owned = arg.coerce_to_string(vm, globals)?;
-        padding_owned.as_str()
-    } else {
-        " "
-    };
-    if padding.is_empty() {
-        return Err(MonorubyErr::argumenterr("Zero width padding."));
-    };
-    let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let str_len = lhs.as_str().chars().count();
-    if width <= 0 || width as usize <= str_len {
-        return Ok(lhs.dup());
-    }
-    let head = (width as usize - str_len) / 2;
-    let tail = width as usize - str_len - head;
-    Ok(Value::string_from_str_with_encoding_of(
-        &format!(
-            "{}{}{}",
-            gen_pad(padding, head),
-            lhs.as_str(),
-            gen_pad(padding, tail)
-        ),
-        lhs,
-    ))
+    pad_builtin(vm, globals, lfp, PadSide::Center)
 }
 
 ///
@@ -9840,6 +9917,74 @@ mod tests {
         // Width <= length: still preserves encoding.
         run_test(r#""abc".encode("US-ASCII").ljust(2).encoding.to_s"#);
         run_test(r#""abc".encode("US-ASCII").rjust(2).encoding.to_s"#);
+    }
+
+    #[test]
+    fn pad_multibyte_pad_string() {
+        // `ljust(N, "ab")` for the long-pad path — the partial cycle
+        // at the end exercises the byte == char branch in `write_pad`.
+        run_test(r#""x".ljust(10, "ab")"#);
+        run_test(r#""x".rjust(10, "ab")"#);
+        run_test(r#""x".center(10, "ab")"#);
+        // Pad with multibyte chars: iter_char_bytes branch.
+        run_test(r#""abc".ljust(5, "あ")"#);
+        run_test(r#""abc".rjust(5, "あ")"#);
+        run_test(r#""abc".center(5, "あ")"#);
+        // Self multibyte + ASCII pad.
+        run_test(r#""あ".ljust(5, "abc")"#);
+        run_test(r#""あ".rjust(5, "abc")"#);
+        run_test(r#""あい".center(7)"#);
+        // Center asymmetric — extra char goes to the tail.
+        run_test(r#""x".center(10, "ab")"#);
+    }
+
+    #[test]
+    fn pad_no_op_returns_fresh_string() {
+        // CRuby returns a NEW object when width ≤ length.
+        run_test(
+            r#"
+              s = "abc"
+              [s.ljust(2).equal?(s), s.rjust(2).equal?(s), s.center(2).equal?(s)]
+            "#,
+        );
+        run_test(r#""abc".ljust(3)"#);
+        run_test(r#""abc".rjust(3)"#);
+        run_test(r#""abc".center(3)"#);
+        run_test(r#""abc".ljust(-5)"#);
+    }
+
+    #[test]
+    fn pad_encoding_compat_errors() {
+        // Previously ljust/rjust silently accepted incompatible
+        // encodings on the pad — the check now matches CRuby.
+        run_test_error(
+            r#"
+              s = "abc".dup.force_encoding("EUC-JP")
+              p = "x".dup.force_encoding("ISO-2022-JP")
+              s.ljust(10, p)
+            "#,
+        );
+        run_test_error(
+            r#"
+              s = "abc".dup.force_encoding("EUC-JP")
+              p = "x".dup.force_encoding("ISO-2022-JP")
+              s.rjust(10, p)
+            "#,
+        );
+        run_test_error(
+            r#"
+              s = "abc".dup.force_encoding("EUC-JP")
+              p = "x".dup.force_encoding("ISO-2022-JP")
+              s.center(10, p)
+            "#,
+        );
+    }
+
+    #[test]
+    fn pad_zero_width_pad_raises() {
+        run_test_error(r#""abc".ljust(5, "")"#);
+        run_test_error(r#""abc".rjust(5, "")"#);
+        run_test_error(r#""abc".center(5, "")"#);
     }
 
     #[test]

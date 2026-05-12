@@ -1026,6 +1026,25 @@ impl RStringInner {
         )
     }
 
+    /// O(1): build a string whose bytes the caller guarantees are
+    /// all 7-bit ASCII (< 0x80), recording `cr = SevenBit` directly
+    /// and skipping the classification scan. The caller is
+    /// responsible for the invariant — in debug builds this is
+    /// checked. Used by byte-level fast paths (padding,
+    /// concatenation, etc.) whose output is provably ASCII whenever
+    /// every input was.
+    pub fn from_ascii_bytes(bytes: SmallVec<[u8; STRING_INLINE_CAP]>, encoding: Encoding) -> Self {
+        debug_assert!(
+            bytes.iter().all(|b| *b < 0x80),
+            "from_ascii_bytes: caller passed a byte >= 0x80"
+        );
+        debug_assert!(
+            encoding.is_ascii_compatible(),
+            "from_ascii_bytes: encoding must be ASCII-compatible"
+        );
+        RStringInner::from(bytes, encoding, CodeRange::SevenBit)
+    }
+
     /// Build a substring of `parent` covering the byte range
     /// `start..end`, inheriting the parent's encoding and propagating
     /// the cached code range when the parent's classification implies
