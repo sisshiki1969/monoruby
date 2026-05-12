@@ -90,7 +90,13 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());
 
-            self.gen_bridges_for_branches(&target, entries, bbid, pc + 1);
+            // `bridge` adds `+1` to the deopt resume PC so it lands on
+            // the first body instruction (skipping LoopStart, which
+            // would re-enter the JIT and infinite-loop). Pass `pc` (=
+            // LoopStart's PC) directly; an extra `+1` here would push
+            // the deopt resume past the fused BinCmp into the bare
+            // CondBr, which then reads a stale `%dst` — see #480.
+            self.gen_bridges_for_branches(&target, entries, bbid, pc);
             self.new_backedge(target.slot_state().clone(), bbid);
 
             Some(target)

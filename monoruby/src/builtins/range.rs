@@ -1576,15 +1576,17 @@ mod tests {
     #[test]
     fn range_step_iteration() {
         // Iteration shape: inclusive vs exclusive end, integer vs
-        // float step. Kept on `run_test` (one CRuby invocation per
-        // case) rather than batched through `run_tests` because
-        // mixing several `to_a` calls in one wrapped block trips
-        // issue #480 under the test harness's lower
-        // `COUNT_LOOP_START_COMPILE` threshold.
-        run_test("(1..5).step(1).to_a");
-        run_test("(1...5).step(1).to_a");
-        run_test("(1..10).step(2).to_a");
-        run_test("(1.0..2.0).step(0.5).to_a");
+        // float step. Batched through `run_tests` so the float case
+        // JIT-compiles the inclusive-positive `while cur <= e` loop
+        // before the integer case enters it — see #480 (deopt resume
+        // PC at loop-merge bridge was past the fused BinCmp, so the
+        // VM resumed at the bare CondBr with a stale `%dst`).
+        run_tests(&[
+            "(1.0..2.0).step(0.5).to_a",
+            "(1..5).step(1).to_a",
+            "(1...5).step(1).to_a",
+            "(1..10).step(2).to_a",
+        ]);
     }
 
     #[test]
