@@ -1070,16 +1070,14 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let idx = lfp.arg(0);
         // Non-fixnum, non-range index: delegate. The
         // `Enumerator::ArithmeticSequence` case is handed off to
-        // `aseq.[](self)` — the slicing logic lives in
-        // `ArithmeticSequence#[]` (see `enumerable.rb`), keeping
-        // it independent of Array (the AS isn't an Array
-        // subclass; this code shouldn't carry its details).
-        // Anything else falls through to the existing `to_int`
-        // coercion path.
+        // `aseq.[](self)` — slicing logic lives in
+        // `ArithmeticSequence#[]` (`builtins/arithmetic_sequence.rs`).
+        // We dispatch via ObjTy so singleton-classed AS values
+        // (e.g. those returned by `Range#%`, which patches `inspect`)
+        // also hit the fast path. Anything else falls through to the
+        // existing `to_int` coercion path.
         if idx.try_fixnum().is_none() && idx.is_range().is_none() {
-            let class_name =
-                globals.store.get_class_name(idx.real_class(&globals.store).id());
-            if class_name == "Enumerator::ArithmeticSequence" {
+            if idx.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
                 return vm.invoke_method_inner(
                     globals,
                     IdentId::get_id("[]"),
