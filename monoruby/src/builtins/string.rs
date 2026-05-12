@@ -2859,6 +2859,18 @@ fn string_rindex(
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
     }
+
+    // String-pattern fast path. The previous implementation always
+    // built a Regexp from a literal-String argument and then ran
+    // `captures_from_pos` once per forward char boundary, so a
+    // haystack with K occurrences cost K regex matches even though
+    // we only ever return the rightmost. Walk the haystack with
+    // `rmatch_indices` instead — one reverse two-way scan, no
+    // regex engine in the loop.
+    if lfp.arg(0).is_rstring_inner().is_some() {
+        return string_rindex_string(vm, globals, &given, lfp.arg(0), lfp.try_arg(1));
+    }
+
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let s = given.check_utf8()?;
@@ -2929,6 +2941,85 @@ fn string_rindex(
         Some(pos) => Value::integer(pos as i64),
         None => Value::nil(),
     })
+}
+
+/// `String#rindex` with a String argument. Splits off from
+/// `string_rindex` so the regex-path is left untouched.
+///
+/// The search is bounded by `pos_arg` (a char index — the maximum
+/// position the match's *start* may occupy). `rmatch_indices` returns
+/// matches right-to-left and is bytewise correct because it works on
+/// `&str`: candidate positions inside a multibyte char's interior are
+/// skipped by `str::Searcher`'s boundary check.
+fn string_rindex_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    given: &RString,
+    needle_val: Value,
+    pos_arg: Option<Value>,
+) -> Result<Value> {
+    let char_len = given.char_length();
+
+    // Resolve `pos`. CRuby clamps a positive overflow down to char_len
+    // (so `"abc".rindex("a", 100)` works) and returns nil when the
+    // negative offset wraps past the start of the string.
+    let max_char_pos = match pos_arg {
+        Some(p) => {
+            let n = p.coerce_to_int_i64(vm, globals)?;
+            match given.conv_char_index2(n) {
+                Some(pos) => pos.min(char_len),
+                None => return Ok(Value::nil()),
+            }
+        }
+        None => char_len,
+    };
+
+    let needle_inner = needle_val.is_rstring_inner().unwrap();
+    let needle_bytes = needle_inner.as_bytes();
+
+    // Empty needle: `rindex("", k)` == k, capped at char_len.
+    if needle_bytes.is_empty() {
+        return Ok(Value::integer(max_char_pos as i64));
+    }
+
+    // The regex path requires valid UTF-8; preserve that contract for
+    // the fast path so behaviour is identical (broken UTF-8 keeps
+    // raising ArgumentError rather than silently scanning bytes).
+    let haystack_str = given.check_utf8()?;
+    let needle_str = needle_inner.check_utf8()?;
+
+    // Translate the char-level cap into a byte cap on the match start.
+    // ASCII-only haystacks skip the chars() walk; for those byte == char.
+    let max_byte_start = if max_char_pos >= char_len {
+        haystack_str.len()
+    } else if given.is_ascii_only() {
+        max_char_pos
+    } else {
+        haystack_str
+            .char_indices()
+            .nth(max_char_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(haystack_str.len())
+    };
+
+    // Reverse two-way scan. `rmatch_indices` yields matches in
+    // right-to-left order, so the first hit at or before
+    // `max_byte_start` is the answer.
+    let byte_pos = haystack_str
+        .rmatch_indices(needle_str)
+        .find(|(i, _)| *i <= max_byte_start)
+        .map(|(i, _)| i);
+
+    let Some(p) = byte_pos else {
+        return Ok(Value::nil());
+    };
+
+    let char_pos = if given.is_ascii_only() {
+        p
+    } else {
+        given.byte_to_char_index(p)?
+    };
+    Ok(Value::integer(char_pos as i64))
 }
 
 ///
@@ -7927,6 +8018,55 @@ mod tests {
         run_test(r#""blablabla".rindex(/.{0}/)"#);
         run_test(r#""blablabla".rindex(/.*/)"#);
         run_test(r#""hello".rindex(/.{0}/)"#);
+    }
+
+    #[test]
+    fn string_rindex_string_basic() {
+        run_test(r#""hello".rindex("l")"#);
+        run_test(r#""hello".rindex("ll")"#);
+        run_test(r#""hello".rindex("z")"#);
+        run_test(r#""ababab".rindex("ab")"#);
+        run_test(r#""hello".rindex("hello")"#);
+        // Long haystack with many occurrences: the previous
+        // implementation paid a regex match per char boundary.
+        run_test(r#"("foo bar baz " * 50).rindex("bar")"#);
+    }
+
+    #[test]
+    fn string_rindex_string_with_pos() {
+        // pos clamps the maximum match-start position.
+        run_test(r#""hello".rindex("l", 2)"#);
+        run_test(r#""hello".rindex("l", 1)"#);
+        run_test(r#""hello".rindex("l", 100)"#); // positive clamp
+        run_test(r#""hello".rindex("hello", -1)"#); // negative-but-in-range
+        run_test(r#""hello".rindex("a", -100)"#); // negative overflow → nil
+        run_test(r#""ababab".rindex("ab", 3)"#);
+    }
+
+    #[test]
+    fn string_rindex_string_empty_needle() {
+        // Empty needle returns `pos` (capped at char_len).
+        run_test(r#""hello".rindex("")"#);
+        run_test(r#""hello".rindex("", 3)"#);
+        run_test(r#""hello".rindex("", 100)"#);
+        run_test(r#""".rindex("")"#);
+    }
+
+    #[test]
+    fn string_rindex_string_utf8() {
+        // Char-level positions on multibyte strings.
+        run_test(r#""あいうあいう".rindex("いう")"#);
+        run_test(r#""あいうあいう".rindex("いう", 2)"#);
+        run_test(r#""あいうあいう".rindex("い")"#);
+        // Match at the start.
+        run_test(r#""あいう".rindex("あ")"#);
+    }
+
+    #[test]
+    fn string_rindex_string_invalid_utf8_raises() {
+        // Same contract as the regex path: broken UTF-8 receivers
+        // raise ArgumentError rather than silently scan bytes.
+        run_test_error(r#""\xC3".dup.force_encoding("UTF-8").rindex("a")"#);
     }
 
     #[test]
