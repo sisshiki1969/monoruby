@@ -952,6 +952,7 @@ class Data
 end unless defined?(::Data)
 
 require_relative 'enumerable'
+require_relative 'arithmetic_sequence'
 require_relative 'numeric'
 require_relative 'integer'
 require_relative 'range'

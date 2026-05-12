@@ -1,5 +1,6 @@
 use super::*;
 
+mod arithmetic_sequence;
 mod array;
 mod binding;
 mod bool_class;
@@ -80,6 +81,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     method::init(globals);
     fiber::init(globals);
     enumerator::init(globals);
+    arithmetic_sequence::init(globals);
     time::init(globals);
     io::init(globals);
     struct_class::init(globals);
