@@ -126,6 +126,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(STRING_CLASS, "count", count);
     globals.define_builtin_func_with(STRING_CLASS, "sum", sum, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
+    globals.define_builtin_func(STRING_CLASS, "reverse", reverse, 0);
+    globals.define_builtin_func(STRING_CLASS, "reverse!", reverse_, 0);
     globals.define_private_builtin_func_with(STRING_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
@@ -4284,6 +4286,41 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec()),
     };
     Ok(Value::symbol(id))
+}
+
+///
+/// ### String#reverse
+///
+/// - reverse -> String
+///
+/// Returns a new string with the codepoints of `self` in reverse order.
+/// Preserves the receiver's declared encoding. Broken UTF-8 byte
+/// sequences walk one byte at a time (matching CRuby).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/reverse.html]
+#[monoruby_builtin]
+fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let inner = lfp.self_val().as_rstring_inner().reverse();
+    Ok(Value::string_from_inner(inner))
+}
+
+///
+/// ### String#reverse!
+///
+/// - reverse! -> self
+///
+/// In-place codepoint reversal. Raises FrozenError on a frozen
+/// receiver; returns `self` either way (no nil-on-noop semantics —
+/// reverse is the same operation regardless of content).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/reverse=21.html]
+#[monoruby_builtin]
+fn reverse_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let mut self_val = lfp.self_val();
+    let reversed = self_val.as_rstring_inner().reverse();
+    self_val.replace_with_inner(reversed);
+    Ok(self_val)
 }
 
 ///
@@ -9908,5 +9945,56 @@ mod tests {
               char1.upto(char2) {}
             "#,
         );
+    }
+
+    #[test]
+    fn reverse_basic() {
+        run_test(r#""".reverse"#);
+        run_test(r#""a".reverse"#);
+        run_test(r#""abc".reverse"#);
+        run_test(r#""abcdefghij" * 5"#);
+        run_test(r#"("Hello, World!" * 8).reverse"#);
+    }
+
+    #[test]
+    fn reverse_utf8() {
+        run_test(r#""あいう".reverse"#);
+        run_test(r#""日本語".reverse"#);
+        // Combining-mark form: codepoint reverse swaps the base
+        // letter and the combining acute (NOT a grapheme reverse).
+        run_test(r#""é".reverse"#);
+        run_test(r#""abcあいう".reverse"#);
+    }
+
+    #[test]
+    fn reverse_preserves_encoding() {
+        run_test(r#""abc".reverse.encoding.to_s"#);
+        run_test(r#""abc".b.reverse.encoding.to_s"#);
+        run_test(r#""abc".encode("US-ASCII").reverse.encoding.to_s"#);
+        run_test(r#""abcあ".reverse.encoding.to_s"#);
+    }
+
+    #[test]
+    fn reverse_broken_utf8_walks_per_byte() {
+        // Truncated leading byte stays as its own char.
+        run_test(r#""\xC3".dup.force_encoding("UTF-8").reverse.bytes"#);
+        // Mixed valid + invalid: per-codepoint reverse keeps the
+        // invalid byte in place between the two ASCII chars.
+        run_test(r#""a\xC3z".dup.force_encoding("UTF-8").reverse.bytes"#);
+        run_test(
+            r#""a\xC3z".dup.force_encoding("UTF-8").reverse.valid_encoding?"#,
+        );
+    }
+
+    #[test]
+    fn reverse_bang_in_place_and_frozen() {
+        run_test(
+            r#"
+              s = "abcあ".dup
+              t = s.reverse!
+              [s, t, s.equal?(t)]
+            "#,
+        );
+        run_test_error(r#""abc".dup.freeze.reverse!"#);
     }
 }
