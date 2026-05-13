@@ -335,9 +335,25 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
                     //ObjTy::METHOD => lhs.method().hash(state),
                     _ => {
-                        e.invoke_method_inner(g, IdentId::HASH, *self, &[], None, None)?
-                            .0
-                            .hash(state);
+                        // CRuby semantics: Array#hash / Hash#hash send `#hash`
+                        // to each element, and when the result is not already
+                        // an Integer, coerce it via `#to_int` before mixing.
+                        // Integer results are hashed by value so two arrays
+                        // produced through different dispatch paths but
+                        // landing on the same integer hash to the same digest.
+                        let h = e.invoke_method_inner(
+                            g,
+                            IdentId::HASH,
+                            *self,
+                            &[],
+                            None,
+                            None,
+                        )?;
+                        match h.unpack() {
+                            RV::Fixnum(i) => i.hash(state),
+                            RV::BigInt(b) => b.hash(state),
+                            _ => h.coerce_to_int_i64(e, g)?.hash(state),
+                        }
                     }
                 }
             },

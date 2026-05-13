@@ -703,10 +703,13 @@ class Range
         raise ArgumentError, "bad value for range" if dir.nil?
         next_val = b + step_arg
         step_dir = (b <=> next_val)
-        # Step moving opposite to the range direction yields nothing.
-        if dir != 0 && step_dir != 0 && (dir < 0) != (step_dir < 0)
-          return
-        end
+        # Step-direction-mismatch short-circuit lives *inside* the
+        # loop so the upper-bound `<=>` test runs at least once even
+        # when no element is yielded. CRuby orders the dispatch the
+        # same way; the visible effect is that
+        # `(b..e).step(step) { ... }` always invokes `b <=> e` twice
+        # (once for direction, once as the loop-entry check) before
+        # giving up.
         i = b
         loop do
           c = (i <=> e)
@@ -717,6 +720,9 @@ class Range
             break if excl ? c <= 0 : c < 0
           else
             break if excl
+          end
+          if dir != 0 && step_dir != 0 && (dir < 0) != (step_dir < 0)
+            break
           end
           yield i
           break if !excl && c == 0
