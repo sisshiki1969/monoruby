@@ -79,6 +79,7 @@ fn dump_ast(code: &str, path: &std::path::Path, kind: ParserKind, globals: &Glob
 
 fn main() {
     use clap::Parser;
+    install_panic_hook();
     let mut finish_flag = false;
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit, args.disable_gems);

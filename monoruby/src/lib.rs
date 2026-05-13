@@ -24,6 +24,7 @@ pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
 pub(crate) use codegen::jitgen::JitContext;
 pub use executor::Executor;
+pub use executor::install_panic_hook;
 pub use globals::OBJECT_CLASS;
 pub use globals::load_file;
 pub use globals::{Globals, MonorubyErr, MonorubyErrKind};
