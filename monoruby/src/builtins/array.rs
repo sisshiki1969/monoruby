@@ -32,12 +32,18 @@ pub(super) fn init(globals: &mut Globals) {
         Box::new(array_size),
         0,
     );
-    globals.define_builtin_inline_funcs(
+    globals.define_builtin_inline_func(
         ARRAY_CLASS,
         "clone",
-        &["dup"],
         clone,
         Box::new(array_clone),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        ARRAY_CLASS,
+        "dup",
+        dup,
+        Box::new(array_dup_inline),
         0,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
@@ -347,11 +353,12 @@ fn array_size(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/clone.html]
 #[monoruby_builtin]
 fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_id = lfp.self_val().class();
-    Ok(Value::array_with_class(
-        lfp.self_val().as_array_inner().clone(),
-        class_id,
-    ))
+    let recv = lfp.self_val();
+    let mut cloned = Value::array_with_class(recv.as_array_inner().clone(), recv.class());
+    if recv.is_frozen() {
+        cloned.set_frozen();
+    }
+    Ok(cloned)
 }
 
 fn array_clone(
@@ -373,7 +380,7 @@ fn array_clone(
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
         monoasm! { &mut r#gen.jit,
-            movq rax, (array_dup);
+            movq rax, (array_clone_extern);
             call rax;
         }
     });
@@ -382,9 +389,57 @@ fn array_clone(
     true
 }
 
-extern "C" fn array_dup(val: Value) -> Value {
-    let class_id = val.class();
-    Value::array_with_class(val.as_array_inner().clone(), class_id)
+extern "C" fn array_clone_extern(val: Value) -> Value {
+    let mut cloned = Value::array_with_class(val.as_array_inner().clone(), val.class());
+    if val.is_frozen() {
+        cloned.set_frozen();
+    }
+    cloned
+}
+
+#[monoruby_builtin]
+fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let recv = lfp.self_val();
+    let real_class_id = recv.real_class(&globals.store).id();
+    Ok(Value::array_with_class(
+        recv.as_array_inner().clone(),
+        real_class_id,
+    ))
+}
+
+fn array_dup_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    class_id: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
+    ir.inline(move |r#gen, _, _, _| {
+        monoasm! { &mut r#gen.jit,
+            // rdi already holds val from state.load above.
+            movq rsi, r12; // globals
+            movq rax, (array_dup_extern);
+            call rax;
+        }
+    });
+    ir.xmm_restore(using_xmm);
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+    true
+}
+
+extern "C" fn array_dup_extern(val: Value, globals: &Globals) -> Value {
+    let real_class_id = val.real_class(&globals.store).id();
+    Value::array_with_class(val.as_array_inner().clone(), real_class_id)
 }
 
 ///
@@ -3616,17 +3671,26 @@ fn shuffle_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
+    let recv = lfp.self_val();
+    let mut ary = recv.as_array();
     let arg0 = lfp.arg(0);
-    let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
-    if let Some(last) = ary.retain(f)? {
-        Ok(last)
-    } else if let Some(bh) = lfp.block() {
-        vm.invoke_block_once(globals, bh, &[])
-    } else {
-        Ok(Value::nil())
+    let mut has_match = false;
+    for i in 0..ary.len() {
+        if vm.eq_values_bool(globals, ary[i], arg0)? {
+            has_match = true;
+            break;
+        }
     }
+    if !has_match {
+        return if let Some(bh) = lfp.block() {
+            vm.invoke_block_once(globals, bh, &[])
+        } else {
+            Ok(Value::nil())
+        };
+    }
+    recv.ensure_not_frozen(&globals.store)?;
+    let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
+    Ok(ary.retain(f)?.unwrap_or(Value::nil()))
 }
 
 ///
