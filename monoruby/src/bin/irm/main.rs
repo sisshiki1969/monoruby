@@ -26,6 +26,7 @@ struct CommandLineArgs {
 
 fn main() {
     use clap::Parser;
+    install_panic_hook();
     let args = CommandLineArgs::parse();
 
     let mut rl = DefaultEditor::new().unwrap();

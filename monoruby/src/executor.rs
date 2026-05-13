@@ -1,5 +1,3 @@
-use crate::codegen::runtime::_dump_stacktrace;
-
 use super::*;
 
 mod constants;
@@ -16,50 +14,27 @@ use crate::ast::{Loc, SourceInfoRef};
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr) -> Option<Value>;
 
-/// Run `f` catching any Rust `panic!` that escapes it, and convert the
-/// panic into a `FatalError` stored on `vm`. Used at `extern "C"`
-/// boundaries so that a bug in the Rust implementation raises a
-/// Ruby-level FatalError (untrappable, propagates to the top) rather
-/// than aborting the whole process via non-unwinding abort.
+/// Install a process-wide panic hook that prepends a "monoruby internal
+/// error" banner to the default Rust panic message before the unwind
+/// reaches an `extern "C"` boundary and aborts the process. The hook is
+/// chained after the previous one, so the standard Rust panic message
+/// (file:line + message + backtrace hint) is still emitted.
 ///
-/// Returns `Some(r)` on normal completion, `None` if a panic was caught
-/// (in which case `vm.set_error(...)` has been called with a FatalError).
-pub fn catch_panic_extern_c<F, R>(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    site: &'static str,
-    f: F,
-) -> Option<R>
-where
-    F: FnOnce(&mut Executor, &mut Globals) -> R,
-{
-    let vm_ptr = vm as *mut Executor;
-    let globals_ptr = globals as *mut Globals;
-    let closure =
-        std::panic::AssertUnwindSafe(move || unsafe { f(&mut *vm_ptr, &mut *globals_ptr) });
-    match std::panic::catch_unwind(closure) {
-        Ok(r) => Some(r),
-        Err(payload) => {
-            let msg = if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else if let Some(s) = payload.downcast_ref::<&'static str>() {
-                s.to_string()
-            } else {
-                format!("panic at {}", site)
-            };
-            // A mid-panic exception may already be set on `vm`; drop it in
-            // favor of the fatal diagnosis so that `set_error`'s invariant
-            // (exception slot is empty) holds.
-            vm.discard_error();
-            vm.set_error(MonorubyErr::fatal(format!(
-                "rust panic caught at extern \"C\" boundary in {}: {}",
-                site, msg
-            )));
-            _dump_stacktrace(vm, globals);
-            None
-        }
-    }
+/// We don't catch panics inside builtins anymore: they'd have to unwind
+/// back through JIT-assembled frames (which carry no unwind info), so
+/// the unwinder would abort anyway. A single hook here is the one place
+/// panics are surfaced — caller-visible diagnostics, then abort.
+pub fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("monoruby: Rust panic — this is a bug, please report it.");
+        prev(info);
+        eprintln!(
+            "monoruby: the panic will now propagate to an `extern \"C\"` boundary and abort the process."
+        );
+    }));
 }
+
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 

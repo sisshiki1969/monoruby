@@ -19,21 +19,12 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             lfp: Lfp,
             pc: BytecodePtr,
         ) -> Option<Value> {
-            // Catch any Rust panic that escapes the inner function before
-            // it reaches the `extern "C"` boundary (where it would become
-            // a non-unwinding abort). On panic, a FatalError has already
-            // been set on `vm`; fall through to the error-handling branch.
-            let result = match catch_panic_extern_c(vm, globals, stringify!(#base_name), |vm, globals| {
-                #wrapped(vm, globals, lfp, pc)
-            }) {
-                Some(r) => r,
-                None => {
-                    // Panic caught; FatalError set. Reclaim it as Err so
-                    // the shared error-reporting path runs.
-                    Err(vm.take_error())
-                }
-            };
-            match result {
+            // A panic that escapes a builtin would have to unwind back
+            // through JIT-assembled frames that carry no unwind info, so
+            // the unwinder would abort anyway. Don't pay the per-call
+            // `catch_unwind` cost — instead, the process-wide panic hook
+            // installed at startup prints diagnostics before abort.
+            match #wrapped(vm, globals, lfp, pc) {
                 Ok(val) => Some(val),
                 Err(mut err) => {
                     if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {
