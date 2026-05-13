@@ -659,10 +659,9 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 
 /// Map a Range#min / Range#max block result to a sign, the way CRuby's
 /// `rb_cmpint` does. Integers are taken at face value; for any other
-/// object we call `> 0` then `< 0` (both with `0`) and use the booleans
-/// to derive -1 / 0 / +1. This duplicate dispatch is observable: specs
-/// stub a mock to receive both `:<` and `:>` exactly two times when
-/// running `(1..3).min {|a,b| obj}` (one of each per pair).
+/// object we call `> 0` first and, only if it returns falsy, fall
+/// through to `< 0`. The short-circuit matches CRuby: a mock that
+/// stubs `:>` to return truthy must not also see a `:<` dispatch.
 fn cmpint_block_result(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -675,16 +674,13 @@ fn cmpint_block_result(
     let gt = vm
         .invoke_method_inner(globals, IdentId::_GT, val, &[zero], None, None)?
         .as_bool();
+    if gt {
+        return Ok(1);
+    }
     let lt = vm
         .invoke_method_inner(globals, IdentId::_LT, val, &[zero], None, None)?
         .as_bool();
-    Ok(if gt {
-        1
-    } else if lt {
-        -1
-    } else {
-        0
-    })
+    Ok(if lt { -1 } else { 0 })
 }
 
 ///
@@ -1433,6 +1429,44 @@ mod tests {
     }
 
     #[test]
+    fn min_with_block_non_integer_result() {
+        // Block returns Float: not a Fixnum, so cmpint_block_result
+        // routes through the `> 0` / `< 0` dispatch path.
+        run_test("(1..5).min {|a, b| (a - b).to_f }");
+        run_test("(1..5).min {|a, b| (b - a).to_f }");
+        run_test("(1...5).min {|a, b| (a - b).to_f }");
+        // Block returns BigInt: also a heap-allocated non-Fixnum.
+        run_test("(1..5).min {|a, b| (a - b) * (10 ** 30) }");
+        // Custom object: both `>` and `<` are dispatched per pair
+        // (CRuby's rb_cmpint semantics — observable by mocks).
+        run_test(
+            r#"
+            class C
+              attr_reader :calls
+              def initialize; @calls = []; end
+              def >(other); @calls << :gt; false; end
+              def <(other); @calls << :lt; true; end
+            end
+            c = C.new
+            r = (1..3).min {|a, b| c }
+            [r, c.calls]
+            "#,
+        );
+        // Block returns a zero-signum non-Integer (both `> 0` and
+        // `< 0` are false → cmpint = 0, so min is unchanged).
+        run_test(
+            r#"
+            class Zero
+              def >(other); false; end
+              def <(other); false; end
+            end
+            z = Zero.new
+            (1..5).min {|a, b| z }
+            "#,
+        );
+    }
+
+    #[test]
     fn max() {
         run_test("(1..5).max");
         run_test("(1...5).max");
@@ -1446,6 +1480,60 @@ mod tests {
     fn max_with_block() {
         run_test("(1..5).max {|a, b| b <=> a }");
         run_test("(1...5).max {|a, b| b <=> a }");
+    }
+
+    #[test]
+    fn max_with_block_non_integer_result() {
+        // Block returns Float: not a Fixnum, so cmpint_block_result
+        // routes through the `> 0` / `< 0` dispatch path.
+        run_test("(1..5).max {|a, b| (a - b).to_f }");
+        run_test("(1..5).max {|a, b| (b - a).to_f }");
+        run_test("(1...5).max {|a, b| (a - b).to_f }");
+        // Block returns BigInt: also a heap-allocated non-Fixnum.
+        run_test("(1..5).max {|a, b| (a - b) * (10 ** 30) }");
+        // Custom object whose `>` returns false: CRuby's rb_cmpint
+        // then dispatches `<` too — so both are observed per pair.
+        // Result is 1 (max never updates because cmp < 0).
+        run_test(
+            r#"
+            class C
+              attr_reader :calls
+              def initialize; @calls = []; end
+              def >(other); @calls << :gt; false; end
+              def <(other); @calls << :lt; true; end
+            end
+            c = C.new
+            r = (1..3).max {|a, b| c }
+            [r, c.calls]
+            "#,
+        );
+        // Custom object whose `>` returns truthy: cmpint short-circuits
+        // and `<` is *not* dispatched. Max updates to 3 each iteration.
+        run_test(
+            r#"
+            class Gt
+              attr_reader :calls
+              def initialize; @calls = []; end
+              def >(other); @calls << :gt; true; end
+              def <(other); @calls << :lt; false; end
+            end
+            g = Gt.new
+            r = (1..3).max {|a, b| g }
+            [r, g.calls]
+            "#,
+        );
+        // Block returns a zero-signum non-Integer (both `> 0` and
+        // `< 0` are false → cmpint = 0, so max is unchanged).
+        run_test(
+            r#"
+            class Zero
+              def >(other); false; end
+              def <(other); false; end
+            end
+            z = Zero.new
+            (1..5).max {|a, b| z }
+            "#,
+        );
     }
 
     #[test]
