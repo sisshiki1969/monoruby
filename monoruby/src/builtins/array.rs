@@ -3075,17 +3075,22 @@ fn transpose(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     if ary.len() == 0 {
         return Ok(Value::array_empty());
     }
-    let first = coerce_to_array_for_transpose(vm, globals, ary[0])?;
-    let len = first.len();
+    // Coerce every row once, up front. CRuby calls #to_ary exactly once
+    // per element; doing it inside the inner loop would invoke the mock
+    // (or user-defined `to_ary`) `len * n` times.
+    let rows: Vec<Array> = ary
+        .iter()
+        .map(|v| coerce_to_array_for_transpose(vm, globals, *v))
+        .collect::<Result<_>>()?;
+    let len = rows[0].len();
     let mut trans = Array::new_empty();
     for i in 0..len {
         let mut temp = Array::new_empty();
-        for v in ary.iter() {
-            let a = coerce_to_array_for_transpose(vm, globals, *v)?;
-            if a.len() != len {
+        for row in &rows {
+            if row.len() != len {
                 return Err(MonorubyErr::indexerr("Element size differs."));
             }
-            temp.push(a[i]);
+            temp.push(row[i]);
         }
         trans.push(temp.into());
     }

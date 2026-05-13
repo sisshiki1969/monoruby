@@ -657,6 +657,36 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
+/// Map a Range#min / Range#max block result to a sign, the way CRuby's
+/// `rb_cmpint` does. Integers are taken at face value; for any other
+/// object we call `> 0` then `< 0` (both with `0`) and use the booleans
+/// to derive -1 / 0 / +1. This duplicate dispatch is observable: specs
+/// stub a mock to receive both `:<` and `:>` exactly two times when
+/// running `(1..3).min {|a,b| obj}` (one of each per pair).
+fn cmpint_block_result(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<i64> {
+    if let Some(i) = val.try_fixnum() {
+        return Ok(i.signum());
+    }
+    let zero = Value::integer(0);
+    let gt = vm
+        .invoke_method_inner(globals, IdentId::_GT, val, &[zero], None, None)?
+        .as_bool();
+    let lt = vm
+        .invoke_method_inner(globals, IdentId::_LT, val, &[zero], None, None)?
+        .as_bool();
+    Ok(if gt {
+        1
+    } else if lt {
+        -1
+    } else {
+        0
+    })
+}
+
 ///
 /// ### Range#min
 ///
@@ -697,18 +727,7 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             for i in (s + 1)..e {
                 let val = Value::integer(i);
                 let cmp = vm.invoke_block(globals, &data, &[val, min_val])?;
-                // CRuby calls < on the block result
-                let is_less = vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_LT,
-                        cmp,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool();
-                if is_less {
+                if cmpint_block_result(vm, globals, cmp)? < 0 {
                     min_val = val;
                 }
             }
@@ -779,18 +798,7 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             for i in (s + 1)..e {
                 let val = Value::integer(i);
                 let cmp = vm.invoke_block(globals, &data, &[val, max_val])?;
-                // CRuby calls > on the block result
-                let is_greater = vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_GT,
-                        cmp,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool();
-                if is_greater {
+                if cmpint_block_result(vm, globals, cmp)? > 0 {
                     max_val = val;
                 }
             }
