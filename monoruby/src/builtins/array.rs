@@ -256,26 +256,38 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut self_val = lfp.self_val().as_array();
     if lfp.try_arg(0).is_none() {
+        // Array.new {} / Array#initialize {} — the block is ignored.
+        if lfp.block().is_some() {
+            vm.ruby_warn(globals, "warning: given block not used")?;
+        }
         self_val.clear();
         return Ok(self_val.into());
     }
-    if lfp.try_arg(1).is_none() && lfp.block().is_none() {
-        // Try to_ary conversion first
+    if lfp.try_arg(1).is_none() {
+        // Single argument: if it's an Array (or to_ary-able to one),
+        // use it as initial contents. CRuby warns when a block is
+        // given here because the block is ignored.
         let arg = lfp.arg(0);
+        let mut from_array: Option<ArrayInner> = None;
         if arg.is_array_ty() {
-            *self_val = (*arg.as_array()).clone();
-            return Ok(self_val.into());
+            from_array = Some((*arg.as_array()).clone());
+        } else {
+            let to_ary = IdentId::TO_ARY;
+            if let Some(func_id) = globals.check_method(arg, to_ary) {
+                let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+                if result.is_array_ty() {
+                    from_array = Some((*result.as_array()).clone());
+                } else if !result.is_nil() {
+                    return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
+                }
+            }
         }
-        let to_ary = IdentId::TO_ARY;
-        if let Some(func_id) = globals.check_method(arg, to_ary) {
-            let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
-            if result.is_array_ty() {
-                *self_val = (*result.as_array()).clone();
-                return Ok(self_val.into());
+        if let Some(inner) = from_array {
+            if lfp.block().is_some() {
+                vm.ruby_warn(globals, "warning: given block not used")?;
             }
-            if !result.is_nil() {
-                return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
-            }
+            *self_val = inner;
+            return Ok(self_val.into());
         }
     }
     // Use coerce_to_int to call to_int on the size argument
@@ -292,7 +304,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
-            eprintln!("warning: block supersedes default value argument");
+            vm.ruby_warn(globals, "warning: block supersedes default value argument")?;
         }
         let iter = (0..size).map(|i| Value::integer(i as i64));
         let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
@@ -1670,6 +1682,22 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let ary = lfp.self_val().as_array();
     let arg0 = lfp.try_arg(0);
 
+    // CRuby warns about a non-nil `$,` whenever join would fall back
+    // to it (no separator argument or an explicit nil). The warning
+    // fires even for an empty array.
+    let would_use_global_sep = match &arg0 {
+        None => true,
+        Some(v) => v.is_nil(),
+    };
+    if would_use_global_sep {
+        let gvar_id = IdentId::get_id("$,");
+        if let Some(v) = globals.get_gvar(gvar_id) {
+            if !v.is_nil() {
+                vm.ruby_warn(globals, "warning: $, is set to non-nil value")?;
+            }
+        }
+    }
+
     // Empty array shortcut: CRuby returns `""` tagged US-ASCII
     // without ever inspecting the separator (in particular, no
     // `#to_str` is sent to it). Doing this before separator
@@ -1989,6 +2017,9 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     // Index out of bounds
     if let Some(bh) = lfp.block() {
+        if lfp.try_arg(1).is_some() {
+            vm.ruby_warn(globals, "warning: block supersedes default value argument")?;
+        }
         let data = vm.get_block_data(globals, bh)?;
         let val = vm.invoke_block(globals, &data, &[lfp.arg(0)])?;
         Ok(val)
