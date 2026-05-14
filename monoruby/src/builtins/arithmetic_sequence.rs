@@ -648,11 +648,11 @@ fn term_or_generic(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/=5b=5d.html]
 #[monoruby_builtin]
 fn index_op(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (raw_b, raw_e, s_val, excl) = unpack_as(lfp.self_val());
+    let (raw_b, raw_e, s_val, raw_excl) = unpack_as(lfp.self_val());
 
     let arr_v = lfp.arg(0);
     let arr = arr_v.as_array();
-    let len = arr.len() as i64;
+    let alen = arr.len() as i64;
 
     // `s == 0` ⇒ empty result (matches existing Ruby behaviour).
     if value_is_zero(s_val) {
@@ -671,130 +671,127 @@ fn index_op(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             v.try_fixnum().map(Some)
         }
     }
-    let rb = coerce_idx(raw_b)
+    let mut b = coerce_idx(raw_b)
         .ok_or_else(|| MonorubyErr::typeerr("begin must be an Integer for Array indexing"))?;
-    let re = coerce_idx(raw_e)
+    let mut e = coerce_idx(raw_e)
         .ok_or_else(|| MonorubyErr::typeerr("end must be an Integer for Array indexing"))?;
+    let mut excl = raw_excl;
 
-    if s > 0 {
-        // ── positive step ────────────────────────────────────────
-        let mut b = rb.unwrap_or(0);
-        if b < 0 {
-            b += len;
+    // Mirror CRuby's `rb_arithmetic_sequence_beg_len_step` (enumerator.c)
+    // followed by `rb_range_component_beg_len` (range.c) and
+    // `rb_ary_subseq_step` (array.c). The combined effect:
+    //   * Negative step is folded into a forward (begin, end) span by
+    //     bumping `end` by +1 when `exclude_end?` and swapping endpoints.
+    //   * `|step| > 1` engages the strict err=1 checks: out-of-range
+    //     raises rather than clamps.
+    //   * `|step| == 1` uses CRuby's err=0 clamping (begin past len ⇒
+    //     return nil; end past len ⇒ silently clamp to len).
+
+    // ── Step 1: fold negative step into a forward span. ──
+    if s < 0 {
+        if excl && e.is_some() {
+            e = Some(e.unwrap() + 1);
+            excl = false;
         }
-        if let Some(orig_b) = rb {
-            let orig_b_after = if orig_b < 0 { orig_b + len } else { orig_b };
-            if orig_b_after > len {
-                if s > 1 {
-                    return Err(MonorubyErr::rangeerr(format_oob(raw_b, raw_e, s_val)));
-                }
-                return Ok(Value::nil());
-            }
+        std::mem::swap(&mut b, &mut e);
+    }
+
+    // ── Step 2: rb_range_component_beg_len. ──
+    let mut beg = b.unwrap_or(0);
+    let mut end = e.unwrap_or(-1);
+    if e.is_none() {
+        excl = false;
+    }
+    let strict = s.unsigned_abs() > 1;
+    let oob = || MonorubyErr::rangeerr(format_oob(raw_b, raw_e, s_val, raw_excl));
+
+    if beg < 0 {
+        beg += alen;
+        if beg < 0 {
+            // CRuby: range_component returns Qnil here. The caller
+            // (`rb_arithmetic_sequence_beg_len_step`) then raises iff
+            // strict; otherwise the Qnil bubbles up to `[]` as nil.
+            return if strict {
+                Err(oob())
+            } else {
+                Ok(Value::nil())
+            };
         }
-        if b == len {
-            return Ok(Value::array_empty());
+    }
+    if end < 0 {
+        end += alen;
+    }
+    if !excl {
+        end += 1;
+    }
+
+    let mut range_len = if strict {
+        // err=1: no clamp of end against alen. Out-of-range raises.
+        if beg > alen {
+            return Err(oob());
         }
-        if b < 0 {
+        let len_unclamped = end - beg;
+        if len_unclamped > alen {
+            return Err(oob());
+        }
+        len_unclamped.max(0)
+    } else {
+        // err=0: clamp end past alen, return nil for beg past alen.
+        if beg > alen {
             return Ok(Value::nil());
         }
+        if end > alen {
+            end = alen;
+        }
+        (end - beg).max(0)
+    };
 
-        let (e, end_is_term) = match re {
-            None => (len - 1, false),
-            Some(orig_e) => {
-                let mut e_res = orig_e;
-                if e_res < 0 {
-                    e_res += len;
-                }
-                let end_is_term = !excl && b >= 0 && (e_res - b).rem_euclid(s) == 0;
-                if s > 1 && end_is_term && e_res >= len {
-                    return Err(MonorubyErr::rangeerr(format_oob(raw_b, raw_e, s_val)));
-                }
-                let e = if excl { e_res - 1 } else { e_res };
-                (e, end_is_term)
-            }
-        };
-        let _ = end_is_term; // kept for parity with the Ruby comments
-        let e = if e >= len { len - 1 } else { e };
-        if e < b {
-            return Ok(Value::array_empty());
-        }
-        // Closed-form capacity: (e - b) / s + 1 terms.
-        let cap = ((e - b) / s) as usize + 1;
-        let mut result = Vec::with_capacity(cap);
-        let slice: &[Value] = &arr;
-        let mut i = b as usize;
-        let e = e as usize;
-        let step = s as usize;
-        while i <= e {
-            // SAFETY: invariant `0 <= b <= e <= len - 1` was established
-            // above (raw_b/raw_e normalised against `len`, e clamped to
-            // `len-1`), so `i` stays inside the slice for every push.
-            result.push(unsafe { *slice.get_unchecked(i) });
-            i += step;
-        }
-        Ok(Value::array_from_vec(result))
-    } else {
-        // ── negative step ────────────────────────────────────────
-        let b = match rb {
-            None => len - 1,
-            Some(orig_b) => {
-                let mut b = orig_b;
-                if b < 0 {
-                    b += len;
-                }
-                if b > len - 1 {
-                    let diff = b - (len - 1);
-                    if s.abs() > 1 && diff > s.abs() {
-                        return Err(MonorubyErr::rangeerr(format_oob(raw_b, raw_e, s_val)));
-                    }
-                    b = len - 1;
-                }
-                if b < 0 {
-                    return Ok(Value::nil());
-                }
-                b
-            }
-        };
-        // Special-case: empty array, b stays at -1 above — handled
-        // below via the b < e check.
-
-        let mut e = match re {
-            None => 0,
-            Some(orig_e) => {
-                let mut e_res = orig_e;
-                if e_res < 0 {
-                    e_res += len;
-                }
-                if excl { e_res + 1 } else { e_res }
-            }
-        };
-        if e < 0 {
-            e = 0;
-        }
-        if b < e {
-            return Ok(Value::array_empty());
-        }
-        // Closed-form capacity: (b - e) / |s| + 1 terms.
-        let cap = ((b - e) / s.unsigned_abs() as i64) as usize + 1;
-        let mut result = Vec::with_capacity(cap);
-        let slice: &[Value] = &arr;
-        let mut i = b;
-        while i >= e {
-            // SAFETY: `b` is clamped to `len - 1` above and never goes
-            // below `e >= 0` in this branch.
-            result.push(unsafe { *slice.get_unchecked(i as usize) });
-            i += s; // s is negative
-            if i < 0 {
-                break;
-            }
-        }
-        Ok(Value::array_from_vec(result))
+    // ── Step 3: rb_ary_subseq_step. ──
+    if alen < range_len || alen < beg + range_len {
+        range_len = alen - beg;
     }
+    if range_len == 0 {
+        return Ok(Value::array_empty());
+    }
+
+    let slice: &[Value] = &arr;
+    if s == 1 {
+        return Ok(Value::array_from_vec(
+            slice[beg as usize..(beg + range_len) as usize].to_vec(),
+        ));
+    }
+    if s == -1 {
+        return Ok(Value::array_from_vec(
+            slice[beg as usize..(beg + range_len) as usize]
+                .iter()
+                .rev()
+                .copied()
+                .collect(),
+        ));
+    }
+
+    // |s| > 1: stride through the (beg, range_len) span. Matches
+    // CRuby's `ary_make_partial_step`: forward step starts at `beg`,
+    // negative step starts at the far end and walks backward.
+    let s_eff = if s < 0 && s < -range_len { -range_len } else { s };
+    let ustep = s_eff.unsigned_abs() as i64;
+    let n = (range_len + ustep - 1) / ustep;
+    let mut result = Vec::with_capacity(n as usize);
+    let mut j = beg + if s_eff > 0 { 0 } else { range_len - 1 };
+    for _ in 0..n {
+        // SAFETY: `0 <= beg`, `beg + range_len <= alen`, and `j` walks
+        // strictly inside `[beg, beg + range_len)` for every push (n
+        // is derived from `range_len / |s_eff|` above).
+        result.push(unsafe { *slice.get_unchecked(j as usize) });
+        j += s_eff;
+    }
+    Ok(Value::array_from_vec(result))
 }
 
 /// Mirrors the Ruby format `((b..e).step(s)) out of range` — empty
-/// string for nil endpoints (matching AS#inspect), `to_s` for integers.
-fn format_oob(b: Value, e: Value, s: Value) -> String {
+/// string for nil endpoints (matching AS#inspect), `to_s` for integers,
+/// `...` rendered when the underlying AS has `exclude_end? == true`.
+fn format_oob(b: Value, e: Value, s: Value, excl: bool) -> String {
     fn render(v: Value) -> String {
         if v.is_nil() {
             String::new()
@@ -807,8 +804,9 @@ fn format_oob(b: Value, e: Value, s: Value) -> String {
         }
     }
     format!(
-        "(({}..{}).step({})) out of range",
+        "(({}{}{}).step({})) out of range",
         render(b),
+        if excl { "..." } else { ".." },
         render(e),
         render(s)
     )
@@ -827,13 +825,13 @@ mod tests {
     // user-defined Numeric. Rational steps below drive `.size`
     // through `size` → `finite_count` → `generic_count`.
     //
-    // `format_oob` fires from `index_op` along three paths:
-    // positive-step with begin past `len`, positive-step with an
-    // `end_is_term` past `len`, and negative-step with
-    // begin − (len − 1) > |s|. Each error case uses `rescue
-    // $!.message` so the rendered string is compared against CRuby,
-    // and is paired with the in-range neighbour that escapes the
-    // check.
+    // `format_oob` fires from `index_op` whenever the underlying
+    // `rb_arithmetic_sequence_beg_len_step` (folded into `index_op`)
+    // sees `|step| > 1` AND either `begin > len` or `(end_excl_adj
+    // - begin) > len` after CRuby's range normalisation. Each error
+    // case uses `rescue $!.message` so the rendered string is compared
+    // against CRuby, and is paired with the in-range neighbour that
+    // escapes the check.
     use crate::tests::*;
 
     #[test]
@@ -880,30 +878,77 @@ mod tests {
             // Boundary just past len, same path.
             "arr = [10, 20, 30, 40, 50]; arr[(6..).step(2)] rescue $!.message",
             // Begin past len but s == 1 ⇒ no error, returns nil
-            // (the early-return that sits inside the same branch).
+            // (the err=0 clamping path).
             "arr = [10, 20, 30, 40, 50]; arr[(7..).step(1)]",
             "arr = [10, 20, 30, 40, 50]; arr[(6..).step(1)]",
             // Begin == len ⇒ empty result (not an error).
             "arr = [10, 20, 30, 40, 50]; arr[(5..).step(2)]",
 
-            // ── positive step, end_is_term past len ────────────────
-            // `(0..6).step(2)`: (6 - 0) % 2 == 0 ⇒ end_is_term true,
-            // and 6 >= len(5) ⇒ raise.
+            // ── positive step, end past len (issue #492 cat. 1) ────
+            // `(0..N).step(2)` for any N >= len raises, regardless of
+            // alignment. CRuby's check is `(end + 1 - begin) > alen`
+            // for inclusive, `(end - begin) > alen` for exclusive.
+            "arr = [10, 20, 30, 40, 50]; arr[(0..5).step(2)] rescue $!.message",
             "arr = [10, 20, 30, 40, 50]; arr[(0..6).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(0..7).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(0...6).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(0...10).step(2)] rescue $!.message",
             // End exactly at len-1 ⇒ no error.
             "arr = [10, 20, 30, 40, 50]; arr[(0..4).step(2)]",
-            // End == len, end_is_term false ((5 - 0) % 2 == 1) ⇒
-            // no error (clamped to len-1 inside the function).
+            // End < len, no error (issue #492 cat. 2: previously
+            // rejected because `e_res == len` was misread as oob).
             "arr = [10, 20, 30, 40, 50]; arr[(0..3).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(1..5).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(2..5).step(3)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(3..5).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(2..6).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(3..7).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(4..8).step(2)]",
 
-            // ── negative step, begin too far past len-1 ────────────
-            // `(10..0).step(-3)`: b - (len-1) = 6, |s| = 3,
-            // diff(6) > |s|(3) ⇒ raise.
+            // ── negative step (issue #492 cat. 3) ──────────────────
+            // The reversal in CRuby folds `(b..e).step(-s)` into a
+            // forward `(e..b).step(-s)` after bumping `e` for excl;
+            // strict checks then catch any case where the span exceeds
+            // the array bounds.
+            "arr = [10, 20, 30, 40, 50]; arr[(5..0).step(-2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(6..0).step(-2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(6...0).step(-3)] rescue $!.message",
             "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-3)] rescue $!.message",
-            // Same shape, |s| = 2.
             "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-2)] rescue $!.message",
-            // |s| == 1 escapes the check ⇒ no error (full reverse).
+            // |s| == 1 escapes the strict check ⇒ clamped, no error.
             "arr = [10, 20, 30, 40, 50]; arr[(10..0).step(-1)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(5..0).step(-1)]",
+
+            // ── negative end with negative step (issue #492 cat. 4) ─
+            // After reversal: e=-1 with excl becomes 0; the forward
+            // span [0, b+1) drives the slice. `(5...-1).step(-1)`
+            // walks the whole array in reverse.
+            "arr = [10, 20, 30, 40, 50]; arr[(5...-1).step(-1)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(5...-1).step(-2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(5..-1).step(-2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(4..-1).step(-2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(4..0).step(-2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(5...0).step(-2)]",
+
+            // ── format_oob renders `...` for excl (issue #492 cat. 5) ─
+            "arr = [10, 20, 30, 40, 50]; arr[Range.new(6, 5, true).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[Range.new(10, 0, true).step(-2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(0...6).step(3)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(7...).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(...6).step(2)] rescue $!.message",
+
+            // ── beginless / endless with valid bounds ──────────────
+            "arr = [10, 20, 30, 40, 50]; arr[(...5).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(...-1).step(2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(..0).step(-2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(..5).step(-2)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(4..).step(2)]",
+
+            // ── negative begin pre-normalised below zero (err=0 vs
+            //    err=1 branches both exercised) ──────────────────────
+            "arr = [10, 20, 30, 40, 50]; arr[(-100..5).step(1)]",
+            "arr = [10, 20, 30, 40, 50]; arr[(-100..5).step(2)] rescue $!.message",
+            "arr = [10, 20, 30, 40, 50]; arr[(-100..-90).step(2)] rescue $!.message",
         ]);
     }
 }
