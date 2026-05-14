@@ -121,7 +121,7 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     fpr: Vec<(FPReg, Vec<SlotId>)>,
-    literal: Vec<(Immediate, SlotId)>,
+    literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
 }
@@ -172,7 +172,7 @@ impl std::fmt::Debug for WriteBack {
 impl WriteBack {
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
-        literal: Vec<(Immediate, SlotId)>,
+        literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
         void: Vec<SlotId>,
     ) -> Self {
@@ -727,7 +727,7 @@ impl JitModule {
             self.fpr_to_stack(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
-            self.literal_to_stack(*slot, (*v).into());
+            self.literal_to_stack(*slot, *v);
         }
         for slot in &wb.void {
             self.literal_to_stack(*slot, Value::nil());
@@ -755,7 +755,7 @@ impl JitModule {
             self.fpr_to_stack2(*xmm, v, base);
         }
         for (v, slot) in &wb.literal {
-            self.literal_to_stack2(*slot, (*v).into());
+            self.literal_to_stack2(*slot, *v);
         }
         for slot in &wb.void {
             self.literal_to_stack2(*slot, Value::nil());

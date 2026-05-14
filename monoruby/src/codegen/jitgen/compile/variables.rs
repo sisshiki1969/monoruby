@@ -131,18 +131,26 @@ impl AbstractState {
             const_version: *version,
             deopt,
         });
-        if let Some(value) = value.is_immediate() {
-            self.def_C(dst, value);
-            return;
-        }
-        ir.lit2reg(*value, GP::Rax);
-        if let Some(f) = value.try_float() {
+        // Heap-allocated Float: keep the Sf optimization so subsequent
+        // float ops can read the f64 from xmm without re-extracting it
+        // from the RValue. Immediate flonums skip this path because
+        // `def_C` is already cheaper than emitting an `Sf` materialization.
+        if value.is_immediate().is_none()
+            && let Some(f) = value.try_float()
+        {
+            ir.lit2reg(*value, GP::Rax);
             let fdst = self.def_Sf_float(dst);
             ir.f64_to_fpr(f, fdst);
             ir.reg2stack(GP::Rax, dst);
-        } else {
-            self.def_reg2acc(ir, GP::Rax, dst);
+            return;
         }
+        // All other values (immediates, class objects, modules, strings,
+        // bignums, …) are folded into the abstract state as `LinkMode::C`.
+        // GC safety: the version guard above deopts on any redefinition,
+        // and `wb_literal` writes the value back to the stack slot before
+        // every GC safepoint, so a non-moving mark-and-sweep collector
+        // sees it through the normal stack scan.
+        self.def_C(dst, *value);
     }
 
     ///

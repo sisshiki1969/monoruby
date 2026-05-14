@@ -239,9 +239,22 @@ impl<'a> JitContext<'a> {
                         ISeqHint::Normal => {}
                     }
                 }
+                // Use `is_C_immediate` here, not `is_C`: heap-resident
+                // `LinkMode::C` (e.g. class constants newly folded by
+                // `load_constant`) would otherwise trigger specialization
+                // of methods like `Array.new`, whose body contains a
+                // polymorphic-on-`o` `__send__(:initialize, ...)`. The
+                // JIT picks up the inline cache's currently-cached
+                // receiver class, propagates it as `Guarded::Class(...)`
+                // onto `o`, and the trailing `o` becomes
+                // `ReturnValue::Class(...)` — overwriting the caller's
+                // dst slot with the wrong class. See the
+                // `attr_reader_in_different_class` regression for the
+                // observable failure.
                 let specializable = self.store.is_simple_call(func_id, callid)
-                    && (state.is_C(callsite.recv)
-                        || (pos_num != 0 && (args..args + pos_num).any(|i| state.is_C(i))));
+                    && (state.is_C_immediate(callsite.recv)
+                        || (pos_num != 0
+                            && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
                 if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
@@ -585,7 +598,7 @@ impl<'a> JitContext<'a> {
 }
 
 pub(super) enum SpecializedCompileResult {
-    Const(Immediate),
+    Const(Value),
     Compiled {
         entry: JitLabel,
         return_state: Option<ReturnState>,

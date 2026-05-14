@@ -377,7 +377,7 @@ pub(super) struct ReturnState {
 #[derive(Debug, Clone, Copy)]
 enum ReturnValue {
     UD,
-    Const(Immediate),
+    Const(Value),
     Class(ClassId),
     Value,
 }
@@ -423,7 +423,7 @@ impl ReturnState {
         }
     }
 
-    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Immediate> {
+    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
         if !self.invariants.side_effect_guard {
             return None;
         }
@@ -520,7 +520,6 @@ impl Invariants {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::Immediate;
 
     /// `taint_for_unmodeled_rescue` must downgrade `Const`/`Class` to
     /// `Value` so `def_rax2acc_return` falls into the `ReturnValue::Value`
@@ -530,7 +529,7 @@ mod tests {
     #[test]
     fn taint_for_unmodeled_rescue_drops_const_and_side_effect_guard() {
         let mut s = ReturnState {
-            ret: ReturnValue::Const(Immediate::nil()),
+            ret: ReturnValue::Const(Value::nil()),
             invariants: Invariants {
                 class_version_guard: true,
                 no_capture_guard: true,
