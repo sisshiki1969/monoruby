@@ -130,7 +130,6 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
     globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func_rest(kernel_class, "extend", extend);
-    globals.define_builtin_func(kernel_class, "kind_of?", is_a, 1);
     globals.define_builtin_inline_func(
         kernel_class,
         "object_id",
@@ -156,7 +155,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(kernel_class, "instance_variables", iv, 0);
     globals.define_builtin_func(kernel_class, "remove_instance_variable", iv_remove, 1);
-    globals.define_builtin_func(kernel_class, "is_a?", is_a, 1);
+    globals.define_builtin_inline_funcs(
+        kernel_class,
+        "is_a?",
+        &["kind_of?"],
+        is_a,
+        Box::new(kernel_is_a),
+        1,
+    );
     globals.define_builtin_inline_funcs_with_kw(
         kernel_class,
         "send",
@@ -2092,6 +2098,52 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
+fn kernel_is_a(
+    state: &mut AbstractState,
+    _ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { args, dst, .. } = *callsite;
+    // Only fold when the argument is a concrete class/module value.
+    // Anything else (including a literal that isn't a class/module — which
+    // would raise TypeError) falls back to the regular dispatch.
+    let Some(target) = state.is_class_or_module_literal(args) else {
+        return false;
+    };
+    let target_id = target.id();
+    // Synthetic classes like BOOL_CLASS have no backing Module object —
+    // their superclass chain isn't meaningful for is_a? folding. Fall
+    // back to the regular dispatch in that case.
+    let Some(recv_module) = store[recv_class].try_get_module() else {
+        return false;
+    };
+    // The receiver-class guard + class_version guard upstream ensure
+    // recv_class is exact at this point, so the inheritance chain is
+    // fixed: walk recv_module's superclasses to compute the result at
+    // compile time.
+    let mut cur = Some(recv_module);
+    let mut result = false;
+    while let Some(m) = cur {
+        if m.id() == target_id {
+            result = true;
+            break;
+        }
+        cur = m.superclass();
+    }
+    if let Some(dst) = dst {
+        state.def_C(dst, Immediate::bool(result));
+    }
+    true
+}
+
 ///
 /// ### Kernel#enum_for
 ///
@@ -3460,6 +3512,26 @@ mod tests {
         end
         c = C.new
         [c.is_a?(S), c.is_a?(C)]"#,
+        );
+        // Walks include / superclass chain so JIT must consult ancestors.
+        run_test(
+            r#"
+            [5.is_a?(Integer), 5.is_a?(Numeric), 5.is_a?(Comparable),
+             5.is_a?(Object), 5.is_a?(Kernel), 5.is_a?(BasicObject),
+             5.is_a?(Float), 5.is_a?(String)]
+            "#,
+        );
+        // kind_of? alias resolves to the same inline.
+        run_test(r#"[5.kind_of?(Integer), 5.kind_of?(Float), "x".kind_of?(String)]"#);
+        // Make is_a? called from a hot method so the JIT compiles and
+        // fires the inline (run_test runs the snippet 25 times).
+        run_test(
+            r#"
+            def check(o); o.is_a?(Integer); end
+            r = []
+            1000.times { r << check(1) }
+            r.uniq
+            "#,
         );
     }
 
