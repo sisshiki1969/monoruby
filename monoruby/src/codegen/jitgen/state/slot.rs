@@ -57,7 +57,7 @@ impl SlotState {
     pub(super) fn new_method(cc: &JitContext) -> Self {
         let mut ctx = SlotState::new(cc, LinkMode::V);
         for i in cc.locals() {
-            ctx.set_mode(i, LinkMode::C(Immediate::nil()));
+            ctx.set_mode(i, LinkMode::C(Value::nil()));
         }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
@@ -175,9 +175,19 @@ impl SlotState {
         self.guarded(slot).class()
     }
 
+    /// True only when *slot* is `LinkMode::C` with a packed immediate
+    /// value (fixnum, flonum, nil, true, false, symbol).
+    ///
+    /// Used to gate iseq specialization: passing a heap-resident
+    /// `LinkMode::C` (e.g. a class constant) through `from_caller` lets
+    /// the callee's body propagate Guarded class info inferred from
+    /// polymorphic inline caches back to the caller's dst slot — making
+    /// the caller believe the return type is whatever class happened to
+    /// win that cache last, which is unsound. Restricting specialization
+    /// to immediates preserves the pre-existing behavior.
     #[allow(non_snake_case)]
-    pub(in crate::codegen::jitgen) fn is_C(&self, slot: SlotId) -> bool {
-        self.mode(slot).is_C()
+    pub(in crate::codegen::jitgen) fn is_C_immediate(&self, slot: SlotId) -> bool {
+        matches!(self.mode(slot), LinkMode::C(v) if v.is_immediate().is_some())
     }
 }
 
@@ -543,11 +553,16 @@ impl SlotState {
     ///
     /// Link *slot* to a concrete value *v*.
     ///
+    /// `v` may be any `Value` (immediate or heap-resident). The pointer is kept
+    /// alive across GC safepoints via `wb_literal` writing it to its stack slot
+    /// before each GC checkpoint, and across constant redefinition via the
+    /// `GuardConstVersion` deopt check emitted by `load_constant`.
+    ///
     #[allow(non_snake_case)]
-    pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: Immediate) {
+    pub(crate) fn def_C(&mut self, slot: impl Into<Option<SlotId>>, v: impl Into<Value>) {
         if let Some(slot) = slot.into() {
             self.discard(slot);
-            self.set_mode(slot, LinkMode::C(v));
+            self.set_mode(slot, LinkMode::C(v.into()));
         }
     }
 
@@ -596,7 +611,7 @@ impl SlotState {
                 ir.fpr2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                ir.lit2stack(v.into(), slot);
+                ir.lit2stack(v, slot);
             }
             LinkMode::G(guarded) => {
                 // G -> S
@@ -628,7 +643,7 @@ impl SlotState {
                 ir.fpr2stack(xmm, slot);
             }
             LinkMode::C(v) => {
-                ir.lit2stack(v.into(), slot);
+                ir.lit2stack(v, slot);
             }
             LinkMode::G(_) => {
                 ir.acc2stack(slot);
@@ -657,7 +672,7 @@ impl SlotState {
 
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<Fixnum> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.try_fixnum()
+            v.is_immediate()?.try_fixnum()
         } else {
             None
         }
@@ -665,7 +680,7 @@ impl SlotState {
 
     pub fn is_flonum_literal(&self, slot: SlotId) -> Option<Flonum> {
         if let LinkMode::C(v) = self.mode(slot) {
-            v.try_flonum()
+            v.is_immediate()?.try_flonum()
         } else {
             None
         }
@@ -1103,7 +1118,7 @@ impl AbstractFrame {
             .collect()
     }
 
-    fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Immediate, SlotId)> {
+    fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Value, SlotId)> {
         self.slots
             .iter()
             .enumerate()
@@ -1185,9 +1200,17 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     Sf(FPReg, SfGuarded),
     ///
-    /// Concrete value (immediate / packed).
+    /// Concrete value.
     ///
-    C(Immediate),
+    /// `Value` may be any packed immediate (fixnum, flonum, nil, true,
+    /// false, symbol) or a pointer to a heap-allocated `RValue` (e.g. a
+    /// class object loaded from a constant). For heap values the pointer
+    /// is kept alive across GC by `wb_literal` writing it to the slot's
+    /// stack location before each GC safepoint, and across constant
+    /// redefinition by the `GuardConstVersion` deopt check at the load
+    /// site.
+    ///
+    C(Value),
 }
 
 impl LinkMode {
@@ -1200,7 +1223,7 @@ impl LinkMode {
     }
 
     fn nil() -> Self {
-        LinkMode::C(Immediate::nil())
+        LinkMode::C(Value::nil())
     }
 
     fn guarded(&self) -> Guarded {
@@ -1208,7 +1231,7 @@ impl LinkMode {
             LinkMode::S(guarded) | LinkMode::G(guarded) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
-            LinkMode::C(v) => Guarded::from_concrete_value((*v).into()),
+            LinkMode::C(v) => Guarded::from_concrete_value(*v),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
         }
@@ -1236,11 +1259,6 @@ impl LinkMode {
                 Guarded::Value => ReturnValue::Value,
             },
         }
-    }
-
-    #[allow(non_snake_case)]
-    fn is_C(&self) -> bool {
-        matches!(self, LinkMode::C(_))
     }
 
     pub(in crate::codegen::jitgen) fn from_caller(
@@ -1468,10 +1486,10 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
                 self.set_Sf_float(slot, r);
-                let (v, f) = if let Some(f) = l.try_flonum() {
-                    (Value::float(f.get()), f.get())
+                let (v, f) = if let Some(f) = l.try_float() {
+                    (Value::float(f), f)
                 } else if let Some(i) = l.try_fixnum() {
-                    (Value::integer(i.get()), i.get() as f64)
+                    (Value::integer(i), i as f64)
                 } else {
                     unreachable!()
                 };
@@ -1480,9 +1498,9 @@ impl AbstractFrame {
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 // C -> S
-                let guarded = Guarded::from_concrete_value(v.into());
+                let guarded = Guarded::from_concrete_value(v);
                 self.set_mode(slot, LinkMode::S(guarded));
-                ir.lit2stack(v.into(), slot);
+                ir.lit2stack(v, slot);
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
