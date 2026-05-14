@@ -342,7 +342,10 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let (entry, return_state) = match self.compile_specialized_func(
+        let SpecializedCompileResult {
+            entry,
+            return_state,
+        } = self.compile_specialized_func(
             state,
             iseq,
             self_class,
@@ -350,16 +353,7 @@ impl<'a> JitContext<'a> {
             args_info,
             Some(outer),
             callid,
-        )? {
-            SpecializedCompileResult::Const(v) => {
-                state.def_C(dst, v);
-                return Ok(CompileResult::Continue);
-            }
-            SpecializedCompileResult::Compiled {
-                entry,
-                return_state,
-            } => (entry, return_state),
-        };
+        )?;
         state.exec_gc(ir, true);
         let using_xmm = state.get_using_xmm();
         // stack pointer adjustment
@@ -571,7 +565,10 @@ impl<'a> JitContext<'a> {
         } else {
             Some(self.label())
         };
-        let (entry, result) = match self.compile_specialized_func(
+        let SpecializedCompileResult {
+            entry,
+            return_state,
+        } = self.compile_specialized_func(
             state,
             iseq,
             recv_class,
@@ -579,30 +576,18 @@ impl<'a> JitContext<'a> {
             args_info,
             None,
             callid,
-        )? {
-            SpecializedCompileResult::Const(v) => {
-                state.def_C(dst, v);
-                return Ok(CompileResult::Continue);
-            }
-            SpecializedCompileResult::Compiled {
-                entry,
-                return_state: result,
-            } => (entry, result),
-        };
+        )?;
         let evict = ir.new_evict();
         state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict);
-        let res = state.def_rax2acc_return(ir, dst, result);
+        let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
         return Ok(res);
     }
 }
 
-pub(super) enum SpecializedCompileResult {
-    Const(Value),
-    Compiled {
-        entry: JitLabel,
-        return_state: Option<ReturnState>,
-    },
+pub(super) struct SpecializedCompileResult {
+    pub entry: JitLabel,
+    pub return_state: Option<ReturnState>,
 }
 
 impl<'a> JitContext<'a> {
@@ -655,29 +640,25 @@ impl<'a> JitContext<'a> {
         // If the iseq has rescue/ensure handlers, the abstract
         // interpreter's BB graph doesn't include the rescue PCs as
         // successors, so the computed return state only reflects the
-        // happy path. Letting Const-folding fire (or letting the
-        // Const ret survive into `def_rax2acc_return`) would
-        // overwrite the rescue path's actual return value with the
-        // happy-path constant. See issue #405.
+        // happy path. Letting the Const ret survive into
+        // `def_rax2acc_return` would overwrite the rescue path's
+        // actual return value with the happy-path constant. See
+        // issue #405.
         let return_state = return_state.map(|mut s| {
             if self.store[iseq_id].has_exception_handler() {
                 s.taint_for_unmodeled_rescue();
             }
             s
         });
-        if let Some(result) = &return_state {
-            if let Some(v) = result.const_folded() {
-                #[cfg(feature = "jit-debug")]
-                if self.codegen_mode() {
-                    eprintln!(
-                        "const folded: {} {:?}",
-                        self.store.func_description(self.store[iseq_id].func_id()),
-                        result
-                    );
-                }
-                return Ok(SpecializedCompileResult::Const(v));
-            }
-        }
+        // Even when the specialized body has been fully const-folded,
+        // we keep the call site: the asm still contains the
+        // speculation's deopt-able guards and the non-local-return
+        // jump targets that a deopt'd interp may use. Skipping the
+        // call site (the previous `SpecializedCompileResult::Const`
+        // shortcut) made those runtime paths unreachable — which
+        // broke e.g. `Array#assoc`, whose block's `return elem`
+        // depends on the deopt path to set rax for the non-local
+        // return.
         #[cfg(feature = "jit-debug")]
         if self.codegen_mode() {
             eprintln!(
@@ -692,7 +673,7 @@ impl<'a> JitContext<'a> {
             info: frame.asm_info,
             patch_point,
         });
-        Ok(SpecializedCompileResult::Compiled {
+        Ok(SpecializedCompileResult {
             entry,
             return_state,
         })

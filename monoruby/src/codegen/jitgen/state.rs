@@ -277,8 +277,20 @@ impl AbstractFrame {
                     ir.push(AsmInst::Unreachable);
                     return CompileResult::Cease;
                 }
-                ReturnValue::Const(v) => {
-                    self.def_C(dst, v);
+                // Treat `Const` returns from inlined iseqs the same as
+                // `Value`: take rax as the source of truth. The
+                // analyzed-as-constant return was inferred from the
+                // happy speculation path inside the callee; if any deopt
+                // along that path fires at runtime, the non-local
+                // return / interp epilogue writes the actual value to
+                // rax (see `Array#assoc` for a concrete example), and
+                // folding the static constant here would poison the
+                // caller into emitting code that overwrites rax with the
+                // stale literal. The callee already wrote the constant
+                // to rax on its happy path, so demoting to `def_rax2acc`
+                // costs only a `mov` while staying correct under deopt.
+                ReturnValue::Const(_) => {
+                    self.def_rax2acc(ir, dst);
                 }
                 ReturnValue::Class(class) => {
                     self.def_reg2acc_class(ir, GP::Rax, dst, class);
@@ -423,6 +435,7 @@ impl ReturnState {
         }
     }
 
+    #[allow(dead_code)] // retained for `taint_for_unmodeled_rescue` tests
     pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
         if !self.invariants.side_effect_guard {
             return None;
