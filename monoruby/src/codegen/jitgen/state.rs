@@ -277,20 +277,15 @@ impl AbstractFrame {
                     ir.push(AsmInst::Unreachable);
                     return CompileResult::Cease;
                 }
-                // Treat `Const` returns from inlined iseqs the same as
-                // `Value`: take rax as the source of truth. The
-                // analyzed-as-constant return was inferred from the
-                // happy speculation path inside the callee; if any deopt
-                // along that path fires at runtime, the non-local
-                // return / interp epilogue writes the actual value to
-                // rax (see `Array#assoc` for a concrete example), and
-                // folding the static constant here would poison the
-                // caller into emitting code that overwrites rax with the
-                // stale literal. The callee already wrote the constant
-                // to rax on its happy path, so demoting to `def_rax2acc`
-                // costs only a `mov` while staying correct under deopt.
-                ReturnValue::Const(_) => {
-                    self.def_rax2acc(ir, dst);
+                // Reaching this arm means `compile_specialized_func`
+                // confirmed the callee's body is genuinely deopt-free
+                // (and has no rescue/ensure). Speculative `Const`
+                // returns are tainted to `Value` upstream by
+                // `taint_for_unmodeled_rescue`, so what arrives here is
+                // a true compile-time constant — safe to fold into the
+                // caller's abstract state.
+                ReturnValue::Const(v) => {
+                    self.def_C(dst, v);
                 }
                 ReturnValue::Class(class) => {
                     self.def_reg2acc_class(ir, GP::Rax, dst, class);
@@ -418,10 +413,22 @@ impl ReturnState {
     }
 
     /// Forget what the abstract interpreter inferred about the return
-    /// value and side effects. Used when the iseq has rescue/ensure
-    /// handlers that the BB graph doesn't model — the actual return
-    /// could come from any rescue path the interpreter never visited
-    /// (see issue #405).
+    /// value and side effects. Used whenever the iseq has control-flow
+    /// paths the BB graph doesn't model, so the actual return at
+    /// runtime can differ from what the analysis computed.
+    ///
+    /// Two cases trigger this taint today:
+    ///
+    /// 1. **rescue/ensure handlers** — the BB graph has no edge into
+    ///    them, so the analysis only sees the happy path (issue #405).
+    ///
+    /// 2. **deopt-able guards** — speculation can fail at runtime, in
+    ///    which case the interpreter resumes from the deopt PC and
+    ///    runs the bytecode (including paths the JIT eliminated as
+    ///    dead). The rax it leaves behind may differ from the static
+    ///    `Const` the analyzer derived on the happy path — see
+    ///    `Array#assoc` / PR #505. The trigger is
+    ///    `JitStackFrame::had_deopt`.
     pub(in crate::codegen::jitgen) fn taint_for_unmodeled_rescue(&mut self) {
         self.ret = ReturnValue::Value;
         self.invariants.side_effect_guard = false;

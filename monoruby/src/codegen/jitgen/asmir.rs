@@ -64,6 +64,12 @@ pub(crate) struct AsmIr {
     codegen_mode: bool,
     inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
+    /// Set when this IR has emitted at least one deopt-able side exit
+    /// (via [`Self::new_deopt`] / [`Self::new_deopt_with_pc`]). Read by
+    /// the enclosing frame to taint any `ReturnValue::Const` it would
+    /// otherwise propagate to its caller — see
+    /// `JitStackFrame::had_deopt`.
+    had_deopt: bool,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -96,7 +102,12 @@ impl AsmIr {
             codegen_mode: ctx.codegen_mode(),
             inst: vec![],
             side_exit: vec![],
+            had_deopt: false,
         }
+    }
+
+    pub(super) fn had_deopt(&self) -> bool {
+        self.had_deopt
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
@@ -117,14 +128,23 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool) {
-        (self.inst.len(), self.side_exit.len(), self.codegen_mode)
+    pub(super) fn save(&mut self) -> (usize, usize, bool, bool) {
+        (
+            self.inst.len(),
+            self.side_exit.len(),
+            self.codegen_mode,
+            self.had_deopt,
+        )
     }
 
-    pub(super) fn restore(&mut self, (inst, side_exit, codegen_mode): (usize, usize, bool)) {
+    pub(super) fn restore(
+        &mut self,
+        (inst, side_exit, codegen_mode, had_deopt): (usize, usize, bool, bool),
+    ) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
+        self.had_deopt = had_deopt;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
@@ -134,6 +154,7 @@ impl AsmIr {
 
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
+        self.had_deopt = true;
         AsmDeopt(i)
     }
 
