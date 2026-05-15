@@ -389,7 +389,20 @@ impl<'a> JitContext<'a> {
                 lhs,
                 rhs,
                 ic,
-            } => return self.binary_cmp(state, ir, kind, dst, lhs, rhs, ic, bc_pos),
+                polymorphic,
+            } => {
+                return self.binary_cmp(
+                    state,
+                    ir,
+                    kind,
+                    dst,
+                    lhs,
+                    rhs,
+                    ic,
+                    polymorphic,
+                    bc_pos,
+                )
+            }
             TraceIr::BinCmpBr {
                 kind,
                 _dst: _,
@@ -398,9 +411,21 @@ impl<'a> JitContext<'a> {
                 disp,
                 brkind,
                 ic,
+                polymorphic,
             } => {
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
-                return self.binary_cmp_br(state, ir, kind, lhs, rhs, dest_bb, brkind, ic, bc_pos);
+                return self.binary_cmp_br(
+                    state,
+                    ir,
+                    kind,
+                    lhs,
+                    rhs,
+                    dest_bb,
+                    brkind,
+                    ic,
+                    polymorphic,
+                    bc_pos,
+                );
             }
             TraceIr::Index {
                 _dst: _,

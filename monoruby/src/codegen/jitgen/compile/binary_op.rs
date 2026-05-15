@@ -65,6 +65,7 @@ impl<'a> JitContext<'a> {
         lhs: SlotId,
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
@@ -80,6 +81,7 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                let _ = polymorphic;
                 self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
             }
         }
@@ -95,8 +97,10 @@ impl<'a> JitContext<'a> {
         dest_bb: BasicBlockId,
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
+        let _ = polymorphic;
         match state.binop_type(lhs, rhs, ic) {
             BinaryOpType::Integer(mode) => {
                 if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {

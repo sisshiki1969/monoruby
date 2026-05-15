@@ -151,6 +151,7 @@ pub(crate) enum TraceIr {
         lhs: SlotId,
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
     },
     BinCmpBr {
         kind: crate::ast::CmpKind,
@@ -160,6 +161,7 @@ pub(crate) enum TraceIr {
         disp: i32,
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
     },
     ArrayTEq {
         lhs: SlotId,
@@ -566,6 +568,7 @@ impl TraceIr {
                         lhs,
                         rhs,
                         ic,
+                        polymorphic: pc.opcode_sub() == 1,
                     }
                 }
 
@@ -607,6 +610,7 @@ impl TraceIr {
                         disp,
                         brkind,
                         ic,
+                        polymorphic: pc.opcode_sub() == 1,
                     }
                 }
                 160..=170 => {
@@ -724,10 +728,12 @@ impl TraceIr {
             rhs: SlotId,
             class: impl Into<Option<(ClassId, ClassId)>>,
             optimizable: bool,
+            polymorphic: bool,
         ) -> String {
             let class: Option<(ClassId, ClassId)> = class.into();
             let s = format!(
-                "{}{} = {:?} {:?} {:?}",
+                "{}{}{} = {:?} {:?} {:?}",
+                if polymorphic { "POLY " } else { "" },
                 optstr(optimizable),
                 ret_str(dst),
                 lhs,
@@ -937,15 +943,17 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), false),
+                polymorphic,
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), false, polymorphic),
             TraceIr::BinCmpBr {
                 kind,
                 _dst: dst,
                 lhs,
                 rhs,
                 ic,
+                polymorphic,
                 ..
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true),
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true, polymorphic),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
