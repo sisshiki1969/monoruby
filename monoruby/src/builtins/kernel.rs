@@ -3192,6 +3192,47 @@ fn singleton_methods(
     }))
 }
 
+/// True for a syntactically valid instance-variable name: `@`
+/// followed by an identifier whose first char is not a digit
+/// (and not another `@`, which would be a class variable).
+fn is_valid_ivar_name(s: &str) -> bool {
+    let mut it = s.chars();
+    if it.next() != Some('@') {
+        return false;
+    }
+    match it.next() {
+        Some(c) if c == '_' || c.is_alphabetic() || !c.is_ascii() => {}
+        _ => return false,
+    }
+    it.all(|c| c == '_' || c.is_alphanumeric() || !c.is_ascii())
+}
+
+/// Resolve an `instance_variable_*` name argument with CRuby
+/// semantics: Symbol/String are used directly, anything else is
+/// coerced via `#to_str` (TypeError otherwise), and the resulting
+/// name must be a valid instance-variable name (NameError otherwise).
+fn ivar_name_id(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<IdentId> {
+    let name = if let Some(sym) = arg.try_symbol() {
+        sym.get_name().to_string()
+    } else if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        match r.is_str() {
+            Some(s) => s.to_string(),
+            None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),
+        }
+    } else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    if !is_valid_ivar_name(&name) {
+        return Err(MonorubyErr::nameerr(format!(
+            "'{name}' is not allowed as an instance variable name"
+        )));
+    }
+    Ok(IdentId::get_id(&name))
+}
+
 ///
 /// ### Kernel#instance_variable_defined?
 ///
@@ -3200,16 +3241,12 @@ fn singleton_methods(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
 fn iv_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let id = match lfp.arg(0).unpack() {
-        RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id(s.check_utf8()?),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
-    };
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }
@@ -3221,8 +3258,8 @@ fn iv_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -3235,8 +3272,8 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)
@@ -3267,8 +3304,8 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
 #[monoruby_builtin]
-fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     match globals.store.remove_ivar(lfp.self_val(), id) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr(format!(
@@ -3318,6 +3355,27 @@ mod tests {
         other.send(:define_singleton_method, :osm, um)
         "##,
         );
+    }
+
+    #[test]
+    fn instance_variable_name_validation() {
+        run_test(
+            r##"
+        o = Object.new
+        o.instance_variable_set(:@a, 1)
+        s = Object.new
+        def s.to_str; "@a"; end
+        [o.instance_variable_get(s), o.instance_variable_get("@a"),
+         o.instance_variable_defined?(:@a), o.instance_variable_defined?(:@z)]
+        "##,
+        );
+        run_test_error(r##"Object.new.instance_variable_get(:foo)"##);
+        run_test_error(r##"Object.new.instance_variable_get(:"@")"##);
+        run_test_error(r##"Object.new.instance_variable_get("@1x")"##);
+        run_test_error(r##"Object.new.instance_variable_set("@@c", 1)"##);
+        run_test_error(r##"Object.new.instance_variable_get(42)"##);
+        run_test_error(r##"Object.new.instance_variable_defined?(:bad)"##);
+        run_test_error(r##"Object.new.instance_variable_get(Object.new)"##);
     }
 
     #[test]
