@@ -6853,6 +6853,19 @@ mod tests {
     }
 
     #[test]
+    fn string_format_positional() {
+        // `N$` positional argument references, including a flag before
+        // the reference (`%-2$d`) and `*N$` width-from-argument.
+        run_test2(r###"sprintf("%1$s %2$s", "a", "b")"###);
+        run_test2(r###"sprintf("%2$s %1$s", "a", "b")"###);
+        run_test2(r###"sprintf("%-2$d", 1, 2, 3)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, 10)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, -10)"###);
+        run_test2(r###"sprintf("%1$*2$b", 10, 10)"###);
+        run_test2(r###"sprintf("%1$*2$s", "abc", 10)"###);
+    }
+
+    #[test]
     fn string_format_g() {
         // %g and %G: shortest representation
         run_test2(r###""%g" % 100.0"###);
