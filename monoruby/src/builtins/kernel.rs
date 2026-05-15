@@ -1611,8 +1611,19 @@ fn warn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
 #[monoruby_builtin]
 fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = globals.current_source_path(vm).parent().unwrap();
-    Ok(Value::string(path.to_string_lossy().to_string()))
+    let path = globals.current_source_path(vm);
+    let s = path.to_string_lossy();
+    // `eval` with a binding (and no explicit filename) yields a
+    // synthetic "(eval at ...)" source; there is no directory.
+    if s.starts_with("(eval") || s.starts_with("(irb") {
+        return Ok(Value::nil());
+    }
+    // File.dirname semantics: a bare filename has directory ".".
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
+        _ => ".".to_string(),
+    };
+    Ok(Value::string(dir))
 }
 
 ///
@@ -2957,6 +2968,9 @@ mod tests {
         run_test_no_result_check("exit");
         run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
+        run_test(r#"eval("__dir__", nil, "foo.rb")"#);
+        run_test(r#"eval("__dir__", nil, "foo/bar.rb")"#);
+        run_test(r#"eval("__dir__", binding).inspect"#);
         run_test_no_result_check("caller(1)");
         run_test_no_result_check("caller()");
         run_test_no_result_check("rand");
