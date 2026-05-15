@@ -202,6 +202,18 @@ impl AbstractFrame {
         self.invariants.class_version_guard = false;
     }
 
+    pub(super) fn const_version_guard(&self) -> Option<usize> {
+        self.invariants.const_version_guard
+    }
+
+    pub(super) fn set_const_version_guard(&mut self, version: usize) {
+        self.invariants.const_version_guard = Some(version);
+    }
+
+    pub(super) fn unset_const_version_guard(&mut self) {
+        self.invariants.const_version_guard = None;
+    }
+
     pub(super) fn unset_side_effect_guard(&mut self) {
         self.invariants.side_effect_guard = false;
     }
@@ -402,6 +414,7 @@ impl ReturnState {
             ret: ReturnValue::UD,
             invariants: Invariants {
                 class_version_guard: true,
+                const_version_guard: None,
                 side_effect_guard: false,
                 no_capture_guard: true,
             },
@@ -481,6 +494,14 @@ impl ReturnState {
 struct Invariants {
     /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guard: bool,
+    /// const version against which a `GuardConstVersion` has already been
+    /// emitted in this trace, when nothing that could change the const
+    /// version has executed since. `Some(v)` lets a subsequent `LoadConst`
+    /// whose cache version is also `v` skip the redundant guard. Different
+    /// cache versions across loads (e.g. a load in a rarely-taken branch
+    /// whose cache is older) require their own guard, so we compare on the
+    /// version value rather than tracking a bare boolean.
+    const_version_guard: Option<usize>,
     /// guard for frame capture. true if guaranteed the frame is not captured.
     no_capture_guard: bool,
     /// guard for side effect. true if guaranteed no side effects are not occurred.
@@ -504,6 +525,7 @@ impl Invariants {
         let side_effect_guard = !cc.iseq().has_exception_handler();
         Self {
             class_version_guard: false,
+            const_version_guard: None,
             no_capture_guard: true,
             side_effect_guard,
         }
@@ -512,6 +534,7 @@ impl Invariants {
     fn new_loop() -> Self {
         Self {
             class_version_guard: false,
+            const_version_guard: None,
             // loop compilation is started only if the current local frame is not captured.
             no_capture_guard: true,
             side_effect_guard: false,
@@ -524,6 +547,7 @@ impl Invariants {
         let side_effect_guard = !cc.iseq().has_exception_handler();
         Self {
             class_version_guard: false,
+            const_version_guard: None,
             // specialized methods and blocks are always guarded frame capture.
             no_capture_guard: true,
             side_effect_guard,
@@ -532,6 +556,11 @@ impl Invariants {
 
     fn join(&mut self, other: &Self) {
         self.class_version_guard &= other.class_version_guard;
+        // Keep the const-version guard only if both branches arrived with
+        // a guard against the same version.
+        if self.const_version_guard != other.const_version_guard {
+            self.const_version_guard = None;
+        }
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
     }
@@ -552,6 +581,7 @@ mod tests {
             ret: ReturnValue::Const(Value::nil()),
             invariants: Invariants {
                 class_version_guard: true,
+                const_version_guard: None,
                 no_capture_guard: true,
                 side_effect_guard: true,
             },
@@ -573,6 +603,7 @@ mod tests {
             ret: ReturnValue::Class(crate::SYMBOL_CLASS),
             invariants: Invariants {
                 class_version_guard: true,
+                const_version_guard: None,
                 no_capture_guard: true,
                 side_effect_guard: true,
             },
@@ -589,6 +620,7 @@ mod tests {
             ret: ReturnValue::Value,
             invariants: Invariants {
                 class_version_guard: true,
+                const_version_guard: None,
                 no_capture_guard: true,
                 side_effect_guard: false,
             },

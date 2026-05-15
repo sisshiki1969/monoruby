@@ -126,11 +126,23 @@ impl<'a> JitContext<'a> {
 impl AbstractState {
     fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self);
-        ir.push(AsmInst::GuardConstVersion {
-            const_version: *version,
-            deopt,
-        });
+        // Once we've verified the global const version against the cached
+        // value, the version is known-good for the rest of the trace until
+        // something that could change it executes (StoreConst, a class/
+        // method def, a non-specialized call, ...). Skip the redundant
+        // guard when the previous guard locked in the same version; see
+        // `unset_const_version_guard` call sites for what invalidates it.
+        // Cache versions can differ across loads (e.g. a load in a rarely
+        // taken branch whose cache is older), so we compare on the version
+        // value, not a bare boolean.
+        if self.const_version_guard() != Some(*version) {
+            let deopt = ir.new_deopt(self);
+            ir.push(AsmInst::GuardConstVersion {
+                const_version: *version,
+                deopt,
+            });
+            self.set_const_version_guard(*version);
+        }
         // Heap-allocated Float: keep the Sf optimization so subsequent
         // float ops can read the f64 from xmm without re-extracting it
         // from the RValue. Immediate flonums skip this path because
@@ -174,6 +186,9 @@ impl AbstractState {
             using_xmm,
             error,
         });
+        // Storing a constant bumps the global const version, so any guard
+        // we'd previously emitted no longer holds.
+        self.unset_const_version_guard();
         self.unset_side_effect_guard();
     }
 
