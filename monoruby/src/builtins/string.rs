@@ -243,21 +243,31 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.try_arg(0) {
+    let class = lfp.self_val().as_class_id();
+    let inner = match lfp.try_arg(0) {
         Some(string) => {
             // Preserve the source string's encoding by going through
             // `coerce_to_rstring` and cloning the inner.
-            let other = string.coerce_to_rstring(vm, globals)?;
-            Ok(Value::string_from_inner((*other).clone()))
+            (*string.coerce_to_rstring(vm, globals)?).clone()
         }
         None => {
             // CRuby's `String.new` (no arg) returns a binary string.
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                b"",
-                Encoding::Ascii8,
-            )))
+            RStringInner::from_encoding(b"", Encoding::Ascii8)
         }
+    };
+    let obj = Value::string_from_inner_with_class(inner, class);
+    // For a subclass, run its `initialize` so user-defined side effects
+    // (e.g. `self.extend`) take effect, matching `Class#new` semantics.
+    // Plain `String.new` keeps the fast direct construction above.
+    if class != STRING_CLASS {
+        let arg = lfp.try_arg(0);
+        let args: &[Value] = match &arg {
+            Some(v) => std::slice::from_ref(v),
+            None => &[],
+        };
+        vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, args, lfp.block(), None)?;
     }
+    Ok(obj)
 }
 
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
@@ -6554,6 +6564,20 @@ mod tests {
     fn string_new() {
         run_test(r##"String.new"##);
         run_test(r##"String.new("Ruby")"##);
+    }
+
+    #[test]
+    fn string_subclass_new() {
+        run_test(
+            r##"
+        module M; end
+        class S < String
+          def initialize(*); super; self.extend(M); end
+        end
+        o = S.new("hi")
+        [o.class.name, o.is_a?(S), o.is_a?(String), o.is_a?(M), o == "hi"]
+        "##,
+        );
     }
 
     #[test]

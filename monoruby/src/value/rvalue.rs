@@ -1334,6 +1334,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_string_from_inner_with_class(inner: RStringInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::STRING),
+            kind: ObjKind::string_from_inner(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_string_from_str(s: &str) -> Self {
         RValue {
             header: Header::new(STRING_CLASS, ObjTy::STRING),

@@ -992,6 +992,10 @@ impl Value {
         RValue::new_string_from_inner(inner).pack()
     }
 
+    pub fn string_from_inner_with_class(inner: RStringInner, class_id: ClassId) -> Self {
+        RValue::new_string_from_inner_with_class(inner, class_id).pack()
+    }
+
     pub fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
