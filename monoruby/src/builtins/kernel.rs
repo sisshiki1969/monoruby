@@ -3383,6 +3383,15 @@ mod tests {
     }
 
     #[test]
+    fn kernel_putc() {
+        run_test(r##"putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)"##);
+        run_test_error(r##"putc(nil)"##);
+        run_test_error(r##"putc(true)"##);
+        run_test_error(r##"putc(false)"##);
+        run_test_error(r##"putc(Object.new)"##);
+    }
+
+    #[test]
     fn nil() {
         run_test(r##"'woo'.nil?"##);
         run_test(r##"3.nil?"##);
