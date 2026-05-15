@@ -1723,7 +1723,11 @@ fn define_method(
 /// - **Singleton-class owner unrelated to target**: error message
 ///   uses CRuby's "can't bind singleton method to a different class"
 ///   wording instead of the generic "subclass of …" form.
-fn validate_bind_target(globals: &Globals, owner: ClassId, target: ClassId) -> Result<()> {
+pub(crate) fn validate_bind_target(
+    globals: &Globals,
+    owner: ClassId,
+    target: ClassId,
+) -> Result<()> {
     let owner_module = globals.store[owner].get_module();
     // Module owners (not Class) bind freely — the module can be
     // included on any receiver. CRuby's `rb_obj_method_arity` and

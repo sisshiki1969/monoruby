@@ -2230,6 +2230,9 @@ fn define_singleton_method(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let class_id = globals.store.get_singleton(self_val)?.id();
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
+    }
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     // For a proc/block body, the runtime LFP carries the *block*'s
     // FuncId. `super` resolution (`find_super`) reads that FuncId's
@@ -2243,12 +2246,14 @@ fn define_singleton_method(
             globals.store[fid].set_name(name);
             block_fid_to_decorate = Some(proc.func_id());
             fid
-        } else if let Some(method) = method.is_method() {
+        } else if let Some(m) = method.is_method() {
+            super::module::validate_bind_target(globals, m.owner(), class_id)?;
             block_fid_to_decorate = None;
-            method.func_id()
-        } else if let Some(method) = method.is_umethod() {
+            m.func_id()
+        } else if let Some(m) = method.is_umethod() {
+            super::module::validate_bind_target(globals, m.owner(), class_id)?;
             block_fid_to_decorate = None;
-            method.func_id()
+            m.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -2799,6 +2804,29 @@ mod tests {
         a = object.bar
         object.define_singleton_method(:baz, proc { |x| ['z', x] })
         a + object.baz(1)
+        "##,
+        );
+    }
+
+    #[test]
+    fn define_singleton_method_errors() {
+        run_test_error(
+            r##"
+        o = Object.new
+        o.freeze
+        o.define_singleton_method(:foo) { 1 }
+        "##,
+        );
+        run_test_error(
+            r##"
+        class P1; end
+        other = P1.new
+        p1 = P1.new
+        class << p1
+          def sm; :s; end
+        end
+        um = p1.method(:sm).unbind
+        other.send(:define_singleton_method, :osm, um)
         "##,
         );
     }
