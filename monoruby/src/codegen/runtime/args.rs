@@ -187,7 +187,11 @@ fn set_callee_frame_arguments(
     {
         fill_positional_args1(dst, &globals[callee_fid], ary.as_ref())?;
     } else {
-        let mut buf = vec![];
+        // Forwarding (`g(x, ...)` / `super(x, ...)`) and other splat
+        // calls land here. The expanded positional sequence is almost
+        // always short, so build it in a stack buffer and only spill
+        // to the heap for genuinely large arg lists.
+        let mut buf: smallvec::SmallVec<[Value; 8]> = smallvec::SmallVec::new();
         for i in 0..pos_args {
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {

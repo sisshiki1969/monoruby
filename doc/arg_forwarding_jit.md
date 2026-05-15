@@ -85,12 +85,15 @@ kw Hash は次を**除き** Ruby から決して観測されない:
 検証: 純/先頭引数つきの positional forwarding（本環境で検証可能）、
 長さ不一致を強制する deopt テスト、`--features deopt`。
 
-### Increment 2 — mixed 経路の `Vec` 排除
+### Increment 2 — mixed 経路の `Vec` 排除【実装済み】
 
-`args.rs:189-207` の汎用 splat 分岐で、`splat_pos == &[pos_args-1]` かつ
-`ex.is_none()` かつ末尾が Array のとき、prefix（caller スロット）+
-Array 要素を二源から連結充填する Vec-free 経路を `fill_positional_args`
-の分配ロジックを共有しつつ追加。純 Rust・x86 非依存で本環境で完全検証可。
+`set_callee_frame_arguments` の汎用 splat 分岐（`args.rs:189-` 付近）は
+forwarding（`g(x, ...)` / `super(x, ...)`）等で呼び出し毎に
+`Vec<Value>` をヒープ確保していた。これを `smallvec::SmallVec<[Value; 8]>`
+に置換し、引数列が短い通常ケースでヒープ確保を消去（巨大引数列のみ
+heap へスピル）。分配ロジック（`fill_positional_args1`）は不変で共有、
+x86 非依存・低 blast radius。Ruby 4.0.4 比較ハーネスで
+forwarding スイート全 8 件＋`method_call` 全 64 件グリーンを確認。
 
 ### Increment 3 — f 側 rest Array / kw Hash の確保省略（要 deopt 実体化）
 
@@ -149,3 +152,18 @@ Array 要素を二源から連結充填する Vec-free 経路を `fill_positiona
 - 注: Ruby 3.4↔3.3 の Hash inspect 差（`build.rs` `MIN_RUBY_VERSION=(4,0)`）
   のため keyword を印字する比較は Ruby 4.0 環境で行うこと。positional
   転送は Ruby 3.3 環境でも検証可能。
+
+## 7. 検証環境の構築（ネットワーク制限下）
+
+CRuby 比較ハーネスは Ruby ≥4.0 を要求するが、apt/cache.ruby-lang.org は
+遮断される一方 github.com は到達可能。再現手順:
+
+1. `git clone --depth 1 --branch ruby_4_0 https://github.com/ruby/ruby.git`
+2. `./autogen.sh && ./configure --prefix=/usr/local --disable-install-doc`
+3. `make -j$(nproc)` → `make install-local`
+   （`make install` は bundled gems 取得で失敗するため `install-local`）
+4. bundled/default gems 未取得のため `export RUBYOPT=--disable-gems`
+5. `ruby -e 'puts RUBY_VERSION' > ~/.monoruby/ruby_version`、
+   `ruby -e 'puts($:)' > ~/.monoruby/library_path`、`touch monoruby/build.rs`
+
+これで `cargo test` の CRuby 比較が Ruby 4.0.4 で機能する。
