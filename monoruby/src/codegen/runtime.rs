@@ -745,8 +745,19 @@ pub(super) extern "C" fn get_index(
         }*/
         METHOD_CLASS => {
             let method = base.as_method();
-            let func_id = method.func_id();
             let receiver = method.receiver();
+            if let Some(target) = method.method_missing_name() {
+                return vm.invoke_method(
+                    globals,
+                    IdentId::METHOD_MISSING,
+                    true,
+                    receiver,
+                    &[Value::symbol(target), index],
+                    None,
+                    None,
+                );
+            }
+            let func_id = method.func_id();
             return vm.invoke_func(globals, func_id, receiver, &[index], None, None);
         }
         _ => {}
