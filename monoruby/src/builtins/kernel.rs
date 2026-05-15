@@ -1609,10 +1609,49 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // NOTE: `require` is intentionally left on `coerce_to_string`.
+    // It is intercepted by CRuby's rubygems `kernel_require.rb`
+    // shim, and routing the arg through `#to_path` here perturbs
+    // `$LOADED_FEATURES` bookkeeping in that shim. `require_relative`
+    // and `load` use the direct builtin path and do get the
+    // CRuby-accurate `#to_path`/`#to_str` coercion.
     let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
+}
+
+/// CRuby's `rb_get_path`: convert a path argument to a String via
+/// `#to_path` (if present) and then `#to_str` (if the `#to_path`
+/// result is not already a String). A bare `#to_str` object is also
+/// accepted. Anything else is a TypeError.
+fn path_arg_to_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<String> {
+    if let Some(s) = arg.is_str() {
+        return Ok(s.to_string());
+    }
+    let v = if let Some(fid) = globals.check_method(arg, IdentId::TO_PATH) {
+        vm.invoke_func_inner(globals, fid, arg, &[], None, None)?
+    } else {
+        arg
+    };
+    if let Some(s) = v.is_str() {
+        return Ok(s.to_string());
+    }
+    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = r.is_str() {
+            return Ok(s.to_string());
+        }
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        arg,
+        STRING_CLASS,
+    ))
 }
 
 ///
@@ -1630,7 +1669,7 @@ fn require_relative(
 ) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let feature = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
@@ -1645,7 +1684,7 @@ fn require_relative(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let file_name = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let file_name = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
