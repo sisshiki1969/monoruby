@@ -2231,12 +2231,23 @@ fn define_singleton_method(
     let self_val = lfp.self_val();
     let class_id = globals.store.get_singleton(self_val)?.id();
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // For a proc/block body, the runtime LFP carries the *block*'s
+    // FuncId. `super` resolution (`find_super`) reads that FuncId's
+    // `name`, so it must be set or it panics. Mirror the decoration
+    // that `Module#define_method` performs.
+    let block_fid_to_decorate: Option<FuncId>;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            globals.define_proc_method(proc)
+            let fid = globals.define_proc_method(proc);
+            globals.store[fid].set_method_style();
+            globals.store[fid].set_name(name);
+            block_fid_to_decorate = Some(proc.func_id());
+            fid
         } else if let Some(method) = method.is_method() {
+            block_fid_to_decorate = None;
             method.func_id()
         } else if let Some(method) = method.is_umethod() {
+            block_fid_to_decorate = None;
             method.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
@@ -2247,11 +2258,24 @@ fn define_singleton_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(globals, bh, pc)?;
-        globals.define_proc_method(proc)
+        let fid = globals.define_proc_method(proc);
+        globals.store[fid].set_method_style();
+        globals.store[fid].set_name(name);
+        block_fid_to_decorate = Some(proc.func_id());
+        fid
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     vm.add_public_method(globals, class_id, name, func_id)?;
+    if let Some(block_fid) = block_fid_to_decorate {
+        if globals.store[block_fid].name().is_none() {
+            globals.store[block_fid].set_name(name);
+        }
+        if !globals.store[block_fid].owner_class().contains(&class_id) {
+            globals.store[block_fid].set_owner_class(class_id);
+        }
+        globals.store[block_fid].set_proc_method();
+    }
     Ok(Value::symbol(name))
 }
 
@@ -2762,6 +2786,22 @@ fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn define_singleton_method_super() {
+        run_test(
+            r##"
+        cls = Class.new do
+          def bar; ['a']; end
+        end
+        object = cls.new
+        object.define_singleton_method(:bar) { ['b', *super()] }
+        a = object.bar
+        object.define_singleton_method(:baz, proc { |x| ['z', x] })
+        a + object.baz(1)
+        "##,
+        );
+    }
 
     #[test]
     fn nil() {
