@@ -180,6 +180,7 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     let opt_tag = Value::symbol(IdentId::get_id("opt"));
     let rest_tag = Value::symbol(IdentId::get_id("rest"));
     let key_tag = Value::symbol(IdentId::get_id("key"));
+    let keyreq_tag = Value::symbol(IdentId::get_id("keyreq"));
     let keyrest_tag = Value::symbol(IdentId::get_id("keyrest"));
     let block_tag = Value::symbol(IdentId::get_id("block"));
     let mut result = vec![];
@@ -231,12 +232,22 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
         name_idx += 1;
     }
     // keyword params
-    for kw_name in &params.kw_names {
-        result.push(Value::array2(key_tag, Value::symbol(*kw_name)));
+    for (i, kw_name) in params.kw_names.iter().enumerate() {
+        let tag = if params.kw_is_required(i) {
+            keyreq_tag
+        } else {
+            key_tag
+        };
+        result.push(Value::array2(tag, Value::symbol(*kw_name)));
     }
     // keyword rest
     if params.kw_rest.is_some() {
-        result.push(Value::array1(keyrest_tag));
+        let entry = if let Some(name) = params.kw_rest_name() {
+            Value::array2(keyrest_tag, Value::symbol(name))
+        } else {
+            Value::array1(keyrest_tag)
+        };
+        result.push(entry);
     }
     // block param
     if let Some(block_name) = params.block_param {
