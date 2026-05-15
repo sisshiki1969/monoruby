@@ -1083,12 +1083,35 @@ impl FuncInfo {
     /// arity to the negative form — CRuby reports `arity = 1` for
     /// `|a,|` while `|a, *|` reports `-2`, and `|a, *r|` likewise.
     ///
+    /// Keyword arguments are folded into a single extra argument
+    /// (per the Ruby docs): mandatory if any keyword is required,
+    /// optional otherwise. A required keyword therefore adds 1 to the
+    /// required count without making the signature variable, while a
+    /// set of purely-optional keywords (or `**kwrest`) with no required
+    /// keyword behaves like one optional argument and forces the
+    /// negative form.
+    ///
     pub(crate) fn arity(&self) -> i64 {
-        let min = self.min_positional_args() as i64;
-        if self.opt_num() > 0 || self.is_explicit_rest() {
-            -(min + 1)
+        let p = &self.ext.params;
+        let req = self.min_positional_args() as i64;
+        let has_required_kw = p.required_kw_num() > 0;
+        let req_count = req + has_required_kw as i64;
+        // Non-lambda procs/blocks only go negative for an explicit rest
+        // or an optional positional; purely-optional keywords (or
+        // `**kwrest`) are ignored. Lambdas, named methods and
+        // `define_method` additionally fold a no-required-keyword set
+        // into one optional argument (CRuby `Method#arity`).
+        let variable = if self.is_block_style() {
+            self.opt_num() > 0 || self.is_explicit_rest()
         } else {
-            min
+            self.opt_num() > 0
+                || self.is_explicit_rest()
+                || (p.has_keyword() && !has_required_kw)
+        };
+        if variable {
+            -(req_count + 1)
+        } else {
+            req_count
         }
     }
 

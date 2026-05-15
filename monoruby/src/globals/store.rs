@@ -976,6 +976,10 @@ impl Store {
             .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
             .collect();
         args_names.append(&mut destruct_args);
+        let kw_required: Vec<bool> = keyword_initializers
+            .iter()
+            .map(|init| init.is_none())
+            .collect();
         let params_info = ParamsInfo::new(
             required_num,
             optional_num,
@@ -984,6 +988,7 @@ impl Store {
             post_num,
             args_names,
             keyword_names,
+            kw_required,
             kw_rest_param,
             block_param,
             forwarding,

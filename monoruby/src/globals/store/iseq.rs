@@ -598,6 +598,11 @@ pub(crate) struct ParamsInfo {
     // for param, req(incl. destruct slot), opt, rest, keyword, kw_rest, destructed local, block
     pub args_names: Vec<Option<IdentId>>,
     pub kw_names: Vec<IdentId>,
+    /// Parallel to `kw_names`: `true` for a required keyword (`a:` with
+    /// no default), `false` for an optional one (`a: default`). May be
+    /// shorter than `kw_names` (e.g. native methods) — treat a missing
+    /// entry as optional via `kw_is_required`.
+    pub kw_required: Vec<bool>,
     pub kw_rest: Option<SlotId>,
     pub block_param: Option<IdentId>,
     forwarding: bool,
@@ -612,6 +617,7 @@ impl ParamsInfo {
         post_num: usize,
         args_names: Vec<Option<IdentId>>,
         keyword_names: Vec<IdentId>,
+        kw_required: Vec<bool>,
         kw_rest: Option<SlotId>,
         block_param: Option<IdentId>,
         forwarding: bool,
@@ -624,6 +630,7 @@ impl ParamsInfo {
             post_num,
             args_names,
             kw_names: keyword_names,
+            kw_required,
             kw_rest,
             block_param,
             forwarding,
@@ -643,6 +650,7 @@ impl ParamsInfo {
             post_num: 0,
             args_names: vec![],
             kw_names: vec![],
+            kw_required: vec![],
             kw_rest: None,
             block_param: None,
             forwarding: false,
@@ -670,6 +678,7 @@ impl ParamsInfo {
             rest_is_implicit: false,
             post_num: 0,
             args_names: vec![],
+            kw_required: vec![false; kw_num],
             kw_names,
             kw_rest: if kw_rest {
                 Some(SlotId::new((1 + p + kw_num) as u16))
@@ -707,6 +716,39 @@ impl ParamsInfo {
     ///
     pub(crate) fn post_num(&self) -> usize {
         self.post_num
+    }
+
+    ///
+    /// The number of required (no-default) keyword arguments.
+    ///
+    pub(crate) fn required_kw_num(&self) -> usize {
+        self.kw_required.iter().filter(|b| **b).count()
+    }
+
+    ///
+    /// Whether the keyword at `idx` in `kw_names` is required.
+    ///
+    pub(crate) fn kw_is_required(&self, idx: usize) -> bool {
+        self.kw_required.get(idx).copied().unwrap_or(false)
+    }
+
+    ///
+    /// Whether this function accepts any keyword argument or `**kwrest`.
+    ///
+    pub(crate) fn has_keyword(&self) -> bool {
+        !self.kw_names.is_empty() || self.kw_rest.is_some()
+    }
+
+    ///
+    /// The name of the `**kwrest` parameter, if it has one. Anonymous
+    /// `**` (and the synthetic kwrest of `...`) return `None`.
+    ///
+    pub(crate) fn kw_rest_name(&self) -> Option<IdentId> {
+        let slot = self.kw_rest?;
+        self.args_names
+            .get(slot.0 as usize - 1)
+            .copied()
+            .flatten()
     }
 
     ///

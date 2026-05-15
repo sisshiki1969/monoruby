@@ -864,6 +864,77 @@ mod tests {
     }
 
     #[test]
+    fn method_arity_keyword_args() {
+        // Keyword arguments participate in Method#arity exactly as
+        // CRuby: a required keyword folds into one mandatory argument,
+        // a purely-optional keyword set folds into one optional
+        // argument (negative form). Compared against system CRuby.
+        run_test(
+            r##"
+            def a; end
+            def b(x); end
+            def c(x:); end
+            def d(x:, y:); end
+            def e(x, y:); end
+            def f(x, y:, &l); end
+            def g(x, y, z:, w: 1, **k, &l); end
+            def h(x: 1, y: 2); end
+            def i(x: 1, y: 2, **k); end
+            def j(x=1, y: 2); end
+            def k(x=1, *y, z:, w: 2, **r, &l); end
+            def l(p, q=1, *r, s:, t: 2, **u, &v); end
+            %i[a b c d e f g h i j k l].map { |n| method(n).arity }
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_parameters_keyword_kinds() {
+        // Required keywords report :keyreq, optional ones :key, and a
+        // named **kwrest carries its name. (Keyword display ordering
+        // for source-interleaved req/opt keywords still differs from
+        // CRuby and is intentionally not asserted here.)
+        run_test(
+            r##"
+            def m(a, b = 1, c:, d: 2, **rest, &blk); end
+            method(:m).parameters
+            "##,
+        );
+        run_test(
+            r##"
+            def only_req_kw(a:, b:); end
+            method(:only_req_kw).parameters
+            "##,
+        );
+        run_test(
+            r##"
+            def kwrest_named(**opts); end
+            method(:kwrest_named).parameters
+            "##,
+        );
+    }
+
+    #[test]
+    fn umethod_arity_keyword_args() {
+        run_test_with_prelude(
+            r##"
+            [Foo.instance_method(:a).arity,
+             Foo.instance_method(:b).arity,
+             Foo.instance_method(:c).arity,
+             Foo.instance_method(:d).arity]
+            "##,
+            r##"
+            class Foo
+              def a(x:); end
+              def b(x: 1); end
+              def c(x, y:, **k); end
+              def d(x = 1, *y, z:, **r); end
+            end
+            "##,
+        );
+    }
+
+    #[test]
     fn umethod_bind_call_basic() {
         run_test(
             r##"
