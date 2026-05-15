@@ -2503,11 +2503,40 @@ fn instance_of(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
 #[monoruby_builtin]
-fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let (func_id, _, owner) = globals.find_method_for_object(receiver, method_name)?;
-    Ok(Value::new_method(receiver, func_id, owner))
+    match globals.find_method_for_object(receiver, method_name) {
+        Ok((func_id, _, owner)) => Ok(Value::new_method(receiver, func_id, owner)),
+        Err(err) => {
+            // CRuby: if `receiver.respond_to_missing?(name, true)` is truthy,
+            // return a Method that proxies to `method_missing`.
+            if let Some(rtm_fid) =
+                globals.check_method(receiver, IdentId::RESPOND_TO_MISSING_)
+            {
+                let responds = vm.invoke_func_inner(
+                    globals,
+                    rtm_fid,
+                    receiver,
+                    &[Value::symbol(method_name), Value::bool(true)],
+                    None,
+                    None,
+                )?;
+                if responds.as_bool()
+                    && let Some(mm_fid) =
+                        globals.check_method(receiver, IdentId::METHOD_MISSING)
+                {
+                    return Ok(Value::new_method_missing_proxy(
+                        receiver,
+                        mm_fid,
+                        method_name,
+                        receiver.class(),
+                    ));
+                }
+            }
+            Err(err)
+        }
+    }
 }
 
 ///

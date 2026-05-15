@@ -1140,8 +1140,25 @@ impl Value {
         RValue::new_method(receiver, func_id, owner).pack()
     }
 
+    pub fn new_method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue::new_method_missing_proxy(receiver, mm_func_id, target, owner).pack()
+    }
+
     pub fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue::new_unbound_method(func_id, owner).pack()
+    }
+
+    pub fn new_unbound_method_missing_proxy(
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue::new_unbound_method_missing_proxy(mm_func_id, target, owner).pack()
     }
 
     pub(crate) fn new_fiber(proc: Proc) -> Self {

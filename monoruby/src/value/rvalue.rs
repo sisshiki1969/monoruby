@@ -340,6 +340,27 @@ impl ObjKind {
         }
     }
 
+    fn method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner::new_method_missing(
+                receiver, mm_func_id, target, owner,
+            )),
+        }
+    }
+
+    fn unbound_method_missing_proxy(mm_func_id: FuncId, target: IdentId, owner: ClassId) -> Self {
+        Self {
+            umethod: ManuallyDrop::new(UMethodInner::new_method_missing(
+                mm_func_id, target, owner,
+            )),
+        }
+    }
+
     fn unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         Self {
             umethod: ManuallyDrop::new(UMethodInner::new(func_id, owner)),
@@ -1548,10 +1569,35 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue {
+            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
+            kind: ObjKind::method_missing_proxy(receiver, mm_func_id, target, owner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue {
             header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
             kind: ObjKind::unbound_method(func_id, owner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_unbound_method_missing_proxy(
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue {
+            header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
+            kind: ObjKind::unbound_method_missing_proxy(mm_func_id, target, owner),
             var_table: None,
         }
     }

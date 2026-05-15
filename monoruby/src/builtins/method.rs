@@ -50,7 +50,11 @@ fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     let a = self_val.as_method();
     let b = other.as_method();
-    let eq = a.func_id() == b.func_id() && a.receiver().id() == b.receiver().id();
+    let eq = match (a.method_missing_name(), b.method_missing_name()) {
+        (Some(an), Some(bn)) => an == bn && a.receiver().id() == b.receiver().id(),
+        (None, None) => a.func_id() == b.func_id() && a.receiver().id() == b.receiver().id(),
+        _ => false,
+    };
     Ok(Value::bool(eq))
 }
 
@@ -70,7 +74,11 @@ fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let a = self_val.as_umethod();
     let b = other.as_umethod();
-    let eq = a.func_id() == b.func_id() && a.owner() == b.owner();
+    let eq = match (a.method_missing_name(), b.method_missing_name()) {
+        (Some(an), Some(bn)) => an == bn && a.owner() == b.owner(),
+        (None, None) => a.func_id() == b.func_id() && a.owner() == b.owner(),
+        _ => false,
+    };
     Ok(Value::bool(eq))
 }
 
@@ -89,6 +97,23 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let method = self_val.as_method();
     let func_id = method.func_id();
     let receiver = method.receiver();
+
+    if let Some(target) = method.method_missing_name() {
+        // Dispatch `receiver.method_missing(target, *args, &blk)` dynamically
+        // by name so that redefining `method_missing` after the Method was
+        // created is honored, and the real `target` method is never called
+        // even if it later comes to exist.
+        let mut args = vec![Value::symbol(target)];
+        args.extend(lfp.arg(0).as_array().iter().copied());
+        return vm.invoke_method_inner(
+            globals,
+            IdentId::METHOD_MISSING,
+            receiver,
+            &args,
+            lfp.block(),
+            None,
+        );
+    }
 
     vm.invoke_func_inner(
         globals,
@@ -110,6 +135,9 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::integer(-1));
+    }
     let func_id = method.func_id();
     Ok(Value::integer(globals[func_id].arity()))
 }
@@ -124,6 +152,9 @@ fn arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::integer(-1));
+    }
     let func_id = method.func_id();
     Ok(Value::integer(globals[func_id].arity()))
 }
@@ -182,6 +213,9 @@ fn source_location(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::nil());
+    }
     let func_id = method.func_id();
     if let Some(iseq) = globals.store[func_id].is_iseq() {
         let iseq_info = &globals.store[iseq];
@@ -208,6 +242,9 @@ fn usource_location(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::nil());
+    }
     let func_id = method.func_id();
     if let Some(iseq) = globals.store[func_id].is_iseq() {
         let iseq_info = &globals.store[iseq];
@@ -229,6 +266,9 @@ fn usource_location(
 fn name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
     let func_id = method.func_id();
     let id = globals[func_id].name().unwrap();
     Ok(Value::symbol(id))
@@ -270,6 +310,13 @@ fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::new_unbound_method_missing_proxy(
+            method.func_id(),
+            target,
+            method.owner(),
+        ));
+    }
     Ok(Value::new_unbound_method(method.func_id(), method.owner()))
 }
 
@@ -283,6 +330,9 @@ fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 fn uname(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
     let func_id = method.func_id();
     let id = globals[func_id].name().unwrap();
     Ok(Value::symbol(id))
@@ -311,6 +361,10 @@ fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
+    if method.method_missing_name().is_some() {
+        let rest = Value::array1(Value::symbol(IdentId::get_id("rest")));
+        return Ok(Value::array1(rest));
+    }
     Ok(super::proc::build_parameters(
         globals,
         method.func_id(),
@@ -328,6 +382,10 @@ fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
+    if method.method_missing_name().is_some() {
+        let rest = Value::array1(Value::symbol(IdentId::get_id("rest")));
+        return Ok(Value::array1(rest));
+    }
     Ok(super::proc::build_parameters(
         globals,
         method.func_id(),
@@ -929,6 +987,124 @@ mod tests {
               def b(x: 1); end
               def c(x, y:, **k); end
               def d(x = 1, *y, z:, **r); end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_method() {
+        run_test_with_prelude(
+            r##"
+            obj = Foo.new
+            m = obj.method(:dynamic)
+            [
+              m.call(1, 2),
+              m[3],
+              (m === 4),
+              m.arity,
+              m.parameters,
+              m.name,
+              m.receiver == obj,
+              m.owner,
+              m.source_location,
+              m.call { |x| x * 10 },
+            ]
+            "##,
+            r##"
+            class Foo
+              def respond_to_missing?(name, include_all)
+                name == :dynamic
+              end
+              def method_missing(name, *args, &blk)
+                if blk
+                  blk.call(7)
+                else
+                  [name, args]
+                end
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_eq() {
+        run_test_with_prelude(
+            r##"
+            a = Foo.new
+            b = Foo.new
+            [
+              a.method(:x) == a.method(:x),
+              a.method(:x).eql?(a.method(:x)),
+              a.method(:x) == a.method(:y),
+              a.method(:x) == b.method(:x),
+              a.method(:x) == 5,
+            ]
+            "##,
+            r##"
+            class Foo
+              def respond_to_missing?(name, ia); true; end
+              def method_missing(name, *a); name; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_false_raises() {
+        run_test_error(
+            r##"
+            class Foo
+              def respond_to_missing?(name, ia); false; end
+            end
+            Foo.new.method(:nope)
+            "##,
+        );
+        run_test_error(
+            r##"
+            class Bar; end
+            Bar.new.method(:nope)
+            "##,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_unbind() {
+        run_test_with_prelude(
+            r##"
+            um = Foo.new.method(:dyn).unbind
+            [
+              um.is_a?(UnboundMethod),
+              um.arity,
+              um.name,
+              um.parameters,
+              um.source_location,
+              um == Foo.new.method(:dyn).unbind,
+              um == Foo.new.method(:other).unbind,
+            ]
+            "##,
+            r##"
+            class Foo
+              def respond_to_missing?(name, ia); true; end
+              def method_missing(name, *a); name; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_respond_to() {
+        run_test_with_prelude(
+            r##"
+            obj = Foo.new
+            [obj.respond_to?(:dynamic), obj.respond_to?(:other)]
+            "##,
+            r##"
+            class Foo
+              def respond_to_missing?(name, ia)
+                name == :dynamic
+              end
             end
             "##,
         );
