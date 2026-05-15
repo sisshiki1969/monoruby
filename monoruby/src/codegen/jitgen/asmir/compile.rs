@@ -337,18 +337,21 @@ impl Codegen {
                 callid,
                 callee_fid,
                 recv,
-                rest_slot,
+                args,
+                lead_num,
                 kwrest_guard,
             } => {
                 let offset = store[callee_fid].get_offset();
-                let g_arity = store[callee_fid].req_num();
+                // gate guarantees req_num() >= lead_num
+                let expected_len = store[callee_fid].req_num() - lead_num;
                 self.jit_set_arguments_forwarded(
                     callid,
                     callee_fid,
                     offset,
-                    g_arity,
+                    args,
+                    lead_num,
+                    expected_len,
                     recv,
-                    rest_slot,
                     kwrest_guard,
                 );
             }

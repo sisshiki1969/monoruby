@@ -2099,9 +2099,10 @@ fn forwarding_specialized_block_passthrough() {
 }
 
 #[test]
-fn forwarding_leading_arg_falls_back() {
-    // `g(x, ...)` => splat_pos != [0]; must not hit the specialized
-    // gate, and stay correct via the generic path.
+fn forwarding_leading_arg() {
+    // `g(x, ...)` with required-only `g`: trailing single splat
+    // (`splat_pos == [pos_num-1]`); hits the specialized path with
+    // lead_num == 1.
     run_test_with_prelude(
         r#"
         $r = []
@@ -2111,6 +2112,89 @@ fn forwarding_leading_arg_falls_back() {
         r#"
         def g(a, b, c, d) = [a, b, c, d]
         def f(...) = g(10, ...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_leading_args_multi_and_heap() {
+    // 3 leading args + a 7-element `...` (> ARRAY_INLINE_CAPA(5), so the
+    // heap branch of the rest copy is taken); g has 10 required params
+    // (3 + 7 == 10).
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { |i| $r << f(i, i+1, i+2, i+3, i+4, i+5, i+6) }
+        $r
+        "#,
+        r#"
+        def g(a, b, c, d, e, f, g, h, i, j) = [a, b, c, d, e, f, g, h, i, j].sum
+        def f(...) = g(100, 200, 300, ...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_leading_args_empty_rest() {
+    // All required slots come from leading args; the `...` array is
+    // empty (expected_len == 0, copy loop skipped).
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { $r << f }
+        $r
+        "#,
+        r#"
+        def g(a, b, c) = a * 100 + b * 10 + c
+        def f(...) = g(7, 8, 9, ...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_leading_args_too_many_falls_back() {
+    // More leading args than `g`'s arity (req_num+1 < pos_num): gate
+    // must reject; CRuby raises ArgumentError, generic path must match.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times do
+          begin
+            f(1)
+          rescue ArgumentError => e
+            $r << e.class.name
+          end
+        end
+        $r
+        "#,
+        r#"
+        def g(a, b) = a + b
+        def f(...) = g(10, 20, 30, ...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_leading_args_block_and_mismatch() {
+    // Leading arg + forwarded block on the fast path, plus a
+    // length-guard miss (wrong rest count) that must fall back and
+    // raise ArgumentError exactly like CRuby.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times do
+          $r << f(3, 4) { |x| x + 1 }
+          begin
+            f(3) { |x| x }
+          rescue ArgumentError => e
+            $r << e.class.name
+          end
+        end
+        $r
+        "#,
+        r#"
+        def g(a, b, c) = yield(a + b + c)
+        def f(...) = g(1, ...)
         "#,
     );
 }

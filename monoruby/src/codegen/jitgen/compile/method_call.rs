@@ -987,20 +987,25 @@ impl AbstractState {
 
             ir.reg_add(GP::Rsp, stack_offset);
         } else if callsite.forwarding
-            && callsite.pos_num == 1
-            && callsite.splat_pos.as_slice() == [0usize]
+            && callsite.pos_num >= 1
+            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
             && callee.is_iseq().is_some()
             && callee.no_keyword()
             && !callee.is_rest()
             && callee.opt_num() == 0
             && callee.post_num() == 0
+            && callee.req_num() + 1 >= callsite.pos_num
         {
-            // Pure forwarding `g(...)` where `g` takes only required
-            // positionals: `f`'s `...` rest is already an Array in
-            // `callsite.args`; copy it straight into the callee frame
+            // Forwarding `g(x.., ...)` where `g` takes only required
+            // positionals and the only splat is the trailing `...` rest
+            // (`splat_pos == [pos_num-1]`). The `lead_num = pos_num-1`
+            // leading args sit at `callsite.args ..`, the `...` Array at
+            // `args + lead_num`; copy both straight into the callee frame
             // (length-guarded) instead of re-parsing via the runtime.
+            // `req_num()+1 >= pos_num` ensures `req_num() >= lead_num`.
             let recv = callsite.recv;
-            let rest_slot = callsite.args;
+            let args = callsite.args;
+            let lead_num = callsite.pos_num - 1;
             let kwrest_guard = callsite.hash_splat_pos.first().copied();
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
@@ -1008,7 +1013,8 @@ impl AbstractState {
                 callid,
                 callee_fid,
                 recv,
-                rest_slot,
+                args,
+                lead_num,
                 kwrest_guard,
             });
             ir.handle_error(error);

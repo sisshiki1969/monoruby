@@ -1075,12 +1075,14 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Specialized argument setup for a pure forwarding call `g(...)`.
+    /// Specialized argument setup for a forwarding call `g(x.., ...)`.
     ///
-    /// `f`'s `...` rest is already an `Array` in `rest_slot`. When the
-    /// runtime array length equals `g`'s (compile-time-constant) required
-    /// arity, copy the elements straight into the callee frame with no
-    /// `Array` re-parse. Any guard miss (`rest_slot` not an `Array`,
+    /// `f`'s `...` rest is already an `Array` at `args + lead_num`, with
+    /// `lead_num` ordinary leading args at `args .. args+lead_num`. When
+    /// the runtime array length equals `g`'s required arity minus
+    /// `lead_num` (a compile-time constant), copy the leading args and
+    /// then the array elements straight into the callee frame with no
+    /// `Array` re-parse. Any guard miss (`args+lead_num` not an `Array`,
     /// length mismatch, or a non-nil forwarded kw-rest) is a clean
     /// side-exit to the generic `jit_generic_set_arguments` path *before*
     /// any callee-frame write, so no rollback is needed.
@@ -1095,7 +1097,8 @@ pub(super) enum AsmInst {
         callid: CallSiteId,
         callee_fid: FuncId,
         recv: SlotId,
-        rest_slot: SlotId,
+        args: SlotId,
+        lead_num: usize,
         kwrest_guard: Option<SlotId>,
     },
 

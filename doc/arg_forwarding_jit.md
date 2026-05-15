@@ -59,36 +59,43 @@ kw Hash は次を**除き** Ruby から決して観測されない:
 
 ## 3. 段階的実装計画
 
-### Increment 1 — f→g 呼び出しの specialize（Array は温存）【実装済み — required-only g】
+### Increment 1 — f→g 呼び出しの specialize（Array は温存）【実装済み — required-only g、先頭引数対応】
 
-実装済みスコープ（第一段）: 純転送 `g(...)`（`callsite.forwarding`
-かつ `pos_num==1 && splat_pos==[0]`）で、`g` が iseq かつ
+実装済みスコープ: forwarding `g(x.., ...)`（`callsite.forwarding`
+かつ **末尾単一 splat** `splat_pos==[pos_num-1]`、先頭 `lead_num =
+pos_num-1` 個の通常引数 + `...` rest）で、`g` が iseq かつ
 **required 引数のみ**（`no_keyword && !is_rest && opt_num==0 &&
-post_num==0`）の場合。`AsmInst::SetArgumentsForwarded`
-（`asmir.rs`、lowering は `asmir/compile/method_call.rs::
-jit_set_arguments_forwarded`、`object_send_splat_arg0` /
-`object_send_handle_arguments` の実証済みパターンを範とする）を
-`compile/method_call.rs::set_arguments` の非 simple 分岐に追加。
+post_num==0`）かつ `req_num()+1 >= pos_num`（= `req_num >= lead_num`）
+の場合。純転送 `g(...)` は `lead_num==0` の特殊形として同経路に内包。
+`AsmInst::SetArgumentsForwarded`（`asmir.rs`、lowering は
+`asmir/compile/method_call.rs::jit_set_arguments_forwarded`、
+`object_send_splat_arg0` / `object_send_handle_arguments` の実証済み
+パターンを範とする）を `compile/method_call.rs::set_arguments` の
+非 simple 分岐に追加。
 
 asm（書込み前ガード → ミスは無ロールバックでフォールバック）:
-self を `LFP_SELF` へ → `rest_slot` の `...` Array を読み、tag/
-`RVALUE_OFFSET_TY==ARRAY` を検査 → `RVALUE_OFFSET_ARY_CAPA`/
-`HEAP_LEN`/`INLINE`/`HEAP_PTR` で len と要素基底を取得（inline/heap
-両対応）→ **長さガード `cmpq len,(g_arity)`（g_arity は即値）** →
-forwarded kw_rest が非 nil なら脱出 → src 昇順 / dst（callee LFP）
-降順の 2 ポインタコピーループ → 成功 sentinel `rax=NIL_VALUE`
-（`handle_error` は `testq rax,rax; jeq`）。ガードミスは page1 の
-`fallback:` で既存 `jit_set_arguments`（`jit_generic_set_arguments`）
-にバイト一致で委譲。Array は温存され deopt は自明に安全。
+self を `LFP_SELF` へ → `lead_num` 個の先頭引数を frame slot
+`args+i` から callee slot `i` へ unroll コピー → `args+lead_num` の
+`...` Array を読み tag/`RVALUE_OFFSET_TY==ARRAY` 検査 →
+`RVALUE_OFFSET_ARY_CAPA`/`HEAP_LEN`/`INLINE`/`HEAP_PTR` で len と
+要素基底取得（inline/heap 両対応）→ **長さガード
+`cmpq len,(expected_len)`**（`expected_len = req_num - lead_num`、
+即値）→ forwarded kw_rest が非 nil なら脱出 → callee slot
+`lead_num..` へ src 昇順 / dst 降順の 2 ポインタコピー → 成功
+sentinel `rax=NIL_VALUE`（`handle_error` は `testq rax,rax; jeq`）。
+ガードミスは page1 `fallback:` で既存 `jit_set_arguments`
+（`jit_generic_set_arguments`）にバイト一致委譲。Array 温存ゆえ
+deopt は自明に安全。
 
-検証: Ruby 4.0.4 比較ハーネスで forwarding 16/16・`method_call`
-73/73 グリーン。新規 9 ケース（inline≤5 / heap>5（`ARRAY_INLINE_CAPA=5`）
-/ 0-arity / arity 不一致→ArgumentError 等価 / kw 転送→フォールバック
-/ block 透過 / 先頭引数→非ゲート / 3 段連鎖＋値コピー不変）。
-ゲート発火を JIT 実コンパイル下で計装確認（fallback への暗黙退避
-ではないことを実証）。フルスイープで環境性失敗集合に対し新規退行ゼロ。
+検証: Ruby 4.0.4 比較ハーネスで forwarding 20/20 グリーン。
+新規ケース: pure（inline≤5 / heap>5（`ARRAY_INLINE_CAPA=5`）/
+0-arity）、arity 不一致→ArgumentError 等価、kw 転送→フォールバック、
+block 透過、3 段連鎖＋値コピー不変、先頭引数（lead=1 / multi+heap /
+空 rest / lead 過多→ゲート却下 ArgumentError 等価 / block＋ミス）。
+ゲート発火（純: lead=0、先頭: lead=1）を JIT 実コンパイル下で計装
+確認。gc-stress 緑。フルスイープで環境性失敗集合に対し新規退行ゼロ。
 
-未対応（フォールバック据置・後続段）: 先頭引数つき `g(x, ...)`、
+未対応（フォールバック据置・後続段）:
 opt/post/rest/kw を持つ `g`、`super` 暗黙転送（Increment 4）。
 
 ---
