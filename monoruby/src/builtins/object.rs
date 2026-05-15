@@ -378,6 +378,29 @@ mod tests {
     }
 
     #[test]
+    fn numeric_frozen() {
+        run_test(r##"[(2**70).frozen?, (1+2i).frozen?, Rational(1,3).frozen?, 0.1.frozen?, 5.frozen?]"##);
+        run_test(r##"x = 2**80; x.freeze; x.frozen?"##);
+    }
+
+    #[test]
+    fn object_spaceship() {
+        run_test(
+            r##"
+        o = Object.new
+        a = [o <=> o, (o <=> Object.new).inspect]
+        m = Object.new
+        def m.==(x); true; end
+        a << (m <=> Object.new)
+        n = Object.new
+        def n.==(x); nil; end
+        a << (n <=> Object.new).inspect
+        a
+        "##,
+        );
+    }
+
+    #[test]
     fn equal() {
         run_test(r##"100.equal?(100)"##);
         run_test(r##"100.equal?(100.0)"##);
