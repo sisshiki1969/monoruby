@@ -256,6 +256,66 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     Value::array_from_vec(result)
 }
 
+/// Build the CRuby `Method#inspect`-style parameter signature string,
+/// e.g. `(a, b=..., *c, key:, opt: ..., **kw, &blk)`. The parameter
+/// order mirrors `build_parameters` so the two stay consistent.
+pub(crate) fn signature_string(store: &Store, func_id: FuncId) -> String {
+    let params = store[func_id].params();
+    let args_names = &params.args_names;
+    let named = |o: Option<&Option<IdentId>>| -> Option<IdentId> {
+        match o {
+            Some(Some(id)) => Some(*id),
+            _ => None,
+        }
+    };
+    let mut parts: Vec<String> = vec![];
+    let mut idx = 0;
+    for _ in 0..params.req_num() {
+        parts.push(named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string()));
+        idx += 1;
+    }
+    for _ in 0..params.opt_num() {
+        let n = named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string());
+        parts.push(format!("{n}=..."));
+        idx += 1;
+    }
+    if params.is_rest().is_some() {
+        if !params.rest_is_implicit() {
+            match named(args_names.get(idx)) {
+                Some(id) => parts.push(format!("*{id}")),
+                None => parts.push("*".to_string()),
+            }
+        }
+        idx += 1;
+    }
+    for _ in 0..params.post_num() {
+        parts.push(named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string()));
+        idx += 1;
+    }
+    for (i, kw) in params.kw_names.iter().enumerate() {
+        if params.kw_is_required(i) {
+            parts.push(format!("{kw}:"));
+        } else {
+            parts.push(format!("{kw}: ..."));
+        }
+    }
+    if params.kw_rest.is_some() {
+        match params.kw_rest_name() {
+            Some(id) => parts.push(format!("**{id}")),
+            None => parts.push("**".to_string()),
+        }
+    }
+    if let Some(bn) = params.block_param {
+        let s = bn.to_string();
+        if s.is_empty() {
+            parts.push("&".to_string());
+        } else {
+            parts.push(format!("&{s}"));
+        }
+    }
+    format!("({})", parts.join(", "))
+}
+
 /// ### Proc#arity
 #[monoruby_builtin]
 fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {

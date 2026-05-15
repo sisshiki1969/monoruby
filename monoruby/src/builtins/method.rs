@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
     globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
     globals.define_builtin_func(METHOD_CLASS, "parameters", parameters, 0);
+    globals.define_builtin_funcs(METHOD_CLASS, "inspect", &["to_s"], inspect, 0);
     globals.define_builtin_func(METHOD_CLASS, "hash", method_hash, 0);
     globals.define_builtin_funcs(METHOD_CLASS, "==", &["eql?"], method_eq, 1);
 
@@ -30,6 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(UMETHOD_CLASS, "original_name", uoriginal_name, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "parameters", uparameters, 0);
+    globals.define_builtin_funcs(UMETHOD_CLASS, "inspect", &["to_s"], uinspect, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "hash", umethod_hash, 0);
     globals.define_builtin_funcs(UMETHOD_CLASS, "==", &["eql?"], umethod_eq, 1);
 }
@@ -196,6 +198,133 @@ fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
         method.func_id(),
         method.owner(),
     ))
+}
+
+fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
+    if is_mm {
+        return String::new();
+    }
+    if let Some(iseq) = store[func_id].is_iseq() {
+        let info = &store[iseq];
+        format!(
+            " {}:{}",
+            info.sourceinfo.short_file_name(),
+            info.sourceinfo.get_line(&info.loc)
+        )
+    } else {
+        String::new()
+    }
+}
+
+/// Render the CRuby-compatible `Method#inspect` / `UnboundMethod#inspect`
+/// string (also used for `#to_s`, which CRuby aliases to `#inspect`).
+///
+/// Mirrors `method_inspect` in CRuby's `proc.c`:
+/// `#<Method: RecvClass(DefiningModule)#name(sig) file:line>`, with the
+/// `.`-separator / receiver-inspect forms for singleton methods.
+fn method_inspect_str(
+    store: &Store,
+    label: &str,
+    recv: Option<Value>,
+    owner: ClassId,
+    name: IdentId,
+    func_id: FuncId,
+    is_mm: bool,
+) -> String {
+    let (owner_part, sharp) = match recv {
+        // UnboundMethod: just the defining module.
+        None => (store.get_class_name(owner), "#"),
+        Some(recv) => {
+            let owner_mod = store[owner].get_module();
+            if let Some(v) = owner_mod.is_singleton() {
+                // A genuine singleton method (`def obj.m` / `def Cls.m`).
+                if recv.id() == v.id() {
+                    (v.inspect(store), ".")
+                } else {
+                    (format!("{}({})", recv.inspect(store), v.inspect(store)), ".")
+                }
+            } else {
+                let recv_mod = store[recv.class()].get_module();
+                let disp = match recv_mod.is_singleton() {
+                    // Singleton class of a class/module keeps its
+                    // `#<Class:Foo>` display; the singleton class of a
+                    // plain object is unwrapped to the real class.
+                    Some(att) if att.is_class_or_module().is_none() => {
+                        recv_mod.get_real_class()
+                    }
+                    _ => recv_mod,
+                };
+                let mut s = store.get_class_name(disp.id());
+                if owner != disp.id() {
+                    s = format!("{}({})", s, store.get_class_name(owner));
+                }
+                (s, "#")
+            }
+        }
+    };
+    let sig = if is_mm {
+        "(*)".to_string()
+    } else {
+        super::proc::signature_string(store, func_id)
+    };
+    let loc = source_loc_suffix(store, func_id, is_mm);
+    format!("#<{label}: {owner_part}{sharp}{name}{sig}{loc}>")
+}
+
+///
+/// ### Method#inspect
+///
+/// - inspect -> String
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/inspect.html]
+#[monoruby_builtin]
+fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    let store = &globals.store;
+    let name = match method.method_missing_name() {
+        Some(t) => t,
+        None => store[method.func_id()].name().unwrap(),
+    };
+    let s = method_inspect_str(
+        store,
+        "Method",
+        Some(method.receiver()),
+        method.owner(),
+        name,
+        method.func_id(),
+        method.method_missing_name().is_some(),
+    );
+    Ok(Value::string(s))
+}
+
+///
+/// ### UnboundMethod#inspect
+///
+/// - inspect -> String
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/inspect.html]
+#[monoruby_builtin]
+fn uinspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    let store = &globals.store;
+    let name = match method.method_missing_name() {
+        Some(t) => t,
+        None => store[method.func_id()].name().unwrap(),
+    };
+    let s = method_inspect_str(
+        store,
+        "UnboundMethod",
+        None,
+        method.owner(),
+        name,
+        method.func_id(),
+        method.method_missing_name().is_some(),
+    );
+    Ok(Value::string(s))
 }
 
 ///
@@ -682,6 +811,70 @@ mod tests {
               include Foo
             end
         "##,
+        );
+    }
+
+    #[test]
+    fn method_inspect_format() {
+        // Strip the trailing " file:line" (monoruby uses a short path,
+        // CRuby an absolute one) and compare the structural prefix.
+        run_test_with_prelude(
+            r##"
+            [
+              MS::MySub.new.method(:bar),
+              MS::A.new.method(:baz),
+              MS::M.new.method(:zero),
+              MS::M.new.method(:one_req),
+              MS::M.new.method(:one_req_named),
+              MS::M.new.method(:zero_with_block),
+              MS::M.new.method(:one_opt),
+              MS::M.new.method(:one_opt_named),
+              MS::M.new.method(:zero_with_splat),
+              MS::M.new.method(:zero_with_double_splat),
+              MS::M.new.method(:mixed),
+              MS::MySuper.instance_method(:bar),
+              MS::A.instance_method(:baz),
+              String.method(:include),
+            ].map { |m| [m.inspect, m.to_s].map { |s| s.split(' ').first } }
+            "##,
+            r##"
+            module MS
+              module MyMod; def bar; :bar; end; end
+              class MySuper; include MyMod; end
+              class MySub < MySuper; end
+              class A; def baz(a, b); end; end
+              class M
+                def zero; end
+                def one_req(a); end
+                def one_req_named(a:); end
+                def zero_with_block(&blk); end
+                def one_opt(a=nil); end
+                def one_opt_named(a: nil); end
+                def zero_with_splat(*a); end
+                def zero_with_double_splat(**a); end
+                def mixed(a, b=nil, *c, &blk); end
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_inspect_singleton() {
+        run_test_with_prelude(
+            r##"
+            obj = Foo.new
+            obj.singleton_class
+            a = obj.method(:bar).inspect.split(' ').first
+            obj2 = Foo.new
+            def obj2.bar; end
+            b = obj2.method(:bar).inspect.sub(/0x\h+/, '0xX').split(' ').first
+            [a, b]
+            "##,
+            r##"
+            module Mod; def bar; end; end
+            class Foo; include Mod; end
+            "##,
         );
     }
 

@@ -648,7 +648,7 @@ impl RValue {
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
-                store.get_class_name(self.class()),
+                store.get_class_name(self.real_class(store).id()),
                 self.id()
             )
         }
