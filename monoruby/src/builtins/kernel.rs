@@ -57,9 +57,36 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
-    globals.define_builtin_module_func_with(kernel_class, "Integer", kernel_integer, 1, 2, false);
-    globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
-    globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Integer",
+        kernel_integer,
+        1,
+        2,
+        false,
+        &["exception"],
+        false,
+    );
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Float",
+        kernel_float,
+        1,
+        1,
+        false,
+        &["exception"],
+        false,
+    );
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Complex",
+        kernel_complex,
+        1,
+        2,
+        false,
+        &["exception"],
+        false,
+    );
     globals.define_builtin_module_func_with(kernel_class, "Rational", kernel_rational, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
@@ -690,7 +717,44 @@ fn kernel_integer(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `exception:` keyword is stored after the positional max (2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    match kernel_integer_inner(vm, globals, lfp) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if exception {
+                Err(e)
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    }
+}
+
+/// Build a `FloatDomainError` (falls back to `RangeError` if the constant
+/// is unavailable).
+fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
+    match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+        .map(|v| v.as_class_id())
+    {
+        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+        None => MonorubyErr::rangeerr(msg),
+    }
+}
+
+fn kernel_integer_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
+    // nil -> TypeError ("can't convert nil into Integer"), always; under
+    // `exception: false` the outer wrapper turns this into nil.
+    if arg0.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Integer"));
+    }
     // Optional second argument: explicit `base` (0 = autodetect from
     // the string's prefix; 2..=36 = forced base, with the prefix
     // optional — `Integer("0x42", 16)` is ok but `("0x42", 10)` errors).
@@ -706,22 +770,32 @@ fn kernel_integer(
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
-        RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
+        RV::Float(num) => {
+            if num.is_nan() {
+                return Err(float_domain_error(globals, "NaN"));
+            }
+            if num.is_infinite() {
+                return Err(float_domain_error(
+                    globals,
+                    if num < 0.0 { "-Infinity" } else { "Infinity" },
+                ));
+            }
+            return Ok(Value::integer(num.trunc() as i64));
+        }
         RV::String(b) => {
             let s = b.check_utf8()?;
             return parse_kernel_integer(s, base.unwrap_or(0));
         }
         _ => {}
     };
-    // Try to_int coercion
+    // Try to_int coercion. If it returns a non-Integer (or nil), fall
+    // through to `to_i` instead of erroring immediately (CRuby semantics).
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         match result.unpack() {
             RV::Fixnum(i) => return Ok(Value::integer(i)),
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
-            _ => {
-                return Err(MonorubyErr::cant_convert_error_int(globals, arg0, result));
-            }
+            _ => {}
         }
     }
     // Try to_i coercion as a fallback
@@ -895,12 +969,12 @@ pub(crate) fn parse_kernel_float(s: &str) -> Result<Value> {
     }
     // Hex prefix branch.
     if bytes.len() >= i + 2 && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
-        let payload = strip_underscores(&bytes[i + 2..], &invalid)?;
+        let payload = strip_underscores(&bytes[i + 2..], true, &invalid)?;
         let f = parse_hex_float(&payload).ok_or_else(invalid)?;
         return Ok(Value::float(if neg { -f } else { f }));
     }
     // Decimal branch.
-    let payload = strip_underscores(&bytes[i..], &invalid)?;
+    let payload = strip_underscores(&bytes[i..], false, &invalid)?;
     let s = std::str::from_utf8(&payload).map_err(|_| invalid())?;
     // Reject CRuby-rejected forms that Rust's parser would accept.
     if s.is_empty()
@@ -914,21 +988,36 @@ pub(crate) fn parse_kernel_float(s: &str) -> Result<Value> {
     // CRuby allows a trailing `.` (e.g. `"10."`) but Rust's `f64::from_str`
     // does too, so no special handling needed.
     let f: f64 = s.parse().map_err(|_| invalid())?;
-    if !f.is_finite() {
+    // Reaching here, the literal `nan`/`inf`/`infinity` spellings were
+    // already rejected, so a non-finite result is numeric overflow of a
+    // valid literal (e.g. `"2e1000"`) which CRuby maps to Infinity.
+    if f.is_nan() {
         return Err(invalid());
     }
     Ok(Value::float(if neg { -f } else { f }))
 }
 
 /// Strip underscores from a digit run, validating that each `_` sits
-/// strictly between two digit (or hex-digit / `.`/`p`/`e`) characters.
-fn strip_underscores(bytes: &[u8], invalid: &dyn Fn() -> MonorubyErr) -> Result<Vec<u8>> {
+/// strictly between two digit characters. For a decimal payload only
+/// `0-9` count as digits (so `2e_100`, `2_e100`, `0x1p_3` are rejected);
+/// for a hex-float mantissa `0-9a-fA-F` count.
+fn strip_underscores(
+    bytes: &[u8],
+    hex: bool,
+    invalid: &dyn Fn() -> MonorubyErr,
+) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len());
-    let is_alnum = |b: u8| b.is_ascii_alphanumeric();
+    let is_digit = |b: u8| {
+        if hex {
+            b.is_ascii_hexdigit()
+        } else {
+            b.is_ascii_digit()
+        }
+    };
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'_' {
-            let prev_ok = i > 0 && is_alnum(bytes[i - 1]);
-            let next_ok = i + 1 < bytes.len() && is_alnum(bytes[i + 1]);
+            let prev_ok = i > 0 && is_digit(bytes[i - 1]);
+            let next_ok = i + 1 < bytes.len() && is_digit(bytes[i + 1]);
             if !prev_ok || !next_ok {
                 return Err(invalid());
             }
@@ -1016,7 +1105,29 @@ fn kernel_float(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `exception:` keyword is stored after the positional max (1).
+    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    match kernel_float_inner(vm, globals, lfp) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if exception {
+                Err(e)
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    }
+}
+
+fn kernel_float_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
+    if arg0.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Float"));
+    }
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::float(num as f64)),
         RV::BigInt(num) => return Ok(Value::float(num.to_f64().unwrap())),
@@ -1027,12 +1138,12 @@ fn kernel_float(
         }
         _ => {}
     };
-    // Try to_f coercion
+    // Try to_f coercion. CRuby requires `#to_f` to return a Float; an
+    // Integer (or anything else) is a TypeError.
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         match result.unpack() {
             RV::Float(f) => return Ok(Value::float(f)),
-            RV::Fixnum(i) => return Ok(Value::float(i as f64)),
             _ => {
                 return Err(MonorubyErr::cant_convert_error_f(globals, arg0, result));
             }
@@ -1050,18 +1161,318 @@ fn kernel_float(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Complex.html]
 #[monoruby_builtin]
 fn kernel_complex(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let r = Real::try_from(globals, lfp.arg(0))?;
-    let i = if let Some(i) = lfp.try_arg(1) {
-        Real::try_from(globals, i)?
-    } else {
-        Real::zero()
+    // `exception:` keyword is stored after the positional max (2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let arg0 = lfp.arg(0);
+    let arg1 = lfp.try_arg(1);
+
+    // nil argument -> TypeError, always raised (even with exception: false).
+    if arg0.is_nil() || arg1.map_or(false, |v| v.is_nil()) {
+        if exception {
+            return Err(MonorubyErr::typeerr("can't convert nil into Complex"));
+        }
+        return Ok(Value::nil());
+    }
+
+    // Single String argument: parse it. Parse errors are ArgumentError /
+    // Encoding::CompatibilityError. With `exception: false`, the
+    // Encoding::CompatibilityError is still raised but ArgumentError is
+    // swallowed (-> nil).
+    if arg1.is_none() {
+        if let RV::String(b) = arg0.unpack() {
+            return match parse_complex_string(globals, b) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    if exception || e.kind() != &MonorubyErrKind::Arguments {
+                        Err(e)
+                    } else {
+                        Ok(Value::nil())
+                    }
+                }
+            };
+        }
+    }
+
+    // When a second argument is present, evaluate it first: a non-Numeric
+    // second argument is always swallowable with `exception: false`
+    // (`Complex(0, :sym, exception: false)` -> nil), whereas a non-Numeric
+    // first argument paired with a *Numeric* second argument always raises
+    // (`Complex(:sym, 0, exception: false)` -> TypeError "not a real").
+    if let Some(i) = arg1 {
+        let im = match real_for_complex(vm, globals, i)? {
+            Some(i) => i,
+            None => {
+                if exception {
+                    return Err(MonorubyErr::typeerr("not a real"));
+                }
+                return Ok(Value::nil());
+            }
+        };
+        let re = match real_for_complex(vm, globals, arg0)? {
+            Some(r) => r,
+            None => return Err(MonorubyErr::typeerr("not a real")),
+        };
+        return Ok(Value::complex(re, im));
+    }
+
+    let r = match real_for_complex(vm, globals, arg0)? {
+        Some(r) => r,
+        None => {
+            // Single non-Numeric argument: try #to_c coercion.
+            let to_c_id = IdentId::get_id("to_c");
+            if let Some(func_id) = globals.check_method(arg0, to_c_id) {
+                let result =
+                    vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+                if result.try_complex().is_some() {
+                    return Ok(result);
+                }
+            }
+            // Single non-Numeric, no usable #to_c: swallowable.
+            if exception {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Complex",
+                    arg0.get_real_class_name(globals)
+                )));
+            }
+            return Ok(Value::nil());
+        }
     };
-    Ok(Value::complex(r, i))
+    Ok(Value::complex(r, Real::zero()))
+}
+
+/// Convert `v` into a `Real` suitable for a Complex component, returning
+/// `Ok(None)` when `v` is not a numeric (so the caller can decide between
+/// `#to_c` coercion and a `TypeError`).
+fn real_for_complex(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<Real>> {
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(Some(Real::from(i))),
+        RV::BigInt(b) => Ok(Some(Real::from(b.clone()))),
+        RV::Float(f) => Ok(Some(Real::from(f))),
+        RV::String(b) => {
+            // A numeric string component is accepted; a non-numeric string
+            // is reported as `None` so the caller raises the right error.
+            match parse_complex_string(globals, b) {
+                Ok(parsed) => Ok(Some(Real::try_from(globals, parsed)?)),
+                Err(e) => {
+                    // Encoding::CompatibilityError must still propagate.
+                    if e.kind() == &MonorubyErrKind::Arguments {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        }
+        _ => {
+            if v.try_rational().is_some() {
+                return Ok(Some(Real::try_from(globals, v)?));
+            }
+            let numeric_id = IdentId::get_id("Numeric");
+            if let Some(numeric) = globals
+                .store
+                .get_constant_noautoload(OBJECT_CLASS, numeric_id)
+                .map(|c| c.as_class_id())
+            {
+                if v.is_kind_of(&globals.store, numeric) {
+                    return Ok(Some(Real::try_from(globals, v)?));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Parse a Ruby `String` value as a Complex, the way `Kernel#Complex(str)`
+/// does. Raises `ArgumentError`/`TypeError`/`Encoding::CompatibilityError`
+/// on invalid input.
+fn parse_complex_string(globals: &mut Globals, b: &RStringInner) -> Result<Value> {
+    // ASCII-incompatible encodings raise Encoding::CompatibilityError.
+    if !b.encoding().is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", b.encoding().name()),
+        ));
+    }
+    let s = b.check_utf8()?;
+    let original = s;
+    if s.bytes().any(|c| c == 0) {
+        return Err(MonorubyErr::argumenterr("string contains null byte"));
+    }
+    match parse_complex_literal(s) {
+        Some((re, im)) => {
+            let re = Real::try_from(globals, re)?;
+            let im = Real::try_from(globals, im)?;
+            Ok(Value::complex(re, im))
+        }
+        None => Err(MonorubyErr::argumenterr(format!(
+            "invalid value for convert(): {:?}",
+            original
+        ))),
+    }
+}
+
+/// Parse a complex literal string into `(real, imaginary)` `Value`s.
+/// Returns `None` for any unrecognised / garbage input.
+fn parse_complex_literal(s: &str) -> Option<(Value, Value)> {
+    let s = s.trim_matches(|c: char| c == ' ' || c == '\t' || c == '\n' || c == '\r');
+    if s.is_empty() {
+        return Some((Value::integer(0), Value::integer(0)));
+    }
+    // Reject sequences of consecutive underscores and leading/trailing `_`.
+    let bytes = s.as_bytes();
+    for (idx, &c) in bytes.iter().enumerate() {
+        if c == b'_' {
+            // `_` must be surrounded by digits.
+            let prev_digit = idx > 0 && bytes[idx - 1].is_ascii_digit();
+            let next_digit =
+                idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit();
+            if !prev_digit || !next_digit {
+                return None;
+            }
+        }
+    }
+    let s: String = s.chars().filter(|&c| c != '_').collect();
+    let s = s.as_str();
+
+    // Polar form: `m@a`.
+    if let Some(at) = s.find('@') {
+        let m = parse_complex_component(&s[..at])?;
+        let a = parse_complex_component(&s[at + 1..])?;
+        let m = value_to_f64(m);
+        let a = value_to_f64(a);
+        let re = m * a.cos();
+        let im = m * a.sin();
+        return Some((complex_real_value(re), complex_real_value(im)));
+    }
+
+    // Normalise imaginary unit characters.
+    let has_imag = s.ends_with(['i', 'I', 'j', 'J']);
+    if has_imag {
+        let body = &s[..s.len() - 1];
+        if body.is_empty() {
+            return Some((Value::integer(0), Value::integer(1)));
+        }
+        if body == "+" {
+            return Some((Value::integer(0), Value::integer(1)));
+        }
+        if body == "-" {
+            return Some((Value::integer(0), Value::integer(-1)));
+        }
+        // Split into `real` + `imag` on a top-level sign that is not part
+        // of an exponent.
+        if let Some(pos) = find_complex_sign_split(body) {
+            let real_str = &body[..pos];
+            let imag_str = &body[pos..];
+            let re = parse_complex_component(real_str)?;
+            let im = if imag_str == "+" {
+                Value::integer(1)
+            } else if imag_str == "-" {
+                Value::integer(-1)
+            } else {
+                parse_complex_component(imag_str)?
+            };
+            return Some((re, im));
+        }
+        // Pure imaginary.
+        let im = parse_complex_component(body)?;
+        return Some((Value::integer(0), im));
+    }
+
+    // Pure real.
+    let re = parse_complex_component(s)?;
+    Some((re, Value::integer(0)))
+}
+
+/// Find the index of a `+`/`-` separating the real and imaginary parts,
+/// skipping a leading sign and exponent signs.
+fn find_complex_sign_split(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
+            if bytes[i - 1] == b'e' || bytes[i - 1] == b'E' {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Parse a single real component: an integer, float, or `a/b` rational.
+/// Returns `None` for garbage (including `Infinity`/`NaN`).
+fn parse_complex_component(s: &str) -> Option<Value> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Rational `a/b`.
+    if let Some(slash) = s.find('/') {
+        let num = s[..slash].trim();
+        let den = s[slash + 1..].trim();
+        let n: i64 = parse_strict_int(num)?;
+        let d: i64 = parse_strict_int(den)?;
+        if d == 0 {
+            return None;
+        }
+        return Some(Value::rational_from_inner(RationalInner::new(n, d)));
+    }
+    // Float (contains `.`, `e`, or `E`).
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        let f: f64 = s.parse().ok()?;
+        if !f.is_finite() {
+            return None;
+        }
+        return Some(Value::float(f));
+    }
+    // Integer.
+    let n: i64 = parse_strict_int(s)?;
+    Some(Value::integer(n))
+}
+
+/// Parse a strict optionally-signed decimal integer. Rejects empty and
+/// any non-digit characters.
+fn parse_strict_int(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let v: i64 = digits.parse().ok()?;
+    Some(if neg { -v } else { v })
+}
+
+fn value_to_f64(v: Value) -> f64 {
+    match v.unpack() {
+        RV::Fixnum(i) => i as f64,
+        RV::BigInt(b) => b.to_f64().unwrap_or(0.0),
+        RV::Float(f) => f,
+        _ => v.try_rational().map_or(0.0, |r| r.to_f()),
+    }
+}
+
+fn complex_real_value(f: f64) -> Value {
+    if f == (f as i64) as f64 && f.is_finite() {
+        Value::integer(f as i64)
+    } else {
+        Value::float(f)
+    }
 }
 
 ///
@@ -3639,6 +4050,86 @@ mod tests {
         run_test_error("Rational(1, 0)");
         // Type error
         run_test_error("Rational(:foo)");
+    }
+
+    #[test]
+    fn kernel_integer_exception_and_coercion() {
+        // `exception: false` swallows conversion errors -> nil.
+        run_tests(&[
+            r#"Integer("abc", exception: false).inspect"#,
+            r#"Integer(nil, exception: false).inspect"#,
+            r#"Integer("---1", exception: false).inspect"#,
+            r#"Integer("42", exception: false)"#,
+        ]);
+        // NaN / Infinity raise FloatDomainError.
+        run_test_error("Integer(0.0 / 0.0)");
+        run_test_error("Integer(1.0 / 0.0)");
+        // to_int returning a non-Integer falls back to to_i.
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; "1"; end; def to_i; 42; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; nil; end; def to_i; 7; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_float_exception_and_overflow() {
+        // Overflow of a valid literal -> Infinity (not ArgumentError).
+        run_tests(&[
+            r#"Float("2e1000").infinite?"#,
+            r#"Float("2E1000") == Float::INFINITY"#,
+            r#"Float("abc", exception: false).inspect"#,
+            r#"Float(nil, exception: false).inspect"#,
+        ]);
+        // nil -> TypeError.
+        run_test_error("Float(nil)");
+        // `_` adjacent to the exponent marker is rejected.
+        run_test_error(r#"Float("2e_100")"#);
+        run_test_error(r#"Float("2_e100")"#);
+        run_test_error(r#"Float("20e100_")"#);
+        // #to_f must return a Float, not an Integer.
+        run_test_error(
+            r#"o = Object.new; def o.to_f; 123; end; Float(o)"#,
+        );
+    }
+
+    #[test]
+    fn kernel_complex_string_parsing() {
+        run_tests(&[
+            r#"Complex("9").to_s"#,
+            r#"Complex("-3").to_s"#,
+            r#"Complex("2/3").to_s"#,
+            r#"Complex("4+2/3i").to_s"#,
+            r#"Complex("2.3").to_s"#,
+            r#"Complex("4+2.3i").to_s"#,
+            r#"Complex("35i").to_s"#,
+            r#"Complex("i").to_s"#,
+            r#"Complex("-i").to_s"#,
+            r#"Complex("79+4i").to_s"#,
+            r#"Complex("79-i").to_s"#,
+            r#"Complex("79+4J").to_s"#,
+            r#"Complex("2e3+4i").to_s"#,
+            r#"Complex("  79+4i  ").to_s"#,
+            r#"Complex("7_9+4_0i").to_s"#,
+            // exception: false swallows parse errors.
+            r#"Complex("ruby", exception: false).inspect"#,
+            r#"Complex("79+4iruby", exception: false).inspect"#,
+            r#"Complex("NaN", exception: false).inspect"#,
+            r#"Complex("7__9+4__0i", exception: false).inspect"#,
+        ]);
+        // Invalid strings raise ArgumentError; nil raises TypeError.
+        run_test_error(r#"Complex("ruby")"#);
+        run_test_error(r#"Complex("Infinity")"#);
+        run_test_error("Complex(nil)");
+        run_test_error("Complex(0, nil)");
+        // #to_c coercion for a single non-Numeric argument.
+        run_test_with_prelude(
+            r#"Complex(o).to_s"#,
+            r#"class C; def to_c; Complex(0, 1); end; end; o = C.new"#,
+        );
     }
 
     #[test]
