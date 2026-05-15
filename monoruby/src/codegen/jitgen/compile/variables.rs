@@ -63,6 +63,15 @@ impl<'a> JitContext<'a> {
         state.discard(dst);
 
         if let Some(cache) = &self.store[id].cache {
+            // Only fold a cache that was resolved at the compile-time const
+            // version. The global const version is monotonic, so a single
+            // `GuardConstVersion` against that snapshot validates every
+            // folded constant in the trace (mirroring how the class-version
+            // guard works). A staler cache would be unsound to fold against
+            // that snapshot, so bail and let the VM refresh it.
+            if cache.version as u64 != self.const_version() {
+                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+            }
             let base_slot = self.store[id].base;
             if let Some(slot) = base_slot {
                 if let Some(base_class) = cache.base_class {
@@ -126,11 +135,21 @@ impl<'a> JitContext<'a> {
 impl AbstractState {
     fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
         let ConstCache { version, value, .. } = cache;
-        let deopt = ir.new_deopt(self);
-        ir.push(AsmInst::GuardConstVersion {
-            const_version: *version,
-            deopt,
-        });
+        // The caller (`JitContext::load_constant`) has already verified
+        // `cache.version == compile-time const version`, and the global
+        // const version is monotonic, so one guard against that snapshot
+        // covers the whole trace until something that could change it
+        // executes (StoreConst, a class/method def, a non-specialized
+        // call, ...). Skip the redundant guard once emitted; see
+        // `unset_const_version_guard` call sites for what invalidates it.
+        if !self.const_version_guard() {
+            let deopt = ir.new_deopt(self);
+            ir.push(AsmInst::GuardConstVersion {
+                const_version: *version,
+                deopt,
+            });
+            self.set_const_version_guard();
+        }
         // Heap-allocated Float: keep the Sf optimization so subsequent
         // float ops can read the f64 from xmm without re-extracting it
         // from the RValue. Immediate flonums skip this path because
@@ -174,6 +193,9 @@ impl AbstractState {
             using_xmm,
             error,
         });
+        // Storing a constant bumps the global const version, so any guard
+        // we'd previously emitted no longer holds.
+        self.unset_const_version_guard();
         self.unset_side_effect_guard();
     }
 

@@ -773,6 +773,7 @@ impl AbstractState {
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
+        self.unset_const_version_guard();
         self.unset_side_effect_guard();
     }
 
@@ -838,6 +839,7 @@ impl AbstractState {
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
+        self.unset_const_version_guard();
         self.unset_side_effect_guard();
     }
 

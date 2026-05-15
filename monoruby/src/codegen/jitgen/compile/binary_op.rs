@@ -130,6 +130,7 @@ impl<'a> JitContext<'a> {
                 if let CompileResult::Continue = res {
                     let src_idx = bc_pos + 1;
                     state.unset_class_version_guard();
+                    state.unset_const_version_guard();
                     self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                 }
                 Ok(res)

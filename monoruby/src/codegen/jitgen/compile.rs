@@ -484,12 +484,14 @@ impl<'a> JitContext<'a> {
             TraceIr::UndefMethod { undef } => {
                 ir.undef_method(state, undef);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasMethod { new, old } => {
                 state.write_back_slots(ir, &[new, old]);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasGvar { new, old } => {
@@ -513,6 +515,7 @@ impl<'a> JitContext<'a> {
                 });
                 ir.check_bop(state);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
@@ -528,6 +531,7 @@ impl<'a> JitContext<'a> {
                 });
                 ir.check_bop(state);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::ClassDef {
@@ -539,6 +543,7 @@ impl<'a> JitContext<'a> {
             } => {
                 state.class_def(ir, dst, base, superclass, name, func_id, false);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::ModuleDef {
@@ -549,11 +554,13 @@ impl<'a> JitContext<'a> {
             } => {
                 state.class_def(ir, dst, base, None, name, func_id, true);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::SingletonClassDef { dst, base, func_id } => {
                 state.singleton_class_def(ir, dst, base, func_id);
                 state.unset_class_version_guard();
+                state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
 

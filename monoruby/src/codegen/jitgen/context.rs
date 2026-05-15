@@ -573,6 +573,11 @@ pub(crate) struct JitContext<'a> {
     class_version: u32,
 
     ///
+    /// Const version at compile time.
+    ///
+    const_version: u64,
+
+    ///
     /// Inline cache for method calls.
     ///
     pub(crate) inline_method_cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
@@ -604,12 +609,14 @@ impl<'a> JitContext<'a> {
         store: &'a Store,
         codegen_mode: bool,
         class_version: u32,
+        const_version: u64,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
             store,
             codegen_mode,
             class_version,
+            const_version,
             inline_method_cache: vec![],
             stack_frame,
             next_specialized_id: 0,
@@ -624,6 +631,7 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             class_version: self.class_version,
+            const_version: self.const_version,
             inline_method_cache: vec![],
             stack_frame,
             // The cloned context emits AsmIr only for analysis (it is
@@ -1118,6 +1126,10 @@ impl<'a> JitContext<'a> {
 
     pub(crate) fn class_version(&self) -> u32 {
         self.class_version
+    }
+
+    pub(crate) fn const_version(&self) -> u64 {
+        self.const_version
     }
 
     pub(super) fn specialize_level(&self) -> usize {
