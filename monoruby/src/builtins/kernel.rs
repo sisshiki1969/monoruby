@@ -1939,7 +1939,22 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
         let s = arg0.coerce_to_str(vm, globals)?;
-        eprintln!("{}", s);
+        // Write to the Ruby `$stderr` (which may be reassigned /
+        // mocked), not the OS stderr, matching CRuby.
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or(Value::nil());
+        if !stderr.is_nil() {
+            let line = Value::string(format!("{}\n", s));
+            vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("write"),
+                stderr,
+                &[line],
+                None,
+                None,
+            )?;
+        }
         s
     } else {
         "abort".to_string()
@@ -3740,6 +3755,24 @@ mod tests {
         rescue SystemExit => e
           e.status
         end
+        "##,
+        );
+    }
+
+    #[test]
+    fn abort_writes_to_dollar_stderr() {
+        run_test(
+            r##"
+        class MyIO; def initialize; @s=+""; end; def write(*a); a.each{|x| @s<<x.to_s}; end; attr_reader :s; end
+        io = MyIO.new
+        old = $stderr
+        $stderr = io
+        begin
+          begin; abort("a message"); rescue SystemExit; end
+        ensure
+          $stderr = old
+        end
+        io.s
         "##,
         );
     }
