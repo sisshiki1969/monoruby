@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(METHOD_CLASS, "original_name", original_name, 0);
     globals.define_builtin_func(METHOD_CLASS, "receiver", receiver, 0);
     globals.define_builtin_func(METHOD_CLASS, "owner", owner, 0);
+    globals.define_builtin_func(METHOD_CLASS, "super_method", super_method, 0);
     globals.define_builtin_func(METHOD_CLASS, "unbind", unbind, 0);
     globals.define_builtin_func(METHOD_CLASS, "parameters", parameters, 0);
     globals.define_builtin_funcs(METHOD_CLASS, "inspect", &["to_s"], inspect, 0);
@@ -30,6 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "original_name", uoriginal_name, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "owner", uowner, 0);
+    globals.define_builtin_func(UMETHOD_CLASS, "super_method", usuper_method, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "parameters", uparameters, 0);
     globals.define_builtin_funcs(UMETHOD_CLASS, "inspect", &["to_s"], uinspect, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "hash", umethod_hash, 0);
@@ -430,6 +432,53 @@ fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
+/// ### Method#super_method
+///
+/// - super_method -> Method | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Method/i/super_method.html]
+#[monoruby_builtin]
+fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_method();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::nil());
+    }
+    let receiver = method.receiver();
+    let owner = method.owner();
+    let Some(name) = globals.store[method.func_id()].name() else {
+        return Ok(Value::nil());
+    };
+    // Walk the receiver's ancestor chain to the node that defines the
+    // current method, then resolve `name` from the node above it.
+    let mut node = Some(globals.store[receiver.class()].get_module());
+    while let Some(n) = node {
+        if n.id() == owner {
+            break;
+        }
+        node = n.superclass();
+    }
+    let Some(found) = node else {
+        return Ok(Value::nil());
+    };
+    let Some(sup) = found.superclass() else {
+        return Ok(Value::nil());
+    };
+    match globals.store.check_method_for_class(sup.id(), name) {
+        // A module's synthetic `Object` superclass can re-resolve the
+        // *same* method (e.g. `Kernel#method` via `Object`); that is a
+        // wrap-around, not a real super.
+        Some(entry) => match entry.func_id() {
+            Some(func_id) if func_id != method.func_id() => {
+                Ok(Value::new_method(receiver, func_id, entry.owner()))
+            }
+            _ => Ok(Value::nil()),
+        },
+        None => Ok(Value::nil()),
+    }
+}
+
+///
 /// ### Method#unbind
 ///
 /// - unbind -> UnboundMethod
@@ -478,6 +527,43 @@ fn uowner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
     Ok(globals.store[method.owner()].get_module().get())
+}
+
+///
+/// ### UnboundMethod#super_method
+///
+/// - super_method -> UnboundMethod | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/super_method.html]
+#[monoruby_builtin]
+fn usuper_method(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let method = self_val.as_umethod();
+    if method.method_missing_name().is_some() {
+        return Ok(Value::nil());
+    }
+    let owner = method.owner();
+    let Some(name) = globals.store[method.func_id()].name() else {
+        return Ok(Value::nil());
+    };
+    let found = globals.store[owner].get_module();
+    let Some(sup) = found.superclass() else {
+        return Ok(Value::nil());
+    };
+    match globals.store.check_method_for_class(sup.id(), name) {
+        Some(entry) => match entry.func_id() {
+            Some(func_id) if func_id != method.func_id() => {
+                Ok(Value::new_unbound_method(func_id, entry.owner()))
+            }
+            _ => Ok(Value::nil()),
+        },
+        None => Ok(Value::nil()),
+    }
 }
 
 ///
@@ -1365,6 +1451,91 @@ mod tests {
               def x; end
             end
             Foo.instance_method(:x).bind_call
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_compose() {
+        run_test_with_prelude(
+            r##"
+            c = C.new
+            up = proc { |s| s.upcase }
+            dbl = D.new
+            [
+              (c.method(:succ) << up).call('Ruby'),
+              (c.method(:succ) >> up).call('Ruby'),
+              (c.method(:inc) << dbl).call(3),
+              (c.method(:inc) >> dbl).call(3),
+              (c.method(:pow_2) << proc { |x| x + x }).lambda?,
+              (c.method(:pow_2) >> proc { |x| x + x }).lambda?,
+              (c.method(:inc) << proc { |n, m| n * m }).call(2, 3),
+            ]
+            "##,
+            r##"
+            class C
+              def succ(s); s.succ; end
+              def pow_2(x); x * x; end
+              def inc(x); x + 1; end
+            end
+            class D
+              def call(n); n * 2; end
+            end
+            "##,
+        );
+        run_test_error(
+            r##"
+            class C; def succ(s); s.succ; end; end
+            C.new.method(:succ) << Object.new
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_curry() {
+        run_test(
+            r##"
+            class C; def foo(a, b, cc); [a, b, cc]; end; end
+            cu = C.new.method(:foo).curry
+            [cu.is_a?(Proc), cu.call(1).call(2, 3)]
+            "##,
+        );
+        run_test_error(
+            r##"
+            class C; def zero; end; end
+            C.new.method(:zero).curry(1)
+            "##,
+        );
+        run_test_error(
+            r##"
+            class C; def one(a); end; end
+            C.new.method(:one).curry(0)
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_super_method() {
+        run_test_with_prelude(
+            r##"
+            obj = C.new
+            obj.extend OverrideAgain
+            m = obj.method(:overridden)
+            [
+              m.super_method.owner.to_s,
+              m.super_method.receiver.equal?(obj),
+              m.super_method.name,
+              m.super_method.super_method.owner.to_s,
+              m.super_method.super_method.super_method.owner.to_s,
+              Object.new.method(:method).super_method,
+              C.instance_method(:overridden).super_method.owner.to_s,
+            ]
+            "##,
+            r##"
+            module B; def overridden; "B"; end; end
+            module BetweenBAndC; include B; def overridden; "x" + super; end; end
+            class C; include BetweenBAndC; def overridden; "C" + super; end; end
+            module OverrideAgain; def overridden; "O" + super; end; end
             "##,
         );
     }
