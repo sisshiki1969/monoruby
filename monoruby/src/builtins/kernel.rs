@@ -2929,8 +2929,62 @@ fn object_respond_to(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.self_val().inspect(&globals.store);
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    // Only plain objects participate in the ivar / hook formatting;
+    // every other kind (immediates, internally `/name`-tagged objects,
+    // and types with their own `inspect`) keeps the default rendering.
+    if self_val.ty() != Some(ObjTy::OBJECT)
+        || globals
+            .store
+            .get_ivar(self_val, IdentId::_NAME)
+            .is_some()
+    {
+        let s = self_val.inspect(&globals.store);
+        return Ok(Value::string(s));
+    }
+
+    // CRuby consults the (private) `instance_variables_to_inspect`
+    // hook: an Array selects/orders the ivars to show, `nil` shows
+    // all, anything else is a TypeError.
+    let hook = IdentId::get_id("instance_variables_to_inspect");
+    let selection = vm.invoke_method_if_exists(globals, hook, self_val, &[], None, None)?;
+
+    let all_ivars = globals.store.get_ivars(self_val);
+    let chosen: Vec<(IdentId, Value)> = match selection {
+        None => all_ivars,
+        Some(v) if v.is_nil() => all_ivars,
+        Some(v) => match v.try_array_ty() {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|e| e.try_symbol())
+                .filter_map(|nm| {
+                    all_ivars
+                        .iter()
+                        .find(|(n, _)| *n == nm)
+                        .map(|(n, val)| (*n, *val))
+                })
+                .collect(),
+            None => {
+                let cls = globals
+                    .store
+                    .get_class_name(v.real_class(&globals.store).id());
+                return Err(MonorubyErr::typeerr(format!(
+                    "Expected #instance_variables_to_inspect to return an Array or nil, but it returned {cls}"
+                )));
+            }
+        },
+    };
+
+    let class_name = globals
+        .store
+        .get_class_name(self_val.real_class(&globals.store).id());
+    let mut s = format!("#<{}:0x{:016x}", class_name, self_val.id());
+    for (i, (name, val)) in chosen.iter().enumerate() {
+        s += if i == 0 { " " } else { ", " };
+        s += &format!("{name}={}", val.inspect(&globals.store));
+    }
+    s += ">";
     Ok(Value::string(s))
 }
 
@@ -5213,5 +5267,43 @@ mod tests {
     fn kernel_uncaught_throw() {
         // Throwing a tag with no matching catch raises an error.
         run_test_error("throw :nope");
+    }
+
+    #[test]
+    fn kernel_inspect_ivars_and_hook() {
+        // Comma-separated ivars; the `instance_variables_to_inspect`
+        // hook selects (Array) / shows-all (nil); addresses normalized.
+        run_test(
+            r#"
+            o = Object.new
+            o.instance_eval { @host="h"; @user="u"; @password="p" }
+            a = o.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o2 = Object.new
+            o2.instance_eval { @host="h"; @user="u"; @password="p" }
+            o2.singleton_class.class_eval { private def instance_variables_to_inspect = %i[@host @user @nope] }
+            b = o2.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o3 = Object.new
+            o3.instance_eval { @a=1 }
+            o3.singleton_class.class_eval { private def instance_variables_to_inspect = [] }
+            c = o3.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o4 = Object.new
+            o4.instance_eval { @x=1; @y=2 }
+            o4.singleton_class.class_eval { private def instance_variables_to_inspect = nil }
+            d = o4.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            [a, b, c, d]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_inspect_hook_type_error() {
+        run_test_error(
+            r#"
+            o = Object.new
+            o.instance_eval { @a=1 }
+            o.singleton_class.class_eval { private def instance_variables_to_inspect = {} }
+            o.inspect
+            "#,
+        );
     }
 }
