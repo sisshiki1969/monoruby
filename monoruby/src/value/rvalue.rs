@@ -643,8 +643,9 @@ impl RValue {
             name.to_s(store)
         } else {
             let mut s = String::new();
-            for (id, v) in self.get_ivars(store).into_iter() {
-                s += &format!(" {id}={}", v.inspect_inner(store, set));
+            for (i, (id, v)) in self.get_ivars(store).into_iter().enumerate() {
+                s += if i == 0 { " " } else { ", " };
+                s += &format!("{id}={}", v.inspect_inner(store, set));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
