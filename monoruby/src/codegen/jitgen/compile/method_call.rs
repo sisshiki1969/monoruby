@@ -637,15 +637,24 @@ impl<'a> JitContext<'a> {
         let mut return_context = frame.detach_return_context();
         let return_state = return_context.remove(&pos);
         self.merge_return_context(return_context);
-        // If the iseq has rescue/ensure handlers, the abstract
-        // interpreter's BB graph doesn't include the rescue PCs as
-        // successors, so the computed return state only reflects the
-        // happy path. Letting the Const ret survive into
-        // `def_rax2acc_return` would overwrite the rescue path's
-        // actual return value with the happy-path constant. See
-        // issue #405.
+        // Capture before `frame.asm_info` is moved below.
+        let frame_had_deopt = frame.had_deopt;
+        // Two unmodeled-path conditions taint the return state so the
+        // caller doesn't propagate a speculative `Const` past us:
+        //
+        // 1. `has_exception_handler`: the BB graph doesn't include
+        //    rescue/ensure successors, so the computed return state
+        //    only reflects the happy path. See issue #405.
+        //
+        // 2. `frame_had_deopt`: any deopt-able side exit emitted
+        //    during this iseq's compile means the runtime can resume
+        //    in the interpreter from the deopt PC and produce a
+        //    different rax than the abstract interpreter's
+        //    speculation predicted (e.g. `Array#assoc`'s block doing
+        //    `return elem` after the recv-class guard fails). See
+        //    PR #505.
         let return_state = return_state.map(|mut s| {
-            if self.store[iseq_id].has_exception_handler() {
+            if self.store[iseq_id].has_exception_handler() || frame_had_deopt {
                 s.taint_for_unmodeled_rescue();
             }
             s
@@ -673,6 +682,15 @@ impl<'a> JitContext<'a> {
             info: frame.asm_info,
             patch_point,
         });
+        // Propagate the deopt fact one level up: if this inlined
+        // sub-iseq could deopt, the caller's compiled body also
+        // contains that deopt-able path, so the caller's own
+        // return-state taint check needs to see it. We are always
+        // inside the caller's frame here (specialized_compile pushed
+        // and popped the sub-frame internally).
+        if frame_had_deopt {
+            self.current_frame_mut().had_deopt = true;
+        }
         Ok(SpecializedCompileResult {
             entry,
             return_state,

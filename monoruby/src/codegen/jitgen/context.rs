@@ -406,6 +406,21 @@ pub(super) struct JitStackFrame {
     /// hints into concrete byte offsets.
     ///
     specialized_id: SpecializedId,
+
+    ///
+    /// True iff any deopt-able side exit was emitted during this
+    /// frame's compilation, including from inlined sub-iseqs whose
+    /// compile-time deopt fact has been propagated up. Used by
+    /// `compile_specialized_func` to taint a `ReturnValue::Const`
+    /// before it leaks to the caller — see
+    /// `ReturnState::taint_for_unmodeled_rescue` for the dual case.
+    ///
+    /// Aggregated from `AsmIr::had_deopt()` at every
+    /// `push_ir`/`add_inline_bridge`/`add_outline_bridge`, and
+    /// propagated from inlined sub-iseqs in
+    /// `compile_specialized_func`.
+    ///
+    pub(super) had_deopt: bool,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -490,6 +505,7 @@ impl JitStackFrame {
             base_stack_offset: stack_offset,
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
+            had_deopt: false,
         }
     }
 
@@ -512,6 +528,7 @@ impl JitStackFrame {
             // walks over a snapshot of the stack and never reaches
             // the codegen resolve pass, so id reuse is safe.
             specialized_id: self.specialized_id,
+            had_deopt: self.had_deopt,
         }
     }
 
@@ -696,7 +713,7 @@ impl<'a> JitContext<'a> {
         self.stack_frame.last().unwrap()
     }
 
-    fn current_frame_mut(&mut self) -> &mut JitStackFrame {
+    pub(super) fn current_frame_mut(&mut self) -> &mut JitStackFrame {
         self.stack_frame.last_mut().unwrap()
     }
 
@@ -1307,7 +1324,9 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
-        self.current_frame_mut().ir.push((bb, ir));
+        let frame = self.current_frame_mut();
+        frame.had_deopt |= ir.had_deopt();
+        frame.ir.push((bb, ir));
     }
 
     pub(super) fn add_inline_bridge(
@@ -1316,14 +1335,14 @@ impl<'a> JitContext<'a> {
         ir: AsmIr,
         dest_bb: Option<BasicBlockId>,
     ) {
-        self.current_frame_mut()
-            .inline_bridges
-            .insert(src_bb, (ir, dest_bb));
+        let frame = self.current_frame_mut();
+        frame.had_deopt |= ir.had_deopt();
+        frame.inline_bridges.insert(src_bb, (ir, dest_bb));
     }
 
     pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
-        self.current_frame_mut()
-            .outline_bridges
-            .push((ir, dest, bbid));
+        let frame = self.current_frame_mut();
+        frame.had_deopt |= ir.had_deopt();
+        frame.outline_bridges.push((ir, dest, bbid));
     }
 }
