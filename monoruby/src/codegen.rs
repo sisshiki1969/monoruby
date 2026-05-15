@@ -984,6 +984,10 @@ impl Codegen {
         unsafe { *self.class_version_addr += 1 }
     }
 
+    pub(crate) fn const_version(&self) -> u64 {
+        unsafe { *self.const_version_addr }
+    }
+
     pub(crate) fn const_version_inc(&self) {
         unsafe { *self.const_version_addr += 1 }
     }

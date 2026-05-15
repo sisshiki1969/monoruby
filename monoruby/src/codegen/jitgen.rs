@@ -282,6 +282,7 @@ impl Codegen {
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
+        const_version: u64,
     ) -> JitResult<(
         Vec<(ClassId, Option<IdentId>, FuncId)>,
         SpecializedCodeInfo,
@@ -293,7 +294,7 @@ impl Codegen {
             JitType::Entry
         };
         let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
-        let mut ctx = JitContext::new(store, true, class_version, vec![]);
+        let mut ctx = JitContext::new(store, true, class_version, const_version, vec![]);
         let mut frame = ctx.traceir_to_asmir(frame)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 

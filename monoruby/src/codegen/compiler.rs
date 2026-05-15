@@ -197,6 +197,7 @@ impl Codegen {
         let now = std::time::Instant::now();
         let (start0, start1) = self.get_address_pair();
 
+        let const_version = self.const_version();
         match self.jit_compile(
             &globals.store,
             iseq_id,
@@ -204,6 +205,7 @@ impl Codegen {
             position,
             entry_label.clone(),
             class_version,
+            const_version,
         ) {
             Ok((cache, specialized_info, class_version_label)) => {
                 let codeptr = self.jit.get_label_address(&entry_label);
