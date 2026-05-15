@@ -388,14 +388,14 @@ mod tests {
         run_test(
             r##"
         o = Object.new
-        a = [o <=> o, (o <=> Object.new).inspect]
+        [o <=> o, (o <=> Object.new).inspect, (o <=> 3.14).inspect]
+        "##,
+        );
+        run_test_once(
+            r##"
         m = Object.new
         def m.==(x); true; end
-        a << (m <=> Object.new)
-        n = Object.new
-        def n.==(x); nil; end
-        a << (n <=> Object.new).inspect
-        a
+        m <=> Object.new
         "##,
         );
     }

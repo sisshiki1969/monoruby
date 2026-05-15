@@ -1,5 +1,12 @@
 module Comparable
   def ==(other)
+    return true if equal?(other)
+    # A class that includes Comparable but never defines its own
+    # `<=>` inherits `Object#<=>`, which falls back to `self ==
+    # other`; calling `<=>` here would then recurse infinitely. Such
+    # an object has no ordering, so it is only `==` to itself
+    # (matches CRuby, which uses an equivalent recursion guard).
+    return false if self.class.instance_method(:<=>).owner == ::Object
     begin
       res = self <=> other
     rescue NoMethodError, ArgumentError
