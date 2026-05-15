@@ -4146,6 +4146,54 @@ mod tests {
     }
 
     #[test]
+    fn kernel_conversion_branch_coverage() {
+        // Integer: bare nil -> TypeError; -Infinity branch; valid
+        // float truncation; exception:false on a float-domain error.
+        run_test_error("Integer(nil)");
+        run_test_error("Integer(-1.0 / 0.0)");
+        run_test("Integer(3.99)");
+        run_test("Integer(-3.99)");
+        run_tests(&[
+            r#"Integer(0.0 / 0.0, exception: false).inspect"#,
+            r#"Integer(1.0 / 0.0, exception: false).inspect"#,
+            r#"Integer("0b1010")"#,
+            r#"Integer("0o17")"#,
+            r#"Integer("0xff")"#,
+            r#"Integer("  -10  ")"#,
+        ]);
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; 99; end; end; o = C.new"#,
+        );
+        // Float: successful #to_f coercion; exception:false -> nil;
+        // hex float literal string.
+        run_test_with_prelude(
+            r#"Float(o)"#,
+            r#"class C; def to_f; 1.5; end; end; o = C.new"#,
+        );
+        run_tests(&[
+            r#"Float(nil, exception: false).inspect"#,
+            r#"Float("1.0e3")"#,
+            r#"Float("0x1.8p3")"#,
+            r#"Float(:sym, exception: false).inspect"#,
+        ]);
+        run_test_error("Float(:sym)");
+        // Complex: exception:false -> nil; symbol real part; numeric
+        // pairs; invalid polar.
+        run_tests(&[
+            r#"Complex(nil, exception: false).inspect"#,
+            r#"Complex(1, 2).to_s"#,
+            r#"Complex(1.5, -2).to_s"#,
+            r#"Complex("ruby", exception: false).inspect"#,
+        ]);
+        // A non-real (Symbol) part is a TypeError even with
+        // `exception: false` (CRuby raises regardless).
+        run_test_error("Complex(:x, 0)");
+        run_test_error("Complex(:x, 0, exception: false)");
+        run_test_error(r#"Complex("1@")"#);
+    }
+
+    #[test]
     fn object_instance_of() {
         run_test2(r#"5.instance_of?(Integer)"#);
         run_test2(r#"5.instance_of?(Float)"#);

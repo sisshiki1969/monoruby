@@ -6578,6 +6578,14 @@ mod tests {
         [o.class.name, o.is_a?(S), o.is_a?(String), o.is_a?(M), o == "hi"]
         "##,
         );
+        // Subclass `new` with no argument (the None inner-build arm).
+        run_test(
+            r##"
+        class S2 < String; end
+        s = S2.new
+        [s.class.name, s.is_a?(S2), s, s.encoding.name]
+        "##,
+        );
     }
 
     #[test]
@@ -6863,6 +6871,10 @@ mod tests {
         run_test2(r###"sprintf("%1$*2$d", 112, -10)"###);
         run_test2(r###"sprintf("%1$*2$b", 10, 10)"###);
         run_test2(r###"sprintf("%1$*2$s", "abc", 10)"###);
+        // Error / edge branches of the positional parser.
+        run_test_error(r###"sprintf("%1$s %2$s", "a")"###);
+        run_test_error(r###"sprintf("%0$d", 1)"###);
+        run_test2(r###"sprintf("%1$s %1$s", "x")"###);
     }
 
     #[test]
