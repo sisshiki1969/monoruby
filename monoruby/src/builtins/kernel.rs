@@ -5273,6 +5273,8 @@ mod tests {
     fn kernel_inspect_ivars_and_hook() {
         // Comma-separated ivars; the `instance_variables_to_inspect`
         // hook selects (Array) / shows-all (nil); addresses normalized.
+        // Classic `def...end` only (the ruruby parser used by `bin/test`
+        // has no endless-method support).
         run_test(
             r#"
             o = Object.new
@@ -5280,15 +5282,24 @@ mod tests {
             a = o.inspect.sub(/0x[0-9a-f]+/, '0xX')
             o2 = Object.new
             o2.instance_eval { @host="h"; @user="u"; @password="p" }
-            o2.singleton_class.class_eval { private def instance_variables_to_inspect = %i[@host @user @nope] }
+            o2.singleton_class.class_eval do
+              def instance_variables_to_inspect; [:@host, :@user, :@nope]; end
+              private :instance_variables_to_inspect
+            end
             b = o2.inspect.sub(/0x[0-9a-f]+/, '0xX')
             o3 = Object.new
             o3.instance_eval { @a=1 }
-            o3.singleton_class.class_eval { private def instance_variables_to_inspect = [] }
+            o3.singleton_class.class_eval do
+              def instance_variables_to_inspect; []; end
+              private :instance_variables_to_inspect
+            end
             c = o3.inspect.sub(/0x[0-9a-f]+/, '0xX')
             o4 = Object.new
             o4.instance_eval { @x=1; @y=2 }
-            o4.singleton_class.class_eval { private def instance_variables_to_inspect = nil }
+            o4.singleton_class.class_eval do
+              def instance_variables_to_inspect; nil; end
+              private :instance_variables_to_inspect
+            end
             d = o4.inspect.sub(/0x[0-9a-f]+/, '0xX')
             [a, b, c, d]
             "#,
@@ -5301,7 +5312,10 @@ mod tests {
             r#"
             o = Object.new
             o.instance_eval { @a=1 }
-            o.singleton_class.class_eval { private def instance_variables_to_inspect = {} }
+            o.singleton_class.class_eval do
+              def instance_variables_to_inspect; {}; end
+              private :instance_variables_to_inspect
+            end
             o.inspect
             "#,
         );
