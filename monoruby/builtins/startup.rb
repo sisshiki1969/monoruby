@@ -60,6 +60,7 @@ class Object
   end
 
   def then
+    return to_enum(:then) { 1 } unless block_given?
     yield self
   end
   alias yield_self then

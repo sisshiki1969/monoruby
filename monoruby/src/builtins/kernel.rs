@@ -122,6 +122,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    // `__callee__` differs from `__method__` only for aliased methods
+    // (it reports the called alias). monoruby does not track the
+    // call-site alias, so it shares `__method__`'s resolution.
+    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
