@@ -6875,6 +6875,13 @@ mod tests {
         run_test_error(r###"sprintf("%1$s %2$s", "a")"###);
         run_test_error(r###"sprintf("%0$d", 1)"###);
         run_test2(r###"sprintf("%1$s %1$s", "x")"###);
+        // Mixing numbered and unnumbered references is an
+        // ArgumentError (matches CRuby's exact messages).
+        run_test_error(r###"sprintf("%1$s %s", "a", "b")"###);
+        run_test_error(r###"sprintf("%s %1$s", "a", "b")"###);
+        run_test_error(r###"sprintf("%*1$d", 5, 42)"###);
+        run_test2(r###"sprintf("%2$*1$d", 5, 42)"###);
+        run_test2(r###"sprintf("%s %s", "a", "b")"###);
     }
 
     #[test]

@@ -505,6 +505,40 @@ impl Executor {
         arguments: &[Value],
     ) -> Result<String> {
         let mut arg_no = 0;
+        // Track whether the format string has used a numbered (`N$`)
+        // and/or an unnumbered (sequential `%s` / `*`) argument
+        // reference. CRuby forbids mixing the two within one format
+        // string.
+        let mut used_numbered = false;
+        let mut used_unnumbered = false;
+        fn mark_numbered(
+            n: usize,
+            used_numbered: &mut bool,
+            used_unnumbered: bool,
+            arg_no: usize,
+        ) -> Result<()> {
+            if used_unnumbered {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "numbered({n}) after unnumbered({arg_no})"
+                )));
+            }
+            *used_numbered = true;
+            Ok(())
+        }
+        fn mark_unnumbered(
+            used_numbered: bool,
+            used_unnumbered: &mut bool,
+            arg_no: usize,
+        ) -> Result<()> {
+            if used_numbered {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unnumbered({}) mixed with numbered",
+                    arg_no + 1
+                )));
+            }
+            *used_unnumbered = true;
+            Ok(())
+        }
         let mut format_str = String::new();
         let fchars: Vec<char> = self_str.chars().collect();
         let flen = fchars.len();
@@ -594,6 +628,7 @@ impl Executor {
             let mut positional_arg = if named_val.is_none() {
                 match try_positional(&fchars, flen, &mut i) {
                     Some(num) => {
+                        mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
                         if num == 0 || num > arguments.len() {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
@@ -660,6 +695,7 @@ impl Executor {
             // was not already consumed before the flags.
             if positional_arg.is_none() && named_val.is_none() {
                 if let Some(num) = try_positional(&fchars, flen, &mut i) {
+                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
                     if num == 0 || num > arguments.len() {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -688,11 +724,13 @@ impl Executor {
                 let width_val = if let Some(num) =
                     try_positional(&fchars, flen, &mut i)
                 {
+                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
                     if num == 0 || num > arguments.len() {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
                     arguments[num - 1]
                 } else {
+                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
                     if arguments.len() <= arg_no {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -768,6 +806,7 @@ impl Executor {
                 ch = fchars[i];
                 let mut prec = 0usize;
                 if ch == '*' {
+                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
                     if arguments.len() <= arg_no {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -867,6 +906,7 @@ impl Executor {
             } else if let Some(v) = named_val {
                 v
             } else {
+                mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
                 if arguments.len() <= arg_no {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
