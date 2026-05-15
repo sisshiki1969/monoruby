@@ -69,7 +69,15 @@ class Object
   end
 
   def <=>(other)
-    0 if equal?(other)
+    return 0 if equal?(other)
+    # The `self == other` fallback would recurse infinitely when
+    # `==` is `Comparable#==` (a Comparable class that did not
+    # override `==`): that `==` calls `<=>`, which reaches here
+    # again. Skip the fallback in that case (covers both a missing
+    # `<=>` and a user `<=>` that calls `super`). Net behaviour
+    # matches CRuby, which uses an equivalent recursion guard.
+    return nil if self.class.instance_method(:==).owner == Comparable
+    0 if (self == other)
   end
 end
 

@@ -1,5 +1,6 @@
 module Comparable
   def ==(other)
+    return true if equal?(other)
     begin
       res = self <=> other
     rescue NoMethodError, ArgumentError

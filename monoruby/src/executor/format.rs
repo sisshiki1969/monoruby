@@ -559,31 +559,47 @@ impl Executor {
                 flen,
             )?;
 
-            // Check for positional argument: non-zero digit(s) followed by '$'
-            let positional_arg = if named_val.is_none()
-                && i < flen
-                && fchars[i].is_ascii_digit()
-                && fchars[i] != '0'
-            {
-                // Look ahead: collect digits then check for '$'
-                let mut j = i;
+            // Detect (and consume) a `N$` positional argument reference at
+            // the current position. Returns the parsed argument index
+            // (1-based) without bounds-checking, advancing `*pos` past the
+            // `$`. CRuby allows the `N$` reference both immediately after
+            // `%` and after the flag characters (e.g. `%-2$d`).
+            fn try_positional(
+                fchars: &[char],
+                flen: usize,
+                pos: &mut usize,
+            ) -> Option<usize> {
+                let start = *pos;
+                if start >= flen || !fchars[start].is_ascii_digit() || fchars[start] == '0'
+                {
+                    return None;
+                }
+                let mut j = start;
                 while j < flen && fchars[j].is_ascii_digit() {
                     j += 1;
                 }
                 if j < flen && fchars[j] == '$' {
-                    // Parse the number
                     let mut num = 0usize;
-                    for k in i..j {
-                        num = num * 10 + (fchars[k] as usize) - ('0' as usize);
+                    for &c in &fchars[start..j] {
+                        num = num * 10 + (c as usize) - ('0' as usize);
                     }
-                    i = j + 1; // skip past '$'
-                    if num == 0 || num > arguments.len() {
-                        return Err(MonorubyErr::argumenterr("too few arguments"));
-                    }
-                    Some(arguments[num - 1])
+                    *pos = j + 1;
+                    Some(num)
                 } else {
-                    // Not positional — digits are part of width, don't advance i
                     None
+                }
+            }
+
+            // Check for positional argument: non-zero digit(s) followed by '$'
+            let mut positional_arg = if named_val.is_none() {
+                match try_positional(&fchars, flen, &mut i) {
+                    Some(num) => {
+                        if num == 0 || num > arguments.len() {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                        Some(arguments[num - 1])
+                    }
+                    None => None,
                 }
             } else {
                 None
@@ -639,6 +655,23 @@ impl Executor {
                     }
                 }
             }
+            // A `N$` positional reference may also follow the flag
+            // characters (e.g. `%-2$d`, `% 2$d`). Detect it here when it
+            // was not already consumed before the flags.
+            if positional_arg.is_none() && named_val.is_none() {
+                if let Some(num) = try_positional(&fchars, flen, &mut i) {
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    positional_arg = Some(arguments[num - 1]);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
             // Left-align overrides zero-fill
             if minus_flag {
                 zero_flag = false;
@@ -647,14 +680,27 @@ impl Executor {
             if plus_flag {
                 space_flag = false;
             }
-            // Width (may be '*')
+            // Width (may be '*' or '*N$' to take the width from a
+            // positional argument, e.g. `%1$*2$d`).
             let mut width = 0usize;
             if ch == '*' {
-                if arguments.len() <= arg_no {
-                    return Err(MonorubyErr::argumenterr("too few arguments"));
-                }
-                let w = arguments[arg_no].coerce_to_integer(self, globals)?;
-                arg_no += 1;
+                i += 1; // skip '*'
+                let width_val = if let Some(num) =
+                    try_positional(&fchars, flen, &mut i)
+                {
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    arguments[num - 1]
+                } else {
+                    if arguments.len() <= arg_no {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    let v = arguments[arg_no];
+                    arg_no += 1;
+                    v
+                };
+                let w = width_val.coerce_to_integer(self, globals)?;
                 match w {
                     IntegerBase::Fixnum(v) => {
                         if v < 0 {
@@ -669,7 +715,6 @@ impl Executor {
                         return Err(MonorubyErr::argumenterr("width too big"));
                     }
                 }
-                i += 1;
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
                         "Invalid termination of format string",

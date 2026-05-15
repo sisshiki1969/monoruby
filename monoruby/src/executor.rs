@@ -98,6 +98,11 @@ pub struct Executor {
     /// "registering an autoload whose feature is the file currently
     /// being loaded" and treat it as a no-op (matches CRuby).
     loading_paths: Vec<std::path::PathBuf>,
+    /// Identity (`Value::id`) of every `catch` tag whose block is
+    /// currently on the stack. `throw` consults this so an
+    /// unmatched tag raises a rescuable `UncaughtThrowError`
+    /// instead of an uncatchable control-flow error.
+    catch_tags: Vec<u64>,
     /// error information.
     exception: Option<MonorubyErr>,
 }
@@ -120,6 +125,7 @@ impl std::default::Default for Executor {
             temp_stack: vec![],
             require_level: 0,
             loading_paths: vec![],
+            catch_tags: vec![],
             exception: None,
         }
     }
@@ -243,6 +249,18 @@ impl Executor {
 
     pub fn temp_pop(&mut self) -> Value {
         self.temp_stack.pop().unwrap()
+    }
+
+    pub(crate) fn push_catch_tag(&mut self, tag: Value) {
+        self.catch_tags.push(tag.id());
+    }
+
+    pub(crate) fn pop_catch_tag(&mut self) {
+        self.catch_tags.pop();
+    }
+
+    pub(crate) fn is_catch_tag_active(&self, tag: Value) -> bool {
+        self.catch_tags.contains(&tag.id())
     }
 
     /// Read a Value previously pushed onto the temp stack. The bit pattern

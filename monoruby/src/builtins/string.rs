@@ -243,21 +243,31 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.try_arg(0) {
+    let class = lfp.self_val().as_class_id();
+    let inner = match lfp.try_arg(0) {
         Some(string) => {
             // Preserve the source string's encoding by going through
             // `coerce_to_rstring` and cloning the inner.
-            let other = string.coerce_to_rstring(vm, globals)?;
-            Ok(Value::string_from_inner((*other).clone()))
+            (*string.coerce_to_rstring(vm, globals)?).clone()
         }
         None => {
             // CRuby's `String.new` (no arg) returns a binary string.
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                b"",
-                Encoding::Ascii8,
-            )))
+            RStringInner::from_encoding(b"", Encoding::Ascii8)
         }
+    };
+    let obj = Value::string_from_inner_with_class(inner, class);
+    // For a subclass, run its `initialize` so user-defined side effects
+    // (e.g. `self.extend`) take effect, matching `Class#new` semantics.
+    // Plain `String.new` keeps the fast direct construction above.
+    if class != STRING_CLASS {
+        let arg = lfp.try_arg(0);
+        let args: &[Value] = match &arg {
+            Some(v) => std::slice::from_ref(v),
+            None => &[],
+        };
+        vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, args, lfp.block(), None)?;
     }
+    Ok(obj)
 }
 
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
@@ -6557,6 +6567,28 @@ mod tests {
     }
 
     #[test]
+    fn string_subclass_new() {
+        run_test(
+            r##"
+        module M; end
+        class S < String
+          def initialize(*); super; self.extend(M); end
+        end
+        o = S.new("hi")
+        [o.class.name, o.is_a?(S), o.is_a?(String), o.is_a?(M), o == "hi"]
+        "##,
+        );
+        // Subclass `new` with no argument (the None inner-build arm).
+        run_test(
+            r##"
+        class S2 < String; end
+        s = S2.new
+        [s.class.name, s.is_a?(S2), s, s.encoding.name]
+        "##,
+        );
+    }
+
+    #[test]
     fn string_try_convert() {
         run_test(r##"String.try_convert("str")"##);
         run_test(r##"String.try_convert(/re/)"##);
@@ -6826,6 +6858,23 @@ mod tests {
         run_test2(r###""%15.1e" % 12785.34578e-127"###);
         run_test2(r###""%15.1E" % 12785.34578e-127"###);
         run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+    }
+
+    #[test]
+    fn string_format_positional() {
+        // `N$` positional argument references, including a flag before
+        // the reference (`%-2$d`) and `*N$` width-from-argument.
+        run_test2(r###"sprintf("%1$s %2$s", "a", "b")"###);
+        run_test2(r###"sprintf("%2$s %1$s", "a", "b")"###);
+        run_test2(r###"sprintf("%-2$d", 1, 2, 3)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, 10)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, -10)"###);
+        run_test2(r###"sprintf("%1$*2$b", 10, 10)"###);
+        run_test2(r###"sprintf("%1$*2$s", "abc", 10)"###);
+        // Error / edge branches of the positional parser.
+        run_test_error(r###"sprintf("%1$s %2$s", "a")"###);
+        run_test_error(r###"sprintf("%0$d", 1)"###);
+        run_test2(r###"sprintf("%1$s %1$s", "x")"###);
     }
 
     #[test]

@@ -551,7 +551,15 @@ impl Value {
     ///
     pub(crate) fn is_frozen(&self) -> bool {
         match self.try_rvalue() {
-            Some(rv) => rv.is_frozen(),
+            Some(rv) => {
+                // All Numeric values are immutable/frozen in Ruby, including
+                // the heap-allocated ones (Bignum, out-of-range Float,
+                // Complex, Rational).
+                matches!(
+                    rv.ty(),
+                    ObjTy::BIGNUM | ObjTy::FLOAT | ObjTy::COMPLEX | ObjTy::RATIONAL
+                ) || rv.is_frozen()
+            }
             None => true, // packed values are always frozen
         }
     }
@@ -990,6 +998,10 @@ impl Value {
 
     pub fn string_from_inner(inner: RStringInner) -> Self {
         RValue::new_string_from_inner(inner).pack()
+    }
+
+    pub fn string_from_inner_with_class(inner: RStringInner, class_id: ClassId) -> Self {
+        RValue::new_string_from_inner_with_class(inner, class_id).pack()
     }
 
     pub fn array(ary: ArrayInner) -> Self {
