@@ -1166,6 +1166,41 @@ mod tests {
     }
 
     #[test]
+    fn method_parameters_anonymous_and_nokey() {
+        // Anonymous *, **, & report :*, :**, :&; `**nil` -> [[:nokey]];
+        // `...` -> [[:rest,:*],[:keyrest,:**],[:block,:&]]. Native
+        // rest stays [[:rest]] (no synthetic name).
+        run_test_with_prelude(
+            r##"
+            o = Object.new
+            def o.ab(&); end
+            [
+              C.new.method(:un_splat).parameters,
+              C.new.method(:un_kwrest).parameters,
+              C.new.method(:nokey).parameters,
+              C.new.method(:fwd).parameters,
+              C.instance_method(:fwd).parameters,
+              C.new.method(:under).parameters,
+              C.new.method(:named).parameters,
+              o.method(:ab).parameters,
+              "foo".method(:delete!).parameters,
+              "foo".method(:+).parameters,
+            ]
+            "##,
+            r##"
+            class C
+              def un_splat(*); end
+              def un_kwrest(**); end
+              def nokey(**nil); end
+              def fwd(...); end
+              def under(_, _, _ = 1, *_, _:, _: 2, **_, &_); end
+              def named(a, *rest, k:, **kw, &blk); end
+            end
+            "##,
+        );
+    }
+
+    #[test]
     fn umethod_arity_keyword_args() {
         run_test_with_prelude(
             r##"
