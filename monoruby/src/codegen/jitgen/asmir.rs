@@ -1075,6 +1075,31 @@ pub(super) enum AsmInst {
     },
 
     ///
+    /// Specialized argument setup for a pure forwarding call `g(...)`.
+    ///
+    /// `f`'s `...` rest is already an `Array` in `rest_slot`. When the
+    /// runtime array length equals `g`'s (compile-time-constant) required
+    /// arity, copy the elements straight into the callee frame with no
+    /// `Array` re-parse. Any guard miss (`rest_slot` not an `Array`,
+    /// length mismatch, or a non-nil forwarded kw-rest) is a clean
+    /// side-exit to the generic `jit_generic_set_arguments` path *before*
+    /// any callee-frame write, so no rollback is needed.
+    ///
+    /// ### out
+    /// - rax: None for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    SetArgumentsForwarded {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        recv: SlotId,
+        rest_slot: SlotId,
+        kwrest_guard: Option<SlotId>,
+    },
+
+    ///
     /// Set up a callee method frame for send.
     ///
     /// ### destroy

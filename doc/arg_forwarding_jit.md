@@ -59,7 +59,40 @@ kw Hash は次を**除き** Ruby から決して観測されない:
 
 ## 3. 段階的実装計画
 
-### Increment 1 — f→g 呼び出しの specialize（Array は温存）
+### Increment 1 — f→g 呼び出しの specialize（Array は温存）【実装済み — required-only g】
+
+実装済みスコープ（第一段）: 純転送 `g(...)`（`callsite.forwarding`
+かつ `pos_num==1 && splat_pos==[0]`）で、`g` が iseq かつ
+**required 引数のみ**（`no_keyword && !is_rest && opt_num==0 &&
+post_num==0`）の場合。`AsmInst::SetArgumentsForwarded`
+（`asmir.rs`、lowering は `asmir/compile/method_call.rs::
+jit_set_arguments_forwarded`、`object_send_splat_arg0` /
+`object_send_handle_arguments` の実証済みパターンを範とする）を
+`compile/method_call.rs::set_arguments` の非 simple 分岐に追加。
+
+asm（書込み前ガード → ミスは無ロールバックでフォールバック）:
+self を `LFP_SELF` へ → `rest_slot` の `...` Array を読み、tag/
+`RVALUE_OFFSET_TY==ARRAY` を検査 → `RVALUE_OFFSET_ARY_CAPA`/
+`HEAP_LEN`/`INLINE`/`HEAP_PTR` で len と要素基底を取得（inline/heap
+両対応）→ **長さガード `cmpq len,(g_arity)`（g_arity は即値）** →
+forwarded kw_rest が非 nil なら脱出 → src 昇順 / dst（callee LFP）
+降順の 2 ポインタコピーループ → 成功 sentinel `rax=NIL_VALUE`
+（`handle_error` は `testq rax,rax; jeq`）。ガードミスは page1 の
+`fallback:` で既存 `jit_set_arguments`（`jit_generic_set_arguments`）
+にバイト一致で委譲。Array は温存され deopt は自明に安全。
+
+検証: Ruby 4.0.4 比較ハーネスで forwarding 16/16・`method_call`
+73/73 グリーン。新規 9 ケース（inline≤5 / heap>5（`ARRAY_INLINE_CAPA=5`）
+/ 0-arity / arity 不一致→ArgumentError 等価 / kw 転送→フォールバック
+/ block 透過 / 先頭引数→非ゲート / 3 段連鎖＋値コピー不変）。
+ゲート発火を JIT 実コンパイル下で計装確認（fallback への暗黙退避
+ではないことを実証）。フルスイープで環境性失敗集合に対し新規退行ゼロ。
+
+未対応（フォールバック据置・後続段）: 先頭引数つき `g(x, ...)`、
+opt/post/rest/kw を持つ `g`、`super` 暗黙転送（Increment 4）。
+
+---
+（以下は当初計画の原文）
 
 最も低リスク。`f` の caller が確保した rest Array を**温存**したまま、
 `g(...)` 呼び出しのみを最適化する。Array が実在するため deopt は

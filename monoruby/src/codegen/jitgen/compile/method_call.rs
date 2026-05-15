@@ -986,6 +986,32 @@ impl AbstractState {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
+        } else if callsite.forwarding
+            && callsite.pos_num == 1
+            && callsite.splat_pos.as_slice() == [0usize]
+            && callee.is_iseq().is_some()
+            && callee.no_keyword()
+            && !callee.is_rest()
+            && callee.opt_num() == 0
+            && callee.post_num() == 0
+        {
+            // Pure forwarding `g(...)` where `g` takes only required
+            // positionals: `f`'s `...` rest is already an Array in
+            // `callsite.args`; copy it straight into the callee frame
+            // (length-guarded) instead of re-parsing via the runtime.
+            let recv = callsite.recv;
+            let rest_slot = callsite.args;
+            let kwrest_guard = callsite.hash_splat_pos.first().copied();
+            self.write_back_recv_and_callargs(ir, callsite);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                recv,
+                rest_slot,
+                kwrest_guard,
+            });
+            ir.handle_error(error);
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);

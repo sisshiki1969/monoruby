@@ -560,6 +560,101 @@ impl Codegen {
     }
 
     ///
+    /// Specialized argument setup for a pure forwarding call `g(...)`.
+    ///
+    /// `f`'s `...` rest is already an `Array` in `rest_slot`. If, at
+    /// runtime, that value is an `Array` whose length equals `g`'s
+    /// compile-time-constant required arity (and the forwarded kw-rest is
+    /// nil), copy the elements straight into the callee frame with no
+    /// `Array` re-parse. Every guard runs *before* any callee-frame write,
+    /// so a miss is a clean jump to the generic `jit_generic_set_arguments`
+    /// path with nothing to roll back.
+    ///
+    /// ### out
+    /// - rax: NIL_VALUE on success (non-zero), None(0) for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    pub(super) fn jit_set_arguments_forwarded(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+        g_arity: usize,
+        recv: SlotId,
+        rest_slot: SlotId,
+        kwrest_guard: Option<SlotId>,
+    ) {
+        let fallback = self.jit.label();
+        let heap = self.jit.label();
+        let got = self.jit.label();
+        let loop0 = self.jit.label();
+        let done = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            // set self
+            movq rax, [rbp - (rbp_local(recv))];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+            // load forwarded `...` rest array
+            movq rcx, [rbp - (rbp_local(rest_slot))];
+            testq rcx, 0b111;
+            jnz  fallback;
+            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            jne  fallback;
+            // rax = len, rsi = element base (inline vs heap)
+            movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  heap;
+            lea  rsi, [rcx + (RVALUE_OFFSET_INLINE)];
+            jmp  got;
+        heap:
+            movq rax, [rcx + (RVALUE_OFFSET_HEAP_LEN)];
+            movq rsi, [rcx + (RVALUE_OFFSET_HEAP_PTR)];
+        got:
+            // speculative length guard (g_arity baked as immediate)
+            cmpq rax, (g_arity);
+            jne  fallback;
+        }
+        if let Some(kw) = kwrest_guard {
+            monoasm! { &mut self.jit,
+                // only fast-path when no keywords are actually forwarded
+                cmpq [rbp - (rbp_local(kw))], (NIL_VALUE);
+                jne  fallback;
+            }
+        }
+        monoasm! { &mut self.jit,
+            // two-pointer copy: src ascends, dst (callee LFP) descends
+            lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
+            movq r8, (g_arity);
+            testq r8, r8;
+            jz   done;
+        loop0:
+            movq rax, [rsi];
+            movq [rdx], rax;
+            addq rsi, 8;
+            subq rdx, 8;
+            subq r8, 1;
+            jnz  loop0;
+        done:
+            movq rax, (NIL_VALUE);   // success sentinel for handle_error
+            jmp  exit;
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        fallback:
+        }
+        self.jit_set_arguments(callid, fid, offset);
+        monoasm! { &mut self.jit,
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+        monoasm! { &mut self.jit,
+        exit:
+        }
+    }
+
+    ///
     /// ### in
     /// - rcx: arg0
     ///

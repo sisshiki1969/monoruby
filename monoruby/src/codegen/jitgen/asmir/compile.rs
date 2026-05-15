@@ -333,6 +333,25 @@ impl Codegen {
                 let offset = store[callee_fid].get_offset();
                 self.jit_set_arguments(callid, callee_fid, offset);
             }
+            AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                recv,
+                rest_slot,
+                kwrest_guard,
+            } => {
+                let offset = store[callee_fid].get_offset();
+                let g_arity = store[callee_fid].req_num();
+                self.jit_set_arguments_forwarded(
+                    callid,
+                    callee_fid,
+                    offset,
+                    g_arity,
+                    recv,
+                    rest_slot,
+                    kwrest_guard,
+                );
+            }
 
             AsmInst::Ret => {
                 self.epilogue();

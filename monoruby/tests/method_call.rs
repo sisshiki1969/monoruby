@@ -1983,3 +1983,159 @@ fn method_missing_hook_via_singleton_class() {
         "#,
     );
 }
+
+#[test]
+fn forwarding_specialized_inline() {
+    // required-only callee, pure `...` forwarding: hits the
+    // SetArgumentsForwarded fast path, inline-array branch (<=5 args).
+    run_test_with_prelude(
+        r#"
+        $r = []
+        10.times { $r << f(1, 2, 3) }
+        $r << f(-7, 8, 99)
+        $r
+        "#,
+        r#"
+        def g(a, b, c) = a * 100 + b * 10 + c
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_heap() {
+    // 7 required params > ARRAY_INLINE_CAPA(5): exercises the heap
+    // (RVALUE_OFFSET_HEAP_PTR/HEAP_LEN) branch of the copy.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { |i| $r << f(i, i+1, i+2, i+3, i+4, i+5, i+6) }
+        $r
+        "#,
+        r#"
+        def g(a, b, c, d, e, f, g) = [a, b, c, d, e, f, g].sum
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_zero_arity() {
+    // g_arity == 0: empty forwarded array, copy loop skipped.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { $r << f }
+        $r
+        "#,
+        r#"
+        def g = 12345
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_arity_mismatch_falls_back() {
+    // Length guard miss must fall back to the generic path and raise
+    // ArgumentError exactly like CRuby (no crash / no silent accept).
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times do
+          begin
+            f(1, 2)
+          rescue ArgumentError => e
+            $r << e.class.name
+          end
+        end
+        $r
+        "#,
+        r#"
+        def g(a, b, c) = a + b + c
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_kwargs_falls_back() {
+    // Non-nil forwarded kw-rest must take the fallback; CRuby raises
+    // ArgumentError because `g` accepts no keywords.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times do
+          $r << f(7)
+          begin
+            f(7, kw: 1)
+          rescue ArgumentError, TypeError => e
+            $r << e.class.name
+          end
+        end
+        $r
+        "#,
+        r#"
+        def g(a) = a * 3
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_block_passthrough() {
+    // Forwarded block must still reach the callee on the fast path.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { $r << f(5) { |x| x + 1 } }
+        $r
+        "#,
+        r#"
+        def g(a) = yield(a * 2)
+        def f(...) = g(...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_leading_arg_falls_back() {
+    // `g(x, ...)` => splat_pos != [0]; must not hit the specialized
+    // gate, and stay correct via the generic path.
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times { $r << f(2, 3, 4) }
+        $r
+        "#,
+        r#"
+        def g(a, b, c, d) = [a, b, c, d]
+        def f(...) = g(10, ...)
+        "#,
+    );
+}
+
+#[test]
+fn forwarding_specialized_chain_and_mutation() {
+    // Deep forwarding chain + ensure the forwarded array elements are
+    // copied by value (callee mutation must not corrupt the caller).
+    run_test_with_prelude(
+        r#"
+        $r = []
+        30.times do
+          a = [1, 2, 3]
+          $r << h(*a)
+          $r << a
+        end
+        $r
+        "#,
+        r#"
+        def g(x, y, z)
+          x, y, z = z, x, y
+          x * 100 + y * 10 + z
+        end
+        def f(...) = g(...)
+        def h(...) = f(...)
+        "#,
+    );
+}
