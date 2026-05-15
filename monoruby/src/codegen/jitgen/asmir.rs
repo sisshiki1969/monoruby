@@ -462,6 +462,22 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn generic_binop(
+        &mut self,
+        state: &AbstractFrame,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::GenericBinOp {
+            lhs,
+            rhs,
+            func,
+            using_xmm,
+        });
+    }
+
     pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId) {
         let using_xmm = state.get_using_xmm();
         let error = self.new_error(state);
@@ -1230,6 +1246,27 @@ pub(super) enum AsmInst {
         brkind: BrKind,
         branch_dest: JitLabel,
     },
+    ///
+    /// Generic binary operation through a `BinaryOpFn` C helper.
+    ///
+    /// Calls `func(vm, globals, lhs, rhs) -> Option<Value>`; the
+    /// result (or 0 = error) is left in rax. Emits **no**
+    /// receiver-class guard, so the site never deopts on receiver
+    /// class variance — used for polymorphic BinCmp/BinOp.
+    ///
+    /// ### out
+    /// - rax: result `Option<Value>`
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    GenericBinOp {
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+
     ///
     /// Compare `lhs and `rhs` with "===" and return the result in rax.
     ///

@@ -81,10 +81,47 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                let _ = polymorphic;
-                self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+                if polymorphic {
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    state.def_rax2acc(ir, dst);
+                    Ok(CompileResult::Continue)
+                } else {
+                    self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+                }
             }
         }
+    }
+
+    ///
+    /// Emit a non-deopting polymorphic comparison: a generic
+    /// `cmp_*_values` C-call with **no receiver-class guard**, so the
+    /// site never side-exits on receiver class variance (the rubykon
+    /// `== nil` vs `== Symbol` pattern). The class-version guard is
+    /// kept (it tracks the global class-version counter, not the
+    /// receiver class, so it only fires on a real `==`/`<=>`
+    /// redefinition — never on class variance, which preserves the
+    /// Part B monotone-recompile invariant). Result `Option<Value>`
+    /// is left in rax.
+    ///
+    fn emit_generic_cmp(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) {
+        state.write_back_slots(ir, &[lhs, rhs]);
+        self.guard_class_version(state, ir, true);
+        let error = ir.new_error(state);
+        ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind));
+        ir.handle_error(error);
+        // The C helper can run arbitrary Ruby (user-defined `==`,
+        // `coerce`); invalidate cached guards so subsequent
+        // instructions re-establish them.
+        state.unset_class_version_guard();
+        state.unset_const_version_guard();
+        state.unset_side_effect_guard();
     }
 
     pub(super) fn binary_cmp_br(
@@ -100,7 +137,6 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        let _ = polymorphic;
         match state.binop_type(lhs, rhs, ic) {
             BinaryOpType::Integer(mode) => {
                 if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {
@@ -129,6 +165,12 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                if polymorphic {
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    let src_idx = bc_pos + 1;
+                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                    return Ok(CompileResult::Continue);
+                }
                 let res = self
                     .call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)?;
                 if let CompileResult::Continue = res {
@@ -140,6 +182,26 @@ impl<'a> JitContext<'a> {
                 Ok(res)
             }
         }
+    }
+}
+
+///
+/// The generic `Option<Value>`-returning C comparison helper for
+/// *kind* — the same `cmp_*_values` functions the VM's generic
+/// binop path calls. These dispatch the fixnum/float fast paths
+/// internally and fall back to live method lookup for heap objects,
+/// so they never require a receiver-class guard.
+///
+fn cmp_generic_fn(kind: CmpKind) -> crate::executor::BinaryOpFn {
+    use crate::executor::op;
+    match kind {
+        CmpKind::Eq => op::cmp_eq_values,
+        CmpKind::Ne => op::cmp_ne_values,
+        CmpKind::Lt => op::cmp_lt_values,
+        CmpKind::Le => op::cmp_le_values,
+        CmpKind::Gt => op::cmp_gt_values,
+        CmpKind::Ge => op::cmp_ge_values,
+        CmpKind::TEq => op::cmp_teq_values,
     }
 }
 

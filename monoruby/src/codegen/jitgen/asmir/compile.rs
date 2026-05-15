@@ -595,6 +595,14 @@ impl Codegen {
                 self.handle_error(&labels[error]);
             }
 
+            AsmInst::GenericBinOp {
+                lhs,
+                rhs,
+                func,
+                using_xmm,
+            } => {
+                self.generic_binop(lhs, rhs, func, using_xmm);
+            }
             AsmInst::ArrayTEq {
                 lhs,
                 rhs,
@@ -976,6 +984,31 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::array_teq);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+    }
+
+    ///
+    /// Call a generic `BinaryOpFn` C helper with no receiver-class
+    /// guard. Mirrors the VM's `call_binop` calling convention
+    /// (rdi=&Executor, rsi=&Globals, rdx=lhs, rcx=rhs); result
+    /// `Option<Value>` in rax.
+    ///
+    fn generic_binop(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) {
+        self.xmm_save(using_xmm);
+        self.load_rdx(lhs);
+        self.load_rcx(rhs);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (func);
             call rax;
         );
         self.xmm_restore(using_xmm);

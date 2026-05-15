@@ -292,7 +292,12 @@ impl<'a> JitContext<'a> {
     /// ### destroy
     /// - rax
     ///
-    fn guard_class_version(&self, state: &mut AbstractState, ir: &mut AsmIr, with_recovery: bool) {
+    pub(super) fn guard_class_version(
+        &self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        with_recovery: bool,
+    ) {
         if state.class_version_guard() {
             return;
         }
