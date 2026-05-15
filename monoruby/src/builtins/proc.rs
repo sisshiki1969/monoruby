@@ -182,7 +182,11 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     let key_tag = Value::symbol(IdentId::get_id("key"));
     let keyreq_tag = Value::symbol(IdentId::get_id("keyreq"));
     let keyrest_tag = Value::symbol(IdentId::get_id("keyrest"));
+    let nokey_tag = Value::symbol(IdentId::get_id("nokey"));
     let block_tag = Value::symbol(IdentId::get_id("block"));
+    let star_sym = Value::symbol(IdentId::get_id("*"));
+    let dstar_sym = Value::symbol(IdentId::get_id("**"));
+    let amp_sym = Value::symbol(IdentId::get_id("&"));
     let mut result = vec![];
     let args_names = &params.args_names;
     let mut name_idx = 0;
@@ -212,10 +216,14 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     // the runtime arg dispatcher to absorb extras under block style.
     if params.is_rest().is_some() {
         if !params.rest_is_implicit() {
-            let entry = if let Some(Some(name)) = args_names.get(name_idx) {
-                Value::array2(rest_tag, Value::symbol(*name))
-            } else {
-                Value::array1(rest_tag)
+            let entry = match args_names.get(name_idx) {
+                Some(Some(name)) => Value::array2(rest_tag, Value::symbol(*name)),
+                // A slot exists but is unnamed: Ruby-level anonymous
+                // `*` (incl. the rest synthesized by `...`). CRuby
+                // reports its name as `:*`.
+                Some(None) => Value::array2(rest_tag, star_sym),
+                // No slot at all: a native/builtin rest -> `[:rest]`.
+                None => Value::array1(rest_tag),
             };
             result.push(entry);
         }
@@ -241,17 +249,36 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
         result.push(Value::array2(tag, Value::symbol(*kw_name)));
     }
     // keyword rest
-    if params.kw_rest.is_some() {
-        let entry = if let Some(name) = params.kw_rest_name() {
-            Value::array2(keyrest_tag, Value::symbol(name))
+    if let Some(slot) = params.kw_rest {
+        if params.kw_rest_name() == Some(IdentId::get_id("nil")) {
+            // `**nil` is modeled by the parser as a kwrest literally
+            // named `nil` (impossible as a real identifier). CRuby
+            // reports it as the lone parameter `[[:nokey]]`.
+            result.push(Value::array1(nokey_tag));
         } else {
-            Value::array1(keyrest_tag)
-        };
-        result.push(entry);
+            let entry = match params.kw_rest_name() {
+                Some(name) => Value::array2(keyrest_tag, Value::symbol(name)),
+                // Distinguish a Ruby-level anonymous `**` (a slot
+                // exists, unnamed -> CRuby `:**`) from a native
+                // kwrest (no slot -> `[:keyrest]`).
+                None => match args_names.get(slot.0 as usize - 1) {
+                    Some(_) => Value::array2(keyrest_tag, dstar_sym),
+                    None => Value::array1(keyrest_tag),
+                },
+            };
+            result.push(entry);
+        }
     }
     // block param
     if let Some(block_name) = params.block_param {
-        result.push(Value::array2(block_tag, Value::symbol(block_name)));
+        // An empty name is the parser's marker for an anonymous `&`
+        // (and the block synthesized by `...`); CRuby reports `:&`.
+        let entry = if block_name == IdentId::get_id("") {
+            Value::array2(block_tag, amp_sym)
+        } else {
+            Value::array2(block_tag, Value::symbol(block_name))
+        };
+        result.push(entry);
     }
     Value::array_from_vec(result)
 }
