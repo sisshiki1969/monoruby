@@ -284,6 +284,23 @@ impl<'pr> Lowerer<'pr> {
         Ok(())
     }
 
+    /// Register block-local shadow variables (`{ |x; a, b| ... }`).
+    /// They are fresh locals scoped to the block body, so adding them
+    /// to the block's (already fresh) lvar table gives the correct
+    /// shadowing behaviour.
+    fn collect_block_local_shadows(
+        &mut self,
+        locals: &prism::NodeList<'pr>,
+    ) -> Result<(), MonorubyErr> {
+        for n in locals.iter() {
+            if let Some(blv) = n.as_block_local_variable_node() {
+                let name = constant_name(&blv.name())?;
+                self.lvars.insert(&name);
+            }
+        }
+        Ok(())
+    }
+
     fn lower_statements_into_vec(
         &mut self,
         node: &StatementsNode<'pr>,
@@ -515,6 +532,31 @@ impl<'pr> Lowerer<'pr> {
                 self.lower_call(&n.call(), location_to_loc(&n.call().location()))?
             }
             prism::Node::BeginNode { .. } => self.lower_begin(&node.as_begin_node().unwrap())?,
+            // `BEGIN { ... }` / `END { ... }`. Full Ruby semantics hoist
+            // the body before / after the program; for the common cases
+            // (notably `eval("BEGIN { ... }")`) lowering the body inline
+            // at its source position is sufficient and, crucially, does
+            // not abort the process with a FatalError.
+            prism::Node::PreExecutionNode { .. } => {
+                let n = node.as_pre_execution_node().unwrap();
+                match n.statements() {
+                    Some(stmts) => self.lower_statements_compact(&stmts, loc)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                }
+            }
+            prism::Node::PostExecutionNode { .. } => {
+                let n = node.as_post_execution_node().unwrap();
+                match n.statements() {
+                    Some(stmts) => self.lower_statements_compact(&stmts, loc)?,
+                    None => Node {
+                        kind: NodeKind::Nil,
+                        loc,
+                    },
+                }
+            }
             prism::Node::MultiWriteNode { .. } => {
                 self.lower_multi_write(&node.as_multi_write_node().unwrap())?
             }
@@ -1475,7 +1517,44 @@ impl<'pr> Lowerer<'pr> {
         let mut elements: Vec<Node> = Vec::new();
         let mut all_const = true;
         for n in node.elements().iter() {
-            let lowered = self.lower_node(&n)?;
+            // `[1, foo: 2, bar: 3]` — Prism gathers the trailing bare
+            // keyword pairs into a `KeywordHashNode`; in an array
+            // context they collapse into a single trailing Hash
+            // element (`[1, {foo: 2, bar: 3}]`).
+            let lowered = if let prism::Node::KeywordHashNode { .. } = n {
+                let kh = n.as_keyword_hash_node().unwrap();
+                let kh_loc = location_to_loc(&kh.location());
+                let mut pairs: Vec<(Node, Node)> = Vec::new();
+                let mut splat: Vec<Node> = Vec::new();
+                for elem in kh.elements().iter() {
+                    match elem {
+                        prism::Node::AssocNode { .. } => {
+                            let assoc = elem.as_assoc_node().unwrap();
+                            let key = self.lower_node(&assoc.key())?;
+                            let value = self.lower_node(&assoc.value())?;
+                            pairs.push((key, value));
+                        }
+                        prism::Node::AssocSplatNode { .. } => {
+                            let s = elem.as_assoc_splat_node().unwrap();
+                            let inner = match s.value() {
+                                Some(v) => self.lower_node(&v)?,
+                                None => Node {
+                                    kind: NodeKind::Nil,
+                                    loc: location_to_loc(&s.location()),
+                                },
+                            };
+                            splat.push(inner);
+                        }
+                        other => return Err(self.unsupported("array kwarg element", &other)),
+                    }
+                }
+                Node {
+                    kind: NodeKind::Hash(pairs, splat),
+                    loc: kh_loc,
+                }
+            } else {
+                self.lower_node(&n)?
+            };
             if !is_constant_literal(&lowered.kind) {
                 all_const = false;
             }
@@ -2829,16 +2908,12 @@ impl<'pr> Lowerer<'pr> {
                     Some(p) => match p {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
-                            if bp.locals().iter().next().is_some() {
-                                return Err(this.unsupported_node(
-                                    "lambda shadow locals",
-                                    location_to_loc(&p.location()),
-                                ));
-                            }
-                            match bp.parameters() {
+                            let params = match bp.parameters() {
                                 Some(pn) => this.lower_parameters(&pn)?,
                                 None => Vec::new(),
-                            }
+                            };
+                            this.collect_block_local_shadows(&bp.locals())?;
+                            params
                         }
                         // `->(a, b) { ... }` with full ParametersNode
                         // (no BlockParametersNode wrapper) is allowed
@@ -2898,16 +2973,12 @@ impl<'pr> Lowerer<'pr> {
                     Some(p) => match p {
                         prism::Node::BlockParametersNode { .. } => {
                             let bp = p.as_block_parameters_node().unwrap();
-                            if bp.locals().iter().next().is_some() {
-                                return Err(this.unsupported_node(
-                                    "block shadow locals",
-                                    location_to_loc(&p.location()),
-                                ));
-                            }
-                            match bp.parameters() {
+                            let params = match bp.parameters() {
                                 Some(pn) => this.lower_parameters(&pn)?,
                                 None => Vec::new(),
-                            }
+                            };
+                            this.collect_block_local_shadows(&bp.locals())?;
+                            params
                         }
                         prism::Node::NumberedParametersNode { .. } => {
                             // `_1`, `_2`, … — Prism reports the max

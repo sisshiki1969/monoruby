@@ -1259,6 +1259,21 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - eval(expr, bind, fname = "(eval)", lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
+///
+/// A FatalError from compiling the eval'd source (e.g. the prism
+/// lowerer hitting a node monoruby does not yet support) would
+/// otherwise propagate uncatchably and abort the process. Inside
+/// `eval`, downgrade it to a catchable SyntaxError — the closest
+/// CRuby analogue for "this source cannot be run here" — so callers
+/// can `rescue` it.
+fn downgrade_eval_fatal(err: MonorubyErr) -> MonorubyErr {
+    if err.is_fatal() {
+        MonorubyErr::new(MonorubyErrKind::Syntax, err.message().to_string())
+    } else {
+        err
+    }
+}
+
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
@@ -1283,10 +1298,14 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         } else {
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
-        globals.compile_script_binding(expr, fname, binding, lineno)?;
+        globals
+            .compile_script_binding(expr, fname, binding, lineno)
+            .map_err(downgrade_eval_fatal)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
+        let fid = globals
+            .compile_script_eval(expr, fname, caller_cfp, None, lineno)
+            .map_err(downgrade_eval_fatal)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to
@@ -1655,7 +1674,10 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => Value::object(OBJECT_CLASS),
     };
     let bh = lfp.expect_block()?;
-    match vm.invoke_block_once(globals, bh, &[tag]) {
+    vm.push_catch_tag(tag);
+    let res = vm.invoke_block_once(globals, bh, &[tag]);
+    vm.pop_catch_tag();
+    match res {
         Ok(val) => Ok(val),
         Err(err) => {
             if let MonorubyErrKind::Throw(throw_tag, throw_val) = err.kind() {
@@ -1675,13 +1697,29 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 #[monoruby_builtin]
 fn throw_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let tag = lfp.arg(0);
     let value = lfp.try_arg(1).unwrap_or(Value::nil());
+    // No active `catch` for this tag: raise a rescuable
+    // `UncaughtThrowError` (< ArgumentError) rather than letting the
+    // control-flow `Throw` escape uncatchably.
+    if !vm.is_catch_tag_active(tag) {
+        let msg = format!("uncaught throw {}", tag.inspect(&globals.store));
+        if let Some(klass) = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
+        {
+            return Err(MonorubyErr::new(
+                MonorubyErrKind::Other(klass.as_class_id()),
+                msg,
+            ));
+        }
+        return Err(MonorubyErr::argumenterr(msg));
+    }
     Err(MonorubyErr::throw(tag, value))
 }
 
@@ -2886,6 +2924,56 @@ mod tests {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+        // `BEGIN { ... }` (PreExecutionNode) inside eval, incl. `return`.
+        run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
+        // Unsupported eval'd syntax is a catchable SyntaxError, not a
+        // process-aborting FatalError.
+        run_test(
+            r##"
+        begin
+          eval("x=1; y=2; x..y if x")
+          :no_raise
+        rescue SyntaxError
+          :syntax
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn catch_throw_uncaught() {
+        run_test(r##"catch(:x) { throw :x, 42 }"##);
+        run_test(r##"catch(:a) { catch(:b) { throw :a, 7 } }"##);
+        run_test(
+            r##"
+        begin
+          throw :nope
+        rescue UncaughtThrowError => e
+          [e.is_a?(ArgumentError), e.message]
+        end
+        "##,
+        );
+        run_test_error(r##"throw :nope"##);
+    }
+
+    #[test]
+    fn block_shadow_locals() {
+        run_test(
+            r##"
+        x = 10
+        [1, 2, 3].each { |i; x| x = i * 100 }
+        a = nil
+        f = ->(n; a) { a = n + 1; a }
+        [x, f.call(2), a.inspect, (proc { |; z| z = 9; z }.call)]
+        "##,
+        );
+    }
+
+    #[test]
+    fn array_implicit_hash_element() {
+        run_test(r##"[args: [1, 2], kw: {a: "b"}]"##);
+        run_test(r##"[1, foo: 2, bar: 3]"##);
+        run_test(r##"[0, {a: 1}, b: 2]"##);
     }
 
     #[test]
