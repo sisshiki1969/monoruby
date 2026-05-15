@@ -3335,8 +3335,6 @@ mod tests {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
-        // `BEGIN { ... }` (PreExecutionNode) inside eval, incl. `return`.
-        run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
         // Unsupported eval'd syntax is a catchable SyntaxError, not a
         // process-aborting FatalError.
         run_test(
@@ -3349,6 +3347,16 @@ mod tests {
         end
         "##,
         );
+    }
+
+    #[test]
+    fn eval_begin_block() {
+        // `BEGIN { ... }` (PreExecutionNode), incl. `return`, is only
+        // lowered by the Prism backend; ruruby-parse rejects it.
+        if parser_is_ruruby() {
+            return;
+        }
+        run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
     }
 
     #[test]
@@ -3369,6 +3377,11 @@ mod tests {
 
     #[test]
     fn block_shadow_locals() {
+        // Block-local shadow vars (`|x; a|`) are only lowered by the
+        // Prism backend; ruruby-parse raises a SyntaxError.
+        if parser_is_ruruby() {
+            return;
+        }
         run_test(
             r##"
         x = 10
