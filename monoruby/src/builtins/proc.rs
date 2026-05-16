@@ -133,9 +133,10 @@ fn source_location(
     let proc = Proc::new(lfp.self_val());
     // fallback: use the proc's own ISeq location
     let func_id = proc.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
+    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        // Absolute path, consistent with Method#source_location.
+        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {

@@ -374,15 +374,24 @@ fn source_location(
     if method.method_missing_name().is_some() {
         return Ok(Value::nil());
     }
-    let func_id = method.func_id();
-    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
-        let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
-        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
-        Ok(Value::array2(file_name, line))
-    } else {
-        Ok(Value::nil())
+    Ok(iseq_source_location(&globals.store, method.func_id()).unwrap_or_else(Value::nil))
+}
+
+/// `[path, line]` for a method's iseq, or `nil` for a Rust-builtin /
+/// internal method. monoruby implements many core methods in Ruby
+/// under `~/.monoruby/`; CRuby's equivalents are C functions whose
+/// `source_location` is `nil` (or an `<internal:…>` marker), so we
+/// report `nil` for anything defined in that internal library rather
+/// than leaking an absolute install path.
+fn iseq_source_location(store: &Store, func_id: FuncId) -> Option<Value> {
+    let iseq = store.resolve_iseq(func_id)?;
+    let info = &store[iseq];
+    let path = info.sourceinfo.file_name().to_string();
+    if path.contains("/.monoruby/") {
+        return None;
     }
+    let line = Value::integer(info.sourceinfo.get_line(&info.loc) as i64);
+    Some(Value::array2(Value::string(path), line))
 }
 
 ///
@@ -403,15 +412,7 @@ fn usource_location(
     if method.method_missing_name().is_some() {
         return Ok(Value::nil());
     }
-    let func_id = method.func_id();
-    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
-        let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
-        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
-        Ok(Value::array2(file_name, line))
-    } else {
-        Ok(Value::nil())
-    }
+    Ok(iseq_source_location(&globals.store, method.func_id()).unwrap_or_else(Value::nil))
 }
 
 ///
