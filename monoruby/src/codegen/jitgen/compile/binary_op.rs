@@ -120,7 +120,15 @@ impl<'a> JitContext<'a> {
         state.write_back_slots(ir, &[lhs, rhs]);
         self.guard_class_version(state, ir, true);
         let error = ir.new_error(state);
-        ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind));
+        // Part C: `==`/`!=` get an inline immediate fast path with a
+        // generic C-call fallback; other cmp kinds use the plain
+        // generic C-call (Part 3-B).
+        match kind {
+            CmpKind::Eq | CmpKind::Ne => {
+                ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind))
+            }
+            _ => ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind)),
+        }
         ir.handle_error(error);
         // The C helper can run arbitrary Ruby (user-defined `==`,
         // `coerce`); invalidate cached guards so subsequent

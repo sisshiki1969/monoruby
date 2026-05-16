@@ -603,6 +603,15 @@ impl Codegen {
             } => {
                 self.generic_binop(lhs, rhs, func, using_xmm);
             }
+            AsmInst::OptEqCmp {
+                lhs,
+                rhs,
+                kind,
+                func,
+                using_xmm,
+            } => {
+                self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+            }
             AsmInst::ArrayTEq {
                 lhs,
                 rhs,
@@ -1012,6 +1021,75 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+    }
+
+    ///
+    /// `==` / `!=` with an inline immediate fast path.
+    ///
+    /// `rdx = lhs`, `rcx = rhs`. If BOTH are non-heap, non-flonum
+    /// immediates (Fixnum / nil / true / false / Symbol) the Ruby
+    /// `==`/`!=` result is exactly bit (identity) equality, so it is
+    /// produced inline. Float (`-0.0`/`0.0`, `NaN`), heap (`String`
+    /// content, custom `==`), `BigInt`, and mixed numeric all fall
+    /// through to the generic `cmp_*_values` C-call, which is
+    /// correct for them. No receiver-class guard.
+    ///
+    /// ### out
+    /// - rax: bool `Value` (fast path) or `Option<Value>` (slow)
+    ///
+    fn opt_eq_cmp(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) {
+        self.load_rdx(lhs);
+        self.load_rcx(rhs);
+        let slow = self.jit.label();
+        let done = self.jit.label();
+        // Heap iff (bits & 0b111) == 0; Flonum iff (bits & 0b011) == 0b010.
+        // Either operand heap/flonum -> generic C-call.
+        monoasm!( &mut self.jit,
+            movq rax, rdx;
+            andq rax, 0b111;
+            jz   slow;
+            movq rax, rdx;
+            andq rax, 0b011;
+            cmpq rax, 0b010;
+            jeq  slow;
+            movq rax, rcx;
+            andq rax, 0b111;
+            jz   slow;
+            movq rax, rcx;
+            andq rax, 0b011;
+            cmpq rax, 0b010;
+            jeq  slow;
+            // both identity-comparable immediates: result = bit-eq
+            xorq rax, rax;
+            cmpq rdx, rcx;
+        );
+        match kind {
+            CmpKind::Eq => self.set_eq(),
+            CmpKind::Ne => self.set_ne(),
+            _ => unreachable!("opt_eq_cmp only handles Eq/Ne"),
+        }
+        monoasm!( &mut self.jit,
+            jmp  done;
+        slow:
+        );
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (func);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        monoasm!( &mut self.jit,
+        done:
+        );
     }
 
     ///

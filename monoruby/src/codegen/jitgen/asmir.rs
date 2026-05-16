@@ -505,6 +505,32 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// `==` / `!=` with a YJIT-`opt_eq`-style inline fast path: when
+    /// both operands are non-heap, non-flonum immediates (Fixnum /
+    /// nil / true / false / Symbol) the result is exactly bit
+    /// equality; anything else (Float, heap, mixed numeric, custom
+    /// `==`) falls back to the generic `cmp_*_values` C-call. No
+    /// receiver-class guard (Part C, layered on Part 3-B).
+    ///
+    pub(super) fn opt_eq_cmp(
+        &mut self,
+        state: &AbstractFrame,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::OptEqCmp {
+            lhs,
+            rhs,
+            kind,
+            func,
+            using_xmm,
+        });
+    }
+
     pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId) {
         let using_xmm = state.get_using_xmm();
         let error = self.new_error(state);
@@ -1290,6 +1316,20 @@ pub(super) enum AsmInst {
     GenericBinOp {
         lhs: SlotId,
         rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+
+    ///
+    /// `==` / `!=` with an inline immediate fast path (YJIT
+    /// `opt_eq` style), generic `cmp_*_values` C-call fallback.
+    /// *kind* is `CmpKind::Eq` or `CmpKind::Ne`. Result `Value`
+    /// (fast path) or `Option<Value>` (slow path) in rax.
+    ///
+    OptEqCmp {
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
         func: crate::executor::BinaryOpFn,
         using_xmm: UsingXmm,
     },
