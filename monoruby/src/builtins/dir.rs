@@ -222,20 +222,30 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         None
     };
-    let sort = lfp.try_arg(3).map(|v| v.as_bool()).unwrap_or(true);
+    let sort = validate_sort(globals, lfp.try_arg(3))?;
 
     // Accept a single String pattern or an Array of String patterns.
+    // A NUL byte raises ArgumentError; the message differs between the
+    // single-String form ("nul-separated glob pattern is deprecated")
+    // and the Array form ("path name contains null byte"), matching
+    // CRuby.
     let patterns: Vec<String> = if pat_val.is_array_ty() {
         pat_val
             .as_array_inner()
             .iter()
-            .map(|v| Ok(v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string()))
+            .map(|v| {
+                let s = v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+                reject_array_pattern_nul(&s)?;
+                Ok(s)
+            })
             .collect::<Result<_>>()?
     } else {
-        vec![pat_val
+        let s = pat_val
             .coerce_to_path_rstring(vm, globals)?
             .to_str()?
-            .to_string()]
+            .to_string();
+        reject_single_pattern_nul(&s)?;
+        vec![s]
     };
 
     let all_matches = glob_impl(patterns, flags, base, sort)?;
@@ -276,12 +286,23 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         None
     };
-    let sort = lfp.try_arg(2).map(|v| v.as_bool()).unwrap_or(true);
+    let sort = validate_sort(globals, lfp.try_arg(2))?;
 
-    // Accept a single String pattern or an Array of String patterns.
+    // `Dir[pat]` with a single argument behaves like `Dir.glob(pat)`
+    // (single-String NUL message); with several it behaves like the
+    // Array form.
+    let single = pat_val.len() == 1;
     let patterns: Vec<String> = pat_val
         .iter()
-        .map(|v| Ok(v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string()))
+        .map(|v| {
+            let s = v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+            if single {
+                reject_single_pattern_nul(&s)?;
+            } else {
+                reject_array_pattern_nul(&s)?;
+            }
+            Ok(s)
+        })
         .collect::<Result<_>>()?;
 
     let all_matches: Vec<RStringInner> = glob_impl(patterns, flags, base, sort)?;
@@ -290,6 +311,41 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::array_from_iter(
         all_matches.into_iter().map(|s| Value::string_from_inner(s)),
     ))
+}
+
+/// Validate a `sort:` keyword argument. CRuby accepts only `true`/`false`
+/// (or an absent argument, defaulting to `true`); anything else raises
+/// `ArgumentError: expected true or false as sort: <inspect>`.
+fn validate_sort(globals: &Globals, arg: Option<Value>) -> Result<bool> {
+    match arg {
+        None => Ok(true),
+        Some(v) if v == Value::bool(true) => Ok(true),
+        Some(v) if v == Value::bool(false) => Ok(false),
+        Some(v) => Err(MonorubyErr::argumenterr(format!(
+            "expected true or false as sort: {}",
+            v.inspect(&globals.store)
+        ))),
+    }
+}
+
+/// A single-String glob pattern containing a NUL byte. CRuby reports
+/// this with a glob-specific (deprecation) message.
+fn reject_single_pattern_nul(s: &str) -> Result<()> {
+    if s.contains('\0') {
+        return Err(MonorubyErr::argumenterr(
+            "nul-separated glob pattern is deprecated",
+        ));
+    }
+    Ok(())
+}
+
+/// An Array element / multi-argument glob pattern containing a NUL byte.
+/// CRuby reports this with the generic string→path null-byte message.
+fn reject_array_pattern_nul(s: &str) -> Result<()> {
+    if s.contains('\0') {
+        return Err(MonorubyErr::argumenterr("path name contains null byte"));
+    }
+    Ok(())
 }
 
 fn glob_impl(
@@ -977,6 +1033,22 @@ mod tests {
             r#"Dir.glob("src/**/*.rs").include?("src/builtins/dir.rs")"#,
             // Array of patterns.
             r#"Dir.glob(["C*", "*.toml"])"#,
+        ]);
+    }
+
+    #[test]
+    fn glob_argument_validation() {
+        run_tests(&[
+            // `sort:` must be exactly true or false.
+            r#"Dir.glob("*", sort: 0) rescue [$!.class, $!.message]"#,
+            r#"Dir.glob("*", sort: nil) rescue [$!.class, $!.message]"#,
+            r#"Dir.glob("*", sort: "false") rescue [$!.class, $!.message]"#,
+            r#"Dir.glob("*", sort: true).class"#,
+            r#"Dir.glob("*", sort: false).class"#,
+            // NUL byte in a pattern is rejected.
+            r#"Dir.glob("a\0b") rescue [$!.class, $!.message]"#,
+            r#"Dir["a\0b"] rescue [$!.class, $!.message]"#,
+            r#"Dir.glob(["ok*", "a\0b"]) rescue [$!.class, $!.message]"#,
         ]);
     }
 
