@@ -776,6 +776,20 @@ impl ClassInfoTable {
     }
 
     ///
+    /// Get the method-table entry for *name* defined *directly* on
+    /// *class_id* (no ancestor walk). Used by `Method#super_method` to
+    /// locate the exact node a method (or its visibility shadow / alias)
+    /// is installed on.
+    ///
+    pub(crate) fn own_method_entry(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<&MethodTableEntry> {
+        self[class_id].methods.get(&name)
+    }
+
+    ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
     /// This fn checks whole superclass chain everytime called.

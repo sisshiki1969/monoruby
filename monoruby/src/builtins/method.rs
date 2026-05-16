@@ -456,6 +456,57 @@ fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(globals.store[method.owner()].get_module().get())
 }
 
+/// Resolve the method `super` would dispatch to from a method with
+/// `cur_func_id` (installed under `func_name`) on `start_class`'s
+/// ancestor chain. Returns `(func_id, owner, original_name)` of the
+/// super method, or `None` when there is no super (top of chain, or
+/// the method was `undef`'d in a closer ancestor).
+///
+/// Walks the linear ancestor chain rather than trusting the Method's
+/// `owner`: a `public :m` / `private :m` re-declaration or an
+/// `alias_method` installs a shadow entry whose `owner` is the
+/// re-declaring class, not the module that actually defines the body,
+/// so matching on `owner` alone would mis-locate (or wrap around to)
+/// the same method.
+fn resolve_super_entry(
+    store: &Store,
+    start_class: ClassId,
+    func_name: IdentId,
+    cur_func_id: FuncId,
+) -> Option<(FuncId, ClassId, IdentId)> {
+    let mut chain = vec![];
+    let mut node = Some(store[start_class].get_module());
+    while let Some(n) = node {
+        chain.push(n.id());
+        node = n.superclass();
+    }
+    // Deepest node whose own entry resolves to *this* func (covers the
+    // visibility-shadow / alias entries that share the same FuncId).
+    let mut def_idx = None;
+    for (i, &cid) in chain.iter().enumerate() {
+        if let Some(e) = store.own_method_entry(cid, func_name)
+            && e.func_id() == Some(cur_func_id)
+        {
+            def_idx = Some(i);
+        }
+    }
+    let start = def_idx? + 1;
+    for &cid in &chain[start..] {
+        if let Some(e) = store.own_method_entry(cid, func_name) {
+            match e.func_id() {
+                // An `undef` marker in a closer ancestor severs super.
+                None => return None,
+                Some(fid) if fid != cur_func_id => {
+                    return Some((fid, e.owner(), e.original_name()));
+                }
+                // Same FuncId again (another shadow) — keep walking.
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 ///
 /// ### Method#super_method
 ///
@@ -470,40 +521,14 @@ fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
         return Ok(Value::nil());
     }
     let receiver = method.receiver();
-    let owner = method.owner();
     let Some(name) = globals.store[method.func_id()].name() else {
         return Ok(Value::nil());
     };
-    // Walk the receiver's ancestor chain to the node that defines the
-    // current method, then resolve `name` from the node above it.
-    let mut node = Some(globals.store[receiver.class()].get_module());
-    while let Some(n) = node {
-        if n.id() == owner {
-            break;
-        }
-        node = n.superclass();
-    }
-    let Some(found) = node else {
-        return Ok(Value::nil());
-    };
-    let Some(sup) = found.superclass() else {
-        return Ok(Value::nil());
-    };
     let lookup = method.lookup_name(&globals.store);
-    match globals.store.check_method_for_class(sup.id(), name) {
-        // A module's synthetic `Object` superclass can re-resolve the
-        // *same* method (e.g. `Kernel#method` via `Object`); that is a
-        // wrap-around, not a real super.
-        Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => Ok(Value::new_method_named(
-                receiver,
-                func_id,
-                entry.owner(),
-                lookup,
-                entry.original_name(),
-            )),
-            _ => Ok(Value::nil()),
-        },
+    match resolve_super_entry(&globals.store, receiver.class(), name, method.func_id()) {
+        Some((func_id, owner, original)) => Ok(Value::new_method_named(
+            receiver, func_id, owner, lookup, original,
+        )),
         None => Ok(Value::nil()),
     }
 }
@@ -586,21 +611,11 @@ fn usuper_method(
     let Some(name) = globals.store[method.func_id()].name() else {
         return Ok(Value::nil());
     };
-    let found = globals.store[owner].get_module();
-    let Some(sup) = found.superclass() else {
-        return Ok(Value::nil());
-    };
     let lookup = method.lookup_name(&globals.store);
-    match globals.store.check_method_for_class(sup.id(), name) {
-        Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => Ok(Value::new_unbound_method_named(
-                func_id,
-                entry.owner(),
-                lookup,
-                entry.original_name(),
-            )),
-            _ => Ok(Value::nil()),
-        },
+    match resolve_super_entry(&globals.store, owner, name, method.func_id()) {
+        Some((func_id, sup_owner, original)) => Ok(Value::new_unbound_method_named(
+            func_id, sup_owner, lookup, original,
+        )),
         None => Ok(Value::nil()),
     }
 }
