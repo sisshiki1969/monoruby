@@ -190,23 +190,34 @@ fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// - bind(obj) -> Method
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind.html]
-// TODO: we must reject invalid objects for *obj*
 #[monoruby_builtin]
-fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    Ok(Value::new_method(
-        lfp.arg(0),
-        method.func_id(),
-        method.owner(),
-    ))
+    let recv = lfp.arg(0);
+    check_bind_receiver(globals, method.owner(), recv)?;
+    Ok(Value::new_method(recv, method.func_id(), method.owner()))
+}
+
+/// CRuby `convert_umethod_to_method` bind check: the receiver must be
+/// `kind_of?` the module the method was defined in. A genuine `Module`
+/// owner (mixin) binds freely; a `Class`/singleton-class owner requires
+/// the receiver's class (the metaclass, for a class/module receiver) to
+/// have `owner` in its ancestor chain.
+fn check_bind_receiver(globals: &mut Globals, owner: ClassId, recv: Value) -> Result<()> {
+    let class_of = if let Some(m) = recv.is_class_or_module() {
+        globals.store.get_metaclass(m.id()).id()
+    } else {
+        recv.class()
+    };
+    super::module::validate_bind_target(globals, owner, class_of)
 }
 
 fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
     if is_mm {
         return String::new();
     }
-    if let Some(iseq) = store[func_id].is_iseq() {
+    if let Some(iseq) = store.resolve_iseq(func_id) {
         let info = &store[iseq];
         format!(
             " {}:{}",
@@ -348,9 +359,9 @@ fn source_location(
         return Ok(Value::nil());
     }
     let func_id = method.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
+    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {
@@ -377,9 +388,9 @@ fn usource_location(
         return Ok(Value::nil());
     }
     let func_id = method.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
+    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {
@@ -704,15 +715,12 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         ));
     }
     let receiver = args.remove(0);
-    // The receiver must be kind_of? the owner module of the original
-    // method; otherwise CRuby raises TypeError. We rely on
-    // `invoke_func_inner` raising the appropriate error if the func is
-    // applied to an incompatible receiver class -- the spec covers both
-    // success and the error path through `bind_call` directly.
-    let _ = method.owner();
+    let owner = method.owner();
+    let func_id = method.func_id();
+    check_bind_receiver(globals, owner, receiver)?;
     vm.invoke_func_inner(
         globals,
-        method.func_id(),
+        func_id,
         receiver,
         &args,
         lfp.block(),

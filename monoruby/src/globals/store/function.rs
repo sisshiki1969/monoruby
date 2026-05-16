@@ -1229,6 +1229,22 @@ impl FuncInfo {
 
 impl Store {
     ///
+    /// Resolve `func_id` to its underlying iseq, following one level of
+    /// `define_method`-from-proc indirection.
+    ///
+    /// A proc-based `define_method` installs a `FuncKind::Proc` wrapper
+    /// whose own `kind` is not an iseq; the actual source lives in the
+    /// wrapped block's func. `source_location` must see through that.
+    ///
+    pub(crate) fn resolve_iseq(&self, func_id: FuncId) -> Option<ISeqId> {
+        match &self[func_id].kind {
+            FuncKind::ISeq(iseq) => Some(*iseq),
+            FuncKind::Proc(proc) => self[proc.func_id()].is_iseq(),
+            _ => None,
+        }
+    }
+
+    ///
     /// Check whether this function call is a *simple* call.
     ///
     /// *simple* call means that:
