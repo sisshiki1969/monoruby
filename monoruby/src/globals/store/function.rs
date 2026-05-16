@@ -1290,28 +1290,15 @@ impl Store {
         }
         let rest_idx = info.params().is_rest()?;
         let iseq = &self[iseq_id];
-        // Single basic block ⇒ no join can observe the deferred slot.
+        // Single basic block ⇒ no join can observe the deferred slot
+        // (the annotation is a frame-entry side note on the rest slot;
+        // with no join it never needs merge handling). The number of
+        // forwarding calls is unrestricted: each forwarding consume is
+        // either source-routed (sets the defer flag) or vetoes the
+        // caller-side skip (`needs_rest_array`), so any number / mix is
+        // safe — the caller builds the real `Array` unless *every*
+        // forwarding consume was source-routed.
         if iseq.bb_info.len() != 1 {
-            return None;
-        }
-        // Exactly one *forwarding* call. A `...`-forwarding method's
-        // synthetic rest can syntactically only appear in a forwarding
-        // argument position, so non-forwarding calls (`allocate`, plain
-        // method calls), assignments and the return value never read
-        // it. Requiring exactly one forwarding call ⇒ the rest is
-        // consumed by a single site (no mixed source-routed / array
-        // consumer hazard); combined with the single-BB check there is
-        // no join and no second reader. This admits multi-statement
-        // bodies like `def new(...); o = allocate; o.initialize(...);
-        // o; end`. The forwarding-shape / arity / nil-kwrest safety of
-        // that single call is enforced where the consumer routes it
-        // (the inline forwarding fast-path gate).
-        let forwarding_calls = iseq
-            .call_callsite_ids()
-            .into_iter()
-            .filter(|cid| self[*cid].forwarding)
-            .count();
-        if forwarding_calls != 1 {
             return None;
         }
         Some(SlotId(rest_idx + 1))

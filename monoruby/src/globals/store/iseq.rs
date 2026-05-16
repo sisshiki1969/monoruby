@@ -322,28 +322,6 @@ impl ISeqInfo {
     /// forwarding-call argument position, so a single call means the
     /// synthetic rest is consumed exactly once.
     ///
-    ///
-    /// `CallSiteId`s of every method-call instruction in the body
-    /// (opcodes 30..=33 in the short instruction class — the only
-    /// `TraceIr::MethodCall` encoding; the call site id is the low 32
-    /// bits of `op1`). Used by the D1 gate to count *forwarding* calls
-    /// (the only consumers of a `...`-forwarding method's synthetic
-    /// rest) independently of non-forwarding calls like `allocate`.
-    ///
-    pub(crate) fn call_callsite_ids(&self) -> Vec<CallSiteId> {
-        self.bytecode()
-            .iter()
-            .filter_map(|bc| {
-                let op1 = bc.op1();
-                let op = (op1 >> 48) as u8;
-                if op & 0xc0 == 0 && (30..=33).contains(&op) {
-                    Some(CallSiteId::from(op1 as u32))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
 
     ///
     /// Get length of bytecode.

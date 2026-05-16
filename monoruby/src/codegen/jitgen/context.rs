@@ -426,6 +426,11 @@ pub(super) struct JitStackFrame {
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
     /// surfaced via `compile_specialized_func`.
     pub(super) deferred_rest: bool,
+    /// D1 veto (see `AsmIr::needs_rest_array`): some forwarding consume
+    /// of the deferred rest needs the real `Array`. Aggregated like
+    /// `deferred_rest`; producer skips `create_array` only when
+    /// `deferred_rest && !needs_rest_array`.
+    pub(super) needs_rest_array: bool,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -512,6 +517,7 @@ impl JitStackFrame {
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
             deferred_rest: false,
+            needs_rest_array: false,
         }
     }
 
@@ -536,6 +542,7 @@ impl JitStackFrame {
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
             deferred_rest: self.deferred_rest,
+            needs_rest_array: self.needs_rest_array,
         }
     }
 
@@ -1376,6 +1383,7 @@ impl<'a> JitContext<'a> {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
         frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.ir.push((bb, ir));
     }
 
@@ -1388,6 +1396,7 @@ impl<'a> JitContext<'a> {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
         frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.inline_bridges.insert(src_bb, (ir, dest_bb));
     }
 
@@ -1395,6 +1404,7 @@ impl<'a> JitContext<'a> {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
         frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.outline_bridges.push((ir, dest, bbid));
     }
 }

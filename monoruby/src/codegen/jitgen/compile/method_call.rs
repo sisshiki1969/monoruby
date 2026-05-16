@@ -354,6 +354,7 @@ impl<'a> JitContext<'a> {
             entry,
             return_state,
             deferred_rest: _,
+            needs_rest_array: _,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -578,6 +579,7 @@ impl<'a> JitContext<'a> {
             entry,
             return_state,
             deferred_rest,
+            needs_rest_array,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -597,6 +599,7 @@ impl<'a> JitContext<'a> {
             patch_point,
             evict,
             deferred_rest,
+            needs_rest_array,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -611,6 +614,8 @@ pub(super) struct SpecializedCompileResult {
     /// `Array` (routed straight from the caller source); the caller-side
     /// `set_arguments` must skip the `create_array`.
     pub deferred_rest: bool,
+    /// D1 veto: some forwarding consume needs the real rest `Array`.
+    pub needs_rest_array: bool,
 }
 
 impl<'a> JitContext<'a> {
@@ -663,6 +668,7 @@ impl<'a> JitContext<'a> {
         // Capture before `frame.asm_info` is moved below.
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
+        let frame_needs_rest_array = frame.needs_rest_array;
         // Two unmodeled-path conditions taint the return state so the
         // caller doesn't propagate a speculative `Const` past us:
         //
@@ -719,6 +725,7 @@ impl<'a> JitContext<'a> {
             entry,
             return_state,
             deferred_rest: frame_deferred_rest,
+            needs_rest_array: frame_needs_rest_array,
         })
     }
 
@@ -815,8 +822,13 @@ impl AbstractState {
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
-        defer_rest: bool,
+        deferred_rest: bool,
+        needs_rest_array: bool,
     ) {
+        // D1: skip the caller-side `create_array` only when at least
+        // one forwarding consume was source-routed AND no forwarding
+        // consume needs the real rest `Array`.
+        let defer_rest = deferred_rest && !needs_rest_array;
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
@@ -1067,7 +1079,15 @@ impl AbstractState {
                     ir.set_deferred_rest();
                     Some((src, len))
                 }
-                _ => None,
+                _ => {
+                    // Not source-routed (slot/arity/kwrest mismatch):
+                    // this forwarding consume reads `f`'s rest slot as a
+                    // real `Array`, so veto the caller-side skip.
+                    if self.deferred_rest_tuple().is_some() {
+                        ir.set_needs_rest_array();
+                    }
+                    None
+                }
             };
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
@@ -1094,11 +1114,24 @@ impl AbstractState {
             // re-parse on the common no-forwarded-kw path (building
             // lead ++ splat-array ++ post directly) and delegates the
             // subtle kw case to the proven generic.
+            // Array-path forwarding consume (iseq with opt/post/rest):
+            // it reads `f`'s rest slot as a real `Array`.
+            if self.deferred_rest_tuple().is_some() {
+                ir.set_needs_rest_array();
+            }
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
             ir.handle_error(error);
         } else {
+            // Generic path. A forwarding call here (e.g. native callee
+            // such as `Array.new`'s `o.__send__(:initialize, ...)`, or
+            // a leading-arg forward like `File.read(@path, ...)`) reads
+            // `f`'s rest slot as a real `Array` via the runtime
+            // `jit_generic_set_arguments`, so veto the skip.
+            if callsite.forwarding && self.deferred_rest_tuple().is_some() {
+                ir.set_needs_rest_array();
+            }
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });

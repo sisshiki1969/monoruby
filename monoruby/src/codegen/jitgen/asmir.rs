@@ -73,6 +73,11 @@ pub(crate) struct AsmIr {
     /// D1: set by the forwarding consumer when it routed the
     /// trampoline's `g(...)` straight from the caller source.
     deferred_rest: bool,
+    /// D1 veto: a forwarding consume of the deferred rest that is NOT
+    /// source-routed (needs the real `Array`: 989-array-path / helper /
+    /// generic / native callee). Producer skips `create_array` only
+    /// when `deferred_rest && !needs_rest_array`.
+    needs_rest_array: bool,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -107,6 +112,7 @@ impl AsmIr {
             side_exit: vec![],
             had_deopt: false,
             deferred_rest: false,
+            needs_rest_array: false,
         }
     }
 
@@ -120,6 +126,14 @@ impl AsmIr {
 
     pub(super) fn set_deferred_rest(&mut self) {
         self.deferred_rest = true;
+    }
+
+    pub(super) fn needs_rest_array(&self) -> bool {
+        self.needs_rest_array
+    }
+
+    pub(super) fn set_needs_rest_array(&mut self) {
+        self.needs_rest_array = true;
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
@@ -140,21 +154,23 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool) {
+    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
             self.deferred_rest,
+            self.needs_rest_array,
         )
     }
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt, deferred_rest): (
+        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
             usize,
             usize,
+            bool,
             bool,
             bool,
             bool,
@@ -165,6 +181,7 @@ impl AsmIr {
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
         self.deferred_rest = deferred_rest;
+        self.needs_rest_array = needs_rest_array;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {

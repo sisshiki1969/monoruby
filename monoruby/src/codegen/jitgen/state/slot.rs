@@ -234,6 +234,13 @@ impl SlotState {
         }
     }
 
+    /// D1: the frame's `(dst, src, len)` deferral annotation, if any.
+    /// Used by array-path forwarding consumers to veto the caller-side
+    /// `create_array` skip (`set_needs_rest_array`).
+    pub(in crate::codegen::jitgen) fn deferred_rest_tuple(&self) -> Option<(SlotId, SlotId, u16)> {
+        self.deferred_rest
+    }
+
     pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
         &self.liveness[slot.0 as usize]
     }
