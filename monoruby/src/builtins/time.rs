@@ -2746,6 +2746,11 @@ mod tests {
         run_test_error(r#"Time.new("2020-12-25")"#);
         run_test_error(r#"Time.new("2020-12-25 00:56:17 +00:60")"#);
         run_test_error(r#"Time.new("2020-13-25 00:00:00")"#);
+        run_test_error(r#"Time.new("20x0-12-25 00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 ab:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 1:2")"#);
+        run_test_error(r#"Time.new("2020-12-25x00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 bogusoffset")"#);
     }
 
     #[test]
