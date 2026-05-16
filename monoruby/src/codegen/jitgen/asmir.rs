@@ -1103,6 +1103,24 @@ pub(super) enum AsmInst {
     },
 
     ///
+    /// Argument setup for a forwarding call `g(x.., ...)` whose callee
+    /// is a `no_keyword` iseq with opt/post/rest (rest-array allocation
+    /// is unavoidable, so handled by the specialized runtime helper
+    /// `jit_forwarded_set_arguments` rather than inline asm). Same asm
+    /// shape as `SetArguments`, different call target.
+    ///
+    /// ### out
+    /// - rax: None for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    SetArgumentsForwardedHelper {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    },
+
+    ///
     /// Set up a callee method frame for send.
     ///
     /// ### destroy

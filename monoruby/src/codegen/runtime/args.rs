@@ -101,6 +101,71 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     Some(Value::nil())
 }
 
+///
+/// Specialized self+argument setup for a forwarding call `g(x.., ...)`
+/// whose callee `g` is a `no_keyword` iseq (with opt/post/rest, i.e.
+/// the cases the zero-alloc inline path does not cover).
+///
+/// The callsite shape is statically known (single trailing splat = the
+/// `...` rest Array, `lead = pos_num-1` ordinary leading args), so the
+/// common no-forwarded-keyword case skips the generic
+/// `set_callee_frame_arguments` CallSiteInfo re-interpretation
+/// (`splat_pos` scan + excessive-keyword `ex` machinery) and builds the
+/// positional buffer directly. The uncommon case where keywords are
+/// actually forwarded delegates to the proven generic path so subtle
+/// kw-to-rest semantics stay byte-identical.
+///
+pub(crate) extern "C" fn jit_forwarded_set_arguments(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    callee_lfp: Lfp,
+    callee_fid: FuncId,
+) -> Option<Value> {
+    let caller_lfp = vm.cfp().lfp();
+    // self
+    let src0 = caller_lfp.register_ptr(globals[callid].recv);
+    let dst0 = callee_lfp.register_ptr(SlotId::self_());
+    unsafe { *dst0 = *src0 };
+
+    let cs = &globals[callid];
+    let kw_empty = cs.kw_args.is_empty()
+        && cs
+            .hash_splat_pos
+            .iter()
+            .all(|p| caller_lfp.register(*p).map_or(true, |v| v.is_nil()));
+
+    let res = if kw_empty && !globals[callee_fid].single_arg_expand() {
+        let pos_args = cs.pos_num;
+        let lead = pos_args - 1; // gate guarantees the splat is the last
+        let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
+        // args live at descending addresses: arg i at args_ptr.sub(i)
+        let ary = unsafe { *args_ptr.sub(lead) }
+            .try_array_ty()
+            .expect("internal error: forwarding splat must be an array");
+        let mut buf: smallvec::SmallVec<[Value; 8]> =
+            smallvec::SmallVec::with_capacity(lead + ary.len());
+        for i in 0..lead {
+            buf.push(unsafe { *args_ptr.sub(i) });
+        }
+        buf.extend_from_slice(&ary);
+        let dst = callee_lfp.register_ptr(SlotId(1));
+        fill_positional_args1(dst, &globals.store[callee_fid], &buf)
+    } else {
+        // keywords actually forwarded: defer to the proven generic path.
+        set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
+    };
+
+    match res {
+        Ok(_) => Some(Value::nil()),
+        Err(mut err) => {
+            err.push_internal_trace(callee_fid);
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 fn check_single_arg_expand(
     splat_pos: &[usize],
     pos_args: usize,

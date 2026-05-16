@@ -1018,6 +1018,21 @@ impl AbstractState {
                 kwrest_guard,
             });
             ir.handle_error(error);
+        } else if callsite.forwarding
+            && callsite.pos_num >= 1
+            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && callee.is_iseq().is_some()
+            && callee.no_keyword()
+        {
+            // Forwarding `g(x.., ...)` to a no_keyword iseq with
+            // opt/post/rest (rest-array allocation unavoidable): use the
+            // specialized runtime helper, which skips the generic
+            // CallSiteInfo re-parse on the common no-forwarded-kw path
+            // and delegates the subtle kw case to the proven generic.
+            self.write_back_recv_and_callargs(ir, callsite);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
+            ir.handle_error(error);
         } else {
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);

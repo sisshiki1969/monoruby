@@ -95,8 +95,37 @@ block 透過、3 段連鎖＋値コピー不変、先頭引数（lead=1 / multi+
 ゲート発火（純: lead=0、先頭: lead=1）を JIT 実コンパイル下で計装
 確認。gc-stress 緑。フルスイープで環境性失敗集合に対し新規退行ゼロ。
 
+#### opt/post/rest を持つ `g`（runtime ヘルパ方式）【実装済み】
+
+rest 付き `g`（`def g(a,*r)` 等）は `*rest` 配列の新規確保が CRuby
+セマンティクス上不可避で、Increment 2（SmallVec 化）後の汎用パス比
+の利得は限界的、かつ手書きアロケーション asm は GC/ライトバリア絡み
+で破壊リスクが高い。よって **専用 runtime ヘルパ**方式を採用:
+
+- 新 `runtime::jit_forwarded_set_arguments`（`jit_generic_set_arguments`
+  と同シグネチャ）。forwarding 形状（末尾単一 splat、`lead =
+  pos_num-1`）が静的に既知なので、**転送 kw が空**の常套ケースは
+  汎用 `set_callee_frame_arguments` の `splat_pos` 走査・余剰 kw `ex`
+  機構をスキップして positional buffer を直接構築し
+  `fill_positional_args1`（req/opt/rest/post を正しく処理）へ。
+  kw が実際に転送される稀ケースは実証済み汎用関数へ委譲し、
+  微妙な kw→rest セマンティクスをバイト一致で保つ。
+- `AsmInst::SetArgumentsForwardedHelper` の lowering は
+  `jit_set_arguments` と同一の実証済み asm 形状（レジスタ設定・
+  rsp 調整・エラー処理）で **call 先のみ差し替え**。手書き asm
+  ループ・アロケーションは一切追加せず asm リスクは増えない。
+- ゲート: required-only 分岐の後段に
+  `forwarding && splat_pos==[pos_num-1] && is_iseq && no_keyword`。
+  required-only（確保ゼロ inline）が先取り、rest/opt/post が本経路、
+  kw パラメータ持ち callee は汎用据置。
+
+検証: forwarding 26/26（新規 6: pure rest / rest-only＋先頭 /
+opt+post+rest / kw 転送→委譲 / block 透過 / 連鎖＋rest 変異不変）。
+ヘルパ発火を実 JIT 下で pure(pos_num=1)・先頭(pos_num=2) ともに
+計装確認・結果厳密一致。gc-stress 緑。フルスイープ退行ゼロ。
+
 未対応（フォールバック据置・後続段）:
-opt/post/rest/kw を持つ `g`、`super` 暗黙転送（Increment 4）。
+kw パラメータを持つ `g`、`super` 暗黙転送（Increment 4）。
 
 ---
 （以下は当初計画の原文）

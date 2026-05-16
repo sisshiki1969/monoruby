@@ -2223,3 +2223,125 @@ fn forwarding_specialized_chain_and_mutation() {
         "#,
     );
 }
+
+#[test]
+fn forwarding_rest_pure() {
+    // `def g(a, *r)` via pure `g(...)`: rest-array alloc unavoidable,
+    // handled by the specialized runtime helper.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times { $r << f(1, 2, 3, 4) }
+        $r << f(9)
+        $r
+        "##,
+        r##"
+        def g(a, *r) = "#{a}|#{r.inspect}"
+        def f(...) = g(...)
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_rest_only_and_leading() {
+    // `def g(*r)` (no required) and leading-arg `k(100, 200, ...)`.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times { |i| $r << [g_all(i, i+1), h_lead(i)] }
+        $r
+        "##,
+        r##"
+        def g(*r) = r.sum
+        def k(a, b, *r) = a * 1000 + b * 100 + r.sum
+        def g_all(...) = g(...)
+        def h_lead(...) = k(100, 200, ...)
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_opt_post_rest() {
+    // Opt + post + rest callee through forwarding (fill_positional_args
+    // generic shape, driven by the helper's direct buffer).
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times do |i|
+          $r << a(i, i+1)
+          $r << a(i, i+1, i+2, i+3, i+4)
+          $r << b(1, 2, 3, 4, 5, 6, 7)
+        end
+        $r
+        "##,
+        r##"
+        def opt(x, y = 10, *rest, z) = "#{x},#{y},#{rest.inspect},#{z}"
+        def post(p, *mid, q, r) = "#{p}|#{mid.inspect}|#{q}|#{r}"
+        def a(...) = opt(...)
+        def b(...) = post(50, ...)
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_rest_kwargs_delegates() {
+    // Keywords actually forwarded into a `*rest` callee: the helper
+    // delegates to the proven generic path; must match CRuby (kw hash
+    // becomes a trailing rest element).
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times do
+          $r << g(1, 2)
+          $r << g(1, k: 9, m: 8)
+        end
+        $r
+        "##,
+        r##"
+        def real(a, *r) = "#{a}|#{r.inspect}"
+        def g(...) = real(...)
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_rest_block_passthrough() {
+    // Forwarded block must still reach a rest-bearing callee on the
+    // helper path.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times { $r << g(2, 3, 4) { |x| x * 10 } }
+        $r
+        "##,
+        r##"
+        def real(a, *r) = yield(a + r.sum)
+        def g(...) = real(...)
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_rest_chain_and_mutation() {
+    // Deep chain + callee mutates its rest array; the forwarded source
+    // array must be unaffected.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        30.times do
+          src = [10, 20, 30]
+          $r << h(*src)
+          $r << src
+        end
+        $r
+        "##,
+        r##"
+        def real(a, *r)
+          r << 999
+          "#{a}:#{r.inspect}"
+        end
+        def f(...) = real(...)
+        def h(...) = f(...)
+        "##,
+    );
+}

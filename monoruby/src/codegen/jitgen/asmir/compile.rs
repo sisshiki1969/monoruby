@@ -355,6 +355,10 @@ impl Codegen {
                     kwrest_guard,
                 );
             }
+            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
+                let offset = store[callee_fid].get_offset();
+                self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
+            }
 
             AsmInst::Ret => {
                 self.epilogue();
@@ -1159,6 +1163,35 @@ impl Codegen {
             movl r8, (fid.get());
             subq rsp, (offset);
             movq rax, (crate::runtime::jit_generic_set_arguments);
+            call rax;
+            addq rsp, (offset);
+        }
+    }
+
+    ///
+    /// Same proven asm shape as `jit_set_arguments`, but dispatches to
+    /// the specialized `jit_forwarded_set_arguments` runtime helper.
+    ///
+    /// ### out
+    /// - rax: None for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    fn jit_set_arguments_forwarded_helper(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+    ) {
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];   // callee_lfp
+            movl r8, (fid.get());
+            subq rsp, (offset);
+            movq rax, (crate::runtime::jit_forwarded_set_arguments);
             call rax;
             addq rsp, (offset);
         }
