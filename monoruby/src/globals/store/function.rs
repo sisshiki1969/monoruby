@@ -1294,14 +1294,24 @@ impl Store {
         if iseq.bb_info.len() != 1 {
             return None;
         }
-        // Exactly one call in the body. A `...`-forwarding method's
-        // rest/kwrest/block can syntactically only appear as forwarding
-        // arguments, so a single call ⇒ the synthetic rest is consumed
-        // exactly once; combined with the single-BB check there is no
-        // join and no second reader. The forwarding-shape / arity /
-        // nil-kwrest safety of that call is enforced where the consumer
-        // routes it (the inline forwarding fast-path gate).
-        if !iseq.single_method_call() {
+        // Exactly one *forwarding* call. A `...`-forwarding method's
+        // synthetic rest can syntactically only appear in a forwarding
+        // argument position, so non-forwarding calls (`allocate`, plain
+        // method calls), assignments and the return value never read
+        // it. Requiring exactly one forwarding call ⇒ the rest is
+        // consumed by a single site (no mixed source-routed / array
+        // consumer hazard); combined with the single-BB check there is
+        // no join and no second reader. This admits multi-statement
+        // bodies like `def new(...); o = allocate; o.initialize(...);
+        // o; end`. The forwarding-shape / arity / nil-kwrest safety of
+        // that single call is enforced where the consumer routes it
+        // (the inline forwarding fast-path gate).
+        let forwarding_calls = iseq
+            .call_callsite_ids()
+            .into_iter()
+            .filter(|cid| self[*cid].forwarding)
+            .count();
+        if forwarding_calls != 1 {
             return None;
         }
         Some(SlotId(rest_idx + 1))

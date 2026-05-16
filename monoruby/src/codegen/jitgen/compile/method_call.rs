@@ -251,8 +251,16 @@ impl<'a> JitContext<'a> {
                 // dst slot with the wrong class. See the
                 // `attr_reader_in_different_class` regression for the
                 // observable failure.
+                // Always specialize calls to an argument-forwarding
+                // method (`def f(...)`): forwarding bodies are thin
+                // trampolines whose cost is dominated by the
+                // re-parse / rest-array of the forwarded `...`, which
+                // specialization (and D1) removes — so don't gate them
+                // on the immediate-arg heuristic.
+                let forwarding_callee = self.store[func_id].params().forwarding();
                 let specializable = self.store.is_simple_call(func_id, callid)
-                    && (state.is_C_immediate(callsite.recv)
+                    && (forwarding_callee
+                        || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
