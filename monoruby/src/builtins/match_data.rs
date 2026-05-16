@@ -142,20 +142,28 @@ fn deconstruct_keys_md(
         }
     } else if arg.is_array_ty() {
         let arr = arg.as_array();
-        // CRuby: if any requested symbol isn't a named capture, return `{}`.
+        // CRuby: more requested keys than named captures -> `{}`.
+        if arr.len() > names.len() {
+            return Ok(Value::hash(RubyMap::default()));
+        }
         for key in arr.iter() {
             let Some(sym) = key.try_symbol() else {
-                return Ok(Value::hash(RubyMap::default()));
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected Symbol)",
+                    key.get_real_class_name(globals)
+                )));
             };
             let name = sym.get_name();
+            // Stop at the first key with no corresponding named
+            // capture, returning what was collected so far.
             if !names.iter().any(|n| *n == name) {
-                return Ok(Value::hash(RubyMap::default()));
+                break;
             }
             map.insert(*key, val_for(&name), vm, globals)?;
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected Array or nil)",
+            "wrong argument type {} (expected Array)",
             arg.get_real_class_name(globals)
         )));
     }
@@ -798,6 +806,26 @@ mod tests {
     }
 
     #[test]
+    fn match_data_deconstruct_keys() {
+        run_test(
+            r##"
+            m = /(?<f>foo)(?<b>bar)(?<c>baz)/.match("foobarbaz")
+            [m.deconstruct_keys(nil), m.deconstruct_keys([:f]),
+             m.deconstruct_keys([]), m.deconstruct_keys([:f, :a, :b]),
+             m.deconstruct_keys([:f, :b, :x])]
+            "##,
+        );
+        // No named captures -> empty hash.
+        run_test(r##"/(foo)(bar)/.match("foobar").deconstruct_keys(nil)"##);
+        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys(1)"##);
+        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys("asd")"##);
+        // Non-Symbol key with array length == named-capture count -> TypeError.
+        run_test_error(r##"/(?<f>x)(?<g>y)/.match("xy").deconstruct_keys(['s', :g])"##);
+        // Array longer than named captures -> {} (early return, no type check).
+        run_test(r##"/(?<f>x)/.match("x").deconstruct_keys(['s', :f])"##);
+    }
+
+    #[test]
     fn match_data_index() {
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-100]"##);
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-1]"##);
@@ -912,22 +940,6 @@ mod tests {
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##);
         // multibyte: UTF-8, byte offsets differ from char offsets
         run_test(r##"/い/.match("あぃい").byteoffset(0)"##);
-    }
-
-    #[test]
-    fn match_data_deconstruct_keys() {
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys(nil)"##,
-        );
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a])"##,
-        );
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a, :missing, :b])"##,
-        );
-        // No named captures → empty hash
-        run_test(r##"/(foo)(bar)/.match("foobar").deconstruct_keys(nil)"##);
-        run_test_error(r##"/(?<a>x)/.match("x").deconstruct_keys(1)"##);
     }
 
     #[test]
