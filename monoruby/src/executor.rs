@@ -1705,7 +1705,7 @@ impl Executor {
         proc: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
-        self.invoke_proc_with_block(globals, proc, args, None)
+        self.invoke_proc_with_block(globals, proc, args, None, None)
     }
 
     pub(crate) fn invoke_proc_with_block(
@@ -1714,6 +1714,7 @@ impl Executor {
         proc: &ProcInner,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
     ) -> Result<Value> {
         let proc = ProcData::from_proc(proc);
         // A proxy BlockHandler encodes its lexical scope as "walk N
@@ -1737,7 +1738,7 @@ impl Executor {
             block_val,
             args.as_ptr(),
             args.len(),
-            None,
+            kw,
         )
         .ok_or_else(|| {
             let err = self.take_error();
