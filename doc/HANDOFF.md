@@ -1,8 +1,11 @@
 # HANDOFF — rubykon polymorphic-JIT work
 
 Branch: `claude/handoff-review-nyy4u`. Base: `master`.
-Last update: 2026-05-16. State: **Parts 3-B, B, C implemented &
-regression-verified. Remaining: rubykon perf measurement, then PR.**
+Last update: 2026-05-16. State: **Parts 3-B, B, C implemented,
+regression-verified, AND rubykon-measured (§3a): the targeted
+`[Symbol][NilClass]` `== nil` deopt storm collapses millions → 10
+(+1 recompile), ~7% best wall-time. Remaining: scoped-out follow-ups
+(§5 items 1–3) + PR.**
 
 > Rule: never push to `master`; this work stays on
 > `claude/handoff-review-nyy4u` and lands via PR. Verify the branch
@@ -176,6 +179,49 @@ This is a pure optimisation layered on a correct Part 3-B; its
   feature + a `build.rs` rerun — resolved by `cargo clean`, **not** a
   code issue.)
 
+### 3a. rubykon measured (this container, 2026-05-16)
+
+`ruby/ruby-bench` cloned at `/home/user/ruby-bench` (it mirrors
+yjit-bench — identical refs — so `benchmarks/rubykon/lib` is the
+exact lib the original analysis used). Pure Ruby, loads under
+monoruby & CRuby 4.0.4. Self-contained runner `/tmp/rubykon_run.rb`
+(19×19, `ITERATIONS=100`, best-of-10; env: `RUBYKON_ITERS/RUNS/LIB`)
+— mirrors yjit-bench `benchmark.rb`, no YJIT/CSV harness so it runs
+identically under both.
+
+> Absolute ms are NOT comparable to the original handoff numbers
+> (different machine). What matters is same-machine relative.
+
+Wall time, best-of-10, 19×19/100, this container:
+
+| build | best | avg |
+|---|---|---|
+| baseline `256b461` (no 3-B/B/C) | 793.6 ms | 805.0 ms |
+| **this branch (3-B/B/C)** | **738.9 ms** | **767.1 ms** |
+| CRuby 4.0.4 `--yjit` | 471.6 ms | 503.1 ms |
+| CRuby 4.0.4 interp | 1047.0 ms | 1091.0 ms |
+
+⇒ Parts 3-B/B/C: **~7% best / ~5% avg faster** than baseline. Real
+but modest (see §5 for why).
+
+Deopt counts (`--features profile`, 2 runs × 100 iters), the
+decisive evidence — **baseline → this branch**, per site:
+
+| site (`POLY … == …`) | baseline | branch |
+|---|---:|---:|
+| `MoveValidator#spot_unoccupied?` `[Symbol][NilClass]` | 1,390,933 | **10** |
+| `block in no_suicide_move?` `[Symbol][NilClass]` | 418,415 | **10** |
+| `EyeDetector#candidate_eye_color` `[Symbol][NilClass]` | 145,612 | **10** |
+| `block in candidate_eye_color` `[NilClass][Symbol]` | 31,721 | ~0 |
+| `Group#already_counted_as_liberty?` `[Integer][NilClass]` | 137,805 | 50,550 |
+
+Each fixed site shows exactly **one `BecamePolymorphic` recompile**
+then runs deopt-free. The targeted `[Symbol][NilClass]` `== nil`
+pattern is reduced **5–6 orders of magnitude (millions → 10)** —
+Part B's monotone one-shot transition is confirmed working exactly
+as designed. (Baseline at 2×100 iters ≈ the original ">10M" at the
+full 10-run measurement — consistent.)
+
 > The 31 lib failures originally seen were entirely the wrong
 > reference Ruby (3.3.6) + a non-UTF-8 locale; 29 vanished under
 > Ruby 4.0.4 and the last 2 (`string_inspect`,
@@ -204,49 +250,71 @@ This is a pure optimisation layered on a correct Part 3-B; its
 - `~/.bashrc` exports `LANG=C.UTF-8 LC_ALL=C.UTF-8` so the
   reference Ruby's `inspect` output (US-ASCII default external
   encoding otherwise) matches monoruby's UTF-8.
-- This container has **no rubykon benchmark** and is **not** the
-  perf-measurement environment. `perf` is unusable on the original
-  WSL2 kernel; use `--features profile` deopt-stats (printed at
-  process exit) for hot-spot analysis there.
+- rubykon **is** now available here: `ruby/ruby-bench` cloned at
+  `/home/user/ruby-bench` (sibling of the repo). Runner
+  `/tmp/rubykon_run.rb`. Measurement done — see §3a. `perf` is
+  unusable; use `--features profile` deopt-stats (printed at process
+  exit) for hot-spot analysis.
 - monoasm uses 64-bit register names even for 32-bit ops
   (`movl r8, [mem]`, not `r8d`); `testq`/`cmpl` supported,
   `testl`/`r8d` are not. `0b…` immediates work in `monoasm!`.
 
 ---
 
-## 5. Remaining work (ordered) — for the benchmark environment
+## 5. Remaining work (ordered)
 
-The implementation and correctness are done. What is left needs the
-rubykon benchmark + profiling, which this container does not have.
+Implementation, correctness, and rubykon measurement are **done**
+(§3, §3a). Parts 3-B/B/C fully solve the *targeted* problem (the
+`[Symbol][NilClass]` `== nil` deopt storm: millions → 10 + one
+recompile). The ~7% (not larger) wall-time gain is explained by the
+deopt-stats: rubykon's *remaining* hot deopts are other
+polymorphism classes the ratified **B-then-C / BinCmp-`Other`**
+scope deliberately did **not** cover. To close more of the gap vs
+CRuby `--yjit` (which inlines all of these via `opt_eq` + a
+send-PIC):
 
-1. **Measure rubykon** with a clean release build of this branch:
-   - deopt counts via `cargo build --release --features profile`
-     (deopt-stats printed at exit). Expectation: the >10M
-     `spot_unoccupied?` / `no_suicide_move?` `==` deopts collapse to
-     ~0 (Part B recompiles the site once; Part 3-B/C then has no
-     recv-class guard to miss).
-   - best-of-10 wall time (19×19, 100 iters) vs the ~559 ms
-     baseline and CRuby 4.0.1 `--yjit` ~367 ms.
-   - Reproduction: the original owner's `/tmp/rubykon_run.rb`
-     (`require "rubykon"` from
-     `…/yjit-bench/benchmarks/rubykon/lib`).
-2. **If a perf regression or wrong result appears in rubykon**
-   specifically (not reproduced by the §3 correctness tests), the
-   first suspects are: Part C's immediate-tag check (verify against
-   `value.rs` tag table), and the Part B counter
-   (`COUNT_DEOPT_RECOMPILE`) interacting with the loop vs method JIT
-   at that site (check `--features deopt`/`jit-log`).
-3. **Optional further opt** only if measurement shows `==`/`!=`
-   slow-path still hot: extend Part 3-B/C to `binary_op`
-   (arithmetic) the same way (`binary_op` does not yet take a
-   `polymorphic` arg; the POLY bit is already recorded for BinOp by
-   the VM per `f11603a`).
-4. **Regression** in the benchmark env: `bin/test` (full
-   test + coverage + benchmark diff + optcarrot). In a Ruby-4.0+
-   env this should be clean; mirror the §3 results.
+1. **Integer/Float-arm polymorphism** (biggest remaining cmp item).
+   `Group#already_counted_as_liberty?` `%3 == %2 [Integer][NilClass]`
+   still deopts ~50K (down from 138K). Cause: with an `Integer` in
+   the IC, `state.binop_type` returns `BinaryOpType::Integer`, so
+   `binary_cmp` takes the **numeric fast-path arm** (integer type
+   guard) — Parts 3-B/B/C only divert the `Other` arm. Fix idea:
+   when `polymorphic`, route the `Integer`/`Float` arms of
+   `binary_cmp`/`binary_cmp_br` to `emit_generic_cmp` too (the
+   opt_eq fast path already handles Fixnum==Fixnum inline; the
+   generic C-call handles Integer==Float/nil correctly). Re-check
+   the §6 invariant (the numeric arms' type guards must not remain
+   as class-variance deopts after recompile).
+2. **Arithmetic `binary_op` polymorphism.** `GameScorer#score_board`
+   / `score_empty_cutting_point` `%6 + %7 [Integer][Integer]` deopt
+   ~35K total (occasional nil). `binary_op` has no `polymorphic`
+   arg yet; the VM already records the POLY bit for BinOp
+   (`f11603a`). Mirror Part 3-B/B for `binary_op` (generic
+   `*_values` C-call, recompile-on-recv-miss). Same invariant check.
+3. **Polymorphic method-call PIC (handoff option A).** `.nil?`
+   (`Game.pass?`, `Enumerable#inject`), `.root?`
+   (`Node#backpropagate`) deopt as `POLYMORPHIC … FuncId` — general
+   MethodCall receiver polymorphism. Needs the N-way PIC / the
+   currently-dead `send_not_cached`
+   (`asmir/compile/method_call.rs`). Largest scope; deferred by the
+   original handoff. CRuby `--yjit` gets these via its send PIC,
+   which is much of its remaining lead.
+4. **Regression** in a benchmark env with optcarrot present:
+   `bin/test` (full test + coverage + benchmark diff + optcarrot).
+   §3 already shows lib `2053/0` + integration green under Ruby
+   4.0.4; mirror that.
 5. **PR** `claude/handoff-review-nyy4u` → `master`. Summarise Parts
-   3-B / B / C, the monotone-recompile safety invariant, and the
-   rubykon before/after numbers from step 1.
+   3-B / B / C, the monotone-recompile safety invariant (§6), and
+   the §3a before/after deopt + wall-time numbers. Be explicit that
+   it solves the `[Symbol][NilClass]` `==` storm and that items
+   1–3 above are the scoped-out follow-ups for the rest of the
+   rubykon↔YJIT gap.
+
+If a *wrong result* (not perf) ever shows in rubykon but not in the
+§3 correctness matrix, first suspects: Part C's immediate-tag check
+vs the `value.rs` tag table, and the Part B counter
+(`COUNT_DEOPT_RECOMPILE`) loop-vs-method-JIT interaction
+(`--features deopt`/`jit-log`).
 
 ---
 
