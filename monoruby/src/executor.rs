@@ -2443,6 +2443,12 @@ pub enum RecompileReason {
     MethodNotFound = 1,
     IvarIdNotFound = 2,
     ClassVersionGuardFailed = 3,
+    /// A monomorphic-compiled BinCmp site's receiver-class guard
+    /// missed after the VM flagged the site polymorphic (POLY bit).
+    /// Recompiling lets `binary_cmp` re-emit it on the non-deopting
+    /// generic-C-call path. Monotone & one-shot: the recompiled site
+    /// has no receiver-class guard, so it can never re-trigger.
+    BecamePolymorphic = 4,
 }
 
 struct Root<'a, 'b> {

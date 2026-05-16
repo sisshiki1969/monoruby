@@ -163,6 +163,27 @@ impl AsmIr {
         self.new_deopt_with_pc(state, pc)
     }
 
+    ///
+    /// Like `new_deopt`, but the side exit recompiles the method/loop
+    /// after a few misses (reason *reason*) before continuing to fall
+    /// back to the interpreter. Used for the receiver-class guard of
+    /// monomorphic-compiled BinCmp sites (Part B).
+    ///
+    pub(crate) fn new_recompile_deopt(
+        &mut self,
+        state: &AbstractFrame,
+        reason: RecompileReason,
+    ) -> AsmDeopt {
+        let pc = state.pc();
+        let i = self.new_label(SideExit::RecompileDeoptimize(
+            pc,
+            state.get_write_back(),
+            reason,
+        ));
+        self.had_deopt = true;
+        AsmDeopt(i)
+    }
+
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
         AsmError(i)
@@ -1768,6 +1789,15 @@ impl AsmInst {
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
     Deoptimize(BytecodePtr, WriteBack),
+    ///
+    /// A deopt that, after a small number of misses, recompiles the
+    /// whole method/loop with the given reason instead of falling
+    /// back to the interpreter forever. Used as the
+    /// receiver-class-guard miss target for monomorphic-compiled
+    /// BinCmp sites so they flip to the non-deopting polymorphic
+    /// path once the VM has observed class variance (Part B).
+    ///
+    RecompileDeoptimize(BytecodePtr, WriteBack, RecompileReason),
     Error(BytecodePtr, WriteBack),
 }
 
@@ -1811,6 +1841,18 @@ impl Codegen {
                         deopt_table.insert(t, label.clone());
                         label
                     }
+                }
+                SideExit::RecompileDeoptimize(pc, wb, reason) => {
+                    let label = self.jit.label();
+                    self.gen_recompile_deopt_with_label(
+                        pc,
+                        &wb,
+                        reason,
+                        label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    );
+                    label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();

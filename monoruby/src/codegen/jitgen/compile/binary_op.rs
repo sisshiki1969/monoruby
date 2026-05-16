@@ -33,7 +33,7 @@ impl<'a> JitContext<'a> {
                 match lhs_class {
                     None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
                     Some(lhs_class) => self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos,
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
                     ),
                 }
             }
@@ -49,9 +49,9 @@ impl<'a> JitContext<'a> {
                 BinaryOpType::Other(None, _) => {
                     Ok(CompileResult::Recompile(RecompileReason::NotCached))
                 }
-                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
-                }
+                BinaryOpType::Other(Some(lhs_class), rhs_class) => self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
+                ),
             },
         }
     }
@@ -86,7 +86,13 @@ impl<'a> JitContext<'a> {
                     state.def_rax2acc(ir, dst);
                     Ok(CompileResult::Continue)
                 } else {
-                    self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+                    // Monomorphic compile (POLY not yet set). Make the
+                    // recv-class guard recompile-on-miss so the site
+                    // flips to the generic path once the VM observes
+                    // class variance (Part B).
+                    self.call_binary_method(
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
+                    )
                 }
             }
         }
@@ -171,8 +177,12 @@ impl<'a> JitContext<'a> {
                     self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                     return Ok(CompileResult::Continue);
                 }
-                let res = self
-                    .call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)?;
+                // Monomorphic compile (POLY not yet set): recompile
+                // on recv-class-guard miss so the site flips to the
+                // generic path once class variance is observed.
+                let res = self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
+                )?;
                 if let CompileResult::Continue = res {
                     let src_idx = bc_pos + 1;
                     state.unset_class_version_guard();
