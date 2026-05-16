@@ -2640,6 +2640,18 @@ mod tests {
              Time.utc(2000, i, 1).month]
             "#,
         );
+        // #to_str returning a non-String falls through (TypeError);
+        // an offset via #to_int is accepted.
+        run_test_error(
+            r#"o = Object.new; def o.to_str; 99; end; Time.utc(2000, o, 1)"#,
+        );
+        run_test_error(
+            r#"o = Object.new; def o.to_str; :sym; end; Time.new(2000,1,1,0,0,0, o)"#,
+        );
+        run_test(
+            r#"o = Object.new; def o.to_int; 7*3600; end
+               Time.new(2000,1,1,0,0,0, o).utc_offset"#,
+        );
     }
 
     #[test]
