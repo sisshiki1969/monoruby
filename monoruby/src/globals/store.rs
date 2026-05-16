@@ -31,6 +31,10 @@ impl MethodTableEntry {
         self.func_id
     }
 
+    pub fn owner(&self) -> ClassId {
+        self.owner
+    }
+
     pub fn visibility(&self) -> Visibility {
         self.visibility
     }
