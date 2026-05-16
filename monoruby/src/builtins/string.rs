@@ -6885,6 +6885,27 @@ mod tests {
     }
 
     #[test]
+    fn string_format_hash_and_neg_radix() {
+        // `#` flag forces a decimal point for e/E/g/G/a/A and keeps
+        // g/G trailing zeros; `%#f` keeps CRuby's Integer quirk.
+        run_test2(r###""%#.0e" % 100"###);
+        run_test2(r###""%#.0g" % 100"###);
+        run_test2(r###""%#g" % 123.4"###);
+        run_test2(r###""%#.0f" % 1"###);
+        run_test2(r###""%#.0f" % 1.0"###);
+        run_test2(r###""%#.0f" % 5"###);
+        run_test2(r###""%#a" % 16.0"###);
+        // `+`/space on negative b/o/x → sign-magnitude, not two's-complement.
+        run_test2(r###""%+b" % -10"###);
+        run_test2(r###""% o" % -10"###);
+        run_test2(r###""%+x" % -255"###);
+        run_test2(r###""%b" % -10"###);
+        run_test2(r###""%o" % -10"###);
+        run_test2(r###""%x" % -10"###);
+        run_test2(r###""%+8b" % -10"###);
+    }
+
+    #[test]
     fn string_format_g() {
         // %g and %G: shortest representation
         run_test2(r###""%g" % 100.0"###);
