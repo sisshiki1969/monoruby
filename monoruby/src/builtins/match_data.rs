@@ -815,9 +815,14 @@ mod tests {
              m.deconstruct_keys([:f, :b, :x])]
             "##,
         );
+        // No named captures -> empty hash.
+        run_test(r##"/(foo)(bar)/.match("foobar").deconstruct_keys(nil)"##);
         run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys(1)"##);
         run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys("asd")"##);
-        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys(['s', :f])"##);
+        // Non-Symbol key with array length == named-capture count -> TypeError.
+        run_test_error(r##"/(?<f>x)(?<g>y)/.match("xy").deconstruct_keys(['s', :g])"##);
+        // Array longer than named captures -> {} (early return, no type check).
+        run_test(r##"/(?<f>x)/.match("x").deconstruct_keys(['s', :f])"##);
     }
 
     #[test]
@@ -935,22 +940,6 @@ mod tests {
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##);
         // multibyte: UTF-8, byte offsets differ from char offsets
         run_test(r##"/い/.match("あぃい").byteoffset(0)"##);
-    }
-
-    #[test]
-    fn match_data_deconstruct_keys() {
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys(nil)"##,
-        );
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a])"##,
-        );
-        run_test(
-            r##"/(?<a>foo)(?<b>bar)/.match("foobar").deconstruct_keys([:a, :missing, :b])"##,
-        );
-        // No named captures → empty hash
-        run_test(r##"/(foo)(bar)/.match("foobar").deconstruct_keys(nil)"##);
-        run_test_error(r##"/(?<a>x)/.match("x").deconstruct_keys(1)"##);
     }
 
     #[test]
