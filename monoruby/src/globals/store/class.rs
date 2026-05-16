@@ -1934,20 +1934,36 @@ impl Store {
         name: IdentId,
     ) -> Option<FuncId> {
         let owner = self[current_func_id].owner_class();
-        let mut module = self.get_module(self_class);
-        loop {
-            if !module.has_origin() && owner.contains(&module.id()) {
-                let super_module = module.superclass()?;
-                let super_fid = self.search_method(super_module, name)?.func_id()?;
-                if super_fid != current_func_id {
+        let mut module = Some(self.get_module(self_class));
+        let mut matched_owner = false;
+        while let Some(m) = module {
+            if !m.has_origin() && owner.contains(&m.id()) {
+                matched_owner = true;
+                if let Some(super_module) = m.superclass()
+                    && let Some(entry) = self.search_method(super_module, name)
+                    && let Some(super_fid) = entry.func_id()
+                    && super_fid != current_func_id
+                {
                     return Some(super_fid);
                 }
-                // The super method has the same func_id as the current method,
-                // meaning we found a duplicate iclass of the same module in the chain.
-                // Continue walking to find the next occurrence.
+                // Same func_id as the current method: a duplicate iclass
+                // of the same module in the chain — keep walking to the
+                // next occurrence.
             }
-            module = module.superclass()?;
+            module = m.superclass();
         }
+        // The method's defining module is not in the receiver's
+        // ancestor chain — e.g. a Module's UnboundMethod bound to an
+        // unrelated object via `#bind` / `#bind_call`. CRuby resolves
+        // `super` against the receiver's actual class hierarchy here.
+        if !matched_owner
+            && let Some(entry) = self.search_method(self.get_module(self_class), name)
+            && let Some(fid) = entry.func_id()
+            && fid != current_func_id
+        {
+            return Some(fid);
+        }
+        None
     }
 }
 
