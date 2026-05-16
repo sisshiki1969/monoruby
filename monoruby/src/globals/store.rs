@@ -1077,6 +1077,21 @@ impl ClassInfoTable {
         let module = self[class_id].get_module();
         self.search_method(module, name)
     }
+
+    /// The original definition name of `name` as resolved from
+    /// `class_id`'s ancestor chain (following `alias` /
+    /// `define_method`), falling back to `name` itself when the
+    /// method is not found. Seeds `Method#original_name` for
+    /// `Object#method`, `Module#instance_method`, … .
+    pub(crate) fn original_name_by_class_id(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> IdentId {
+        self.search_method_by_class_id(class_id, name)
+            .map(|e| e.original_name())
+            .unwrap_or(name)
+    }
 }
 
 #[derive(Debug, Clone)]

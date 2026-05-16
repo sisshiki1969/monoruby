@@ -3111,9 +3111,7 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Ok((func_id, _, owner)) => {
             let original_name = globals
                 .store
-                .search_method_by_class_id(receiver.class(), method_name)
-                .map(|e| e.original_name())
-                .unwrap_or(method_name);
+                .original_name_by_class_id(receiver.class(), method_name);
             Ok(Value::new_method_named(
                 receiver,
                 func_id,
@@ -3184,9 +3182,7 @@ fn singleton_method(
     let (func_id, _, owner) = globals.store.find_method_for_class(class_id, method_name)?;
     let original_name = globals
         .store
-        .search_method_by_class_id(class_id, method_name)
-        .map(|e| e.original_name())
-        .unwrap_or(method_name);
+        .original_name_by_class_id(class_id, method_name);
     Ok(Value::new_method_named(
         receiver,
         func_id,

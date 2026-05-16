@@ -2113,9 +2113,7 @@ fn instance_method(
         })?;
     let original_name = globals
         .store
-        .search_method_by_class_id(klass.id(), method_name)
-        .map(|e| e.original_name())
-        .unwrap_or(method_name);
+        .original_name_by_class_id(klass.id(), method_name);
     Ok(Value::new_unbound_method_named(
         func_id,
         owner,
@@ -2173,9 +2171,7 @@ fn public_instance_method(
     }
     let original_name = globals
         .store
-        .search_method_by_class_id(klass.id(), method_name)
-        .map(|e| e.original_name())
-        .unwrap_or(method_name);
+        .original_name_by_class_id(klass.id(), method_name);
     Ok(Value::new_unbound_method_named(
         func_id,
         owner,
