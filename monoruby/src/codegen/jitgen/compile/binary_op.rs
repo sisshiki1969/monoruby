@@ -69,31 +69,36 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(mode) => {
+            BinaryOpType::Integer(mode) if !polymorphic => {
                 state.gen_cmp_integer(ir, kind, dst, mode);
                 Ok(CompileResult::Continue)
             }
-            BinaryOpType::Float(info) => {
+            BinaryOpType::Float(info) if !polymorphic => {
                 state.gen_cmp_float(ir, dst, info, kind);
                 Ok(CompileResult::Continue)
             }
             BinaryOpType::Other(None, _) => {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
-                    state.def_rax2acc(ir, dst);
-                    Ok(CompileResult::Continue)
-                } else {
-                    // Monomorphic compile (POLY not yet set). Make the
-                    // recv-class guard recompile-on-miss so the site
-                    // flips to the generic path once the VM observes
-                    // class variance (Part B).
-                    self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
-                    )
-                }
+            BinaryOpType::Other(Some(lhs_class), rhs_class) if !polymorphic => {
+                // Monomorphic compile (POLY not yet set). Make the
+                // recv-class guard recompile-on-miss so the site
+                // flips to the generic path once the VM observes
+                // class variance (Part B).
+                self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
+                )
+            }
+            // Polymorphic & cached (Integer / Float / Other(Some)):
+            // never specialize on a numeric/class fast path — each
+            // would deopt on class variance, defeating Part B's
+            // monotone invariant. The generic path is non-deopting;
+            // Part C keeps Fixnum/nil/true/false/Symbol inline, so
+            // an Integer↔nil site stays fast without the deopt.
+            _ => {
+                self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                state.def_rax2acc(ir, dst);
+                Ok(CompileResult::Continue)
             }
         }
     }
@@ -152,7 +157,7 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(mode) => {
+            BinaryOpType::Integer(mode) if !polymorphic => {
                 if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {
                     return Ok(result);
                 }
@@ -162,7 +167,7 @@ impl<'a> JitContext<'a> {
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
                 Ok(CompileResult::Continue)
             }
-            BinaryOpType::Float(info) => {
+            BinaryOpType::Float(info) if !polymorphic => {
                 if let Some(result) =
                     state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
                 {
@@ -178,13 +183,7 @@ impl<'a> JitContext<'a> {
             BinaryOpType::Other(None, _) => {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
-                    let src_idx = bc_pos + 1;
-                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                    return Ok(CompileResult::Continue);
-                }
+            BinaryOpType::Other(Some(lhs_class), rhs_class) if !polymorphic => {
                 // Monomorphic compile (POLY not yet set): recompile
                 // on recv-class-guard miss so the site flips to the
                 // generic path once class variance is observed.
@@ -198,6 +197,14 @@ impl<'a> JitContext<'a> {
                     self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                 }
                 Ok(res)
+            }
+            // Polymorphic & cached: non-deopting generic compare +
+            // conditional branch (see `binary_cmp`).
+            _ => {
+                self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                let src_idx = bc_pos + 1;
+                self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                Ok(CompileResult::Continue)
             }
         }
     }
