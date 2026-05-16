@@ -3332,10 +3332,32 @@ impl<'pr> Lowerer<'pr> {
             && method == "[]"
         {
             let base = self.lower_node(recv)?;
+            // `recv[k => v]` / `recv[**h]`: the `NodeKind::Index`
+            // fast path is positional-only and would drop the
+            // keyword/`**` portion. Keep it as a real `[]` method
+            // call so the *callee* decides what to do with the
+            // keywords (e.g. `Hash.[]` folds them into a trailing
+            // Hash; `Proc#[]` forwards them to the block).
+            if kw_args.is_empty() && hash_splat.is_empty() {
+                return Ok(Node {
+                    kind: NodeKind::Index {
+                        base: Box::new(base),
+                        index: args,
+                    },
+                    loc,
+                });
+            }
+            let mut arglist = ruruby_parse::ArgList::default();
+            arglist.args = args;
+            arglist.kw_args = kw_args;
+            arglist.hash_splat = hash_splat;
+            arglist.splat = has_splat;
             return Ok(Node {
-                kind: NodeKind::Index {
-                    base: Box::new(base),
-                    index: args,
+                kind: NodeKind::MethodCall {
+                    receiver: Box::new(base),
+                    method: "[]".to_string(),
+                    arglist: Box::new(arglist),
+                    safe_nav: false,
                 },
                 loc,
             });
