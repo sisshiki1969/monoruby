@@ -232,6 +232,10 @@ impl Globals {
             SYMBOL_TO_PROC_BODY_FUNCID,
             globals.define_builtin_func_with(OBJECT_CLASS, "", symbol_to_proc_body, 1, 1, true)
         );
+        assert_eq!(
+            METHOD_TO_PROC_BODY_FUNCID,
+            globals.define_builtin_func_rest(OBJECT_CLASS, "", method_to_proc_body)
+        );
         globals.random.init_with_seed(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);

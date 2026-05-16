@@ -172,15 +172,15 @@ fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 // TODO: support keyword arguments
 #[monoruby_builtin]
 fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let method = self_.as_method();
-    let self_val = method.receiver();
-    let func_id = method.func_id();
-    let proc = Proc::from_outer(
-        Lfp::heap_frame(self_val, globals[func_id].meta()),
-        func_id,
-        pc,
-    );
+    // CRuby's Method#to_proc is a lambda bound to the Method's
+    // receiver: its self ignores instance_exec/instance_eval rebinding
+    // and a block passed to the proc is forwarded to the method. We
+    // mirror Symbol#to_proc — stash the Method object on the proc's
+    // outer frame and run a shared body that re-invokes it.
+    let method_val = lfp.self_val();
+    let body_fid = METHOD_TO_PROC_BODY_FUNCID;
+    let outer_lfp = Lfp::heap_frame(method_val, globals[body_fid].meta());
+    let proc = Proc::from_outer(outer_lfp, body_fid, pc);
     Ok(proc.into())
 }
 
