@@ -22,7 +22,9 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 10, false);
     globals.define_builtin_class_func(TIME_CLASS, "now", time_now, 0);
-    globals.define_builtin_class_func_with(TIME_CLASS, "at", time_at, 1, 2, false);
+    globals.define_builtin_class_func_with_kw(
+        TIME_CLASS, "at", time_at, 1, 2, false, &["in"], false,
+    );
     globals.store[TIME_CLASS].set_alloc_func(time_alloc_func);
 
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
@@ -802,6 +804,16 @@ fn parse_utc_offset(
         return FixedOffset::east_opt(secs)
             .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
     }
+    // An object that responds to `#to_str` (but is not itself numeric)
+    // is coerced to a String offset like `"+05:00"`.
+    if !v.is_integer()
+        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+    {
+        let s = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = s.is_str() {
+            return parse_utc_offset_string(s);
+        }
+    }
     let secs = match i32::try_from(v.coerce_to_int_i64(vm, globals)?) {
         Ok(s) => s,
         Err(_) => {
@@ -906,8 +918,16 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let total_ns = nsecs + usec_ns;
     let dt = DateTime::from_timestamp(secs, total_ns)
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
-    let local: DateTime<Local> = dt.into();
-    let time_info = TimeInner::Local(local.into());
+    // `Time.at(t, in: offset)` — keyword UTC offset.
+    let time_info = if let Some(off) = lfp.try_arg(2)
+        && !off.is_nil()
+    {
+        let fixed = parse_utc_offset(vm, globals, off)?;
+        TimeInner::Local(dt.with_timezone(&fixed))
+    } else {
+        let local: DateTime<Local> = dt.into();
+        TimeInner::Local(local.into())
+    };
     Ok(Value::new_time(time_info))
 }
 
@@ -1126,14 +1146,27 @@ fn time_arg_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
 /// `"dec"` → 12, etc. Names that don't match still fall through to the
 /// numeric parse so `"12"` works.
 fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
-    if let Some(s) = v.is_str() {
+    let parse_str = |s: &str| -> Result<i64> {
         let trimmed = s.trim();
         if let Some(n) = month_name_to_num(trimmed) {
             return Ok(n);
         }
-        return trimmed.parse::<i64>().map_err(|_| {
+        trimmed.parse::<i64>().map_err(|_| {
             MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed))
-        });
+        })
+    };
+    if let Some(s) = v.is_str() {
+        return parse_str(s);
+    }
+    // A non-numeric object that responds to `#to_str` is coerced to a
+    // String first (CRuby allows a month name via `#to_str`).
+    if !v.is_integer()
+        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+    {
+        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = r.is_str() {
+            return parse_str(s);
+        }
     }
     v.coerce_to_int_i64(vm, globals)
 }
@@ -2577,6 +2610,47 @@ mod tests {
             t = Time.new(2013, 3, 17, 12, 0, 0, "+09:00:00")
             t.utc_offset
             "#,
+        );
+    }
+
+    #[test]
+    fn time_at_in_keyword() {
+        run_test(
+            r#"
+            t = 1_700_000_000
+            a = Time.at(t, in: "+05:00")
+            b = Time.at(t, in: "-09:00:01")
+            c = Time.at(t, in: 5*3600)
+            d = Time.at(t, in: "UTC")
+            [a.utc_offset, a.to_i, b.utc_offset, c.utc_offset, d.utc_offset,
+             Time.at(t).to_i, Time.at(t, 500).usec]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_arg_to_str_coercion() {
+        run_test(
+            r#"
+            m = Object.new; def m.to_str; "feb"; end
+            s = Object.new; def s.to_str; "+05:00"; end
+            i = Object.new; def i.to_int; 3; end
+            [Time.utc(2000, m, 1).month,
+             Time.new(2000, 1, 1, 0, 0, 0, s).utc_offset,
+             Time.utc(2000, i, 1).month]
+            "#,
+        );
+        // #to_str returning a non-String falls through (TypeError);
+        // an offset via #to_int is accepted.
+        run_test_error(
+            r#"o = Object.new; def o.to_str; 99; end; Time.utc(2000, o, 1)"#,
+        );
+        run_test_error(
+            r#"o = Object.new; def o.to_str; :sym; end; Time.new(2000,1,1,0,0,0, o)"#,
+        );
+        run_test(
+            r#"o = Object.new; def o.to_int; 7*3600; end
+               Time.new(2000,1,1,0,0,0, o).utc_offset"#,
         );
     }
 
