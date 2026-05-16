@@ -995,7 +995,31 @@ require_relative 'comparable'
 # reference `Data.define`.
 class Data
   def self.define(*members, &block)
+    members = members.map { |m| m.is_a?(String) ? m.to_sym : m }
     klass = ::Struct.new(*members)
+    # CRuby renders `Data` instances as `#<data ...>` rather than
+    # `#<struct ...>`. Reuse Struct's (correct) inspect — which already
+    # handles qualified/anonymous class names and bypasses an overridden
+    # `#name` — and only relabel the prefix.
+    klass.class_eval do
+      def inspect
+        ::Struct.instance_method(:inspect).bind(self).call.sub(/\A#<struct/, '#<data')
+      end
+      alias_method :to_s, :inspect
+
+      # Returns a copy with the given members replaced. Does not go
+      # through `self.class.new` (CRuby allocates + initializes directly).
+      def with(**kw)
+        return self if kw.empty?
+        kw = kw.map { |k, v| [k.is_a?(String) ? k.to_sym : k, v] }.to_h
+        ms = self.class.members
+        merged = to_h.merge(kw)
+        copy = self.class.allocate
+        copy.send(:initialize, *ms.map { |m| merged[m] })
+        copy.freeze
+        copy
+      end
+    end
     klass.class_eval(&block) if block
     klass
   end
