@@ -181,13 +181,19 @@ class Module
 end
 
 module Warning
-  @categories = { deprecated: false, experimental: true, performance: false }
+  @categories = {
+    deprecated: false, experimental: true, performance: false,
+    strict_unused_block: false,
+  }
 
-  def self.warn(*x)
+  def self.categories
+    @categories.keys
   end
 
   def self.[](category)
-    category = category.to_sym if category.is_a?(String)
+    unless category.is_a?(Symbol)
+      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
+    end
     unless @categories.key?(category)
       raise ArgumentError, "unknown category: #{category}"
     end
@@ -195,12 +201,20 @@ module Warning
   end
 
   def self.[]=(category, value)
-    category = category.to_sym if category.is_a?(String)
+    unless category.is_a?(Symbol)
+      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
+    end
     unless @categories.key?(category)
       raise ArgumentError, "unknown category: #{category}"
     end
     @categories[category] = value ? true : false
   end
+
+  def warn(msg, category: nil)
+    $stderr.write(msg)
+    nil
+  end
+  extend self
 end
 
 class Process
@@ -581,6 +595,28 @@ class Exception
       end
     else
       msg + "\n"
+    end
+  end
+
+  # CRuby `Exception#detailed_message(highlight: false, **)`:
+  # decorate the message with the class name; empty-message and
+  # anonymous-class cases have special forms.
+  def detailed_message(highlight: false, **)
+    msg = message.to_s
+    cls = self.class
+    if msg.empty?
+      base = instance_of?(::RuntimeError) ? "unhandled exception" : (cls.name || cls.to_s)
+      return highlight ? "\e[1;4m#{base}\e[m" : base
+    end
+    nl = msg.index("\n")
+    first = nl ? msg[0...nl] : msg
+    rest = nl ? msg[nl..] : ""
+    if cls.name.nil?
+      highlight ? "\e[1m#{first}\e[m#{rest}" : "#{first}#{rest}"
+    elsif highlight
+      "\e[1m#{first} (\e[1;4m#{cls}\e[m\e[1m)\e[m#{rest}"
+    else
+      "#{first} (#{cls})#{rest}"
     end
   end
 end
