@@ -752,6 +752,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn detailed_message() {
+        run_test(
+            r#"
+            [RuntimeError.new("boom").detailed_message,
+             RuntimeError.new("").detailed_message,
+             ArgumentError.new("").detailed_message,
+             RuntimeError.new("x").detailed_message(highlight: true),
+             ArgumentError.new("bad").detailed_message(highlight: true),
+             RuntimeError.new("a\nb").detailed_message,
+             Class.new(StandardError).new("m").detailed_message,
+             RuntimeError.new("").detailed_message(highlight: true),
+             ArgumentError.new("z").detailed_message(foo: 1)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn warning_module() {
+        run_test(r#"Warning.categories.sort"#);
+        run_test(r#"Warning[:strict_unused_block]"#);
+        run_test(r#"Warning.singleton_class.ancestors.include?(Warning)"#);
+        run_test_error(r#"Warning[42]"#);
+        run_test_error(r#"Warning["noop"]"#);
+        run_test_error(r#"Warning[:nope]"#);
+        run_test_error(r#"Warning[:deprecated] = "x"; Warning[1] = false"#);
+    }
+
     // -- Exception#== ------------------------------------------------------
 
     /// Identity-equal exceptions are equal.
