@@ -3598,6 +3598,30 @@ mod tests {
     }
 
     #[test]
+    fn hash_bracket_kwarg_form() {
+        // `Recv[k => v]` / `Recv[**h]` — the trailing keywords form an
+        // implicit positional Hash; previously dropped. This `[]`-call
+        // lowering is Prism-only (ruruby-parse lowers it differently).
+        if parser_is_ruruby() {
+            return;
+        }
+        run_test(r#"Hash[5 => 6]"#);
+        run_test(r#"Hash["a" => 1, "b" => 2]"#);
+        run_test(r#"h = {9 => 9}; Hash[**h]"#);
+        run_test(
+            r#"
+            klass = Class.new(Hash) { def to_hash; {trap: 1}; end }
+            a = klass[5 => 6]
+            [a.class.ancestors.include?(Hash), {5 => 6} == a,
+             {3 => 4}.merge(klass[1 => 2])]
+            "#,
+        );
+        // Proc#[] with kwargs forwards to the block (like #call).
+        run_test(r#"->(*a){ a }[1, k: 2]"#);
+        run_test(r#"->(a, k:){ [a, k] }[1, k: 9]"#);
+    }
+
+    #[test]
     fn hash_bracket_array_form() {
         // 1-element arrays become `key => nil`.
         run_test("Hash[[[:a]]]");
