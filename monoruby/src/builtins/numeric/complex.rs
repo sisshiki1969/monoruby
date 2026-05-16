@@ -61,18 +61,31 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.set_constant_by_str(COMPLEX_CLASS, "I", i_const);
 }
 
-fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
-    match rhs.try_complex() {
-        Some(rhs) => lhs == rhs,
-        None => {
-            let rhs = match Real::try_from(store, rhs) {
-                Ok(rhs) => rhs,
-                Err(_) => return false,
-            };
-
-            lhs == &ComplexInner::new(rhs, Real::zero())
-        }
+/// `Complex#==` following CRuby's `nucomp_eqeq_p` protocol:
+/// 1. `other` is a Complex          → compare real & imaginary parts.
+/// 2. `other` is a real Numeric     → `self.real == other && self.imag.zero?`
+///    (the comparison is delegated to `self.real.==`, which may be a
+///    user object).
+/// 3. otherwise                     → `other == self` (`rb_equal`).
+fn complex_eq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    other: Value,
+) -> Result<bool> {
+    let lhs = self_val.as_complex();
+    if let Some(rhs) = other.try_complex() {
+        return Ok(&*lhs == rhs);
     }
+    if is_real_like_numeric(vm, globals, other)? {
+        if !lhs.im().is_zero() {
+            return Ok(false);
+        }
+        let r = vm.invoke_method_inner(globals, IdentId::_EQ, lhs.re().get(), &[other], None, None)?;
+        return Ok(r.as_bool());
+    }
+    let r = vm.invoke_method_inner(globals, IdentId::_EQ, other, &[self_val], None, None)?;
+    Ok(r.as_bool())
 }
 
 ///
@@ -82,15 +95,13 @@ fn eq_bool(store: &Store, lhs: &ComplexInner, rhs: Value) -> bool {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    Ok(Value::bool(eq_bool(globals, lhs.as_complex(), lfp.arg(0))))
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(complex_eq(vm, globals, lfp.self_val(), lfp.arg(0))?))
 }
 
 #[monoruby_builtin]
-fn ne(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    Ok(Value::bool(!eq_bool(globals, lhs.as_complex(), lfp.arg(0))))
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(!complex_eq(vm, globals, lfp.self_val(), lfp.arg(0))?))
 }
 
 ///
@@ -1045,6 +1056,30 @@ mod tests {
             r#"begin; Complex(3, 0.0).rationalize; rescue RangeError; :re; end"#,
             // Non-zero imaginary also raises.
             r#"begin; Complex(3, 1).rationalize; rescue RangeError; :re; end"#,
+        ]);
+    }
+
+    #[test]
+    fn complex_eq_protocol() {
+        run_tests(&[
+            // Complex vs Complex.
+            "Complex(1, 2) == Complex(1, 2)",
+            "Complex(1.0, 2.0) == Complex(1, 2)",
+            "Complex(1, 2) == Complex(3, 4)",
+            "Complex(0.0/0.0, 0) == Complex(0.0/0.0, 0)",
+            // Real Numeric: real == other when imaginary part is zero.
+            "Complex(3, 0) == 3",
+            "Complex(3.0, 0) == 3",
+            "Complex(-3, 0) == -3",
+            "Complex(3, 0) == 4",
+            "Complex(3, 1) == 3",
+            "Complex(3, 0) != 3",
+            "Complex(3, 0) != 4",
+            // Non-Numeric object: falls back to `other == self`.
+            "Complex(3, 0) == 'x'",
+            "Complex(3, 0) == nil",
+            "(o = Object.new; def o.==(x); true; end; Complex(3, 0) == o)",
+            "(o = Object.new; def o.==(x); 42; end; (Complex(3, 0) == o) == true)",
         ]);
     }
 }
