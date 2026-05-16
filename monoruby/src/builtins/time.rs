@@ -2655,6 +2655,8 @@ mod tests {
         run_test_error(r#"Time.new(2000,1,1,0,0,0,"junk")"#);
         run_test_error(r#"Time.new(2000,1,1,0,0,0,"+24:00")"#);
         run_test_error(r#"Time.new(2000,1,1,0,0,0,"+23:60")"#);
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"+01:00:99")"#);
+        run_test_error("Time.new(2000,1,1,0,0,0,\"+0\u{00C4}:00\")");
         run_test_error(r#"Time.at(0, in: "+24:00")"#);
     }
 
