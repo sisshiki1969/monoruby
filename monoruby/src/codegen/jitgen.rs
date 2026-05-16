@@ -816,11 +816,20 @@ impl Codegen {
         pc: BytecodePtr,
         wb: &WriteBack,
         reason: RecompileReason,
+        position: Option<BytecodePtr>,
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, Some(reason), loop_jit_spill_bytes, base)
+        self.side_exit_with_label(
+            pc,
+            wb,
+            entry,
+            false,
+            Some((reason, position)),
+            loop_jit_spill_bytes,
+            base,
+        )
     }
 
     ///
@@ -849,7 +858,7 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
-        recompile: Option<RecompileReason>,
+        recompile: Option<(RecompileReason, Option<BytecodePtr>)>,
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
@@ -898,7 +907,7 @@ impl Codegen {
         // the generic op a few times first (so the VM has set the
         // site's POLY bit) before we recompile; once exhausted it
         // never recompiles again (monotone / one-shot).
-        if let Some(reason) = recompile {
+        if let Some((reason, position)) = recompile {
             let recompile_lbl = self.jit.label();
             let skip = self.jit.label();
             let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
@@ -908,7 +917,7 @@ impl Codegen {
                 subl [rip + counter], 1;
                 jne  skip;
             );
-            self.gen_recompile(Some(pc), recompile_lbl, reason, None);
+            self.gen_recompile(position, recompile_lbl, reason, None);
             monoasm!( &mut self.jit,
             skip:
             );

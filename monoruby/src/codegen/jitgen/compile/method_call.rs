@@ -99,8 +99,16 @@ impl<'a> JitContext<'a> {
 
         // receiver class guard
         if state.class(recv) != Some(recv_class) {
-            let deopt = if recompile_on_recv_miss {
-                ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic)
+            // Specialized JIT recompiles via an idx, not a position;
+            // keep it on the plain deopt path (no Part B there).
+            let use_recompile = recompile_on_recv_miss
+                && !matches!(self.jit_type(), JitType::Specialized { .. });
+            let deopt = if use_recompile {
+                ir.new_recompile_deopt(
+                    state,
+                    RecompileReason::BecamePolymorphic,
+                    self.position(),
+                )
             } else {
                 ir.new_deopt(state)
             };

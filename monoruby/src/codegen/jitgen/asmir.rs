@@ -169,16 +169,22 @@ impl AsmIr {
     /// back to the interpreter. Used for the receiver-class guard of
     /// monomorphic-compiled BinCmp sites (Part B).
     ///
+    /// *position* is the JIT entry position (`None` for a full
+    /// method/block JIT, `Some(loop-header pc)` for a loop JIT) — the
+    /// recompile target, NOT the deopt site `pc`.
+    ///
     pub(crate) fn new_recompile_deopt(
         &mut self,
         state: &AbstractFrame,
         reason: RecompileReason,
+        position: Option<BytecodePtr>,
     ) -> AsmDeopt {
         let pc = state.pc();
         let i = self.new_label(SideExit::RecompileDeoptimize(
             pc,
             state.get_write_back(),
             reason,
+            position,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -1797,7 +1803,7 @@ pub enum SideExit {
     /// BinCmp sites so they flip to the non-deopting polymorphic
     /// path once the VM has observed class variance (Part B).
     ///
-    RecompileDeoptimize(BytecodePtr, WriteBack, RecompileReason),
+    RecompileDeoptimize(BytecodePtr, WriteBack, RecompileReason, Option<BytecodePtr>),
     Error(BytecodePtr, WriteBack),
 }
 
@@ -1842,12 +1848,13 @@ impl Codegen {
                         label
                     }
                 }
-                SideExit::RecompileDeoptimize(pc, wb, reason) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
                     self.gen_recompile_deopt_with_label(
                         pc,
                         &wb,
                         reason,
+                        position,
                         label.clone(),
                         loop_jit_spill_bytes,
                         base,
