@@ -1630,6 +1630,11 @@ fn define_method(
     // look up and (b) have its owner_class registered so
     // `check_super`'s walk recognises the method's home class.
     let block_fid_to_decorate: Option<FuncId>;
+    // Original definition name to record on the new method entry.
+    // Defaults to the installed name; a Method/UnboundMethod source
+    // propagates its own original name so `Method#original_name`
+    // recovers e.g. `Kernel#is_a?` behind `define_method(:my_is_a?, …)`.
+    let mut original_name = name;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
             let fid = globals.define_proc_method(proc);
@@ -1640,12 +1645,14 @@ fn define_method(
             globals.store[fid].set_name(name);
             block_fid_to_decorate = Some(proc.func_id());
             fid
-        } else if let Some(method) = method.is_method() {
-            validate_bind_target(globals, method.owner(), class_id)?;
+        } else if let Some(m) = method.is_method() {
+            validate_bind_target(globals, m.owner(), class_id)?;
+            original_name = m.original_name(&globals.store);
             block_fid_to_decorate = None;
-            method.func_id()
+            m.func_id()
         } else if let Some(umethod) = method.is_umethod() {
             validate_bind_target(globals, umethod.owner(), class_id)?;
+            original_name = umethod.original_name(&globals.store);
             block_fid_to_decorate = None;
             umethod.func_id()
         } else {
@@ -1674,10 +1681,24 @@ fn define_method(
     // same scope. Cross-class `klass.send(:define_method, ...)`
     // never enters module-function mode (the toggle is per-cref).
     if vm.context_class_id() == class_id && vm.is_module_function() {
-        vm.add_method(globals, class_id, name, func_id, Visibility::Private)?;
+        vm.add_method_with_original(
+            globals,
+            class_id,
+            name,
+            func_id,
+            Visibility::Private,
+            original_name,
+        )?;
         vm.add_singleton_method(globals, class_id, name, func_id, Visibility::Public)?;
     } else {
-        vm.add_method(globals, class_id, name, func_id, visibility)?;
+        vm.add_method_with_original(
+            globals,
+            class_id,
+            name,
+            func_id,
+            visibility,
+            original_name,
+        )?;
     }
     // For proc-based define_method: also decorate the block iseq's
     // FuncInfo with the installed name and owner so `find_super`
@@ -2090,7 +2111,17 @@ fn instance_method(
                 method_name,
             )
         })?;
-    Ok(Value::new_unbound_method(func_id, owner))
+    let original_name = globals
+        .store
+        .search_method_by_class_id(klass.id(), method_name)
+        .map(|e| e.original_name())
+        .unwrap_or(method_name);
+    Ok(Value::new_unbound_method_named(
+        func_id,
+        owner,
+        method_name,
+        original_name,
+    ))
 }
 
 #[monoruby_builtin]
@@ -2140,7 +2171,17 @@ fn public_instance_method(
         }
         _ => {}
     }
-    Ok(Value::new_unbound_method(func_id, owner))
+    let original_name = globals
+        .store
+        .search_method_by_class_id(klass.id(), method_name)
+        .map(|e| e.original_name())
+        .unwrap_or(method_name);
+    Ok(Value::new_unbound_method_named(
+        func_id,
+        owner,
+        method_name,
+        original_name,
+    ))
 }
 
 ///

@@ -195,8 +195,12 @@ fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
     let recv = lfp.arg(0);
-    check_bind_receiver(globals, method.owner(), recv)?;
-    Ok(Value::new_method(recv, method.func_id(), method.owner()))
+    let owner = method.owner();
+    let func_id = method.func_id();
+    let lookup = method.lookup_name(&globals.store);
+    let original = method.original_name(&globals.store);
+    check_bind_receiver(globals, owner, recv)?;
+    Ok(Value::new_method_named(recv, func_id, owner, lookup, original))
 }
 
 /// CRuby `convert_umethod_to_method` bind check: the receiver must be
@@ -240,7 +244,7 @@ fn method_inspect_str(
     label: &str,
     recv: Option<Value>,
     owner: ClassId,
-    name: IdentId,
+    name: &str,
     func_id: FuncId,
     is_mm: bool,
 ) -> String {
@@ -297,19 +301,31 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let method = self_val.as_method();
     let store = &globals.store;
     let name = match method.method_missing_name() {
-        Some(t) => t,
-        None => store[method.func_id()].name().unwrap(),
+        Some(t) => t.to_string(),
+        None => display_name(store, method.lookup_name(store), method.original_name(store)),
     };
     let s = method_inspect_str(
         store,
         "Method",
         Some(method.receiver()),
         method.owner(),
-        name,
+        &name,
         method.func_id(),
         method.method_missing_name().is_some(),
     );
     Ok(Value::string(s))
+}
+
+/// CRuby's `#<Method: …#name(original)>` form: when a method was
+/// reached under a different name than its original definition
+/// (`alias_method` / `define_method` from a Method/UnboundMethod), the
+/// original name is shown in parentheses; otherwise just the name.
+fn display_name(_store: &Store, lookup: IdentId, original: IdentId) -> String {
+    if lookup != original {
+        format!("{lookup}({original})")
+    } else {
+        lookup.to_string()
+    }
 }
 
 ///
@@ -325,15 +341,15 @@ fn uinspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let method = self_val.as_umethod();
     let store = &globals.store;
     let name = match method.method_missing_name() {
-        Some(t) => t,
-        None => store[method.func_id()].name().unwrap(),
+        Some(t) => t.to_string(),
+        None => display_name(store, method.lookup_name(store), method.original_name(store)),
     };
     let s = method_inspect_str(
         store,
         "UnboundMethod",
         None,
         method.owner(),
-        name,
+        &name,
         method.func_id(),
         method.method_missing_name().is_some(),
     );
@@ -411,9 +427,7 @@ fn name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if let Some(target) = method.method_missing_name() {
         return Ok(Value::symbol(target));
     }
-    let func_id = method.func_id();
-    let id = globals[func_id].name().unwrap();
-    Ok(Value::symbol(id))
+    Ok(Value::symbol(method.lookup_name(&globals.store)))
 }
 
 ///
@@ -475,14 +489,19 @@ fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     let Some(sup) = found.superclass() else {
         return Ok(Value::nil());
     };
+    let lookup = method.lookup_name(&globals.store);
     match globals.store.check_method_for_class(sup.id(), name) {
         // A module's synthetic `Object` superclass can re-resolve the
         // *same* method (e.g. `Kernel#method` via `Object`); that is a
         // wrap-around, not a real super.
         Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => {
-                Ok(Value::new_method(receiver, func_id, entry.owner()))
-            }
+            Some(func_id) if func_id != method.func_id() => Ok(Value::new_method_named(
+                receiver,
+                func_id,
+                entry.owner(),
+                lookup,
+                entry.original_name(),
+            )),
             _ => Ok(Value::nil()),
         },
         None => Ok(Value::nil()),
@@ -496,7 +515,7 @@ fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/unbind.html]
 #[monoruby_builtin]
-fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn unbind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     if let Some(target) = method.method_missing_name() {
@@ -506,7 +525,14 @@ fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
             method.owner(),
         ));
     }
-    Ok(Value::new_unbound_method(method.func_id(), method.owner()))
+    // Preserve lookup / original names across unbind so the resulting
+    // UnboundMethod's #name / #original_name / #inspect are unchanged.
+    Ok(Value::new_unbound_method_named(
+        method.func_id(),
+        method.owner(),
+        method.lookup_name(&globals.store),
+        method.original_name(&globals.store),
+    ))
 }
 
 ///
@@ -522,9 +548,7 @@ fn uname(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if let Some(target) = method.method_missing_name() {
         return Ok(Value::symbol(target));
     }
-    let func_id = method.func_id();
-    let id = globals[func_id].name().unwrap();
-    Ok(Value::symbol(id))
+    Ok(Value::symbol(method.lookup_name(&globals.store)))
 }
 
 ///
@@ -566,11 +590,15 @@ fn usuper_method(
     let Some(sup) = found.superclass() else {
         return Ok(Value::nil());
     };
+    let lookup = method.lookup_name(&globals.store);
     match globals.store.check_method_for_class(sup.id(), name) {
         Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => {
-                Ok(Value::new_unbound_method(func_id, entry.owner()))
-            }
+            Some(func_id) if func_id != method.func_id() => Ok(Value::new_unbound_method_named(
+                func_id,
+                entry.owner(),
+                lookup,
+                entry.original_name(),
+            )),
             _ => Ok(Value::nil()),
         },
         None => Ok(Value::nil()),
@@ -636,8 +664,10 @@ fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 fn original_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
-    let id = globals[method.func_id()].name().unwrap();
-    Ok(Value::symbol(id))
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
+    Ok(Value::symbol(method.original_name(&globals.store)))
 }
 
 /// ### UnboundMethod#original_name -- see `Method#original_name`.
@@ -650,8 +680,10 @@ fn uoriginal_name(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    let id = globals[method.func_id()].name().unwrap();
-    Ok(Value::symbol(id))
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
+    Ok(Value::symbol(method.original_name(&globals.store)))
 }
 
 ///

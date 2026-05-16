@@ -24,6 +24,12 @@ pub(crate) struct MethodTableEntry {
     func_id: Option<FuncId>,
     visibility: Visibility,
     is_basic_op: bool,
+    /// The method's *original* definition name, tracked through
+    /// `alias_method` and `define_method`-from-(Unbound)Method so that
+    /// `Method#original_name` and the `#name(original)` form of
+    /// `Method#inspect` can recover it. For a plainly-defined method
+    /// (`def`, `attr_*`, builtin) this equals the entry's own name.
+    original_name: IdentId,
 }
 
 impl MethodTableEntry {
@@ -33,6 +39,10 @@ impl MethodTableEntry {
 
     pub fn owner(&self) -> ClassId {
         self.owner
+    }
+
+    pub fn original_name(&self) -> IdentId {
+        self.original_name
     }
 
     pub fn visibility(&self) -> Visibility {

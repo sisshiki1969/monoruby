@@ -1122,6 +1122,22 @@ impl Executor {
         self.invoke_method_added(globals, class_id, name)
     }
 
+    /// Like `add_method`, but records an explicit *original* definition
+    /// name (used by `define_method` from a Method/UnboundMethod so that
+    /// `Method#original_name` recovers the source method's name).
+    pub(crate) fn add_method_with_original(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+        original_name: IdentId,
+    ) -> Result<()> {
+        globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
     /// Create an alias and invoke the method_added hook.
     pub(crate) fn alias_method_for_class(
         &mut self,

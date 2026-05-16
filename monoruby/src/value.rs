@@ -1152,6 +1152,16 @@ impl Value {
         RValue::new_method(receiver, func_id, owner).pack()
     }
 
+    pub fn new_method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue::new_method_named(receiver, func_id, owner, lookup_name, original_name).pack()
+    }
+
     pub fn new_method_missing_proxy(
         receiver: Value,
         mm_func_id: FuncId,
@@ -1163,6 +1173,15 @@ impl Value {
 
     pub fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue::new_unbound_method(func_id, owner).pack()
+    }
+
+    pub fn new_unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue::new_unbound_method_named(func_id, owner, lookup_name, original_name).pack()
     }
 
     pub fn new_unbound_method_missing_proxy(

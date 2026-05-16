@@ -340,6 +340,24 @@ impl ObjKind {
         }
     }
 
+    fn method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner::new_named(
+                receiver,
+                func_id,
+                owner,
+                lookup_name,
+                original_name,
+            )),
+        }
+    }
+
     fn method_missing_proxy(
         receiver: Value,
         mm_func_id: FuncId,
@@ -364,6 +382,22 @@ impl ObjKind {
     fn unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         Self {
             umethod: ManuallyDrop::new(UMethodInner::new(func_id, owner)),
+        }
+    }
+
+    fn unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        Self {
+            umethod: ManuallyDrop::new(UMethodInner::new_named(
+                func_id,
+                owner,
+                lookup_name,
+                original_name,
+            )),
         }
     }
 
@@ -1578,6 +1612,20 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue {
+            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
+            kind: ObjKind::method_named(receiver, func_id, owner, lookup_name, original_name),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_method_missing_proxy(
         receiver: Value,
         mm_func_id: FuncId,
@@ -1595,6 +1643,19 @@ impl RValue {
         RValue {
             header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
             kind: ObjKind::unbound_method(func_id, owner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue {
+            header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
+            kind: ObjKind::unbound_method_named(func_id, owner, lookup_name, original_name),
             var_table: None,
         }
     }
