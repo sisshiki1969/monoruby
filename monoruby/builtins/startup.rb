@@ -60,6 +60,7 @@ class Object
   end
 
   def then
+    return to_enum(:then) { 1 } unless block_given?
     yield self
   end
   alias yield_self then
@@ -748,7 +749,12 @@ module Kernel
   end
 
   def putc(ch)
-    s = ch.is_a?(Integer) ? (ch & 0xff).chr : ch.to_s[0]
+    if ch.is_a?(String)
+      s = ch[0]
+    else
+      i = ch.is_a?(Integer) ? ch : __to_int(ch)
+      s = (i & 0xff).chr
+    end
     $stdout.write(s)
     ch
   end

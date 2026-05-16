@@ -122,6 +122,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    // `__callee__` differs from `__method__` only for aliased methods
+    // (it reports the called alias). monoruby does not track the
+    // call-site alias, so it shares `__method__`'s resolution.
+    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
@@ -1605,10 +1609,49 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // NOTE: `require` is intentionally left on `coerce_to_string`.
+    // It is intercepted by CRuby's rubygems `kernel_require.rb`
+    // shim, and routing the arg through `#to_path` here perturbs
+    // `$LOADED_FEATURES` bookkeeping in that shim. `require_relative`
+    // and `load` use the direct builtin path and do get the
+    // CRuby-accurate `#to_path`/`#to_str` coercion.
     let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
+}
+
+/// CRuby's `rb_get_path`: convert a path argument to a String via
+/// `#to_path` (if present) and then `#to_str` (if the `#to_path`
+/// result is not already a String). A bare `#to_str` object is also
+/// accepted. Anything else is a TypeError.
+fn path_arg_to_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<String> {
+    if let Some(s) = arg.is_str() {
+        return Ok(s.to_string());
+    }
+    let v = if let Some(fid) = globals.check_method(arg, IdentId::TO_PATH) {
+        vm.invoke_func_inner(globals, fid, arg, &[], None, None)?
+    } else {
+        arg
+    };
+    if let Some(s) = v.is_str() {
+        return Ok(s.to_string());
+    }
+    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = r.is_str() {
+            return Ok(s.to_string());
+        }
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        arg,
+        STRING_CLASS,
+    ))
 }
 
 ///
@@ -1626,7 +1669,7 @@ fn require_relative(
 ) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let feature = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
@@ -1641,7 +1684,7 @@ fn require_relative(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let file_name = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let file_name = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
@@ -1935,7 +1978,22 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
         let s = arg0.coerce_to_str(vm, globals)?;
-        eprintln!("{}", s);
+        // Write to the Ruby `$stderr` (which may be reassigned /
+        // mocked), not the OS stderr, matching CRuby.
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or(Value::nil());
+        if !stderr.is_nil() {
+            let line = Value::string(format!("{}\n", s));
+            vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("write"),
+                stderr,
+                &[line],
+                None,
+                None,
+            )?;
+        }
         s
     } else {
         "abort".to_string()
@@ -3246,6 +3304,47 @@ fn singleton_methods(
     }))
 }
 
+/// True for a syntactically valid instance-variable name: `@`
+/// followed by an identifier whose first char is not a digit
+/// (and not another `@`, which would be a class variable).
+fn is_valid_ivar_name(s: &str) -> bool {
+    let mut it = s.chars();
+    if it.next() != Some('@') {
+        return false;
+    }
+    match it.next() {
+        Some(c) if c == '_' || c.is_alphabetic() || !c.is_ascii() => {}
+        _ => return false,
+    }
+    it.all(|c| c == '_' || c.is_alphanumeric() || !c.is_ascii())
+}
+
+/// Resolve an `instance_variable_*` name argument with CRuby
+/// semantics: Symbol/String are used directly, anything else is
+/// coerced via `#to_str` (TypeError otherwise), and the resulting
+/// name must be a valid instance-variable name (NameError otherwise).
+fn ivar_name_id(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<IdentId> {
+    let name = if let Some(sym) = arg.try_symbol() {
+        sym.get_name().to_string()
+    } else if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        match r.is_str() {
+            Some(s) => s.to_string(),
+            None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),
+        }
+    } else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    if !is_valid_ivar_name(&name) {
+        return Err(MonorubyErr::nameerr(format!(
+            "'{name}' is not allowed as an instance variable name"
+        )));
+    }
+    Ok(IdentId::get_id(&name))
+}
+
 ///
 /// ### Kernel#instance_variable_defined?
 ///
@@ -3254,16 +3353,12 @@ fn singleton_methods(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
 fn iv_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let id = match lfp.arg(0).unpack() {
-        RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id(s.check_utf8()?),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
-    };
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }
@@ -3275,8 +3370,8 @@ fn iv_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -3289,8 +3384,8 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)
@@ -3321,8 +3416,8 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
 #[monoruby_builtin]
-fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     match globals.store.remove_ivar(lfp.self_val(), id) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr(format!(
@@ -3372,6 +3467,71 @@ mod tests {
         other.send(:define_singleton_method, :osm, um)
         "##,
         );
+    }
+
+    #[test]
+    fn instance_variable_name_validation() {
+        run_test(
+            r##"
+        o = Object.new
+        o.instance_variable_set(:@a, 1)
+        s = Object.new
+        def s.to_str; "@a"; end
+        [o.instance_variable_get(s), o.instance_variable_get("@a"),
+         o.instance_variable_defined?(:@a), o.instance_variable_defined?(:@z)]
+        "##,
+        );
+        run_test_error(r##"Object.new.instance_variable_get(:foo)"##);
+        run_test_error(r##"Object.new.instance_variable_get(:"@")"##);
+        run_test_error(r##"Object.new.instance_variable_get("@1x")"##);
+        run_test_error(r##"Object.new.instance_variable_set("@@c", 1)"##);
+        run_test_error(r##"Object.new.instance_variable_get(42)"##);
+        run_test_error(r##"Object.new.instance_variable_defined?(:bad)"##);
+        run_test_error(r##"Object.new.instance_variable_get(Object.new)"##);
+        // #to_str returning a non-String is a TypeError.
+        run_test_error(
+            r##"o=Object.new; def o.to_str; 5; end; Object.new.instance_variable_get(o)"##,
+        );
+    }
+
+    #[test]
+    fn path_arg_to_path_to_str_coercion() {
+        // Exercises `path_arg_to_string` (#to_path then #to_str, and
+        // the TypeError arm) through `load`.
+        run_test_once(
+            r##"
+        pth = "/tmp/mono_cov_#{Process.pid}_#{rand(1 << 30)}.rb"
+        File.write(pth, "$cov = (defined?($cov) && $cov ? $cov : 0) + 1\n")
+        $cov = 0
+        $pth = pth
+        o1 = Object.new
+        def o1.to_path; $pth; end
+        load(o1)
+        inner = Object.new
+        def inner.to_str; $pth; end
+        $inner = inner
+        o2 = Object.new
+        def o2.to_path; $inner; end
+        load(o2)
+        err = begin
+          load(Object.new)
+          :no
+        rescue TypeError
+          :te
+        end
+        File.delete(pth)
+        [$cov, err]
+        "##,
+        );
+    }
+
+    #[test]
+    fn kernel_putc() {
+        run_test(r##"putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)"##);
+        run_test_error(r##"putc(nil)"##);
+        run_test_error(r##"putc(true)"##);
+        run_test_error(r##"putc(false)"##);
+        run_test_error(r##"putc(Object.new)"##);
     }
 
     #[test]
@@ -3723,6 +3883,24 @@ mod tests {
         rescue SystemExit => e
           e.status
         end
+        "##,
+        );
+    }
+
+    #[test]
+    fn abort_writes_to_dollar_stderr() {
+        run_test(
+            r##"
+        class MyIO; def initialize; @s=+""; end; def write(*a); a.each{|x| @s<<x.to_s}; end; attr_reader :s; end
+        io = MyIO.new
+        old = $stderr
+        $stderr = io
+        begin
+          begin; abort("a message"); rescue SystemExit; end
+        ensure
+          $stderr = old
+        end
+        io.s
         "##,
         );
     }

@@ -605,7 +605,16 @@ fn file_basename(
         "/"
     };
     if let Some(suffix) = suffix {
-        if basename.ends_with(&suffix) {
+        if suffix == ".*" {
+            // CRuby treats the ".*" suffix specially: strip the last
+            // extension (a '.' that is not the leading char, so
+            // dotfiles like ".bashrc" are preserved).
+            if let Some(pos) = basename.rfind('.') {
+                if pos > 0 {
+                    return Ok(Value::string_from_str(&basename[..pos]));
+                }
+            }
+        } else if basename.ends_with(&suffix) {
             return Ok(Value::string_from_str(
                 &basename[..basename.len() - suffix.len()],
             ));
@@ -2286,6 +2295,19 @@ fn file_realdirpath(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn basename_suffix() {
+        run_tests(&[
+            r##"File.basename("complex.so", ".*")"##,
+            r##"File.basename("a.tar.gz", ".*")"##,
+            r##"File.basename(".bashrc", ".*")"##,
+            r##"File.basename("noext", ".*")"##,
+            r##"File.basename("/x/y/foo.rb", ".rb")"##,
+            r##"File.basename("/x/y/foo.rb")"##,
+            r##"File.basename("dir.d/", ".*")"##,
+        ]);
+    }
 
     #[test]
     fn join() {
