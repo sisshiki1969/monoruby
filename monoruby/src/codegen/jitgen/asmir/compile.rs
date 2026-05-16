@@ -340,6 +340,7 @@ impl Codegen {
                 args,
                 lead_num,
                 kwrest_guard,
+                deferred_src,
             } => {
                 let offset = store[callee_fid].get_offset();
                 // gate guarantees req_num() >= lead_num
@@ -353,6 +354,7 @@ impl Codegen {
                     expected_len,
                     recv,
                     kwrest_guard,
+                    deferred_src,
                 );
             }
             AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {

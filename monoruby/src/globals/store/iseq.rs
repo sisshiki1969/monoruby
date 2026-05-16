@@ -315,6 +315,25 @@ impl ISeqInfo {
     }
 
     ///
+    /// True iff the body contains exactly one method-call instruction
+    /// (opcodes 30..=33 in the short instruction class — the only
+    /// `TraceIr::MethodCall` encoding). Used by the D1 forwarding-rest
+    /// gate: a `...`-forwarding method's rest can only appear in a
+    /// forwarding-call argument position, so a single call means the
+    /// synthetic rest is consumed exactly once.
+    ///
+    pub(crate) fn single_method_call(&self) -> bool {
+        self.bytecode()
+            .iter()
+            .filter(|bc| {
+                let op = (bc.op1() >> 48) as u8;
+                op & 0xc0 == 0 && (30..=33).contains(&op)
+            })
+            .count()
+            == 1
+    }
+
+    ///
     /// Get length of bytecode.
     ///
     #[cfg(feature = "emit-bc")]

@@ -70,6 +70,9 @@ pub(crate) struct AsmIr {
     /// otherwise propagate to its caller — see
     /// `JitStackFrame::had_deopt`.
     had_deopt: bool,
+    /// D1: set by the forwarding consumer when it routed the
+    /// trampoline's `g(...)` straight from the caller source.
+    deferred_rest: bool,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -103,11 +106,20 @@ impl AsmIr {
             inst: vec![],
             side_exit: vec![],
             had_deopt: false,
+            deferred_rest: false,
         }
     }
 
     pub(super) fn had_deopt(&self) -> bool {
         self.had_deopt
+    }
+
+    pub(super) fn deferred_rest(&self) -> bool {
+        self.deferred_rest
+    }
+
+    pub(super) fn set_deferred_rest(&mut self) {
+        self.deferred_rest = true;
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
@@ -128,23 +140,31 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool, bool) {
+    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool) {
         (
             self.inst.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
+            self.deferred_rest,
         )
     }
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt): (usize, usize, bool, bool),
+        (inst, side_exit, codegen_mode, had_deopt, deferred_rest): (
+            usize,
+            usize,
+            bool,
+            bool,
+            bool,
+        ),
     ) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
+        self.deferred_rest = deferred_rest;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
@@ -1100,6 +1120,13 @@ pub(super) enum AsmInst {
         args: SlotId,
         lead_num: usize,
         kwrest_guard: Option<SlotId>,
+        /// D1: when `Some((src, len))` the trampoline's `...` rest array
+        /// was deferred — copy the `len` forwarded positionals straight
+        /// from the caller source slots `src..src+len` (read via the
+        /// caller `rbp` saved at `[rbp]`) instead of loading/length-
+        /// guarding `f`'s rest `Array`. No fallback (the structural gate
+        /// guarantees exact arity and a nil forwarded `**kwrest`).
+        deferred_src: Option<(SlotId, u16)>,
     },
 
     ///

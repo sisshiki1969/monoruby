@@ -345,6 +345,7 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest: _,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -359,7 +360,7 @@ impl<'a> JitContext<'a> {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        state.set_arguments(&self.store, ir, callid, callee_fid);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -568,6 +569,7 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -578,7 +580,16 @@ impl<'a> JitContext<'a> {
             callid,
         )?;
         let evict = ir.new_evict();
-        state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict);
+        state.send_specialized(
+            ir,
+            &self.store,
+            callid,
+            fid,
+            entry,
+            patch_point,
+            evict,
+            deferred_rest,
+        );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
         return Ok(res);
@@ -588,6 +599,10 @@ impl<'a> JitContext<'a> {
 pub(super) struct SpecializedCompileResult {
     pub entry: JitLabel,
     pub return_state: Option<ReturnState>,
+    /// D1: the trampoline body's forwarding consumer elided `f`'s rest
+    /// `Array` (routed straight from the caller source); the caller-side
+    /// `set_arguments` must skip the `create_array`.
+    pub deferred_rest: bool,
 }
 
 impl<'a> JitContext<'a> {
@@ -639,6 +654,7 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
         let frame_had_deopt = frame.had_deopt;
+        let frame_deferred_rest = frame.deferred_rest;
         // Two unmodeled-path conditions taint the return state so the
         // caller doesn't propagate a speculative `Const` past us:
         //
@@ -694,6 +710,7 @@ impl<'a> JitContext<'a> {
         Ok(SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest: frame_deferred_rest,
         })
     }
 
@@ -751,7 +768,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid, false);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -790,13 +807,14 @@ impl AbstractState {
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
+        defer_rest: bool,
     ) {
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid, defer_rest);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -874,6 +892,7 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
+        defer_rest: bool,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -935,7 +954,19 @@ impl AbstractState {
             // fill a rest param.
             if callee.is_rest() {
                 let ofs = stack_offset - (LFP_ARG0 + (8 * (callee.reqopt_num())) as i32);
-                self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+                if defer_rest {
+                    // D1: the trampoline body's forwarding consumer
+                    // copied straight from these source slots, so no
+                    // `Array` is built here. Spill the source range so
+                    // it is memory-resident for the deopt-time
+                    // materialization, and store a real `nil` into the
+                    // rest slot (matches its `C(nil)` LinkMode, keeps
+                    // the frame GC-safe).
+                    self.write_back_range(ir, args + req + opt, rest_len as u16);
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                } else {
+                    self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+                }
             }
 
             // fill post params.
@@ -1007,6 +1038,29 @@ impl AbstractState {
             let args = callsite.args;
             let lead_num = callsite.pos_num - 1;
             let kwrest_guard = callsite.hash_splat_pos.first().copied();
+            // D1: if `f`'s `...` rest array was deferred at frame entry,
+            // route the copy straight from the caller's source slots.
+            // Only when the forwarded arity exactly matches `g`'s
+            // required params (this branch already guarantees `g` is
+            // req-only: no opt/post/rest/kw, so no `ArgumentError`-
+            // shaped case the eager `create_array` + length-guard would
+            // raise) and only for the `g(*rest, **kwrest, &blk)`
+            // trampoline shape (`kwrest_guard.is_some()`; the structural
+            // gate guarantees no kw reaches `f`, so the forwarded
+            // `**kwrest` is nil). `ir.set_deferred_rest` makes the
+            // caller skip `create_array`. The annotation is NOT cleared:
+            // the window's and the `g` call's own side exits must still
+            // rebuild the array for an interpreter resuming inside `f`.
+            let deferred_src = match self.deferred_rest_src(args + lead_num) {
+                Some((src, len))
+                    if (len as usize) == callee.req_num() - lead_num
+                        && kwrest_guard.is_some() =>
+                {
+                    ir.set_deferred_rest();
+                    Some((src, len))
+                }
+                _ => None,
+            };
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwarded {
@@ -1016,6 +1070,7 @@ impl AbstractState {
                 args,
                 lead_num,
                 kwrest_guard,
+                deferred_src,
             });
             ir.handle_error(error);
         } else if callsite.forwarding

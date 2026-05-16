@@ -588,7 +588,42 @@ impl Codegen {
         expected_len: usize,
         recv: SlotId,
         kwrest_guard: Option<SlotId>,
+        deferred_src: Option<(SlotId, u16)>,
     ) {
+        if let Some((src, _len)) = deferred_src {
+            // D1: the `...` rest `Array` was deferred. `recv` and the
+            // `lead_num` leading args are `f`'s own slots (`f`'s rbp).
+            // The forwarded positionals come from the *caller* frame:
+            // `f` established its own rbp (`init_func`), so the caller's
+            // rbp is the value `f` saved at `[rbp]`; the gate guarantees
+            // the caller is exactly one (outermost) level up, so the
+            // source lives at `[caller_rbp - rbp_local(src + j)]`.
+            // Exact arity and a nil forwarded `**kwrest` are gate
+            // invariants, hence no length/kw guard and no fallback.
+            monoasm! { &mut self.jit,
+                movq rax, [rbp - (rbp_local(recv))];
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+            }
+            for i in 0..lead_num {
+                monoasm! { &mut self.jit,
+                    movq rax, [rbp - (rbp_local(args + i))];
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rax;
+                }
+            }
+            monoasm! { &mut self.jit,
+                movq rcx, [rbp];
+            }
+            for j in 0..expected_len {
+                monoasm! { &mut self.jit,
+                    movq rax, [rcx - (rbp_local(src + j))];
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + j)) as i32)], rax;
+                }
+            }
+            monoasm! { &mut self.jit,
+                movq rax, (NIL_VALUE);
+            }
+            return;
+        }
         let fallback = self.jit.label();
         let heap = self.jit.label();
         let got = self.jit.label();

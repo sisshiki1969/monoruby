@@ -801,8 +801,17 @@ impl JitModule {
     }
 
     fn gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
+        // The deferred trampoline frame `f` established its own `rbp`
+        // (`init_func`'s `pushq rbp; movq rbp, rsp`), so the dynamic
+        // caller's `rbp` is the value `f` saved at `[rbp]`. The
+        // structural gate guarantees the caller is exactly one
+        // (outermost, non-specialized) level up, so the positional
+        // source slots live at `[caller_rbp - rbp_local(src + i)]`.
+        // `dst` (f's rest local) is r14-relative like every other deopt
+        // restore.
         monoasm! { self,
-            lea  rdi, [rbp - (rbp_local(src))];
+            movq rcx, [rbp];
+            lea  rdi, [rcx - (rbp_local(src))];
             movq rsi, (len as usize);
             movq rax, (runtime::create_array);
             call rax;

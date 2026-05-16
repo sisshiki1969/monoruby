@@ -1294,16 +1294,14 @@ impl Store {
         if iseq.bb_info.len() != 1 {
             return None;
         }
-        // Exactly one call, and it forwards the trailing `...`.
-        if iseq.callsite_map.len() != 1 {
-            return None;
-        }
-        let cid = *iseq.callsite_map.values().next()?;
-        let cs = &self[cid];
-        if !cs.forwarding || cs.pos_num == 0 {
-            return None;
-        }
-        if cs.splat_pos.as_slice() != [cs.pos_num - 1] {
+        // Exactly one call in the body. A `...`-forwarding method's
+        // rest/kwrest/block can syntactically only appear as forwarding
+        // arguments, so a single call ⇒ the synthetic rest is consumed
+        // exactly once; combined with the single-BB check there is no
+        // join and no second reader. The forwarding-shape / arity /
+        // nil-kwrest safety of that call is enforced where the consumer
+        // routes it (the inline forwarding fast-path gate).
+        if !iseq.single_method_call() {
             return None;
         }
         Some(SlotId(rest_idx + 1))

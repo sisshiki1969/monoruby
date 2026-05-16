@@ -103,6 +103,19 @@ impl SlotState {
                 ctx.set_MaybeNone(kw + i);
             }
         }
+        // D1: tentatively annotate the forwarding-trampoline rest slot.
+        // The slot's `LinkMode` is left at its baseline (`S`): when the
+        // deferral activates the caller-side `set_arguments` physically
+        // stores a real `nil` there (GC-safe) and the consumer routes
+        // from the caller source; deopts rebuild the array via
+        // `forward_rest`. When it does *not* activate the caller builds
+        // the array normally and the (still-`S`) slot holds it — no
+        // spurious `C(nil)` write-back can clobber that array. The
+        // annotation only routes the consumer and adds the deopt
+        // materialization while live.
+        if let Some((dst, src, len)) = cc.forward_rest_deferral() {
+            ctx.deferred_rest = Some((dst, src, len));
+        }
         ctx
     }
 
@@ -207,6 +220,18 @@ impl SlotState {
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
         self.slots[slot.0 as usize] = mode;
+    }
+
+    /// D1: if `slot` is the deferred forwarding-rest slot, return its
+    /// `(src, len)` caller source range.
+    pub(in crate::codegen::jitgen) fn deferred_rest_src(
+        &self,
+        slot: SlotId,
+    ) -> Option<(SlotId, u16)> {
+        match self.deferred_rest {
+            Some((dst, src, len)) if dst == slot => Some((src, len)),
+            _ => None,
+        }
     }
 
     pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
@@ -1041,11 +1066,13 @@ impl AbstractFrame {
     }
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
-        // A deferred rest slot keeps `LinkMode::C(nil)`, so the literal
-        // write-back already stores a valid `nil` there — GC scanning is
-        // safe without materializing the array. The trampoline gate
-        // guarantees the frame is not capturable, so no heap snapshot
-        // observes the rest local before the (in-window) consume either.
+        // A deferred rest slot always physically holds a valid `Value`
+        // at any GC safepoint: when the deferral activated the
+        // caller-side `set_arguments` stored a real `nil` there; when it
+        // did not it holds the normally-built array. So GC scanning is
+        // safe without materializing, and the trampoline gate (single
+        // forwarding call, no eval/binding) guarantees the frame is not
+        // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
         WriteBack::new(vec![], literal, self.r15, void, vec![])
