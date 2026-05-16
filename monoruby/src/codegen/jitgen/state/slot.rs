@@ -20,6 +20,18 @@ pub(crate) struct SlotState {
     /// `S`) and hand the same physical register back, so the consumer
     /// ends up reading both operands from the same register.
     pinned_vfpr: Vec<FPReg>,
+    /// D1 forwarding-rest deferral: `Some((dst, src, len))` means the
+    /// rest-parameter slot `dst` of a forwarding-trampoline frame has
+    /// not been materialized as an `Array` on the fast path; its
+    /// positional source args live at `src .. src + len` in the
+    /// (outermost, non-specialized) caller frame. The slot's `LinkMode`
+    /// is kept at `C(nil)` (always GC-safe); this annotation only
+    /// (a) routes the single forwarding consumer to copy straight from
+    /// the source range and (b) adds an `Array` materialization to every
+    /// deopt `WriteBack` while it is live. Strictly transient: produced
+    /// at trampoline-frame entry, cleared at the single forwarding
+    /// consume; gated so it never crosses a basic-block join.
+    deferred_rest: Option<(SlotId, SlotId, u16)>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -45,6 +57,7 @@ impl SlotState {
             r15: None,
             local_num,
             pinned_vfpr: Vec::new(),
+            deferred_rest: None,
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -1023,10 +1036,19 @@ impl AbstractFrame {
         b
     }
 
+    fn wb_forward_rest(&self) -> Vec<(SlotId, SlotId, u16)> {
+        self.deferred_rest.into_iter().collect()
+    }
+
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
+        // A deferred rest slot keeps `LinkMode::C(nil)`, so the literal
+        // write-back already stores a valid `nil` there — GC scanning is
+        // safe without materializing the array. The trampoline gate
+        // guarantees the frame is not capturable, so no heap snapshot
+        // observes the rest local before the (in-window) consume either.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        WriteBack::new(vec![], literal, self.r15, void)
+        WriteBack::new(vec![], literal, self.r15, void, vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
@@ -1037,7 +1059,7 @@ impl AbstractFrame {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(xmm, literal, r15, vec![])
+        WriteBack::new(xmm, literal, r15, vec![], self.wb_forward_rest())
     }
 
     fn xmm_swap(&mut self, l: FPReg, r: FPReg) {

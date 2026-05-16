@@ -124,6 +124,15 @@ pub(crate) struct WriteBack {
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
+    /// Deferred forwarding-rest materialization (D1). Each entry
+    /// `(dst, src, len)`: the rest-parameter slot `dst` of a
+    /// forwarding-trampoline frame was *not* materialized as an `Array`
+    /// on the fast path; its positional source args live at
+    /// `src .. src + len`. On any side-exit / GC safepoint / frame
+    /// capture inside the deferral window the interpreter (or the heap
+    /// frame copy) reads the rest local, so the array must be built
+    /// here from the source slots and stored into `dst`.
+    forward_rest: Vec<(SlotId, SlotId, u16)>,
 }
 
 impl Hash for WriteBack {
@@ -143,6 +152,11 @@ impl Hash for WriteBack {
         }
         if let Some(slot) = self.r15 {
             slot.hash(state);
+        }
+        for (dst, src, len) in &self.forward_rest {
+            dst.hash(state);
+            src.hash(state);
+            len.hash(state);
         }
     }
 }
@@ -165,6 +179,9 @@ impl std::fmt::Debug for WriteBack {
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
+        for (dst, src, len) in &self.forward_rest {
+            s.push_str(&format!(" fwdrest[{:?};{}]->{:?}", src, len, dst));
+        }
         write!(f, "WriteBack({})", s)
     }
 }
@@ -175,12 +192,14 @@ impl WriteBack {
         literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
         void: Vec<SlotId>,
+        forward_rest: Vec<(SlotId, SlotId, u16)>,
     ) -> Self {
         Self {
             fpr,
             literal,
             r15,
             void,
+            forward_rest,
         }
     }
 }
@@ -762,9 +781,32 @@ impl JitModule {
             self.literal_to_stack2(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
-            monoasm! { self,
+            monoasm! { &mut *self,
                 movq [r14 - (conv(slot))], r15;
             }
+        }
+        // D1: materialize deferred forwarding-rest arrays. Runs last so
+        // the literal loop above has already written the `dst` slot
+        // (mode `C(nil)`) — keeping the frame GC-consistent during the
+        // `create_array` call (which may itself allocate). The source
+        // positional args live in the *caller* (outermost, non-
+        // specialized) JIT frame, so they are addressed `rbp`-relative
+        // (rbp is the stable outermost frame pointer, valid until the
+        // JIT method returns — and at an in-window side-exit neither the
+        // caller nor `f` has returned). `dst` is `f`'s rest local,
+        // addressed `r14`-relative like every other deopt restore.
+        for (dst, src, len) in wb.forward_rest.clone() {
+            self.gen_forward_rest_materialize(dst, src, len);
+        }
+    }
+
+    fn gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
+        monoasm! { self,
+            lea  rdi, [rbp - (rbp_local(src))];
+            movq rsi, (len as usize);
+            movq rax, (runtime::create_array);
+            call rax;
+            movq [r14 - (conv(dst))], rax;
         }
     }
 }

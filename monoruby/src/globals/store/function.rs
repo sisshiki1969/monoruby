@@ -1257,4 +1257,55 @@ impl Store {
                     info.positional_within_range(pos_num)
                 })
     }
+
+    ///
+    /// Structural gate for D1 forwarding-rest deferral.
+    ///
+    /// Returns the rest-parameter local `SlotId` iff `fid` is a *pure
+    /// forwarding trampoline*: `def f(...) = g(...)` — i.e. a method
+    /// declared with `...` (no required/optional/post positionals),
+    /// whose entire body is a single basic block containing exactly one
+    /// call, and that call forwards the trailing `...` (its only splat
+    /// is the rest slot). For such an `f` the synthetic rest `Array`
+    /// built at the caller boundary is consumed once, by that single
+    /// forwarding call, with no intervening basic-block join — the
+    /// precondition for deferring its materialization.
+    ///
+    /// This is the *structural* half of the gate only; the call-site
+    /// half (caller is the outermost non-specialized JIT frame, source
+    /// args spillable, monomorphic inner callee, no forwarded kw/block)
+    /// is checked where the deferral is actually produced.
+    ///
+    /// Conservative: may reject a valid trampoline, never accepts an
+    /// unsound shape.
+    ///
+    pub(crate) fn forwarding_trampoline_rest(&self, fid: FuncId) -> Option<SlotId> {
+        let info = &self[fid];
+        let iseq_id = info.is_iseq()?;
+        if info.req_num() != 0 || info.opt_num() != 0 || info.post_num() != 0 {
+            return None;
+        }
+        if !info.is_rest() || !info.params().forwarding() {
+            return None;
+        }
+        let rest_idx = info.params().is_rest()?;
+        let iseq = &self[iseq_id];
+        // Single basic block ⇒ no join can observe the deferred slot.
+        if iseq.bb_info.len() != 1 {
+            return None;
+        }
+        // Exactly one call, and it forwards the trailing `...`.
+        if iseq.callsite_map.len() != 1 {
+            return None;
+        }
+        let cid = *iseq.callsite_map.values().next()?;
+        let cs = &self[cid];
+        if !cs.forwarding || cs.pos_num == 0 {
+            return None;
+        }
+        if cs.splat_pos.as_slice() != [cs.pos_num - 1] {
+            return None;
+        }
+        Some(SlotId(rest_idx + 1))
+    }
 }
