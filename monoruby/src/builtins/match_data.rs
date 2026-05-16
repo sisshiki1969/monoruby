@@ -142,20 +142,28 @@ fn deconstruct_keys_md(
         }
     } else if arg.is_array_ty() {
         let arr = arg.as_array();
-        // CRuby: if any requested symbol isn't a named capture, return `{}`.
+        // CRuby: more requested keys than named captures -> `{}`.
+        if arr.len() > names.len() {
+            return Ok(Value::hash(RubyMap::default()));
+        }
         for key in arr.iter() {
             let Some(sym) = key.try_symbol() else {
-                return Ok(Value::hash(RubyMap::default()));
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected Symbol)",
+                    key.get_real_class_name(globals)
+                )));
             };
             let name = sym.get_name();
+            // Stop at the first key with no corresponding named
+            // capture, returning what was collected so far.
             if !names.iter().any(|n| *n == name) {
-                return Ok(Value::hash(RubyMap::default()));
+                break;
             }
             map.insert(*key, val_for(&name), vm, globals)?;
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected Array or nil)",
+            "wrong argument type {} (expected Array)",
             arg.get_real_class_name(globals)
         )));
     }
@@ -795,6 +803,21 @@ mod tests {
         run_test(r##"/(?<a>foo)(?<b>bar)(?<a>BAZ)?/.match("foobarbaz").inspect"##);
 
         run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").captures"##);
+    }
+
+    #[test]
+    fn match_data_deconstruct_keys() {
+        run_test(
+            r##"
+            m = /(?<f>foo)(?<b>bar)(?<c>baz)/.match("foobarbaz")
+            [m.deconstruct_keys(nil), m.deconstruct_keys([:f]),
+             m.deconstruct_keys([]), m.deconstruct_keys([:f, :a, :b]),
+             m.deconstruct_keys([:f, :b, :x])]
+            "##,
+        );
+        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys(1)"##);
+        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys("asd")"##);
+        run_test_error(r##"/(?<f>x)/.match("x").deconstruct_keys(['s', :f])"##);
     }
 
     #[test]
