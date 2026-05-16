@@ -1595,4 +1595,206 @@ mod tests {
             "##,
         );
     }
+
+    #[test]
+    fn method_to_proc_surface() {
+        // arity / parameters reflect the *method*, not the shared body.
+        run_test_with_prelude(
+            r##"
+            m = C.new.method(:f)
+            g = C.new.method(:g)
+            [
+              m.to_proc.arity,
+              g.to_proc.arity,
+              m.to_proc.parameters,
+              m.to_proc.lambda?,
+              m.to_proc.call(10, 20),
+            ]
+            "##,
+            r##"
+            class C
+              def f(a, b); a + b; end
+              def g(*rest); rest; end
+            end
+            "##,
+        );
+        // source_location of a Method#to_proc proc is the method's,
+        // shaped [String, Integer] on the def line.
+        run_test_with_prelude(
+            r##"
+            sl = C.new.method(:f).to_proc.source_location
+            ms = C.instance_method(:f).source_location
+            [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String),
+             sl[1].is_a?(Integer), sl[1] == ms[1]]
+            "##,
+            r##"
+            class C
+              def f(a, b); a + b; end
+            end
+            "##,
+        );
+        // binding's receiver is the *method's* receiver.
+        run_test_with_prelude(
+            r##"
+            obj = C.new
+            pr = obj.method(:f).to_proc
+            pr.binding.receiver.equal?(obj)
+            "##,
+            r##"
+            class C
+              def f; self; end
+            end
+            "##,
+        );
+        // A block passed to the to_proc proc is forwarded to the method.
+        run_test_with_prelude(
+            r##"
+            C.new.method(:each_twice).to_proc.call(3) { |n| n }
+            "##,
+            r##"
+            class C
+              def each_twice(n); r = []; 2.times { r << (yield n) }; r; end
+            end
+            "##,
+        );
+        // lambda-from-method semantics: instance_exec does NOT rebind
+        // the receiver seen by the method body.
+        run_test_with_prelude(
+            r##"
+            pr = A.new.method(:who).to_proc
+            "a string".instance_exec(&pr)
+            "##,
+            r##"
+            class A
+              def who; self.class.name; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_to_proc_method_missing() {
+        // A method_missing-backed Method#to_proc: arity is -1 and
+        // calling it dispatches through (a possibly redefined)
+        // method_missing.
+        run_test_with_prelude(
+            r##"
+            d = D.new
+            pr = d.method(:anything).to_proc
+            [pr.arity, pr.call(1, 2)]
+            "##,
+            r##"
+            class D
+              def respond_to_missing?(name, priv = false); true; end
+              def method_missing(name, *args); [name, args]; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_name_and_original_name() {
+        // Plain lookup: name == original_name == the looked-up name.
+        run_test_with_prelude(
+            r##"
+            m = C.new.method(:f)
+            [m.name, m.original_name]
+            "##,
+            r##"
+            class C; def f; 1; end; end
+            "##,
+        );
+        // alias: name is the alias, original_name is the definition.
+        run_test_once(
+            r##"
+            class C; def f; 1; end; alias g f; end
+            m = C.new.method(:g)
+            [m.name, m.original_name]
+            "##,
+        );
+        // define_method from an UnboundMethod propagates the original
+        // definition name behind the new installed name.
+        run_test_once(
+            r##"
+            class C
+              define_method(:my_is_a?, Kernel.instance_method(:is_a?))
+            end
+            m = C.new.method(:my_is_a?)
+            [m.name, m.original_name, m.call(C)]
+            "##,
+        );
+        // define_method from a bound Method likewise (owner-compatible
+        // target: Sub < Base).
+        run_test_once(
+            r##"
+            class Base; def real(x); x * 3; end; end
+            class Sub < Base; define_method(:wrapped, Base.new.method(:real)); end
+            m = Sub.new.method(:wrapped)
+            [m.name, m.original_name, m.call(4)]
+            "##,
+        );
+        // define_method from an owner-unrelated bound Method is a
+        // TypeError (matching CRuby's bind-argument check).
+        run_test_error(
+            r##"
+            class Src; def real(x); x * 3; end; end
+            class Dst; define_method(:wrapped, Src.new.method(:real)); end
+            "##,
+        );
+        // singleton_method name tracking.
+        run_test_once(
+            r##"
+            obj = Object.new
+            def obj.solo; 42; end
+            m = obj.singleton_method(:solo)
+            [m.name, m.original_name, m.call]
+            "##,
+        );
+        // (public_)instance_method name / original_name through alias.
+        run_test_once(
+            r##"
+            class C; def f; 1; end; alias g f; end
+            um  = C.instance_method(:g)
+            pum = C.public_instance_method(:g)
+            [um.name, um.original_name, pum.name, pum.original_name]
+            "##,
+        );
+    }
+
+    #[test]
+    fn define_method_from_proc_source_location() {
+        // resolve_iseq sees through the proc-based define_method
+        // wrapper so source_location is the block's [String, Integer].
+        run_test_once(
+            r##"
+            class C; define_method(:dm) { |x| x + 1 }; end
+            sl = C.instance_method(:dm).source_location
+            ps = C.new.method(:dm).to_proc.source_location
+            [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String),
+             sl[1].is_a?(Integer), ps[1] == sl[1],
+             C.new.method(:dm).call(9)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn module_method_bound_super_fallback() {
+        // A module's UnboundMethod bound (via bind_call / bind) to an
+        // object whose class does not include the module: `super`
+        // resolves against the receiver's own class hierarchy.
+        run_test_once(
+            r##"
+            module Mod
+              def foo_super; "Mod-" + super; end
+            end
+            class Parent
+              def foo_super; "Parent"; end
+            end
+            um = Mod.instance_method(:foo_super)
+            a = um.bind_call(Parent.new)
+            b = um.bind(Parent.new).call
+            [a, b]
+            "##,
+        );
+    }
 }
