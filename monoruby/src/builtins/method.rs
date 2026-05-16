@@ -172,15 +172,15 @@ fn uarity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 // TODO: support keyword arguments
 #[monoruby_builtin]
 fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let method = self_.as_method();
-    let self_val = method.receiver();
-    let func_id = method.func_id();
-    let proc = Proc::from_outer(
-        Lfp::heap_frame(self_val, globals[func_id].meta()),
-        func_id,
-        pc,
-    );
+    // CRuby's Method#to_proc is a lambda bound to the Method's
+    // receiver: its self ignores instance_exec/instance_eval rebinding
+    // and a block passed to the proc is forwarded to the method. We
+    // mirror Symbol#to_proc — stash the Method object on the proc's
+    // outer frame and run a shared body that re-invokes it.
+    let method_val = lfp.self_val();
+    let body_fid = METHOD_TO_PROC_BODY_FUNCID;
+    let outer_lfp = Lfp::heap_frame(method_val, globals[body_fid].meta());
+    let proc = Proc::from_outer(outer_lfp, body_fid, pc);
     Ok(proc.into())
 }
 
@@ -190,23 +190,38 @@ fn to_proc(_: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// - bind(obj) -> Method
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/bind.html]
-// TODO: we must reject invalid objects for *obj*
 #[monoruby_builtin]
-fn bind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    Ok(Value::new_method(
-        lfp.arg(0),
-        method.func_id(),
-        method.owner(),
-    ))
+    let recv = lfp.arg(0);
+    let owner = method.owner();
+    let func_id = method.func_id();
+    let lookup = method.lookup_name(&globals.store);
+    let original = method.original_name(&globals.store);
+    check_bind_receiver(globals, owner, recv)?;
+    Ok(Value::new_method_named(recv, func_id, owner, lookup, original))
+}
+
+/// CRuby `convert_umethod_to_method` bind check: the receiver must be
+/// `kind_of?` the module the method was defined in. A genuine `Module`
+/// owner (mixin) binds freely; a `Class`/singleton-class owner requires
+/// the receiver's class (the metaclass, for a class/module receiver) to
+/// have `owner` in its ancestor chain.
+fn check_bind_receiver(globals: &mut Globals, owner: ClassId, recv: Value) -> Result<()> {
+    let class_of = if let Some(m) = recv.is_class_or_module() {
+        globals.store.get_metaclass(m.id()).id()
+    } else {
+        recv.class()
+    };
+    super::module::validate_bind_target(globals, owner, class_of)
 }
 
 fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
     if is_mm {
         return String::new();
     }
-    if let Some(iseq) = store[func_id].is_iseq() {
+    if let Some(iseq) = store.resolve_iseq(func_id) {
         let info = &store[iseq];
         format!(
             " {}:{}",
@@ -229,7 +244,7 @@ fn method_inspect_str(
     label: &str,
     recv: Option<Value>,
     owner: ClassId,
-    name: IdentId,
+    name: &str,
     func_id: FuncId,
     is_mm: bool,
 ) -> String {
@@ -286,19 +301,31 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let method = self_val.as_method();
     let store = &globals.store;
     let name = match method.method_missing_name() {
-        Some(t) => t,
-        None => store[method.func_id()].name().unwrap(),
+        Some(t) => t.to_string(),
+        None => display_name(store, method.lookup_name(store), method.original_name(store)),
     };
     let s = method_inspect_str(
         store,
         "Method",
         Some(method.receiver()),
         method.owner(),
-        name,
+        &name,
         method.func_id(),
         method.method_missing_name().is_some(),
     );
     Ok(Value::string(s))
+}
+
+/// CRuby's `#<Method: …#name(original)>` form: when a method was
+/// reached under a different name than its original definition
+/// (`alias_method` / `define_method` from a Method/UnboundMethod), the
+/// original name is shown in parentheses; otherwise just the name.
+fn display_name(_store: &Store, lookup: IdentId, original: IdentId) -> String {
+    if lookup != original {
+        format!("{lookup}({original})")
+    } else {
+        lookup.to_string()
+    }
 }
 
 ///
@@ -314,15 +341,15 @@ fn uinspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let method = self_val.as_umethod();
     let store = &globals.store;
     let name = match method.method_missing_name() {
-        Some(t) => t,
-        None => store[method.func_id()].name().unwrap(),
+        Some(t) => t.to_string(),
+        None => display_name(store, method.lookup_name(store), method.original_name(store)),
     };
     let s = method_inspect_str(
         store,
         "UnboundMethod",
         None,
         method.owner(),
-        name,
+        &name,
         method.func_id(),
         method.method_missing_name().is_some(),
     );
@@ -347,15 +374,24 @@ fn source_location(
     if method.method_missing_name().is_some() {
         return Ok(Value::nil());
     }
-    let func_id = method.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
-        let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
-        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
-        Ok(Value::array2(file_name, line))
-    } else {
-        Ok(Value::nil())
+    Ok(iseq_source_location(&globals.store, method.func_id()).unwrap_or_else(Value::nil))
+}
+
+/// `[path, line]` for a method's iseq, or `nil` for a Rust-builtin /
+/// internal method. monoruby implements many core methods in Ruby
+/// under `~/.monoruby/`; CRuby's equivalents are C functions whose
+/// `source_location` is `nil` (or an `<internal:…>` marker), so we
+/// report `nil` for anything defined in that internal library rather
+/// than leaking an absolute install path.
+fn iseq_source_location(store: &Store, func_id: FuncId) -> Option<Value> {
+    let iseq = store.resolve_iseq(func_id)?;
+    let info = &store[iseq];
+    let path = info.sourceinfo.file_name().to_string();
+    if path.contains("/.monoruby/") {
+        return None;
     }
+    let line = Value::integer(info.sourceinfo.get_line(&info.loc) as i64);
+    Some(Value::array2(Value::string(path), line))
 }
 
 ///
@@ -376,15 +412,7 @@ fn usource_location(
     if method.method_missing_name().is_some() {
         return Ok(Value::nil());
     }
-    let func_id = method.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
-        let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
-        let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
-        Ok(Value::array2(file_name, line))
-    } else {
-        Ok(Value::nil())
-    }
+    Ok(iseq_source_location(&globals.store, method.func_id()).unwrap_or_else(Value::nil))
 }
 
 ///
@@ -400,9 +428,7 @@ fn name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if let Some(target) = method.method_missing_name() {
         return Ok(Value::symbol(target));
     }
-    let func_id = method.func_id();
-    let id = globals[func_id].name().unwrap();
-    Ok(Value::symbol(id))
+    Ok(Value::symbol(method.lookup_name(&globals.store)))
 }
 
 ///
@@ -431,6 +457,57 @@ fn owner(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(globals.store[method.owner()].get_module().get())
 }
 
+/// Resolve the method `super` would dispatch to from a method with
+/// `cur_func_id` (installed under `func_name`) on `start_class`'s
+/// ancestor chain. Returns `(func_id, owner, original_name)` of the
+/// super method, or `None` when there is no super (top of chain, or
+/// the method was `undef`'d in a closer ancestor).
+///
+/// Walks the linear ancestor chain rather than trusting the Method's
+/// `owner`: a `public :m` / `private :m` re-declaration or an
+/// `alias_method` installs a shadow entry whose `owner` is the
+/// re-declaring class, not the module that actually defines the body,
+/// so matching on `owner` alone would mis-locate (or wrap around to)
+/// the same method.
+fn resolve_super_entry(
+    store: &Store,
+    start_class: ClassId,
+    func_name: IdentId,
+    cur_func_id: FuncId,
+) -> Option<(FuncId, ClassId, IdentId)> {
+    let mut chain = vec![];
+    let mut node = Some(store[start_class].get_module());
+    while let Some(n) = node {
+        chain.push(n.id());
+        node = n.superclass();
+    }
+    // Deepest node whose own entry resolves to *this* func (covers the
+    // visibility-shadow / alias entries that share the same FuncId).
+    let mut def_idx = None;
+    for (i, &cid) in chain.iter().enumerate() {
+        if let Some(e) = store.own_method_entry(cid, func_name)
+            && e.func_id() == Some(cur_func_id)
+        {
+            def_idx = Some(i);
+        }
+    }
+    let start = def_idx? + 1;
+    for &cid in &chain[start..] {
+        if let Some(e) = store.own_method_entry(cid, func_name) {
+            match e.func_id() {
+                // An `undef` marker in a closer ancestor severs super.
+                None => return None,
+                Some(fid) if fid != cur_func_id => {
+                    return Some((fid, e.owner(), e.original_name()));
+                }
+                // Same FuncId again (another shadow) — keep walking.
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 ///
 /// ### Method#super_method
 ///
@@ -445,35 +522,14 @@ fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
         return Ok(Value::nil());
     }
     let receiver = method.receiver();
-    let owner = method.owner();
     let Some(name) = globals.store[method.func_id()].name() else {
         return Ok(Value::nil());
     };
-    // Walk the receiver's ancestor chain to the node that defines the
-    // current method, then resolve `name` from the node above it.
-    let mut node = Some(globals.store[receiver.class()].get_module());
-    while let Some(n) = node {
-        if n.id() == owner {
-            break;
-        }
-        node = n.superclass();
-    }
-    let Some(found) = node else {
-        return Ok(Value::nil());
-    };
-    let Some(sup) = found.superclass() else {
-        return Ok(Value::nil());
-    };
-    match globals.store.check_method_for_class(sup.id(), name) {
-        // A module's synthetic `Object` superclass can re-resolve the
-        // *same* method (e.g. `Kernel#method` via `Object`); that is a
-        // wrap-around, not a real super.
-        Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => {
-                Ok(Value::new_method(receiver, func_id, entry.owner()))
-            }
-            _ => Ok(Value::nil()),
-        },
+    let lookup = method.lookup_name(&globals.store);
+    match resolve_super_entry(&globals.store, receiver.class(), name, method.func_id()) {
+        Some((func_id, owner, original)) => Ok(Value::new_method_named(
+            receiver, func_id, owner, lookup, original,
+        )),
         None => Ok(Value::nil()),
     }
 }
@@ -485,7 +541,7 @@ fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/unbind.html]
 #[monoruby_builtin]
-fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn unbind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     if let Some(target) = method.method_missing_name() {
@@ -495,7 +551,14 @@ fn unbind(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
             method.owner(),
         ));
     }
-    Ok(Value::new_unbound_method(method.func_id(), method.owner()))
+    // Preserve lookup / original names across unbind so the resulting
+    // UnboundMethod's #name / #original_name / #inspect are unchanged.
+    Ok(Value::new_unbound_method_named(
+        method.func_id(),
+        method.owner(),
+        method.lookup_name(&globals.store),
+        method.original_name(&globals.store),
+    ))
 }
 
 ///
@@ -511,9 +574,7 @@ fn uname(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if let Some(target) = method.method_missing_name() {
         return Ok(Value::symbol(target));
     }
-    let func_id = method.func_id();
-    let id = globals[func_id].name().unwrap();
-    Ok(Value::symbol(id))
+    Ok(Value::symbol(method.lookup_name(&globals.store)))
 }
 
 ///
@@ -551,17 +612,11 @@ fn usuper_method(
     let Some(name) = globals.store[method.func_id()].name() else {
         return Ok(Value::nil());
     };
-    let found = globals.store[owner].get_module();
-    let Some(sup) = found.superclass() else {
-        return Ok(Value::nil());
-    };
-    match globals.store.check_method_for_class(sup.id(), name) {
-        Some(entry) => match entry.func_id() {
-            Some(func_id) if func_id != method.func_id() => {
-                Ok(Value::new_unbound_method(func_id, entry.owner()))
-            }
-            _ => Ok(Value::nil()),
-        },
+    let lookup = method.lookup_name(&globals.store);
+    match resolve_super_entry(&globals.store, owner, name, method.func_id()) {
+        Some((func_id, sup_owner, original)) => Ok(Value::new_unbound_method_named(
+            func_id, sup_owner, lookup, original,
+        )),
         None => Ok(Value::nil()),
     }
 }
@@ -625,8 +680,10 @@ fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 fn original_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
-    let id = globals[method.func_id()].name().unwrap();
-    Ok(Value::symbol(id))
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
+    Ok(Value::symbol(method.original_name(&globals.store)))
 }
 
 /// ### UnboundMethod#original_name -- see `Method#original_name`.
@@ -639,8 +696,10 @@ fn uoriginal_name(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    let id = globals[method.func_id()].name().unwrap();
-    Ok(Value::symbol(id))
+    if let Some(target) = method.method_missing_name() {
+        return Ok(Value::symbol(target));
+    }
+    Ok(Value::symbol(method.original_name(&globals.store)))
 }
 
 ///
@@ -704,15 +763,12 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         ));
     }
     let receiver = args.remove(0);
-    // The receiver must be kind_of? the owner module of the original
-    // method; otherwise CRuby raises TypeError. We rely on
-    // `invoke_func_inner` raising the appropriate error if the func is
-    // applied to an incompatible receiver class -- the spec covers both
-    // success and the error path through `bind_call` directly.
-    let _ = method.owner();
+    let owner = method.owner();
+    let func_id = method.func_id();
+    check_bind_receiver(globals, owner, receiver)?;
     vm.invoke_func_inner(
         globals,
-        method.func_id(),
+        func_id,
         receiver,
         &args,
         lfp.block(),
@@ -1536,6 +1592,208 @@ mod tests {
             module BetweenBAndC; include B; def overridden; "x" + super; end; end
             class C; include BetweenBAndC; def overridden; "C" + super; end; end
             module OverrideAgain; def overridden; "O" + super; end; end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_to_proc_surface() {
+        // arity / parameters reflect the *method*, not the shared body.
+        run_test_with_prelude(
+            r##"
+            m = C.new.method(:f)
+            g = C.new.method(:g)
+            [
+              m.to_proc.arity,
+              g.to_proc.arity,
+              m.to_proc.parameters,
+              m.to_proc.lambda?,
+              m.to_proc.call(10, 20),
+            ]
+            "##,
+            r##"
+            class C
+              def f(a, b); a + b; end
+              def g(*rest); rest; end
+            end
+            "##,
+        );
+        // source_location of a Method#to_proc proc is the method's,
+        // shaped [String, Integer] on the def line.
+        run_test_with_prelude(
+            r##"
+            sl = C.new.method(:f).to_proc.source_location
+            ms = C.instance_method(:f).source_location
+            [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String),
+             sl[1].is_a?(Integer), sl[1] == ms[1]]
+            "##,
+            r##"
+            class C
+              def f(a, b); a + b; end
+            end
+            "##,
+        );
+        // binding's receiver is the *method's* receiver.
+        run_test_with_prelude(
+            r##"
+            obj = C.new
+            pr = obj.method(:f).to_proc
+            pr.binding.receiver.equal?(obj)
+            "##,
+            r##"
+            class C
+              def f; self; end
+            end
+            "##,
+        );
+        // A block passed to the to_proc proc is forwarded to the method.
+        run_test_with_prelude(
+            r##"
+            C.new.method(:each_twice).to_proc.call(3) { |n| n }
+            "##,
+            r##"
+            class C
+              def each_twice(n); r = []; 2.times { r << (yield n) }; r; end
+            end
+            "##,
+        );
+        // lambda-from-method semantics: instance_exec does NOT rebind
+        // the receiver seen by the method body.
+        run_test_with_prelude(
+            r##"
+            pr = A.new.method(:who).to_proc
+            "a string".instance_exec(&pr)
+            "##,
+            r##"
+            class A
+              def who; self.class.name; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_to_proc_method_missing() {
+        // A method_missing-backed Method#to_proc: arity is -1 and
+        // calling it dispatches through (a possibly redefined)
+        // method_missing.
+        run_test_with_prelude(
+            r##"
+            d = D.new
+            pr = d.method(:anything).to_proc
+            [pr.arity, pr.call(1, 2)]
+            "##,
+            r##"
+            class D
+              def respond_to_missing?(name, priv = false); true; end
+              def method_missing(name, *args); [name, args]; end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn method_name_and_original_name() {
+        // Plain lookup: name == original_name == the looked-up name.
+        run_test_with_prelude(
+            r##"
+            m = C.new.method(:f)
+            [m.name, m.original_name]
+            "##,
+            r##"
+            class C; def f; 1; end; end
+            "##,
+        );
+        // alias: name is the alias, original_name is the definition.
+        run_test_once(
+            r##"
+            class C; def f; 1; end; alias g f; end
+            m = C.new.method(:g)
+            [m.name, m.original_name]
+            "##,
+        );
+        // define_method from an UnboundMethod propagates the original
+        // definition name behind the new installed name.
+        run_test_once(
+            r##"
+            class C
+              define_method(:my_is_a?, Kernel.instance_method(:is_a?))
+            end
+            m = C.new.method(:my_is_a?)
+            [m.name, m.original_name, m.call(C)]
+            "##,
+        );
+        // define_method from a bound Method likewise (owner-compatible
+        // target: Sub < Base).
+        run_test_once(
+            r##"
+            class Base; def real(x); x * 3; end; end
+            class Sub < Base; define_method(:wrapped, Base.new.method(:real)); end
+            m = Sub.new.method(:wrapped)
+            [m.name, m.original_name, m.call(4)]
+            "##,
+        );
+        // define_method from an owner-unrelated bound Method is a
+        // TypeError (matching CRuby's bind-argument check).
+        run_test_error(
+            r##"
+            class Src; def real(x); x * 3; end; end
+            class Dst; define_method(:wrapped, Src.new.method(:real)); end
+            "##,
+        );
+        // singleton_method name tracking.
+        run_test_once(
+            r##"
+            obj = Object.new
+            def obj.solo; 42; end
+            m = obj.singleton_method(:solo)
+            [m.name, m.original_name, m.call]
+            "##,
+        );
+        // (public_)instance_method name / original_name through alias.
+        run_test_once(
+            r##"
+            class C; def f; 1; end; alias g f; end
+            um  = C.instance_method(:g)
+            pum = C.public_instance_method(:g)
+            [um.name, um.original_name, pum.name, pum.original_name]
+            "##,
+        );
+    }
+
+    #[test]
+    fn define_method_from_proc_source_location() {
+        // resolve_iseq sees through the proc-based define_method
+        // wrapper so source_location is the block's [String, Integer].
+        run_test_once(
+            r##"
+            class C; define_method(:dm) { |x| x + 1 }; end
+            sl = C.instance_method(:dm).source_location
+            ps = C.new.method(:dm).to_proc.source_location
+            [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String),
+             sl[1].is_a?(Integer), ps[1] == sl[1],
+             C.new.method(:dm).call(9)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn module_method_bound_super_fallback() {
+        // A module's UnboundMethod bound (via bind_call / bind) to an
+        // object whose class does not include the module: `super`
+        // resolves against the receiver's own class hierarchy.
+        run_test_once(
+            r##"
+            module Mod
+              def foo_super; "Mod-" + super; end
+            end
+            class Parent
+              def foo_super; "Parent"; end
+            end
+            um = Mod.instance_method(:foo_super)
+            a = um.bind_call(Parent.new)
+            b = um.bind(Parent.new).call
+            [a, b]
             "##,
         );
     }

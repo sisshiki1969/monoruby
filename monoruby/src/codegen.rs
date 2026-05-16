@@ -1352,13 +1352,17 @@ extern "C" fn set_instance_var_with_cache(
     }
     if class_id == cache.class_id {
         rval.set_ivar_by_ivarid(cache.ivar_id, val);
-        return Some(Value::nil());
+        // Return the assigned value: an `attr_writer`-generated `name=`
+        // method must yield it (e.g. `obj.method(:x=).call(v) == v`).
+        // The VM ivar-store path ignores this (uses it only for the
+        // None = error check), so this is safe there too.
+        return Some(val);
     }
     let ivar_id = globals.store.get_ivar_id(class_id, name);
     let new_cache = InstanceVarCache { class_id, ivar_id };
     *cache = new_cache;
     rval.set_ivar_by_ivarid(ivar_id, val);
-    Some(Value::nil())
+    Some(val)
 }
 
 extern "C" fn stack_overflow(executor: &mut Executor) -> Option<Value> {

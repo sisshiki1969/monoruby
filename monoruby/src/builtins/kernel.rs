@@ -3108,7 +3108,18 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
     match globals.find_method_for_object(receiver, method_name) {
-        Ok((func_id, _, owner)) => Ok(Value::new_method(receiver, func_id, owner)),
+        Ok((func_id, _, owner)) => {
+            let original_name = globals
+                .store
+                .original_name_by_class_id(receiver.class(), method_name);
+            Ok(Value::new_method_named(
+                receiver,
+                func_id,
+                owner,
+                method_name,
+                original_name,
+            ))
+        }
         Err(err) => {
             // CRuby: if `receiver.respond_to_missing?(name, true)` is truthy,
             // return a Method that proxies to `method_missing`.
@@ -3169,7 +3180,16 @@ fn singleton_method(
         }
     };
     let (func_id, _, owner) = globals.store.find_method_for_class(class_id, method_name)?;
-    Ok(Value::new_method(receiver, func_id, owner))
+    let original_name = globals
+        .store
+        .original_name_by_class_id(class_id, method_name);
+    Ok(Value::new_method_named(
+        receiver,
+        func_id,
+        owner,
+        method_name,
+        original_name,
+    ))
 }
 
 ///

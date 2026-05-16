@@ -1013,8 +1013,16 @@ pub(super) extern "C" fn undef_method(
     globals: &mut Globals,
     method: IdentId,
 ) -> Option<Value> {
-    let func_id = vm.cfp().lfp().func_id();
-    let class_id = func_id.lexical_class(globals);
+    // Prefer the runtime class context (`class` body / `class_eval` /
+    // `module_eval` push it) so `klass.class_eval { undef foo }` targets
+    // `klass` rather than the block's captured lexical class (Object at
+    // top level). When no runtime context is active — e.g. `undef` in a
+    // plain method body (`def self.x; undef foo; end`) where the method
+    // frame is empty — fall back to the iseq's lexical class, matching
+    // CRuby's `cref->klass`.
+    let class_id = vm
+        .class_context_id_opt()
+        .unwrap_or_else(|| vm.cfp().lfp().func_id().lexical_class(globals));
     match globals.undef_method_for_class(class_id, method) {
         Err(err) => {
             vm.set_error(err);

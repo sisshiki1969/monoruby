@@ -358,6 +358,17 @@ pub(crate) const YIELDER_FUNCID: FuncId = FuncId::new(2);
 ///
 pub(crate) const SYMBOL_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(3);
 
+///
+/// Pre-assigned FuncId for the shared body of `Method#to_proc` /
+/// `UnboundMethod`-bound `Method#to_proc`.
+///
+/// Like `Symbol#to_proc`, the Method object lives on the proc's
+/// `outer_lfp`; the body reads it there (so `instance_exec` rebinding
+/// the block's self is ignored, matching CRuby's lambda semantics) and
+/// invokes the bound method with the forwarded args and block.
+///
+pub(crate) const METHOD_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(4);
+
 #[monoruby_builtin]
 pub(crate) fn enum_yielder(
     vm: &mut Executor,
@@ -438,6 +449,48 @@ pub(crate) fn symbol_to_proc_body(
     }
     let bh = lfp.block();
     vm.invoke_method_inner(globals, symbol, recv, &rest, bh, None)
+}
+
+///
+/// Shared body for procs returned by `Method#to_proc`.
+///
+/// The Method object lives on the proc's `outer_lfp` (set up by
+/// `Method#to_proc`); reading it there — not from `lfp.self_val()` —
+/// means `instance_exec`/`instance_eval` rebinding the block's self is
+/// ignored, matching CRuby's lambda-from-method semantics. `arg(0)` is
+/// the rest array of call arguments; any block is forwarded.
+///
+#[monoruby_builtin]
+pub(crate) fn method_to_proc_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let method_val = lfp
+        .outer()
+        .expect("method_to_proc_body called without outer_lfp")
+        .self_val();
+    let method = method_val.as_method();
+    let receiver = method.receiver();
+    let func_id = method.func_id();
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let bh = lfp.block();
+    if let Some(target) = method.method_missing_name() {
+        // Mirror `Method#call`: dispatch `receiver.method_missing(name, …)`
+        // by name so a later `method_missing` redefinition is honored.
+        let mut mm_args = vec![Value::symbol(target)];
+        mm_args.extend(args);
+        return vm.invoke_method_inner(
+            globals,
+            IdentId::METHOD_MISSING,
+            receiver,
+            &mm_args,
+            bh,
+            None,
+        );
+    }
+    vm.invoke_func_inner(globals, func_id, receiver, &args, bh, None)
 }
 
 impl Funcs {
@@ -1228,6 +1281,22 @@ impl FuncInfo {
 }
 
 impl Store {
+    ///
+    /// Resolve `func_id` to its underlying iseq, following one level of
+    /// `define_method`-from-proc indirection.
+    ///
+    /// A proc-based `define_method` installs a `FuncKind::Proc` wrapper
+    /// whose own `kind` is not an iseq; the actual source lives in the
+    /// wrapped block's func. `source_location` must see through that.
+    ///
+    pub(crate) fn resolve_iseq(&self, func_id: FuncId) -> Option<ISeqId> {
+        match &self[func_id].kind {
+            FuncKind::ISeq(iseq) => Some(*iseq),
+            FuncKind::Proc(proc) => self[proc.func_id()].is_iseq(),
+            _ => None,
+        }
+    }
+
     ///
     /// Check whether this function call is a *simple* call.
     ///

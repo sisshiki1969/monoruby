@@ -24,6 +24,12 @@ pub(crate) struct MethodTableEntry {
     func_id: Option<FuncId>,
     visibility: Visibility,
     is_basic_op: bool,
+    /// The method's *original* definition name, tracked through
+    /// `alias_method` and `define_method`-from-(Unbound)Method so that
+    /// `Method#original_name` and the `#name(original)` form of
+    /// `Method#inspect` can recover it. For a plainly-defined method
+    /// (`def`, `attr_*`, builtin) this equals the entry's own name.
+    original_name: IdentId,
 }
 
 impl MethodTableEntry {
@@ -33,6 +39,10 @@ impl MethodTableEntry {
 
     pub fn owner(&self) -> ClassId {
         self.owner
+    }
+
+    pub fn original_name(&self) -> IdentId {
+        self.original_name
     }
 
     pub fn visibility(&self) -> Visibility {
@@ -1066,6 +1076,21 @@ impl ClassInfoTable {
     ) -> Option<MethodTableEntry> {
         let module = self[class_id].get_module();
         self.search_method(module, name)
+    }
+
+    /// The original definition name of `name` as resolved from
+    /// `class_id`'s ancestor chain (following `alias` /
+    /// `define_method`), falling back to `name` itself when the
+    /// method is not found. Seeds `Method#original_name` for
+    /// `Object#method`, `Module#instance_method`, … .
+    pub(crate) fn original_name_by_class_id(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> IdentId {
+        self.search_method_by_class_id(class_id, name)
+            .map(|e| e.original_name())
+            .unwrap_or(name)
     }
 }
 

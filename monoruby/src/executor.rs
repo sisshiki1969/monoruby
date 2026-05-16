@@ -644,6 +644,15 @@ impl Executor {
     }
 
     pub fn context_class_id(&self) -> ClassId {
+        self.class_context_id_opt().unwrap_or(OBJECT_CLASS)
+    }
+
+    /// The class of the innermost runtime cref in the current frame,
+    /// or `None` when no runtime class context is active (a plain
+    /// method body or the top level). `undef` / `alias` use this to
+    /// prefer the `class_eval` / `class`-body definee while still
+    /// falling back to the iseq's captured lexical class.
+    pub fn class_context_id_opt(&self) -> Option<ClassId> {
         self.lexical_class
             .last()
             .unwrap()
@@ -652,7 +661,6 @@ impl Executor {
                 DefinitionContext::Class(class_id) => class_id,
                 DefinitionContext::Receiver(val) => val.class(),
             })
-            .unwrap_or(OBJECT_CLASS)
     }
 
     /// Lexical parent for `module Foo; end` / `class Foo; end` /
@@ -1119,6 +1127,22 @@ impl Executor {
         visibility: Visibility,
     ) -> Result<()> {
         globals.add_method(class_id, name, func_id, visibility);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
+    /// Like `add_method`, but records an explicit *original* definition
+    /// name (used by `define_method` from a Method/UnboundMethod so that
+    /// `Method#original_name` recovers the source method's name).
+    pub(crate) fn add_method_with_original(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+        original_name: IdentId,
+    ) -> Result<()> {
+        globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
         self.invoke_method_added(globals, class_id, name)
     }
 

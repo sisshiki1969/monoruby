@@ -131,11 +131,18 @@ fn source_location(
     _: BytecodePtr,
 ) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
-    // fallback: use the proc's own ISeq location
-    let func_id = proc.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
+    // A Method#to_proc proc reports the method's source location.
+    let func_id = if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        m.func_id()
+    } else {
+        proc.func_id()
+    };
+    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        // Absolute path, consistent with Method#source_location.
+        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {
@@ -150,8 +157,16 @@ fn source_location(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/binding.html]
 #[monoruby_builtin]
-fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn binding_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // For a Method#to_proc proc, the outer self is the Method object;
+    // its binding's receiver must be the *method's* receiver (CRuby).
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        let frame = Lfp::heap_frame(m.receiver(), globals[m.func_id()].meta());
+        return Ok(Binding::from_outer(frame, proc.source()).as_val());
+    }
     let outer_lfp = proc.outer_lfp();
     let pc = proc.source();
     Ok(Binding::from_outer(outer_lfp.unwrap(), pc).as_val())
@@ -173,6 +188,12 @@ fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+        && m.method_missing_name().is_none()
+    {
+        return Ok(build_parameters(globals, m.func_id(), true));
+    }
     let func_id = proc.func_id();
     let is_lambda = !globals[func_id].is_block_style();
     Ok(build_parameters(globals, func_id, is_lambda))
@@ -361,6 +382,16 @@ pub(crate) fn signature_string(store: &Store, func_id: FuncId) -> String {
 #[monoruby_builtin]
 fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // A Method#to_proc proc reports the *method's* arity, not the
+    // shared rest-style body's (-1).
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        if m.method_missing_name().is_some() {
+            return Ok(Value::integer(-1));
+        }
+        return Ok(Value::integer(globals[m.func_id()].arity()));
+    }
     let func_id = proc.func_id();
     Ok(Value::integer(globals[func_id].arity()))
 }
