@@ -673,6 +673,22 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         };
         return Ok(Value::new_time(time_info));
     }
+    // `Time.new("2020-12-25 00:56:17 +09:00")` — single String
+    // argument is parsed as a date-time, optionally with a trailing
+    // offset (else the `in:` keyword, else local).
+    if let Some(s) = lfp.arg(0).is_str()
+        && (1..6).all(|i| lfp.try_arg(i).is_none())
+        && {
+            // Only the `YYYY-MM-DD…` shape is a date-time string;
+            // a bare numeric string (`"2020"`) is a year argument
+            // and falls through to the normal component path.
+            let b = s.trim().as_bytes();
+            b.len() >= 10 && b[4] == b'-' && b[7] == b'-'
+        }
+    {
+        let time_info = parse_time_string(vm, globals, s, in_arg)?;
+        return Ok(Value::new_time(time_info));
+    }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
     // `utc_offset`, so we pre-extract it before calling `from_args`
     // (which expects `usec` in slot 6). An explicit `in:` keyword
@@ -861,52 +877,134 @@ fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
         };
         return FixedOffset::east_opt(hours * 3600).ok_or_else(err);
     }
-    let bytes = s.as_bytes();
-    let sign = match bytes.first() {
-        Some(b'+') => 1,
-        Some(b'-') => -1,
+    let (sign, rest) = match s.strip_prefix('+') {
+        Some(r) => (1, r),
+        None => match s.strip_prefix('-') {
+            Some(r) => (-1, r),
+            None => return Err(err()),
+        },
+    };
+    // Accept colon and no-colon numeric forms: HH, HH:MM, HHMM,
+    // HH:MM:SS, HHMMSS.
+    let digits: String = rest.chars().filter(|&c| c != ':').collect();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(err());
+    }
+    let val = |a: usize, b: usize| -> i32 {
+        digits[a..b].parse::<i32>().unwrap_or(0)
+    };
+    let (h, m, sec) = match digits.len() {
+        2 => (val(0, 2), 0, 0),
+        4 => (val(0, 2), val(2, 4), 0),
+        6 => (val(0, 2), val(2, 4), val(4, 6)),
         _ => return Err(err()),
     };
-    let parse2 = |idx: usize| -> Result<i32> {
-        if bytes.len() < idx + 2 {
-            return Err(err());
-        }
-        let pair = &bytes[idx..idx + 2];
-        if !pair[0].is_ascii_digit() || !pair[1].is_ascii_digit() {
-            return Err(err());
-        }
-        Ok(((pair[0] - b'0') as i32) * 10 + (pair[1] - b'0') as i32)
-    };
-    let h = parse2(1)?;
     if h > 23 {
         // CRuby reports a well-formed but too-large hour distinctly
         // from a malformed string.
         return Err(MonorubyErr::argumenterr("utc_offset out of range"));
     }
-    if bytes.get(3) != Some(&b':') {
+    if m > 59 || sec > 59 {
         return Err(err());
     }
-    let m = parse2(4)?;
-    if m > 59 {
-        return Err(err());
-    }
-    let s_secs = if bytes.len() == 9 {
-        if bytes.get(6) != Some(&b':') {
-            return Err(err());
-        }
-        let sec = parse2(7)?;
-        if sec > 59 {
-            return Err(err());
-        }
-        sec
-    } else if bytes.len() == 6 {
-        0
-    } else {
-        return Err(err());
-    };
-    let total = sign * (h * 3600 + m * 60 + s_secs);
+    let total = sign * (h * 3600 + m * 60 + sec);
     FixedOffset::east_opt(total)
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+}
+
+/// Parse `Time.new`'s single-String form:
+/// `YYYY-MM-DD[ T]HH:MM:SS[.frac][ ]?[offset]`. A trailing offset
+/// (`+HH:MM`, `+HHMM`, `Z`, military letter, …) wins; otherwise the
+/// `in:` keyword, otherwise local time. CRuby messages:
+/// `no time information` (date only) / `can't parse: "<s>"`.
+fn parse_time_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    s: &str,
+    in_arg: Option<Value>,
+) -> Result<TimeInner> {
+    let cant = || MonorubyErr::argumenterr(format!("can't parse: {s:?}"));
+    let t = s.trim();
+    let b = t.as_bytes();
+    if t.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return Err(cant());
+    }
+    let num = |a: usize, c: usize| -> Result<i64> {
+        t.get(a..c)
+            .and_then(|x| x.parse::<i64>().ok())
+            .ok_or_else(cant)
+    };
+    let year = num(0, 4)?;
+    let mon = num(5, 7)? as u32;
+    let day = num(8, 10)? as u32;
+    let after = &t[10..];
+    if after.is_empty() {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    let sep = after.as_bytes()[0];
+    if sep != b' ' && sep != b'T' {
+        return Err(cant());
+    }
+    let tpart = after[1..].trim_start();
+    let tb = tpart.as_bytes();
+    if tpart.len() < 8 || tb[2] != b':' || tb[5] != b':' {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    let hh: u32 = tpart[0..2].parse().map_err(|_| cant())?;
+    let mi: u32 = tpart[3..5].parse().map_err(|_| cant())?;
+    let ss: u32 = tpart[6..8].parse().map_err(|_| cant())?;
+    let mut idx = 8;
+    let mut nsec: u32 = 0;
+    if tpart.as_bytes().get(idx) == Some(&b'.') {
+        idx += 1;
+        let start = idx;
+        while tpart.as_bytes().get(idx).is_some_and(|c| c.is_ascii_digit()) {
+            idx += 1;
+        }
+        let frac = &tpart[start..idx];
+        if !frac.is_empty() {
+            // Left-justify to 9 digits (truncate beyond nanoseconds).
+            let mut f = frac.to_string();
+            f.truncate(9);
+            while f.len() < 9 {
+                f.push('0');
+            }
+            nsec = f.parse().unwrap_or(0);
+        }
+    }
+    let off_str = tpart[idx..].trim();
+    let date = NaiveDate::from_ymd_opt(year as i32, mon, day)
+        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
+    let time = NaiveTime::from_hms_nano_opt(hh, mi, ss, nsec)
+        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
+    let naive = NaiveDateTime::new(date, time);
+
+    let fixed = if !off_str.is_empty() {
+        Some(parse_utc_offset_string(off_str)?)
+    } else if let Some(off) = in_arg {
+        Some(parse_utc_offset(vm, globals, off)?)
+    } else {
+        None
+    };
+    match fixed {
+        Some(fixed) => {
+            let dt = fixed
+                .from_local_datetime(&naive)
+                .single()
+                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+            Ok(TimeInner::Local(dt))
+        }
+        None => {
+            let local = match Local.from_local_datetime(&naive) {
+                LocalResult::Single(d) => d,
+                LocalResult::Ambiguous(d, _) => d,
+                LocalResult::None => {
+                    return Err(MonorubyErr::argumenterr("argument out of range."))
+                }
+            };
+            Ok(TimeInner::Local(local.into()))
+        }
+    }
 }
 
 ///
@@ -2628,6 +2726,31 @@ mod tests {
             t.utc_offset
             "#,
         );
+    }
+
+    #[test]
+    fn time_new_string_form() {
+        run_test(
+            r#"
+            [Time.new("2020-12-25 00:56:17").iso8601,
+             Time.new("2020-12-25T00:56:17.123456789 +09:00").iso8601(9),
+             Time.new("2020-12-25 00:56:17 +0300").utc_offset,
+             Time.new("2020-12-25 00:56:17Z").utc_offset,
+             Time.new("2020-12-25 00:56:17", in: "+05:00").utc_offset,
+             Time.new("2020-12-25 00:56:17.5").nsec,
+             Time.new("2020-12-25T00:56:17 Z").utc_offset,
+             Time.new("2020").iso8601,
+             Time.new("2020", 3, 4).iso8601]
+            "#,
+        );
+        run_test_error(r#"Time.new("2020-12-25")"#);
+        run_test_error(r#"Time.new("2020-12-25 00:56:17 +00:60")"#);
+        run_test_error(r#"Time.new("2020-13-25 00:00:00")"#);
+        run_test_error(r#"Time.new("20x0-12-25 00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 ab:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 1:2")"#);
+        run_test_error(r#"Time.new("2020-12-25x00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 bogusoffset")"#);
     }
 
     #[test]
