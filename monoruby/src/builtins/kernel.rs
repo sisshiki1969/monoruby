@@ -3434,6 +3434,41 @@ mod tests {
         run_test_error(r##"Object.new.instance_variable_get(42)"##);
         run_test_error(r##"Object.new.instance_variable_defined?(:bad)"##);
         run_test_error(r##"Object.new.instance_variable_get(Object.new)"##);
+        // #to_str returning a non-String is a TypeError.
+        run_test_error(
+            r##"o=Object.new; def o.to_str; 5; end; Object.new.instance_variable_get(o)"##,
+        );
+    }
+
+    #[test]
+    fn path_arg_to_path_to_str_coercion() {
+        // Exercises `path_arg_to_string` (#to_path then #to_str, and
+        // the TypeError arm) through `load`.
+        run_test_once(
+            r##"
+        pth = "/tmp/mono_cov_#{Process.pid}_#{rand(1 << 30)}.rb"
+        File.write(pth, "$cov = (defined?($cov) && $cov ? $cov : 0) + 1\n")
+        $cov = 0
+        $pth = pth
+        o1 = Object.new
+        def o1.to_path; $pth; end
+        load(o1)
+        inner = Object.new
+        def inner.to_str; $pth; end
+        $inner = inner
+        o2 = Object.new
+        def o2.to_path; $inner; end
+        load(o2)
+        err = begin
+          load(Object.new)
+          :no
+        rescue TypeError
+          :te
+        end
+        File.delete(pth)
+        [$cov, err]
+        "##,
+        );
     }
 
     #[test]
