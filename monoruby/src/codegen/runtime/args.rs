@@ -137,18 +137,26 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
 
     let res = if kw_empty && !globals[callee_fid].single_arg_expand() {
         let pos_args = cs.pos_num;
-        let lead = pos_args - 1; // gate guarantees the splat is the last
+        // gate guarantees exactly one splat; `sp` is its position (the
+        // `...`/`*rest` slot). It is trailing for `g(x.., ...)` but is
+        // *before* post params for implicit `super` of `def m(a,*r,z)`.
+        let sp = cs.splat_pos[0];
         let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
         // args live at descending addresses: arg i at args_ptr.sub(i)
-        let ary = unsafe { *args_ptr.sub(lead) }
+        let ary = unsafe { *args_ptr.sub(sp) }
             .try_array_ty()
             .expect("internal error: forwarding splat must be an array");
+        // buffer order matches the generic splat branch exactly:
+        // lead [0..sp] ++ splat-array ++ post [sp+1..pos_args]
         let mut buf: smallvec::SmallVec<[Value; 8]> =
-            smallvec::SmallVec::with_capacity(lead + ary.len());
-        for i in 0..lead {
+            smallvec::SmallVec::with_capacity(pos_args - 1 + ary.len());
+        for i in 0..sp {
             buf.push(unsafe { *args_ptr.sub(i) });
         }
         buf.extend_from_slice(&ary);
+        for i in (sp + 1)..pos_args {
+            buf.push(unsafe { *args_ptr.sub(i) });
+        }
         let dst = callee_lfp.register_ptr(SlotId(1));
         fill_positional_args1(dst, &globals.store[callee_fid], &buf)
     } else {

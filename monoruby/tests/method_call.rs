@@ -2345,3 +2345,118 @@ fn forwarding_rest_chain_and_mutation() {
         "##,
     );
 }
+
+#[test]
+fn forwarding_super_rest_post() {
+    // Implicit `super` of `def m(a, *r, z)`: single splat *before* a
+    // post param (splat_pos == [rest_pos], not trailing). Previously
+    // fell to the generic path; now the single-splat helper handles it.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        o = B.new
+        30.times { $r << o.m(1, 2, 3, 4, 5) }
+        $r << o.m(7, 8)
+        $r
+        "##,
+        r##"
+        class A
+          def m(a, *r, z) = "A #{a}|#{r.inspect}|#{z}"
+        end
+        class B < A
+          def m(a, *r, z) = "B->" + super
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_super_rest_last() {
+    // Implicit `super` of `def m(a, *r)` (rest is the last positional):
+    // trailing single splat, already specialized — regression guard.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        o = B.new
+        30.times { $r << o.m(1, 2, 3, 4) }
+        $r << o.m(9)
+        $r
+        "##,
+        r##"
+        class A
+          def m(a, *r) = "A #{a}|#{r.inspect}"
+        end
+        class B < A
+          def m(a, *r) = "B->" + super
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_super_opt_rest_post() {
+    // Implicit `super` of `def m(a, b=10, *r, y, z)`: opt + rest + post,
+    // single splat in the middle, exercised at several arities.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        o = B.new
+        30.times do |i|
+          $r << o.m(i, i+1, i+2, i+3)
+          $r << o.m(1, 2, 3, 4, 5, 6, 7, 8)
+        end
+        $r
+        "##,
+        r##"
+        class A
+          def m(a, b = 10, *r, y, z) = "#{a},#{b},#{r.inspect},#{y},#{z}"
+        end
+        class B < A
+          def m(a, b = 10, *r, y, z) = "B[" + super + "]"
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_super_no_rest_passthrough() {
+    // Implicit `super` of a fixed-arity method (no splat) must keep
+    // working (is_simple path) — regression guard.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        o = B.new
+        30.times { $r << o.m(3, 4) }
+        $r
+        "##,
+        r##"
+        class A
+          def m(a, b) = a * 10 + b
+        end
+        class B < A
+          def m(a, b) = super + 1000
+        end
+        "##,
+    );
+}
+
+#[test]
+fn forwarding_super_block_passthrough() {
+    // A block given to the subclass method must reach `super`.
+    run_test_with_prelude(
+        r##"
+        $r = []
+        o = B.new
+        30.times { $r << o.m(2, 3, 4) { |x| x * 100 } }
+        $r
+        "##,
+        r##"
+        class A
+          def m(a, *r) = yield(a + r.sum)
+        end
+        class B < A
+          def m(a, *r) = super
+        end
+        "##,
+    );
+}
