@@ -242,7 +242,21 @@ fn hex_digit_val(b: u8) -> u8 {
 /// Format a float using %g/%G rules:
 /// Use scientific notation if exponent < -4 or >= precision, otherwise fixed.
 /// Strip trailing zeros after decimal point (and the point itself if no digits remain).
-fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
+/// For the `#` flag: ensure the mantissa contains a decimal point
+/// (CRuby keeps the point even when no fractional digits follow).
+/// Inserts `.` just before the exponent marker (`e`/`E`/`p`/`P`) or
+/// at the end if there is none. No-op if a `.` is already present.
+fn force_decimal_point(s: &str) -> String {
+    if s.contains('.') {
+        return s.to_string();
+    }
+    match s.find(['e', 'E', 'p', 'P']) {
+        Some(pos) => format!("{}.{}", &s[..pos], &s[pos..]),
+        None => format!("{}.", s),
+    }
+}
+
+fn format_g(f: f64, precision: usize, uppercase: bool, strip: bool) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
@@ -266,7 +280,11 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
             format!("{:.p$e}", f, p = sci_prec)
         };
         // Strip trailing zeros in the mantissa part (before 'e'/'E')
-        strip_trailing_zeros_scientific(&s)
+        if strip {
+            strip_trailing_zeros_scientific(&s)
+        } else {
+            s
+        }
     } else {
         // Use fixed notation
         // precision means total significant digits
@@ -276,7 +294,11 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
             0
         };
         let s = format!("{:.p$}", f, p = fixed_prec);
-        strip_trailing_zeros_fixed(&s)
+        if strip {
+            strip_trailing_zeros_fixed(&s)
+        } else {
+            s
+        }
     }
 }
 
@@ -985,14 +1007,32 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 2, ch == 'B');
-                            let prefix = if hash_flag {
-                                if ch == 'B' { "0B" } else { "0b" }
+                            if plus_flag || space_flag {
+                                // `+`/space disables two's-complement and
+                                // uses sign-magnitude (`-1010`).
+                                let digits = apply_int_precision(
+                                    &format!("{:b}", v.unsigned_abs()),
+                                    precision,
+                                );
+                                let prefix = if hash_flag {
+                                    if ch == 'B' { "0B" } else { "0b" }
+                                } else {
+                                    ""
+                                };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
                             } else {
-                                ""
-                            };
-                            let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
+                                let tc = format_neg_twos_complement(v, 2, ch == 'B');
+                                let prefix = if hash_flag {
+                                    if ch == 'B' { "0B" } else { "0b" }
+                                } else {
+                                    ""
+                                };
+                                let body = format!("{}{}", prefix, tc);
+                                apply_width(&body, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -1017,8 +1057,20 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 8, false);
-                            apply_width(&tc, width, minus_flag, ' ')
+                            if plus_flag || space_flag {
+                                let digits = apply_int_precision(
+                                    &format!("{:o}", v.unsigned_abs()),
+                                    precision,
+                                );
+                                let prefix = if hash_flag { "0" } else { "" };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
+                            } else {
+                                let tc = format_neg_twos_complement(v, 8, false);
+                                apply_width(&tc, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -1042,14 +1094,34 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 16, ch == 'X');
-                            let prefix = if hash_flag {
-                                if ch == 'X' { "0X" } else { "0x" }
+                            if plus_flag || space_flag {
+                                let digits = apply_int_precision(
+                                    &if ch == 'X' {
+                                        format!("{:X}", v.unsigned_abs())
+                                    } else {
+                                        format!("{:x}", v.unsigned_abs())
+                                    },
+                                    precision,
+                                );
+                                let prefix = if hash_flag {
+                                    if ch == 'X' { "0X" } else { "0x" }
+                                } else {
+                                    ""
+                                };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
                             } else {
-                                ""
-                            };
-                            let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
+                                let tc = format_neg_twos_complement(v, 16, ch == 'X');
+                                let prefix = if hash_flag {
+                                    if ch == 'X' { "0X" } else { "0x" }
+                                } else {
+                                    ""
+                                };
+                                let body = format!("{}{}", prefix, tc);
+                                apply_width(&body, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -1092,6 +1164,13 @@ impl Executor {
                     } else {
                         format!("{:.p$}", f.abs(), p = prec)
                     };
+                    // CRuby quirk: `%#f` does NOT force a point for an
+                    // Integer argument (unlike `%#e`/`%#g`/`%#a`).
+                    let s = if hash_flag && f.is_finite() && !val.is_integer() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1108,6 +1187,11 @@ impl Executor {
                     } else {
                         normalize_sci_exponent(&format!("{:.p$e}", f.abs(), p = prec))
                     };
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1116,8 +1200,15 @@ impl Executor {
                     let f = val.coerce_to_float(self, globals)?;
                     let prec = precision.unwrap_or(6);
                     let prec = if prec == 0 { 1 } else { prec };
-                    let s = format_g(f.abs(), prec, ch == 'G');
+                    // The `#` flag keeps trailing zeros and forces a
+                    // decimal point.
+                    let s = format_g(f.abs(), prec, ch == 'G', !hash_flag);
                     let s = normalize_sci_exponent(&s);
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1125,6 +1216,11 @@ impl Executor {
                 'a' | 'A' => {
                     let f = val.coerce_to_float(self, globals)?;
                     let s = format_hex_float(f.abs(), precision, ch == 'A');
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
