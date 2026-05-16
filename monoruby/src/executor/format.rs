@@ -533,6 +533,9 @@ impl Executor {
         // string.
         let mut used_numbered = false;
         let mut used_unnumbered = false;
+        // A named reference (`%<n>` / `%{n}`) may not be mixed with
+        // numbered or unnumbered references in one format string.
+        let mut used_named = false;
         fn mark_numbered(
             n: usize,
             used_numbered: &mut bool,
@@ -907,6 +910,12 @@ impl Executor {
                 if named_val.is_some() {
                     return Err(MonorubyErr::argumenterr("named<name> after named{name}"));
                 }
+                if used_numbered || used_unnumbered {
+                    return Err(MonorubyErr::argumenterr(
+                        "named reference is mixed with numbered/unnumbered",
+                    ));
+                }
+                used_named = true;
                 let hash = get_named_hash(arguments, &mut named_hash_cache)
                     .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
                 let key_val = Value::symbol_from_str(&key);
@@ -921,6 +930,20 @@ impl Executor {
                 format_str += &apply_width(&s, width, minus_flag, ' ');
                 i = j + 1;
                 continue;
+            }
+            // Enforce CRuby's rule that named references cannot be
+            // mixed with numbered/unnumbered ones.
+            if named_val.is_some() {
+                if used_numbered || used_unnumbered {
+                    return Err(MonorubyErr::argumenterr(
+                        "named reference is mixed with numbered/unnumbered",
+                    ));
+                }
+                used_named = true;
+            } else if used_named {
+                return Err(MonorubyErr::argumenterr(
+                    "numbered/unnumbered reference is mixed with named",
+                ));
             }
             // Determine val: positional, named, or sequential
             let val = if let Some(v) = positional_arg {

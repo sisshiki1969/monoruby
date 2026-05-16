@@ -67,6 +67,20 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // `Proc#call` is declared with keyword-rest, so trailing keyword
+    // arguments land in the kw-rest slot (`arg(1)`, after the
+    // positional rest at `arg(0)`). Forward them to the block invoker
+    // so the *block's own* signature decides whether they bind to
+    // keyword parameters or fold into a trailing positional Hash
+    // (matches CRuby; previously these were dropped).
+    let kw = match lfp.try_arg(1) {
+        Some(v)
+            if v.ty() == Some(ObjTy::HASH) && !Hashmap::new(v).inner().is_empty() =>
+        {
+            Some(Hashmap::new(v))
+        }
+        _ => None,
+    };
     // Fast path for Symbol#to_proc procs: dispatch directly so that the
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
@@ -97,10 +111,10 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
         }
         let bh = lfp.block();
-        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, None);
+        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, kw);
     }
     let bh = lfp.block();
-    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh)
+    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh, kw)
 }
 
 ///
@@ -779,5 +793,34 @@ mod tests {
               forward(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn proc_call_forwards_trailing_kwargs() {
+        // Trailing keyword args passed to Proc#call/[]/=== are
+        // forwarded to the block; the block's own signature decides
+        // whether they bind to kw params or fold into a *rest Hash.
+        run_test(r#"->(fmt, *args){ args }.call("x", foo: 123)"#);
+        run_test(r#"->(*a){ a }.call(1, x: 2)"#);
+        run_test(r#"proc {|*a| a }.call(1, y: 3)"#);
+        run_test(r#"lambda {|*a| a }.call(2, z: 4)"#);
+        run_test(r#"->(a, k:){ [a, k] }.call(1, k: 2)"#);
+        run_test(r#"->(a, **kw){ [a, kw] }.call(1, x: 9)"#);
+        run_test(r#"->(*a){ a }.(7, q: 8)"#);
+        run_test(r#"(->(x){ x } === 4)"#);
+        run_test(r#"->(*a){ a }.call(**{})"#);
+        run_test(r#"->(a=0, *r){ [a, r] }.call(k: 1)"#);
+        run_test(r#"def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }"#);
+    }
+
+    #[test]
+    fn sprintf_named_unnamed_mix_is_error() {
+        run_test_error(r#""%d %<foo>d" % [1, {foo: 2}]"#);
+        run_test_error(r#""%d %{foo}" % [1, {foo: 2}]"#);
+        run_test_error(r#""%{a} %d" % {a: 1}"#);
+        run_test(r#""%<a>s %<b>s" % {a: 1, b: 2}"#);
+        run_test(r#""%{a} %{b}" % {a: 1, b: 2}"#);
+        run_test(r#""%s %s" % [1, 2]"#);
+        run_test(r#""%<a>d" % {a: 5}"#);
     }
 }
