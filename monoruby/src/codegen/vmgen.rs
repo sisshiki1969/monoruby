@@ -7,6 +7,13 @@ pub mod init_method;
 mod method_call;
 mod variables;
 
+/// Byte offset (relative to `r13`, which points at the *next* bytecode)
+/// of the current instruction's `opcode_sub` byte. Mirrors the constant
+/// of the same name in `method_call.rs`; writing `1` here marks the
+/// call site polymorphic so the JIT can read it back via
+/// `BytecodePtr::opcode_sub()`.
+const OPCODE_SUB: i64 = 7 - 16;
+
 macro_rules! vm_cmp_opt {
   ($op:ident) => {
       paste! {
@@ -528,14 +535,36 @@ impl Codegen {
     ///
     fn vm_save_binary_class(&mut self) {
         let get_class = self.get_class.clone();
+        let skip = self.jit.label();
+        let set_poly = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
+            // r8 <- cached lhs class (0 if the inline cache is empty)
+            movl  r8, [r13 - 8];
             movl  [r13 - 8], rax;
             xchgq rdi, rsi;
             //movq  rdi, rsi;
             call  get_class;
+            // r9 <- cached rhs class
+            movl  r9, [r13 - 4];
             movl  [r13 - 4], rax;
             xchgq rdi, rsi;
+            // Polymorphic detection: once the cache is populated
+            // (cached lhs class != 0), if either operand's class
+            // differs from what was cached, mark this binop/cmp site
+            // polymorphic via opcode_sub so the JIT emits a
+            // non-deoptimizing dispatch instead of a monomorphic
+            // class guard.
+            testq r8, r8;
+            jeq   skip;
+            cmpl  r8, [r13 - 8];
+            jne   set_poly;
+            cmpl  r9, [r13 - 4];
+            jne   set_poly;
+            jmp   skip;
+        set_poly:
+            movb  [r13 + (OPCODE_SUB)], 1;
+        skip:
         };
     }
 

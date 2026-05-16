@@ -163,6 +163,33 @@ impl AsmIr {
         self.new_deopt_with_pc(state, pc)
     }
 
+    ///
+    /// Like `new_deopt`, but the side exit recompiles the method/loop
+    /// after a few misses (reason *reason*) before continuing to fall
+    /// back to the interpreter. Used for the receiver-class guard of
+    /// monomorphic-compiled BinCmp sites (Part B).
+    ///
+    /// *position* is the JIT entry position (`None` for a full
+    /// method/block JIT, `Some(loop-header pc)` for a loop JIT) — the
+    /// recompile target, NOT the deopt site `pc`.
+    ///
+    pub(crate) fn new_recompile_deopt(
+        &mut self,
+        state: &AbstractFrame,
+        reason: RecompileReason,
+        position: Option<BytecodePtr>,
+    ) -> AsmDeopt {
+        let pc = state.pc();
+        let i = self.new_label(SideExit::RecompileDeoptimize(
+            pc,
+            state.get_write_back(),
+            reason,
+            position,
+        ));
+        self.had_deopt = true;
+        AsmDeopt(i)
+    }
+
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
         let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
         AsmError(i)
@@ -458,6 +485,48 @@ impl AsmIr {
         self.push(AsmInst::ArrayTEq {
             lhs,
             rhs,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn generic_binop(
+        &mut self,
+        state: &AbstractFrame,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::GenericBinOp {
+            lhs,
+            rhs,
+            func,
+            using_xmm,
+        });
+    }
+
+    ///
+    /// `==` / `!=` with a YJIT-`opt_eq`-style inline fast path: when
+    /// both operands are non-heap, non-flonum immediates (Fixnum /
+    /// nil / true / false / Symbol) the result is exactly bit
+    /// equality; anything else (Float, heap, mixed numeric, custom
+    /// `==`) falls back to the generic `cmp_*_values` C-call. No
+    /// receiver-class guard (Part C, layered on Part 3-B).
+    ///
+    pub(super) fn opt_eq_cmp(
+        &mut self,
+        state: &AbstractFrame,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+    ) {
+        let using_xmm = state.get_using_xmm();
+        self.push(AsmInst::OptEqCmp {
+            lhs,
+            rhs,
+            kind,
+            func,
             using_xmm,
         });
     }
@@ -1231,6 +1300,41 @@ pub(super) enum AsmInst {
         branch_dest: JitLabel,
     },
     ///
+    /// Generic binary operation through a `BinaryOpFn` C helper.
+    ///
+    /// Calls `func(vm, globals, lhs, rhs) -> Option<Value>`; the
+    /// result (or 0 = error) is left in rax. Emits **no**
+    /// receiver-class guard, so the site never deopts on receiver
+    /// class variance — used for polymorphic BinCmp/BinOp.
+    ///
+    /// ### out
+    /// - rax: result `Option<Value>`
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    GenericBinOp {
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+
+    ///
+    /// `==` / `!=` with an inline immediate fast path (YJIT
+    /// `opt_eq` style), generic `cmp_*_values` C-call fallback.
+    /// *kind* is `CmpKind::Eq` or `CmpKind::Ne`. Result `Value`
+    /// (fast path) or `Option<Value>` (slow path) in rax.
+    ///
+    OptEqCmp {
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+
+    ///
     /// Compare `lhs and `rhs` with "===" and return the result in rax.
     ///
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
@@ -1731,6 +1835,15 @@ impl AsmInst {
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
     Deoptimize(BytecodePtr, WriteBack),
+    ///
+    /// A deopt that, after a small number of misses, recompiles the
+    /// whole method/loop with the given reason instead of falling
+    /// back to the interpreter forever. Used as the
+    /// receiver-class-guard miss target for monomorphic-compiled
+    /// BinCmp sites so they flip to the non-deopting polymorphic
+    /// path once the VM has observed class variance (Part B).
+    ///
+    RecompileDeoptimize(BytecodePtr, WriteBack, RecompileReason, Option<BytecodePtr>),
     Error(BytecodePtr, WriteBack),
 }
 
@@ -1774,6 +1887,19 @@ impl Codegen {
                         deopt_table.insert(t, label.clone());
                         label
                     }
+                }
+                SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
+                    let label = self.jit.label();
+                    self.gen_recompile_deopt_with_label(
+                        pc,
+                        &wb,
+                        reason,
+                        position,
+                        label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    );
+                    label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();

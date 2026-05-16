@@ -799,7 +799,37 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, loop_jit_spill_bytes, base)
+        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base)
+    }
+
+    ///
+    /// Like `gen_deopt_with_label`, but after the deopt write-back
+    /// (so all live Ruby values are on the LFP and GC-safe) and
+    /// before falling back to the interpreter, recompile the
+    /// method/loop with *reason* once a small miss counter is
+    /// exhausted. Used for the receiver-class guard of
+    /// monomorphic-compiled BinCmp sites so they flip to the
+    /// non-deopting polymorphic path (Part B).
+    ///
+    fn gen_recompile_deopt_with_label(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        reason: RecompileReason,
+        position: Option<BytecodePtr>,
+        entry: DestLabel,
+        loop_jit_spill_bytes: usize,
+        base: usize,
+    ) {
+        self.side_exit_with_label(
+            pc,
+            wb,
+            entry,
+            false,
+            Some((reason, position)),
+            loop_jit_spill_bytes,
+            base,
+        )
     }
 
     ///
@@ -813,7 +843,7 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, true, loop_jit_spill_bytes, base)
+        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base)
     }
 
     ///
@@ -828,6 +858,7 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
+        recompile: Option<(RecompileReason, Option<BytecodePtr>)>,
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
@@ -867,6 +898,28 @@ impl Codegen {
                 movq rdx, r13;
                 movq rax, (crate::globals::log_deoptimize);
                 call rax;
+            );
+        }
+        // Part B: counter-gated, one-shot recompile. Emitted AFTER
+        // the write-back above (LFP holds all live Ruby values, so a
+        // GC inside `jit_recompile_loop` is safe) and BEFORE the
+        // interpreter fallback. The counter lets the interpreter run
+        // the generic op a few times first (so the VM has set the
+        // site's POLY bit) before we recompile; once exhausted it
+        // never recompiles again (monotone / one-shot).
+        if let Some((reason, position)) = recompile {
+            let recompile_lbl = self.jit.label();
+            let skip = self.jit.label();
+            let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
+            monoasm!( &mut self.jit,
+                cmpl [rip + counter], 0;
+                jle  skip;
+                subl [rip + counter], 1;
+                jne  skip;
+            );
+            self.gen_recompile(position, recompile_lbl, reason, None);
+            monoasm!( &mut self.jit,
+            skip:
             );
         }
         let fetch = self.vm_fetch();

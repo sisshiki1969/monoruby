@@ -46,7 +46,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
         };
-        self.compile_method_call(state, ir, recv_class, None, func_id, callid)
+        self.compile_method_call(state, ir, recv_class, None, func_id, callid, false)
     }
 
     ///
@@ -60,6 +60,11 @@ impl<'a> JitContext<'a> {
         arg_class: Option<ClassId>,
         func_id: FuncId,
         callid: CallSiteId,
+        // When the receiver-class guard misses, recompile (so the
+        // site flips to the non-deopting polymorphic path) instead
+        // of plain-deopting forever. Only set for monomorphic-
+        // compiled BinCmp sites, which have such a path (Part B).
+        recompile_on_recv_miss: bool,
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         self.inline_method_cache
@@ -94,7 +99,19 @@ impl<'a> JitContext<'a> {
 
         // receiver class guard
         if state.class(recv) != Some(recv_class) {
-            let deopt = ir.new_deopt(state);
+            // Specialized JIT recompiles via an idx, not a position;
+            // keep it on the plain deopt path (no Part B there).
+            let use_recompile = recompile_on_recv_miss
+                && !matches!(self.jit_type(), JitType::Specialized { .. });
+            let deopt = if use_recompile {
+                ir.new_recompile_deopt(
+                    state,
+                    RecompileReason::BecamePolymorphic,
+                    self.position(),
+                )
+            } else {
+                ir.new_deopt(state)
+            };
             state.load(ir, recv, GP::Rdi);
             state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
         }
@@ -292,7 +309,12 @@ impl<'a> JitContext<'a> {
     /// ### destroy
     /// - rax
     ///
-    fn guard_class_version(&self, state: &mut AbstractState, ir: &mut AsmIr, with_recovery: bool) {
+    pub(super) fn guard_class_version(
+        &self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        with_recovery: bool,
+    ) {
         if state.class_version_guard() {
             return;
         }
