@@ -4,8 +4,10 @@ Branch: `claude/handoff-review-nyy4u`. Base: `master`.
 Last update: 2026-05-16. State: **Parts 3-B, B, C implemented,
 regression-verified, AND rubykon-measured (§3a): the targeted
 `[Symbol][NilClass]` `== nil` deopt storm collapses millions → 10
-(+1 recompile), ~7% best wall-time. Remaining: scoped-out follow-ups
-(§5 items 1–3) + PR.**
+(+1 recompile), ~7% best wall-time. One follow-up ("§5 item 1") was
+tried, measured, and reverted — it disproved its own premise and
+revealed the next bottleneck is class-version churn, not BinCmp
+polymorphism (§5a/§5b). Remaining: §5b investigation + PR (§5c).**
 
 > Rule: never push to `master`; this work stays on
 > `claude/handoff-review-nyy4u` and lands via PR. Verify the branch
@@ -266,31 +268,68 @@ full 10-run measurement — consistent.)
 Implementation, correctness, and rubykon measurement are **done**
 (§3, §3a). Parts 3-B/B/C fully solve the *targeted* problem (the
 `[Symbol][NilClass]` `== nil` deopt storm: millions → 10 + one
-recompile). The ~7% (not larger) wall-time gain is explained by the
-deopt-stats: rubykon's *remaining* hot deopts are other
-polymorphism classes the ratified **B-then-C / BinCmp-`Other`**
-scope deliberately did **not** cover. To close more of the gap vs
-CRuby `--yjit` (which inlines all of these via `opt_eq` + a
-send-PIC):
+recompile). The ~7% (not larger) wall-time gain is explained below.
 
-1. **Integer/Float-arm polymorphism** (biggest remaining cmp item).
-   `Group#already_counted_as_liberty?` `%3 == %2 [Integer][NilClass]`
-   still deopts ~50K (down from 138K). Cause: with an `Integer` in
-   the IC, `state.binop_type` returns `BinaryOpType::Integer`, so
-   `binary_cmp` takes the **numeric fast-path arm** (integer type
-   guard) — Parts 3-B/B/C only divert the `Other` arm. Fix idea:
-   when `polymorphic`, route the `Integer`/`Float` arms of
-   `binary_cmp`/`binary_cmp_br` to `emit_generic_cmp` too (the
-   opt_eq fast path already handles Fixnum==Fixnum inline; the
-   generic C-call handles Integer==Float/nil correctly). Re-check
-   the §6 invariant (the numeric arms' type guards must not remain
-   as class-variance deopts after recompile).
+### 5a. Investigated & rejected — "§5 item 1" (commit reverted)
+
+A first follow-up hypothesis was that
+`Group#already_counted_as_liberty?` (`%3 == %2`, ~50K residual
+deopts, the single largest remaining cmp deopt) deopted because
+`binop_type` returned `BinaryOpType::Integer` so `binary_cmp` took
+the numeric fast-path arm (integer type guard) instead of the
+`Other`/generic arm. A change routing the polymorphic
+`Integer`/`Float` arms to `emit_generic_cmp` was implemented
+(`bf91ecc`), correctness-verified, **measured, and reverted**
+(`bbdb8df`).
+
+**Why reverted — the hypothesis was wrong.** With the change the
+site *still* deopted ~50K (`50,550 → 49,833`); only the recorded
+operand-class label moved (`[Integer][NilClass]` →
+`[NilClass][NilClass]`). With the numeric/recv-class guards removed
+by `emit_generic_cmp`, the *only* deopt-capable instruction left on
+that path is `guard_class_version` (Part C's opt_eq fast path has
+no deopt; `handle_error` only fires on a C-call error, which
+`nil == nil` never hits). So **`already_counted_as_liberty?`'s
+~50K deopts are class-version-guard misses, i.e. class-version
+*churn*, not receiver/numeric polymorphism at all.** The change
+gave no deopt reduction and a slight wall-time *regression* (best
+738.9 → 755.0 ms — the per-call opt_eq tag-check overhead on the
+hot `Integer == Integer` path, with no offsetting deopt saving).
+Per "don't ship changes that don't earn their cost", it was
+reverted. The branch is back to the validated Parts 3-B/B/C state.
+
+> Lesson for the next continuation: confirm the *actual*
+> deopt-causing instruction (it is recorded at the cmp pc but may be
+> a guard `emit_generic_cmp`/the numeric arm inserted, not the cmp
+> itself) before optimising. `--features deopt` prints the deopt
+> reason symbol (`__version_guard`, `_bop_guard`, the operand value,
+> …) — use it to disambiguate.
+
+### 5b. The real remaining rubykon gap vs CRuby `--yjit`
+
+From §3a deopt-stats, what still dominates (none in the ratified
+B-then-C / BinCmp-`Other` scope):
+
+1. **Class-version churn.** `already_counted_as_liberty?` ~50K
+   class-version-guard deopts. Something in rubykon's MCTS hot path
+   keeps bumping the global class-version counter (suspects:
+   per-node `MCTS::Node`/`Root` object/singleton creation,
+   `define_method`, frozen/`extend`, or an inline-cache
+   invalidation feeding the class-version bump). Investigate with
+   `--features deopt` (confirm reason `__version_guard`) and
+   `--features profile` recompile stats; the fix is to stop the
+   churn (or make the class-version guard at a hot site
+   recompile-once like Part B rather than deopt-per-iter), **not**
+   more BinCmp polymorphism work. This is the highest-value next
+   item and is a *different subsystem* from Parts 3-B/B/C.
 2. **Arithmetic `binary_op` polymorphism.** `GameScorer#score_board`
    / `score_empty_cutting_point` `%6 + %7 [Integer][Integer]` deopt
-   ~35K total (occasional nil). `binary_op` has no `polymorphic`
-   arg yet; the VM already records the POLY bit for BinOp
-   (`f11603a`). Mirror Part 3-B/B for `binary_op` (generic
-   `*_values` C-call, recompile-on-recv-miss). Same invariant check.
+   ~35K total (occasional non-Integer). `binary_op` has no
+   `polymorphic` arg yet; the VM already records the POLY bit for
+   BinOp (`f11603a`). Mirror Part 3-B/B for `binary_op` (generic
+   `*_values` C-call, recompile-on-recv-miss, §6 invariant). NOTE:
+   given 5a, first confirm via `--features deopt` that these are
+   actually operand-type guards and not class-version churn too.
 3. **Polymorphic method-call PIC (handoff option A).** `.nil?`
    (`Game.pass?`, `Enumerable#inject`), `.root?`
    (`Node#backpropagate`) deopt as `POLYMORPHIC … FuncId` — general
@@ -299,16 +338,20 @@ send-PIC):
    (`asmir/compile/method_call.rs`). Largest scope; deferred by the
    original handoff. CRuby `--yjit` gets these via its send PIC,
    which is much of its remaining lead.
+
+### 5c. Ship the verified work
+
 4. **Regression** in a benchmark env with optcarrot present:
    `bin/test` (full test + coverage + benchmark diff + optcarrot).
    §3 already shows lib `2053/0` + integration green under Ruby
    4.0.4; mirror that.
 5. **PR** `claude/handoff-review-nyy4u` → `master`. Summarise Parts
-   3-B / B / C, the monotone-recompile safety invariant (§6), and
-   the §3a before/after deopt + wall-time numbers. Be explicit that
-   it solves the `[Symbol][NilClass]` `==` storm and that items
-   1–3 above are the scoped-out follow-ups for the rest of the
-   rubykon↔YJIT gap.
+   3-B / B / C, the monotone-recompile safety invariant (§6), the
+   §3a before/after deopt + wall-time numbers, and explicitly that
+   it solves the `[Symbol][NilClass]` `==` storm. List 5b items as
+   scoped-out follow-ups. The reverted 5a commit pair (`bf91ecc` +
+   `bbdb8df`) can stay in history or be dropped via interactive
+   rebase before the PR — either is fine; nothing depends on it.
 
 If a *wrong result* (not perf) ever shows in rubykon but not in the
 §3 correctness matrix, first suspects: Part C's immediate-tag check
