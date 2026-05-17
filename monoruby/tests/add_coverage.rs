@@ -248,8 +248,8 @@ fn const_inherited() {
 //
 
 #[test]
-fn case_opt_negative() {
-    run_test(
+fn case_opt() {
+    run_tests(&[
         r#"
         res = []
         [-1, 0, 1, 2, 3, 100].each do |x|
@@ -263,12 +263,6 @@ fn case_opt_negative() {
         end
         res
         "#,
-    );
-}
-
-#[test]
-fn case_opt_large_range() {
-    run_test(
         r#"
         res = []
         [0, 5, 10, 15, 20, 25, -1, 100].each do |x|
@@ -283,12 +277,6 @@ fn case_opt_large_range() {
         end
         res
         "#,
-    );
-}
-
-#[test]
-fn case_opt_non_integer() {
-    run_test(
         r#"
         res = []
         ["a", 1, :sym, nil, true].each do |x|
@@ -303,7 +291,7 @@ fn case_opt_non_integer() {
         end
         res
         "#,
-    );
+    ]);
 }
 
 //
