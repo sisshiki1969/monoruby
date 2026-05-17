@@ -1035,6 +1035,53 @@ class IO
     false
   end
 
+  # CRuby raises EOFError (not RuntimeError) at end of stream for the
+  # `read*` family; #getbyte/#getc return nil at EOF.
+  def readbyte
+    raise IOError, "closed stream" if closed?
+    b = getbyte
+    raise EOFError, "end of file reached" if b.nil?
+    b
+  end
+
+  def readchar
+    raise IOError, "closed stream" if closed?
+    c = getc
+    raise EOFError, "end of file reached" if c.nil?
+    c
+  end
+
+  def readline(*args)
+    line = gets(*args)
+    raise EOFError, "end of file reached" if line.nil?
+    line
+  end
+
+  def each_byte
+    raise IOError, "closed stream" if closed?
+    return to_enum(:each_byte) { nil } unless block_given?
+    while (b = getbyte)
+      yield b
+    end
+    self
+  end
+
+  def each_char
+    raise IOError, "closed stream" if closed?
+    return to_enum(:each_char) { nil } unless block_given?
+    while (c = getc)
+      yield c
+    end
+    self
+  end
+
+  def each_codepoint
+    raise IOError, "closed stream" if closed?
+    return to_enum(:each_codepoint) { nil } unless block_given?
+    each_char { |c| yield c.ord }
+    self
+  end
+
   def internal_encoding
     nil
   end
