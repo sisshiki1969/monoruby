@@ -4520,7 +4520,51 @@ fn ascii_case_fast_path(
     op: CaseOp,
     mode: CaseMode,
 ) -> Option<RStringInner> {
-    if !inner.is_ascii_only() || matches!(mode, CaseMode::Turkic) {
+    if matches!(mode, CaseMode::Turkic) {
+        return None;
+    }
+    if !inner.is_ascii_only() {
+        // EUC-JP / Shift_JIS: CRuby's default (non-`:unicode`) case
+        // mapping touches ASCII bytes only; multibyte characters are
+        // copied verbatim. Walk the encoding-aware char iterator so
+        // a Shift_JIS trail byte in 0x40..=0x7E is never mistaken for
+        // a foldable ASCII letter.
+        if matches!(
+            inner.encoding(),
+            crate::value::Encoding::EucJp | crate::value::Encoding::Sjis(_)
+        ) {
+            let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+                SmallVec::with_capacity(inner.as_bytes().len());
+            let mut first = true;
+            for ch in inner.iter_char_bytes() {
+                if ch.len() == 1 && ch[0] < 0x80 {
+                    let b = ch[0];
+                    let mapped = match op {
+                        CaseOp::Upcase => b.to_ascii_uppercase(),
+                        CaseOp::Downcase => b.to_ascii_lowercase(),
+                        CaseOp::Swapcase => {
+                            if b.is_ascii_alphabetic() {
+                                b ^ 0x20
+                            } else {
+                                b
+                            }
+                        }
+                        CaseOp::Capitalize => {
+                            if first {
+                                b.to_ascii_uppercase()
+                            } else {
+                                b.to_ascii_lowercase()
+                            }
+                        }
+                    };
+                    out.push(mapped);
+                } else {
+                    out.extend_from_slice(ch);
+                }
+                first = false;
+            }
+            return Some(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+        }
         return None;
     }
     let bytes = inner.as_bytes();
@@ -10828,6 +10872,26 @@ mod tests {
             r#"("\x82\xA0\xFF\xFE".dup.force_encoding("Shift_JIS")).scrub("?").encode("UTF-8")"#,
             // valid content is returned unchanged (scrub is a no-op).
             r#""漢字".encode("EUC-JP").scrub.encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_case_mapping() {
+        // P3: ASCII-only case mapping for EUC-JP / Shift_JIS;
+        // multibyte characters (incl. Shift_JIS trail bytes that
+        // fall in the ASCII range) are copied verbatim.
+        run_tests(&[
+            r#""AaＡあBc".encode("EUC-JP").upcase.encode("UTF-8")"#,
+            r#""AaＡあBc".encode("EUC-JP").downcase.encode("UTF-8")"#,
+            r#""AaＡあBc".encode("EUC-JP").swapcase.encode("UTF-8")"#,
+            r#""aAＡあBc".encode("EUC-JP").capitalize.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").upcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").downcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").swapcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").capitalize.encode("UTF-8")"#,
+            r#"(x = "ABc".encode("EUC-JP"); x.upcase!; x.encode("UTF-8"))"#,
+            r#""ABC".encode("EUC-JP").upcase!"#, // no change -> nil
+            r#""漢字abc".encode("Shift_JIS").upcase.encode("UTF-8")"#,
         ]);
     }
 }
