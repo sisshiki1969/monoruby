@@ -868,13 +868,14 @@ mod tests {
 
     #[test]
     fn match_data() {
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").to_s"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").inspect"##);
-        run_test(r##"/(?<a>foo)(?<b>bar)(?<c>BAZ)?/.match("foobarbaz").inspect"##);
-        run_test(r##"/(?<a>foo)(?<b>bar)(BAZ)?/.match("foobarbaz").inspect"##);
-        run_test(r##"/(?<a>foo)(?<b>bar)(?<a>BAZ)?/.match("foobarbaz").inspect"##);
-
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").captures"##);
+        run_tests(&[
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").to_s"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").inspect"##,
+            r##"/(?<a>foo)(?<b>bar)(?<c>BAZ)?/.match("foobarbaz").inspect"##,
+            r##"/(?<a>foo)(?<b>bar)(BAZ)?/.match("foobarbaz").inspect"##,
+            r##"/(?<a>foo)(?<b>bar)(?<a>BAZ)?/.match("foobarbaz").inspect"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").captures"##,
+        ]);
     }
 
     #[test]
@@ -916,119 +917,85 @@ mod tests {
 
     #[test]
     fn match_data_index() {
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-100]"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-1]"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[0]"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[100]"##);
-        run_test(r##"/(foo)(?<abc>bar)(BAZ)?/.match("foobarbaz")["abc"]"##);
-        run_test(r##"/(foo)(?<abc>xxx)?(BAZ)?/.match("foobarbaz")["abc"]"##);
+        run_tests(&[
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-100]"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[-1]"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[0]"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")[100]"##,
+            r##"/(foo)(?<abc>bar)(BAZ)?/.match("foobarbaz")["abc"]"##,
+            r##"/(foo)(?<abc>xxx)?(BAZ)?/.match("foobarbaz")["abc"]"##,
+        ]);
         run_test_error(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz")["abc"]"##);
     }
 
     #[test]
-    fn match_data_begin_end() {
-        run_test(r##"/(foo)(bar)/.match("foobar").begin(0)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").begin(1)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").begin(2)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").end(0)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").end(1)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").end(2)"##);
-        // nil group
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").begin(3)"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").end(3)"##);
-    }
-
-    #[test]
-    fn match_data_named_captures() {
-        run_test(r##"/(?<a>foo)(?<b>bar)/.match("foobar").named_captures"##);
-    }
-
-    #[test]
-    fn match_data_via_last_match() {
-        run_test(
+    fn match_data_begin_end_named_via_last_match_size_regexp_pre_post() {
+        run_tests(&[
+            r##"/(foo)(bar)/.match("foobar").begin(0)"##,
+            r##"/(foo)(bar)/.match("foobar").begin(1)"##,
+            r##"/(foo)(bar)/.match("foobar").begin(2)"##,
+            r##"/(foo)(bar)/.match("foobar").end(0)"##,
+            r##"/(foo)(bar)/.match("foobar").end(1)"##,
+            r##"/(foo)(bar)/.match("foobar").end(2)"##,
+            // nil group
+            r##"/(foo)(bar)(BAZ)?/.match("foobar").begin(3)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobar").end(3)"##,
+            r##"/(?<a>foo)(?<b>bar)/.match("foobar").named_captures"##,
             r#"
             "foobar" =~ /(foo)(bar)/
             m = Regexp.last_match
             [m.class.to_s, m[0], m[1], m[2], m.begin(0), m.end(0), m.begin(1), m.end(2)]
             "#,
-        );
-        run_test(
             r#"
             "hello world" =~ /(\w+)\s(\w+)/
             [Regexp.last_match.begin(1), Regexp.last_match.end(2)]
             "#,
-        );
-        run_test(
             r#"
             "abc".scan(/(b)/) { }
             [Regexp.last_match.class.to_s, Regexp.last_match[0], Regexp.last_match[1]]
             "#,
-        );
-    }
-
-    #[test]
-    fn match_data_size_length() {
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").size"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").length"##);
-    }
-
-    #[test]
-    fn match_data_regexp_string() {
-        run_test(r##"/(foo)(bar)/.match("foobarbaz").regexp.source"##);
-        run_test(r##"/(foo)(bar)/.match("foobarbaz").string"##);
-    }
-
-    #[test]
-    fn match_data_pre_post_match() {
-        run_test(r##"/bar/.match("foobarbaz").pre_match"##);
-        run_test(r##"/bar/.match("foobarbaz").post_match"##);
-        run_test(r##"/^foo/.match("foobar").pre_match"##);
-        run_test(r##"/baz$/.match("foobaz").post_match"##);
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").size"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").length"##,
+            r##"/(foo)(bar)/.match("foobarbaz").regexp.source"##,
+            r##"/(foo)(bar)/.match("foobarbaz").string"##,
+            r##"/bar/.match("foobarbaz").pre_match"##,
+            r##"/bar/.match("foobarbaz").post_match"##,
+            r##"/^foo/.match("foobar").pre_match"##,
+            r##"/baz$/.match("foobaz").post_match"##,
+        ]);
     }
 
     #[test]
     fn match_data_offset() {
-        run_test(r##"/(foo)(bar)/.match("foobar").offset(0)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").offset(1)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").offset(2)"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").offset(3)"##);
+        run_tests(&[
+            r##"/(foo)(bar)/.match("foobar").offset(0)"##,
+            r##"/(foo)(bar)/.match("foobar").offset(1)"##,
+            r##"/(foo)(bar)/.match("foobar").offset(2)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobar").offset(3)"##,
+        ]);
         run_test_error(r##"/(foo)(bar)/.match("foobar").offset(10)"##);
     }
 
     #[test]
-    fn match_data_names() {
-        run_test(r##"/(?<a>foo)(?<b>bar)/.match("foobar").names"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").names"##);
-    }
-
-    #[test]
-    fn match_data_values_at() {
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(0,1,2,3)"##);
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(-1,-2,-100,100)"##);
-    }
-
-    #[test]
-    fn match_data_deconstruct() {
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").deconstruct"##);
-    }
-
-    #[test]
-    fn match_data_match_and_match_length() {
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(0)"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(3)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").match_length(0)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").match_length(1)"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").match_length(3)"##);
-    }
-
-    #[test]
-    fn match_data_byte_offsets() {
-        run_test(r##"/(foo)(bar)/.match("foobar").bytebegin(0)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").byteend(1)"##);
-        run_test(r##"/(foo)(bar)/.match("foobar").byteoffset(2)"##);
-        run_test(r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##);
-        // multibyte: UTF-8, byte offsets differ from char offsets
-        run_test(r##"/い/.match("あぃい").byteoffset(0)"##);
+    fn match_data_names_values_at_deconstruct_match_byte_offsets() {
+        run_tests(&[
+            r##"/(?<a>foo)(?<b>bar)/.match("foobar").names"##,
+            r##"/(foo)(bar)/.match("foobar").names"##,
+            r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(0,1,2,3)"##,
+            r##"/(foo)(bar)(baz)/.match("foobarbaz").values_at(-1,-2,-100,100)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").deconstruct"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(0)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobarbaz").match(3)"##,
+            r##"/(foo)(bar)/.match("foobar").match_length(0)"##,
+            r##"/(foo)(bar)/.match("foobar").match_length(1)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobar").match_length(3)"##,
+            r##"/(foo)(bar)/.match("foobar").bytebegin(0)"##,
+            r##"/(foo)(bar)/.match("foobar").byteend(1)"##,
+            r##"/(foo)(bar)/.match("foobar").byteoffset(2)"##,
+            r##"/(foo)(bar)(BAZ)?/.match("foobar").byteoffset(3)"##,
+            // multibyte: UTF-8, byte offsets differ from char offsets
+            r##"/い/.match("あぃい").byteoffset(0)"##,
+        ]);
     }
 
     #[test]
@@ -1048,45 +1015,31 @@ mod tests {
     }
 
     #[test]
-    fn match_data_index_with_start_length() {
-        run_test(
+    fn match_data_index_with_start_length_and_range() {
+        run_tests(&[
             r##"/(foo)(bar)(baz)/.match("foobarbaz")[1, 2]"##,
-        );
-        run_test(
             r##"/(foo)(bar)(baz)/.match("foobarbaz")[0, 4]"##,
-        );
-        // Out-of-range start -> nil.
-        run_test(
+            // Out-of-range start -> nil.
             r##"/(foo)(bar)(baz)/.match("foobarbaz")[10, 1]"##,
-        );
-        // Negative start counts from end.
-        run_test(
+            // Negative start counts from end.
             r##"/(foo)(bar)(baz)/.match("foobarbaz")[-2, 2]"##,
-        );
-    }
-
-    #[test]
-    fn match_data_index_with_range() {
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[0..2]"##);
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[1..]"##);
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[..2]"##);
-        run_test(r##"/(foo)(bar)(baz)/.match("foobarbaz")[1...3]"##);
-        // Out-of-range start -> nil.
-        run_test(r##"/(foo)(bar)/.match("foobar")[10..20]"##);
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[0..2]"##,
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[1..]"##,
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[..2]"##,
+            r##"/(foo)(bar)(baz)/.match("foobarbaz")[1...3]"##,
+            // Out-of-range start -> nil.
+            r##"/(foo)(bar)/.match("foobar")[10..20]"##,
+        ]);
     }
 
     #[test]
     fn match_data_values_at_with_range_and_names() {
-        run_test(
+        run_tests(&[
             r##"/(?<x>.)(?<y>.)(?<z>.)/.match("abc").values_at(0, 1..2)"##,
-        );
-        run_test(
             r##"/(?<x>.)(?<y>.)(?<z>.)/.match("abc").values_at(:x, :z)"##,
-        );
-        // Range past the end pads with nil.
-        run_test(
+            // Range past the end pads with nil.
             r##"/(.)(.)(\d+)(\d)/.match("THX1138: The Movie").values_at(0..5)"##,
-        );
+        ]);
         // Out-of-range Range -> RangeError with CRuby-format message.
         run_test_error(
             r##"/(.)(.)(\d+)(\d)/.match("THX1138: The Movie").values_at(-6..3)"##,
@@ -1095,24 +1048,14 @@ mod tests {
 
     #[test]
     fn match_data_position_methods_named_arg() {
-        run_test(
+        run_tests(&[
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").begin(:f)"##,
-        );
-        run_test(
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").end("b")"##,
-        );
-        run_test(
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").bytebegin(:b)"##,
-        );
-        run_test(
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").byteend("f")"##,
-        );
-        run_test(
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").byteoffset(:b)"##,
-        );
-        run_test(
             r##"/(?<f>foo)(?<b>bar)/.match("foobar").offset(:b)"##,
-        );
+        ]);
         // Unknown name -> IndexError
         run_test_error(
             r##"/(?<f>foo)/.match("foo").begin(:nope)"##,

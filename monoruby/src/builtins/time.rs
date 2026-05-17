@@ -2258,7 +2258,7 @@ mod tests {
 
     #[test]
     fn test_time2() {
-        run_test(
+        run_tests(&[
             r#"
             res = []
             t = Time.local(2000,1,1,20,15,1,1000)     # => 2000-01-01 20:15:01.001 +0900
@@ -2270,8 +2270,6 @@ mod tests {
             res << t.localtime.to_s                   # => 2000-01-02 05:15:01 +0900
             res << t.gmt?                             # => false
        "#,
-        );
-        run_test(
             r#"
             res = []
             t = Time.local(2000,1,1,20,15,1,1000)     # => 2000-01-01 20:15:01.001 +0900
@@ -2280,8 +2278,6 @@ mod tests {
             res << t.day                              # => 1
             res
        "#,
-        );
-        run_test(
             r#"
             res = []
             t = Time.utc(2000,1,1,20,15,1,1000)       # => 2000-01-01 20:15:01.001 +0900
@@ -2290,75 +2286,47 @@ mod tests {
             res << t.day                              # => 1
             res
        "#,
-        );
-    }
-
-    #[test]
-    fn test_time_at() {
-        run_test(
+            // test_time_at
             r#"
             t = Time.at(0)
             t.utc.year
             "#,
-        );
-        run_test(
             r#"
             t = Time.at(946684800)
             t.utc.year
             "#,
-        );
-        run_test(
             r#"
             t = Time.at(1000000000, 500000)
             t.utc.to_s
             "#,
-        );
-    }
-
-    #[test]
-    fn time_sub() {
-        // Time - Time => Float (seconds)
-        run_test(
+            // time_sub
+            // Time - Time => Float (seconds)
             r#"
             t1 = Time.at(1000)
             t2 = Time.at(900)
             (t1 - t2).class
             "#,
-        );
-        // Time - numeric => Time
-        run_test(
+            // Time - numeric => Time
             r#"
             t = Time.at(1000)
             (t - 100).is_a?(Time)
             "#,
-        );
-    }
-
-    #[test]
-    fn time_accessors() {
-        // Test yday, wday, hour, min, sec
-        run_test(
+            // time_accessors
+            // Test yday, wday, hour, min, sec
             r#"
             t = Time.local(2000,3,1,14,30,45)
             [t.yday, t.wday, t.hour, t.min, t.sec]
             "#,
-        );
-        run_test(
             r#"
             t = Time.utc(2000,1,1,0,0,0)
             [t.yday, t.wday, t.hour, t.min, t.sec]
             "#,
-        );
-    }
-
-    #[test]
-    fn time_usec_nsec() {
-        run_test(
+            // time_usec_nsec
             r#"
             t = Time.utc(2000,1,1,20,15,1,123456)
             [t.usec, t.nsec, t.tv_nsec]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -2371,18 +2339,16 @@ mod tests {
 
     #[test]
     fn time_to_i_to_f() {
-        run_test(
+        run_tests(&[
             r#"
             t = Time.at(946684800)
             [t.to_i, t.tv_sec]
             "#,
-        );
-        run_test(
             r#"
             t = Time.at(946684800, 500000)
             t.to_f.class
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -2393,139 +2359,98 @@ mod tests {
 
     #[test]
     fn time_add() {
-        run_test(
+        run_tests(&[
             r#"
             t = Time.at(1000)
             (t + 100).is_a?(Time)
             "#,
-        );
-        run_test(
             r#"
             t = Time.at(1000)
             (t + 100).to_i - t.to_i
             "#,
-        );
-        run_test(
             r#"
             t = Time.at(1000)
             (t + 0.5).to_f - t.to_f > 0
             "#,
-        );
-    }
-
-    #[test]
-    fn time_weekday_predicates() {
-        run_test(
+            // time_weekday_predicates
             r#"
             t = Time.utc(2000,1,3) # Monday
             [t.sunday?, t.monday?, t.tuesday?, t.wednesday?,
              t.thursday?, t.friday?, t.saturday?]
             "#,
-        );
-    }
-
-    #[test]
-    fn time_gmt_offset_aliases() {
-        run_test("Time.utc(2000).gmt_offset");
-        run_test("Time.utc(2000).gmtoff");
-    }
-
-    #[test]
-    fn time_dst() {
-        run_test("Time.utc(2000).dst?");
-        run_test("Time.utc(2000).isdst");
-    }
-
-    #[test]
-    fn time_zone() {
-        run_test("Time.utc(2000).zone");
-    }
-
-    #[test]
-    fn time_gm_string_args() {
-        // String args parse as base-10 numerals, mirroring CRuby.
-        run_test(r#"Time.gm("2000", "12", "1", "5", "8", "8").inspect"#);
-        // Short month-name lookup ("jan" → 1, "Dec" → 12, …).
-        run_test(r#"Time.gm(2000, "jan").inspect"#);
-        run_test(r#"Time.gm(2000, "dec").inspect"#);
-    }
-
-    #[test]
-    fn time_gm_c_style_10_args() {
-        // 10-arg form: (sec, min, hour, mday, mon, year, wday, yday, isdst, tz).
-        // Trailing wday/yday/isdst/tz are ignored.
-        run_test(
+            // time_gmt_offset_aliases
+            "Time.utc(2000).gmt_offset",
+            "Time.utc(2000).gmtoff",
+            // time_dst
+            "Time.utc(2000).dst?",
+            "Time.utc(2000).isdst",
+            // time_zone
+            "Time.utc(2000).zone",
+            // time_gm_string_args
+            // String args parse as base-10 numerals, mirroring CRuby.
+            r#"Time.gm("2000", "12", "1", "5", "8", "8").inspect"#,
+            // Short month-name lookup ("jan" → 1, "Dec" → 12, …).
+            r#"Time.gm(2000, "jan").inspect"#,
+            r#"Time.gm(2000, "dec").inspect"#,
+            // time_gm_c_style_10_args
+            // 10-arg form: (sec, min, hour, mday, mon, year, wday, yday, isdst, tz).
+            // Trailing wday/yday/isdst/tz are ignored.
             r#"Time.gm(1, 15, 20, 1, 1, 2000, :ignored, :ignored, :ignored, :ignored).inspect"#,
-        );
-        // Float-form 10-arg (numeric to_int truncation).
-        run_test(
+            // Float-form 10-arg (numeric to_int truncation).
             r#"Time.gm(1.0, 15.0, 20.0, 1.0, 1.0, 2000.0, nil, nil, false, nil).inspect"#,
-        );
-    }
-
-    #[test]
-    fn time_gm_nil_defaults() {
-        // Trailing nil month/day/etc default to 1/0.
-        run_test("Time.gm(2000, nil, nil, nil, nil, nil).inspect");
-    }
-
-    #[test]
-    fn time_getutc_getgm() {
-        run_test("Time.local(2000,1,1,9,0,0).getutc.to_s");
-        run_test("Time.local(2000,1,1,9,0,0).getgm.utc?");
-        run_test("Time.utc(2000,1,1).getutc.utc?");
+            // time_gm_nil_defaults
+            // Trailing nil month/day/etc default to 1/0.
+            "Time.gm(2000, nil, nil, nil, nil, nil).inspect",
+            // time_getutc_getgm
+            "Time.local(2000,1,1,9,0,0).getutc.to_s",
+            "Time.local(2000,1,1,9,0,0).getgm.utc?",
+            "Time.utc(2000,1,1).getutc.utc?",
+        ]);
     }
 
     #[test]
     fn time_getlocal() {
         run_test_once("Time.utc(2000,1,1).getlocal.is_a?(Time)");
-        run_test("Time.utc(2000,1,1,12,0,0).getlocal(3600).to_s");
-        run_test("Time.utc(2000,1,1,12,0,0).getlocal(-18000).to_s");
+        run_tests(&[
+            "Time.utc(2000,1,1,12,0,0).getlocal(3600).to_s",
+            "Time.utc(2000,1,1,12,0,0).getlocal(-18000).to_s",
+        ]);
     }
 
     #[test]
     fn time_to_a() {
-        run_test("Time.utc(2000,1,2,3,4,5).to_a");
-    }
-
-    #[test]
-    fn time_iso8601() {
-        run_test(r#"Time.utc(2000,1,2,3,4,5).iso8601"#);
-        run_test(r#"Time.utc(2000,1,2,3,4,5).xmlschema"#);
-    }
-
-    #[test]
-    fn time_asctime_ctime() {
-        run_test(r#"Time.utc(2000,1,2,3,4,5).asctime"#);
-        run_test(r#"Time.utc(2000,1,2,3,4,5).ctime"#);
-    }
-
-    #[test]
-    fn time_floor_ceil_round() {
-        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).floor.usec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).ceil.usec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).ceil.sec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,499999).round.usec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,500000).round.usec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,123456).floor(3).usec"#);
-        run_test(r#"Time.utc(2000,1,1,0,0,0,123456).ceil(3).usec"#);
+        run_tests(&[
+            "Time.utc(2000,1,2,3,4,5).to_a",
+            // time_iso8601
+            r#"Time.utc(2000,1,2,3,4,5).iso8601"#,
+            r#"Time.utc(2000,1,2,3,4,5).xmlschema"#,
+            // time_asctime_ctime
+            r#"Time.utc(2000,1,2,3,4,5).asctime"#,
+            r#"Time.utc(2000,1,2,3,4,5).ctime"#,
+            // time_floor_ceil_round
+            r#"Time.utc(2000,1,1,0,0,0,500000).floor.usec"#,
+            r#"Time.utc(2000,1,1,0,0,0,500000).ceil.usec"#,
+            r#"Time.utc(2000,1,1,0,0,0,500000).ceil.sec"#,
+            r#"Time.utc(2000,1,1,0,0,0,499999).round.usec"#,
+            r#"Time.utc(2000,1,1,0,0,0,500000).round.usec"#,
+            r#"Time.utc(2000,1,1,0,0,0,123456).floor(3).usec"#,
+            r#"Time.utc(2000,1,1,0,0,0,123456).ceil(3).usec"#,
+        ]);
     }
 
     #[test]
     fn time_deconstruct_keys() {
-        run_test(
+        run_tests(&[
             r#"
             t = Time.utc(2022, 10, 5, 13, 30)
             h = t.deconstruct_keys(nil)
             [h[:year], h[:month], h[:day], h[:hour], h[:min], h[:sec], h[:zone], h[:dst]]
             "#,
-        );
-        run_test(
             r#"Time.utc(2022,10,5,13,30).deconstruct_keys([:year, :month])"#,
-        );
-        run_test(r#"Time.utc(2022,10,5,13,30).deconstruct_keys([])"#);
-        // non-symbol entries are silently dropped
-        run_test(r#"Time.utc(2022,10,5,13,30).deconstruct_keys(['year', []])"#);
+            r#"Time.utc(2022,10,5,13,30).deconstruct_keys([])"#,
+            // non-symbol entries are silently dropped
+            r#"Time.utc(2022,10,5,13,30).deconstruct_keys(['year', []])"#,
+        ]);
         // TypeError for wrong arg types
         run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys(1)"#);
         run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys("asd")"#);
@@ -2533,7 +2458,7 @@ mod tests {
     }
 
     #[test]
-    fn time_strftime_nanoseconds() {
+    fn time_strftime() {
         run_tests(&[
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%3N")"#,
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%6N")"#,
@@ -2541,93 +2466,55 @@ mod tests {
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%N")"#,
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%L")"#,
             r#"Time.utc(2000,1,1,20,15,1,123456).strftime("%Y-%m-%d %H:%M:%S.%3N")"#,
-        ]);
-    }
-
-    #[test]
-    fn time_strftime_offset_specifiers() {
-        // `%z` — `+HHMM`.
-        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%z")"#);
-        // `%:z` — `+HH:MM`.
-        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%:z")"#);
-        // `%::z` — `+HH:MM:SS` with non-zero seconds.
-        run_test(r#"Time.new(2024, 1, 1, 0, 0, 0, 3665).strftime("%::z")"#);
-        // UTC time → `+0000` family.
-        run_test(r#"Time.utc(2024).strftime("%z")"#);
-        run_test(r#"Time.utc(2024).strftime("%:z")"#);
-        run_test(r#"Time.utc(2024).strftime("%::z")"#);
-    }
-
-    #[test]
-    fn time_strftime_minus_flag_on_utc_returns_negative_zero() {
-        // CRuby's RFC 3339 "unknown offset" form: `%-z` on offset==0
-        // emits `-0000` / `-00:00` / `-00:00:00`.
-        run_test(r#"Time.utc(2022).strftime("%-z")"#);
-        run_test(r#"Time.gm(2022).strftime("%-z")"#);
-        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "Z").strftime("%-z")"#);
-        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "-00:00").strftime("%-z")"#);
-        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").utc.strftime("%-z")"#);
-        run_test(r#"Time.utc(2022).strftime("%-:z")"#);
-        run_test(r#"Time.utc(2022).strftime("%-::z")"#);
-    }
-
-    #[test]
-    fn time_strftime_minus_flag_ignored_on_nonzero_offset() {
-        // Non-zero offset: `-` flag is a no-op (matches CRuby).
-        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").strftime("%-z")"#);
-        run_test(r#"Time.new(2022, 1, 1, 0, 0, 0, "-08:00").strftime("%-z")"#);
-    }
-
-    #[test]
-    fn time_strftime_z_for_fixed_offset_is_empty() {
-        // `%Z` returns "" for fixed-offset zones, "UTC" for utc Time.
-        run_test(r#"Time.new(2000, 1, 1, 0, 0, 0, 42).strftime("%Z")"#);
-        run_test(r#"Time.utc(2000).strftime("%Z")"#);
-    }
-
-    #[test]
-    fn time_strftime_v_directive_uppercase_month() {
-        // `%v` → ` D-MMM-YYYY` (uppercase abbreviated month).
-        run_test(r#"Time.gm(2001, 2, 3, 4, 5, 6).strftime("%v")"#);
-        run_test(r#"Time.gm(2024, 12, 25).strftime("%v")"#);
-    }
-
-    #[test]
-    fn time_strftime_caret_b_uppercase_abbr() {
-        run_test(r#"Time.gm(2001, 2, 3).strftime("%^b")"#);
-        run_test(r#"Time.gm(2001, 7, 4).strftime("%^B")"#);
-        // `%^h` is a CRuby synonym for `%^b`.
-        run_test(r#"Time.gm(2001, 2, 3).strftime("%^h")"#);
-    }
-
-    #[test]
-    fn time_strftime_offset_rounds_fractional_seconds() {
-        // `Time.new(.., Rational(36645, 10))` is 3664.5 seconds —
-        // CRuby rounds to 3665 (so `%::z` is `+01:01:05`, not
-        // `+01:01:04`).
-        run_test(
+            // `%z` — `+HHMM`.
+            r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%z")"#,
+            // `%:z` — `+HH:MM`.
+            r#"Time.new(2024, 1, 1, 0, 0, 0, "+05:30").strftime("%:z")"#,
+            // `%::z` — `+HH:MM:SS` with non-zero seconds.
+            r#"Time.new(2024, 1, 1, 0, 0, 0, 3665).strftime("%::z")"#,
+            // UTC time → `+0000` family.
+            r#"Time.utc(2024).strftime("%z")"#,
+            r#"Time.utc(2024).strftime("%:z")"#,
+            r#"Time.utc(2024).strftime("%::z")"#,
+            // CRuby's RFC 3339 "unknown offset" form: `%-z` on offset==0
+            // emits `-0000` / `-00:00` / `-00:00:00`.
+            r#"Time.utc(2022).strftime("%-z")"#,
+            r#"Time.gm(2022).strftime("%-z")"#,
+            r#"Time.new(2022, 1, 1, 0, 0, 0, "Z").strftime("%-z")"#,
+            r#"Time.new(2022, 1, 1, 0, 0, 0, "-00:00").strftime("%-z")"#,
+            r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").utc.strftime("%-z")"#,
+            r#"Time.utc(2022).strftime("%-:z")"#,
+            r#"Time.utc(2022).strftime("%-::z")"#,
+            // Non-zero offset: `-` flag is a no-op (matches CRuby).
+            r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:00").strftime("%-z")"#,
+            r#"Time.new(2022, 1, 1, 0, 0, 0, "-08:00").strftime("%-z")"#,
+            // `%Z` returns "" for fixed-offset zones, "UTC" for utc Time.
+            r#"Time.new(2000, 1, 1, 0, 0, 0, 42).strftime("%Z")"#,
+            r#"Time.utc(2000).strftime("%Z")"#,
+            // `%v` → ` D-MMM-YYYY` (uppercase abbreviated month).
+            r#"Time.gm(2001, 2, 3, 4, 5, 6).strftime("%v")"#,
+            r#"Time.gm(2024, 12, 25).strftime("%v")"#,
+            r#"Time.gm(2001, 2, 3).strftime("%^b")"#,
+            r#"Time.gm(2001, 7, 4).strftime("%^B")"#,
+            // `%^h` is a CRuby synonym for `%^b`.
+            r#"Time.gm(2001, 2, 3).strftime("%^h")"#,
+            // `Time.new(.., Rational(36645, 10))` is 3664.5 seconds —
+            // CRuby rounds to 3665 (so `%::z` is `+01:01:05`, not
+            // `+01:01:04`).
             r#"Time.new(2012, 1, 1, 0, 0, 0, Rational(36645, 10)).strftime("%::z")"#,
-        );
-    }
-
-    #[test]
-    fn time_dump_load_roundtrip() {
-        // The published bytestring for Time.at(946812800).gmtime is fixed
-        // by ruby/spec; we match it exactly.
-        run_test(
+            // The published bytestring for Time.at(946812800).gmtime is fixed
+            // by ruby/spec; we match it exactly.
             r#"
             t = Time.at(946812800).gmtime
             t.send(:_dump).bytes
             "#,
-        );
-        // Round-trip a UTC Time through _dump / _load.
-        run_test(
+            // Round-trip a UTC Time through _dump / _load.
             r#"
             t = Time.utc(2000, 1, 15, 20, 1, 1, 203)
             r = Time.send(:_load, t.send(:_dump))
             [r.year, r.month, r.day, r.hour, r.min, r.sec, r.usec, r.utc?]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -2639,65 +2526,45 @@ mod tests {
 
     #[test]
     fn time_gm_carry_over() {
-        // sec=60 carries to next minute (leap-second tolerance).
-        run_test(
+        run_tests(&[
+            // sec=60 carries to next minute (leap-second tolerance).
             r#"
             t = Time.gm(1972, 6, 30, 23, 59, 60)
             [t.year, t.mon, t.mday, t.hour, t.min, t.sec]
             "#,
-        );
-        // mday=31 in Feb carries forward (Feb has 28 days in 1999).
-        run_test(r#"Time.gm(1999, 2, 31).inspect"#);
+            // mday=31 in Feb carries forward (Feb has 28 days in 1999).
+            r#"Time.gm(1999, 2, 31).inspect"#,
+        ]);
         // mday=32 still rejected (hard ceiling).
         run_test_error(r#"Time.gm(2008, 1, 32)"#);
     }
 
     #[test]
-    fn time_gm_fractional_sec() {
-        // Float fractional sec → usec.
-        run_test(
+    fn time_value_misc() {
+        run_tests(&[
+            // Float fractional sec → usec.
             r#"
             t = Time.gm(2000, 1, 1, 20, 15, 1.75)
             [t.sec, t.usec]
             "#,
-        );
-        // Rational preserves nanosecond precision.
-        run_test(
+            // Rational preserves nanosecond precision.
             r#"
             t = Time.utc(2010, 3, 30, 5, 43, "25.0123456789".to_r)
             [t.sec, t.nsec]
             "#,
-        );
-    }
-
-    #[test]
-    fn time_ceil_with_digits() {
-        run_test(
             r#"
             t = Time.utc(2010, 3, 30, 5, 43, "25.0123456789".to_r)
             t.ceil(4).iso8601(4)
             "#,
-        );
-    }
-
-    #[test]
-    fn time_iso8601_year_padding() {
-        // Year < 4 digits is zero-padded to 4 digits.
-        run_test(r#"Time.utc(12, 4, 12).iso8601"#);
-        // Year > 4 digits emits all of them.
-        run_test(r#"Time.utc(40000, 4, 12).iso8601"#);
-    }
-
-    #[test]
-    fn time_iso8601_with_precision() {
-        run_test(r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(2)"#);
-        run_test(r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(9)"#);
-    }
-
-    #[test]
-    fn time_gmtime_frozen_no_op() {
-        // Already-UTC frozen time: gmtime is a no-op.
-        run_test(r#"Time.utc(2000).freeze.gmtime.utc?"#);
+            // Year < 4 digits is zero-padded to 4 digits.
+            r#"Time.utc(12, 4, 12).iso8601"#,
+            // Year > 4 digits emits all of them.
+            r#"Time.utc(40000, 4, 12).iso8601"#,
+            r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(2)"#,
+            r#"Time.utc(1985, 4, 12, 23, 20, 50, 521245).iso8601(9)"#,
+            // Already-UTC frozen time: gmtime is a no-op.
+            r#"Time.utc(2000).freeze.gmtime.utc?"#,
+        ]);
     }
 
     #[test]
@@ -2713,38 +2580,30 @@ mod tests {
     }
 
     #[test]
-    fn time_new_with_args() {
-        // `Time.new` previously ignored its arguments and returned the
-        // current time. Now it honours the `Time.gm`-style coordinates
-        // and uses the system local zone.
-        run_test(r#"Time.new(2024, 6, 15, 12, 30, 45).inspect"#);
-        run_test(r#"Time.new(2024).inspect"#);
-        run_test(r#"Time.new(2024, "jun", 15).inspect"#);
-        // String args parse as base-10 numerals.
-        run_test(r#"Time.new("2024", "6", "15", "12", "30", "45").inspect"#);
-    }
-
-    #[test]
-    fn time_new_with_utc_offset_string() {
-        // `+HH:MM` / `+HH:MM:SS` strings give a fixed-offset zone.
-        run_test(
+    fn time_new_with() {
+        run_tests(&[
+            // `Time.new` previously ignored its arguments and returned the
+            // current time. Now it honours the `Time.gm`-style coordinates
+            // and uses the system local zone.
+            r#"Time.new(2024, 6, 15, 12, 30, 45).inspect"#,
+            r#"Time.new(2024).inspect"#,
+            r#"Time.new(2024, "jun", 15).inspect"#,
+            // String args parse as base-10 numerals.
+            r#"Time.new("2024", "6", "15", "12", "30", "45").inspect"#,
+            // `+HH:MM` / `+HH:MM:SS` strings give a fixed-offset zone.
             r#"
             t = Time.new(2013, 3, 17, nil, nil, nil, "+03:00")
             [t.utc_offset, t.year, t.mon, t.mday]
             "#,
-        );
-        run_test(
             r#"
             t = Time.new(2013, 3, 17, 12, 0, 0, "-05:30")
             [t.utc_offset, t.hour, t.min]
             "#,
-        );
-        run_test(
             r#"
             t = Time.new(2013, 3, 17, 12, 0, 0, "+09:00:00")
             t.utc_offset
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -2774,7 +2633,7 @@ mod tests {
 
     #[test]
     fn time_new_now_in_keyword_and_military_zone() {
-        run_test(
+        run_tests(&[
             r#"
             a = Time.new(2000, 1, 1, 12, 0, 0, in: "+05:00")
             b = Time.new(2000, 1, 1, 12, 0, 0, in: 5*3600)
@@ -2784,13 +2643,11 @@ mod tests {
              Time.now(in: "+09:00").utc_offset, Time.now.is_a?(Time),
              Time.new.is_a?(Time)]
             "#,
-        );
-        // Single-letter military timezone (A..I,K..M=+, N..Y=-, Z=0).
-        run_test(
+            // Single-letter military timezone (A..I,K..M=+, N..Y=-, Z=0).
             r#"
             %w[A B I K M N W Y Z].map { |z| Time.new(2000,1,1,0,0,0,z).utc_offset }
             "#,
-        );
+        ]);
         // `J` and malformed strings → unified message; well-formed but
         // hour > 23 → "utc_offset out of range".
         run_test_error(r#"Time.new(2000,1,1,0,0,0,"J")"#);
@@ -2845,20 +2702,18 @@ mod tests {
 
     #[test]
     fn time_new_with_utc_offset_integer() {
-        run_test(
+        run_tests(&[
             r#"
             t = Time.new(2013, 3, 17, 12, 0, 0, 7245)
             t.utc_offset
             "#,
-        );
-        // utc_offset = nil → local zone (same as no-arg).
-        run_test(
+            // utc_offset = nil → local zone (same as no-arg).
             r#"
             a = Time.new(2024, 1, 1, 0, 0, 0)
             b = Time.new(2024, 1, 1, 0, 0, 0, nil)
             a.utc_offset == b.utc_offset
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3004,7 +2859,7 @@ mod tests {
     }
 
     #[test]
-    fn time_spaceship() {
+    fn time_comparison() {
         // `<=>` of two Times → -1 / 0 / 1; non-Time other → nil.
         // Local vs UTC at the same absolute instant compares equal
         // (both sides normalised to UTC).
@@ -3016,12 +2871,6 @@ mod tests {
             r#"Time.utc(1970) <=> "foo""#,
             "Time.utc(1970) <=> 0",
             "Time.utc(1970) <=> nil",
-        ]);
-    }
-
-    #[test]
-    fn time_relational_ops() {
-        run_tests(&[
             "Time.utc(1970) < Time.utc(1971)",
             "Time.utc(1971) < Time.utc(1970)",
             "Time.utc(1970) <= Time.utc(1970)",
@@ -3044,7 +2893,7 @@ mod tests {
     }
 
     #[test]
-    fn time_eq_eql() {
+    fn time_equality_and_misc() {
         // `==` is equality of absolute instant (Local vs UTC at the
         // same moment compare equal); returns false (not nil) for
         // non-Time arguments. `eql?` shares the same absolute-instant
@@ -3063,34 +2912,16 @@ mod tests {
             "Time.utc(1970).eql?(nil)",
             // Cross-zone same-instant `eql?` — CRuby returns true.
             r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u.eql?(l)"#,
-        ]);
-    }
-
-    #[test]
-    fn time_hash_matches_eql() {
-        // `hash` must agree with `eql?` on the absolute instant:
-        // same instant ⇒ same hash, regardless of display offset.
-        run_tests(&[
+            // `hash` must agree with `eql?` on the absolute instant:
+            // same instant ⇒ same hash, regardless of display offset.
             "Time.utc(1970).hash == Time.utc(1970).hash",
             r#"u = Time.utc(2000, 1, 1, 12, 0, 0); l = u.getlocal("+09:00"); u.hash == l.hash"#,
             "Time.utc(1970).hash.is_a?(Integer)",
-        ]);
-    }
-
-    #[test]
-    fn time_in_range_iteration() {
-        // `Range#each` probes `start <=> end`; without `<=>` on Time
-        // the range used to come back empty. Use a singleton `succ`
-        // so iteration terminates.
-        run_tests(&[
+            // `Range#each` probes `start <=> end`; without `<=>` on Time
+            // the range used to come back empty. Use a singleton `succ`
+            // so iteration terminates.
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).to_a.size",
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).include?(t)",
-        ]);
-    }
-
-    #[test]
-    fn time_subclass_and_at_time_arg() {
-        run_tests(&[
             // `Time.{new,at,utc,local}` on a subclass yield that subclass.
             "k = Class.new(Time); k.new(2020,1,1).instance_of?(k)",
             "k = Class.new(Time); k.at(0).instance_of?(k)",

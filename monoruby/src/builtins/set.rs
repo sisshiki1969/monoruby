@@ -1388,32 +1388,16 @@ mod tests {
             "Set[1, 2, 3].include?(4)",
             "Set.new.empty?",
             "Set[1].empty?",
-        ]);
-    }
-
-    #[test]
-    fn set_add_delete() {
-        run_tests(&[
             "s = Set.new; s << 1; s << 2; s << 1; s.size",
             "s = Set[1, 2]; s.add?(3).equal?(s)",
             "s = Set[1, 2]; s.add?(1).nil?",
             "s = Set[1, 2, 3]; s.delete(2); s.include?(2)",
             "s = Set[1, 2]; s.delete?(2).equal?(s)",
             "s = Set[1, 2]; s.delete?(3).nil?",
-        ]);
-    }
-
-    #[test]
-    fn set_operations() {
-        run_test("(Set[1, 2, 3] & Set[2, 3, 4]).to_a.sort");
-        run_test("(Set[1, 2, 3] | Set[2, 3, 4]).to_a.sort");
-        run_test("(Set[1, 2, 3] - Set[2, 3, 4]).to_a.sort");
-        run_test("(Set[1, 2, 3] ^ Set[2, 3, 4]).to_a.sort");
-    }
-
-    #[test]
-    fn set_comparison() {
-        run_tests(&[
+            "(Set[1, 2, 3] & Set[2, 3, 4]).to_a.sort",
+            "(Set[1, 2, 3] | Set[2, 3, 4]).to_a.sort",
+            "(Set[1, 2, 3] - Set[2, 3, 4]).to_a.sort",
+            "(Set[1, 2, 3] ^ Set[2, 3, 4]).to_a.sort",
             "Set[1, 2] == Set[2, 1]",
             "Set[1, 2] == Set[1, 2, 3]",
             "Set[1, 2].subset?(Set[1, 2, 3])",
@@ -1424,22 +1408,10 @@ mod tests {
             "Set[1, 2].disjoint?(Set[2, 3])",
             "Set[1, 2].intersect?(Set[2, 3])",
             "Set[1, 2].intersect?(Set[3, 4])",
+            "a = []; Set[3, 1, 2].each {|x| a << x}; a.sort",
+            "Set[3, 1, 2].to_a.sort",
+            "Set[].to_s",
         ]);
-    }
-
-    #[test]
-    fn set_each() {
-        run_test("a = []; Set[3, 1, 2].each {|x| a << x}; a.sort");
-    }
-
-    #[test]
-    fn set_to_a() {
-        run_test("Set[3, 1, 2].to_a.sort");
-    }
-
-    #[test]
-    fn set_inspect() {
-        run_test("Set[].to_s");
     }
 
     #[test]
@@ -1456,105 +1428,51 @@ mod tests {
 
     #[test]
     fn set_merge() {
-        run_test("s = Set[1]; s.merge([2, 3]); s.to_a.sort");
-    }
-
-    #[test]
-    fn set_new_with_enum() {
-        run_test("Set.new([1, 2, 3]).to_a.sort");
-        run_test("Set.new([1, 2, 3]) {|x| x * 2}.to_a.sort");
-    }
-
-    #[test]
-    fn set_spaceship() {
-        run_test("Set[1, 2] <=> Set[1, 2]");
-        run_test("Set[1, 2] <=> Set[1, 2, 3]");
-        run_test("Set[1, 2, 3] <=> Set[1, 2]");
-        run_test("(Set[1, 2] <=> Set[3, 4]).nil?");
-    }
-
-    #[test]
-    fn set_dup() {
-        run_test("s = Set[1, 2]; t = s.dup; t << 3; [s.size, t.size]");
-    }
-
-    #[test]
-    fn set_clear() {
-        run_test("s = Set[1, 2, 3]; s.clear; s.size");
-        run_test("s = Set[1, 2, 3]; s.clear; s.empty?");
-        run_test("s = Set[1, 2, 3]; s.clear.equal?(s)");
-    }
-
-    #[test]
-    fn set_to_set() {
-        run_test("s = Set[1, 2]; s.to_set.equal?(s)");
-        run_test("Set[1, 2, 3].to_set.to_a.sort");
-    }
-
-    #[test]
-    fn set_subtract() {
-        run_test("s = Set[1, 2, 3, 4]; s.subtract([2, 4]); s.to_a.sort");
-        run_test("s = Set[1, 2, 3]; s.subtract(Set[3, 4]); s.to_a.sort");
-        run_test("s = Set[1, 2]; s.subtract([]).to_a.sort");
-        run_test("s = Set[1, 2]; s.subtract([1, 2]); s.size");
-    }
-
-    #[test]
-    fn set_replace() {
-        run_test("s = Set[1, 2, 3]; s.replace([4, 5]); s.to_a.sort");
-        run_test("s = Set[1, 2]; s.replace(Set[3, 4, 5]); s.to_a.sort");
-        run_test("s = Set[1, 2]; s.replace([]).size");
-        run_test("s = Set[1, 2]; s.replace([1, 2]).equal?(s)");
-    }
-
-    #[test]
-    fn set_proper_superset() {
-        run_test("Set[1, 2, 3].proper_superset?(Set[1, 2])");
-        run_test("Set[1, 2].proper_superset?(Set[1, 2])");
-        run_test("Set[1, 2].proper_superset?(Set[1, 2, 3])");
-        run_test("Set[1, 2, 3] > Set[1, 2]");
-        run_test("Set[1, 2] > Set[1, 2]");
-    }
-
-    #[test]
-    fn set_delete_if() {
-        run_test("s = Set[1, 2, 3, 4, 5]; s.delete_if {|x| x % 2 == 0}; s.to_a.sort");
-        run_test("s = Set[1, 2, 3]; s.delete_if {|x| false}; s.to_a.sort");
-        run_test("s = Set[1, 2, 3]; s.delete_if {|x| true}; s.size");
-        run_test("s = Set[1, 2, 3]; s.delete_if {|x| x > 1}.equal?(s)");
-    }
-
-    #[test]
-    fn set_keep_if() {
-        run_test("s = Set[1, 2, 3, 4, 5]; s.keep_if {|x| x.odd?}; s.to_a.sort");
-        run_test("s = Set[1, 2, 3]; s.keep_if {|x| true}; s.to_a.sort");
-        run_test("s = Set[1, 2, 3]; s.keep_if {|x| false}; s.size");
-        run_test("s = Set[1, 2, 3]; s.keep_if {|x| x < 3}.equal?(s)");
-    }
-
-    #[test]
-    fn set_filter_reject() {
-        run_test("s = Set[1, 2, 3, 4]; s.select! {|x| x.even?}; s.to_a.sort");
-        run_test("s = Set[1, 2, 3, 4]; s.reject! {|x| x.even?}; s.to_a.sort");
-        run_test("s = Set[2, 4]; s.select! {|x| x.even?}.nil?");
-    }
-
-    #[test]
-    fn set_map() {
-        run_test("s = Set[1, 2, 3]; s.collect! {|x| x * 2}; s.to_a.sort");
-    }
-
-    #[test]
-    fn set_flatten() {
-        run_test("Set[Set[1, 2], Set[3, 4], 5].flatten.to_a.sort");
-    }
-
-    #[test]
-    fn set_flatten_bang() {
-        run_test("s = Set[Set[1, 2], Set[3, 4], 5]; s.flatten!; s.to_a.sort");
-        run_test("s = Set[Set[1, 2], Set[3, 4], 5]; s.flatten!.equal?(s)");
-        run_test("s = Set[1, 2, 3]; s.flatten!.nil?");
-        run_test("Set[Set[Set[1]], 2].flatten.to_a.sort");
+        run_tests(&[
+            "s = Set[1]; s.merge([2, 3]); s.to_a.sort",
+            "Set.new([1, 2, 3]).to_a.sort",
+            "Set.new([1, 2, 3]) {|x| x * 2}.to_a.sort",
+            "Set[1, 2] <=> Set[1, 2]",
+            "Set[1, 2] <=> Set[1, 2, 3]",
+            "Set[1, 2, 3] <=> Set[1, 2]",
+            "(Set[1, 2] <=> Set[3, 4]).nil?",
+            "s = Set[1, 2]; t = s.dup; t << 3; [s.size, t.size]",
+            "s = Set[1, 2, 3]; s.clear; s.size",
+            "s = Set[1, 2, 3]; s.clear; s.empty?",
+            "s = Set[1, 2, 3]; s.clear.equal?(s)",
+            "s = Set[1, 2]; s.to_set.equal?(s)",
+            "Set[1, 2, 3].to_set.to_a.sort",
+            "s = Set[1, 2, 3, 4]; s.subtract([2, 4]); s.to_a.sort",
+            "s = Set[1, 2, 3]; s.subtract(Set[3, 4]); s.to_a.sort",
+            "s = Set[1, 2]; s.subtract([]).to_a.sort",
+            "s = Set[1, 2]; s.subtract([1, 2]); s.size",
+            "s = Set[1, 2, 3]; s.replace([4, 5]); s.to_a.sort",
+            "s = Set[1, 2]; s.replace(Set[3, 4, 5]); s.to_a.sort",
+            "s = Set[1, 2]; s.replace([]).size",
+            "s = Set[1, 2]; s.replace([1, 2]).equal?(s)",
+            "Set[1, 2, 3].proper_superset?(Set[1, 2])",
+            "Set[1, 2].proper_superset?(Set[1, 2])",
+            "Set[1, 2].proper_superset?(Set[1, 2, 3])",
+            "Set[1, 2, 3] > Set[1, 2]",
+            "Set[1, 2] > Set[1, 2]",
+            "s = Set[1, 2, 3, 4, 5]; s.delete_if {|x| x % 2 == 0}; s.to_a.sort",
+            "s = Set[1, 2, 3]; s.delete_if {|x| false}; s.to_a.sort",
+            "s = Set[1, 2, 3]; s.delete_if {|x| true}; s.size",
+            "s = Set[1, 2, 3]; s.delete_if {|x| x > 1}.equal?(s)",
+            "s = Set[1, 2, 3, 4, 5]; s.keep_if {|x| x.odd?}; s.to_a.sort",
+            "s = Set[1, 2, 3]; s.keep_if {|x| true}; s.to_a.sort",
+            "s = Set[1, 2, 3]; s.keep_if {|x| false}; s.size",
+            "s = Set[1, 2, 3]; s.keep_if {|x| x < 3}.equal?(s)",
+            "s = Set[1, 2, 3, 4]; s.select! {|x| x.even?}; s.to_a.sort",
+            "s = Set[1, 2, 3, 4]; s.reject! {|x| x.even?}; s.to_a.sort",
+            "s = Set[2, 4]; s.select! {|x| x.even?}.nil?",
+            "s = Set[1, 2, 3]; s.collect! {|x| x * 2}; s.to_a.sort",
+            "Set[Set[1, 2], Set[3, 4], 5].flatten.to_a.sort",
+            "s = Set[Set[1, 2], Set[3, 4], 5]; s.flatten!; s.to_a.sort",
+            "s = Set[Set[1, 2], Set[3, 4], 5]; s.flatten!.equal?(s)",
+            "s = Set[1, 2, 3]; s.flatten!.nil?",
+            "Set[Set[Set[1]], 2].flatten.to_a.sort",
+        ]);
     }
 
     #[test]
@@ -1569,36 +1487,18 @@ mod tests {
 
     #[test]
     fn set_case_equality() {
-        run_test("Set[1, 2, 3] === 2");
-        run_test("Set[1, 2, 3] === 4");
-    }
-
-    #[test]
-    fn set_join() {
-        run_test("Set[1, 2, 3].join(', ')");
-    }
-
-    #[test]
-    fn set_classify() {
-        run_test("Set[1,2,3,4,5].classify {|x| x % 2}.map {|k,v| [k, v.to_a.sort]}.sort");
-    }
-
-    #[test]
-    fn set_divide_arity1() {
-        run_test("Set[1,2,3,4,5].divide {|x| x % 2}.map {|s| s.to_a.sort}.sort");
-    }
-
-    #[test]
-    fn set_reset() {
-        run_test("s = Set[1, 2, 3]; s.reset.to_a.sort");
-    }
-
-    #[test]
-    fn set_eq_recursive() {
-        // Two sets with same elements
-        run_test("Set[1, 2] == Set[1, 2]");
-        run_test("Set[1, 2] == Set[2, 1]");
-        run_test("Set[1, 2] == Set[1, 3]");
+        run_tests(&[
+            "Set[1, 2, 3] === 2",
+            "Set[1, 2, 3] === 4",
+            "Set[1, 2, 3].join(', ')",
+            "Set[1,2,3,4,5].classify {|x| x % 2}.map {|k,v| [k, v.to_a.sort]}.sort",
+            "Set[1,2,3,4,5].divide {|x| x % 2}.map {|s| s.to_a.sort}.sort",
+            "s = Set[1, 2, 3]; s.reset.to_a.sort",
+            // Two sets with same elements
+            "Set[1, 2] == Set[1, 2]",
+            "Set[1, 2] == Set[2, 1]",
+            "Set[1, 2] == Set[1, 3]",
+        ]);
     }
 
     #[test]
@@ -1639,32 +1539,22 @@ mod tests {
 
     #[test]
     fn set_frozen_block_no_block_returns_enumerator() {
-        // Without a block, these return an enumerator even on frozen sets.
-        run_test("Set[1, 2, 3].freeze.delete_if.class.to_s");
-        run_test("Set[1, 2, 3].freeze.keep_if.class.to_s");
-        run_test("Set[1, 2, 3].freeze.select!.class.to_s");
-        run_test("Set[1, 2, 3].freeze.reject!.class.to_s");
-        run_test("Set[1, 2, 3].freeze.collect!.class.to_s");
-    }
-
-    #[test]
-    fn set_divide_arity2() {
-        // Symmetric relation: elements within abs-difference of 1 group together.
-        run_test(
+        run_tests(&[
+            // Without a block, these return an enumerator even on frozen sets.
+            "Set[1, 2, 3].freeze.delete_if.class.to_s",
+            "Set[1, 2, 3].freeze.keep_if.class.to_s",
+            "Set[1, 2, 3].freeze.select!.class.to_s",
+            "Set[1, 2, 3].freeze.reject!.class.to_s",
+            "Set[1, 2, 3].freeze.collect!.class.to_s",
+            // Symmetric relation: elements within abs-difference of 1 group together.
             "Set[1, 3, 4, 6, 9, 10, 11].divide {|x, y| (x - y).abs == 1 }\
              .map {|s| s.to_a.sort }.sort",
-        );
-        // SCC with a symmetric relation: (a+b).even? on {1,2,3,4} groups
-        // odd {1,3} and even {2,4}.
-        run_test(
+            // SCC with a symmetric relation: (a+b).even? on {1,2,3,4} groups
+            // odd {1,3} and even {2,4}.
             "Set[1, 2, 3, 4].divide {|a, b| (a + b).even? }\
              .map {|s| s.to_a.sort }.sort",
-        );
-    }
-
-    #[test]
-    fn set_initialize_private() {
-        run_test("Set.private_instance_methods(false).include?(:initialize)");
+            "Set.private_instance_methods(false).include?(:initialize)",
+        ]);
     }
 
     #[test]
@@ -1703,16 +1593,14 @@ mod tests {
 
     #[test]
     fn set_inspect_to_s_alias_equal_method() {
-        // Both names resolve to the same underlying Method.
-        run_test("Set.instance_method(:to_s) == Set.instance_method(:inspect)");
-        run_test("Set[].method(:to_s) == Set[].method(:inspect)");
-    }
-
-    #[test]
-    fn set_case_equality_alias() {
-        // Set#=== is an alias for #include? / #member?.
-        run_test("Set.instance_method(:===) == Set.instance_method(:include?)");
-        run_test("Set.instance_method(:===) == Set.instance_method(:member?)");
+        run_tests(&[
+            // Both names resolve to the same underlying Method.
+            "Set.instance_method(:to_s) == Set.instance_method(:inspect)",
+            "Set[].method(:to_s) == Set[].method(:inspect)",
+            // Set#=== is an alias for #include? / #member?.
+            "Set.instance_method(:===) == Set.instance_method(:include?)",
+            "Set.instance_method(:===) == Set.instance_method(:member?)",
+        ]);
     }
 
     #[test]
@@ -1732,40 +1620,22 @@ mod tests {
     }
 
     #[test]
-    fn set_iteration_delete_allowed() {
-        // Removing an element during iteration is permitted (CRuby-compatible).
-        run_test(
+    fn set_misc() {
+        run_tests(&[
+            // Removing an element during iteration is permitted (CRuby-compatible).
             "s = Set[1, 2, 3]; s.each { |x| s.delete(x) if x == 2 }; s.to_a.sort",
-        );
-    }
-
-    #[test]
-    fn set_hash_static() {
-        // Same content → same hash, regardless of insertion order.
-        run_test("Set[].hash == Set[].hash");
-        run_test("Set[1, 2, 3].hash == Set[1, 2, 3].hash");
-        run_test("Set[:a, \"b\", \"c\"].hash == Set[\"c\", \"b\", :a].hash");
-        run_test("Set[].hash != Set[1, 2, 3].hash");
-    }
-
-    #[test]
-    fn set_enumerator_forwards_block_result() {
-        // select!/reject! without a block return an Enumerator whose #each
-        // drives the backing method; the user block's truthiness must reach
-        // the filter logic.
-        run_test(
+            // Same content → same hash, regardless of insertion order.
+            "Set[].hash == Set[].hash",
+            "Set[1, 2, 3].hash == Set[1, 2, 3].hash",
+            "Set[:a, \"b\", \"c\"].hash == Set[\"c\", \"b\", :a].hash",
+            "Set[].hash != Set[1, 2, 3].hash",
+            // select!/reject! without a block return an Enumerator whose #each
+            // drives the backing method; the user block's truthiness must reach
+            // the filter logic.
             "s = Set[\"one\", \"two\", \"three\"]; \
              s.select!.each { |x| x.size != 3 }; s.to_a",
-        );
-        run_test(
             "s = Set[\"one\", \"two\", \"three\"]; \
              s.reject!.each { |x| x.size == 3 }; s.to_a",
-        );
-    }
-
-    #[test]
-    fn set_compare_by_identity() {
-        run_tests(&[
             r#"Set.new.compare_by_identity?"#,
             r#"(s=Set.new; s.compare_by_identity.equal?(s))"#,
             r#"(s=Set.new; s.compare_by_identity; s.compare_by_identity?)"#,
