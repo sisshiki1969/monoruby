@@ -10754,6 +10754,9 @@ mod tests {
             r#""ﾊﾝｶｸ".encode("Shift_JIS").length"#,            // half-width kana
             r#""日本語".encode("EUC-JP").reverse.encode("UTF-8")"#,
             r#""日本語".encode("Shift_JIS").chars.map { |c| c.encode("UTF-8") }"#,
+            // EUC-JP 0x8F lead = JIS X 0212 (3-byte char).
+            r#"("\x8F\xA2\xAF".dup.force_encoding("EUC-JP")).length"#,
+            r#"("\x8F\xA2\xAF" + "A").dup.force_encoding("EUC-JP").each_char.map(&:bytesize)"#,
             r#""".encode("EUC-JP").length"#,
         ]);
     }
