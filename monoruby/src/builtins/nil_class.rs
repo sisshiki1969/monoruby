@@ -15,56 +15,30 @@ mod tests {
 
     #[test]
     fn to_s() {
-        run_test(r##"nil.to_s"##);
-        run_test(r##"nil.to_s.class"##);
-        run_test(r##"nil.to_s == """##);
-        run_test(r##"nil.to_s.equal?(nil.to_s)"##);
-    }
-
-    #[test]
-    fn inspect() {
-        run_test(r##"nil.inspect"##);
-    }
-
-    #[test]
-    fn class_name() {
-        run_test(r##"nil.class"##);
-        run_test(r##"nil.is_a?(NilClass)"##);
-    }
-
-    #[test]
-    fn to_a() {
-        run_test(r##"nil.to_a"##);
-        run_test(r##"nil.to_a.class"##);
-        run_test(r##"nil.to_a == []"##);
-        run_test(r##"nil.to_a.equal?(nil.to_a)"##);
-    }
-
-    #[test]
-    fn match_op() {
-        run_test(r##"nil =~ /foo/"##);
-        run_test(r##"nil =~ "foo""##);
-        run_test(r##"nil =~ 42"##);
-        run_test(r##"nil =~ nil"##);
-    }
-
-    #[test]
-    fn to_c() {
-        run_test(r##"nil.to_c"##);
-        run_test(r##"nil.to_c.class"##);
-        run_test(r##"nil.to_c == Complex(0, 0)"##);
-    }
-
-    #[test]
-    fn to_i() {
-        run_test(r##"nil.to_i"##);
-    }
-
-    #[test]
-    fn nil_p() {
-        run_test(r##"nil.nil?"##);
-        run_test(r##"nil == nil"##);
-        run_test(r##"nil.equal?(nil)"##);
+        run_tests(&[
+            r##"nil.to_s"##,
+            r##"nil.to_s.class"##,
+            r##"nil.to_s == """##,
+            r##"nil.to_s.equal?(nil.to_s)"##,
+            r##"nil.inspect"##,
+            r##"nil.class"##,
+            r##"nil.is_a?(NilClass)"##,
+            r##"nil.to_a"##,
+            r##"nil.to_a.class"##,
+            r##"nil.to_a == []"##,
+            r##"nil.to_a.equal?(nil.to_a)"##,
+            r##"nil =~ /foo/"##,
+            r##"nil =~ "foo""##,
+            r##"nil =~ 42"##,
+            r##"nil =~ nil"##,
+            r##"nil.to_c"##,
+            r##"nil.to_c.class"##,
+            r##"nil.to_c == Complex(0, 0)"##,
+            r##"nil.to_i"##,
+            r##"nil.nil?"##,
+            r##"nil == nil"##,
+            r##"nil.equal?(nil)"##,
+        ]);
     }
 
     #[test]
@@ -111,12 +85,6 @@ mod tests {
             r##"nil.^ 100"##,
             r##"nil.^ //"##,
             r##"nil.^ "100""##,
-        ]);
-    }
-
-    #[test]
-    fn and() {
-        run_tests(&[
             r##"nil & true"##,
             r##"nil & false"##,
             r##"nil & nil"##,
@@ -129,12 +97,6 @@ mod tests {
             r##"nil.& 100"##,
             r##"nil.& //"##,
             r##"nil.& "100""##,
-        ]);
-    }
-
-    #[test]
-    fn or() {
-        run_tests(&[
             r##"nil | true"##,
             r##"nil | false"##,
             r##"nil | nil"##,

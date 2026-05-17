@@ -359,8 +359,10 @@ mod tests {
     #[test]
     fn binding_receiver() {
         // Binding#receiver returns self at the binding's frame.
-        run_test(r#"binding.receiver == self"#);
-        run_test(r#"TOPLEVEL_BINDING.receiver.equal?(self)"#);
+        run_tests(&[
+            r#"binding.receiver == self"#,
+            r#"TOPLEVEL_BINDING.receiver.equal?(self)"#,
+        ]);
         run_test(
             r#"
             class Foo

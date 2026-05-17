@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn enum_free() {
-        run_test(
+        run_tests(&[
             r##"
             20.times do
                 a = Enumerator.new do |y|
@@ -428,12 +428,6 @@ mod tests {
                 a.next
             end
         "##,
-        );
-    }
-
-    #[test]
-    fn fib() {
-        run_test(
             r##"
             fib = Enumerator.new do |y|
                 a = b = 1
@@ -445,7 +439,7 @@ mod tests {
             30.times do fib.next end
             fib.next
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -508,7 +502,7 @@ mod tests {
 
     #[test]
     fn each() {
-        run_test(
+        run_tests(&[
             r##"
             res = []
             e = [1,2,3,4].to_enum
@@ -517,12 +511,6 @@ mod tests {
             end
             res
         "##,
-        );
-    }
-
-    #[test]
-    fn rewind() {
-        run_test(
             r##"
             res = []
             e = [1,2,3,4].to_enum
@@ -536,7 +524,7 @@ mod tests {
             res << e.next
             res
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -591,9 +579,14 @@ mod tests {
         );
     }
 
+    // Note: Enumerator::Lazy is defined in Ruby (enumerable.rb) but
+    // monoruby has a block variable capture limitation that prevents
+    // nested block forwarding from working correctly. Tests are
+    // disabled until the underlying issue is fixed.
+
     #[test]
     fn one_() {
-        run_test(
+        run_tests(&[
             r##"
             res = []
             res << ['ant', 'bear', 'cat'].one? {|word| word.length == 4}  # => true
@@ -609,12 +602,6 @@ mod tests {
             res << [].one?                                                # => true
             res
         "##,
-        );
-    }
-
-    #[test]
-    fn none_() {
-        run_test(
             r##"
             f = [nil, true, false]
             t = [nil, false, nil]
@@ -628,12 +615,6 @@ mod tests {
             res << [].none?                           # => true
             res
         "##,
-        );
-    }
-
-    #[test]
-    fn min_by() {
-        run_test(
             r##"
             res = []
             a = %w(albatross dog horse)
@@ -643,29 +624,14 @@ mod tests {
             # res << a.min_by(2) {|x| x.length } # => ["dog", "horse"]
             res
         "##,
-        );
-    }
-
-    #[test]
-    fn enumerator_size() {
-        run_test(
             r##"
             res = []
             res << Enumerator.new { |y| y << 1 }.size
             res
         "##,
-        );
-    }
-
-    // Note: Enumerator::Lazy is defined in Ruby (enumerable.rb) but
-    // monoruby has a block variable capture limitation that prevents
-    // nested block forwarding from working correctly. Tests are
-    // disabled until the underlying issue is fixed.
-
-    #[test]
-    fn enumerator_size_upto_downto() {
-        run_test("1.upto(5).size");
-        run_test("5.downto(1).size");
-        run_test("3.times.size");
+            "1.upto(5).size",
+            "5.downto(1).size",
+            "3.times.size",
+        ]);
     }
 }
