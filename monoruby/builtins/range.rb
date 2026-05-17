@@ -31,6 +31,27 @@ class Range
       # same-length stopping rule.
       seq_mode = (i.is_a?(String) && e.is_a?(String)) ||
                  (i.is_a?(Symbol) && e.is_a?(Symbol))
+      # CRuby's String#upto special-cases single ASCII-character
+      # endpoints: it walks by codepoint, not by #succ, so
+      # `("A".."z")` yields the punctuation between `Z` and `a`
+      # (bytes 65..122 = 58 elements) and `(:A..:z)` the symbol
+      # equivalent. #succ would instead stop at `Z`/`z`.
+      if seq_mode
+        __bs = i.is_a?(Symbol) ? i.to_s : i
+        __es = e.is_a?(Symbol) ? e.to_s : e
+        if __bs.length == 1 && __es.length == 1 &&
+           __bs.ord < 128 && __es.ord < 128
+          __sym = i.is_a?(Symbol)
+          __last = excl ? __es.ord - 1 : __es.ord
+          __c = __bs.ord
+          while __c <= __last
+            ch = __c.chr
+            yield(__sym ? ch.to_sym : ch)
+            __c += 1
+          end
+          return self
+        end
+      end
       end_len = (e.is_a?(Symbol) ? e.to_s.length : e.length) if seq_mode
       loop do
         if seq_mode
