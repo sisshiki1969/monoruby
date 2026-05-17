@@ -660,6 +660,9 @@ fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
 fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `Time.new`/`Time.now` called on a subclass must return an
+    // instance of that subclass.
+    let cls = lfp.self_val().as_class().id();
     // The `in:` keyword (slot 7) gives the UTC offset for both
     // `Time.now(in:)` and `Time.new(y, …, in:)`.
     let in_arg = lfp.try_arg(7).filter(|v| !v.is_nil());
@@ -671,7 +674,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         } else {
             TimeInner::Local(Local::now().into())
         };
-        return Ok(Value::new_time(time_info));
+        return Ok(Value::new_time_with_class(time_info, cls));
     }
     // `Time.new("2020-12-25 00:56:17 +09:00")` — single String
     // argument is parsed as a date-time, optionally with a trailing
@@ -687,7 +690,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
     {
         let time_info = parse_time_string(vm, globals, s, in_arg)?;
-        return Ok(Value::new_time(time_info));
+        return Ok(Value::new_time_with_class(time_info, cls));
     }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
     // `utc_offset`, so we pre-extract it before calling `from_args`
@@ -725,7 +728,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         };
         TimeInner::Local(local.into())
     };
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 /// Variant of `from_args` used by `Time.new`: the 7th positional arg
@@ -1015,7 +1018,21 @@ fn parse_time_string(
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/at.html]
 #[monoruby_builtin]
 fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let secs_val = lfp.arg(0);
+    // `Time.at(time)` copies the instant of an existing Time, keeping
+    // its UTC/offset-ness; a subclass receiver yields a subclass instance.
+    if matches!(secs_val.unpack(), RV::Object(rv) if rv.ty() == ObjTy::TIME) {
+        // A second positional (usec) argument together with a Time is
+        // an error in CRuby (bug #8173).
+        if lfp.try_arg(1).is_some_and(|v| !v.is_nil()) {
+            return Err(MonorubyErr::typeerr(
+                "can't convert Time into an exact number",
+            ));
+        }
+        let inner = secs_val.as_time().clone();
+        return Ok(Value::new_time_with_class(inner, cls));
+    }
     let (secs, nsecs) = if let Some(f) = secs_val.try_float() {
         let s = f.floor() as i64;
         let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
@@ -1043,7 +1060,7 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let local: DateTime<Local> = dt.into();
         TimeInner::Local(local.into())
     };
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 /// Allocator for `Time` and its subclasses.
@@ -1060,9 +1077,10 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/local.html]
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let t = generate_time(vm, globals, Local, lfp)?;
     let time_info = TimeInner::Local(t.into());
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 ///
@@ -1073,9 +1091,10 @@ fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [utc(year, mon = 1, day = 1, hour = 0, min = 0, sec = 0, usec = 0) -> Time]
 #[monoruby_builtin]
 fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let t = generate_time(vm, globals, Utc, lfp)?;
     let time_info = TimeInner::Utc(t);
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
@@ -3066,6 +3085,23 @@ mod tests {
         run_tests(&[
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).to_a.size",
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).include?(t)",
+        ]);
+    }
+
+    #[test]
+    fn time_subclass_and_at_time_arg() {
+        run_tests(&[
+            // `Time.{new,at,utc,local}` on a subclass yield that subclass.
+            "k = Class.new(Time); k.new(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.at(0).instance_of?(k)",
+            "k = Class.new(Time); k.utc(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.local(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.at(Time.utc(1999,12,31)).instance_of?(k)",
+            // `Time.at(time)` copies the instant, preserving UTC-ness.
+            "o = Time.utc(2000,1,1,2,3,4); a = Time.at(o); [a == o, a.utc?, a.equal?(o), a.year]",
+            "o = Time.at(123456789); b = Time.at(o); [b == o, b.to_i]",
+            // `Time.at(Time, usec)` is a TypeError (bug #8173).
+            "begin; Time.at(Time.now, 500000); :no; rescue TypeError; :te; end",
         ]);
     }
 }
