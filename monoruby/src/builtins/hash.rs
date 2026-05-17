@@ -726,8 +726,13 @@ fn index_assign(
     // CRuby: when storing into a Hash with a fresh String key, the key
     // is dup'd and frozen so later mutation of the caller's String can't
     // corrupt the hash. Frozen strings are stored as-is; existing-key
-    // preservation is handled by the underlying RubyMap.
-    if key.is_str().is_some() && !key.is_frozen() {
+    // preservation is handled by the underlying RubyMap. A
+    // compare_by_identity hash keys on object identity, so it stores
+    // the caller's String as-is (no copy, no freeze).
+    if key.is_str().is_some()
+        && !key.is_frozen()
+        && !lfp.self_val().as_hash().is_compare_by_identity()
+    {
         // Build a fresh String value from the bytes so the duplicate
         // does NOT inherit singleton methods from the caller's key.
         let inner = key.as_rstring_inner().clone();
