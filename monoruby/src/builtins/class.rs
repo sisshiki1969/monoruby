@@ -13,6 +13,69 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
     Box::new(gen_class_new_inline)
 }
 
+pub fn gen_class_allocate() -> Box<InlineGen> {
+    Box::new(gen_class_allocate_inline)
+}
+
+///
+/// Inline `Class#allocate`: the receiver class's `alloc_func` (resolved
+/// at JIT-compile time from the speculated `self_class`) and its
+/// `class_id` are embedded as constants, so the allocation is a single
+/// direct `call` with no native trampoline / method dispatch. Falls
+/// back (returns false ⇒ normal native `allocate`) when the call site
+/// is not simple or the class has no `alloc_func`.
+///
+pub(super) fn gen_class_allocate_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    self_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    // `Class#allocate`'s receiver is a class object, so its class is
+    // that class's singleton (metaclass). Unwrap to the attached class
+    // to read the right `alloc_func`.
+    let mut self_module = store[self_class].get_module();
+    if let Some(origin) = self_module.is_singleton() {
+        self_module = origin.as_class();
+    }
+    let class_id = self_module.id();
+    let alloc_func = match store[class_id].alloc_func() {
+        Some(f) => f,
+        None => return false,
+    };
+    let CallSiteInfo { dst, .. } = *callsite;
+    state.writeback_acc(ir);
+    let using_xmm = state.get_using_xmm();
+    ir.xmm_save(using_xmm);
+    ir.inline(move |r#gen, _, _, _| {
+        monoasm!( &mut r#gen.jit,
+            // alloc_func(class_id, &mut Globals) -> Value
+            movl rdi, (class_id.u32());
+            movq rsi, r12;
+            movq rax, (alloc_func);
+            call rax;
+        );
+    });
+    ir.xmm_restore(using_xmm);
+    // The allocator produces an instance of exactly `class_id`. Record
+    // that class in the abstract state so the trailing
+    // `o.__builtin_initialize__(...)` resolves to a single, statically
+    // known `class_id#initialize` (monomorphic per the self-class-
+    // specialized `Class#new`). Without this the allocated object's
+    // class is unknown, forcing a polymorphic inline-cache dispatch
+    // that thrashes / deopts on every construction when many classes
+    // are built through the shared `Class#new` (e.g. aobench).
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+    true
+}
+
 pub(super) fn init(globals: &mut Globals) {
     // Class.allocate / Class#new on a class object both produce a fresh,
     // uninitialized Class. Install that as Class's alloc_func so it flows
@@ -23,7 +86,28 @@ pub(super) fn init(globals: &mut Globals) {
 
     // instance methods. The default `Class#allocate` consults the receiver
     // class's `ClassInfo.alloc_func`, raising TypeError when None.
+    // Public, user-overridable `Class#allocate` (CRuby semantics:
+    // `klass.allocate` directly dispatches to a user override).
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    // Private, non-overridable internal allocator that the Ruby
+    // `Class#new` (startup.rb) calls. Users override `allocate`, not
+    // this name, so `new` keeps CRuby's "bypass user allocate"
+    // semantics while still being a Ruby trampoline. Carries the
+    // inline-asm generator so the allocation inside a specialized
+    // `Class#new` is emitted as a direct `call` (no native trampoline).
+    let alloc_fid = globals.define_builtin_inline_func(
+        CLASS_CLASS,
+        "__builtin_allocate__",
+        allocate,
+        gen_class_allocate(),
+        0,
+    );
+    globals.add_method(
+        CLASS_CLASS,
+        IdentId::get_id("__builtin_allocate__"),
+        alloc_fid,
+        Visibility::Private,
+    );
     globals.define_builtin_inline_funcs_with_kw(
         CLASS_CLASS,
         "new",

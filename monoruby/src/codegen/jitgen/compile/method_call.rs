@@ -268,8 +268,16 @@ impl<'a> JitContext<'a> {
                 // dst slot with the wrong class. See the
                 // `attr_reader_in_different_class` regression for the
                 // observable failure.
+                // Always specialize calls to an argument-forwarding
+                // method (`def f(...)`): forwarding bodies are thin
+                // trampolines whose cost is dominated by the
+                // re-parse / rest-array of the forwarded `...`, which
+                // specialization (and D1) removes — so don't gate them
+                // on the immediate-arg heuristic.
+                let forwarding_callee = self.store[func_id].params().forwarding();
                 let specializable = self.store.is_simple_call(func_id, callid)
-                    && (state.is_C_immediate(callsite.recv)
+                    && (forwarding_callee
+                        || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
@@ -367,6 +375,8 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest: _,
+            needs_rest_array: _,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -381,7 +391,7 @@ impl<'a> JitContext<'a> {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        state.set_arguments(&self.store, ir, callid, callee_fid);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -590,6 +600,8 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest,
+            needs_rest_array,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -600,7 +612,17 @@ impl<'a> JitContext<'a> {
             callid,
         )?;
         let evict = ir.new_evict();
-        state.send_specialized(ir, &self.store, callid, fid, entry, patch_point, evict);
+        state.send_specialized(
+            ir,
+            &self.store,
+            callid,
+            fid,
+            entry,
+            patch_point,
+            evict,
+            deferred_rest,
+            needs_rest_array,
+        );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
         return Ok(res);
@@ -610,6 +632,12 @@ impl<'a> JitContext<'a> {
 pub(super) struct SpecializedCompileResult {
     pub entry: JitLabel,
     pub return_state: Option<ReturnState>,
+    /// D1: the trampoline body's forwarding consumer elided `f`'s rest
+    /// `Array` (routed straight from the caller source); the caller-side
+    /// `set_arguments` must skip the `create_array`.
+    pub deferred_rest: bool,
+    /// D1 veto: some forwarding consume needs the real rest `Array`.
+    pub needs_rest_array: bool,
 }
 
 impl<'a> JitContext<'a> {
@@ -661,6 +689,8 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
         let frame_had_deopt = frame.had_deopt;
+        let frame_deferred_rest = frame.deferred_rest;
+        let frame_needs_rest_array = frame.needs_rest_array;
         // Two unmodeled-path conditions taint the return state so the
         // caller doesn't propagate a speculative `Const` past us:
         //
@@ -716,6 +746,8 @@ impl<'a> JitContext<'a> {
         Ok(SpecializedCompileResult {
             entry,
             return_state,
+            deferred_rest: frame_deferred_rest,
+            needs_rest_array: frame_needs_rest_array,
         })
     }
 
@@ -773,7 +805,7 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid, false);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -812,13 +844,19 @@ impl AbstractState {
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
+        deferred_rest: bool,
+        needs_rest_array: bool,
     ) {
+        // D1: skip the caller-side `create_array` only when at least
+        // one forwarding consume was source-routed AND no forwarding
+        // consume needs the real rest `Array`.
+        let defer_rest = deferred_rest && !needs_rest_array;
         self.exec_gc(ir, true);
         let using_xmm = self.get_using_xmm();
         // stack pointer adjustment
         // -using_xmm.offset()
         ir.xmm_save_cont(using_xmm);
-        self.set_arguments(store, ir, callid, callee_fid);
+        self.set_arguments(store, ir, callid, callee_fid, defer_rest);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -896,6 +934,7 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
+        defer_rest: bool,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -957,7 +996,19 @@ impl AbstractState {
             // fill a rest param.
             if callee.is_rest() {
                 let ofs = stack_offset - (LFP_ARG0 + (8 * (callee.reqopt_num())) as i32);
-                self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+                if defer_rest {
+                    // D1: the trampoline body's forwarding consumer
+                    // copied straight from these source slots, so no
+                    // `Array` is built here. Spill the source range so
+                    // it is memory-resident for the deopt-time
+                    // materialization, and store a real `nil` into the
+                    // rest slot (matches its `C(nil)` LinkMode, keeps
+                    // the frame GC-safe).
+                    self.write_back_range(ir, args + req + opt, rest_len as u16);
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                } else {
+                    self.fetch_rest_for_callee(ir, args + req + opt, rest_len, ofs);
+                }
             }
 
             // fill post params.
@@ -1008,7 +1059,101 @@ impl AbstractState {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
+        } else if callsite.forwarding
+            && callsite.pos_num >= 1
+            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && callee.is_iseq().is_some()
+            && callee.no_keyword()
+            && !callee.is_rest()
+            && callee.opt_num() == 0
+            && callee.post_num() == 0
+            && callee.req_num() + 1 >= callsite.pos_num
+        {
+            // Forwarding `g(x.., ...)` where `g` takes only required
+            // positionals and the only splat is the trailing `...` rest
+            // (`splat_pos == [pos_num-1]`). The `lead_num = pos_num-1`
+            // leading args sit at `callsite.args ..`, the `...` Array at
+            // `args + lead_num`; copy both straight into the callee frame
+            // (length-guarded) instead of re-parsing via the runtime.
+            // `req_num()+1 >= pos_num` ensures `req_num() >= lead_num`.
+            let recv = callsite.recv;
+            let args = callsite.args;
+            let lead_num = callsite.pos_num - 1;
+            let kwrest_guard = callsite.hash_splat_pos.first().copied();
+            // D1: if `f`'s `...` rest array was deferred at frame entry,
+            // route the copy straight from the caller's source slots.
+            // Only when the forwarded arity exactly matches `g`'s
+            // required params (this branch already guarantees `g` is
+            // req-only: no opt/post/rest/kw, so no `ArgumentError`-
+            // shaped case the eager `create_array` + length-guard would
+            // raise) and only for the `g(*rest, **kwrest, &blk)`
+            // trampoline shape (`kwrest_guard.is_some()`; the structural
+            // gate guarantees no kw reaches `f`, so the forwarded
+            // `**kwrest` is nil). `ir.set_deferred_rest` makes the
+            // caller skip `create_array`. The annotation is NOT cleared:
+            // the window's and the `g` call's own side exits must still
+            // rebuild the array for an interpreter resuming inside `f`.
+            let deferred_src = match self.deferred_rest_src(args + lead_num) {
+                Some((src, len))
+                    if (len as usize) == callee.req_num() - lead_num
+                        && kwrest_guard.is_some() =>
+                {
+                    ir.set_deferred_rest();
+                    Some((src, len))
+                }
+                _ => {
+                    // Not source-routed (slot/arity/kwrest mismatch):
+                    // this forwarding consume reads `f`'s rest slot as a
+                    // real `Array`, so veto the caller-side skip.
+                    if self.deferred_rest_tuple().is_some() {
+                        ir.set_needs_rest_array();
+                    }
+                    None
+                }
+            };
+            self.write_back_recv_and_callargs(ir, callsite);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                recv,
+                args,
+                lead_num,
+                kwrest_guard,
+                deferred_src,
+            });
+            ir.handle_error(error);
+        } else if callsite.forwarding
+            && callsite.splat_pos.len() == 1
+            && callsite.splat_pos[0] < callsite.pos_num
+            && callee.is_iseq().is_some()
+            && callee.no_keyword()
+        {
+            // Forwarding with a single splat at any position — `g(x.., ...)`
+            // (trailing) or implicit `super` of a `def m(a,*r,z)` method
+            // (splat before post params). Handled by the specialized
+            // runtime helper, which skips the generic CallSiteInfo
+            // re-parse on the common no-forwarded-kw path (building
+            // lead ++ splat-array ++ post directly) and delegates the
+            // subtle kw case to the proven generic.
+            // Array-path forwarding consume (iseq with opt/post/rest):
+            // it reads `f`'s rest slot as a real `Array`.
+            if self.deferred_rest_tuple().is_some() {
+                ir.set_needs_rest_array();
+            }
+            self.write_back_recv_and_callargs(ir, callsite);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
+            ir.handle_error(error);
         } else {
+            // Generic path. A forwarding call here (e.g. native callee
+            // such as `Array.new`'s `o.__send__(:initialize, ...)`, or
+            // a leading-arg forward like `File.read(@path, ...)`) reads
+            // `f`'s rest slot as a real `Array` via the runtime
+            // `jit_generic_set_arguments`, so veto the skip.
+            if callsite.forwarding && self.deferred_rest_tuple().is_some() {
+                ir.set_needs_rest_array();
+            }
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });

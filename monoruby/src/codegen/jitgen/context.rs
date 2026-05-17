@@ -421,6 +421,16 @@ pub(super) struct JitStackFrame {
     /// `compile_specialized_func`.
     ///
     pub(super) had_deopt: bool,
+    /// D1: set when the trampoline forwarding consumer routed `g(...)`
+    /// straight from the caller source (elided `f`'s rest Array).
+    /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
+    /// surfaced via `compile_specialized_func`.
+    pub(super) deferred_rest: bool,
+    /// D1 veto (see `AsmIr::needs_rest_array`): some forwarding consume
+    /// of the deferred rest needs the real `Array`. Aggregated like
+    /// `deferred_rest`; producer skips `create_array` only when
+    /// `deferred_rest && !needs_rest_array`.
+    pub(super) needs_rest_array: bool,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -506,6 +516,8 @@ impl JitStackFrame {
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
+            deferred_rest: false,
+            needs_rest_array: false,
         }
     }
 
@@ -529,6 +541,8 @@ impl JitStackFrame {
             // the codegen resolve pass, so id reuse is safe.
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
+            deferred_rest: self.deferred_rest,
+            needs_rest_array: self.needs_rest_array,
         }
     }
 
@@ -1136,6 +1150,36 @@ impl<'a> JitContext<'a> {
         self.current_frame().specialize_level
     }
 
+    ///
+    /// D1 forwarding-rest deferral decision for the *current* frame.
+    ///
+    /// `Some((rest_local, src, len))` iff the current frame is a
+    /// specialized pure forwarding trampoline `def f(...) = g(...)`
+    /// whose caller is the outermost (non-specialized) JIT frame —
+    /// `specialize_level == 1`, so `f` sits exactly one level below the
+    /// root and the caller's `rbp` is precisely the value `f` saved at
+    /// `[rbp]` (its `init_func` did `pushq rbp; movq rbp, rsp`). `src`
+    /// is the caller call site's positional args base (caller register
+    /// numbering, read via that saved caller `rbp`), `len` its
+    /// positional count, `rest_local` `f`'s synthetic rest local slot.
+    ///
+    pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
+        if !self.is_specialized() || self.specialize_level() != 1 {
+            return None;
+        }
+        let fid = self.func_id();
+        let rest_local = self.store.forwarding_trampoline_rest(fid)?;
+        let cid = self.method_caller_callsite()?;
+        if !self.store.is_simple_call(fid, cid) {
+            return None;
+        }
+        let cs = &self.store[cid];
+        if cs.kw_may_exists() || cs.block_arg.is_some() || cs.pos_num == 0 {
+            return None;
+        }
+        Some((rest_local, cs.args, cs.pos_num as u16))
+    }
+
     pub(super) fn position(&self) -> Option<BytecodePtr> {
         match &self.jit_type() {
             JitType::Loop(pos) => Some(*pos),
@@ -1338,6 +1382,8 @@ impl<'a> JitContext<'a> {
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
+        frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.ir.push((bb, ir));
     }
 
@@ -1349,12 +1395,16 @@ impl<'a> JitContext<'a> {
     ) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
+        frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.inline_bridges.insert(src_bb, (ir, dest_bb));
     }
 
     pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
+        frame.deferred_rest |= ir.deferred_rest();
+        frame.needs_rest_array |= ir.needs_rest_array();
         frame.outline_bridges.push((ir, dest, bbid));
     }
 }

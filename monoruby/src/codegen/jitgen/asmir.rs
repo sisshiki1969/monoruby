@@ -70,6 +70,14 @@ pub(crate) struct AsmIr {
     /// otherwise propagate to its caller — see
     /// `JitStackFrame::had_deopt`.
     had_deopt: bool,
+    /// D1: set by the forwarding consumer when it routed the
+    /// trampoline's `g(...)` straight from the caller source.
+    deferred_rest: bool,
+    /// D1 veto: a forwarding consume of the deferred rest that is NOT
+    /// source-routed (needs the real `Array`: 989-array-path / helper /
+    /// generic / native callee). Producer skips `create_array` only
+    /// when `deferred_rest && !needs_rest_array`.
+    needs_rest_array: bool,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -103,11 +111,29 @@ impl AsmIr {
             inst: vec![],
             side_exit: vec![],
             had_deopt: false,
+            deferred_rest: false,
+            needs_rest_array: false,
         }
     }
 
     pub(super) fn had_deopt(&self) -> bool {
         self.had_deopt
+    }
+
+    pub(super) fn deferred_rest(&self) -> bool {
+        self.deferred_rest
+    }
+
+    pub(super) fn set_deferred_rest(&mut self) {
+        self.deferred_rest = true;
+    }
+
+    pub(super) fn needs_rest_array(&self) -> bool {
+        self.needs_rest_array
+    }
+
+    pub(super) fn set_needs_rest_array(&mut self) {
+        self.needs_rest_array = true;
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
@@ -128,23 +154,34 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool, bool) {
+    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
+            self.deferred_rest,
+            self.needs_rest_array,
         )
     }
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt): (usize, usize, bool, bool),
+        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+            usize,
+            usize,
+            bool,
+            bool,
+            bool,
+            bool,
+        ),
     ) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
+        self.deferred_rest = deferred_rest;
+        self.needs_rest_array = needs_rest_array;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
@@ -1139,6 +1176,59 @@ pub(super) enum AsmInst {
     /// - caller save registers
     ///
     SetArguments {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    },
+
+    ///
+    /// Specialized argument setup for a forwarding call `g(x.., ...)`.
+    ///
+    /// `f`'s `...` rest is already an `Array` at `args + lead_num`, with
+    /// `lead_num` ordinary leading args at `args .. args+lead_num`. When
+    /// the runtime array length equals `g`'s required arity minus
+    /// `lead_num` (a compile-time constant), copy the leading args and
+    /// then the array elements straight into the callee frame with no
+    /// `Array` re-parse. Any guard miss (`args+lead_num` not an `Array`,
+    /// length mismatch, or a non-nil forwarded kw-rest) is a clean
+    /// side-exit to the generic `jit_generic_set_arguments` path *before*
+    /// any callee-frame write, so no rollback is needed.
+    ///
+    /// ### out
+    /// - rax: None for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    SetArgumentsForwarded {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        recv: SlotId,
+        args: SlotId,
+        lead_num: usize,
+        kwrest_guard: Option<SlotId>,
+        /// D1: when `Some((src, len))` the trampoline's `...` rest array
+        /// was deferred — copy the `len` forwarded positionals straight
+        /// from the caller source slots `src..src+len` (read via the
+        /// caller `rbp` saved at `[rbp]`) instead of loading/length-
+        /// guarding `f`'s rest `Array`. No fallback (the structural gate
+        /// guarantees exact arity and a nil forwarded `**kwrest`).
+        deferred_src: Option<(SlotId, u16)>,
+    },
+
+    ///
+    /// Argument setup for a forwarding call `g(x.., ...)` whose callee
+    /// is a `no_keyword` iseq with opt/post/rest (rest-array allocation
+    /// is unavoidable, so handled by the specialized runtime helper
+    /// `jit_forwarded_set_arguments` rather than inline asm). Same asm
+    /// shape as `SetArguments`, different call target.
+    ///
+    /// ### out
+    /// - rax: None for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    SetArgumentsForwardedHelper {
         callid: CallSiteId,
         callee_fid: FuncId,
     },

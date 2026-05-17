@@ -83,6 +83,12 @@ class Object
 end
 
 class Class
+  #def new(...)
+  #  o = __builtin_allocate__
+  #  o.__builtin_initialize__(...)
+  #  o
+  #end
+
   private
   def inherited(subclass)
   end

@@ -560,6 +560,152 @@ impl Codegen {
     }
 
     ///
+    /// Specialized argument setup for a forwarding call `g(x.., ...)`.
+    ///
+    /// `f`'s `...` rest is already an `Array` at slot `args + lead_num`,
+    /// with `lead_num` ordinary leading args at `args .. args+lead_num`.
+    /// If, at runtime, that value is an `Array` whose length equals
+    /// `expected_len` (= `g`'s required arity − `lead_num`, a
+    /// compile-time constant) and the forwarded kw-rest is nil, copy the
+    /// leading args and then the array elements straight into the callee
+    /// frame with no `Array` re-parse. Every guard runs *before* any
+    /// callee-frame write, so a miss is a clean jump to the generic
+    /// `jit_generic_set_arguments` path with nothing to roll back.
+    ///
+    /// ### out
+    /// - rax: NIL_VALUE on success (non-zero), None(0) for error.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    pub(super) fn jit_set_arguments_forwarded(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+        args: SlotId,
+        lead_num: usize,
+        expected_len: usize,
+        recv: SlotId,
+        kwrest_guard: Option<SlotId>,
+        deferred_src: Option<(SlotId, u16)>,
+    ) {
+        if let Some((src, _len)) = deferred_src {
+            // D1: the `...` rest `Array` was deferred. `recv` and the
+            // `lead_num` leading args are `f`'s own slots (`f`'s rbp).
+            // The forwarded positionals come from the *caller* frame:
+            // `f` established its own rbp (`init_func`), so the caller's
+            // rbp is the value `f` saved at `[rbp]`; the gate guarantees
+            // the caller is exactly one (outermost) level up, so the
+            // source lives at `[caller_rbp - rbp_local(src + j)]`.
+            // Exact arity and a nil forwarded `**kwrest` are gate
+            // invariants, hence no length/kw guard and no fallback.
+            monoasm! { &mut self.jit,
+                movq rax, [rbp - (rbp_local(recv))];
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+            }
+            for i in 0..lead_num {
+                monoasm! { &mut self.jit,
+                    movq rax, [rbp - (rbp_local(args + i))];
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rax;
+                }
+            }
+            monoasm! { &mut self.jit,
+                movq rcx, [rbp];
+            }
+            for j in 0..expected_len {
+                monoasm! { &mut self.jit,
+                    movq rax, [rcx - (rbp_local(src + j))];
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + j)) as i32)], rax;
+                }
+            }
+            monoasm! { &mut self.jit,
+                movq rax, (NIL_VALUE);
+            }
+            return;
+        }
+        let fallback = self.jit.label();
+        let heap = self.jit.label();
+        let got = self.jit.label();
+        let loop0 = self.jit.label();
+        let done = self.jit.label();
+        let exit = self.jit.label();
+        let rest_slot = args + lead_num;
+        monoasm! { &mut self.jit,
+            // set self
+            movq rax, [rbp - (rbp_local(recv))];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+        }
+        // copy `lead_num` ordinary leading args (unrolled; lead_num is a
+        // small compile-time constant). They were spilled to their frame
+        // slots by `write_back_recv_and_callargs`.
+        for i in 0..lead_num {
+            monoasm! { &mut self.jit,
+                movq rax, [rbp - (rbp_local(args + i))];
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rax;
+            }
+        }
+        monoasm! { &mut self.jit,
+            // load forwarded `...` rest array
+            movq rcx, [rbp - (rbp_local(rest_slot))];
+            testq rcx, 0b111;
+            jnz  fallback;
+            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            jne  fallback;
+            // rax = len, rsi = element base (inline vs heap)
+            movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  heap;
+            lea  rsi, [rcx + (RVALUE_OFFSET_INLINE)];
+            jmp  got;
+        heap:
+            movq rax, [rcx + (RVALUE_OFFSET_HEAP_LEN)];
+            movq rsi, [rcx + (RVALUE_OFFSET_HEAP_PTR)];
+        got:
+            // speculative length guard (expected_len baked as immediate)
+            cmpq rax, (expected_len);
+            jne  fallback;
+        }
+        if let Some(kw) = kwrest_guard {
+            monoasm! { &mut self.jit,
+                // only fast-path when no keywords are actually forwarded
+                cmpq [rbp - (rbp_local(kw))], (NIL_VALUE);
+                jne  fallback;
+            }
+        }
+        monoasm! { &mut self.jit,
+            // two-pointer copy of the `...` array into callee slots
+            // [lead_num ..]: src ascends, dst (callee LFP) descends
+            lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * lead_num) as i32)];
+            movq r8, (expected_len);
+            testq r8, r8;
+            jz   done;
+        loop0:
+            movq rax, [rsi];
+            movq [rdx], rax;
+            addq rsi, 8;
+            subq rdx, 8;
+            subq r8, 1;
+            jnz  loop0;
+        done:
+            movq rax, (NIL_VALUE);   // success sentinel for handle_error
+            jmp  exit;
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        fallback:
+        }
+        self.jit_set_arguments(callid, fid, offset);
+        monoasm! { &mut self.jit,
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+        monoasm! { &mut self.jit,
+        exit:
+        }
+    }
+
+    ///
     /// ### in
     /// - rcx: arg0
     ///

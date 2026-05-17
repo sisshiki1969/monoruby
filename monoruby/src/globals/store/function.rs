@@ -1326,4 +1326,50 @@ impl Store {
                     info.positional_within_range(pos_num)
                 })
     }
+
+    ///
+    /// Structural gate for D1 forwarding-rest deferral.
+    ///
+    /// Returns the rest-parameter local `SlotId` iff `fid` is a *pure
+    /// forwarding trampoline*: `def f(...) = g(...)` — i.e. a method
+    /// declared with `...` (no required/optional/post positionals),
+    /// whose entire body is a single basic block containing exactly one
+    /// call, and that call forwards the trailing `...` (its only splat
+    /// is the rest slot). For such an `f` the synthetic rest `Array`
+    /// built at the caller boundary is consumed once, by that single
+    /// forwarding call, with no intervening basic-block join — the
+    /// precondition for deferring its materialization.
+    ///
+    /// This is the *structural* half of the gate only; the call-site
+    /// half (caller is the outermost non-specialized JIT frame, source
+    /// args spillable, monomorphic inner callee, no forwarded kw/block)
+    /// is checked where the deferral is actually produced.
+    ///
+    /// Conservative: may reject a valid trampoline, never accepts an
+    /// unsound shape.
+    ///
+    pub(crate) fn forwarding_trampoline_rest(&self, fid: FuncId) -> Option<SlotId> {
+        let info = &self[fid];
+        let iseq_id = info.is_iseq()?;
+        if info.req_num() != 0 || info.opt_num() != 0 || info.post_num() != 0 {
+            return None;
+        }
+        if !info.is_rest() || !info.params().forwarding() {
+            return None;
+        }
+        let rest_idx = info.params().is_rest()?;
+        let iseq = &self[iseq_id];
+        // Single basic block ⇒ no join can observe the deferred slot
+        // (the annotation is a frame-entry side note on the rest slot;
+        // with no join it never needs merge handling). The number of
+        // forwarding calls is unrestricted: each forwarding consume is
+        // either source-routed (sets the defer flag) or vetoes the
+        // caller-side skip (`needs_rest_array`), so any number / mix is
+        // safe — the caller builds the real `Array` unless *every*
+        // forwarding consume was source-routed.
+        if iseq.bb_info.len() != 1 {
+            return None;
+        }
+        Some(SlotId(rest_idx + 1))
+    }
 }
