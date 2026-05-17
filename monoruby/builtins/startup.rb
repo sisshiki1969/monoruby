@@ -1082,6 +1082,95 @@ class IO
     self
   end
 
+  def each_line(*args)
+    raise IOError, "closed stream" if closed?
+    # `chomp:` arrives as a trailing options Hash (the only Hash arg
+    # #each_line ever takes). Pop it so it round-trips through
+    # `to_enum` as a positional Hash too.
+    chomp = false
+    if args.last.is_a?(Hash)
+      chomp = args.pop[:chomp] ? true : false
+    end
+    unless block_given?
+      return to_enum(:each_line, *args, { chomp: chomp }) { nil }
+    end
+    # Fast, proven path: default record separator, no chomp — delegate
+    # to the native `\n`-separated reader (#gets).
+    if args.empty? && !chomp
+      while (line = gets)
+        yield line
+      end
+      return self
+    end
+    # Argument-aware path: (sep), (limit), (sep, limit), chomp:.
+    # CRuby's default separator is `$/` (whose own default is "\n").
+    # monoruby leaves `$/` nil unless the user set it, so fall back to
+    # "\n" for the implicit case while still honouring an explicit
+    # `nil` (slurp) / "" (paragraph) / String passed by the caller.
+    sep = $/.nil? ? "\n" : $/
+    limit = nil
+    unless args.empty?
+      a0 = args[0]
+      if a0.nil? || a0.is_a?(String)
+        sep = a0
+        limit = args[1]
+      else
+        limit = a0
+      end
+    end
+    limit = limit.to_int if limit && !limit.is_a?(Integer)
+    limit = nil if limit && limit <= 0
+
+    if sep.nil?
+      buf = +""
+      while (c = getc)
+        buf << c
+        break if limit && buf.bytesize >= limit
+      end
+      yield buf unless buf.empty?
+      return self
+    end
+
+    paragraph = (sep == "")
+    match = paragraph ? "\n\n" : sep
+    loop do
+      buf = +""
+      if paragraph
+        # Skip the blank lines between paragraphs.
+        c = nil
+        while (c = getc) && c == "\n"; end
+        break if c.nil?
+        buf << c
+      end
+      eof = false
+      loop do
+        c = getc
+        if c.nil?
+          eof = true
+          break
+        end
+        buf << c
+        break if limit && buf.bytesize >= limit
+        break if buf.end_with?(match)
+      end
+      break if buf.empty?
+      out = buf
+      if chomp
+        out = if paragraph
+                buf.sub(/\n+\z/, "")
+              elsif buf.end_with?(sep)
+                buf[0, buf.length - sep.length]
+              else
+                buf
+              end
+      end
+      yield out
+      break if eof
+    end
+    self
+  end
+  alias each each_line
+
   def internal_encoding
     nil
   end
