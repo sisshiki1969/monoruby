@@ -2691,6 +2691,22 @@ fn string_index(
     let given = self_.is_rstring().unwrap();
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
+        // Non-UTF-8 receiver + String needle: encoding-aware byte
+        // search at character boundaries (the regex path below needs
+        // valid UTF-8).
+        if !given.encoding().is_utf8_compatible() {
+            let from = match given.conv_char_index(char_pos) {
+                Some(p) => p,
+                None => return Ok(Value::nil()),
+            };
+            let needle = arg_inner.as_bytes().to_vec();
+            return Ok(
+                match nonutf8_substring_index(&given, &needle, from, false) {
+                    Some(cp) => Value::integer(cp as i64),
+                    None => Value::nil(),
+                },
+            );
+        }
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
@@ -3023,6 +3039,46 @@ fn string_rindex(
 /// matches right-to-left and is bytewise correct because it works on
 /// `&str`: candidate positions inside a multibyte char's interior are
 /// skipped by `str::Searcher`'s boundary check.
+/// Character index of `needle`'s bytes within a non-UTF-8 receiver,
+/// constrained to character boundaries (so an ASCII needle never
+/// matches a Shift_JIS trail byte). `rev=false` ⇒ first match at or
+/// after `anchor`; `rev=true` ⇒ last match at or before `anchor`.
+/// The caller has already passed `check_string_encoding_compat`, so
+/// `needle` is ASCII or same-encoding bytes.
+fn nonutf8_substring_index(
+    inner: &RStringInner,
+    needle: &[u8],
+    anchor: usize,
+    rev: bool,
+) -> Option<usize> {
+    let bytes = inner.as_bytes();
+    let mut bounds: Vec<usize> = Vec::new();
+    let mut off = 0usize;
+    for ch in inner.iter_char_bytes() {
+        bounds.push(off);
+        off += ch.len();
+    }
+    let char_len = bounds.len();
+    if needle.is_empty() {
+        return if rev {
+            Some(anchor.min(char_len))
+        } else if anchor <= char_len {
+            Some(anchor)
+        } else {
+            None
+        };
+    }
+    let hit = |cp: usize| {
+        let bp = bounds[cp];
+        bytes[bp..].starts_with(needle)
+    };
+    if rev {
+        (0..char_len.min(anchor + 1)).rev().find(|&cp| hit(cp))
+    } else {
+        (anchor..char_len).find(|&cp| hit(cp))
+    }
+}
+
 fn string_rindex_string(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -3052,6 +3108,17 @@ fn string_rindex_string(
     // Empty needle: `rindex("", k)` == k, capped at char_len.
     if needle_bytes.is_empty() {
         return Ok(Value::integer(max_char_pos as i64));
+    }
+
+    // Non-UTF-8 receiver: encoding-aware reverse byte search at
+    // character boundaries.
+    if !given.encoding().is_utf8_compatible() {
+        return Ok(
+            match nonutf8_substring_index(given, needle_bytes, max_char_pos, true) {
+                Some(cp) => Value::integer(cp as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     // The regex path requires valid UTF-8; preserve that contract for
@@ -11247,6 +11314,30 @@ mod tests {
             r#""abc".encode("EUC-JP").squeeze!"#,            // no change -> nil
             r#"(y = "abcabc".encode("EUC-JP"); y.tr!("b", "B"); y.encode("UTF-8"))"#,
             r#""abc".encode("EUC-JP").tr!("z", "Z")"#,        // no change -> nil
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_index_rindex() {
+        // P3 (step 5): `index`/`rindex` with a String needle over a
+        // non-UTF-8 receiver — character index, matches constrained to
+        // character boundaries; incompatible needle encoding raises.
+        run_tests(&[
+            r#""aあbいcあb".encode("EUC-JP").index("b")"#,
+            r#""aあbいcあb".encode("EUC-JP").index("b", 4)"#,
+            r#""aあbいcあb".encode("EUC-JP").index("z")"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("b")"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("b", 3)"#,
+            r#""aあbいcあb".encode("EUC-JP").index("")"#,
+            r#""aあbいcあb".encode("EUC-JP").index("", 99)"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("")"#,
+            r#"begin; "aあ".encode("EUC-JP").index("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#"begin; "aあ".encode("EUC-JP").rindex("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            // Shift_JIS: 'z' (0x7A) must not match a trail byte.
+            r#""X漢Yz漢Y".encode("Shift_JIS").index("Y")"#,
+            r#""X漢Yz漢Y".encode("Shift_JIS").rindex("Y")"#,
+            r#""X漢Yz漢Y".encode("Shift_JIS").index("z")"#,
+            r#""abcabc".encode("EUC-JP").index("bc", 2)"#,
         ]);
     }
 }
