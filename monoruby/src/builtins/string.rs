@@ -5241,6 +5241,19 @@ fn delete_compute(
         .collect::<Result<_>>()?;
     let inner = self_val.as_rstring_inner();
 
+    // Non-UTF-8 receiver: delete by character via the encoding-aware
+    // iterator (multibyte chars are kept unless the set is negated).
+    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        for ch in inner.iter_char_bytes() {
+            if !ascii_sets_contain(&sets2, ch) {
+                out.extend_from_slice(ch);
+            }
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
+
     if inner.is_ascii_only() {
         let bytes = inner.as_bytes();
         let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
@@ -5681,6 +5694,17 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
 
+    // Non-UTF-8 receiver: walk the encoding-aware char iterator.
+    if let Some(sets) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let mut c = 0i64;
+        for ch in inner.iter_char_bytes() {
+            if ascii_sets_contain(&sets, ch) {
+                c += 1;
+            }
+        }
+        return Ok(Value::integer(c));
+    }
+
     // ASCII haystack fast path: bitmap test per byte, branchless
     // `all(...)` over the intersection of sets.
     if inner.is_ascii_only() {
@@ -5809,6 +5833,59 @@ fn squeeze_compute(
 ///
 /// Empty specs match nothing (`"".count("") == 0`); `negated` is the
 /// leading `^` flag from `expand_tr_spec`.
+/// For a non-UTF-8 receiver, classify the `tr`-style set arguments:
+/// - `Ok(Some(sets))`  — every set is ASCII-only; safe to use.
+/// - `Err(..)`         — a set has non-ASCII bytes in a *different*
+///   encoding than the receiver → `Encoding::CompatibilityError`
+///   (CRuby behaviour, e.g. `euc.count("あ")`).
+/// - `Ok(None)`        — UTF-8 receiver, or a non-ASCII set in the
+///   *same* encoding → caller keeps the existing path (the
+///   same-encoding multibyte set case is a documented follow-up).
+fn nonutf8_ascii_charsets(
+    globals: &Globals,
+    recv: &RStringInner,
+    args: Array,
+) -> Result<Option<Vec<Charset>>> {
+    if recv.encoding().is_utf8_compatible() {
+        return Ok(None);
+    }
+    let mut sets = Vec::with_capacity(args.len());
+    for a in args.iter() {
+        let Some(s) = a.is_rstring_inner() else {
+            return Ok(None);
+        };
+        let b = s.as_bytes();
+        if b.iter().any(|x| *x >= 0x80) {
+            return if s.encoding() != recv.encoding() {
+                Err(MonorubyErr::incompatible_encoding(
+                    &globals.store,
+                    recv.encoding(),
+                    s.encoding(),
+                ))
+            } else {
+                Ok(None)
+            };
+        }
+        // SAFETY: every byte < 0x80, so this is valid ASCII/UTF-8.
+        sets.push(Charset::parse(std::str::from_utf8(b).unwrap())?);
+    }
+    Ok(Some(sets))
+}
+
+/// Membership of one character (given as its raw bytes under the
+/// receiver's encoding) in the intersection of ASCII-only `sets`.
+/// A single ASCII byte uses the byte bitmap; any multibyte character
+/// is never an ASCII member, so its membership is uniformly the
+/// negation flag (`contains_char` of any non-ASCII char == `negated`
+/// for an ASCII-only spec).
+fn ascii_sets_contain(sets: &[Charset], ch: &[u8]) -> bool {
+    if ch.len() == 1 && ch[0] < 0x80 {
+        sets.iter().all(|s| s.contains_ascii_byte(ch[0]))
+    } else {
+        sets.iter().all(|s| s.contains_char('\u{FFFF}'))
+    }
+}
+
 struct Charset {
     ascii_bitmap: [u64; 2],
     non_ascii: std::collections::BTreeSet<char>,
@@ -10968,6 +11045,28 @@ mod tests {
             r#""漢A字".encode("Shift_JIS").split("").map { |x| x.encode("UTF-8") }"#,
             r#"(r = []; "aあb".encode("EUC-JP").split("") { |c| r << c.encode("UTF-8") }; r)"#,
             r#""aあbいc".encode("EUC-JP").split("", 1).map { |x| x.encode("UTF-8") }"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_count_delete() {
+        // P3 (step 3): `count` / `delete` over a non-UTF-8 receiver
+        // with ASCII-only sets (multibyte chars participate only via
+        // a negated set); a non-ASCII set in a different encoding is
+        // an Encoding::CompatibilityError.
+        run_tests(&[
+            r#""aあbいcaa".encode("EUC-JP").count("a")"#,
+            r#""aあbいcaa".encode("EUC-JP").count("^a")"#,
+            r#""aあbいcaa".encode("EUC-JP").delete("a").encode("UTF-8")"#,
+            r#""aあbいcaa".encode("EUC-JP").delete("^a").encode("UTF-8")"#,
+            r#"begin; "aあ".encode("EUC-JP").count("あ"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#"begin; "aあ".encode("EUC-JP").delete("あ"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#""AxＡあ".encode("Shift_JIS").count("A-Z")"#,
+            r#""AxＡあ".encode("Shift_JIS").delete("a-z").encode("UTF-8")"#,
+            r#""漢字".encode("EUC-JP").count("a")"#,
+            r#""abcabc".encode("EUC-JP").delete("b").encode("UTF-8")"#,
+            r#"(s = "abcあ".encode("EUC-JP"); s.delete!("b"); s.encode("UTF-8"))"#,
+            r#""ac".encode("EUC-JP").delete!("z")"#, // no change -> nil
         ]);
     }
 }
