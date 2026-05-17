@@ -167,21 +167,20 @@ mod tests {
     }
 
     #[test]
-    fn encode_to_utf32_raises_converter_not_found() {
-        // encoding_rs has no UTF-32 transcoder, so monoruby raises
-        // ConverterNotFoundError. CRuby supports UTF-32, so this is
-        // a monoruby-specific behaviour test (asserted from inside
-        // the runtime to avoid the CRuby comparison).
-        run_test_no_result_check(
-            r#"
-              begin
-                "abc".encode("UTF-32BE")
-                raise "expected ConverterNotFoundError"
-              rescue Encoding::ConverterNotFoundError
-                # ok
-              end
-            "#,
-        );
+    fn encode_utf16_utf32_round_trips() {
+        // Hand-rolled UTF-16/UTF-32 (LE/BE) codecs: `String#encode`
+        // to and from each, plus byte-level expectations, must match
+        // CRuby exactly.
+        run_tests(&[
+            r#""abc".encode("UTF-32BE").bytes"#,
+            r#""abc".encode("UTF-32LE").bytes"#,
+            r#""abc".encode("UTF-16BE").bytes"#,
+            r#""abç𝕏".encode("UTF-16LE").encode("UTF-8")"#,
+            r#""abç𝕏".encode("UTF-32LE").encode("UTF-8")"#,
+            r#""abç𝕏".encode("UTF-16BE").encode("UTF-32LE").encode("UTF-8")"#,
+            r#""𝕏".encode("UTF-32BE").bytes"#,
+            r#""héllo".encode("UTF-16LE").encode("UTF-16BE").encode("UTF-8")"#,
+        ]);
     }
 
     // -------- Options --------
@@ -310,20 +309,13 @@ mod tests {
     }
 
     #[test]
-    fn encoding_converter_new_unsupported_pair_raises() {
-        // CRuby supports a much larger transcoder set (it bundles
-        // its own, not encoding_rs's), so this case is monoruby-
-        // specific: monoruby raises ConverterNotFoundError on
-        // pairs encoding_rs can't handle.
-        run_test_no_result_check(
-            r#"
-              begin
-                Encoding::Converter.new("UTF-8", "UTF-32BE")
-                raise "expected ConverterNotFoundError"
-              rescue Encoding::ConverterNotFoundError
-                # ok
-              end
-            "#,
-        );
+    fn encoding_converter_new_utf16_32_supported() {
+        // UTF-16/UTF-32 (LE/BE) pairs are now constructible (they
+        // used to raise ConverterNotFoundError).
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-8", "UTF-32BE").class.name"#,
+            r#"Encoding::Converter.new("UTF-16LE", "UTF-8").class.name"#,
+            r#"Encoding::Converter.new("UTF-32LE", "UTF-16BE").class.name"#,
+        ]);
     }
 }

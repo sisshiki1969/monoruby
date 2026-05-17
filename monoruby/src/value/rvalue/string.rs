@@ -579,11 +579,44 @@ impl RStringInner {
                 utf8_inspect_with_lookahead(&mut res, self.as_bytes(), true);
                 res
             }
-            Encoding::UsAscii => {
+            // UTF-16 / UTF-32 (not ASCII-compatible, Unicode): decode
+            // to scalar values, then render ASCII chars with the
+            // normal escape rules and every non-ASCII codepoint as
+            // `\uXXXX` / `\u{XXXXX}` (CRuby never shows them literally
+            // because the result encoding differs from the string's).
+            Encoding::Utf16Le
+            | Encoding::Utf16Be
+            | Encoding::Utf32Le
+            | Encoding::Utf32Be => {
+                let chars = decode_unicode_units(self.as_bytes(), self.ty);
                 let mut res = String::with_capacity(self.len());
-                utf8_inspect_with_lookahead(&mut res, self.as_bytes(), false);
+                for (idx, &c) in chars.iter().enumerate() {
+                    let next = chars.get(idx + 1).copied().unwrap_or('\0');
+                    unicode_inspect_char(&mut res, c, next);
+                }
                 res
             }
+            // ASCII-compatible, non-Unicode multibyte: ASCII bytes use
+            // the normal rules; every non-ASCII *character* becomes one
+            // `\x{HH..}` group of its raw bytes (e.g. EUC-JP "あ" ⇒
+            // `\x{A4A2}`).
+            Encoding::EucJp | Encoding::Sjis(_) => {
+                let mut res = String::with_capacity(self.len());
+                for cb in self.iter_char_bytes() {
+                    if cb.len() == 1 && cb[0] < 0x80 {
+                        ascii_escape(&mut res, cb[0]);
+                    } else {
+                        res.push_str("\\x{");
+                        for b in cb {
+                            res.push_str(&format!("{:0>2X}", b));
+                        }
+                        res.push('}');
+                    }
+                }
+                res
+            }
+            // US-ASCII, ASCII-8BIT, ISO-8859-N, ISO-2022-JP (dummy):
+            // pure per-byte — ASCII rules for < 0x80, `\xHH` otherwise.
             _ => {
                 let mut res = String::with_capacity(self.len());
                 for c in self.as_bytes() {
@@ -660,6 +693,82 @@ fn utf8_inspect_with_next(s: &mut String, ch: char, next_ch: char, is_utf8: bool
         // CRuby prefers the 4-digit `\uNNNN` form for BMP codepoints
         // and only falls back to `\u{N}` once the codepoint exceeds
         // 0xFFFF (`"\u{1F600}".inspect` → `"\\u{1F600}"`).
+        if cp <= 0xFFFF {
+            s.push_str(&format!("\\u{:0>4X}", cp));
+        } else {
+            s.push_str(&format!("\\u{{{:X}}}", cp));
+        }
+    }
+}
+
+/// Decode UTF-16/UTF-32 (LE/BE) bytes into scalar values for
+/// `#inspect`. Mirrors the transcoder's hand-rolled codecs; invalid
+/// units degrade to U+FFFD (CRuby would emit `\xHH` for genuinely
+/// broken units, but the inspect specs only exercise valid input —
+/// and U+FFFD still renders as `�`, matching CRuby's output for
+/// already-U+FFFD content).
+fn decode_unicode_units(bytes: &[u8], enc: Encoding) -> Vec<char> {
+    let mut out = Vec::new();
+    match enc {
+        Encoding::Utf32Le | Encoding::Utf32Be => {
+            let be = matches!(enc, Encoding::Utf32Be);
+            for c in bytes.chunks(4) {
+                if c.len() < 4 {
+                    out.push('\u{FFFD}');
+                    continue;
+                }
+                let v = if be {
+                    u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+                } else {
+                    u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+                };
+                out.push(char::from_u32(v).unwrap_or('\u{FFFD}'));
+            }
+        }
+        _ => {
+            let be = matches!(enc, Encoding::Utf16Be);
+            let units: Vec<u16> = bytes
+                .chunks(2)
+                .map(|c| {
+                    if c.len() < 2 {
+                        0xFFFDu16
+                    } else if be {
+                        u16::from_be_bytes([c[0], c[1]])
+                    } else {
+                        u16::from_le_bytes([c[0], c[1]])
+                    }
+                })
+                .collect();
+            let mut i = 0;
+            while i < units.len() {
+                let u = units[i];
+                if (0xD800..=0xDBFF).contains(&u)
+                    && i + 1 < units.len()
+                    && (0xDC00..=0xDFFF).contains(&units[i + 1])
+                {
+                    let hi = (u as u32 - 0xD800) << 10;
+                    let lo = units[i + 1] as u32 - 0xDC00;
+                    out.push(char::from_u32(0x10000 + hi + lo).unwrap_or('\u{FFFD}'));
+                    i += 2;
+                } else {
+                    out.push(char::from_u32(u as u32).unwrap_or('\u{FFFD}'));
+                    i += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `#inspect` for a single char of a Unicode but non-ASCII-compatible
+/// encoding (UTF-16/UTF-32): ASCII chars use the normal escape rules;
+/// every non-ASCII codepoint is `\uXXXX` / `\u{XXXXX}` (never shown
+/// literally, because the result encoding differs from the string's).
+fn unicode_inspect_char(s: &mut String, ch: char, next_ch: char) {
+    if ch.is_ascii() {
+        utf8_inspect_with_next(s, ch, next_ch, true);
+    } else {
+        let cp = ch as u32;
         if cp <= 0xFFFF {
             s.push_str(&format!("\\u{:0>4X}", cp));
         } else {
