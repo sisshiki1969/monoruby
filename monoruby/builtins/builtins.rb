@@ -142,7 +142,10 @@ class Hash
   def slice(*keys)
     h = {}
     h.compare_by_identity if compare_by_identity?
-    keys.each { |k| h[k] = self[k] if key?(k) }
+    # CRuby's Hash#slice uses the internal element reference, not a
+    # subclass-overridden #[], so bind the base Hash#[].
+    aref = ::Hash.instance_method(:[])
+    keys.each { |k| h[k] = aref.bind(self).call(k) if key?(k) }
     h
   end
 

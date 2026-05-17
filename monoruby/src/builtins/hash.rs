@@ -753,8 +753,25 @@ fn index_assign(
 #[monoruby_builtin]
 fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
-    let h = Hashmap::new(lfp.self_val());
-    h.index(vm, globals, key)
+    let self_val = lfp.self_val();
+    let h = Hashmap::new(self_val);
+    if let Some(v) = h.get(key, vm, globals)? {
+        Ok(v)
+    } else {
+        // CRuby's `Hash#[]` invokes the `default` *method* on a miss
+        // (rb_funcall id_default), so Hash subclasses overriding
+        // `#default` are honoured. The default `Hash#default` builtin
+        // returns the stored value / runs the default proc, so plain
+        // hashes behave exactly as before.
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("default"),
+            self_val,
+            &[key],
+            None,
+            None,
+        )
+    }
 }
 
 fn hash_index(
