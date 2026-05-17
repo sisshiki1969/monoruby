@@ -15,26 +15,14 @@ mod tests {
 
     #[test]
     fn to_s() {
-        run_test(r##"true.to_s"##);
-        run_test(r##"true.to_s.class"##);
-        run_test(r##"true.to_s == "true""##);
-        run_test(r##"true.to_s.equal?(true.to_s)"##);
-    }
-
-    #[test]
-    fn inspect() {
-        run_test(r##"true.inspect"##);
-    }
-
-    #[test]
-    fn class_name() {
-        run_test(r##"true.class"##);
-        run_test(r##"true.is_a?(TrueClass)"##);
-    }
-
-    #[test]
-    fn xor() {
         run_tests(&[
+            r##"true.to_s"##,
+            r##"true.to_s.class"##,
+            r##"true.to_s == "true""##,
+            r##"true.to_s.equal?(true.to_s)"##,
+            r##"true.inspect"##,
+            r##"true.class"##,
+            r##"true.is_a?(TrueClass)"##,
             r##"true ^ true"##,
             r##"true ^ false"##,
             r##"true ^ nil"##,
@@ -47,12 +35,6 @@ mod tests {
             r##"true.^ 100"##,
             r##"true.^ //"##,
             r##"true.^ "100""##,
-        ]);
-    }
-
-    #[test]
-    fn and() {
-        run_tests(&[
             r##"true & true"##,
             r##"true & false"##,
             r##"true & nil"##,
@@ -65,12 +47,6 @@ mod tests {
             r##"true.& 100"##,
             r##"true.& //"##,
             r##"true.& "100""##,
-        ]);
-    }
-
-    #[test]
-    fn or() {
-        run_tests(&[
             r##"true | true"##,
             r##"true | false"##,
             r##"true | nil"##,
@@ -83,15 +59,11 @@ mod tests {
             r##"true.| 100"##,
             r##"true.| //"##,
             r##"true.| "100""##,
+            r##"true == true"##,
+            r##"true == false"##,
+            r##"true == nil"##,
+            r##"true != false"##,
+            r##"true.equal?(true)"##,
         ]);
-    }
-
-    #[test]
-    fn equality() {
-        run_test(r##"true == true"##);
-        run_test(r##"true == false"##);
-        run_test(r##"true == nil"##);
-        run_test(r##"true != false"##);
-        run_test(r##"true.equal?(true)"##);
     }
 }

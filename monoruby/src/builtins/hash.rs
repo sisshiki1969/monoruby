@@ -2313,7 +2313,7 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        run_test(
+        run_tests(&[
             r##"
         a = []
         h = Hash.new
@@ -2336,41 +2336,24 @@ mod tests {
         a << h.to_s
         a
         "##,
-        );
-        run_test("{}");
-        run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
-        run_test("{}.empty?");
-        run_test("{a:1}.empty?");
-    }
-
-    #[test]
-    fn hash_splat() {
-        run_test(r##"h = {a: 1}; {**h}"##);
-        run_test(r##"h = {a: 1, b: 2}; {c: 3, **h}"##);
-        run_test(r##"h1 = {a: 1}; h2 = {b: 2}; {**h1, **h2}"##);
-        run_test(r##"h = {a: 1}; {a: 0, **h}"##);
-    }
-
-    #[test]
-    fn clear() {
-        run_test(r##"a = {a:1,b:2}; a.clear; a[:c] = 100; a"##);
-    }
-
-    #[test]
-    fn transform_keys() {
-        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s}"##);
-        run_test(r##"{a: 1, b: 2}.transform_keys {|k| k.to_s.upcase}"##);
-    }
-
-    #[test]
-    fn transform_values() {
-        run_test(r##"{a: 1, b: 2}.transform_values {|v| v * 10}"##);
-        run_test(r##"{a: "x", b: "y"}.transform_values {|v| v.upcase}"##);
-    }
-
-    #[test]
-    fn replace() {
-        run_test(
+            "{}",
+            r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#,
+            "{}.empty?",
+            "{a:1}.empty?",
+            // hash_splat
+            r##"h = {a: 1}; {**h}"##,
+            r##"h = {a: 1, b: 2}; {c: 3, **h}"##,
+            r##"h1 = {a: 1}; h2 = {b: 2}; {**h1, **h2}"##,
+            r##"h = {a: 1}; {a: 0, **h}"##,
+            // clear
+            r##"a = {a:1,b:2}; a.clear; a[:c] = 100; a"##,
+            // transform_keys
+            r##"{a: 1, b: 2}.transform_keys {|k| k.to_s}"##,
+            r##"{a: 1, b: 2}.transform_keys {|k| k.to_s.upcase}"##,
+            // transform_values
+            r##"{a: 1, b: 2}.transform_values {|v| v * 10}"##,
+            r##"{a: "x", b: "y"}.transform_values {|v| v.upcase}"##,
+            // replace
             r##"
         a1 = {a:1,b:2}
         a2 = {c:3,d:4}
@@ -2378,31 +2361,25 @@ mod tests {
         a1[:z] = 100
         [a1, a2, z]
         "##,
-        );
-    }
-
-    #[test]
-    fn eq() {
-        run_test(r##"{} == {}"##);
-        run_test(r##"{a:4} == {a:4}"##);
-        run_test(r##"{a:4} == {a:4.0}"##);
-        run_test(r##"{a:4} == {a:5}"##);
-        run_test(r##"{a:4} == {a:5, b:7}"##);
-        run_test(r##"{a:4} == :a"##);
-    }
-
-    #[test]
-    fn eq_recursive() {
-        // Self-referencing hash: h == h should return true, not stack overflow
-        run_test("h = {}; h[:a] = h; h == h");
-        // Two distinct recursive hashes with same structure
-        run_test("a = {}; a[:x] = a; b = {}; b[:x] = b; a == b");
-        // Cross-recursive hashes: a contains b, b contains a
-        run_test("a = {}; b = {}; a[:x] = b; b[:x] = a; a == b");
-        // Recursive hash with non-matching values
-        run_test("a = {x: 1}; a[:y] = a; b = {x: 2}; b[:y] = b; a == b");
-        // Nested: array inside hash, hash inside array
-        run_test("h = {}; a = [h]; h[:a] = a; h == h");
+            // eq
+            r##"{} == {}"##,
+            r##"{a:4} == {a:4}"##,
+            r##"{a:4} == {a:4.0}"##,
+            r##"{a:4} == {a:5}"##,
+            r##"{a:4} == {a:5, b:7}"##,
+            r##"{a:4} == :a"##,
+            // eq_recursive
+            // Self-referencing hash: h == h should return true, not stack overflow
+            "h = {}; h[:a] = h; h == h",
+            // Two distinct recursive hashes with same structure
+            "a = {}; a[:x] = a; b = {}; b[:x] = b; a == b",
+            // Cross-recursive hashes: a contains b, b contains a
+            "a = {}; b = {}; a[:x] = b; b[:x] = a; a == b",
+            // Recursive hash with non-matching values
+            "a = {x: 1}; a[:y] = a; b = {x: 2}; b[:y] = b; a == b",
+            // Nested: array inside hash, hash inside array
+            "h = {}; a = [h]; h[:a] = a; h == h",
+        ]);
     }
 
     #[test]
@@ -2423,7 +2400,7 @@ mod tests {
 
     #[test]
     fn delete() {
-        run_test(
+        run_tests(&[
             r##"
         a = []
         h = {:ab => "some" , :cd => "all"}
@@ -2432,12 +2409,7 @@ mod tests {
         a << h.delete(:ef){|key|"#{key} Nothing"} #=> "ef Nothing"
         a
         "##,
-        );
-    }
-
-    #[test]
-    fn each() {
-        run_test(
+            // each
             r##"
         a = []
         {:a=>1, :b=>2, :c=>3}.each {|k, v|
@@ -2446,8 +2418,6 @@ mod tests {
         }
         a
         "##,
-        );
-        run_test(
             r##"
         a = []
         {:a=>1, :b=>2, :c=>3}.each {|kv|
@@ -2455,23 +2425,13 @@ mod tests {
         }
         a
         "##,
-        );
-    }
-
-    #[test]
-    fn map() {
-        run_test(
+            // map
             r##"
         {:a=>1, :b=>2, :c=>3}.collect {|k, v|
             k.to_s + v.to_s
         }
         "##,
-        );
-    }
-
-    #[test]
-    fn each_value() {
-        run_test(
+            // each_value
             r##"
         a = []
         {:a=>1, :b=>2, :c=>3}.each_value {|v|
@@ -2479,8 +2439,6 @@ mod tests {
         }
         a
         "##,
-        );
-        run_test(
             r##"
         a = []
         {:a=>1, :b=>2, :c=>3}.each_key {|k|
@@ -2488,12 +2446,7 @@ mod tests {
         }
         a
         "##,
-        );
-    }
-
-    #[test]
-    fn select() {
-        run_test(
+            // select
             r##"
         res = []
         h = { "a" => 100, "b" => 200, "c" => 300 }
@@ -2501,8 +2454,6 @@ mod tests {
         res << h.select {|k,v| v < 200}  #=> {"a" => 100}
         res
         "##,
-        );
-        run_test(
             r##"
         res = []
         h = { "a" => 100, "b" => 200, "c" => 300 }
@@ -2510,53 +2461,32 @@ mod tests {
         res << h
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn assoc() {
-        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:a)"##);
-        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:b)"##);
-        run_test(r##"{a: 1, b: 2, c: 3}.assoc(:z)"##);
-        run_test(r##"{"a" => 1, "b" => 2}.assoc("b")"##);
-        run_test(r##"{1 => :a, 1.0 => :b}.assoc(1)"##);
-    }
-
-    #[test]
-    fn rassoc() {
-        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(1)"##);
-        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(2)"##);
-        run_test(r##"{a: 1, b: 2, c: 3}.rassoc(9)"##);
-        run_test(r##"{"a" => 1, "b" => 2}.rassoc(2)"##);
-    }
-
-    #[test]
-    fn invert() {
-        run_test(
+            // assoc
+            r##"{a: 1, b: 2, c: 3}.assoc(:a)"##,
+            r##"{a: 1, b: 2, c: 3}.assoc(:b)"##,
+            r##"{a: 1, b: 2, c: 3}.assoc(:z)"##,
+            r##"{"a" => 1, "b" => 2}.assoc("b")"##,
+            r##"{1 => :a, 1.0 => :b}.assoc(1)"##,
+            // rassoc
+            r##"{a: 1, b: 2, c: 3}.rassoc(1)"##,
+            r##"{a: 1, b: 2, c: 3}.rassoc(2)"##,
+            r##"{a: 1, b: 2, c: 3}.rassoc(9)"##,
+            r##"{"a" => 1, "b" => 2}.rassoc(2)"##,
+            // invert
             r##"
         {5 => "5", 1 => "1", 2 => "2", 3 => "3"}.invert
         "##,
-        );
-    }
-
-    #[test]
-    fn sort() {
-        run_test(
+            // sort
             r##"
         {5 => "5", 1 => "1", 2 => "2", 3 => "3"}.sort
         "##,
-        );
-    }
-
-    #[test]
-    fn reject() {
-        run_test(
+            // reject
             r##"
         h = { 2 =>"8", 4 =>"6", 6 =>"4", 8 =>"2" }
         h2 = h.reject{|key, value| key.to_i < value.to_i} #=> {6=>"4", 8=>"2"}
         [h, h2]
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -2626,8 +2556,10 @@ mod tests {
         let _g = env_lock();
         //run_test(r##"ENV["PWD"]"##);
         //run_test(r##"ENV.fetch("PWD")"##);
-        run_test(r##"ENV.fetch("XZCDEWS", "ABC")"##);
-        run_test(r##"ENV.fetch("XZCDEWS") {|key| key + "先生"}"##);
+        run_tests(&[
+            r##"ENV.fetch("XZCDEWS", "ABC")"##,
+            r##"ENV.fetch("XZCDEWS") {|key| key + "先生"}"##,
+        ]);
         run_test_error(r##"ENV[100]"##);
     }
 
@@ -2793,9 +2725,11 @@ mod tests {
     #[test]
     fn env_to_h_returns_fresh_hash() {
         let _g = env_lock();
-        run_test(r##"ENV.to_h.equal?(ENV)"##);
-        run_test(r##"ENV.to_hash.equal?(ENV)"##);
-        run_test(r##"ENV.to_h.is_a?(Hash) && !ENV.to_h.equal?(ENV)"##);
+        run_tests(&[
+            r##"ENV.to_h.equal?(ENV)"##,
+            r##"ENV.to_hash.equal?(ENV)"##,
+            r##"ENV.to_h.is_a?(Hash) && !ENV.to_h.equal?(ENV)"##,
+        ]);
     }
 
     /// Block form transforms each pair into [k', v'].
@@ -3118,18 +3052,13 @@ mod tests {
 
     #[test]
     fn hash_inspect_recursive() {
-        run_test(
+        run_tests(&[
             r##"
         h = {}
         h[:self] = h
         h.inspect
         "##,
-        );
-    }
-
-    #[test]
-    fn hash_replace_type_check() {
-        run_test(
+            // hash_replace_type_check
             r##"
         begin
           {}.replace(42)
@@ -3138,7 +3067,7 @@ mod tests {
           true
         end
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -3157,29 +3086,21 @@ mod tests {
 
     #[test]
     fn hash_literal() {
-        run_test(r#"{1 => "a", 2 => "b", 3 => "c"}"#);
-    }
-
-    #[test]
-    fn hash_tos_recursive() {
-        // Same object appearing multiple times (not recursive)
-        run_test(r#"a = [1]; {a:a, b:a}.to_s"#);
-        run_test(r#"a = {a:1}; {a:a, b:a}.to_s"#);
-        run_test(r#"a = {a:1}; {a:[a], b:a}.to_s"#);
-        // Self-containing hash
-        run_test(
+        run_tests(&[
+            r#"{1 => "a", 2 => "b", 3 => "c"}"#,
+            // hash_tos_recursive
+            // Same object appearing multiple times (not recursive)
+            r#"a = [1]; {a:a, b:a}.to_s"#,
+            r#"a = {a:1}; {a:a, b:a}.to_s"#,
+            r#"a = {a:1}; {a:[a], b:a}.to_s"#,
+            // Self-containing hash
             r##"
         h = {a: 1}
         h[:self] = h
         h.to_s
         "##,
-        );
-    }
-
-    #[test]
-    fn hash_inspect_user_defined() {
-        // User-defined inspect on custom objects inside hash values
-        run_test(
+            // hash_inspect_user_defined
+            // User-defined inspect on custom objects inside hash values
             r##"
         class Bar
           def inspect
@@ -3188,34 +3109,29 @@ mod tests {
         end
         {a: Bar.new, b: 1}.inspect
         "##,
-        );
-    }
-
-    #[test]
-    fn hash_inspect() {
-        // Empty hash
-        run_test(r#"{}.inspect"#);
-        run_test(r#"{}.to_s"#);
-        // Symbol keys
-        run_test(r#"{a: 1, b: 2, c: 3}.inspect"#);
-        // String keys
-        run_test(r#"{"a" => 1, "b" => 2}.inspect"#);
-        // Integer keys
-        run_test(r#"{1 => "one", 2 => "two"}.inspect"#);
-        // Mixed key types
-        run_test(r#"{a: 1, "b" => 2, 3 => :three}.inspect"#);
-        // Nested hash
-        run_test(r#"{a: {b: {c: 1}}}.inspect"#);
-        // Hash containing array
-        run_test(r#"{a: [1, 2, 3], b: [4, 5]}.inspect"#);
-        // Various value types
-        run_test(r#"{a: nil, b: true, c: false, d: 1, e: 2.5, f: "str", g: :sym}.inspect"#);
-        // Hash with Range values
-        run_test(r#"{a: 1..5, b: 1...5}.inspect"#);
-        // to_s is aliased to inspect
-        run_test(r#"{a: 1}.to_s"#);
-        // User-defined inspect in nested values
-        run_test(
+            // hash_inspect
+            // Empty hash
+            r#"{}.inspect"#,
+            r#"{}.to_s"#,
+            // Symbol keys
+            r#"{a: 1, b: 2, c: 3}.inspect"#,
+            // String keys
+            r#"{"a" => 1, "b" => 2}.inspect"#,
+            // Integer keys
+            r#"{1 => "one", 2 => "two"}.inspect"#,
+            // Mixed key types
+            r#"{a: 1, "b" => 2, 3 => :three}.inspect"#,
+            // Nested hash
+            r#"{a: {b: {c: 1}}}.inspect"#,
+            // Hash containing array
+            r#"{a: [1, 2, 3], b: [4, 5]}.inspect"#,
+            // Various value types
+            r#"{a: nil, b: true, c: false, d: 1, e: 2.5, f: "str", g: :sym}.inspect"#,
+            // Hash with Range values
+            r#"{a: 1..5, b: 1...5}.inspect"#,
+            // to_s is aliased to inspect
+            r#"{a: 1}.to_s"#,
+            // User-defined inspect in nested values
             r##"
         class MyVal
           def inspect
@@ -3224,9 +3140,7 @@ mod tests {
         end
         {a: MyVal.new, b: [MyVal.new]}.inspect
         "##,
-        );
-        // User-defined inspect as keys
-        run_test(
+            // User-defined inspect as keys
             r##"
         class MyKey
           def inspect
@@ -3241,12 +3155,12 @@ mod tests {
         end
         {MyKey.new => "value"}.inspect
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn hash_new() {
-        run_test(
+        run_tests(&[
             r##"
         h = Hash.new do |hash, key|
             hash[key] = "foo"
@@ -3255,8 +3169,6 @@ mod tests {
 
         [h[:a], h[:a], h[:a]]
         "##,
-        );
-        run_test(
             r##"
         res = []
         h = Hash.new("default")
@@ -3267,8 +3179,6 @@ mod tests {
         res << h.default
         res
         "##,
-        );
-        run_test(
             r##"
         res = []
         h = Hash.new{|hash, key| hash[key] ="default"}
@@ -3277,8 +3187,6 @@ mod tests {
         res << h
         res
         "##,
-        );
-        run_test(
             r##"
         res = []
         h = Hash.new
@@ -3287,8 +3195,6 @@ mod tests {
         res << h
         res
         "##,
-        );
-        run_test(
             r##"
         res = []
         h = Hash.new {|hash, key| "The #{key} not exist in #{hash.inspect}"}
@@ -3297,12 +3203,12 @@ mod tests {
         res << h
         res
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn shift() {
-        run_test(
+        run_tests(&[
             r##"
         h = {a: 1, b: 2, c: 3}
         res = []
@@ -3310,73 +3216,56 @@ mod tests {
         res << h
         res
         "##,
-        );
-        run_test(
             r##"
         h = {}
         h.shift
         "##,
-        );
-        run_test(
             r##"
         [Hash.new("default").shift, Hash.new.shift]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn hash_compare() {
-        // <
-        run_test(r#"{a: 1} < {a: 1, b: 2}"#);
-        run_test(r#"{a: 1, b: 2} < {a: 1, b: 2}"#);
-        run_test(r#"{a: 1, b: 2} < {a: 1}"#);
-        run_test(r#"{} < {a: 1}"#);
-        run_test(r#"{} < {}"#);
-        // <=
-        run_test(r#"{a: 1} <= {a: 1, b: 2}"#);
-        run_test(r#"{a: 1, b: 2} <= {a: 1, b: 2}"#);
-        run_test(r#"{a: 1, b: 2} <= {a: 1}"#);
-        run_test(r#"{} <= {}"#);
-        // >
-        run_test(r#"{a: 1, b: 2} > {a: 1}"#);
-        run_test(r#"{a: 1, b: 2} > {a: 1, b: 2}"#);
-        run_test(r#"{a: 1} > {a: 1, b: 2}"#);
-        run_test(r#"{a: 1} > {}"#);
-        run_test(r#"{} > {}"#);
-        // >=
-        run_test(r#"{a: 1, b: 2} >= {a: 1}"#);
-        run_test(r#"{a: 1, b: 2} >= {a: 1, b: 2}"#);
-        run_test(r#"{a: 1} >= {a: 1, b: 2}"#);
-        run_test(r#"{} >= {}"#);
-        // different values
-        run_test(r#"{a: 1} < {a: 2, b: 2}"#);
-        run_test(r#"{a: 1} <= {a: 2}"#);
-    }
-
-    #[test]
-    fn hash_delete_if() {
-        run_test(
+        run_tests(&[
+            // <
+            r#"{a: 1} < {a: 1, b: 2}"#,
+            r#"{a: 1, b: 2} < {a: 1, b: 2}"#,
+            r#"{a: 1, b: 2} < {a: 1}"#,
+            r#"{} < {a: 1}"#,
+            r#"{} < {}"#,
+            // <=
+            r#"{a: 1} <= {a: 1, b: 2}"#,
+            r#"{a: 1, b: 2} <= {a: 1, b: 2}"#,
+            r#"{a: 1, b: 2} <= {a: 1}"#,
+            r#"{} <= {}"#,
+            // >
+            r#"{a: 1, b: 2} > {a: 1}"#,
+            r#"{a: 1, b: 2} > {a: 1, b: 2}"#,
+            r#"{a: 1} > {a: 1, b: 2}"#,
+            r#"{a: 1} > {}"#,
+            r#"{} > {}"#,
+            // >=
+            r#"{a: 1, b: 2} >= {a: 1}"#,
+            r#"{a: 1, b: 2} >= {a: 1, b: 2}"#,
+            r#"{a: 1} >= {a: 1, b: 2}"#,
+            r#"{} >= {}"#,
+            // different values
+            r#"{a: 1} < {a: 2, b: 2}"#,
+            r#"{a: 1} <= {a: 2}"#,
+            // hash_delete_if
             r##"
         h = {a: 1, b: 2, c: 3}
         res = h.delete_if {|k, v| v > 1}
         [h, res.equal?(h)]
         "##,
-        );
-    }
-
-    #[test]
-    fn key() {
-        run_test(
+            // key
             r##"
         h = {a: 1, b: 2, c: 3}
         [h.key(2), h.key(4)]
         "##,
-        );
-    }
-
-    #[test]
-    fn hash_reject_bang() {
-        run_test(
+            // hash_reject_bang
             r##"
         h = {a: 1, b: 2, c: 3}
         res1 = h.reject! {|k, v| v > 1}
@@ -3384,64 +3273,40 @@ mod tests {
         res2 = h2.reject! {|k, v| v > 10}
         [h, res1.equal?(h), res2]
         "##,
-        );
-    }
-
-    #[test]
-    fn keep_if() {
-        run_test(
+            // keep_if
             r##"
         h = {a: 1, b: 2, c: 3}
         res = h.keep_if {|k, v| v > 1}
         [res, h, res.equal?(h)]
         "##,
-        );
-    }
-
-    #[test]
-    fn hash_bracket() {
-        run_test(r#"Hash[]"#);
-        run_test(r#"Hash["a", 1, "b", 2]"#);
-        run_test(r#"Hash[{a: 1, b: 2}]"#);
-        run_test(r#"Hash[["a", 1], ["b", 2]]"#);
-        run_test(
+            // hash_bracket
+            r#"Hash[]"#,
+            r#"Hash["a", 1, "b", 2]"#,
+            r#"Hash[{a: 1, b: 2}]"#,
+            r#"Hash[["a", 1], ["b", 2]]"#,
             r##"
         h = Hash["a", 1, "b", 2, "c", 3]
         [h["a"], h["b"], h["c"]]
         "##,
-        );
-    }
-
-    #[test]
-    fn index_splat() {
-        run_test(r#"a = ["a", 1, "b", 2]; Hash[*a]"#);
-        run_test(
+            // index_splat
+            r#"a = ["a", 1, "b", 2]; Hash[*a]"#,
             r##"
         args = ["a", 1, "b", 2, "c", 3]
         h = Hash[*args]
         [h["a"], h["b"], h["c"]]
         "##,
-        );
-        run_test(r#"a = [1, 2, 3]; [*a]"#);
-    }
-
-    #[test]
-    fn compare_by_identity_q() {
-        run_test("h = {}; h.compare_by_identity?");
-        run_test("h = {}; h.compare_by_identity; h.compare_by_identity?");
-    }
-
-    #[test]
-    fn values_at() {
-        run_test(r#"h = {a: 1, b: 2, c: 3}; h.values_at(:a, :c)"#);
-        run_test(r#"h = {a: 1, b: 2}; h.values_at(:a, :x, :b)"#);
-    }
-
-    #[test]
-    fn dig() {
-        run_test(r#"h = {a: {b: {c: 1}}}; h.dig(:a, :b, :c)"#);
-        run_test(r#"h = {a: {b: 1}}; h.dig(:a, :x)"#);
-        run_test(r#"h = {a: 1}; h.dig(:a)"#);
+            r#"a = [1, 2, 3]; [*a]"#,
+            // compare_by_identity_q
+            "h = {}; h.compare_by_identity?",
+            "h = {}; h.compare_by_identity; h.compare_by_identity?",
+            // values_at
+            r#"h = {a: 1, b: 2, c: 3}; h.values_at(:a, :c)"#,
+            r#"h = {a: 1, b: 2}; h.values_at(:a, :x, :b)"#,
+            // dig
+            r#"h = {a: {b: {c: 1}}}; h.dig(:a, :b, :c)"#,
+            r#"h = {a: {b: 1}}; h.dig(:a, :x)"#,
+            r#"h = {a: 1}; h.dig(:a)"#,
+        ]);
     }
 
     #[test]
@@ -3451,20 +3316,17 @@ mod tests {
     }
 
     #[test]
-    fn to_h2() {
-        run_test("h = {a: 1, b: 2}; h.to_h == h");
-    }
-
-    #[test]
-    fn to_h_with_block() {
-        run_test("{a: 1, b: 2}.to_h {|k, v| [k, v.to_s] }");
-    }
-
-    #[test]
-    fn try_convert() {
-        run_test("Hash.try_convert({a: 1})");
-        run_test("Hash.try_convert(1)");
-        run_test("Hash.try_convert(nil)");
+    fn to_h_and_try_convert() {
+        run_tests(&[
+            // to_h2
+            "h = {a: 1, b: 2}; h.to_h == h",
+            // to_h_with_block
+            "{a: 1, b: 2}.to_h {|k, v| [k, v.to_s] }",
+            // try_convert
+            "Hash.try_convert({a: 1})",
+            "Hash.try_convert(1)",
+            "Hash.try_convert(nil)",
+        ]);
     }
 
     #[test]
@@ -3490,23 +3352,19 @@ mod tests {
     }
 
     #[test]
-    fn hash_iter_guard_existing_key_allowed() {
-        // Updating an already-present key during iteration is allowed,
-        // matching CRuby semantics.
-        run_test("h = {a: 1, b: 2}; h.each { |k, v| h[k] = v * 10 }; h.to_a.sort");
-    }
-
-    #[test]
-    fn hash_iter_guard_delete_allowed() {
-        // Hash#delete during iteration does NOT raise (CRuby-compatible).
-        // Exact visitation order is implementation-defined, so just check
-        // that the call succeeds and returns the pre-delete value.
-        run_test(
+    fn hash_iter_guard_allowed() {
+        run_tests(&[
+            // Updating an already-present key during iteration is allowed,
+            // matching CRuby semantics.
+            "h = {a: 1, b: 2}; h.each { |k, v| h[k] = v * 10 }; h.to_a.sort",
+            // Hash#delete during iteration does NOT raise (CRuby-compatible).
+            // Exact visitation order is implementation-defined, so just check
+            // that the call succeeds and returns the pre-delete value.
             "h = {a: 1}; \
              seen = nil; \
              h.each { |k, v| seen = h.delete(k) }; \
              [seen, h.empty?]",
-        );
+        ]);
     }
 
     #[test]
@@ -3515,36 +3373,32 @@ mod tests {
     }
 
     #[test]
-    fn hash_iter_guard_nested_iteration() {
-        // Nested iteration increments iter_lev twice and decrements back to 0;
-        // after all iterations complete, mutation is allowed again.
-        run_test(
+    fn hash_iter_guard_lev() {
+        run_tests(&[
+            // Nested iteration increments iter_lev twice and decrements back to 0;
+            // after all iterations complete, mutation is allowed again.
             "h = {a: 1, b: 2}; \
              h.each { |k1, _| h.each { |k2, _| _ = [k1, k2] } }; \
              h[:c] = 3; h.keys.sort",
-        );
-    }
-
-    #[test]
-    fn hash_iter_guard_released_after_block_exception() {
-        // If the each block raises, the iter_lev guard is still decremented
-        // (RAII Drop) so subsequent mutations succeed.
-        run_test(
+            // If the each block raises, the iter_lev guard is still decremented
+            // (RAII Drop) so subsequent mutations succeed.
             "h = {a: 1}; \
              begin; h.each { raise 'stop' }; rescue; end; \
              h[:b] = 2; h.keys.sort",
-        );
+        ]);
     }
 
     // ----- Tests for ruby/spec sweep (PR #361) -----
 
     #[test]
     fn hash_new_validation() {
-        // 0..1 positional args ok
-        run_test("Hash.new.default");
-        run_test("Hash.new(5).default");
-        // Block-form ok
-        run_test("Hash.new { |h, k| k }.default_proc.is_a?(Proc)");
+        run_tests(&[
+            // 0..1 positional args ok
+            "Hash.new.default",
+            "Hash.new(5).default",
+            // Block-form ok
+            "Hash.new { |h, k| k }.default_proc.is_a?(Proc)",
+        ]);
         // Both default value and block: ArgumentError
         run_test_error("Hash.new(5) { 0 }");
         // More than one positional: ArgumentError
@@ -3610,28 +3464,30 @@ mod tests {
         if parser_is_ruruby() {
             return;
         }
-        run_test(r#"Hash[5 => 6]"#);
-        run_test(r#"Hash["a" => 1, "b" => 2]"#);
-        run_test(r#"h = {9 => 9}; Hash[**h]"#);
-        run_test(
+        run_tests(&[
+            r#"Hash[5 => 6]"#,
+            r#"Hash["a" => 1, "b" => 2]"#,
+            r#"h = {9 => 9}; Hash[**h]"#,
             r#"
             klass = Class.new(Hash) { def to_hash; {trap: 1}; end }
             a = klass[5 => 6]
             [a.class.ancestors.include?(Hash), {5 => 6} == a,
              {3 => 4}.merge(klass[1 => 2])]
             "#,
-        );
-        // Proc#[] with kwargs forwards to the block (like #call).
-        run_test(r#"->(*a){ a }[1, k: 2]"#);
-        run_test(r#"->(a, k:){ [a, k] }[1, k: 9]"#);
+            // Proc#[] with kwargs forwards to the block (like #call).
+            r#"->(*a){ a }[1, k: 2]"#,
+            r#"->(a, k:){ [a, k] }[1, k: 9]"#,
+        ]);
     }
 
     #[test]
     fn hash_bracket_array_form() {
-        // 1-element arrays become `key => nil`.
-        run_test("Hash[[[:a]]]");
-        // [[k, v], ...] form.
-        run_test("Hash[[[:a, 1], [:b, 2]]]");
+        run_tests(&[
+            // 1-element arrays become `key => nil`.
+            "Hash[[[:a]]]",
+            // [[k, v], ...] form.
+            "Hash[[[:a, 1], [:b, 2]]]",
+        ]);
         // Wrong element type: ArgumentError carries CRuby-shaped message.
         run_test_error("Hash[[:a]]");
         run_test_error("Hash[[nil]]");
@@ -3641,9 +3497,9 @@ mod tests {
 
     #[test]
     fn hash_fetch_keyerror_fields() {
-        // KeyError carries `receiver` (the hash) and `key`, and the message
-        // formats the key with `inspect` (so a string key shows quoted).
-        run_test(
+        run_tests(&[
+            // KeyError carries `receiver` (the hash) and `key`, and the message
+            // formats the key with `inspect` (so a string key shows quoted).
             r#"
             h = {}
             begin
@@ -3652,9 +3508,7 @@ mod tests {
               [e.receiver.equal?(h), e.key, e.message]
             end
             "#,
-        );
-        // Symbol keys: receiver is preserved, key is the missing symbol.
-        run_test(
+            // Symbol keys: receiver is preserved, key is the missing symbol.
             r#"
             h = { a: 1 }
             begin
@@ -3663,7 +3517,7 @@ mod tests {
               [e.receiver.equal?(h), e.key]
             end
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3758,8 +3612,10 @@ mod tests {
 
     #[test]
     fn hash_sort_with_block() {
-        run_test(r#"{1 => 2, 2 => 9, 3 => 4}.sort { |a, b| b <=> a }"#);
-        run_test(r#"{1 => 2, 2 => 9, 3 => 4}.sort"#);
+        run_tests(&[
+            r#"{1 => 2, 2 => 9, 3 => 4}.sort { |a, b| b <=> a }"#,
+            r#"{1 => 2, 2 => 9, 3 => 4}.sort"#,
+        ]);
     }
 
     #[test]
@@ -3799,9 +3655,9 @@ mod tests {
 
     #[test]
     fn hash_index_assign_string_key() {
-        // A non-frozen String key is dup'd and frozen on store; later
-        // mutation of the original String doesn't affect the stored key.
-        run_test(
+        run_tests(&[
+            // A non-frozen String key is dup'd and frozen on store; later
+            // mutation of the original String doesn't affect the stored key.
             r#"
             key = +"foo"
             h = {}
@@ -3809,10 +3665,8 @@ mod tests {
             key << "bar"
             [h.keys[0], h.keys[0].frozen?]
             "#,
-        );
-        // Singleton methods on the original key do NOT bleed into the stored
-        // copy (the stored key uses the real String class).
-        run_test(
+            // Singleton methods on the original key do NOT bleed into the stored
+            // copy (the stored key uses the real String class).
             r#"
             key = +"foo"
             def key.reverse; "bar"; end
@@ -3820,16 +3674,14 @@ mod tests {
             h[key] = 0
             h.keys[0].reverse
             "#,
-        );
-        // A frozen String key is stored as-is.
-        run_test(
+            // A frozen String key is stored as-is.
             r#"
             key = "foo".freeze
             h = {}
             h[key] = 0
             h.keys[0].equal?(key)
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3946,42 +3798,38 @@ mod tests {
 
     #[test]
     fn hash_dup_preserves_class_not_singleton() {
-        // dup keeps the class but does NOT carry singleton methods.
-        run_test(
+        run_tests(&[
+            // dup keeps the class but does NOT carry singleton methods.
             r#"
             klass = Class.new(Hash)
             h = klass[a: 1]
             h.dup.class == klass
             "#,
-        );
-        run_test(
             r#"
             h = { 1 => 2 }
             def h.to_a; nil; end
             h.dup.to_a
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn hash_reject_no_default_carry() {
-        // reject returns a fresh hash without the receiver's default.
-        run_test(
+        run_tests(&[
+            // reject returns a fresh hash without the receiver's default.
             r#"
             h = Hash.new(99)
             h[:a] = 1
             r = h.reject { false }
             [r.default, r[:a]]
             "#,
-        );
-        // Singleton method on the receiver does not bleed into the result.
-        run_test(
+            // Singleton method on the receiver does not bleed into the result.
             r#"
             h = { 1 => 2 }
             def h.to_a; nil; end
             h.reject { false }.to_a
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -4019,7 +3867,7 @@ mod tests {
     fn hash_to_h_subclass_returns_plain_hash() {
         // Hash subclass#to_h (no block) returns a plain Hash that retains
         // default value/proc and compare_by_identity flag.
-        run_test(
+        run_tests(&[
             r#"
             klass = Class.new(Hash)
             h = klass.new
@@ -4027,8 +3875,6 @@ mod tests {
             r = h.to_h
             [r.class, r[:foo]]
             "#,
-        );
-        run_test(
             r#"
             klass = Class.new(Hash)
             h = klass.new
@@ -4036,7 +3882,7 @@ mod tests {
             r = h.to_h
             r.default
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -4054,8 +3900,10 @@ mod tests {
     #[test]
     fn hash_literal_reserved_word_keys() {
         // Parser shorthand for nil:/false:/true: (PR #361).
-        run_test("{nil: 1, false: 2, true: 3}");
-        run_test("{nil: 1}.keys");
+        run_tests(&[
+            "{nil: 1, false: 2, true: 3}",
+            "{nil: 1}.keys",
+        ]);
     }
 
     #[test]
@@ -4065,19 +3913,19 @@ mod tests {
         // total positional arity to >1 so a single Array argument from
         // Hash#each (`[k, v]`) auto-splats. The block then sees only the
         // key, matching CRuby's `core/hash/shared/each.rb`.
-        run_test(
+        run_tests(&[
             r#"
             ary = []
             { "a" => 1, "b" => 2, "c" => 3 }.each { |k,| ary << k }
             ary.sort
             "#,
-        );
-        // Same for Array#each on a list of pairs.
-        run_test(r#"[[1, 2], [3, 4]].map { |k,| k }"#);
-        // |a, b,| (already 2 params) also auto-splats; trailing comma is
-        // a no-op for the destructuring count.
-        run_test(r#"[[1, 2, 3]].map { |a, b,| [a, b] }"#);
-        // No trailing comma → single param sees the whole array.
-        run_test(r#"[[1, 2]].map { |k| k }"#);
+            // Same for Array#each on a list of pairs.
+            r#"[[1, 2], [3, 4]].map { |k,| k }"#,
+            // |a, b,| (already 2 params) also auto-splats; trailing comma is
+            // a no-op for the destructuring count.
+            r#"[[1, 2, 3]].map { |a, b,| [a, b] }"#,
+            // No trailing comma → single param sees the whole array.
+            r#"[[1, 2]].map { |k| k }"#,
+        ]);
     }
 }

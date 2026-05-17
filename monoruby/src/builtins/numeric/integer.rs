@@ -1968,7 +1968,7 @@ mod tests {
     #[test]
     fn integer_tof_jit_inline_aliased_dst() {
         run_test(
-            r##"
+r##"
         class V
           attr_reader :x
           def initialize(x); @x = x; end
@@ -1983,13 +1983,13 @@ mod tests {
         # Warm the JIT, then check.
         3000.times { chained(v); literal }
         [chained(v), literal]
-        "##,
+        "##
         );
     }
 
     #[test]
     fn times() {
-        run_test(
+        run_tests(&[
             r##"
         a = 0
         5.times do |z|
@@ -2006,12 +2006,6 @@ mod tests {
         end
         a
         "##,
-        );
-    }
-
-    #[test]
-    fn step() {
-        run_test(
             r##"
         a = 0
         x = 0.step(10, 2) do |z|
@@ -2028,18 +2022,12 @@ mod tests {
         end
         [a, x]
         "##,
-        );
-    }
-
-    #[test]
-    fn step_returns_arithmetic_sequence() {
-        // `Numeric#step` without a block returns an
-        // ArithmeticSequence when step is numeric (mirroring
-        // CRuby and `Range#step`). Non-numeric step keeps the
-        // plain-Enumerator contract — ArgumentError is raised
-        // lazily on iteration / `.size`. Direction mismatch
-        // returns size 0 (CRuby compatibility).
-        run_tests(&[
+            // `Numeric#step` without a block returns an
+            // ArithmeticSequence when step is numeric (mirroring
+            // CRuby and `Range#step`). Non-numeric step keeps the
+            // plain-Enumerator contract — ArgumentError is raised
+            // lazily on iteration / `.size`. Direction mismatch
+            // returns size 0 (CRuby compatibility).
             "1.step(10).class.name",
             "1.step(10, 2).class.name",
             "1.step(10).is_a?(Enumerator::ArithmeticSequence)",
@@ -2049,12 +2037,6 @@ mod tests {
             "1.step(0, 1).size",
             "1.step(0, 1).to_a",
             r##"1.step(10, "foo").class.name"##,
-        ]);
-    }
-
-    #[test]
-    fn upto() {
-        run_test(
             r##"
         a = 0
         x = 0.upto(10) do |z|
@@ -2071,8 +2053,6 @@ mod tests {
         end
         [a, x]
         "##,
-        );
-        run_test(
             r##"
         res = 0
         10.upto(8) do |z|
@@ -2080,12 +2060,6 @@ mod tests {
         end
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn downto() {
-        run_test(
             r##"
         a = 0
         x = 10.downto(0) do |z|
@@ -2102,8 +2076,6 @@ mod tests {
         end
         [a, x]
         "##,
-        );
-        run_test(
             r##"
         res = 0
         8.downto(10) do |z|
@@ -2111,7 +2083,7 @@ mod tests {
         end
         res
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -2122,31 +2094,17 @@ mod tests {
 
     #[test]
     fn to_f() {
-        run_test("253.to_f");
-        run_test("-25253.to_f");
-        run_test("0.to_f");
-    }
-
-    #[test]
-    fn to_i() {
-        run_test("253.to_i");
-        run_test("-25253.to_i");
-        run_test(
-            "8364942539529902342420345356709767546464574458647864843346254643534645647575786.to_i",
-        );
-    }
-
-    #[test]
-    fn non_zero() {
-        run_test("253.nonzero?");
-        run_test("0.nonzero?");
-        run_test("253.zero?");
-        run_test("0.zero?");
-    }
-
-    #[test]
-    fn index() {
         run_tests(&[
+            "253.to_f",
+            "-25253.to_f",
+            "0.to_f",
+            "253.to_i",
+            "-25253.to_i",
+            "8364942539529902342420345356709767546464574458647864843346254643534645647575786.to_i",
+            "253.nonzero?",
+            "0.nonzero?",
+            "253.zero?",
+            "0.zero?",
             "999999999999999999999999999999999[-100]",
             "999999999999999999999999999999999[0]",
             "999999999999999999999999999999999[47]",
@@ -2212,12 +2170,6 @@ mod tests {
             "-999999999999999999999999999999999[-10..-31]",
             "-999999999999999999999999999999999[63..32]",
             "-999999999999999999999999999999999[-63..32]",
-        ]);
-    }
-
-    #[test]
-    fn even_() {
-        run_tests(&[
             "100.even?",
             "-100.even?",
             "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.even?",
@@ -2230,7 +2182,7 @@ mod tests {
     }
 
     #[test]
-    fn cmp() {
+    fn to_f_2() {
         run_tests(&[
             "100.send(:==, 100)",
             "100.send(:!=, 100)",
@@ -2249,12 +2201,13 @@ mod tests {
 
     #[test]
     fn digits() {
-        run_test("100.digits");
-        run_test("100.digits(10)");
-        run_test("100.digits(16)");
-        run_test("100.digits(16.5)");
-        run_test("class C; def to_int; 10; end; end; 100.digits(C.new)");
-
+        run_tests(&[
+            "100.digits",
+            "100.digits(10)",
+            "100.digits(16)",
+            "100.digits(16.5)",
+            "class C; def to_int; 10; end; end; 100.digits(C.new)",
+        ]);
         run_test_error("(-100).digits(16)");
         run_test_error("-100.digits(16)");
         run_test_error("100.digits(-16)");
@@ -2264,48 +2217,28 @@ mod tests {
 
     #[test]
     fn integer_abs() {
-        run_test("42.abs");
-        run_test("(-42).abs");
-        run_test("0.abs");
-        run_test("42.magnitude");
-        run_test("(-42).magnitude");
-    }
-
-    #[test]
-    fn integer_negative() {
-        run_test("42.negative?");
-        run_test("(-42).negative?");
-        run_test("0.negative?");
-        run_test("42.positive?");
-        run_test("(-42).positive?");
-        run_test("0.positive?");
-    }
-
-    #[test]
-    fn integer_integer() {
-        run_test("42.integer?");
-        run_test("0.integer?");
-    }
-
-    #[test]
-    fn integer_ord() {
-        run_test("42.ord");
-        run_test("0.ord");
-    }
-
-    #[test]
-    fn integer_ceil() {
-        run_test("42.ceil");
-        run_test("42.ceil(0)");
-        run_test("42.ceil(-1)");
-        run_test("45.ceil(-1)");
-        run_test("(-42).ceil(-1)");
-        run_test("123.ceil(-2)");
-    }
-
-    #[test]
-    fn integer_round() {
         run_tests(&[
+            "42.abs",
+            "(-42).abs",
+            "0.abs",
+            "42.magnitude",
+            "(-42).magnitude",
+            "42.negative?",
+            "(-42).negative?",
+            "0.negative?",
+            "42.positive?",
+            "(-42).positive?",
+            "0.positive?",
+            "42.integer?",
+            "0.integer?",
+            "42.ord",
+            "0.ord",
+            "42.ceil",
+            "42.ceil(0)",
+            "42.ceil(-1)",
+            "45.ceil(-1)",
+            "(-42).ceil(-1)",
+            "123.ceil(-2)",
             "42.round",
             "42.round(0)",
             "42.round(-1)",
@@ -2314,44 +2247,22 @@ mod tests {
             "15.round(-1)",
             "25.round(-1)",
             "35.round(-1)",
-        ]);
-    }
-
-    #[test]
-    fn integer_truncate() {
-        run_test("42.truncate");
-        run_test("42.truncate(0)");
-        run_test("42.truncate(-1)");
-        run_test("(-42).truncate(-1)");
-        run_test("123.truncate(-2)");
-    }
-
-    #[test]
-    fn integer_next_pred() {
-        run_test("42.next");
-        run_test("(-1).next");
-        run_test("42.pred");
-        run_test("0.pred");
-    }
-
-    #[test]
-    fn integer_remainder() {
-        run_test("5.remainder(3)");
-        run_test("(-5).remainder(3)");
-        run_test("5.remainder(-3)");
-        run_test("(-5).remainder(-3)");
-    }
-
-    #[test]
-    fn integer_fdiv() {
-        run_test("1.fdiv(2)");
-        run_test("(-1).fdiv(2)");
-        run_test("1.fdiv(2.0)");
-    }
-
-    #[test]
-    fn integer_gcd_lcm() {
-        run_tests(&[
+            "42.truncate",
+            "42.truncate(0)",
+            "42.truncate(-1)",
+            "(-42).truncate(-1)",
+            "123.truncate(-2)",
+            "42.next",
+            "(-1).next",
+            "42.pred",
+            "0.pred",
+            "5.remainder(3)",
+            "(-5).remainder(3)",
+            "5.remainder(-3)",
+            "(-5).remainder(-3)",
+            "1.fdiv(2)",
+            "(-1).fdiv(2)",
+            "1.fdiv(2.0)",
             "12.gcd(8)",
             "12.gcd(-8)",
             "(-12).gcd(8)",
@@ -2361,19 +2272,9 @@ mod tests {
             "12.lcm(-8)",
             "0.lcm(5)",
             "12.gcdlcm(8)",
-        ]);
-    }
-
-    #[test]
-    fn integer_pow() {
-        run_test("2.pow(10)");
-        run_test("2.pow(10, 1000)");
-        run_test("2.pow(0)");
-    }
-
-    #[test]
-    fn integer_allbits() {
-        run_tests(&[
+            "2.pow(10)",
+            "2.pow(10, 1000)",
+            "2.pow(0)",
             "0b1010.allbits?(0b1010)",
             "0b1010.allbits?(0b1000)",
             "0b1010.allbits?(0b1011)",
@@ -2381,12 +2282,6 @@ mod tests {
             "0b1010.anybits?(0b1001)",
             "0b1010.nobits?(0b0101)",
             "0b1010.nobits?(0b0001)",
-        ]);
-    }
-
-    #[test]
-    fn integer_bit_length() {
-        run_tests(&[
             "0.bit_length",
             "1.bit_length",
             "255.bit_length",
@@ -2396,48 +2291,34 @@ mod tests {
             "(-257).bit_length",
             "(2**100).bit_length",
             "(-(2**100)).bit_length",
+            "1.coerce(2)",
+            "1.coerce(2.5)",
+            "42.numerator",
+            "42.denominator",
+            "0.numerator",
+            "0.denominator",
+            "Integer.sqrt(0)",
         ]);
     }
 
     #[test]
-    fn integer_coerce() {
-        run_test("1.coerce(2)");
-        run_test("1.coerce(2.5)");
-    }
-
-    #[test]
-    fn integer_numerator_denominator() {
-        run_test("42.numerator");
-        run_test("42.denominator");
-        run_test("0.numerator");
-        run_test("0.denominator");
-    }
-
-    #[test]
-    fn integer_sqrt() {
-        run_test("Integer.sqrt(0)");
-        run_test("Integer.sqrt(1)");
-        run_test("Integer.sqrt(4)");
-        run_test("Integer.sqrt(9)");
-        run_test("Integer.sqrt(10)");
-        run_test("Integer.sqrt(100)");
-    }
-
-    #[test]
-    fn integer_try_convert() {
-        run_test("Integer.try_convert(1)");
-        run_test("Integer.try_convert(nil)");
-        run_test(r#"Integer.try_convert("1")"#);
-    }
-
-    #[test]
-    fn positive_negative() {
-        run_test("42.positive?");
-        run_test("(-42).positive?");
-        run_test("0.positive?");
-        run_test("42.negative?");
-        run_test("(-42).negative?");
-        run_test("0.negative?");
+    fn integer_abs_2() {
+        run_tests(&[
+            "Integer.sqrt(1)",
+            "Integer.sqrt(4)",
+            "Integer.sqrt(9)",
+            "Integer.sqrt(10)",
+            "Integer.sqrt(100)",
+            "Integer.try_convert(1)",
+            "Integer.try_convert(nil)",
+            r#"Integer.try_convert("1")"#,
+            "42.positive?",
+            "(-42).positive?",
+            "0.positive?",
+            "42.negative?",
+            "(-42).negative?",
+            "0.negative?",
+        ]);
     }
 
     #[test]
@@ -2466,8 +2347,10 @@ mod tests {
 
     #[test]
     fn integer_to_r() {
-        run_test("3.respond_to?(:to_r)");
-        run_test("3.respond_to?(:rationalize)");
+        run_tests(&[
+            "3.respond_to?(:to_r)",
+            "3.respond_to?(:rationalize)",
+        ]);
     }
 
     #[test]
@@ -2482,40 +2365,32 @@ mod tests {
 
     #[test]
     fn to_s_with_base() {
-        run_test("255.to_s(16)");
-        run_test("(-255).to_s(16)");
-        run_test("10.to_s(2)");
-        run_test("0.to_s(16)");
-        run_test("123.to_s");
-        run_test("255.to_s(36)");
-    }
-
-    #[test]
-    fn chr_with_encoding() {
-        run_test("65.chr");
-        run_test("97.chr");
-    }
-
-    #[test]
-    fn index_with_length() {
-        run_test("42[0, 3]");
-        run_test("0b11010[1, 3]");
-        run_test("255[4, 4]");
-    }
-
-    #[test]
-    fn integer_eql() {
-        run_test("(2**64).eql?(2**64)");
-        run_test("1.eql?(1)");
-        run_test("1.eql?(1.0)");
-        run_test("(2**64).eql?(2**64 + 1)");
+        run_tests(&[
+            "255.to_s(16)",
+            "(-255).to_s(16)",
+            "10.to_s(2)",
+            "0.to_s(16)",
+            "123.to_s",
+            "255.to_s(36)",
+            "65.chr",
+            "97.chr",
+            "42[0, 3]",
+            "0b11010[1, 3]",
+            "255[4, 4]",
+            "(2**64).eql?(2**64)",
+            "1.eql?(1)",
+            "1.eql?(1.0)",
+            "(2**64).eql?(2**64 + 1)",
+        ]);
     }
 
     #[test]
     fn pow_bignum_exponent() {
-        run_test("1 ** (2**100)");
-        run_test("(-1) ** (2**100)");
-        run_test("(-1) ** (2**100 + 1)");
+        run_tests(&[
+            "1 ** (2**100)",
+            "(-1) ** (2**100)",
+            "(-1) ** (2**100 + 1)",
+        ]);
         run_test_error("2 ** (2**100)");
     }
 
@@ -2538,8 +2413,10 @@ mod tests {
 
     #[test]
     fn fdiv_fixnum() {
-        run_test("100.fdiv(3)");
-        run_test("10.fdiv(2)");
+        run_tests(&[
+            "100.fdiv(3)",
+            "10.fdiv(2)",
+        ]);
     }
 
     #[test]
@@ -2549,8 +2426,10 @@ mod tests {
 
     #[test]
     fn div_coerce() {
-        run_test("10 / 3.0");
-        run_test("10 / 2.5");
+        run_tests(&[
+            "10 / 3.0",
+            "10 / 2.5",
+        ]);
     }
 
     #[test]
@@ -2570,9 +2449,11 @@ mod tests {
 
     #[test]
     fn integer_dup() {
-        run_test("42.dup");
-        run_test("42.dup.equal?(42)");
-        run_test("a = 2**100; a.dup.equal?(a)");
+        run_tests(&[
+            "42.dup",
+            "42.dup.equal?(42)",
+            "a = 2**100; a.dup.equal?(a)",
+        ]);
     }
 
     #[test]
@@ -2605,8 +2486,10 @@ mod tests {
 
     #[test]
     fn integer_round_float_ndigits() {
-        run_test("42.round(1.5)");
-        run_test("42.round(-1.5)");
+        run_tests(&[
+            "42.round(1.5)",
+            "42.round(-1.5)",
+        ]);
     }
 
     #[test]
@@ -2641,23 +2524,25 @@ mod tests {
 
     #[test]
     fn integer_index_negative() {
-        run_test("0b11010[-2, 3]");
-        run_test("0b11010[1, 3]");
+        run_tests(&[
+            "0b11010[-2, 3]",
+            "0b11010[1, 3]",
+        ]);
     }
 
     #[test]
     fn integer_index_endless_range() {
-        run_test("0b11010[1..]");
-        run_test("255[4..]");
-        run_test("255[70..]");
-        run_test("255[-2..]");
-        run_test("123456789123456789123456789123456789123456789[70..]");
-        run_test("123456789123456789123456789123456789123456789[-3..]");
-
+        run_tests(&[
+            "0b11010[1..]",
+            "255[4..]",
+            "255[70..]",
+            "255[-2..]",
+            "123456789123456789123456789123456789123456789[70..]",
+            "123456789123456789123456789123456789123456789[-3..]",
+        ]);
         run_test_error("255[Float::NAN..]");
         run_test_error("255[Float::INFINITY..]");
         run_test_error("255[Float::-INFINITY..]");
-
         run_test_error("255[..4]");
         run_test_error("255[..70]");
         run_test("255[..-2]");
@@ -2667,10 +2552,12 @@ mod tests {
 
     #[test]
     fn integer_round_half() {
-        run_test("25.round(-1, half: :up)");
-        run_test("25.round(-1, half: :down)");
-        run_test("25.round(-1, half: :even)");
-        run_test("15.round(-1, half: :even)");
+        run_tests(&[
+            "25.round(-1, half: :up)",
+            "25.round(-1, half: :down)",
+            "25.round(-1, half: :even)",
+            "15.round(-1, half: :even)",
+        ]);
     }
 
     #[test]
@@ -2681,33 +2568,35 @@ mod tests {
     }
 
     #[test]
-    fn integer_abs_bigint() {
-        run_test("(-(2**64)).abs");
-        run_test("(2**64).abs");
-        run_test("(-42).abs");
-    }
-
-    #[test]
-    fn integer_neg_boundary() {
-        run_test("-(2**62)");
+    fn integer() {
+        run_tests(&[
+            "(-(2**64)).abs",
+            "(2**64).abs",
+            "(-42).abs",
+            "-(2**62)",
+        ]);
     }
 
     #[test]
     fn integer_div() {
-        run_test("7.div(3)");
-        run_test("(-7).div(3)");
-        run_test("7.div(-3)");
-        run_test("7.div(3.0)");
-        run_test("5.div(Rational(3))");
+        run_tests(&[
+            "7.div(3)",
+            "(-7).div(3)",
+            "7.div(-3)",
+            "7.div(3.0)",
+            "5.div(Rational(3))",
+        ]);
         run_test_error("7.div(0)");
         run_test_error("7.div(0.0)");
     }
 
     #[test]
     fn integer_ceildiv() {
-        run_test("7.ceildiv(3)");
-        run_test("(-7).ceildiv(3)");
-        run_test("7.ceildiv(-3)");
+        run_tests(&[
+            "7.ceildiv(3)",
+            "(-7).ceildiv(3)",
+            "7.ceildiv(-3)",
+        ]);
         run_test_error("7.ceildiv(0)");
     }
 
@@ -2719,56 +2608,40 @@ mod tests {
 
     #[test]
     fn pow_negative_base_float_exp() {
-        // (-1) ** 0.5 should return Complex in CRuby
-        run_test("((-1) ** 0.5).class");
-    }
-
-    #[test]
-    fn command_call_with_bitnot_arg() {
-        // `p ~x` / `foo ~x` — `~` is only ever a unary operator, so it
-        // must begin an argument in a parenless method call (matches
-        // CRuby's `p ~5 == -6`).
-        run_test("p ~5");
-        run_test("p ~5 + 3");
-        run_test("a = 10; p ~a");
-        run_test("a = 10; b = 20; p ~a + b");
-        run_test(
+        run_tests(&[
+            // (-1) ** 0.5 should return Complex in CRuby
+            "((-1) ** 0.5).class",
+            // `p ~x` / `foo ~x` — `~` is only ever a unary operator, so it
+            // must begin an argument in a parenless method call (matches
+            // CRuby's `p ~5 == -6`).
+            "p ~5",
+            "p ~5 + 3",
+            "a = 10; p ~a",
+            "a = 10; b = 20; p ~a + b",
             r#"
             def foo(x); x; end
             foo ~5
             "#,
-        );
-    }
-
-    #[test]
-    fn pow_unary_minus_rhs() {
-        // `x ** -expr` where expr is a method call / identifier must parse
-        // as `x ** (-expr)` (right-associative and tighter than outer `-`).
-        run_test(
+            // `x ** -expr` where expr is a method call / identifier must parse
+            // as `x ** (-expr)` (right-associative and tighter than outer `-`).
             r#"
             def three; 3; end
             2 ** -three
             "#,
-        );
-        // Double negation: `2 ** --3`.
-        run_test("2 ** --3");
-        // `-x ** y` keeps the `-` outside (unary minus binds looser than **).
-        run_test("-3 ** 4");
-        // Right-associative: `2 ** -3 ** 2` == `2 ** -(3 ** 2)`.
-        run_test("2 ** -3 ** 2");
-        // Negation of a BigInt expression as RHS.
-        run_test(
+            // Double negation: `2 ** --3`.
+            "2 ** --3",
+            // `-x ** y` keeps the `-` outside (unary minus binds looser than **).
+            "-3 ** 4",
+            // Right-associative: `2 ** -3 ** 2` == `2 ** -(3 ** 2)`.
+            "2 ** -3 ** 2",
+            // Negation of a BigInt expression as RHS.
             r#"
             big = 10 ** 20
             (Rational(1) ** -big).to_s
             "#,
-        );
-    }
-
-    #[test]
-    fn integer_size_bigint() {
-        run_test("(2**64).size");
-        run_test("(2**63).size");
+            "(2**64).size",
+            "(2**63).size",
+        ]);
     }
 
     #[test]
@@ -2793,36 +2666,34 @@ mod tests {
 
     #[test]
     fn fdiv_large_bigint() {
-        run_test("(10**200).fdiv(10**199)");
-        run_test("(10**200).fdiv(3 * 10**199)");
+        run_tests(&[
+            "(10**200).fdiv(10**199)",
+            "(10**200).fdiv(3 * 10**199)",
+        ]);
     }
 
     #[test]
     fn integer_sqrt_newton() {
-        run_test("Integer.sqrt(0)");
-        run_test("Integer.sqrt(1)");
-        run_test("Integer.sqrt(100)");
+        run_tests(&[
+            "Integer.sqrt(0)",
+            "Integer.sqrt(1)",
+            "Integer.sqrt(100)",
+        ]);
         run_test_error("Integer.sqrt(-1)");
         run_test_error(r#"Integer.sqrt("foo")"#);
     }
 
     #[test]
     fn round_negative_precision() {
-        run_test("249.round(-2)");
-        run_test("(-249).round(-2)");
-        run_test("150.round(-2)");
-    }
-
-    #[test]
-    fn floor_bigint_neg_precision() {
-        run_test("(-130).floor(-1)");
-        run_test("(-131).floor(-1)");
-    }
-
-    #[test]
-    fn module_include_q() {
-        run_test("Integer.include?(Comparable)");
-        run_test("Integer.include?(Enumerable)");
+        run_tests(&[
+            "249.round(-2)",
+            "(-249).round(-2)",
+            "150.round(-2)",
+            "(-130).floor(-1)",
+            "(-131).floor(-1)",
+            "Integer.include?(Comparable)",
+            "Integer.include?(Enumerable)",
+        ]);
     }
 
     #[test]
@@ -2840,15 +2711,13 @@ mod tests {
     }
 
     #[test]
-    fn integer_upto_float_endpoint() {
-        run_test("res = []; 1.upto(3.5) {|i| res << i}; res");
-        run_test("res = []; 5.downto(2.5) {|i| res << i}; res");
-    }
-
-    #[test]
-    fn integer_to_s_encoding() {
-        run_test("42.to_s.encoding.to_s");
-        run_test("255.to_s(16).encoding.to_s");
+    fn integer_2() {
+        run_tests(&[
+            "res = []; 1.upto(3.5) {|i| res << i}; res",
+            "res = []; 5.downto(2.5) {|i| res << i}; res",
+            "42.to_s.encoding.to_s",
+            "255.to_s(16).encoding.to_s",
+        ]);
     }
 
     #[test]
@@ -2875,9 +2744,7 @@ mod tests {
             r#"0x0045.chr("UTF-8").bytes.to_a"#,
             r#"0x0045.chr("Utf-8").bytes.to_a"#,
             r#"0x0045.chr("utf-8").encoding.to_s"#,
-        ]);
-        // Shift_JIS mock encoding
-        run_tests(&[
+            // Shift_JIS mock encoding
             r#"0x0000.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
             r#"0x007F.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
             r#"0x00A1.chr(Encoding::SHIFT_JIS).bytes.to_a"#,
@@ -2901,52 +2768,40 @@ mod tests {
         run_test("Encoding.default_internal");
         run_test_error("256.chr");
         // default_internal = UTF-8: >255 uses UTF-8
-        run_test(
+        run_tests(&[
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.bytes.to_a
             Encoding.default_internal = nil
             res
         "#,
-        );
-        run_test(
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 0x3000.chr.encoding.to_s
             Encoding.default_internal = nil
             res
         "#,
-        );
-        // 0-127 always US-ASCII regardless of default_internal
-        run_test(
+            // 0-127 always US-ASCII regardless of default_internal
             r#"
             Encoding.default_internal = Encoding::UTF_8
             res = 65.chr.encoding.to_s
             Encoding.default_internal = nil
             res
         "#,
-        );
+        ]);
     }
 
     #[test]
     fn pow_modular_sign() {
-        run_test("(-2).pow(3, 12)");
-        run_test("2.pow(3, 12)");
-        run_test("2.pow(3, -12)");
-        run_test("(-2).pow(3, -12)");
-        run_test("(-7).pow(3, 19)");
-    }
-
-    #[test]
-    fn try_convert() {
-        run_test("Integer.try_convert(1)");
-        run_test("Integer.try_convert(1.0)");
-        run_test("Integer.try_convert(nil)");
-    }
-
-    #[test]
-    fn integer_floor_ceil_truncate_round() {
         run_tests(&[
+            "(-2).pow(3, 12)",
+            "2.pow(3, 12)",
+            "2.pow(3, -12)",
+            "(-2).pow(3, -12)",
+            "(-7).pow(3, 19)",
+            "Integer.try_convert(1)",
+            "Integer.try_convert(1.0)",
+            "Integer.try_convert(nil)",
             // ndigits >= 0 returns self
             "15.floor",
             "15.ceil",
@@ -3011,7 +2866,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_shr() {
+    fn integer_3() {
         run_tests(&[
             "8 >> 1",
             "-8 >> 1",
@@ -3020,12 +2875,6 @@ mod tests {
             // BigInt
             "(10**20) >> 10",
             "(10**20) >> 0",
-        ]);
-    }
-
-    #[test]
-    fn integer_shr_jit_edge_cases() {
-        run_tests(&[
             // negative constant rhs (>> -k == << k)
             "a = 1; a >> -3",
             "a = 5; a >> -10",
@@ -3041,22 +2890,10 @@ mod tests {
             // zero lhs
             "a = 0; a >> 10",
             "a = 0; a >> -10",
-        ]);
-    }
-
-    #[test]
-    fn integer_shl_extended() {
-        run_tests(&[
             "1 << 10",
             "-1 << 10",
             // BigInt shift
             "(10**20) << 10",
-        ]);
-    }
-
-    #[test]
-    fn integer_shl_jit_edge_cases() {
-        run_tests(&[
             // negative constant rhs (<< -k == >> k)
             "a = 256; a << -4",
             "a = -256; a << -4",
@@ -3135,7 +2972,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_bitop_jit_edge_cases() {
+    fn integer_4() {
         run_tests(&[
             // immediate rhs (small, tagged form fits in i32)
             "a = 0xFF; a | 0x0F",
@@ -3181,16 +3018,11 @@ mod tests {
             "a = 10**20; a | 0xFF",
             "a = 10**20; a & 0xFF",
             "a = 10**20; a ^ 0xFF",
-        ]);
-    }
-
-    #[test]
-    fn integer_pow_jit_edge_cases() {
-        run_tests(&[
             // small fixnum^fixnum that fits in i63
             "a = 2; a ** 10",
             "a = 3; a ** 5",
-            "a = 0; a ** 0", // 0**0 == 1
+            "a = 0; a ** 0",
+            // 0**0 == 1
             "a = 1; a ** 100",
             "a = -2; a ** 5",
             "a = -2; a ** 4",
@@ -3239,16 +3071,18 @@ mod tests {
 
     #[test]
     fn integer_rem_jit_edge_cases() {
-        run_test("a = 17; a % 5");
-        run_test("a = 17; a % -5");
-        run_test("a = -17; a % 5");
-        run_test("a = -17; a % -5");
-        run_test("a = 1000; a % 7");
-        run_test("a = 0; a % 5");
-        // Float rhs (non-Integer rhs falls back to method dispatch)
-        run_test("a = 17; a % 5.0");
-        // BigInt rhs (non-Integer slot type → method dispatch)
-        run_test("a = 17; a % (10**20)");
+        run_tests(&[
+            "a = 17; a % 5",
+            "a = 17; a % -5",
+            "a = -17; a % 5",
+            "a = -17; a % -5",
+            "a = 1000; a % 7",
+            "a = 0; a % 5",
+            // Float rhs (non-Integer rhs falls back to method dispatch)
+            "a = 17; a % 5.0",
+            // BigInt rhs (non-Integer slot type → method dispatch)
+            "a = 17; a % (10**20)",
+        ]);
         // Division by zero raises ZeroDivisionError
         run_test_error("a = 17; a % 0");
     }
@@ -3276,7 +3110,8 @@ mod tests {
             "a = 1024; a % 8",
             "a = -1024; a % 8",
             // rhs near i32 boundary for the mask (mask = rhs*2 - 1)
-            "a = 12345678; a % (1 << 30)", // mask = 2^31 - 1, fits in i32
+            "a = 12345678; a % (1 << 30)",
+            // mask = 2^31 - 1, fits in i32
             "a = -12345678; a % (1 << 30)",
             // rhs needs register-loaded mask (mask exceeds i32)
             "a = 12345678; a % (1 << 31)",
@@ -3306,30 +3141,28 @@ mod tests {
 
     #[test]
     fn float_pow_rem_jit() {
-        // Float#** and Float#% go through CFunc_FF_F path (already inline).
-        run_test("a = 2.5; a ** 3");
-        run_test("a = 2.5; a ** 3.0");
-        run_test("a = 2.0; a ** -2");
-        run_test("a = 17.5; a % 5.0");
-        run_test("a = -17.5; a % 5.0");
-        run_test("a = 17.5; a % -5.0");
-    }
-
-    #[test]
-    fn integer_rem_float_rhs() {
-        // Integer % Float: rhs_class = FLOAT_CLASS path.
-        // The inline JIT converts lhs to f64 and calls rem_ff.
-        run_test("a = 17; b = 5.0; a % b");
-        run_test("a = -17; b = 5.0; a % b");
-        run_test("a = 17; b = -5.0; a % b");
-        run_test("a = -17; b = -5.0; a % b");
-        run_test("a = 0; b = 5.0; a % b");
-        run_test("a = 17; b = 2.5; a % b");
-        run_test("a = 17; b = 1.5; a % b");
-        // rhs is a float literal (still through Float-rhs path because the
-        // class cache records rhs_class = FLOAT_CLASS)
-        run_test("a = 17; a % 5.0");
-        run_test("a = -17; a % 5.0");
+        run_tests(&[
+            // Float#** and Float#% go through CFunc_FF_F path (already inline).
+            "a = 2.5; a ** 3",
+            "a = 2.5; a ** 3.0",
+            "a = 2.0; a ** -2",
+            "a = 17.5; a % 5.0",
+            "a = -17.5; a % 5.0",
+            "a = 17.5; a % -5.0",
+            // Integer % Float: rhs_class = FLOAT_CLASS path.
+            // The inline JIT converts lhs to f64 and calls rem_ff.
+            "a = 17; b = 5.0; a % b",
+            "a = -17; b = 5.0; a % b",
+            "a = 17; b = -5.0; a % b",
+            "a = -17; b = -5.0; a % b",
+            "a = 0; b = 5.0; a % b",
+            "a = 17; b = 2.5; a % b",
+            "a = 17; b = 1.5; a % b",
+            // rhs is a float literal (still through Float-rhs path because the
+            // class cache records rhs_class = FLOAT_CLASS)
+            "a = 17; a % 5.0",
+            "a = -17; a % 5.0",
+        ]);
     }
 
     #[test]
@@ -3355,14 +3188,16 @@ mod tests {
         // exponent produces Complex via pow_ff, but the existing helper
         // has a known precision drift in its trig-based formula, so we
         // don't test that case here.)
-        run_test("a = 2; b = 3.0; a ** b");
-        run_test("a = 2; b = 0.5; a ** b");
-        run_test("a = 2; b = -3.0; a ** b");
-        run_test("a = 0; b = 3.0; a ** b");
-        run_test("a = 1; b = 100.0; a ** b");
-        // Negative base with integer-valued float: regular Float result
-        run_test("a = -2; b = 3.0; a ** b");
-        run_test("a = -2; b = 4.0; a ** b");
+        run_tests(&[
+            "a = 2; b = 3.0; a ** b",
+            "a = 2; b = 0.5; a ** b",
+            "a = 2; b = -3.0; a ** b",
+            "a = 0; b = 3.0; a ** b",
+            "a = 1; b = 100.0; a ** b",
+            // Negative base with integer-valued float: regular Float result
+            "a = -2; b = 3.0; a ** b",
+            "a = -2; b = 4.0; a ** b",
+        ]);
     }
 
     #[test]
@@ -3381,7 +3216,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_to_s_with_base() {
+    fn integer_5() {
         run_tests(&[
             "255.to_s(16)",
             "255.to_s(2)",
@@ -3391,12 +3226,6 @@ mod tests {
             "(10**20).to_s",
             "(10**20).to_s(16)",
             "(10**20).to_s(2)",
-        ]);
-    }
-
-    #[test]
-    fn integer_bit_length_extended() {
-        run_tests(&[
             "0.bit_length",
             "1.bit_length",
             "255.bit_length",
@@ -3405,42 +3234,19 @@ mod tests {
             // BigInt
             "(10**20).bit_length",
             "(-(10**20)).bit_length",
-        ]);
-    }
-
-    #[test]
-    fn integer_pow_modular() {
-        run_tests(&[
             "2.pow(10, 1000)",
             "2.pow(100, 97)",
             // BigInt
             "(10**20).pow(2, 97)",
-        ]);
-    }
-
-    #[test]
-    fn integer_size() {
-        run_tests(&["1.size", "(-1).size", "(10**20).size"]);
-    }
-
-    #[test]
-    fn integer_abs_bigint_extended() {
-        run_tests(&["(10**20).abs", "(-(10**20)).abs"]);
-    }
-
-    #[test]
-    fn integer_zero_nonzero_bigint() {
-        run_tests(&[
+            "1.size",
+            "(-1).size",
+            "(10**20).size",
+            "(10**20).abs",
+            "(-(10**20)).abs",
             "(10**20).zero?",
             "(10**20).nonzero?",
             "0.zero?",
             "0.nonzero?",
-        ]);
-    }
-
-    #[test]
-    fn integer_eql_extended() {
-        run_tests(&[
             "1.eql?(1)",
             "1.eql?(1.0)",
             "1.eql?(2)",
@@ -3465,4 +3271,5 @@ mod tests {
             "#,
         );
     }
+
 }

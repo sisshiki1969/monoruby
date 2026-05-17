@@ -1106,27 +1106,24 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn range() {
-        run_test(
+    fn range_basics_to_s_inspect_each_map_flat_map() {
+        // `to_s` uses element `to_s` and elides nil endpoints.
+        // `inspect` uses element `inspect`; nil endpoints elide one-sided
+        // but render as literal "nil" when both ends are nil.
+        // Ranges embedded in containers use `inspect` via the container.
+        run_tests(&[
             r##"
           r = Range.new(3,10)
           [r.begin, r.end, r.exclude_end?]
         "##,
-        );
-        run_test("(1..5).exclude_end?");
-        run_test("(1...5).exclude_end?");
-        run_test("(1...5).to_a");
-        run_test("Range.new(1, 5, true).to_a");
-        run_test("(1..10).first(3)");
-        run_test("(1..10).last(3)");
-        run_test("(1..5).first");
-        run_test("(1..5).last");
-    }
-
-    #[test]
-    fn range_to_s_inspect() {
-        // `to_s` uses element `to_s` and elides nil endpoints.
-        run_tests(&[
+            "(1..5).exclude_end?",
+            "(1...5).exclude_end?",
+            "(1...5).to_a",
+            "Range.new(1, 5, true).to_a",
+            "(1..10).first(3)",
+            "(1..10).last(3)",
+            "(1..5).first",
+            "(1..5).last",
             "(1..5).to_s",
             "(1...5).to_s",
             "('a'..'z').to_s",
@@ -1136,10 +1133,6 @@ mod tests {
             "(1...).to_s",
             "(nil..nil).to_s",
             "(nil...nil).to_s",
-        ]);
-        // `inspect` uses element `inspect`; nil endpoints elide one-sided
-        // but render as literal "nil" when both ends are nil.
-        run_tests(&[
             "(1..5).inspect",
             "(1...5).inspect",
             "('a'..'z').inspect",
@@ -1148,20 +1141,11 @@ mod tests {
             "(1..).inspect",
             "(nil..nil).inspect",
             "(nil...nil).inspect",
-        ]);
-        // Ranges embedded in containers use `inspect` via the container.
-        run_tests(&[
             "[1..5].inspect",
             "[nil..5].inspect",
             "[1..nil].inspect",
             "[nil..nil].inspect",
             r#"["a".."z"].inspect"#,
-        ]);
-    }
-
-    #[test]
-    fn each() {
-        run_test(
             r#"
         a = 0
         (1...5).each do |x|
@@ -1169,8 +1153,6 @@ mod tests {
         end
         a
         "#,
-        );
-        run_test(
             r#"
         a = 0
         (1..5).each do |x|
@@ -1178,8 +1160,6 @@ mod tests {
         end
         a
         "#,
-        );
-        run_test(
             r#"
         a = 0
         (10..5).each do |x|
@@ -1187,8 +1167,6 @@ mod tests {
         end
         a
         "#,
-        );
-        run_test(
             r#"
         a = ''
         ('a'...'z').each do |x|
@@ -1196,57 +1174,37 @@ mod tests {
         end
         a
         "#,
-        );
-    }
-
-    #[test]
-    fn map() {
-        run_test(
             r#"
         (1...5).map do |x|
             x * 100
         end
         "#,
-        );
-        run_test(
             r#"
         (1..5).map do |x|
             x + 100
         end
         "#,
-        );
-        run_test(
             r#"
         (1..1).map do |x|
             x + 100
         end
         "#,
-        );
-        run_test(
             r#"
         (5..1).map do |x|
             x + 100
         end
         "#,
-        );
-    }
-
-    #[test]
-    fn flat_map() {
-        run_test(
             r#"
         (1...5).flat_map do |x|
             [x] * x
         end
         "#,
-        );
-        run_test(
             r#"
         (1..5).flat_map do |x|
             [x] * x
         end
         "#,
-        );
+        ]);
     }
 
     #[test]
@@ -1351,26 +1309,18 @@ mod tests {
     }
 
     #[test]
-    fn all() {
-        run_test(
+    fn all_bsearch_reject_min() {
+        run_tests(&[
             r#"
         (1...5).all? do |x|
             x > 0
         end
         "#,
-        );
-        run_test(
             r#"
         (1...5).all? do |x|
             x != 5
         end
         "#,
-        );
-    }
-
-    #[test]
-    fn bsearch() {
-        run_test(
             r##"
         res = []
         ary = [0, 4, 7, 10, 12]
@@ -1387,56 +1337,40 @@ mod tests {
         res << (10..4).bsearch {|i| 100 - ary[i] }
         res << (10..4).bsearch {|i| 300 - ary[i] }
         res << (10..4).bsearch {|i|  50 - ary[i] }
-        
+
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn reject() {
-        run_test(
             r##"
         (1..6).reject {|i| i % 2 == 0 }
         "##,
-        );
-        run_test(
             r##"
         (1...6).reject {|i| i % 2 == 0 }
         "##,
-        );
-        run_test(
             r##"
         (10..6).reject {|i| i % 2 == 0 }
         "##,
-        );
-    }
-
-    #[test]
-    fn min() {
-        run_test("(1..5).min");
-        run_test("(1...5).min");
-        run_test("(5..1).min");
-        run_test("(1..1).min");
-        run_test("(1...1).min");
-        run_test("('a'..'z').min");
-    }
-
-    #[test]
-    fn min_with_block() {
-        run_test("(1..5).min {|a, b| b <=> a }");
-        run_test("(1...5).min {|a, b| b <=> a }");
+            "(1..5).min",
+            "(1...5).min",
+            "(5..1).min",
+            "(1..1).min",
+            "(1...1).min",
+            "('a'..'z').min",
+            "(1..5).min {|a, b| b <=> a }",
+            "(1...5).min {|a, b| b <=> a }",
+        ]);
     }
 
     #[test]
     fn min_with_block_non_integer_result() {
         // Block returns Float: not a Fixnum, so cmpint_block_result
         // routes through the `> 0` / `< 0` dispatch path.
-        run_test("(1..5).min {|a, b| (a - b).to_f }");
-        run_test("(1..5).min {|a, b| (b - a).to_f }");
-        run_test("(1...5).min {|a, b| (a - b).to_f }");
         // Block returns BigInt: also a heap-allocated non-Fixnum.
-        run_test("(1..5).min {|a, b| (a - b) * (10 ** 30) }");
+        run_tests(&[
+            "(1..5).min {|a, b| (a - b).to_f }",
+            "(1..5).min {|a, b| (b - a).to_f }",
+            "(1...5).min {|a, b| (a - b).to_f }",
+            "(1..5).min {|a, b| (a - b) * (10 ** 30) }",
+        ]);
         // Custom object: both `>` and `<` are dispatched per pair
         // (CRuby's rb_cmpint semantics — observable by mocks).
         run_test(
@@ -1467,30 +1401,30 @@ mod tests {
     }
 
     #[test]
-    fn max() {
-        run_test("(1..5).max");
-        run_test("(1...5).max");
-        run_test("(5..1).max");
-        run_test("(1..1).max");
-        run_test("(1...1).max");
-        run_test("('a'..'z').max");
-    }
-
-    #[test]
-    fn max_with_block() {
-        run_test("(1..5).max {|a, b| b <=> a }");
-        run_test("(1...5).max {|a, b| b <=> a }");
+    fn max_max_with_block() {
+        run_tests(&[
+            "(1..5).max",
+            "(1...5).max",
+            "(5..1).max",
+            "(1..1).max",
+            "(1...1).max",
+            "('a'..'z').max",
+            "(1..5).max {|a, b| b <=> a }",
+            "(1...5).max {|a, b| b <=> a }",
+        ]);
     }
 
     #[test]
     fn max_with_block_non_integer_result() {
         // Block returns Float: not a Fixnum, so cmpint_block_result
         // routes through the `> 0` / `< 0` dispatch path.
-        run_test("(1..5).max {|a, b| (a - b).to_f }");
-        run_test("(1..5).max {|a, b| (b - a).to_f }");
-        run_test("(1...5).max {|a, b| (a - b).to_f }");
         // Block returns BigInt: also a heap-allocated non-Fixnum.
-        run_test("(1..5).max {|a, b| (a - b) * (10 ** 30) }");
+        run_tests(&[
+            "(1..5).max {|a, b| (a - b).to_f }",
+            "(1..5).max {|a, b| (b - a).to_f }",
+            "(1...5).max {|a, b| (a - b).to_f }",
+            "(1..5).max {|a, b| (a - b) * (10 ** 30) }",
+        ]);
         // Custom object whose `>` returns false: CRuby's rb_cmpint
         // then dispatches `<` too — so both are observed per pair.
         // Result is 1 (max never updates because cmp < 0).
@@ -1537,41 +1471,29 @@ mod tests {
     }
 
     #[test]
-    fn count() {
-        run_test("(1..5).count");
-        run_test("(1...5).count");
-        run_test("(5..1).count");
-        run_test("(1..1).count");
-        run_test("(1...1).count");
-    }
-
-    #[test]
-    fn minmax() {
-        run_test("(1..5).minmax");
-        run_test("(1...5).minmax");
-        run_test("(5..1).minmax");
-        run_test("(1..1).minmax");
-        run_test("(1...1).minmax");
-        run_test("('a'..'z').minmax");
-    }
-
-    #[test]
-    fn minmax_with_block() {
+    fn count_minmax() {
         // Non-fixnum range with block: walks via `to_a` / `succ`
         // and applies the block as comparator.
-        run_tests(&[
-            "(1..5).minmax {|a, b| b <=> a }",
-            r#"('a'..'e').minmax {|a, b| a <=> b }"#,
-            r#"('a'..'e').minmax {|a, b| b <=> a }"#,
-        ]);
-    }
-
-    #[test]
-    fn minmax_exclusive_non_numeric() {
         // Exclusive non-numeric range without a block: walk via
         // `each`/`succ` and use the last yielded element as the
         // max (CRuby behaviour). Used to raise TypeError.
-        run_test(r#"('a'...'e').minmax"#);
+        run_tests(&[
+            "(1..5).count",
+            "(1...5).count",
+            "(5..1).count",
+            "(1..1).count",
+            "(1...1).count",
+            "(1..5).minmax",
+            "(1...5).minmax",
+            "(5..1).minmax",
+            "(1..1).minmax",
+            "(1...1).minmax",
+            "('a'..'z').minmax",
+            "(1..5).minmax {|a, b| b <=> a }",
+            r#"('a'..'e').minmax {|a, b| a <=> b }"#,
+            r#"('a'..'e').minmax {|a, b| b <=> a }"#,
+            r#"('a'...'e').minmax"#,
+        ]);
     }
 
     #[test]
@@ -1629,7 +1551,21 @@ mod tests {
     }
 
     #[test]
-    fn cover() {
+    fn cover_step_percent() {
+        // `Range#step` (numeric, no block) returns an
+        // ArithmeticSequence — not a plain Enumerator. Spec
+        // sub-tests "returned Enumerator type" depend on this.
+        // Kind / introspection / size / first / last / inspect,
+        // plus beginless / endless variants.
+        // Iteration shape: inclusive vs exclusive end, integer vs
+        // float step. Batched through `run_tests` so the float case
+        // JIT-compiles the inclusive-positive `while cur <= e` loop
+        // before the integer case enters it — see #480 (deopt resume
+        // PC at loop-merge bridge was past the fused BinCmp, so the
+        // VM resumed at the bare CondBr with a stale `%dst`).
+        // `Range#%` is `Range#step` with a different inspect form
+        // — `((1..10).%(2))` vs `((1..10).step(2))` — but the
+        // underlying AS otherwise behaves identically.
         run_tests(&[
             "(1..10).cover?(5)",
             "(1..10).cover?(0)",
@@ -1640,17 +1576,6 @@ mod tests {
             "(1..10).cover?(0..5)",
             "(1..10).cover?(5..15)",
             "('a'..'z').cover?('m')",
-        ]);
-    }
-
-    #[test]
-    fn range_step_returns_arithmetic_sequence() {
-        // `Range#step` (numeric, no block) returns an
-        // ArithmeticSequence — not a plain Enumerator. Spec
-        // sub-tests "returned Enumerator type" depend on this.
-        // Kind / introspection / size / first / last / inspect,
-        // plus beginless / endless variants.
-        run_tests(&[
             "(1..10).step(2).class.name",
             "(1..10).step(2).is_a?(Enumerator)",
             "(1..10).step(2).is_a?(Enumerable)",
@@ -1666,31 +1591,10 @@ mod tests {
             "(1..10).step(2).last",
             "(1..10).step(2).last(2)",
             "(1..10).step(2).inspect",
-        ]);
-    }
-
-    #[test]
-    fn range_step_iteration() {
-        // Iteration shape: inclusive vs exclusive end, integer vs
-        // float step. Batched through `run_tests` so the float case
-        // JIT-compiles the inclusive-positive `while cur <= e` loop
-        // before the integer case enters it — see #480 (deopt resume
-        // PC at loop-merge bridge was past the fused BinCmp, so the
-        // VM resumed at the bare CondBr with a stale `%dst`).
-        run_tests(&[
             "(1.0..2.0).step(0.5).to_a",
             "(1..5).step(1).to_a",
             "(1...5).step(1).to_a",
             "(1..10).step(2).to_a",
-        ]);
-    }
-
-    #[test]
-    fn range_percent_arithmetic_sequence() {
-        // `Range#%` is `Range#step` with a different inspect form
-        // — `((1..10).%(2))` vs `((1..10).step(2))` — but the
-        // underlying AS otherwise behaves identically.
-        run_tests(&[
             "(1..10).%(2).class.name",
             "(1..10).%(2).is_a?(Enumerator::ArithmeticSequence)",
             "(1..10).%(2).to_a",

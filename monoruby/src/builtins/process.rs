@@ -626,21 +626,18 @@ mod tests {
         // CRuby, so each canonical name (ABRT not IOT for 6, CHLD not CLD
         // for 17, IO not POLL for 29) is verified implicitly. 16 is the
         // only gap in the range and returns nil.
-        run_test(r#"(0..31).map { |n| Signal.signame(n) }"#);
-    }
-
-    #[test]
-    fn signal_signame_invalid_returns_nil() {
+        //
         // Numbers outside the known range — including the 16 gap, the
         // boundary value 32, and large negative/positive values — all
         // return nil rather than raising.
-        run_test(
+        run_tests(&[
+            r#"(0..31).map { |n| Signal.signame(n) }"#,
             r#"
             [-1_000_000, -100, -1, 16, 32, 100, 1_000_000].map { |n|
               Signal.signame(n)
             }
             "#,
-        );
+        ]);
     }
 
     #[test]

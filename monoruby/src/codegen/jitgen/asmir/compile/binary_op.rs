@@ -923,31 +923,28 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn rem() {
-        run_test("a = 3456; a % 64");
-        run_test("a = 3456; a % 32");
-        run_test("a = 3456; a % 16");
-        run_test("a = 3456; a % 8");
-        run_test("a = 3456; a % 4");
-        run_test("a = 3456; a % 2");
-    }
-
-    #[test]
-    fn constant_folding() {
-        run_test("584+1+5-(3+91)*56");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) == 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) != 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) < 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) <= 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) > 0 then 1 else 0 end");
-        run_test("if 584+(1+5)-(3+91)*56%(1+5) >= 0 then 1 else 0 end");
-
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) == 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) != 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) < 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) <= 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) > 0 then 1 else 0 end");
-        run_test("if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then 1 else 0 end");
+    fn rem_and_constant_folding() {
+        run_tests(&[
+            "a = 3456; a % 64",
+            "a = 3456; a % 32",
+            "a = 3456; a % 16",
+            "a = 3456; a % 8",
+            "a = 3456; a % 4",
+            "a = 3456; a % 2",
+            "584+1+5-(3+91)*56",
+            "if 584+(1+5)-(3+91)*56%(1+5) == 0 then 1 else 0 end",
+            "if 584+(1+5)-(3+91)*56%(1+5) != 0 then 1 else 0 end",
+            "if 584+(1+5)-(3+91)*56%(1+5) < 0 then 1 else 0 end",
+            "if 584+(1+5)-(3+91)*56%(1+5) <= 0 then 1 else 0 end",
+            "if 584+(1+5)-(3+91)*56%(1+5) > 0 then 1 else 0 end",
+            "if 584+(1+5)-(3+91)*56%(1+5) >= 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) == 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) != 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) < 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) <= 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) > 0 then 1 else 0 end",
+            "if 58.4+(1.7+5)-(3+91.7)*56/(0.1+5) >= 0 then 1 else 0 end",
+        ]);
     }
 
     /// Loop JIT spill stress. The right-associated multiplication chain

@@ -727,85 +727,51 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn torigonometric() {
-        run_test("Math.cos 149");
-        run_test("Math.cos -14.97522");
-        run_test("Math.sin 149");
-        run_test("Math.sin -14.97522");
-        run_test("Math.tan 149");
-        run_test("Math.tan -14.97522");
-    }
-
-    #[test]
-    fn inverse_trig() {
-        run_test("Math.asin 0.5");
-        run_test("Math.acos 0.5");
-        run_test("Math.atan 1");
-        run_test("Math.atan2(1, 1)");
-        run_test("Math.atan2(0, -1)");
-    }
-
-    #[test]
-    fn hyperbolic() {
-        run_test("Math.sinh 1");
-        run_test("Math.cosh 1");
-        run_test("Math.tanh 1");
-        run_test("Math.asinh 1");
-        run_test("Math.acosh 2");
-        run_test("Math.atanh 0.5");
-    }
-
-    #[test]
-    fn log() {
-        run_test("Math.log10 149");
-        run_test("Math.log10 14.9");
-        run_test(
+    fn math() {
+        run_tests(&[
+            "Math.cos 149",
+            "Math.cos -14.97522",
+            "Math.sin 149",
+            "Math.sin -14.97522",
+            "Math.tan 149",
+            "Math.tan -14.97522",
+            "Math.asin 0.5",
+            "Math.acos 0.5",
+            "Math.atan 1",
+            "Math.atan2(1, 1)",
+            "Math.atan2(0, -1)",
+            "Math.sinh 1",
+            "Math.cosh 1",
+            "Math.tanh 1",
+            "Math.asinh 1",
+            "Math.acosh 2",
+            "Math.atanh 0.5",
+            "Math.log10 149",
+            "Math.log10 14.9",
             "Math.log10 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-        );
-        run_test("Math.log(1)");
-        run_test("Math.log(Math::E)");
-        run_test("Math.log(10, 10)");
-        run_test("Math.log2(1)");
-        run_test("Math.log2(8)");
-    }
-
-    #[test]
-    fn exp_test() {
-        run_test("Math.exp(0)");
-        run_test("Math.exp(1)");
-        run_test("Math.exp(-1)");
-    }
-
-    #[test]
-    fn error_functions() {
-        run_test("Math.erf(0)");
-        run_test("Math.erf(1)");
-        run_test("Math.erfc(0)");
-        run_test("Math.erfc(1)");
-    }
-
-    #[test]
-    fn gamma_test() {
-        run_test("Math.gamma(5)");
-        run_test("Math.gamma(1)");
-        run_test("Math.lgamma(5)");
-        run_test("Math.lgamma(1)");
-    }
-
-    #[test]
-    fn misc_math() {
-        run_test("Math.cbrt(27)");
-        run_test("Math.cbrt(-8)");
-        run_test("Math.hypot(3, 4)");
-        run_test("Math.ldexp(0.5, 2)");
-        run_test("Math.frexp(1024)");
-    }
-
-    #[test]
-    fn sqrt() {
-        run_test("Math.sqrt 128");
-        run_test("Math.sqrt 2192.56818");
-        run_test(
+            "Math.log(1)",
+            "Math.log(Math::E)",
+            "Math.log(10, 10)",
+            "Math.log2(1)",
+            "Math.log2(8)",
+            "Math.exp(0)",
+            "Math.exp(1)",
+            "Math.exp(-1)",
+            "Math.erf(0)",
+            "Math.erf(1)",
+            "Math.erfc(0)",
+            "Math.erfc(1)",
+            "Math.gamma(5)",
+            "Math.gamma(1)",
+            "Math.lgamma(5)",
+            "Math.lgamma(1)",
+            "Math.cbrt(27)",
+            "Math.cbrt(-8)",
+            "Math.hypot(3, 4)",
+            "Math.ldexp(0.5, 2)",
+            "Math.frexp(1024)",
+            "Math.sqrt 128",
+            "Math.sqrt 2192.56818",
             r#"
         class C
           include Math
@@ -815,12 +781,6 @@ mod tests {
         end
         C.new.f
         "#,
-        );
-    }
-
-    #[test]
-    fn implicit_to_f() {
-        run_test(
             r#"
             class MyNum < Numeric
               def to_f
@@ -829,8 +789,6 @@ mod tests {
             end
             Math.sqrt(MyNum.new)
             "#,
-        );
-        run_test(
             r#"
             class MyNum2 < Numeric
               def to_f
@@ -839,8 +797,6 @@ mod tests {
             end
             Math.sin(MyNum2.new)
             "#,
-        );
-        run_test(
             r#"
             class MyNum3 < Numeric
               def to_f
@@ -849,7 +805,39 @@ mod tests {
             end
             Math.cos(MyNum3.new)
             "#,
-        );
+            // Warm up the JIT with non-negative values, then invoke with a
+            // negative operand to exercise the inline-asm domain check.
+            r#"
+            begin
+              Math.sqrt(-3.7)
+            rescue =>e
+              e.to_s
+            end
+            "#,
+            r#"
+            begin
+              Math.sqrt(-Float::INFINITY)
+            rescue =>e
+              e.to_s
+            end
+            "#,
+            "Math.expm1(0)",
+            "Math.log1p(0)",
+            "Math.log(10**20)",
+            "Math.log2(10**20)",
+            "Math.log10(10**20)",
+            "Math.gamma(5)",
+            "Math.gamma(0.5)",
+            "Math.lgamma(1)",
+            "Math.lgamma(0.5)",
+            "Math.atanh(0)",
+            "Math.atanh(0.5)",
+            "Math.asin(Float::NAN).nan?",
+            "Math.acos(Float::NAN).nan?",
+            "Math.ldexp(0.5, 2)",
+            "Math.ldexp(1.0, 10)",
+            "Math.ldexp(0.5, -1)",
+        ]);
     }
 
     #[test]
@@ -859,33 +847,11 @@ mod tests {
         run_test_error("Math.asin(2)");
         run_test_error("Math.acos(2)");
         // NaN passthrough
-        run_test("Math.sqrt(Float::NAN).nan?");
-        run_test("Math.sqrt(Float::INFINITY).infinite?");
-        run_test("Math.log(Float::NAN).nan?");
-    }
-
-    #[test]
-    fn math_sqrt_jit_domain_error() {
-        // Warm up the JIT with non-negative values, then invoke with a
-        // negative operand to exercise the inline-asm domain check.
-        run_test(
-            r#"
-            begin
-              Math.sqrt(-3.7)
-            rescue =>e
-              e.to_s
-            end
-            "#,
-        );
-        run_test(
-            r#"
-            begin
-              Math.sqrt(-Float::INFINITY)
-            rescue =>e
-              e.to_s
-            end
-            "#,
-        );
+        run_tests(&[
+            "Math.sqrt(Float::NAN).nan?",
+            "Math.sqrt(Float::INFINITY).infinite?",
+            "Math.log(Float::NAN).nan?",
+        ]);
     }
 
     #[test]
@@ -896,41 +862,12 @@ mod tests {
 
     #[test]
     fn math_gamma_exact() {
-        run_test("Math.gamma(1)");
-        run_test("Math.gamma(5)");
-        run_test("Math.gamma(10)");
+        run_tests(&[
+            "Math.gamma(1)",
+            "Math.gamma(5)",
+            "Math.gamma(10)",
+        ]);
         run_test_error("Math.gamma(-Float::INFINITY)");
-    }
-
-    #[test]
-    fn math_expm1_log1p() {
-        run_test("Math.expm1(0)");
-        run_test("Math.log1p(0)");
-    }
-
-    #[test]
-    fn math_log_bigint() {
-        run_test("Math.log(10**20)");
-        run_test("Math.log2(10**20)");
-        run_test("Math.log10(10**20)");
-    }
-
-    #[test]
-    fn math_gamma_extended() {
-        run_test("Math.gamma(5)");
-        run_test("Math.gamma(0.5)");
-    }
-
-    #[test]
-    fn math_lgamma_extended() {
-        run_test("Math.lgamma(1)");
-        run_test("Math.lgamma(0.5)");
-    }
-
-    #[test]
-    fn math_atanh_extended() {
-        run_test("Math.atanh(0)");
-        run_test("Math.atanh(0.5)");
     }
 
     #[test]
@@ -938,21 +875,6 @@ mod tests {
         run_test("Math.acosh(1)");
         run_test_error("Math.acosh(0)");
         run_test("Math.acosh(Float::NAN).nan?");
-    }
-
-    #[test]
-    fn math_asin_acos_nan() {
-        run_test("Math.asin(Float::NAN).nan?");
-        run_test("Math.acos(Float::NAN).nan?");
-    }
-
-    #[test]
-    fn math_ldexp() {
-        run_tests(&[
-            "Math.ldexp(0.5, 2)",
-            "Math.ldexp(1.0, 10)",
-            "Math.ldexp(0.5, -1)",
-        ]);
     }
 
     #[test]

@@ -15,26 +15,14 @@ mod tests {
 
     #[test]
     fn to_s() {
-        run_test(r##"false.to_s"##);
-        run_test(r##"false.to_s.class"##);
-        run_test(r##"false.to_s == "false""##);
-        run_test(r##"false.to_s.equal?(false.to_s)"##);
-    }
-
-    #[test]
-    fn inspect() {
-        run_test(r##"false.inspect"##);
-    }
-
-    #[test]
-    fn class_name() {
-        run_test(r##"false.class"##);
-        run_test(r##"false.is_a?(FalseClass)"##);
-    }
-
-    #[test]
-    fn xor() {
         run_tests(&[
+            r##"false.to_s"##,
+            r##"false.to_s.class"##,
+            r##"false.to_s == "false""##,
+            r##"false.to_s.equal?(false.to_s)"##,
+            r##"false.inspect"##,
+            r##"false.class"##,
+            r##"false.is_a?(FalseClass)"##,
             r##"false ^ true"##,
             r##"false ^ false"##,
             r##"false ^ nil"##,
@@ -47,12 +35,6 @@ mod tests {
             r##"false.^ 100"##,
             r##"false.^ //"##,
             r##"false.^ "100""##,
-        ]);
-    }
-
-    #[test]
-    fn and() {
-        run_tests(&[
             r##"false & true"##,
             r##"false & false"##,
             r##"false & nil"##,
@@ -65,12 +47,6 @@ mod tests {
             r##"false.& 100"##,
             r##"false.& //"##,
             r##"false.& "100""##,
-        ]);
-    }
-
-    #[test]
-    fn or() {
-        run_tests(&[
             r##"false | true"##,
             r##"false | false"##,
             r##"false | nil"##,
@@ -83,15 +59,11 @@ mod tests {
             r##"false.| 100"##,
             r##"false.| //"##,
             r##"false.| "100""##,
+            r##"false == false"##,
+            r##"false == true"##,
+            r##"false == nil"##,
+            r##"false != true"##,
+            r##"false.equal?(false)"##,
         ]);
-    }
-
-    #[test]
-    fn equality() {
-        run_test(r##"false == false"##);
-        run_test(r##"false == true"##);
-        run_test(r##"false == nil"##);
-        run_test(r##"false != true"##);
-        run_test(r##"false.equal?(false)"##);
     }
 }

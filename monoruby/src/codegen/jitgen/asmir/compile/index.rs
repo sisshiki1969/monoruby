@@ -145,39 +145,33 @@ mod test {
 
     #[test]
     fn array_index() {
-        run_test(
+        run_tests(&[
             r##"
             a = [0,1,2,3,4,5]
             res = []
             -10.step(10,1) do |x| res << a[x] end
             res
         "##,
-        );
-        run_test(
             r##"
             a = [0,1,2,3,4,5]
             [a[-100000],a[-7],a[-6],a[-5],a[-4],a[-3],a[-2],a[-1],a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8],a[9],a[100000]]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn array_index_assign() {
-        run_test(
+        run_tests(&[
             r##"
             a = [nil, nil, nil, nil, nil]
             0.step(10,1) do |x| a[x] = x end
             a
         "##,
-        );
-        run_test(
             r##"
             a = [nil, nil, nil, nil, nil]
             -5.step(-1,1) do |x| a[x] = x end
             a
         "##,
-        );
-        run_test(
             r##"
             a = [0,1,2,3,4,5]
             a[-6] = 10
@@ -196,9 +190,9 @@ mod test {
             a[6] = 26
             [a,r]
         "##,
-        );
-        run_test("a = []; a[100] = 42; a");
-        run_test("a = []; a[100000] = 42; a");
+            "a = []; a[100] = 42; a",
+            "a = []; a[100000] = 42; a",
+        ]);
         run_test_error("a = [1,2]; a[-3] = 42");
         run_test_error("a = [1,2]; a[-100000] = 42");
     }

@@ -807,47 +807,41 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn ruby_constants_are_strings() {
-        run_test(r#"RUBY_VERSION.is_a?(String)"#);
-        run_test(r#"RUBY_DESCRIPTION.is_a?(String)"#);
-        run_test(r#"RUBY_ENGINE.is_a?(String)"#);
-        run_test(r#"RUBY_ENGINE_VERSION.is_a?(String)"#);
-        run_test(r#"RUBY_PLATFORM.is_a?(String)"#);
-        run_test(r#"RUBY_COPYRIGHT.is_a?(String)"#);
-        run_test(r#"RUBY_RELEASE_DATE.is_a?(String)"#);
-        run_test(r#"RUBY_REVISION.is_a?(String)"#);
-        run_test(r#"RUBY_PATCHLEVEL.is_a?(Integer)"#);
-    }
-
-    #[test]
-    fn ruby_string_constants_are_frozen() {
+    fn ruby_constants() {
         // ruby/spec asserts every String-typed RUBY_* constant
         // returns true from `.frozen?`.
-        run_test(r#"RUBY_VERSION.frozen?"#);
-        run_test(r#"RUBY_DESCRIPTION.frozen?"#);
-        run_test(r#"RUBY_ENGINE.frozen?"#);
-        run_test(r#"RUBY_ENGINE_VERSION.frozen?"#);
-        run_test(r#"RUBY_PLATFORM.frozen?"#);
-        run_test(r#"RUBY_COPYRIGHT.frozen?"#);
-        run_test(r#"RUBY_RELEASE_DATE.frozen?"#);
-        run_test(r#"RUBY_REVISION.frozen?"#);
-    }
-
-    #[test]
-    fn ruby_module_mirrors_constants() {
         // Ruby 4.0+ exposes a `Ruby` module that mirrors every
         // RUBY_* constant under a non-prefixed name. The mirrors
         // must share *object identity* with the top-level pair, so
         // `equal?` (not just `==`) succeeds.
-        run_test(r#"Ruby.is_a?(Module)"#);
-        run_test(r#"Ruby::VERSION.equal?(RUBY_VERSION)"#);
-        run_test(r#"Ruby::DESCRIPTION.equal?(RUBY_DESCRIPTION)"#);
-        run_test(r#"Ruby::ENGINE.equal?(RUBY_ENGINE)"#);
-        run_test(r#"Ruby::ENGINE_VERSION.equal?(RUBY_ENGINE_VERSION)"#);
-        run_test(r#"Ruby::PLATFORM.equal?(RUBY_PLATFORM)"#);
-        run_test(r#"Ruby::COPYRIGHT.equal?(RUBY_COPYRIGHT)"#);
-        run_test(r#"Ruby::RELEASE_DATE.equal?(RUBY_RELEASE_DATE)"#);
-        run_test(r#"Ruby::REVISION.equal?(RUBY_REVISION)"#);
-        run_test(r#"Ruby::PATCHLEVEL.equal?(RUBY_PATCHLEVEL)"#);
+        run_tests(&[
+            r#"RUBY_VERSION.is_a?(String)"#,
+            r#"RUBY_DESCRIPTION.is_a?(String)"#,
+            r#"RUBY_ENGINE.is_a?(String)"#,
+            r#"RUBY_ENGINE_VERSION.is_a?(String)"#,
+            r#"RUBY_PLATFORM.is_a?(String)"#,
+            r#"RUBY_COPYRIGHT.is_a?(String)"#,
+            r#"RUBY_RELEASE_DATE.is_a?(String)"#,
+            r#"RUBY_REVISION.is_a?(String)"#,
+            r#"RUBY_PATCHLEVEL.is_a?(Integer)"#,
+            r#"RUBY_VERSION.frozen?"#,
+            r#"RUBY_DESCRIPTION.frozen?"#,
+            r#"RUBY_ENGINE.frozen?"#,
+            r#"RUBY_ENGINE_VERSION.frozen?"#,
+            r#"RUBY_PLATFORM.frozen?"#,
+            r#"RUBY_COPYRIGHT.frozen?"#,
+            r#"RUBY_RELEASE_DATE.frozen?"#,
+            r#"RUBY_REVISION.frozen?"#,
+            r#"Ruby.is_a?(Module)"#,
+            r#"Ruby::VERSION.equal?(RUBY_VERSION)"#,
+            r#"Ruby::DESCRIPTION.equal?(RUBY_DESCRIPTION)"#,
+            r#"Ruby::ENGINE.equal?(RUBY_ENGINE)"#,
+            r#"Ruby::ENGINE_VERSION.equal?(RUBY_ENGINE_VERSION)"#,
+            r#"Ruby::PLATFORM.equal?(RUBY_PLATFORM)"#,
+            r#"Ruby::COPYRIGHT.equal?(RUBY_COPYRIGHT)"#,
+            r#"Ruby::RELEASE_DATE.equal?(RUBY_RELEASE_DATE)"#,
+            r#"Ruby::REVISION.equal?(RUBY_REVISION)"#,
+            r#"Ruby::PATCHLEVEL.equal?(RUBY_PATCHLEVEL)"#,
+        ]);
     }
 }

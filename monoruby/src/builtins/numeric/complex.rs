@@ -784,13 +784,15 @@ mod tests {
 
     #[test]
     fn complex() {
-        run_test(r#"4000000000000000000000000000000+5000000000000000000000000000000i"#);
-        run_test(r#"4.27+1.5i"#);
-        run_test(r#"+(4.27+1.5i)"#);
-        run_test(r#"-(4.27+1.5i)"#);
-        run_test(r#"4-5i"#);
-        run_test(r#"4000000000000000000000000000000-5000000000000000000000000000000i"#);
-        run_test(r#"4.27-1.5i"#);
+        run_tests(&[
+            r#"4000000000000000000000000000000+5000000000000000000000000000000i"#,
+            r#"4.27+1.5i"#,
+            r#"+(4.27+1.5i)"#,
+            r#"-(4.27+1.5i)"#,
+            r#"4-5i"#,
+            r#"4000000000000000000000000000000-5000000000000000000000000000000i"#,
+            r#"4.27-1.5i"#,
+        ]);
         let v = &["4.2-1.5i", "4+5i", "4.0+5.0i", "134", "1.34"];
         run_binop_tests(v, &["+", "-", "*", "==", "!="], v);
         run_binop_tests2(&["4.5-8.0i"], &["/"], &["0.5-2.0i"]);
@@ -800,29 +802,23 @@ mod tests {
         run_test_error(r#"(4.27-1.5i) * :5"#);
         run_test_error(r#"(4.5-8.0i) / :5"#);
 
-        run_test("Complex.polar(2.0)");
-        run_test("Complex.polar(2.0, 0)");
-        //run_test("Complex.polar(2, 0)");
-        run_test("Complex.rect(1)");
-        run_test("Complex.rect(1, 2)");
-        run_test("Complex.rectangular(1, 2)");
-    }
-
-    #[test]
-    fn abs() {
-        run_test("Complex(4, 5).abs");
-        run_test("Complex(4, 5).magnitude");
-    }
-
-    #[test]
-    fn rect() {
-        run_test("Complex(4, 5).rect");
-        run_test("Complex(4.7, 1.5).rect");
-    }
-
-    #[test]
-    fn eql() {
         run_tests(&[
+            "Complex.polar(2.0)",
+            "Complex.polar(2.0, 0)",
+            //run_test("Complex.polar(2, 0)");
+            "Complex.rect(1)",
+            "Complex.rect(1, 2)",
+            "Complex.rectangular(1, 2)",
+        ]);
+    }
+
+    #[test]
+    fn abs_2() {
+        run_tests(&[
+            "Complex(4, 5).abs",
+            "Complex(4, 5).magnitude",
+            "Complex(4, 5).rect",
+            "Complex(4.7, 1.5).rect",
             // true cases: same type components
             "Complex(1, 2).eql?(Complex(1, 2))",
             "Complex(1.0, 2.0).eql?(Complex(1.0, 2.0))",
@@ -857,88 +853,44 @@ mod tests {
     }
 
     #[test]
-    fn float_quo_complex() {
-        run_test("74620.09.quo(Complex(8,2))");
-        run_test("1.0.fdiv(Complex(8,2))");
-    }
-
-    #[test]
-    fn complex_accessors() {
-        // real, imaginary (alias imag) extract components.
+    fn float_quo_complex_2() {
         run_tests(&[
+            "74620.09.quo(Complex(8,2))",
+            "1.0.fdiv(Complex(8,2))",
+            // real, imaginary (alias imag) extract components.
             "Complex(3, 4).real",
             "Complex(3, 4).imaginary",
             "Complex(3, 4).imag",
             "Complex(3.5, -1.25).real",
             "Complex(3.5, -1.25).imaginary",
-        ]);
-    }
-
-    #[test]
-    fn complex_conjugate() {
-        run_tests(&[
             "Complex(3, 5).conjugate.to_s",
             "Complex(3, 5).conj.to_s",
             "Complex(3, -5).conjugate.to_s",
             "Complex(0, 0).conj.to_s",
-        ]);
-    }
-
-    #[test]
-    fn complex_abs2() {
-        run_tests(&[
             "Complex(3, 4).abs2",
             "Complex(-3, -4).abs2",
             "Complex(0, 0).abs2",
             "Complex(1.5, 2.5).abs2",
-        ]);
-    }
-
-    #[test]
-    fn complex_angle() {
-        // Each alias returns the same value.
-        run_test("Complex(1, 0).angle");
-        run_test("Complex(1, 0).arg");
-        run_test("Complex(1, 0).phase");
-        run_test("Complex(0, 1).angle");
-        run_test("Complex(-1, 0).angle");
-    }
-
-    #[test]
-    fn complex_i_constant() {
-        run_tests(&[
+            // Each alias returns the same value.
+            "Complex(1, 0).angle",
+            "Complex(1, 0).arg",
+            "Complex(1, 0).phase",
+            "Complex(0, 1).angle",
+            "Complex(-1, 0).angle",
             "Complex::I.real",
             "Complex::I.imaginary",
             "(Complex::I * Complex::I).to_s",
-        ]);
-    }
-
-    #[test]
-    fn complex_real_q_and_integer_q() {
-        run_tests(&[
             // Complex#real? always false.
             "Complex(1, 0).real?",
             "Complex(1, 2).real?",
             // Complex#integer? always false.
             "Complex(1, 0).integer?",
             "Complex(1, 2).integer?",
-        ]);
-    }
-
-    #[test]
-    fn complex_finite_infinite() {
-        run_tests(&[
             "Complex(1, 2).finite?",
             "Complex(1, 2).infinite?",
             "Complex(Float::INFINITY, 2).finite?",
             "Complex(Float::INFINITY, 2).infinite?",
             "Complex(1, Float::INFINITY).infinite?",
-        ]);
-    }
-
-    #[test]
-    fn complex_cmp() {
-        run_tests(&[
             // Real Complex vs real Complex.
             "Complex(5) <=> Complex(2)",
             "Complex(2) <=> Complex(3)",
@@ -951,37 +903,19 @@ mod tests {
             "(Complex(5, 1) <=> Complex(2)).nil?",
             "(Complex(1) <=> Complex(2, 1)).nil?",
             r#"(Complex(1) <=> "cmp").nil?"#,
-        ]);
-    }
-
-    #[test]
-    fn complex_integer_pow() {
-        // Integer exponent preserves integer-valued parts for the common
-        // non-negative-exponent cases (regression for the earlier
-        // `(3+4i) ** 1 == (3.0000...+4.0i)` bug).
-        run_tests(&[
+            // Integer exponent preserves integer-valued parts for the common
+            // non-negative-exponent cases (regression for the earlier
+            // `(3+4i) ** 1 == (3.0000...+4.0i)` bug).
             "(Complex(3, 4) ** 1).to_s",
             "(Complex(3, 4) ** 0).to_s",
             "(Complex(1, 1) ** 4).to_s",
             "(Complex(2, 0) ** 10).to_s",
-        ]);
-    }
-
-    #[test]
-    fn complex_fdiv() {
-        run_tests(&[
             "Complex(6, 8).fdiv(2).to_s",
             "Complex(6, 8).fdiv(2.0).to_s",
             "Complex(6, 8).fdiv(-4).to_s",
             // Non-numeric argument raises TypeError.
             r#"begin; Complex(6).fdiv([]); rescue TypeError; :te; end"#,
-        ]);
-    }
-
-    #[test]
-    fn complex_to_f_to_i_to_r() {
-        // Integer 0 imaginary is exact-zero; conversions succeed.
-        run_tests(&[
+            // Integer 0 imaginary is exact-zero; conversions succeed.
             "Complex(5, 0).to_f",
             "Complex(5, 0).to_i",
             "Complex(5, 0).to_r.to_s",
@@ -991,62 +925,26 @@ mod tests {
             r#"begin; Complex(5, 0.0).to_r; rescue RangeError; :re; end"#,
             // Non-zero imaginary also raises.
             r#"begin; Complex(5, 2).to_f; rescue RangeError; :re; end"#,
-        ]);
-    }
-
-    #[test]
-    fn complex_to_c_and_to_s_infinity_nan() {
-        run_tests(&[
             // to_c returns self (object identity).
             "Complex(3, 4).to_c.equal?(Complex(3, 4).to_c.to_c)",
             // to_s inserts `*` before `i` for non-finite imaginary parts.
             "Complex(1, Float::INFINITY).to_s",
             "Complex(1, -Float::INFINITY).to_s",
             "Complex(1, Float::NAN).to_s",
-        ]);
-    }
-
-    #[test]
-    fn complex_unary_minus() {
-        run_tests(&[
             "(-Complex(3, 4)).to_s",
             "(-Complex(-3, 4)).to_s",
             "(-Complex(0, 0)).to_s",
-        ]);
-    }
-
-    #[test]
-    fn complex_marshal_dump_and_hash() {
-        run_tests(&[
             // marshal_dump returns [real, imaginary].
             "Complex(1, 2).send(:marshal_dump)",
             // Equal complexes have equal hashes (stable).
             "Complex(1, 2).hash == Complex(1, 2).hash",
-        ]);
-    }
-
-    #[test]
-    fn complex_negative_positive_undefined() {
-        // Complex explicitly undefines negative? and positive?.
-        run_tests(&[
+            // Complex explicitly undefines negative? and positive?.
             r#"begin; Complex(1).negative?; rescue NoMethodError; :nm; end"#,
             r#"begin; Complex(1).positive?; rescue NoMethodError; :nm; end"#,
             "Complex(1).methods.include?(:negative?)",
             "Complex(1).methods.include?(:positive?)",
-        ]);
-    }
-
-    #[test]
-    fn complex_polar_instance() {
-        run_tests(&[
             "Complex(3, 4).polar.size",
             "Complex(3, 4).polar.first",
-        ]);
-    }
-
-    #[test]
-    fn complex_rationalize() {
-        run_tests(&[
             // Integer 0 imaginary: delegates to real part.
             "Complex(3, 0).rationalize.to_s",
             "Complex(Rational(1, 2), 0).rationalize.to_s",
