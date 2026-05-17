@@ -4925,6 +4925,33 @@ fn reverse_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(self_val)
 }
 
+/// Case mapping for a receiver in a Unicode but non-ASCII-compatible
+/// encoding (UTF-16/UTF-32): decode → `apply_case` → re-encode,
+/// preserving the encoding tag. Returns `None` for other encodings so
+/// the caller's normal `&str` path runs. (`expect_str` would fail on
+/// the UTF-16/32 byte stream.)
+fn unicode_noncompat_case(
+    self_val: Value,
+    op: CaseOp,
+    mode: CaseMode,
+) -> Option<RStringInner> {
+    let inner = self_val.is_rstring_inner()?;
+    let enc = inner.encoding();
+    if !matches!(
+        enc,
+        crate::value::Encoding::Utf16Le
+            | crate::value::Encoding::Utf16Be
+            | crate::value::Encoding::Utf32Le
+            | crate::value::Encoding::Utf32Be
+    ) {
+        return None;
+    }
+    let (decoded, _) = super::encoding::decode_utf16_32(inner.as_bytes(), enc);
+    let mapped = apply_case(&decoded, op, mode);
+    let bytes = super::encoding::encode_utf16_32(&mapped, enc);
+    Some(RStringInner::from_encoding_scanned(&bytes, enc))
+}
+
 ///
 /// ### String#upcase
 ///
@@ -4939,6 +4966,9 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Upcase, mode) {
             return Ok(Value::string_from_inner(fast));
         }
+    }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Upcase, mode) {
+        return Ok(Value::string_from_inner(r));
     }
     let s = self_val.expect_str(globals)?;
     // `apply_case` walks `chars()` and pushes whole scalars, so the
@@ -4967,6 +4997,14 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
         if changed {
             self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Upcase, mode) {
+        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(r);
             return Ok(lfp.self_val());
         }
         return Ok(Value::nil());
@@ -5002,6 +5040,9 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             return Ok(Value::string_from_inner(fast));
         }
     }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Downcase, mode) {
+        return Ok(Value::string_from_inner(r));
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Downcase, mode),
@@ -5025,6 +5066,14 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
         if changed {
             self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Downcase, mode) {
+        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(r);
             return Ok(lfp.self_val());
         }
         return Ok(Value::nil());
@@ -5065,6 +5114,9 @@ fn capitalize(
             return Ok(Value::string_from_inner(fast));
         }
     }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Capitalize, mode) {
+        return Ok(Value::string_from_inner(r));
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Capitalize, mode),
@@ -5093,6 +5145,14 @@ fn capitalize_(
         let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
         if changed {
             self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Capitalize, mode) {
+        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(r);
             return Ok(lfp.self_val());
         }
         return Ok(Value::nil());
@@ -5127,6 +5187,9 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             return Ok(Value::string_from_inner(fast));
         }
     }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Swapcase, mode) {
+        return Ok(Value::string_from_inner(r));
+    }
     let s = self_val.expect_str(globals)?;
     Ok(Value::string_from_str_with_encoding_of(
         &apply_case(s, CaseOp::Swapcase, mode),
@@ -5150,6 +5213,14 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
         if changed {
             self_val.replace_with_inner(result);
+            return Ok(lfp.self_val());
+        }
+        return Ok(Value::nil());
+    }
+    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Swapcase, mode) {
+        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
+        if changed {
+            self_val.replace_with_inner(r);
             return Ok(lfp.self_val());
         }
         return Ok(Value::nil());
@@ -10248,6 +10319,37 @@ mod tests {
               $DEBUG = false
             end
             "##,
+        ]);
+    }
+
+    #[test]
+    fn inspect_and_case_map_by_encoding() {
+        run_tests(&[
+            // UTF-16/UTF-32: decode, ASCII escaped normally, non-ASCII
+            // as \uXXXX / \u{XXXXX}.
+            r#""\a".encode("UTF-16LE").inspect"#,
+            r#""hello привет".encode("utf-16le").inspect"#,
+            r#""\u{1F600}".encode("UTF-16LE").inspect"#,
+            r#""\u{1F600}".encode("UTF-32BE").inspect"#,
+            // ASCII-compatible non-Unicode multibyte: \x{..} per char.
+            r#""\u{3042}".encode("EUC-JP").inspect"#,
+            r#""aあb".encode("Shift_JIS").inspect"#,
+            r#""あい".encode("EUC-JP").inspect"#,
+            // US-ASCII / ASCII-8BIT / ISO-8859: per-byte, >=0x80 -> \xHH.
+            r#""\xC2\xA9".dup.force_encoding("US-ASCII").inspect"#,
+            r#""A\x80B".dup.force_encoding("US-ASCII").inspect"#,
+            r#""\xA9".dup.force_encoding("ISO-8859-1").inspect"#,
+            r#""\t\xA9z".dup.force_encoding("ASCII-8BIT").inspect"#,
+            // Containers carry the element rule through.
+            r#"["aあb".encode("EUC-JP")].inspect"#,
+            r#"({ k: "x".encode("UTF-16BE") }).inspect"#,
+            // In-place / pure case mapping on UTF-16 preserves the
+            // encoding and matches the UTF-8 result.
+            r#"a = "äÖü HeLLo".encode("utf-16le"); a.upcase!; a.encode("UTF-8")"#,
+            r#"a = "äÖü HeLLo".encode("utf-16be"); a.downcase!; a.encode("UTF-8")"#,
+            r#"a = "äÖü HeLLo".encode("utf-32le"); a.swapcase!; a.encode("UTF-8")"#,
+            r#""äÖü heLLo".encode("utf-16le").capitalize.encode("UTF-8")"#,
+            r#""abc".encode("utf-16le").upcase.encoding.name"#,
         ]);
     }
 

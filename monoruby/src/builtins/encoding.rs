@@ -647,7 +647,7 @@ fn is_utf16_or_32(enc: crate::value::Encoding) -> bool {
     matches!(enc, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be)
 }
 
-fn decode_utf16_32(bytes: &[u8], enc: crate::value::Encoding) -> (String, bool) {
+pub(crate) fn decode_utf16_32(bytes: &[u8], enc: crate::value::Encoding) -> (String, bool) {
     use crate::value::Encoding as E;
     match enc {
         E::Utf16Le => decode_utf16_bytes(bytes, false),
@@ -658,7 +658,7 @@ fn decode_utf16_32(bytes: &[u8], enc: crate::value::Encoding) -> (String, bool) 
     }
 }
 
-fn encode_utf16_32(s: &str, enc: crate::value::Encoding) -> Vec<u8> {
+pub(crate) fn encode_utf16_32(s: &str, enc: crate::value::Encoding) -> Vec<u8> {
     use crate::value::Encoding as E;
     match enc {
         E::Utf16Le => encode_utf16_bytes(s, false),
