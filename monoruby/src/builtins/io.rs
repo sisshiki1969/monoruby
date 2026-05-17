@@ -26,8 +26,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
-    globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
-    globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "readlines", io_class_readlines, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
@@ -50,9 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "rewind", io_rewind, 0);
     globals.define_builtin_funcs(IO_CLASS, "eof?", &["eof"], io_eof_, 0);
     globals.define_builtin_func(IO_CLASS, "getbyte", io_getbyte, 0);
-    globals.define_builtin_func(IO_CLASS, "readbyte", io_readbyte, 0);
     globals.define_builtin_func(IO_CLASS, "getc", io_getc, 0);
-    globals.define_builtin_func(IO_CLASS, "readchar", io_readchar, 0);
     globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
     globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
@@ -490,58 +486,6 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::nil());
     }
     Ok(Value::string_from_vec(buf))
-}
-
-///
-/// ### IO#readline
-///
-/// - readline([NOT SUPPORTED] rs = $/, [NOT SUPPORTED] chomp: false) -> String
-/// - readline([NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
-/// - readline([NOT SUPPORTED] rs, [NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
-#[monoruby_builtin]
-fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_io_inner_mut().read_line()? {
-        Some(s) => s,
-        None => return Err(MonorubyErr::runtimeerr("end of file reached")),
-    };
-    Ok(Value::string(s))
-}
-
-///
-/// ### IO#each
-///
-/// - each(rs = $/, chomp: false) {|line| ... } -> self
-/// - each(limit, chomp: false) {|line| ... } -> self
-/// - each(rs, limit, chomp: false) {|line| ... } -> self
-/// - each(rs = $/, chomp: false) -> Enumerator
-/// - each(limit, chomp: false) -> Enumerator
-/// - each(rs, limit, chomp: false) -> Enumerator
-///
-/// - each_line(rs = $/, chomp: false) {|line| ... } -> self
-/// - each_line(limit, chomp: false) {|line| ... } -> self
-/// - each_line(rs, limit, chomp: false) {|line| ... } -> self
-/// - each_line(rs = $/, chomp: false) -> Enumerator
-/// - each_line(limit, chomp: false) -> Enumerator
-/// - each_line(rs, limit, chomp: false) -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/each.html]
-#[monoruby_builtin]
-fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    if let Some(bh) = lfp.block() {
-        let p = vm.get_block_data(globals, bh)?;
-        while let Some(s) = io.read_line()? {
-            vm.invoke_block(globals, &p, &[Value::string(s)])?;
-        }
-    } else {
-        return Err(MonorubyErr::runtimeerr(
-            "IO#each_line without block is not yet supported",
-        ));
-    };
-    Ok(lfp.self_val())
 }
 
 ///
@@ -1272,30 +1216,6 @@ fn io_getbyte(
     }
 }
 
-///
-/// ### IO#readbyte
-/// - readbyte -> Integer
-///
-/// Like `IO#getbyte` but raises `EOFError` at end of stream.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readbyte.html]
-#[monoruby_builtin]
-fn io_readbyte(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = io.read(Some(1))?;
-    if buf.is_empty() {
-        Err(MonorubyErr::runtimeerr("end of file reached"))
-    } else {
-        Ok(Value::integer(buf[0] as i64))
-    }
-}
-
 /// Read a single UTF-8 character (1-4 bytes) from the IO. Returns the bytes
 /// of the character, an empty Vec on EOF, or the first byte if the byte
 /// sequence is not valid UTF-8 (matching CRuby's invalid-byte behavior in
@@ -1348,30 +1268,6 @@ fn io_getc(
     let buf = read_one_char(io)?;
     if buf.is_empty() {
         Ok(Value::nil())
-    } else {
-        Ok(Value::string_from_vec(buf))
-    }
-}
-
-///
-/// ### IO#readchar
-/// - readchar -> String
-///
-/// Like `IO#getc` but raises `EOFError` at end of stream.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readchar.html]
-#[monoruby_builtin]
-fn io_readchar(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = read_one_char(io)?;
-    if buf.is_empty() {
-        Err(MonorubyErr::runtimeerr("end of file reached"))
     } else {
         Ok(Value::string_from_vec(buf))
     }
