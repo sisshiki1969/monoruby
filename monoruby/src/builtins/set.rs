@@ -57,6 +57,43 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "divide", divide, 0);
     globals.define_builtin_func(SET_CLASS, "reset", reset, 0);
     globals.define_builtin_func(SET_CLASS, "hash", set_hash, 0);
+    globals.define_builtin_func(SET_CLASS, "compare_by_identity", compare_by_identity, 0);
+    globals.define_builtin_func(SET_CLASS, "compare_by_identity?", compare_by_identity_q, 0);
+}
+
+///
+/// ### Set#compare_by_identity
+///
+/// Makes the set compare its members by identity. A `Set` is backed by
+/// a `Hash`, so this delegates to the hash's identity machinery.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/compare_by_identity.html]
+#[monoruby_builtin]
+fn compare_by_identity(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    lfp.expect_no_block()?;
+    lfp.self_val().as_hash().compare_by_identity(vm, globals)?;
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Set#compare_by_identity?
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/compare_by_identity=3f.html]
+#[monoruby_builtin]
+fn compare_by_identity_q(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    lfp.expect_no_block()?;
+    Ok(Value::bool(lfp.self_val().as_hash().is_compare_by_identity()))
 }
 
 /// Create a new empty Set (a Hash with class SET_CLASS).
@@ -359,7 +396,12 @@ fn set_inspect(
 #[monoruby_builtin]
 fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let keys = set_keys(lfp.self_val());
-    set_from_iter(keys.into_iter(), vm, globals)
+    let new_set = set_from_iter(keys.into_iter(), vm, globals)?;
+    // `compare_by_identity` persists across #dup / #clone.
+    if lfp.self_val().as_hash().is_compare_by_identity() {
+        new_set.as_hash().compare_by_identity(vm, globals)?;
+    }
+    Ok(new_set)
 }
 
 ///
@@ -568,6 +610,10 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         return Ok(Value::bool(false));
     }
     let self_val = lfp.self_val();
+    // A set comparing by identity is never equal to one that does not.
+    if self_val.as_hash().is_compare_by_identity() != other.as_hash().is_compare_by_identity() {
+        return Ok(Value::bool(false));
+    }
     let self_inner = self_val.as_hashmap_inner();
     let other_inner = other.as_hashmap_inner();
     if self_inner.len() != other_inner.len() {
@@ -1715,5 +1761,24 @@ mod tests {
             "s = Set[\"one\", \"two\", \"three\"]; \
              s.reject!.each { |x| x.size == 3 }; s.to_a",
         );
+    }
+
+    #[test]
+    fn set_compare_by_identity() {
+        run_tests(&[
+            r#"Set.new.compare_by_identity?"#,
+            r#"(s=Set.new; s.compare_by_identity.equal?(s))"#,
+            r#"(s=Set.new; s.compare_by_identity; s.compare_by_identity?)"#,
+            // distinct equal-value String objects are kept apart.
+            r#"(a="x"; b="x"; s=Set.new; s.compare_by_identity; s.merge([a,a,b]); s.size)"#,
+            // member? becomes identity-based.
+            r#"(e=[1]; s=Set.new; s<<e; before=s.member?(e.dup); s.compare_by_identity; [before, s.member?(e.dup), s.member?(e)])"#,
+            // a compare_by_identity set is never == a normal one.
+            r#"(Set[1,2].compare_by_identity == Set[1,2])"#,
+            r#"(a=Set[1,2]; a.compare_by_identity; b=Set[1,2]; b.compare_by_identity; a==b)"#,
+            // persists across dup / clone.
+            r#"(s=Set.new; s.compare_by_identity; [s.dup.compare_by_identity?, s.clone.compare_by_identity?])"#,
+            r#"(s=Set.new; s.compare_by_identity?)"#,
+        ]);
     }
 }
