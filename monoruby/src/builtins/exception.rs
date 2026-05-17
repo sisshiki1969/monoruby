@@ -627,24 +627,20 @@ mod tests {
 
     #[test]
     fn set_backtrace() {
-        run_test(
+        run_tests(&[
             r#"
             e = RuntimeError.new("test")
             e.set_backtrace(["foo.rb:1:in `bar'", "baz.rb:2:in `qux'"])
         "#,
-        );
-        run_test(
             r#"
             e = RuntimeError.new("test")
             e.set_backtrace("foo.rb:1:in `bar'")
         "#,
-        );
-        run_test(
             r#"
             e = RuntimeError.new("test")
             e.set_backtrace(nil)
         "#,
-        );
+        ]);
     }
 
     #[test]
@@ -732,7 +728,7 @@ mod tests {
 
     #[test]
     fn full_message() {
-        run_test(
+        run_tests(&[
             r#"
             begin
               raise "test error"
@@ -740,8 +736,6 @@ mod tests {
               e.full_message(order: :top).include?("test error")
             end
             "#,
-        );
-        run_test(
             r#"
             begin
               raise "test error"
@@ -749,7 +743,7 @@ mod tests {
               e.full_message(order: :top).include?("RuntimeError")
             end
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -771,9 +765,11 @@ mod tests {
 
     #[test]
     fn warning_module() {
-        run_test(r#"Warning.categories.sort"#);
-        run_test(r#"Warning[:strict_unused_block]"#);
-        run_test(r#"Warning.singleton_class.ancestors.include?(Warning)"#);
+        run_tests(&[
+            r#"Warning.categories.sort"#,
+            r#"Warning[:strict_unused_block]"#,
+            r#"Warning.singleton_class.ancestors.include?(Warning)"#,
+        ]);
         run_test_error(r#"Warning[42]"#);
         run_test_error(r#"Warning["noop"]"#);
         run_test_error(r#"Warning[:nope]"#);
@@ -781,110 +777,59 @@ mod tests {
     }
 
     // -- Exception#== ------------------------------------------------------
+    // -- Exception#exception ----------------------------------------------
 
-    /// Identity-equal exceptions are equal.
     #[test]
-    fn exception_eq_same_object() {
-        run_test(
+    fn exception_eq_and_method_merged() {
+        run_tests(&[
+            // Identity-equal exceptions are equal.
             r#"
             e = ArgumentError.new
             e == e
             "#,
-        );
-    }
-
-    /// Exceptions of the same class with the same nil message and no
-    /// backtrace are equal.
-    #[test]
-    fn exception_eq_same_class_no_message() {
-        run_test(r#"RuntimeError.new == RuntimeError.new"#);
-    }
-
-    /// Exceptions of the same class with the same explicit message are
-    /// equal.
-    #[test]
-    fn exception_eq_same_class_same_message() {
-        run_test(r#"TypeError.new("message") == TypeError.new("message")"#);
-    }
-
-    /// Different classes are not equal even with the same message.
-    #[test]
-    fn exception_eq_different_class() {
-        run_test(r#"RuntimeError.new("m") == TypeError.new("m")"#);
-    }
-
-    /// Different messages, same class — not equal.
-    #[test]
-    fn exception_eq_different_message() {
-        run_test(r#"RuntimeError.new("a") == RuntimeError.new("b")"#);
-    }
-
-    /// Identical user-set backtraces produce equal exceptions.
-    #[test]
-    fn exception_eq_with_same_backtrace() {
-        run_test(
+            // Exceptions of the same class with the same nil message and no
+            // backtrace are equal.
+            r#"RuntimeError.new == RuntimeError.new"#,
+            // Exceptions of the same class with the same explicit message are
+            // equal.
+            r#"TypeError.new("message") == TypeError.new("message")"#,
+            // Different classes are not equal even with the same message.
+            r#"RuntimeError.new("m") == TypeError.new("m")"#,
+            // Different messages, same class — not equal.
+            r#"RuntimeError.new("a") == RuntimeError.new("b")"#,
+            // Identical user-set backtraces produce equal exceptions.
             r#"
             one = TypeError.new("m"); one.set_backtrace(["here.rb:1"])
             two = TypeError.new("m"); two.set_backtrace(["here.rb:1"])
             one == two
             "#,
-        );
-    }
-
-    /// Differing user-set backtraces make exceptions unequal.
-    #[test]
-    fn exception_eq_with_different_backtrace() {
-        run_test(
+            // Differing user-set backtraces make exceptions unequal.
             r#"
             one = RuntimeError.new("m"); one.set_backtrace(["a.rb:1"])
             two = RuntimeError.new("m"); two.set_backtrace(["b.rb:2"])
             one == two
             "#,
-        );
-    }
-
-    /// Comparing an exception against a non-Exception returns false
-    /// without raising.
-    #[test]
-    fn exception_eq_against_non_exception() {
-        run_test(r#"RuntimeError.new("m") == "m""#);
-    }
-
-    // -- Exception#exception ----------------------------------------------
-
-    /// `e.exception` with no argument returns self.
-    #[test]
-    fn exception_method_no_arg_returns_self() {
-        run_test(
+            // Comparing an exception against a non-Exception returns false
+            // without raising.
+            r#"RuntimeError.new("m") == "m""#,
+            // `e.exception` with no argument returns self.
             r#"
             e = RuntimeError.new("m")
             e.exception.equal?(e)
             "#,
-        );
-    }
-
-    /// `e.exception(self)` returns self.
-    #[test]
-    fn exception_method_self_arg_returns_self() {
-        run_test(
+            // `e.exception(self)` returns self.
             r#"
             e = RuntimeError.new("m")
             e.exception(e).equal?(e)
             "#,
-        );
-    }
-
-    /// `e.exception("new")` returns a fresh same-class exception with
-    /// the new message.
-    #[test]
-    fn exception_method_with_new_message() {
-        run_test(
+            // `e.exception("new")` returns a fresh same-class exception with
+            // the new message.
             r#"
             e = RuntimeError.new("m")
             e2 = e.exception("new")
             [e2.class, e2.message, e2.equal?(e)]
             "#,
-        );
+        ]);
     }
 
     /// `e.exception("new")` is created via #dup so subclass-defined
@@ -909,48 +854,32 @@ mod tests {
 
     // -- Exception#backtrace / set_backtrace -------------------------------
 
-    /// A fresh, never-raised exception has nil backtrace.
     #[test]
-    fn backtrace_nil_when_unraised_and_unset() {
-        run_test(r#"Exception.new.backtrace"#);
-    }
-
-    /// `set_backtrace(nil)` clears any stored backtrace; subsequent
-    /// `backtrace` returns nil.
-    #[test]
-    fn set_backtrace_nil_clears() {
-        run_test(
+    fn backtrace_set_backtrace_merged() {
+        run_tests(&[
+            // A fresh, never-raised exception has nil backtrace.
+            r#"Exception.new.backtrace"#,
+            // `set_backtrace(nil)` clears any stored backtrace; subsequent
+            // `backtrace` returns nil.
             r#"
             e = RuntimeError.new("m")
             e.set_backtrace(["x.rb:1"])
             e.set_backtrace(nil)
             e.backtrace
             "#,
-        );
-    }
-
-    /// `set_backtrace(String)` stores it as a single-element array.
-    #[test]
-    fn set_backtrace_string_wrapped() {
-        run_test(
+            // `set_backtrace(String)` stores it as a single-element array.
             r#"
             e = RuntimeError.new("m")
             e.set_backtrace("here.rb:1")
             e.backtrace
             "#,
-        );
-    }
-
-    /// An Array of Strings is stored as-is and reflected in #backtrace.
-    #[test]
-    fn set_backtrace_array_roundtrip() {
-        run_test(
+            // An Array of Strings is stored as-is and reflected in #backtrace.
             r#"
             e = RuntimeError.new("m")
             e.set_backtrace(["a.rb:1", "b.rb:2"])
             e.backtrace
             "#,
-        );
+        ]);
     }
 
     /// Bad inputs to set_backtrace raise TypeError.

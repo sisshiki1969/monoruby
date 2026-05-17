@@ -1005,12 +1005,6 @@ mod tests {
             "1.angle",
             "(-1).angle",
             "0.angle",
-        ]);
-    }
-
-    #[test]
-    fn float() {
-        run_tests(&[
             "4.87.to_i",
             "-2.18.to_i",
             "4.7777.to_f",
@@ -1021,12 +1015,6 @@ mod tests {
             "(-3.0).div(-2)",
             "(-37.044).abs",
             "37.044.magnitude",
-        ]);
-    }
-
-    #[test]
-    fn round() {
-        run_tests(&[
             "1.2.floor",
             "(-1.2).floor",
             "1.2.floor(1)",
@@ -1042,12 +1030,6 @@ mod tests {
             "(1000 * Math::PI).round(3)",
             "(1000 * Math::PI).round(0)",
             "(1000 * Math::PI).round(-3)",
-        ]);
-    }
-
-    #[test]
-    fn ceil_truncate_round_large_ndigits() {
-        run_tests(&[
             // ndigits > 9 would overflow 10i32.pow() before the fix
             "1.123456789.ceil(15)",
             "1.123456789.floor(15)",
@@ -1058,12 +1040,6 @@ mod tests {
             "123456789.0.floor(-15)",
             "123456789.0.truncate(-15)",
             "123456789.0.round(-15)",
-        ]);
-    }
-
-    #[test]
-    fn finite() {
-        run_tests(&[
             "(1/0.0).finite?",
             "(-1/0.0).finite?",
             "(Float::NAN).finite?",
@@ -1076,37 +1052,17 @@ mod tests {
             "(-1/0.0).nan?",
             "(Float::NAN).nan?",
             "(5.5).nan?",
-        ]);
-    }
-
-    #[test]
-    fn float_division_by_zero() {
-        run_tests(&[
             "(0.0/0).nan?",
             "(0.0/0.0).nan?",
             "1.0/0 == Float::INFINITY",
             "-1.0/0 == -Float::INFINITY",
             "1.0/0.0 == Float::INFINITY",
-        ]);
-    }
-
-    #[test]
-    fn next_float() {
-        run_test("1.0.next_float");
-        run_test("0.0.next_float");
-        run_test("(-1.0).next_float");
-    }
-
-    #[test]
-    fn prev_float() {
-        run_test("1.0.prev_float");
-        run_test("0.0.prev_float");
-        run_test("(-1.0).prev_float");
-    }
-
-    #[test]
-    fn zero_positive_negative() {
-        run_tests(&[
+            "1.0.next_float",
+            "0.0.next_float",
+            "(-1.0).next_float",
+            "1.0.prev_float",
+            "0.0.prev_float",
+            "(-1.0).prev_float",
             "0.0.zero?",
             "1.0.zero?",
             "(-1.0).zero?",
@@ -1205,17 +1161,17 @@ mod tests {
             // to_int alias
             "3.7.to_int",
             "(-3.7).to_int",
+            // BigInt fallback (exceeds i63)
+            "(2.0**62).to_i",
+            "(-(2.0**62) - 1).to_i",
+            "(2.0**63).to_i",
+            "(1.0e18).to_i",
+            "(-1.0e18).to_i",
+            // NaN/Infinity raise FloatDomainError (tested through JIT warmup)
+            "begin; Float::NAN.to_i; rescue => e; e.class.name; end",
+            "begin; Float::INFINITY.to_i; rescue => e; e.class.name; end",
+            "begin; (-Float::INFINITY).to_i; rescue => e; e.class.name; end",
         ]);
-        // BigInt fallback (exceeds i63)
-        run_test("(2.0**62).to_i");
-        run_test("(-(2.0**62) - 1).to_i");
-        run_test("(2.0**63).to_i");
-        run_test("(1.0e18).to_i");
-        run_test("(-1.0e18).to_i");
-        // NaN/Infinity raise FloatDomainError (tested through JIT warmup)
-        run_test("begin; Float::NAN.to_i; rescue => e; e.class.name; end");
-        run_test("begin; Float::INFINITY.to_i; rescue => e; e.class.name; end");
-        run_test("begin; (-Float::INFINITY).to_i; rescue => e; e.class.name; end");
     }
 
     #[test]
@@ -1351,23 +1307,11 @@ mod tests {
             "Float::NAN.to_s.encoding.to_s",
             "Float::INFINITY.to_s.encoding.to_s",
             "1.0.inspect.encoding.to_s",
-        ]);
-    }
-
-    #[test]
-    fn float_quo() {
-        run_test("6.0.quo(2)");
-        run_test("6.0.quo(2.0)");
-    }
-
-    #[test]
-    fn float_eql() {
-        run_tests(&["1.0.eql?(1.0)", "1.0.eql?(1)", "1.0.eql?(1.1)"]);
-    }
-
-    #[test]
-    fn float_constants() {
-        run_tests(&[
+            "6.0.quo(2)",
+            "6.0.quo(2.0)",
+            "1.0.eql?(1.0)",
+            "1.0.eql?(1)",
+            "1.0.eql?(1.1)",
             "Float::MIN",
             "Float::DIG",
             "Float::MANT_DIG",
@@ -1394,12 +1338,6 @@ mod tests {
             "Float::INFINITY.denominator",
             "(-Float::INFINITY).denominator",
             "1.5.denominator",
-        ]);
-    }
-
-    #[test]
-    fn float_divmod_quotient_type() {
-        run_tests(&[
             "3.8.divmod(1)",
             "(-3.8).divmod(1)",
             "3.8.divmod(0.5)",

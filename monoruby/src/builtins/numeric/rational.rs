@@ -593,62 +593,42 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn rational_basic() {
-        run_test("Rational(3, 4).numerator");
-        run_test("Rational(3, 4).denominator");
-        run_test("Rational(6, 4).numerator");
-    }
-
-    #[test]
-    fn rational_arithmetic() {
-        run_test("(Rational(1, 2) + Rational(1, 3)).to_s");
-        run_test("(Rational(1, 2) - Rational(1, 3)).to_s");
-        run_test("(Rational(2, 3) * Rational(3, 4)).to_s");
-        run_test("(Rational(2, 3) / Rational(3, 4)).to_s");
-    }
-
-    #[test]
-    fn rational_comparison() {
-        run_test("Rational(1, 2) == Rational(2, 4)");
-        run_test("Rational(1, 2) == 0.5");
-        run_test("(Rational(1, 2) <=> Rational(1, 3))");
-    }
-
-    #[test]
-    fn rational_conversion() {
-        run_test("Rational(3, 2).to_f");
-        run_test("Rational(7, 2).to_i");
-        run_test("Rational(3, 4).to_s");
-        run_test("Rational(3, 4).inspect");
-    }
-
-    #[test]
-    fn rational_predicates() {
-        run_test("Rational(0, 1).zero?");
-        run_test("Rational(1, 2).positive?");
-        run_test("Rational(-1, 2).negative?");
-        run_test("Rational(1, 2).integer?");
-    }
-
-    #[test]
-    fn rational_unary() {
-        run_test("(-Rational(3, 4)).to_s");
-        run_test("Rational(-3, 4).abs.to_s");
-    }
-
-    #[test]
-    fn rational_power() {
-        run_test("(Rational(2, 3) ** 2).to_s");
-        run_test("(Rational(2, 3) ** -1).to_s");
+    fn rational_basic_arithmetic_comparison_conversion_predicates_unary_power() {
+        run_tests(&[
+            "Rational(3, 4).numerator",
+            "Rational(3, 4).denominator",
+            "Rational(6, 4).numerator",
+            "(Rational(1, 2) + Rational(1, 3)).to_s",
+            "(Rational(1, 2) - Rational(1, 3)).to_s",
+            "(Rational(2, 3) * Rational(3, 4)).to_s",
+            "(Rational(2, 3) / Rational(3, 4)).to_s",
+            "Rational(1, 2) == Rational(2, 4)",
+            "Rational(1, 2) == 0.5",
+            "(Rational(1, 2) <=> Rational(1, 3))",
+            "Rational(3, 2).to_f",
+            "Rational(7, 2).to_i",
+            "Rational(3, 4).to_s",
+            "Rational(3, 4).inspect",
+            "Rational(0, 1).zero?",
+            "Rational(1, 2).positive?",
+            "Rational(-1, 2).negative?",
+            "Rational(1, 2).integer?",
+            "(-Rational(3, 4)).to_s",
+            "Rational(-3, 4).abs.to_s",
+            "(Rational(2, 3) ** 2).to_s",
+            "(Rational(2, 3) ** -1).to_s",
+        ]);
     }
 
     #[test]
     fn rational_power_extended() {
         // Rational ** Rational (integer denominator)
-        run_test("(Rational(2, 3) ** Rational(2, 1)).to_s");
-        run_test("(Rational(2, 3) ** Rational(-1, 1)).to_s");
-        // Rational ** Float
-        run_test("(Rational(4, 1) ** 0.5).class");
+        run_tests(&[
+            "(Rational(2, 3) ** Rational(2, 1)).to_s",
+            "(Rational(2, 3) ** Rational(-1, 1)).to_s",
+            // Rational ** Float
+            "(Rational(4, 1) ** 0.5).class",
+        ]);
         // Zero base with negative exponent
         run_test_error("Rational(0, 1) ** -1");
         run_test_error("Rational(0, 1) ** Rational(-1, 1)");
@@ -659,12 +639,14 @@ mod tests {
     // Fix 3: Negative Rational ** fractional exponent returns Complex
     #[test]
     fn rational_pow_negative_base_complex() {
-        // Rational(-8,1) ** Rational(1,3) should return Complex
-        run_test("(Rational(-8, 1) ** Rational(1, 3)).class");
-        // Rational(-8,1) ** 0.333... should return Complex
-        run_test("(Rational(-8, 1) ** (1.0/3)).class");
-        // Integer ** Rational also goes through coerce to Rational **
-        run_test("((-8) ** Rational(1, 3)).class");
+        run_tests(&[
+            // Rational(-8,1) ** Rational(1,3) should return Complex
+            "(Rational(-8, 1) ** Rational(1, 3)).class",
+            // Rational(-8,1) ** 0.333... should return Complex
+            "(Rational(-8, 1) ** (1.0/3)).class",
+            // Integer ** Rational also goes through coerce to Rational **
+            "((-8) ** Rational(1, 3)).class",
+        ]);
     }
 
     #[test]
@@ -674,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn rational_floor_ceil_round_ndigits() {
+    fn rational_floor_ceil_round_ndigits_cmp_coerce_div_float_zero_ne_eq_cmp() {
         run_tests(&[
             "Rational(7, 3).floor.to_s",
             "Rational(7, 3).ceil.to_s",
@@ -684,12 +666,6 @@ mod tests {
             "Rational(7, 3).floor(1).class",
             "Rational(7, 3).ceil(1).class",
             "Rational(7, 3).round(1).class",
-        ]);
-    }
-
-    #[test]
-    fn rational_round_large_ndigits() {
-        run_tests(&[
             // Absurdly large ndigits should not hang
             "Rational(3, 2).round(2_097_171)",
             "Rational(3, 2).floor(2_097_171)",
@@ -697,25 +673,11 @@ mod tests {
             "Rational(3, 2).truncate(2_097_171)",
             // Denominator=1 (integer rational)
             "Rational(6, 1).round(1000000)",
-        ]);
-    }
-
-    #[test]
-    fn rational_cmp_coerce() {
-        run_test("Rational(1, 2) <=> 0.5");
-        run_test("Rational(1, 2) <=> 1");
-        run_test("Rational(1, 2) <=> 'a'");
-    }
-
-    #[test]
-    fn rational_div_float_zero() {
-        run_test("(Rational(1, 2) / 0.0).to_s");
-        run_test("(Rational(-1, 2) / 0.0).to_s");
-    }
-
-    #[test]
-    fn rational_ne() {
-        run_tests(&[
+            "Rational(1, 2) <=> 0.5",
+            "Rational(1, 2) <=> 1",
+            "Rational(1, 2) <=> 'a'",
+            "(Rational(1, 2) / 0.0).to_s",
+            "(Rational(-1, 2) / 0.0).to_s",
             "Rational(1, 2) != Rational(1, 2)",
             "Rational(1, 2) != Rational(1, 3)",
             "Rational(1, 2) != 0.5",
@@ -723,34 +685,16 @@ mod tests {
             "Rational(2, 1) != 2",
             "Rational(2, 1) != 3",
             "Rational(1, 2) != :foo",
-        ]);
-    }
-
-    #[test]
-    fn rational_eq_extended() {
-        run_tests(&[
             // BigInt comparison
             "Rational(10**20, 1) == 10**20",
             "Rational(10**20, 1) == 10**19",
             // Coerce path (unknown type)
             "Rational(1, 2) == :foo",
-        ]);
-    }
-
-    #[test]
-    fn rational_cmp_extended() {
-        run_tests(&[
             // BigInt comparison
             "(Rational(10**20, 1) <=> 10**20)",
             "(Rational(1, 2) <=> 10**20)",
             // nil return for non-comparable
             "(Rational(1, 2) <=> :foo)",
-        ]);
-    }
-
-    #[test]
-    fn rational_floor() {
-        run_tests(&[
             // ndigits == 0 (returns Integer)
             "Rational(7, 3).floor",
             "Rational(-7, 3).floor",
@@ -764,12 +708,6 @@ mod tests {
             "Rational(-123, 1).floor(-1)",
             // ndigits_sufficient: 1/4 is exact at 2 decimal places
             "Rational(1, 4).floor(2).to_s",
-        ]);
-    }
-
-    #[test]
-    fn rational_ceil() {
-        run_tests(&[
             "Rational(7, 3).ceil",
             "Rational(-7, 3).ceil",
             "Rational(6, 3).ceil",
@@ -777,12 +715,6 @@ mod tests {
             "Rational(-7, 3).ceil(1).to_s",
             "Rational(123, 1).ceil(-1)",
             "Rational(-123, 1).ceil(-1)",
-        ]);
-    }
-
-    #[test]
-    fn rational_truncate() {
-        run_tests(&[
             "Rational(7, 3).truncate",
             "Rational(-7, 3).truncate",
             "Rational(6, 3).truncate",
@@ -817,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn rational_arithmetic_with_int_and_float() {
+    fn rational_arithmetic_int_float_new_nme_div_pow_to_f_rationalize_trunc_marshal() {
         run_tests(&[
             // Rational + Integer
             "(Rational(1, 2) + 1).to_s",
@@ -835,13 +767,7 @@ mod tests {
             "(Rational(1, 2) / 3).to_s",
             // Rational / Float
             "(Rational(1, 2) / 0.5).class",
-        ]);
-    }
-
-    #[test]
-    fn rational_new_raises_no_method_error() {
-        // Rational.new is undefined; calling it must raise NoMethodError.
-        run_test(
+            // Rational.new is undefined; calling it must raise NoMethodError.
             r#"
             begin
               Rational.new(1)
@@ -851,13 +777,7 @@ mod tests {
               e.class
             end
             "#,
-        );
-    }
-
-    #[test]
-    fn rational_div_divmod_mod_float_zero() {
-        // Rational#div(0.0) must raise ZeroDivisionError (not FloatDomainError).
-        run_tests(&[
+            // Rational#div(0.0) must raise ZeroDivisionError (not FloatDomainError).
             r#"begin; Rational(3, 4).div(0.0); rescue ZeroDivisionError; :zd; end"#,
             r#"begin; Rational(3, 4).divmod(0.0); rescue ZeroDivisionError; :zd; end"#,
             r#"begin; Rational(3, 4) % 0.0; rescue ZeroDivisionError; :zd; end"#,
@@ -865,49 +785,29 @@ mod tests {
             r#"begin; Rational(3, 4).div(0); rescue ZeroDivisionError; :zd; end"#,
             // Non-numeric argument must raise TypeError (not NoMethodError).
             r#"begin; Rational(3, 4).div([]); rescue TypeError; :te; end"#,
-        ]);
-    }
-
-    #[test]
-    fn rational_pow_bigint_and_special_bases() {
-        // Rational(1) ** BigInt stays Rational(1).
-        run_test("(Rational(1) ** (10 ** 20)).to_s");
-        // Rational(-1) ** even/odd BigInt.
-        run_test("(Rational(-1) ** (10 ** 20)).to_s");
-        run_test("(Rational(-1) ** ((10 ** 20) + 1)).to_s");
-        // Rational(0) ** negative Float returns Infinity (no error).
-        run_test("(Rational(0, 1) ** -1.0).infinite?");
-        // Rational(2) ** BigInt raises ArgumentError ("exponent is too large").
-        run_test(
+            // Rational(1) ** BigInt stays Rational(1).
+            "(Rational(1) ** (10 ** 20)).to_s",
+            // Rational(-1) ** even/odd BigInt.
+            "(Rational(-1) ** (10 ** 20)).to_s",
+            "(Rational(-1) ** ((10 ** 20) + 1)).to_s",
+            // Rational(0) ** negative Float returns Infinity (no error).
+            "(Rational(0, 1) ** -1.0).infinite?",
+            // Rational(2) ** BigInt raises ArgumentError ("exponent is too large").
             r#"begin; Rational(2) ** (10 ** 20); rescue ArgumentError; :ae; end"#,
-        );
-    }
-
-    #[test]
-    fn rational_to_f_large_numerator_denominator() {
-        // Both numerator and denominator exceed f64 range; ratio is finite.
-        // Matches CRuby's Rational#to_f for ~10^308 magnitude inputs.
-        run_test(
+            // Both numerator and denominator exceed f64 range; ratio is finite.
+            // Matches CRuby's Rational#to_f for ~10^308 magnitude inputs.
             r#"
             num = 10 ** 310
             den = 2 * 10 ** 310
             Rational(num, den).to_f
             "#,
-        );
-        // Extremely large magnitudes with exact 500:1 ratio.
-        run_test(
+            // Extremely large magnitudes with exact 500:1 ratio.
             r#"
             num = 5 * 10 ** 600
             den = 10 ** 598
             Rational(num, den).to_f
             "#,
-        );
-    }
-
-    #[test]
-    fn rational_rationalize_negative() {
-        // Stern-Brocot on negative self must negate and restore sign.
-        run_tests(&[
+            // Stern-Brocot on negative self must negate and restore sign.
             "Rational(-5404319552844595, 18014398509481984).rationalize(Rational(1, 10)).to_s",
             "Rational(-5404319552844595, 18014398509481984).rationalize(0.05).to_s",
             "Rational(-5404319552844595, 18014398509481984).rationalize(0.001).to_s",
@@ -915,25 +815,13 @@ mod tests {
             "Rational(5404319552844595, 18014398509481984).rationalize(Rational(1, 10)).to_s",
             // No argument returns self.
             "Rational(3, 4).rationalize.to_s",
-        ]);
-    }
-
-    #[test]
-    fn rational_truncate_strict_precision() {
-        // truncate rejects non-Integer precision without calling to_int.
-        run_tests(&[
+            // truncate rejects non-Integer precision without calling to_int.
             r#"begin; Rational(7, 3).truncate(nil); rescue TypeError => e; e.message; end"#,
             r#"begin; Rational(7, 3).truncate(1.0); rescue TypeError => e; e.message; end"#,
             r#"begin; Rational(7, 3).truncate(""); rescue TypeError => e; e.message; end"#,
             // Integer precision still works.
             "Rational(7, 3).truncate(2).to_s",
-        ]);
-    }
-
-    #[test]
-    fn rational_marshal_dump_private() {
-        // marshal_dump is a private instance method returning [num, den].
-        run_tests(&[
+            // marshal_dump is a private instance method returning [num, den].
             "Rational.private_instance_methods(false).include?(:marshal_dump)",
             "Rational(3, 5).send(:marshal_dump)",
         ]);
