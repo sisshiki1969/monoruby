@@ -6,6 +6,46 @@ use std::cmp::Ordering;
 pub mod pack;
 mod printable;
 
+/// Width (in bytes) of the *valid* EUC-JP character starting at
+/// `b[0]`, or `None` if no valid character starts there. Encodes the
+/// onigenc EUC-JP rules: ASCII (1); `0x8E`+kana (2, JIS X 0201);
+/// `0x8F`+2 (3, JIS X 0212); `0xA1..=0xFE` pair (2, JIS X 0208).
+pub fn eucjp_char_width(b: &[u8]) -> Option<usize> {
+    let c0 = *b.first()?;
+    match c0 {
+        0x00..=0x7f => Some(1),
+        0x8e => match b.get(1) {
+            Some(0xa1..=0xdf) => Some(2),
+            _ => None,
+        },
+        0x8f => match (b.get(1), b.get(2)) {
+            (Some(0xa1..=0xfe), Some(0xa1..=0xfe)) => Some(3),
+            _ => None,
+        },
+        0xa1..=0xfe => match b.get(1) {
+            Some(0xa1..=0xfe) => Some(2),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Width of the *valid* Shift_JIS / CP932 character starting at
+/// `b[0]`, or `None`. ASCII & `0xA1..=0xDF` half-width kana are
+/// single byte; a `0x81..=0x9F | 0xE0..=0xFC` lead with a
+/// `0x40..=0x7E | 0x80..=0xFC` trail is a double-byte character.
+pub fn sjis_char_width(b: &[u8]) -> Option<usize> {
+    let c0 = *b.first()?;
+    match c0 {
+        0x00..=0x7f | 0xa1..=0xdf => Some(1),
+        0x81..=0x9f | 0xe0..=0xfc => match b.get(1) {
+            Some(0x40..=0x7e | 0x80..=0xfc) => Some(2),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[monoruby_object]
 pub struct RString(Value);
 
@@ -261,7 +301,21 @@ impl Encoding {
                     CodeRange::Broken
                 }
             }
-            Encoding::EucJp | Encoding::Sjis(_) => CodeRange::Valid,
+            Encoding::EucJp | Encoding::Sjis(_) => {
+                let char_w = if matches!(self, Encoding::EucJp) {
+                    eucjp_char_width
+                } else {
+                    sjis_char_width
+                };
+                let mut i = 0;
+                while i < bytes.len() {
+                    match char_w(&bytes[i..]) {
+                        Some(w) => i += w,
+                        None => return CodeRange::Broken,
+                    }
+                }
+                CodeRange::Valid
+            }
             // ISO-2022-JP: validate via encoding_rs's decoder so
             // truncated escape sequences / invalid JIS X 0208
             // codepoints aren't silently accepted as Valid. The

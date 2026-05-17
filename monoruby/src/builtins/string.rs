@@ -6152,7 +6152,14 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
                 "replacement must be a valid byte sequence",
             ));
         }
-        if r_enc != self_enc && !(r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible()) {
+        // An all-ASCII replacement is compatible with any
+        // ASCII-compatible target encoding (CRuby allows
+        // `s.scrub("?")` regardless of `s`'s encoding).
+        let repl_ascii_only = r_inner.as_bytes().iter().all(|b| *b < 0x80);
+        let compatible = r_enc == self_enc
+            || (r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible())
+            || (repl_ascii_only && self_enc.is_ascii_compatible());
+        if !compatible {
             return Err(MonorubyErr::argumenterr(format!(
                 "incompatible character encodings: {} and {}",
                 self_enc.name(),
@@ -6192,6 +6199,27 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
                     out.push(b);
                 } else {
                     out.extend_from_slice(repl.as_bytes());
+                }
+            }
+        }
+        Encoding::EucJp | Encoding::Sjis(_) => {
+            let char_w = if matches!(enc, Encoding::EucJp) {
+                eucjp_char_width
+            } else {
+                sjis_char_width
+            };
+            let mut i = 0;
+            while i < bytes.len() {
+                if let Some(w) = char_w(&bytes[i..]) {
+                    out.extend_from_slice(&bytes[i..i + w]);
+                    i += w;
+                } else {
+                    // An invalid byte that cannot begin a valid
+                    // character is its own ill-formed subpart
+                    // (CRuby replaces each independently, e.g.
+                    // SJIS `\xFF\xFE` -> two replacements).
+                    out.extend_from_slice(repl.as_bytes());
+                    i += 1;
                 }
             }
         }
@@ -10779,6 +10807,27 @@ mod tests {
             r#""漢A字".encode("Shift_JIS")[5]"#,
             r#""日本語".encode("EUC-JP")[0, 2].encode("UTF-8")"#,
             r#""日本語".encode("Shift_JIS")[1, 2].encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_validity_and_scrub() {
+        // P2: per-encoding validity + scrub for EUC-JP / Shift_JIS.
+        run_tests(&[
+            r#""あい".encode("EUC-JP").valid_encoding?"#,
+            r#""漢字".encode("Shift_JIS").valid_encoding?"#,
+            r#""abc".force_encoding("EUC-JP").valid_encoding?"#,
+            r#""\xFF\xFEok".dup.force_encoding("EUC-JP").valid_encoding?"#,
+            r#""a\x80b".dup.force_encoding("Shift_JIS").valid_encoding?"#,
+            r#""\x8F\xA2\xAF".dup.force_encoding("EUC-JP").valid_encoding?"#, // JIS X 0212
+            r#""a\x80b".dup.force_encoding("Shift_JIS").scrub("?")"#,
+            // valid JIS X 0208 left unchanged (compare by bytes to
+            // avoid String#inspect's non-UTF-8 rendering).
+            r#""a\xA1\xA1b".dup.force_encoding("EUC-JP").scrub("?").bytes"#,
+            // each lone invalid byte is its own replacement.
+            r#"("\x82\xA0\xFF\xFE".dup.force_encoding("Shift_JIS")).scrub("?").encode("UTF-8")"#,
+            // valid content is returned unchanged (scrub is a no-op).
+            r#""漢字".encode("EUC-JP").scrub.encode("UTF-8")"#,
         ]);
     }
 }
