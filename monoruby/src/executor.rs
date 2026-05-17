@@ -167,6 +167,17 @@ impl Executor {
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         // $PROGRAM_NAME is an alias of $0 in Ruby; make them share one entry.
         globals.alias_global_variable(IdentId::get_id("$PROGRAM_NAME"), IdentId::get_id("$0"));
+        // $VERBOSE default mirrors CRuby: -W0 -> nil (silent), -W1
+        // (the default) -> false, -W2 -> true. `$-v` / `$-w` are
+        // aliases of $VERBOSE.
+        let verbose = match crate::globals::WARNING.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => Value::nil(),
+            2 => Value::bool(true),
+            _ => Value::bool(false),
+        };
+        globals.set_gvar(IdentId::get_id("$VERBOSE"), verbose);
+        globals.alias_global_variable(IdentId::get_id("$-v"), IdentId::get_id("$VERBOSE"));
+        globals.alias_global_variable(IdentId::get_id("$-w"), IdentId::get_id("$VERBOSE"));
         let mut executor = Self::default();
         let path = dirs::home_dir()
             .unwrap()

@@ -217,6 +217,72 @@ module Warning
   extend self
 end
 
+module Kernel
+  # Faithful Kernel#warn: combine the (flattened) messages, gate by
+  # $VERBOSE / Warning[category], then delegate to Warning.warn so a
+  # user-overridden Warning.warn takes effect (matches CRuby).
+  def warn(*messages, uplevel: nil, category: nil)
+    messages = messages.flatten
+    return nil if messages.empty?
+
+    unless category.nil?
+      if category.is_a?(Symbol)
+        # already a Symbol
+      elsif category.respond_to?(:to_sym)
+        category = category.to_sym
+        unless category.is_a?(Symbol)
+          raise TypeError, "can't convert to Symbol"
+        end
+      else
+        raise TypeError,
+              "no implicit conversion of #{category.class} into Symbol"
+      end
+    end
+
+    # $VERBOSE == nil silences all warnings.
+    return nil if $VERBOSE.nil?
+
+    # Category gating: outside verbose mode a known but disabled
+    # category suppresses the message; an unknown category is passed
+    # through.
+    if category && $VERBOSE != true
+      enabled =
+        begin
+          Warning[category]
+        rescue ArgumentError
+          true
+        end
+      return nil unless enabled
+    end
+
+    str = +""
+    unless uplevel.nil?
+      uplevel = __to_int(uplevel)
+      raise ArgumentError, "negative level (#{uplevel})" if uplevel < 0
+      loc = caller_locations(uplevel + 1, 1)
+      if loc && (loc = loc.first)
+        str << "#{loc.path}:#{loc.lineno}: warning: "
+      end
+    end
+    messages.each do |m|
+      s = m.to_s
+      str << s
+      str << "\n" unless s.end_with?("\n")
+    end
+
+    # Pass the category keyword, but fall back to a positional-only
+    # call if Warning.warn was redefined without keyword support
+    # (matches CRuby, and stays robust when Warning.warn is a mock).
+    begin
+      Warning.warn(str, category: category)
+    rescue ArgumentError
+      Warning.warn(str)
+    end
+    nil
+  end
+  module_function :warn
+end
+
 class Process
   CLOCK_REALTIME = 0
   CLOCK_MONOTONIC = 1
