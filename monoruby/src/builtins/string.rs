@@ -10185,6 +10185,73 @@ mod tests {
     }
 
     #[test]
+    fn sprintf_negative_radix_and_flags() {
+        run_tests(&[
+            // Negative two's-complement (`..`) with precision / width /
+            // `0` flag (pads with the radix-1 fill digit).
+            r##""%b" % -10"##,
+            r##""%.8b" % -10"##,
+            r##""%.10b" % -10"##,
+            r##""%010b" % -10"##,
+            r##""%-10b" % -10"##,
+            r##""%#010b" % -10"##,
+            r##""%.5o" % -10"##,
+            r##""%08o" % -10"##,
+            r##""%#o" % -10"##,
+            r##""%.5x" % -10"##,
+            r##""%08x" % -10"##,
+            r##""%#010x" % -255"##,
+            r##""%X" % -255"##,
+            r##""% b" % -10"##,
+            r##""%+x" % -10"##,
+            // Negative BigInt two's-complement.
+            r##""%b" % -(2**64 + 5)"##,
+            r##""%o" % -(2**64 + 5)"##,
+            r##""%x" % -(2**100)"##,
+            r##""%X" % -(2**100)"##,
+            r##""%.70b" % -(2**64 + 5)"##,
+            r##""% x" % -(2**64 + 5)"##,
+            // `%a` zero padding goes after the `0x` prefix.
+            r##""%020a" % 195.625"##,
+            r##""%020.3a" % 195.625"##,
+            r##""%-20a" % 195.625"##,
+            r##""%a" % -2.5"##,
+            // `%s` / `%p` precision counts characters, not bytes.
+            r##""%.2s" % "été""##,
+            r##""%.5s" % "héllo wörld""##,
+            r##""%.3p" % "abcdef""##,
+            r##""[%.1p]" % [[1]]"##,
+            // Non-finite floats are space-padded even with `0`.
+            r##""%010E" % (-1e1020)"##,
+            r##""%010E" % 1e1020"##,
+            r##""%010f" % (1.0/0)"##,
+            r##""%+010g" % (-1.0/0)"##,
+            r##""%010E" % (0.0/0)"##,
+            // `$DEBUG` true => ArgumentError for unused arguments.
+            r##"
+            begin
+              $DEBUG = true
+              "%s" % [1, 2, 3]
+            rescue ArgumentError
+              :arg_error
+            ensure
+              $DEBUG = false
+            end
+            "##,
+            r##"
+            begin
+              $DEBUG = true
+              "" % [1, 2, 3]
+            rescue ArgumentError
+              :arg_error
+            ensure
+              $DEBUG = false
+            end
+            "##,
+        ]);
+    }
+
+    #[test]
     fn string_clear_in_place() {
         run_tests(&[
             r##"s = +"hello"; s.clear; s"##,

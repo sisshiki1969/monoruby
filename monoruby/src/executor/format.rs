@@ -1,5 +1,6 @@
 use super::*;
 use crate::value::IntegerBase;
+use num::Signed;
 
 /// Apply integer precision: pad digits with leading zeros to at
 /// least `prec` digits. Special-case: precision 0 with value 0
@@ -91,7 +92,9 @@ fn format_float_with_flags(
         ""
     };
     let body = format!("{}{}", sign, s);
-    if zero_flag && width > body.len() {
+    // Non-finite values (`Inf`/`NaN`) are never zero-padded, even with
+    // the `0` flag — CRuby pads them with spaces.
+    if zero_flag && f.is_finite() && width > body.len() {
         let pad = width - sign.len();
         format!("{}{:0>w$}", sign, s, w = pad)
     } else {
@@ -350,62 +353,82 @@ fn normalize_sci_exponent(s: &str) -> String {
     }
 }
 
-/// Format a negative integer in base for Ruby's two's complement representation.
-/// Ruby uses `..f01` style for negative hex, `..7401` for negative octal, etc.
-///
-/// Algorithm: take abs value, format in base, compute (base-1)-complement + 1,
-/// strip leading fill digits (keeping one), prefix with `..`.
-fn format_neg_twos_complement(val: i64, base: u32, uppercase: bool) -> String {
+/// Minimal digit run (one leading fill digit kept) for Ruby's `..`
+/// two's-complement notation, plus the fill character itself, computed
+/// from the *absolute value's* base-`base` digit string (lowercase).
+fn neg_tc_minimal_from_abs(abs_digits: &str, base: u32, uppercase: bool) -> (char, String) {
     let max_digit = base - 1;
-    let fill_char = if uppercase {
-        char::from_digit(max_digit, base)
-            .unwrap()
-            .to_ascii_uppercase()
-    } else {
-        char::from_digit(max_digit, base).unwrap()
+    let fill = {
+        let c = char::from_digit(max_digit, base).unwrap();
+        if uppercase { c.to_ascii_uppercase() } else { c }
     };
-
-    let abs_val = (val as i128).unsigned_abs() as u64;
-    // Format absolute value in base
-    let abs_digits: Vec<u32> = {
-        let s = match base {
-            16 => format!("{:x}", abs_val),
-            8 => format!("{:o}", abs_val),
-            2 => format!("{:b}", abs_val),
-            _ => unreachable!(),
-        };
-        s.chars().map(|c| c.to_digit(base).unwrap()).collect()
-    };
-
-    // Compute (base-1)-complement: each digit d -> (base-1) - d
-    let mut complement: Vec<u32> = abs_digits.iter().map(|&d| max_digit - d).collect();
-
-    // Add 1 (with carry)
+    let abs: Vec<u32> = abs_digits
+        .chars()
+        .map(|c| c.to_digit(base).unwrap())
+        .collect();
+    // (base-1)-complement of each digit, then +1 with carry.
+    let mut comp: Vec<u32> = abs.iter().map(|&d| max_digit - d).collect();
     let mut carry = 1u32;
-    for d in complement.iter_mut().rev() {
-        let sum = *d + carry;
-        *d = sum % base;
-        carry = sum / base;
+    for d in comp.iter_mut().rev() {
+        let s = *d + carry;
+        *d = s % base;
+        carry = s / base;
     }
-    // If there's still carry, we need to prepend, but for Ruby's format
-    // it just means more fill digits (which get stripped anyway)
-
-    // Convert digits to chars
-    let result: String = complement
+    let s: String = comp
         .iter()
         .map(|&d| {
             let c = char::from_digit(d, base).unwrap();
             if uppercase { c.to_ascii_uppercase() } else { c }
         })
         .collect();
-
-    // Strip leading fill chars but keep one
-    let stripped = result.trim_start_matches(fill_char);
-    if stripped.is_empty() {
-        format!("..{}", fill_char)
+    let stripped = s.trim_start_matches(fill);
+    let digits = if stripped.is_empty() {
+        fill.to_string()
     } else {
-        format!("..{}{}", fill_char, stripped)
+        format!("{}{}", fill, stripped)
+    };
+    (fill, digits)
+}
+
+/// Assemble a negative `%b/%o/%x` value in Ruby's `..` two's-complement
+/// notation, honouring precision, the (`0b`/`0x`) prefix, width, the
+/// `0` flag (pads with the fill digit, right after `..`) and `-`.
+#[allow(clippy::too_many_arguments)]
+fn format_neg_tc(
+    abs_digits: &str,
+    base: u32,
+    uppercase: bool,
+    precision: Option<usize>,
+    prefix: &str,
+    width: usize,
+    zero_flag: bool,
+    minus_flag: bool,
+) -> String {
+    let (fill, mut digits) = neg_tc_minimal_from_abs(abs_digits, base, uppercase);
+    // Precision P => at least `max(min_len, P - 2)` digits after `..`
+    // (the `..` accounts for two of the requested precision digits).
+    if let Some(p) = precision {
+        let target = std::cmp::max(digits.len(), p.saturating_sub(2));
+        while digits.len() < target {
+            digits.insert(0, fill);
+        }
     }
+    let total = |d: &str| prefix.len() + 2 + d.len();
+    if zero_flag && !minus_flag && width > total(&digits) {
+        while total(&digits) < width {
+            digits.insert(0, fill);
+        }
+        format!("{}..{}", prefix, digits)
+    } else {
+        let body = format!("{}..{}", prefix, digits);
+        apply_width(&body, width, minus_flag, ' ')
+    }
+}
+
+/// Truncate `s` to at most `n` characters (Ruby string precision counts
+/// characters, not bytes).
+fn take_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
 }
 
 /// Format integer for %b/%B/%o/%x/%X with sign, prefix, and flags.
@@ -993,8 +1016,8 @@ impl Executor {
                         ));
                     };
                     if let Some(prec) = precision {
-                        if s.len() > prec {
-                            s.truncate(prec);
+                        if s.chars().count() > prec {
+                            s = take_chars(&s, prec);
                         }
                     }
                     apply_width(&s, width, minus_flag, ' ')
@@ -1013,6 +1036,10 @@ impl Executor {
                     } else {
                         val.inspect(&globals.store)
                     };
+                    let s = match precision {
+                        Some(prec) if s.chars().count() > prec => take_chars(&s, prec),
+                        _ => s,
+                    };
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 'd' | 'i' | 'u' => {
@@ -1028,153 +1055,155 @@ impl Executor {
                 }
                 'b' | 'B' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
+                    let (is_neg, abs_digits, pos_digits) = match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            if plus_flag || space_flag {
-                                // `+`/space disables two's-complement and
-                                // uses sign-magnitude (`-1010`).
-                                let digits = apply_int_precision(
-                                    &format!("{:b}", v.unsigned_abs()),
-                                    precision,
-                                );
-                                let prefix = if hash_flag {
-                                    if ch == 'B' { "0B" } else { "0b" }
-                                } else {
-                                    ""
-                                };
-                                format_int_with_prefix(
-                                    true, &digits, prefix, width, zero_flag, minus_flag,
-                                    plus_flag, space_flag,
-                                )
-                            } else {
-                                let tc = format_neg_twos_complement(v, 2, ch == 'B');
-                                let prefix = if hash_flag {
-                                    if ch == 'B' { "0B" } else { "0b" }
-                                } else {
-                                    ""
-                                };
-                                let body = format!("{}{}", prefix, tc);
-                                apply_width(&body, width, minus_flag, ' ')
-                            }
+                            (true, format!("{:b}", v.unsigned_abs()), None)
                         }
-                        _ => {
-                            let digits = match ival {
-                                IntegerBase::Fixnum(v) => format!("{:b}", v),
-                                IntegerBase::BigInt(v) => format!("{:b}", v),
-                            };
-                            let digits = apply_int_precision(&digits, precision);
-                            let is_zero = digits == "0";
-                            let prefix = if hash_flag && !is_zero {
-                                if ch == 'B' { "0B" } else { "0b" }
-                            } else {
-                                ""
-                            };
+                        IntegerBase::Fixnum(v) => (false, String::new(), Some(format!("{:b}", v))),
+                        IntegerBase::BigInt(v) if v.is_negative() => {
+                            (true, format!("{:b}", -v), None)
+                        }
+                        IntegerBase::BigInt(v) => {
+                            (false, String::new(), Some(format!("{:b}", v)))
+                        }
+                    };
+                    if is_neg {
+                        let prefix = if hash_flag {
+                            if ch == 'B' { "0B" } else { "0b" }
+                        } else {
+                            ""
+                        };
+                        if plus_flag || space_flag {
+                            // `+`/space disables two's-complement and
+                            // uses sign-magnitude (`-1010`).
+                            let digits = apply_int_precision(&abs_digits, precision);
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
-                                space_flag,
+                                true, &digits, prefix, width, zero_flag, minus_flag,
+                                plus_flag, space_flag,
+                            )
+                        } else {
+                            format_neg_tc(
+                                &abs_digits, 2, ch == 'B', precision, prefix, width,
+                                zero_flag, minus_flag,
                             )
                         }
+                    } else {
+                        let digits = apply_int_precision(&pos_digits.unwrap(), precision);
+                        let is_zero = digits == "0";
+                        let prefix = if hash_flag && !is_zero {
+                            if ch == 'B' { "0B" } else { "0b" }
+                        } else {
+                            ""
+                        };
+                        format_int_with_prefix(
+                            false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                            space_flag,
+                        )
                     }
                 }
                 'o' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
+                    let (is_neg, abs_digits, pos_digits) = match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            if plus_flag || space_flag {
-                                let digits = apply_int_precision(
-                                    &format!("{:o}", v.unsigned_abs()),
-                                    precision,
-                                );
-                                let prefix = if hash_flag { "0" } else { "" };
-                                format_int_with_prefix(
-                                    true, &digits, prefix, width, zero_flag, minus_flag,
-                                    plus_flag, space_flag,
-                                )
-                            } else {
-                                let tc = format_neg_twos_complement(v, 8, false);
-                                apply_width(&tc, width, minus_flag, ' ')
-                            }
+                            (true, format!("{:o}", v.unsigned_abs()), None)
                         }
-                        _ => {
-                            let digits = match ival {
-                                IntegerBase::Fixnum(v) => format!("{:o}", v),
-                                IntegerBase::BigInt(v) => format!("{:o}", v),
-                            };
-                            let digits = apply_int_precision(&digits, precision);
-                            let prefix = if hash_flag {
-                                if digits.starts_with('0') { "" } else { "0" }
-                            } else {
-                                ""
-                            };
+                        IntegerBase::Fixnum(v) => (false, String::new(), Some(format!("{:o}", v))),
+                        IntegerBase::BigInt(v) if v.is_negative() => {
+                            (true, format!("{:o}", -v), None)
+                        }
+                        IntegerBase::BigInt(v) => {
+                            (false, String::new(), Some(format!("{:o}", v)))
+                        }
+                    };
+                    if is_neg {
+                        if plus_flag || space_flag {
+                            let digits = apply_int_precision(&abs_digits, precision);
+                            let prefix = if hash_flag { "0" } else { "" };
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
-                                space_flag,
+                                true, &digits, prefix, width, zero_flag, minus_flag,
+                                plus_flag, space_flag,
+                            )
+                        } else {
+                            format_neg_tc(
+                                &abs_digits, 8, false, precision, "", width, zero_flag,
+                                minus_flag,
                             )
                         }
+                    } else {
+                        let digits = apply_int_precision(&pos_digits.unwrap(), precision);
+                        let prefix = if hash_flag {
+                            if digits.starts_with('0') { "" } else { "0" }
+                        } else {
+                            ""
+                        };
+                        format_int_with_prefix(
+                            false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                            space_flag,
+                        )
                     }
                 }
                 'x' | 'X' => {
                     let ival = val.coerce_to_integer(self, globals)?;
-                    match ival {
+                    let upper = ch == 'X';
+                    let (is_neg, abs_digits, pos_digits) = match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            if plus_flag || space_flag {
-                                let digits = apply_int_precision(
-                                    &if ch == 'X' {
-                                        format!("{:X}", v.unsigned_abs())
-                                    } else {
-                                        format!("{:x}", v.unsigned_abs())
-                                    },
-                                    precision,
-                                );
-                                let prefix = if hash_flag {
-                                    if ch == 'X' { "0X" } else { "0x" }
-                                } else {
-                                    ""
-                                };
-                                format_int_with_prefix(
-                                    true, &digits, prefix, width, zero_flag, minus_flag,
-                                    plus_flag, space_flag,
-                                )
-                            } else {
-                                let tc = format_neg_twos_complement(v, 16, ch == 'X');
-                                let prefix = if hash_flag {
-                                    if ch == 'X' { "0X" } else { "0x" }
-                                } else {
-                                    ""
-                                };
-                                let body = format!("{}{}", prefix, tc);
-                                apply_width(&body, width, minus_flag, ' ')
-                            }
+                            (true, format!("{:x}", v.unsigned_abs()), None)
                         }
-                        _ => {
-                            let digits = match ival {
-                                IntegerBase::Fixnum(v) => {
-                                    if ch == 'X' {
-                                        format!("{:X}", v)
-                                    } else {
-                                        format!("{:x}", v)
-                                    }
-                                }
-                                IntegerBase::BigInt(v) => {
-                                    if ch == 'X' {
-                                        format!("{:X}", v)
-                                    } else {
-                                        format!("{:x}", v)
-                                    }
-                                }
-                            };
-                            let digits = apply_int_precision(&digits, precision);
-                            let is_zero = digits == "0";
-                            let prefix = if hash_flag && !is_zero {
-                                if ch == 'X' { "0X" } else { "0x" }
+                        IntegerBase::Fixnum(v) => {
+                            let d = if upper {
+                                format!("{:X}", v)
                             } else {
-                                ""
+                                format!("{:x}", v)
                             };
+                            (false, String::new(), Some(d))
+                        }
+                        IntegerBase::BigInt(v) if v.is_negative() => {
+                            (true, format!("{:x}", -v), None)
+                        }
+                        IntegerBase::BigInt(v) => {
+                            let d = if upper {
+                                format!("{:X}", v)
+                            } else {
+                                format!("{:x}", v)
+                            };
+                            (false, String::new(), Some(d))
+                        }
+                    };
+                    if is_neg {
+                        let prefix = if hash_flag {
+                            if upper { "0X" } else { "0x" }
+                        } else {
+                            ""
+                        };
+                        if plus_flag || space_flag {
+                            let mag = if upper {
+                                abs_digits.to_uppercase()
+                            } else {
+                                abs_digits.clone()
+                            };
+                            let digits = apply_int_precision(&mag, precision);
                             format_int_with_prefix(
-                                false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
-                                space_flag,
+                                true, &digits, prefix, width, zero_flag, minus_flag,
+                                plus_flag, space_flag,
+                            )
+                        } else {
+                            format_neg_tc(
+                                &abs_digits, 16, upper, precision, prefix, width,
+                                zero_flag, minus_flag,
                             )
                         }
+                    } else {
+                        let digits = apply_int_precision(&pos_digits.unwrap(), precision);
+                        let is_zero = digits == "0";
+                        let prefix = if hash_flag && !is_zero {
+                            if upper { "0X" } else { "0x" }
+                        } else {
+                            ""
+                        };
+                        format_int_with_prefix(
+                            false, &digits, prefix, width, zero_flag, minus_flag, plus_flag,
+                            space_flag,
+                        )
                     }
                 }
                 'f' => {
@@ -1244,9 +1273,33 @@ impl Executor {
                     } else {
                         s
                     };
-                    format_float_with_flags(
-                        &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
-                    )
+                    // `%a` zero-padding goes *after* the `0x` prefix
+                    // (e.g. `0x00001.8p+7`), not before it.
+                    let sign = if f.is_sign_negative() && !f.is_nan() {
+                        "-"
+                    } else if plus_flag {
+                        "+"
+                    } else if space_flag {
+                        " "
+                    } else {
+                        ""
+                    };
+                    let (pfx, rest) = if s.starts_with("0x") || s.starts_with("0X") {
+                        s.split_at(2)
+                    } else {
+                        ("", s.as_str())
+                    };
+                    if zero_flag && !minus_flag && width > sign.len() + s.len() {
+                        let pad = width - sign.len() - pfx.len();
+                        format!("{}{}{:0>w$}", sign, pfx, rest, w = pad)
+                    } else {
+                        apply_width(
+                            &format!("{}{}", sign, s),
+                            width,
+                            minus_flag,
+                            ' ',
+                        )
+                    }
                 }
                 _ => {
                     return Err(MonorubyErr::argumenterr(format!(
@@ -1256,6 +1309,20 @@ impl Executor {
                 }
             };
             format_str += &format;
+        }
+
+        // With `$DEBUG` enabled, CRuby raises when sequential
+        // (unnumbered) formatting leaves arguments unused.
+        if !used_numbered
+            && !used_named
+            && arg_no < arguments.len()
+            && globals
+                .get_gvar(IdentId::get_id("$DEBUG"))
+                .is_some_and(|v| v.as_bool())
+        {
+            return Err(MonorubyErr::argumenterr(
+                "too many arguments for format string",
+            ));
         }
 
         Ok(format_str)
