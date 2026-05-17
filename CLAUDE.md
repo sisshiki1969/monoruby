@@ -86,6 +86,82 @@ monoruby/                   # Workspace root
 
 ---
 
+## Development Environment Setup
+
+### 1. Installing CRuby (rbenv)
+
+The monoruby test harness compares output against CRuby, so CRuby 4.0 or later is required. To install via rbenv:
+CRuby 4.0 or later can be obtained from the [ruby/ruby](https://github.com/ruby/ruby) repository on GitHub.
+
+> **Important:** Starting with Ruby 3.4, `bigdecimal` is no longer a default
+> gem. The monoruby `bigdecimal_*` integration tests `require "bigdecimal"`
+> against the system Ruby, so install it explicitly after installing Ruby 4:
+>
+> ```sh
+> gem install bigdecimal
+> ```
+>
+> Without this, every `tests/bigdecimal.rs` test will fail because the
+> reference Ruby process exits with `LoadError: cannot load such file --
+bigdecimal`.
+
+### 2. Verifying Ruby Version
+
+Confirm that the `ruby` command launches CRuby 4.0 or later:
+
+```sh
+ruby --version
+# => ruby 4.0.1 (2025-xx-xx ...) — must be 4.0 or later
+```
+
+`build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
+
+### 3. Setting Up and Running ruby/spec
+
+ruby/spec (mspec) is cloned outside the monoruby repository:
+
+```sh
+# Clone into the parent directory of monoruby
+cd /path/to/parent-of-monoruby
+git clone --depth 1 https://github.com/ruby/spec.git spec
+git clone --depth 1 https://github.com/ruby/mspec.git mspec
+```
+
+Expected directory layout:
+
+```
+parent/
+├── monoruby/    # this repository
+├── spec/        # ruby/spec
+└── mspec/       # mspec test runner
+```
+
+#### Running core category specs
+
+```sh
+# Build and install monoruby in release mode
+cd monoruby
+cargo install --path monoruby
+
+# Run a specific category (e.g., core/array)
+cd ../spec
+../mspec/bin/mspec run core/array -t monoruby
+
+# Run a single spec file
+../mspec/bin/mspec run core/array/flatten_spec.rb -t monoruby
+
+# Show results in dotted format
+../mspec/bin/mspec run core/array -t monoruby --format dotted
+
+# Run all core categories at once (bin/spec script)
+cd ../monoruby
+bin/spec
+```
+
+> **Note**: `core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`, and `core/kernel/readlines_spec.rb` hang under monoruby's single-threaded runtime and are excluded by `bin/spec`.
+
+---
+
 ## Architecture Deep Dive
 
 ### Compilation Pipeline
@@ -121,23 +197,23 @@ Native x86-64 code
 
 #### Dispatch on lower 3 bits
 
-| Lower bits (`& 0b111`) | Kind |
-|------------------------|------|
-| `???????1` (bit 0 = 1) | **Fixnum** — integer stored in bits 63:1 as i63 (`value >> 1`) |
-| `??????10` (bits 1:0 = `10`) | **Flonum** — double-precision float encoded inline (bit-rotated) |
-| `??????00` (bits 2:0 = `000`) | **Heap pointer** — raw pointer to a GC-managed `RValue` |
-| Other (bit 2 = 1, bits 1:0 ≠ `10`) | **Other immediate** — nil / true / false / Symbol |
+| Lower bits (`& 0b111`)             | Kind                                                             |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `???????1` (bit 0 = 1)             | **Fixnum** — integer stored in bits 63:1 as i63 (`value >> 1`)   |
+| `??????10` (bits 1:0 = `10`)       | **Flonum** — double-precision float encoded inline (bit-rotated) |
+| `??????00` (bits 2:0 = `000`)      | **Heap pointer** — raw pointer to a GC-managed `RValue`          |
+| Other (bit 2 = 1, bits 1:0 ≠ `10`) | **Other immediate** — nil / true / false / Symbol                |
 
 The method `is_packed_value()` tests `bits & 0b0111 != 0`; if true, the value is an immediate and `try_rvalue()` returns `None`. If false, the bits are a valid `*const RValue` pointer.
 
 #### Immediate tag constants
 
-| Constant | Hex | Binary | Meaning |
-|----------|-----|--------|---------|
-| `NIL_VALUE` | `0x04` | `0000_0100` | `nil` |
-| `FALSE_VALUE` | `0x14` | `0001_0100` | `false` |
-| `TRUE_VALUE` | `0x1c` | `0001_1100` | `true` |
-| `TAG_SYMBOL` | `0x0c` | `0000_1100` | Symbol (IdentId packed in upper 32 bits) |
+| Constant      | Hex    | Binary      | Meaning                                  |
+| ------------- | ------ | ----------- | ---------------------------------------- |
+| `NIL_VALUE`   | `0x04` | `0000_0100` | `nil`                                    |
+| `FALSE_VALUE` | `0x14` | `0001_0100` | `false`                                  |
+| `TRUE_VALUE`  | `0x1c` | `0001_1100` | `true`                                   |
+| `TAG_SYMBOL`  | `0x0c` | `0000_1100` | Symbol (IdentId packed in upper 32 bits) |
 
 `FLOAT_ZERO` (`(0b1000 << 60) | 0b10`) is the flonum encoding of `0.0`.
 
@@ -146,6 +222,7 @@ Floats that cannot be represented as a flonum (exponent out of range) are heap-a
 ### Global State (`globals.rs`)
 
 `Globals` is the top-level interpreter state, holding:
+
 - `store: Store` — function/class/call-site tables
 - `global_vars` — Ruby global variables
 - `invokers` — pre-generated code for method/block/fiber entry
@@ -157,10 +234,12 @@ Floats that cannot be represented as a flonum (exponent out of range) are heap-a
 ### Executor (`executor.rs`)
 
 The `Executor` struct is the bytecode interpreter. Key fields:
+
 - `cfp: Option<Cfp>` — current control frame pointer
 - `rsp_save` — native stack save for fiber switching
 
 Stack frame offsets (from `executor.rs`):
+
 - `LFP_OUTER` (`+0`), `LFP_META` (`+8`), `LFP_BLOCK` (`+16`), `LFP_SELF` (`+24`), `LFP_ARG0` (`+32`)
 
 Global registers in JIT-compiled code:
@@ -175,12 +254,14 @@ Global registers in JIT-compiled code:
 ### JIT Compiler (`codegen/`)
 
 **Threshold values**:
+
 - Method JIT: ≥ 20 calls (`COUNT_START_COMPILE`, 5 in test mode)
 - Loop JIT: ≥ 100 iterations (`COUNT_LOOP_START_COMPILE`, 15 in test mode)
 
 **`CODEGEN`** is a thread-local `RefCell<Codegen>` singleton.
 
 **Deoptimization** falls back to the interpreter when:
+
 1. A type guard fails (type changed at runtime)
 2. Class version mismatch (class was modified)
 3. BOP (basic-op) redefinition
@@ -211,105 +292,20 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-| Crate | Purpose |
-|-------|---------|
-| `monoruby` | Main interpreter + JIT |
-| `ruruby-parse` | Hand-written Ruby parser → AST |
+| Crate           | Purpose                                                  |
+| --------------- | -------------------------------------------------------- |
+| `monoruby`      | Main interpreter + JIT                                   |
+| `ruruby-parse`  | Hand-written Ruby parser → AST                           |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
-| `rubymap` | Order-preserving Ruby-compatible HashMap/Set |
-| `hashbrown` | Vendored hash table (local fork) |
-| `ruby_traits` | Shared trait definitions |
-| `rust-smallvec` | Vendored SmallVec with const-generics (local fork) |
+| `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
+| `hashbrown`     | Vendored hash table (local fork)                         |
+| `ruby_traits`   | Shared trait definitions                                 |
+| `rust-smallvec` | Vendored SmallVec with const-generics (local fork)       |
 
 External crates (fetched from git):
+
 - `monoasm` / `monoasm_macro` — dynamic x86-64 assembler
 - `onigmo-regex` — Onigmo regular expression engine
-
----
-
-## Development Environment Setup
-
-### 1. Installing CRuby (rbenv)
-
-The monoruby test harness compares output against CRuby, so CRuby 4.0 or later is required. To install via rbenv:
-
-```sh
-# Install rbenv and ruby-build (if not already installed)
-git clone https://github.com/rbenv/rbenv.git ~/.rbenv
-git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
-echo 'eval "$(~/.rbenv/bin/rbenv init -)"' >> ~/.bashrc
-source ~/.bashrc
-
-# Install CRuby 4.0.1
-rbenv install 4.0.1
-rbenv global 4.0.1
-```
-
-> **Important:** Starting with Ruby 3.4, `bigdecimal` is no longer a default
-> gem. The monoruby `bigdecimal_*` integration tests `require "bigdecimal"`
-> against the system Ruby, so install it explicitly after installing Ruby 4:
->
-> ```sh
-> gem install bigdecimal
-> ```
->
-> Without this, every `tests/bigdecimal.rs` test will fail because the
-> reference Ruby process exits with `LoadError: cannot load such file --
-> bigdecimal`.
-
-### 2. Verifying Ruby Version
-
-Confirm that the `ruby` command launches CRuby 4.0 or later:
-
-```sh
-ruby --version
-# => ruby 4.0.1 (2025-xx-xx ...) — must be 4.0 or later
-```
-
-`build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
-
-### 3. Setting Up and Running ruby/spec
-
-ruby/spec (mspec) is cloned outside the monoruby repository:
-
-```sh
-# Clone into the parent directory of monoruby
-cd /path/to/parent-of-monoruby
-git clone --depth 1 https://github.com/ruby/spec.git spec
-git clone --depth 1 https://github.com/ruby/mspec.git mspec
-```
-
-Expected directory layout:
-```
-parent/
-├── monoruby/    # this repository
-├── spec/        # ruby/spec
-└── mspec/       # mspec test runner
-```
-
-#### Running core category specs
-
-```sh
-# Build and install monoruby in release mode
-cd monoruby
-cargo install --path monoruby
-
-# Run a specific category (e.g., core/array)
-cd ../spec
-../mspec/bin/mspec run core/array -t monoruby
-
-# Run a single spec file
-../mspec/bin/mspec run core/array/flatten_spec.rb -t monoruby
-
-# Show results in dotted format
-../mspec/bin/mspec run core/array -t monoruby --format dotted
-
-# Run all core categories at once (bin/spec script)
-cd ../monoruby
-bin/spec
-```
-
-> **Note**: `core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`, and `core/kernel/readlines_spec.rb` hang under monoruby's single-threaded runtime and are excluded by `bin/spec`.
 
 ---
 
@@ -362,6 +358,7 @@ bin/test
 ```
 
 `bin/test` does:
+
 1. `cargo llvm-cov nextest` with all debug features enabled
 2. Builds a debug binary with `gc-stress`
 3. Runs benchmark scripts and `diff`s output against CRuby 3.4.1
@@ -380,22 +377,22 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 
 ### Cargo Features
 
-| Feature | Effect |
-|---------|--------|
-| `dump-bc` | Dump bytecode to stderr |
-| `dump-traceir` | Dump TraceIR to stderr |
-| `emit-asm` | Dump generated assembly (implies `dump-bc`, `dump-traceir`, `jit-log`) |
-| `emit-bc` | Emit bytecode (implies `dump-bc`, `dump-traceir`) |
-| `emit-cfg` | Emit CFG in DOT format |
-| `jit-log` | Log JIT compilation events |
-| `jit-debug` | Detailed JIT debug output |
-| `no-jit` | Disable JIT (interpreter only) |
-| `deopt` | Log deoptimizations |
-| `gc-log` | Log GC statistics at exit |
-| `gc-debug` | GC debug assertions |
-| `gc-stress` | GC on every allocation (stress test) |
-| `profile` | Collect deopt/recompile statistics |
-| `perf` | Emit perf-compatible symbol maps |
+| Feature        | Effect                                                                 |
+| -------------- | ---------------------------------------------------------------------- |
+| `dump-bc`      | Dump bytecode to stderr                                                |
+| `dump-traceir` | Dump TraceIR to stderr                                                 |
+| `emit-asm`     | Dump generated assembly (implies `dump-bc`, `dump-traceir`, `jit-log`) |
+| `emit-bc`      | Emit bytecode (implies `dump-bc`, `dump-traceir`)                      |
+| `emit-cfg`     | Emit CFG in DOT format                                                 |
+| `jit-log`      | Log JIT compilation events                                             |
+| `jit-debug`    | Detailed JIT debug output                                              |
+| `no-jit`       | Disable JIT (interpreter only)                                         |
+| `deopt`        | Log deoptimizations                                                    |
+| `gc-log`       | Log GC statistics at exit                                              |
+| `gc-debug`     | GC debug assertions                                                    |
+| `gc-stress`    | GC on every allocation (stress test)                                   |
+| `profile`      | Collect deopt/recompile statistics                                     |
+| `perf`         | Emit perf-compatible symbol maps                                       |
 
 ### Cargo Config
 
@@ -445,6 +442,7 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 ### Nightly Features in Use
 
 The following nightly features are enabled in `monoruby/src/lib.rs`:
+
 - `box_patterns`
 - `int_roundings`
 - `iter_next_chunk`
@@ -461,13 +459,13 @@ Do not add new nightly features without necessity; prefer stable alternatives wh
 File: `.github/workflows/rust.yml`
 
 Triggered on push/PR to `master`. Steps:
-1. Install Ruby 3.4.1 (used to validate monoruby output)
+
+1. Install Ruby 4.0.0+ (used to validate monoruby output)
 2. Install Rust nightly via `dtolnay/rust-toolchain@nightly`
 3. Install `cargo-llvm-cov` and `cargo-nextest`
-4. Install ImageMagick (for PPM→JPG conversion in aobench test)
-5. Clone optcarrot benchmark
-6. Run `bin/test` (full test + coverage)
-7. Upload `lcov.info` to Codecov
+4. Clone optcarrot benchmark
+5. Run `bin/test` (full test + coverage)
+6. Upload `lcov.info` to Codecov
 
 ---
 
@@ -493,6 +491,7 @@ Benchmark scripts live in `benchmark/`. YAML files (`*.yaml`, `*.yml`) contain b
 ## Vendored Dependencies
 
 The repository vendors several dependencies as local paths rather than crates.io:
+
 - `hashbrown/` — local fork
 - `rust-smallvec/` — local fork with const-generics feature
 - `ruruby-parse/` — developed in tandem with monoruby
