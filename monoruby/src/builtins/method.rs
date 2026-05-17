@@ -54,9 +54,12 @@ fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     let a = self_val.as_method();
     let b = other.as_method();
+    if a.receiver() != b.receiver() {
+        return Ok(Value::bool(false));
+    }
     let eq = match (a.method_missing_name(), b.method_missing_name()) {
-        (Some(an), Some(bn)) => an == bn && a.receiver().id() == b.receiver().id(),
-        (None, None) => a.func_id() == b.func_id() && a.receiver().id() == b.receiver().id(),
+        (Some(an), Some(bn)) => an == bn,
+        (None, None) => a.func_id() == b.func_id(),
         _ => false,
     };
     Ok(Value::bool(eq))
@@ -78,9 +81,12 @@ fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let a = self_val.as_umethod();
     let b = other.as_umethod();
+    if a.owner() != b.owner() {
+        return Ok(Value::bool(false));
+    }
     let eq = match (a.method_missing_name(), b.method_missing_name()) {
-        (Some(an), Some(bn)) => an == bn && a.owner() == b.owner(),
-        (None, None) => a.func_id() == b.func_id() && a.owner() == b.owner(),
+        (Some(an), Some(bn)) => an == bn,
+        (None, None) => a.func_id() == b.func_id(),
         _ => false,
     };
     Ok(Value::bool(eq))
@@ -200,7 +206,9 @@ fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let lookup = method.lookup_name(&globals.store);
     let original = method.original_name(&globals.store);
     check_bind_receiver(globals, owner, recv)?;
-    Ok(Value::new_method_named(recv, func_id, owner, lookup, original))
+    Ok(Value::new_method_named(
+        recv, func_id, owner, lookup, original,
+    ))
 }
 
 /// CRuby `convert_umethod_to_method` bind check: the receiver must be
@@ -223,11 +231,7 @@ fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
     }
     if let Some(iseq) = store.resolve_iseq(func_id) {
         let info = &store[iseq];
-        format!(
-            " {}:{}",
-            info.sourceinfo.short_file_name(),
-            info.sourceinfo.get_line(&info.loc)
-        )
+        format!(" {}", info.get_location())
     } else {
         String::new()
     }
@@ -258,7 +262,10 @@ fn method_inspect_str(
                 if recv.id() == v.id() {
                     (v.inspect(store), ".")
                 } else {
-                    (format!("{}({})", recv.inspect(store), v.inspect(store)), ".")
+                    (
+                        format!("{}({})", recv.inspect(store), v.inspect(store)),
+                        ".",
+                    )
                 }
             } else {
                 let recv_mod = store[recv.class()].get_module();
@@ -266,9 +273,7 @@ fn method_inspect_str(
                     // Singleton class of a class/module keeps its
                     // `#<Class:Foo>` display; the singleton class of a
                     // plain object is unwrapped to the real class.
-                    Some(att) if att.is_class_or_module().is_none() => {
-                        recv_mod.get_real_class()
-                    }
+                    Some(att) if att.is_class_or_module().is_none() => recv_mod.get_real_class(),
                     _ => recv_mod,
                 };
                 let mut s = store.get_class_name(disp.id());
@@ -302,7 +307,11 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let store = &globals.store;
     let name = match method.method_missing_name() {
         Some(t) => t.to_string(),
-        None => display_name(store, method.lookup_name(store), method.original_name(store)),
+        None => display_name(
+            store,
+            method.lookup_name(store),
+            method.original_name(store),
+        ),
     };
     let s = method_inspect_str(
         store,
@@ -342,7 +351,11 @@ fn uinspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let store = &globals.store;
     let name = match method.method_missing_name() {
         Some(t) => t.to_string(),
-        None => display_name(store, method.lookup_name(store), method.original_name(store)),
+        None => display_name(
+            store,
+            method.lookup_name(store),
+            method.original_name(store),
+        ),
     };
     let s = method_inspect_str(
         store,
@@ -515,7 +528,12 @@ fn resolve_super_entry(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/super_method.html]
 #[monoruby_builtin]
-fn super_method(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn super_method(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     if method.method_missing_name().is_some() {
@@ -677,7 +695,12 @@ fn uparameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/original_name.html]
 #[monoruby_builtin]
-fn original_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn original_name(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_method();
     if let Some(target) = method.method_missing_name() {
@@ -686,7 +709,12 @@ fn original_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
     Ok(Value::symbol(method.original_name(&globals.store)))
 }
 
-/// ### UnboundMethod#original_name -- see `Method#original_name`.
+///
+/// ### UnboundMethod#original_name
+///
+/// - original_name -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/original_name.html]
 #[monoruby_builtin]
 fn uoriginal_name(
     _: &mut Executor,
@@ -766,14 +794,7 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let owner = method.owner();
     let func_id = method.func_id();
     check_bind_receiver(globals, owner, receiver)?;
-    vm.invoke_func_inner(
-        globals,
-        func_id,
-        receiver,
-        &args,
-        lfp.block(),
-        None,
-    )
+    vm.invoke_func_inner(globals, func_id, receiver, &args, lfp.block(), None)
 }
 
 #[cfg(test)]

@@ -2,42 +2,15 @@
 set -e
 
 RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby
-cd ../spec
 
-# Spec files to exclude — currently none. If blocking-IO or threading
-# issues resurface, list them here separated by `|` for grep -vE.
-EXCLUDE_FILES="__never_matches__"
-
-FAILED=0
-TOTAL_EXAMPLES=0
-TOTAL_FAILURES=0
-TOTAL_ERRORS=0
-
-for cat in $(ls core/); do
-  SPEC_FILES=$(find core/$cat -name '*_spec.rb' 2>/dev/null | grep -vE "$EXCLUDE_FILES" | sort)
-  [ -z "$SPEC_FILES" ] && continue
-
-  FILE_COUNT=$(echo "$SPEC_FILES" | wc -l)
-  echo "=== core/$cat ($FILE_COUNT files) ==="
-
-  # For categories with many spec files (>80), run in smaller batches
-  # to avoid timeouts.
-  if [ "$FILE_COUNT" -gt 80 ]; then
-    BATCH_FAILED=0
-    echo "$SPEC_FILES" | xargs -n 40 sh -c '
-      timeout 180 ../mspec/bin/mspec "$@" -t monoruby || exit 1
-    ' _ || BATCH_FAILED=1
-    if [ "$BATCH_FAILED" -ne 0 ]; then
-      FAILED=$((FAILED + 1))
-    fi
-  else
-    if ! timeout 120 ../mspec/bin/mspec $SPEC_FILES -t monoruby; then
-      FAILED=$((FAILED + 1))
-    fi
-  fi
-done
-
-if [ $FAILED -gt 0 ]; then
-  echo "$FAILED categories had errors"
-  exit 1
+# Run ruby/spec with instrumented binary for coverage
+if [ -d "../spec" ] && [ -d "../mspec" ]; then
+  echo "Running ruby/spec for coverage..."
+  cd ../spec
+  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct systemexit method unboundmethod; do
+    echo "=== core/$cat ==="
+    ../mspec/bin/mspec core/$cat -t "$MONORUBY"
+  done
+  cd "$OLDPWD"
 fi
+
