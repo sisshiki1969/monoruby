@@ -143,32 +143,35 @@ fn test_shift() {
 
 #[test]
 fn test_assign_op() {
-    run_test("a=3; a+=7; a");
-    run_test("a=3; a-=7; a");
-    run_test("a=3; a*=7; a");
-    run_test("a=300; a/=7; a");
-    run_test("a=30; a<<=7; a");
-    run_test("a=3000; a>>=7; a");
-    run_test("a=36; a|=77; a");
-    run_test("a=36; a&=77; a");
-    run_test("a=36; a^=77; a");
-    run_test("@a=36; @a+=7; @a");
-    run_test("@a=[1,2,3]; @a[0]+=@a[1]; @a");
+    run_tests(&[
+        "a=3; a+=7; a",
+        "a=3; a-=7; a",
+        "a=3; a*=7; a",
+        "a=300; a/=7; a",
+        "a=30; a<<=7; a",
+        "a=3000; a>>=7; a",
+        "a=36; a|=77; a",
+        "a=36; a&=77; a",
+        "a=36; a^=77; a",
+        "@a=36; @a+=7; @a",
+        "@a=[1,2,3]; @a[0]+=@a[1]; @a",
+    ]);
 }
 
 #[test]
 fn test1() {
     run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
     run_test("def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a");
-    run_test("a=42; b=-a");
-    run_test("a=42; a; b=-a");
+    run_tests(&["a=42; b=-a", "a=42; a; b=-a"]);
 }
 
 #[test]
 fn test_assign() {
-    run_test("a=8; b=2; c = (a,b=b,a); [a,b,c]");
-    run_test("e = (a,b,c=1,2,3); [e, a, b, c]");
-    run_test("a=b=c=7; [a,b,c]");
+    run_tests(&[
+        "a=8; b=2; c = (a,b=b,a); [a,b,c]",
+        "e = (a,b,c=1,2,3); [e, a, b, c]",
+        "a=b=c=7; [a,b,c]",
+    ]);
 }
 
 #[test]
@@ -772,22 +775,16 @@ fn test9() {
 }
 
 #[test]
-fn test9a() {
-    run_test(
+fn test9a_test10() {
+    run_tests(&[
         r#"
             64.chr
             a = 64.chr
         "#,
-    );
-}
-
-#[test]
-fn test10() {
-    run_test(
         r#"
             if nil then 2*5/3 else 5 end
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -815,15 +812,15 @@ fn test_symbol() {
 
 #[test]
 fn test_array() {
-    run_test(r#"[1,"2", true, nil]"#);
-    run_test(r#"[1,"2", true, nil][-5]"#);
-    run_test(r#"[1,"2", true, nil][-1]"#);
-    run_test(r#"[1,"2", true, nil][0]"#);
-    run_test(r#"[1,"2", true, nil][1]"#);
-    run_test(r#"[1,"2", true, nil][2]"#);
-    run_test(r#"[1,"2", true, nil][3]"#);
-    run_test(r#"[1,"2", true, nil][4]"#);
-    run_test(
+    run_tests(&[
+        r#"[1,"2", true, nil]"#,
+        r#"[1,"2", true, nil][-5]"#,
+        r#"[1,"2", true, nil][-1]"#,
+        r#"[1,"2", true, nil][0]"#,
+        r#"[1,"2", true, nil][1]"#,
+        r#"[1,"2", true, nil][2]"#,
+        r#"[1,"2", true, nil][3]"#,
+        r#"[1,"2", true, nil][4]"#,
         r#"
             a = [1,2,3,4,5]
             a[0] = 42
@@ -832,7 +829,7 @@ fn test_array() {
             a[-4] = "Ruby"
             a
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -852,20 +849,24 @@ fn test_logical_ops() {
         }
     }
     run_tests(&test);
-    run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");
-    run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
+    run_tests(&[
+        "if 4 == 4 and 3 < 1 then 0 else 42 end",
+        "if 4 != 4 or 3 < 1 then 0 else 42 end",
+    ]);
 }
 
 #[test]
 fn logical_assign_ops() {
-    run_test("a = nil; a||=100; a");
-    run_test("a = nil; a&&=100; a");
-    run_test("a = 200; a&&=100; a");
-    run_test("a = nil; b = a||=100; [a, b]");
-    run_test("a ||= 100; a");
-    run_test("b = a ||= 100; [a, b]");
-    run_test("a &&= 100; a");
-    run_test("a = 200; b = a &&= 100; [a, b]");
+    run_tests(&[
+        "a = nil; a||=100; a",
+        "a = nil; a&&=100; a",
+        "a = 200; a&&=100; a",
+        "a = nil; b = a||=100; [a, b]",
+        "a ||= 100; a",
+        "b = a ||= 100; [a, b]",
+        "a &&= 100; a",
+        "a = 200; b = a &&= 100; [a, b]",
+    ]);
 }
 
 #[test]
@@ -1451,7 +1452,7 @@ fn block_break2() {
 
 #[test]
 fn redo() {
-    run_test(
+    run_tests(&[
         r#"
         res = []
         flag = false
@@ -1464,8 +1465,6 @@ fn redo() {
         end
         res
         "#,
-    );
-    run_test(
         r#"
         res = []
         flag = false
@@ -1481,8 +1480,6 @@ fn redo() {
         res << x
         res
         "#,
-    );
-    run_test(
         r#"
         res = []
         flag = false
@@ -1496,7 +1493,7 @@ fn redo() {
         end
         res
         "#,
-    );
+    ]);
 }
 
 #[test]
