@@ -3,6 +3,12 @@ use monoruby::tests::*;
 
 #[test]
 fn verbose_default_is_false() {
+    // `$-v` / `$-w` special-global syntax is only lexed by the Prism
+    // backend; the legacy ruruby-parse parser rejects it.
+    if parser_is_ruruby() {
+        run_test("$VERBOSE");
+        return;
+    }
     run_test("[$VERBOSE, $-v, $-w]");
 }
 

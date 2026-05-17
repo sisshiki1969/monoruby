@@ -43,6 +43,9 @@ fn numbered_param_with_method_chain() {
 
 #[test]
 fn it_param_basic() {
+    if parser_is_ruruby() {
+        return;
+    }
     run_test("[10, 20].map { it + 1 }");
     run_test("[1, 2, 3].select { it.odd? }");
     run_test("[[1, 2], [3, 4]].map { it }");
@@ -50,6 +53,9 @@ fn it_param_basic() {
 
 #[test]
 fn it_param_do_end() {
+    if parser_is_ruruby() {
+        return;
+    }
     run_test(
         r#"
         res = []
@@ -63,11 +69,17 @@ fn it_param_do_end() {
 
 #[test]
 fn it_param_nested_block() {
+    if parser_is_ruruby() {
+        return;
+    }
     run_test("[1, 2].map { [4, 5].map { it * 10 } }");
 }
 
 #[test]
 fn it_param_lambda() {
+    if parser_is_ruruby() {
+        return;
+    }
     run_test("f = ->{ it * 2 }; f.call(7)");
 }
 
