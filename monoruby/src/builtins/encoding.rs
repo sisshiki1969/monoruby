@@ -535,6 +535,140 @@ impl TranscodeOpts {
     }
 }
 
+/// Decode UTF-16 (`be` = big-endian) into a Rust `String`. Invalid
+/// units (odd trailing byte, unpaired/garbled surrogate) become
+/// U+FFFD; the bool is `true` if any were seen.
+fn decode_utf16_bytes(bytes: &[u8], be: bool) -> (String, bool) {
+    let mut out = String::with_capacity(bytes.len() / 2);
+    let mut had_err = false;
+    let units: Vec<u16> = bytes
+        .chunks(2)
+        .map(|c| {
+            if c.len() < 2 {
+                had_err = true;
+                0xFFFDu16
+            } else if be {
+                u16::from_be_bytes([c[0], c[1]])
+            } else {
+                u16::from_le_bytes([c[0], c[1]])
+            }
+        })
+        .collect();
+    let mut i = 0;
+    while i < units.len() {
+        let u = units[i];
+        if (0xD800..=0xDBFF).contains(&u) {
+            if i + 1 < units.len() && (0xDC00..=0xDFFF).contains(&units[i + 1]) {
+                let hi = (u as u32 - 0xD800) << 10;
+                let lo = units[i + 1] as u32 - 0xDC00;
+                let c = char::from_u32(0x10000 + hi + lo).unwrap_or('\u{FFFD}');
+                out.push(c);
+                i += 2;
+                continue;
+            }
+            had_err = true;
+            out.push('\u{FFFD}');
+            i += 1;
+        } else if (0xDC00..=0xDFFF).contains(&u) {
+            had_err = true;
+            out.push('\u{FFFD}');
+            i += 1;
+        } else {
+            out.push(char::from_u32(u as u32).unwrap_or('\u{FFFD}'));
+            i += 1;
+        }
+    }
+    (out, had_err)
+}
+
+/// Decode UTF-32 (`be` = big-endian) into a Rust `String`. Invalid
+/// units (short trailing group, value > U+10FFFF, surrogate range)
+/// become U+FFFD; the bool is `true` if any were seen.
+fn decode_utf32_bytes(bytes: &[u8], be: bool) -> (String, bool) {
+    let mut out = String::with_capacity(bytes.len() / 4);
+    let mut had_err = false;
+    for c in bytes.chunks(4) {
+        if c.len() < 4 {
+            had_err = true;
+            out.push('\u{FFFD}');
+            continue;
+        }
+        let v = if be {
+            u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+        } else {
+            u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+        };
+        match char::from_u32(v) {
+            Some(ch) => out.push(ch),
+            None => {
+                had_err = true;
+                out.push('\u{FFFD}');
+            }
+        }
+    }
+    (out, had_err)
+}
+
+/// Encode `s` as UTF-16 (`be` = big-endian) bytes.
+fn encode_utf16_bytes(s: &str, be: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() * 2);
+    let mut buf = [0u16; 2];
+    for ch in s.chars() {
+        for u in ch.encode_utf16(&mut buf).iter() {
+            if be {
+                out.extend_from_slice(&u.to_be_bytes());
+            } else {
+                out.extend_from_slice(&u.to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+/// Encode `s` as UTF-32 (`be` = big-endian) bytes.
+fn encode_utf32_bytes(s: &str, be: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() * 4);
+    for ch in s.chars() {
+        let v = ch as u32;
+        if be {
+            out.extend_from_slice(&v.to_be_bytes());
+        } else {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// `true` for the UTF-16/UTF-32 (LE/BE) encodings handled by the
+/// hand-rolled codecs above (encoding_rs cannot encode these, and has
+/// no UTF-32 at all).
+fn is_utf16_or_32(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    matches!(enc, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be)
+}
+
+fn decode_utf16_32(bytes: &[u8], enc: crate::value::Encoding) -> (String, bool) {
+    use crate::value::Encoding as E;
+    match enc {
+        E::Utf16Le => decode_utf16_bytes(bytes, false),
+        E::Utf16Be => decode_utf16_bytes(bytes, true),
+        E::Utf32Le => decode_utf32_bytes(bytes, false),
+        E::Utf32Be => decode_utf32_bytes(bytes, true),
+        _ => unreachable!(),
+    }
+}
+
+fn encode_utf16_32(s: &str, enc: crate::value::Encoding) -> Vec<u8> {
+    use crate::value::Encoding as E;
+    match enc {
+        E::Utf16Le => encode_utf16_bytes(s, false),
+        E::Utf16Be => encode_utf16_bytes(s, true),
+        E::Utf32Le => encode_utf32_bytes(s, false),
+        E::Utf32Be => encode_utf32_bytes(s, true),
+        _ => unreachable!(),
+    }
+}
+
 pub(super) fn transcode_bytes_with_opts(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -580,6 +714,16 @@ pub(super) fn transcode_bytes_with_opts(
         // hand back the UTF-8 bytes (CRuby converts "あ" in EUC-JP
         // to UTF-8 BINARY, which contains the UTF-8 byte sequence).
         // Implement that path via encoding_rs.
+        if is_utf16_or_32(src_enc) {
+            let (decoded, decode_err) = decode_utf16_32(src_bytes, src_enc);
+            if decode_err {
+                return Err(MonorubyErr::invalid_byte_sequence_error(
+                    store,
+                    format!("invalid byte sequence on {} → ASCII-8BIT", src_enc.name()),
+                ));
+            }
+            return Ok(decoded.into_bytes());
+        }
         if let Some(src_rs) = encoding_to_rs(src_enc) {
             let (decoded, decode_err) = src_rs.decode_without_bom_handling(src_bytes);
             if decode_err {
@@ -598,26 +742,31 @@ pub(super) fn transcode_bytes_with_opts(
     // all_ascii fast-path above already covered the ASCII-only
     // case, so here we know src has a non-ASCII byte; UsAscii src
     // with non-ASCII content is invalid by definition).
-    let src_rs = match encoding_to_rs(src_enc) {
-        Some(s) => s,
-        None if src_enc == E::UsAscii => {
-            return Err(MonorubyErr::invalid_byte_sequence_error(
-                store,
-                format!("invalid byte sequence on US-ASCII"),
-            ));
-        }
-        None => {
-            return Err(MonorubyErr::converter_not_found_error(
-                store,
-                format!(
-                    "code converter not found ({} to {})",
-                    src_enc.name(),
-                    dst_enc.name()
-                ),
-            ));
-        }
+    let (decoded, decode_err): (std::borrow::Cow<str>, bool) = if is_utf16_or_32(src_enc) {
+        let (s, e) = decode_utf16_32(src_bytes, src_enc);
+        (std::borrow::Cow::Owned(s), e)
+    } else {
+        let src_rs = match encoding_to_rs(src_enc) {
+            Some(s) => s,
+            None if src_enc == E::UsAscii => {
+                return Err(MonorubyErr::invalid_byte_sequence_error(
+                    store,
+                    format!("invalid byte sequence on US-ASCII"),
+                ));
+            }
+            None => {
+                return Err(MonorubyErr::converter_not_found_error(
+                    store,
+                    format!(
+                        "code converter not found ({} to {})",
+                        src_enc.name(),
+                        dst_enc.name()
+                    ),
+                ));
+            }
+        };
+        src_rs.decode_without_bom_handling(src_bytes)
     };
-    let (decoded, decode_err) = src_rs.decode_without_bom_handling(src_bytes);
     if decode_err && !opts.invalid_replace {
         return Err(MonorubyErr::invalid_byte_sequence_error(
             store,
@@ -653,6 +802,11 @@ pub(super) fn transcode_bytes_with_opts(
             return Ok(out.into_bytes());
         }
         return Ok(decoded.into_owned().into_bytes());
+    }
+    // UTF-16/UTF-32 destination: every Unicode scalar value is
+    // representable, so there is no undefined-conversion case.
+    if is_utf16_or_32(dst_enc) {
+        return Ok(encode_utf16_32(&decoded, dst_enc));
     }
     let dst_rs = match encoding_to_rs(dst_enc) {
         Some(d) => d,
@@ -1285,11 +1439,13 @@ fn validate_converter_pair(
         return Ok(());
     }
     let src_supported = encoding_to_rs(src).is_some()
+        || is_utf16_or_32(src)
         || matches!(
             src,
             crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
         );
     let dst_supported = encoding_to_rs(dst).is_some()
+        || is_utf16_or_32(dst)
         || matches!(
             dst,
             crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
@@ -2853,7 +3009,7 @@ fn enc_name_list(
 ) -> Result<Value> {
     let mut seen: Vec<String> = Vec::new();
     let mut names: Vec<Value> = Vec::new();
-    let mut add = |names: &mut Vec<Value>, seen: &mut Vec<String>, s: &str| {
+    let add = |names: &mut Vec<Value>, seen: &mut Vec<String>, s: &str| {
         if !seen.iter().any(|x| x == s) {
             seen.push(s.to_string());
             names.push(Value::string_from_str(s));
@@ -3699,23 +3855,15 @@ mod tests {
     }
 
     #[test]
-    fn converter_unsupported_pair_raises() {
-        // Pairs that have no `encoding_rs` transcoder raise
-        // ConverterNotFoundError. UTF-32 is the test vehicle because
-        // monoruby explicitly returns `None` from `encoding_to_rs`
-        // for it; CRuby implements UTF-32 transcoders so this
-        // diverges (CRuby would not raise) — assert monoruby's
-        // behaviour without the round-trip CRuby comparison.
-        run_test_no_result_check(
-            r#"
-              begin
-                Encoding::Converter.new("UTF-8", "UTF-32BE")
-                raise "expected ConverterNotFoundError"
-              rescue Encoding::ConverterNotFoundError
-                # ok
-              end
-            "#,
-        );
+    fn converter_utf16_32_pairs_supported() {
+        // UTF-16/UTF-32 (LE/BE) now have hand-rolled codecs, so
+        // `Encoding::Converter.new` accepts these pairs (it used to
+        // raise ConverterNotFoundError for UTF-32).
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-8", "UTF-32BE").class.name"#,
+            r#"Encoding::Converter.new("UTF-32LE", "UTF-8").class.name"#,
+            r#"Encoding::Converter.new("UTF-16BE", "UTF-32LE").class.name"#,
+        ]);
     }
 
     #[test]
@@ -3767,18 +3915,11 @@ mod tests {
             r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][0] == Encoding::UTF_8"#,
             r#"Encoding::Converter.search_convpath("UTF-8", "Shift_JIS")[0][1] == Encoding::Shift_JIS"#,
         ]);
-        // Unsupported pair raises ConverterNotFoundError, matching
-        // `.new` — UTF-32 has no `encoding_rs` transcoder in monoruby.
-        run_test_no_result_check(
-            r#"
-              begin
-                Encoding::Converter.search_convpath("UTF-8", "UTF-32BE")
-                raise "expected ConverterNotFoundError"
-              rescue Encoding::ConverterNotFoundError
-                # ok
-              end
-            "#,
-        );
+        // UTF-32 is now a supported direct pair (hand-rolled codec).
+        run_tests(&[
+            r#"Encoding::Converter.search_convpath("UTF-8", "UTF-32BE").length"#,
+            r#"Encoding::Converter.search_convpath("UTF-8", "UTF-32BE")[0][1] == Encoding::UTF_32BE"#,
+        ]);
     }
 
     #[test]
