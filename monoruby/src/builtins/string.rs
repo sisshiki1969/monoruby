@@ -1117,6 +1117,79 @@ fn index_assign(
 
     let subst = arg_val.coerce_to_string(vm, globals)?;
     let self_ = lfp.self_val();
+    // Non-UTF-8 receiver: resolve the character index/range and splice
+    // bytes via the encoding-aware `get_range` (the `&str` path below
+    // would error on EUC-JP / Shift_JIS multibyte content). `subst`
+    // is ASCII or same-encoding (compat checked above).
+    if !self_.as_rstring_inner().encoding().is_utf8_compatible() {
+        let inner = self_.as_rstring_inner();
+        let char_len = inner.char_length();
+        if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
+            if arg0_val.is_range().is_none() && arg0_val.is_regex().is_none() {
+                arg0_val.coerce_to_int_i64(vm, globals).ok()
+            } else {
+                None
+            }
+        }) {
+            let start = if idx == char_len as i64 {
+                char_len
+            } else {
+                match conv_index(idx, char_len) {
+                    Some(i) => i,
+                    None => return Err(MonorubyErr::indexerr("index out of range")),
+                }
+            };
+            let len = if let Some(a1) = arg1_opt {
+                match a1.coerce_to_int_i64(vm, globals)? {
+                    i if i < 0 => return Err(MonorubyErr::indexerr("negative length")),
+                    i => i as usize,
+                }
+            } else if start == char_len {
+                0
+            } else {
+                1
+            };
+            let r = inner.get_range(start, len);
+            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            return Ok(arg_val);
+        }
+        if let Some(info) = arg0_val.is_range() {
+            let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
+            let end_raw =
+                info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+            if start_raw > char_len as i64 {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "{start_raw}..{end_raw} out of range"
+                )));
+            }
+            let start_char = match conv_index(start_raw, char_len) {
+                Some(i) => i,
+                None => {
+                    return Err(MonorubyErr::rangeerr(format!(
+                        "{start_raw}..{end_raw} out of range"
+                    )));
+                }
+            };
+            let end_char = if end_raw < 0 {
+                let e = char_len as i64 + end_raw;
+                if e < start_char as i64 {
+                    start_char.saturating_sub(1)
+                } else {
+                    e as usize
+                }
+            } else {
+                end_raw as usize
+            };
+            let count = if end_char >= start_char {
+                end_char - start_char + 1
+            } else {
+                0
+            };
+            let r = inner.get_range(start_char, count);
+            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            return Ok(arg_val);
+        }
+    }
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
     if let Some(arg0) = arg0_val.try_fixnum() {
@@ -1986,6 +2059,60 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         res
     }
     let self_ = lfp.self_val();
+    // Non-UTF-8 receiver: resolve the character index/range with the
+    // encoding-aware `get_range`, return the removed substring (tagged
+    // with the receiver's encoding) and splice it out byte-wise. Only
+    // the Integer / Integer+len / Range forms (Regexp / String-needle
+    // on non-UTF-8 remain documented follow-ups).
+    let arg0 = lfp.arg(0);
+    if !self_.as_rstring_inner().encoding().is_utf8_compatible()
+        && (arg0.try_fixnum().is_some() || arg0.is_range().is_some())
+    {
+        let enc = self_.as_rstring_inner().encoding();
+        let char_len = self_.as_rstring_inner().char_length();
+        let (start, count): (usize, usize) =
+            if let Some(i) = arg0.try_fixnum() {
+                let idx = match conv_index(i, char_len) {
+                    Some(i) => i,
+                    None => return Ok(Value::nil()),
+                };
+                if let Some(a1) = lfp.try_arg(1) {
+                    match a1.coerce_to_int_i64(vm, globals)? {
+                        l if l < 0 => return Ok(Value::nil()),
+                        l => (idx, l as usize),
+                    }
+                } else if idx < char_len {
+                    (idx, 1)
+                } else {
+                    return Ok(Value::nil());
+                }
+            } else {
+                let info = arg0.is_range().unwrap();
+                let s_raw = info.start().coerce_to_int_i64(vm, globals)?;
+                let e_raw =
+                    info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+                let start = match conv_index(s_raw, char_len) {
+                    Some(i) => i,
+                    None => return Ok(Value::nil()),
+                };
+                let end = if e_raw >= 0 {
+                    e_raw as usize
+                } else if char_len as i64 + e_raw >= 0 {
+                    (char_len as i64 + e_raw) as usize
+                } else {
+                    return Ok(Value::nil());
+                };
+                let count = if end >= start { end - start + 1 } else { 0 };
+                (start, count)
+            };
+        let r = self_.as_rstring_inner().get_range(start, count);
+        if r.is_empty() && lfp.try_arg(1).is_none() && arg0.try_fixnum().is_some() {
+            return Ok(Value::nil());
+        }
+        let removed = RStringInner::from_encoding(&self_.as_rstring_inner()[r.clone()], enc);
+        replace_byte_range(globals, self_, r.start, r.end, "")?;
+        return Ok(Value::string_from_inner(removed));
+    }
     let lhs = self_.expect_string(globals)?;
     if let Some(i) = lfp.arg(0).try_fixnum() {
         let index = match conv_index(i, lhs.chars().count()) {
@@ -11349,6 +11476,28 @@ mod tests {
             r#""X漢Yz漢Y".encode("Shift_JIS").rindex("Y")"#,
             r#""X漢Yz漢Y".encode("Shift_JIS").index("z")"#,
             r#""abcabc".encode("EUC-JP").index("bc", 2)"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_insert_aset_slice_bang() {
+        // P3 (step 6): `insert` / `[]=` / `slice!` over a non-UTF-8
+        // receiver (Integer / Integer+len / Range forms), character
+        // indexed; `partition`/`rpartition` now work transitively.
+        run_tests(&[
+            r#""aあbいc".encode("EUC-JP").insert(2, "X").encode("UTF-8")"#,
+            r#""aあbいc".encode("EUC-JP").insert(-1, "Z").encode("UTF-8")"#,
+            r#"(t = "aあbいc".encode("EUC-JP"); t[1] = "Z"; t.encode("UTF-8"))"#,
+            r#"(u = "aあbいc".encode("EUC-JP"); u[1, 2] = "QQ"; u.encode("UTF-8"))"#,
+            r#"(v = "aあbいc".encode("EUC-JP"); v[1..3] = "-"; v.encode("UTF-8"))"#,
+            r#"(z = "漢A字".encode("Shift_JIS"); z[1] = "b"; z.encode("UTF-8"))"#,
+            r#"(w = "aあbいc".encode("EUC-JP"); r = w.slice!(1); [r.encode("UTF-8"), w.encode("UTF-8")])"#,
+            r#"(x = "aあbいc".encode("EUC-JP"); r = x.slice!(1, 2); [r.encode("UTF-8"), x.encode("UTF-8")])"#,
+            r#"(y = "aあbいc".encode("EUC-JP"); r = y.slice!(1..2); [r.encode("UTF-8"), y.encode("UTF-8")])"#,
+            r#""aあbいc".encode("EUC-JP").partition("b").map { |x| x.encode("UTF-8") }"#,
+            r#""aあbいcb".encode("EUC-JP").rpartition("b").map { |x| x.encode("UTF-8") }"#,
+            r#"begin; "aあbいc".encode("EUC-JP").rpartition("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#"begin; ("ab".encode("EUC-JP"))[5] = "x"; :no; rescue IndexError; :ie; end"#,
         ]);
     }
 }
