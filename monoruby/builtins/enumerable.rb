@@ -52,7 +52,7 @@ module Enumerable
         init = nil
         sym = a.to_sym
       else
-        raise ArgumentError, "no block given"
+        raise TypeError, "#{args[0].inspect} is not a symbol nor a string"
       end
     when 2
       init = args[0]
@@ -368,6 +368,16 @@ module Enumerable
       r = yield(x)
       if r.is_a?(Array)
         res.concat(r)
+      elsif !r.is_a?(String) && r.respond_to?(:to_ary)
+        a = r.to_ary
+        if a.is_a?(Array)
+          res.concat(a)
+        elsif a.nil?
+          res << r
+        else
+          raise TypeError,
+                "can't convert #{r.class} to Array (#{r.class}#to_ary gives #{a.class})"
+        end
       else
         res << r
       end
