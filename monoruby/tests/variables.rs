@@ -3,11 +3,13 @@ use monoruby::tests::*;
 
 #[test]
 fn instance_var() {
-    run_test("@a=42; @a");
-    run_test("@a=42; @a = @a * 2; @a");
-    run_test("@a=42; b = @a * 2; b");
-    run_test("@a=42; c = b = @a * 2; c");
-    run_test("@a = 10; @a += 15; @a");
+    run_tests(&[
+        "@a=42; @a",
+        "@a=42; @a = @a * 2; @a",
+        "@a=42; b = @a * 2; b",
+        "@a=42; c = b = @a * 2; c",
+        "@a = 10; @a += 15; @a",
+    ]);
     run_test_with_prelude(
         r###"
         x = C.new

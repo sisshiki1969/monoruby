@@ -3,19 +3,13 @@ use monoruby::tests::*;
 
 #[test]
 fn begin_use() {
-    run_test(
+    run_tests(&[
         r#"
             # Use
             begin
               100
             end
         "#,
-    );
-}
-
-#[test]
-fn begin_nouse() {
-    run_test(
         r#"
             # NoUse
             begin
@@ -23,7 +17,7 @@ fn begin_nouse() {
             end
             nil
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -54,7 +48,7 @@ fn rescue_ret() {
 
 #[test]
 fn rescue_use() {
-    run_test(
+    run_tests(&[
         r#"
             begin
               100
@@ -62,12 +56,6 @@ fn rescue_use() {
               200
             end
         "#,
-    );
-}
-
-#[test]
-fn rescue_else() {
-    run_test(
         r#"
             begin
               100
@@ -76,12 +64,6 @@ fn rescue_else() {
               200
             end
         "#,
-    );
-}
-
-#[test]
-fn rescue_else_ensure() {
-    run_test(
         r#"
             begin
               100
@@ -92,7 +74,7 @@ fn rescue_else_ensure() {
               300
             end
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -124,7 +106,7 @@ fn rescue8() {
 
 #[test]
 fn rescue_write_back1() {
-    run_test(
+    run_tests(&[
         r#"
         res = []
         for i in 0..10
@@ -144,12 +126,6 @@ fn rescue_write_back1() {
         res << x
         res
         "#,
-    );
-}
-
-#[test]
-fn rescue_write_back2() {
-    run_test(
         r#"
         res = []
         begin
@@ -167,7 +143,7 @@ fn rescue_write_back2() {
         end
         res << x
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -313,7 +289,7 @@ fn return_in_ensure() {
 
 #[test]
 fn retry_in_loop() {
-    run_test(
+    run_tests(&[
         r#"
             res = []
             50.times do
@@ -332,60 +308,30 @@ fn retry_in_loop() {
             end
             res
         "#,
-    );
-}
-
-#[test]
-fn rescue_modifier_simple_assign() {
-    run_test(
         r#"
             x = raise("err") rescue 42
             x
         "#,
-    );
-}
-
-#[test]
-fn rescue_modifier_op_assign() {
-    run_test(
         r#"
             x = 10
             x += raise("err") rescue 5
             x
         "#,
-    );
-}
-
-#[test]
-fn rescue_modifier_or_assign() {
-    run_test(
         r#"
             x = nil
             x ||= raise("err") rescue 99
             x
         "#,
-    );
-}
-
-#[test]
-fn rescue_modifier_and_assign() {
-    run_test(
         r#"
             x = true
             x &&= raise("err") rescue 77
             x
         "#,
-    );
-}
-
-#[test]
-fn rescue_modifier_multi_assign() {
-    run_test(
         r#"
             a, b = raise("err") rescue [1, 2]
             [a, b]
         "#,
-    );
+    ]);
 }
 
 #[test]
@@ -511,56 +457,30 @@ fn raise_no_args_without_current_exception() {
 
 #[test]
 fn eval_custom_filename_and_lineno() {
-    run_test(
+    run_tests(&[
         r#"
             eval("__FILE__", nil, "myfile.rb", 10)
         "#,
-    );
-    run_test(
         r#"
             eval("__LINE__", nil, "myfile.rb", 10)
         "#,
-    );
-}
-
-#[test]
-fn instance_eval_custom_filename() {
-    run_test(
         r#"
             Object.new.instance_eval("__FILE__", "inst.rb", 3)
         "#,
-    );
-    run_test(
         r#"
             Object.new.instance_eval("__LINE__", "inst.rb", 3)
         "#,
-    );
-}
-
-#[test]
-fn class_eval_custom_filename() {
-    run_test(
         r#"
             Integer.class_eval("__FILE__", "cls.rb", 7)
         "#,
-    );
-    run_test(
         r#"
             Integer.class_eval("__LINE__", "cls.rb", 7)
         "#,
-    );
-}
-
-#[test]
-fn module_eval_custom_filename() {
-    run_test(
         r#"
             Integer.module_eval("__FILE__", "custom.rb", 5)
         "#,
-    );
-    run_test(
         r#"
             Integer.module_eval("__LINE__", "custom.rb", 5)
         "#,
-    );
+    ]);
 }

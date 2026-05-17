@@ -529,37 +529,15 @@ impl<'a> BytecodeGen<'a> {
 mod test {
     use crate::tests::*;
     #[test]
-    fn for_range_integer1() {
-        run_test("a = []; for i in 0..3; a << i; end; a << i; a");
-    }
-
-    #[test]
-    fn for_range_integer2() {
-        run_test("a = []; for i in 0...3; a << i; end; a << i; a");
-    }
-
-    #[test]
-    fn for_range_each() {
-        run_test("a = []; r = 0..3; for i in r; a << i; end; a << i; a");
-    }
-
-    #[test]
-    fn for_range_each2() {
-        run_test("a = []; r = 0...3; for i in r; a << i; end; a << i; a");
-    }
-
-    #[test]
-    fn for_range_integer_dyn() {
-        run_test("a = []; i = 42; 1.times { for i in 0..3; a << i; end }; a << i; a");
-    }
-
-    #[test]
-    fn for_range_modify_loop_var() {
-        run_test("a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]");
-    }
-
-    #[test]
-    fn for_range_modify_loop_var_dyn() {
-        run_test("a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]");
+    fn for_range() {
+        run_tests(&[
+            "a = []; for i in 0..3; a << i; end; a << i; a",
+            "a = []; for i in 0...3; a << i; end; a << i; a",
+            "a = []; r = 0..3; for i in r; a << i; end; a << i; a",
+            "a = []; r = 0...3; for i in r; a << i; end; a << i; a",
+            "a = []; i = 42; 1.times { for i in 0..3; a << i; end }; a << i; a",
+            "a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]",
+            "a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]",
+        ]);
     }
 }
