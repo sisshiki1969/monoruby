@@ -34,6 +34,33 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "byteend", byteend, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
+    globals.define_builtin_funcs(MATCHDATA_CLASS, "==", &["eql?"], eq, 1);
+}
+
+///
+/// ### MatchData#== / #eql?
+///
+/// Two MatchData are equal iff their target strings, patterns, and all
+/// match positions are equal.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/=3d=3d.html]
+#[monoruby_builtin]
+fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let other = lfp.arg(0);
+    if !matches!(other.unpack(), RV::Object(rv) if rv.ty() == ObjTy::MATCHDATA) {
+        return Ok(Value::bool(false));
+    }
+    let a = self_.as_match_data();
+    let b = other.as_match_data();
+    let src_eq = a.string() == b.string();
+    let re_eq = match (a.regexp(), b.regexp()) {
+        (Some(x), Some(y)) => x.as_str() == y.as_str(),
+        (None, None) => true,
+        _ => false,
+    };
+    let pos_eq = a.len() == b.len() && (0..a.len()).all(|i| a.pos(i) == b.pos(i));
+    Ok(Value::bool(src_eq && re_eq && pos_eq))
 }
 
 /// Stand-in for the undefined `MatchData.allocate`. Raises NoMethodError
@@ -345,9 +372,35 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
     let names = m.regexp().and_then(|r| r.capture_names().ok()).unwrap_or_default();
+    // A name shared by several groups appears only once (== Regexp#names).
+    let mut seen: Vec<&str> = Vec::with_capacity(names.len());
+    for n in &names {
+        if !seen.iter().any(|s| *s == n.as_str()) {
+            seen.push(n);
+        }
+    }
     Ok(Value::array_from_iter(
-        names.iter().map(|n| Value::string_from_str(n)),
+        seen.into_iter().map(Value::string_from_str),
     ))
+}
+
+/// The value of named capture `name`: the *last* group sharing that
+/// name whose capture actually participated in the match (CRuby
+/// "latest matched capture"); `None` if the name never matched.
+fn last_matched_named<'a>(
+    m: &'a crate::value::rvalue::MatchDataInner,
+    capture_names: &[String],
+    name: &str,
+) -> Option<&'a str> {
+    let mut result = None;
+    for (i, n) in capture_names.iter().enumerate() {
+        if n == name
+            && let Some(s) = m.at(i + 1)
+        {
+            result = Some(s);
+        }
+    }
+    result
 }
 
 ///
@@ -640,21 +693,24 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         };
         Ok(slice_match_data(&m, start, slice_len))
     } else if let Some(sym) = lfp.arg(0).try_symbol_or_string() {
-        if let Some(i) = m
+        let members = m
             .regexp()
             .map(|r| r.get_group_members(&format!("{sym}")))
-            .and_then(|g| g.last().copied())
-        {
-            if let Some(s) = m.at(i as usize) {
-                Ok(Value::string_from_str(s))
-            } else {
-                Ok(Value::nil())
-            }
-        } else {
-            Err(MonorubyErr::indexerr(format!(
+            .unwrap_or_default();
+        if members.is_empty() {
+            return Err(MonorubyErr::indexerr(format!(
                 "undefined group name reference: {sym}"
-            )))
+            )));
         }
+        // Among groups sharing this name, return the last one that
+        // actually matched (CRuby semantics); nil if none matched.
+        let mut result = Value::nil();
+        for i in members {
+            if let Some(s) = m.at(i as usize) {
+                result = Value::string_from_str(s);
+            }
+        }
+        Ok(result)
     } else {
         Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Integer",
@@ -779,11 +835,27 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         .regexp()
         .and_then(|r| r.capture_names().ok())
         .unwrap_or_default();
+    // `named_captures(symbolize_names: true)` -> Symbol keys.
+    let symbolize = lfp
+        .try_arg(0)
+        .and_then(|h| h.try_hash_ty())
+        .and_then(|h| h.get(Value::symbol_from_str("symbolize_names"), vm, globals).ok().flatten())
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
     let mut map = RubyMap::default();
-    for (i, name) in names.iter().enumerate() {
-        let key = Value::string_from_str(name);
-        let val = m.at(i + 1)
-            .map(|s| Value::string_from_str(s))
+    let mut done: Vec<&str> = Vec::with_capacity(names.len());
+    for name in &names {
+        if done.iter().any(|s| *s == name.as_str()) {
+            continue;
+        }
+        done.push(name);
+        let key = if symbolize {
+            Value::symbol_from_str(name)
+        } else {
+            Value::string_from_str(name)
+        };
+        let val = last_matched_named(&m, &names, name)
+            .map(Value::string_from_str)
             .unwrap_or_default();
         map.insert(key, val, vm, globals)?;
     }
@@ -823,6 +895,23 @@ mod tests {
         run_test_error(r##"/(?<f>x)(?<g>y)/.match("xy").deconstruct_keys(['s', :g])"##);
         // Array longer than named captures -> {} (early return, no type check).
         run_test(r##"/(?<f>x)/.match("x").deconstruct_keys(['s', :f])"##);
+    }
+
+    #[test]
+    fn match_data_dup_names_eq() {
+        run_tests(&[
+            r##"/(?<hay>hay)(?<dot>\.)(?<hay>hay)/.match("hay.hay").names"##,
+            r##"/\A(?<a>.)(?<b>.)(?<b>.)(?<a>.)?\z/.match("012").named_captures"##,
+            r##"/(?<a>.)(?<b>.)?/.match("0").named_captures(symbolize_names: true)"##,
+            r##"/(?<a>.)(?<b>.)?/.match("02").named_captures(symbolize_names: false)"##,
+            r##"/(?<f>foo)|(?<f>bar)/.match("bar")[:f]"##,
+            r##"/(?<f>foo)|(?<f>bar)/.match("foo")[:f]"##,
+            r##"(/(?<a>x)/.match("x")["nope"] rescue $!.class)"##,
+            r##"/(a)(b)/.match("ab") == /(a)(b)/.match("ab")"##,
+            r##"/(a)(b)/.match("ab").eql?(/(a)(b)/.match("ab"))"##,
+            r##"/(a)(b)/.match("ab") == /(a)(b)/.match("xab")"##,
+            r##"/(a)/.match("a") == "a""##,
+        ]);
     }
 
     #[test]
