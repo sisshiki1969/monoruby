@@ -235,6 +235,9 @@ struct CallSite {
     /// *BcReg* of the return value. If None, the return value is discarded.
     dst: Option<BcReg>,
     forwarding: bool,
+    /// Bypass `private` visibility. Set for the privileged
+    /// `recv.__builtin_initialize__(...)` intrinsic spelling.
+    bypass_visibility: bool,
 }
 
 impl CallSite {
@@ -262,6 +265,7 @@ impl CallSite {
             recv,
             dst,
             forwarding,
+            bypass_visibility: false,
         }
     }
 

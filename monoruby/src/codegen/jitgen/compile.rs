@@ -284,8 +284,25 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::BlockArgProxy(ret, outer) => {
-                state.def_S(ret);
-                ir.block_arg_proxy(ret, outer);
+                // When this frame is specialized for a caller call site
+                // that passes no block (no literal block and no `&blk`),
+                // the forwarded `&block` of `...` is provably nil at
+                // compile time. Fold the proxy to a constant `nil`
+                // instead of materializing it every call (`outer == 0`:
+                // the proxy refers to this frame's own block param). A
+                // deopt resumes the interpreter, which re-runs this
+                // `BlockArgProxy` bytecode and computes the same nil.
+                if outer == 0
+                    && self.is_specialized()
+                    && let Some(cid) = self.method_caller_callsite()
+                    && self.store[cid].block_fid.is_none()
+                    && self.store[cid].block_arg.is_none()
+                {
+                    state.def_C(ret, Value::nil());
+                } else {
+                    state.def_S(ret);
+                    ir.block_arg_proxy(ret, outer);
+                }
             }
             TraceIr::BlockArg(ret, outer) => {
                 state.def_S(ret);
@@ -737,7 +754,20 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::CheckKwRest(local) => {
-                ir.push(AsmInst::CheckKwRest(local));
+                // D1 kwrest deferral: in a specialized pure forwarding
+                // trampoline (`def f(...) = g(...)`) whose `...` rest is
+                // source-routed (see `forward_rest_deferral`), skip
+                // materializing an empty `Hash` for the forwarding
+                // `**kwrest`. A nil `**kwrest` forwards as "no keyword
+                // arguments" on every consume path (the deferred fast
+                // path treats it as a gate invariant; the generic /
+                // fallback / VM / deopt-resume paths all skip a nil
+                // hash-splat — see `set_callee_frame_arguments` /
+                // `hash_splat_and_kw_rest`), so leaving it nil is
+                // universally safe and avoids a per-call `empty_hash`.
+                if self.forward_rest_deferral().is_none() {
+                    ir.push(AsmInst::CheckKwRest(local));
+                }
             }
             TraceIr::OptCase {
                 cond,

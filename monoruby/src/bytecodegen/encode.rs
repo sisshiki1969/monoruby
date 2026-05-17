@@ -677,6 +677,7 @@ impl<'a> BytecodeGen<'a> {
             recv,
             dst,
             forwarding,
+            bypass_visibility,
         } = callsite;
 
         let args = self.slot_id(&args);
@@ -712,6 +713,7 @@ impl<'a> BytecodeGen<'a> {
             recv,
             dst,
             forwarding,
+            bypass_visibility,
         ))
     }
 }

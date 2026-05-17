@@ -73,7 +73,27 @@ impl<'a> BytecodeGen<'a> {
             None
         };
 
-        let callid = self.handle_arguments(arglist, method, recv, dst, loc)?;
+        // Privileged intrinsic: `recv.__builtin_initialize__(...)` is a
+        // visibility-bypassing call to `recv.initialize(...)`. Used by
+        // the Ruby `Class#new` (startup.rb) so a class's private
+        // `initialize` is driven without the `__send__(:initialize, ...)`
+        // indirection — keeping the natural forwarding-call shape that
+        // the JIT's D1 forwarding-rest deferral can specialize (the
+        // forwarded `...` rest is then routed straight from the caller
+        // with no rest `Array` materialized).
+        let builtin_initialize =
+            method == IdentId::get_id("__builtin_initialize__");
+        let method = if builtin_initialize {
+            IdentId::INITIALIZE
+        } else {
+            method
+        };
+
+        let mut callid = self.handle_arguments(arglist, method, recv, dst, loc)?;
+
+        if builtin_initialize {
+            callid.bypass_visibility = true;
+        }
 
         self.temp = old_temp;
         if push_flag {

@@ -616,6 +616,13 @@ fn hash_splat_and_kw_rest(
                 .iter()
                 .map(|pos| caller_lfp.register(*pos).unwrap())
             {
+                // A nil hash-splat is `**nil` — no keyword arguments.
+                // (The other hash-splat readers already skip nil; this
+                // kw-rest-building loop must too, so a deferred/elided
+                // forwarding `**kwrest` left as nil is universally safe.)
+                if h.is_nil() {
+                    continue;
+                }
                 let mut h = h.as_hashmap_inner().clone();
                 for name in kw_names.iter() {
                     let sym = Value::symbol(*name);

@@ -596,6 +596,7 @@ impl Store {
         recv: SlotId,
         dst: Option<SlotId>,
         forwarding: bool,
+        bypass_visibility: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
@@ -613,6 +614,7 @@ impl Store {
             recv,
             dst,
             forwarding,
+            bypass_visibility,
         });
         id
     }
@@ -1168,6 +1170,13 @@ pub struct CallSiteInfo {
     pub(crate) dst: Option<SlotId>,
     #[allow(dead_code)]
     pub(crate) forwarding: bool,
+    /// Treat this call as a function call for visibility purposes
+    /// (bypass `private`), regardless of whether the receiver is
+    /// `self`. Set for the privileged `recv.__builtin_initialize__(...)`
+    /// intrinsic spelling so `Class#new` can drive a class's private
+    /// `initialize` while keeping the natural forwarding-call shape
+    /// (which the D1 forwarding-rest deferral can specialize).
+    pub(crate) bypass_visibility: bool,
 }
 
 impl CallSiteInfo {
@@ -1188,7 +1197,7 @@ impl CallSiteInfo {
     }
 
     pub fn is_func_call(&self) -> bool {
-        self.recv.is_self()
+        self.recv.is_self() || self.bypass_visibility
     }
 
     ///

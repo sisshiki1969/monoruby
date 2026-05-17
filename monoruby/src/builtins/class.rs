@@ -64,7 +64,15 @@ pub(super) fn gen_class_allocate_inline(
         );
     });
     ir.xmm_restore(using_xmm);
-    state.def_rax2acc(ir, dst);
+    // The allocator produces an instance of exactly `class_id`. Record
+    // that class in the abstract state so the trailing
+    // `o.__builtin_initialize__(...)` resolves to a single, statically
+    // known `class_id#initialize` (monomorphic per the self-class-
+    // specialized `Class#new`). Without this the allocated object's
+    // class is unknown, forcing a polymorphic inline-cache dispatch
+    // that thrashes / deopts on every construction when many classes
+    // are built through the shared `Class#new` (e.g. aobench).
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
     true
 }
 
