@@ -3995,18 +3995,20 @@ mod tests {
 
     #[test]
     fn test_builtin() {
-        run_test2(":sym.class.to_s");
-        run_test2("5.class.to_s");
-        run_test2("5.7.class.to_s");
-        run_test2("'windows'.class.to_s");
-        run_test2("puts 100");
-        run_test2("print '100'");
-        run_test2("p");
-        run_test2("p 1");
-        run_test2("p 1,2");
-        run_test2("p 1,2,3");
-        run_test2("nil.respond_to?(:foo)");
-        run_test2("nil.inspect");
+        run_tests2(&[
+            ":sym.class.to_s",
+            "5.class.to_s",
+            "5.7.class.to_s",
+            "'windows'.class.to_s",
+            "puts 100",
+            "print '100'",
+            "p",
+            "p 1",
+            "p 1,2",
+            "p 1,2,3",
+            "nil.respond_to?(:foo)",
+            "nil.inspect",
+        ]);
         run_test2("Time.singleton_class.to_s");
         run_test2(r#"File.write("/tmp/foo", "woo")"#);
     }
@@ -4251,12 +4253,13 @@ mod tests {
 
     #[test]
     fn kernel_integer() {
-        run_test2(r#"Integer(-2435)"#);
-        run_test2(r#"Integer("2435")"#);
+        run_tests2(&[r#"Integer(-2435)"#, r#"Integer("2435")"#]);
         run_test_error(r#"Integer("2435.78")"#);
         run_test_error(r#"Integer([4])"#);
-        run_test2(r#"Integer(-2435766756886769978978435)"#);
-        run_test2(r#"Integer(2435.4556787)"#);
+        run_tests2(&[
+            r#"Integer(-2435766756886769978978435)"#,
+            r#"Integer(2435.4556787)"#,
+        ]);
     }
 
     #[test]
@@ -4492,10 +4495,12 @@ mod tests {
 
     #[test]
     fn object_instance_of() {
-        run_test2(r#"5.instance_of?(Integer)"#);
-        run_test2(r#"5.instance_of?(Float)"#);
-        run_test2(r#":ruby.instance_of?(Symbol)"#);
-        run_test2(r#":ruby.instance_of?(Object)"#);
+        run_tests2(&[
+            r#"5.instance_of?(Integer)"#,
+            r#"5.instance_of?(Float)"#,
+            r#":ruby.instance_of?(Symbol)"#,
+            r#":ruby.instance_of?(Object)"#,
+        ]);
         run_test2(
             r#"
         class C < Object

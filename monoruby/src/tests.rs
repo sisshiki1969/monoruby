@@ -162,6 +162,30 @@ pub fn run_test2(code: &str) {
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
+/// Batched form of [`run_test2`]: concatenates `codes` into a single
+/// `[..]` literal so the whole slice costs one CRuby spawn instead of
+/// one per element. Like `run_test2` (and unlike [`run_tests`]) it runs
+/// the code only once — no 25-iteration JIT-warmup loop.
+pub fn run_tests2<S: AsRef<str>>(codes: &[S]) {
+    let mut code = "__a = [];".to_string();
+    for c in codes {
+        let c = c.as_ref();
+        code += &format!("__a << ({c});");
+    }
+    code += "__a";
+    eprintln!("{code}");
+    let mut globals = Globals::new_test();
+    let interp_val = run_test_main(&mut globals, &code).as_array();
+    let ruby_res = run_ruby(&mut globals, &code).as_array();
+
+    for i in 0..codes.len() {
+        let interp_elem = interp_val.get(i).unwrap();
+        let ruby_elem = ruby_res.get(i).unwrap();
+        eprintln!("{}", codes[i].as_ref());
+        Value::assert_eq(&globals, *interp_elem, *ruby_elem);
+    }
+}
+
 pub fn run_test_no_result_check(code: &str) -> Value {
     eprintln!("{code}");
     let mut globals = Globals::new_test();

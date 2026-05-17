@@ -7354,42 +7354,46 @@ mod tests {
 
     #[test]
     fn string_format() {
-        run_test2(r###""-%d-" % 12"###);
-        run_test2(r###""-%4d-" % 12"###);
-        run_test2(r###""-%04d-" % 12"###);
-        run_test2(r###""-%x-" % 12"###);
-        run_test2(r###""-%4x-" % 12"###);
-        run_test2(r###""-%04x-" % 12"###);
-        run_test2(r###""-%X-" % 12"###);
-        run_test2(r###""-%4X-" % 12"###);
-        run_test2(r###""-%04X-" % 12"###);
-        run_test2(r###""-%b-" % 9"###);
-        run_test2(r###""-%6b-" % 9"###);
-        run_test2(r###""-%06b-" % 9"###);
-        run_test2(r###""%40i" % "1257765464656546546546546546546546546""###);
-        run_test2(r###""%40b" % "1257765464656546546546546546546546546""###);
-        run_test2(r###""%08.5f" % 12.575824562"###);
-        run_test2(r###""%08.3f" % 12.57"###);
-        run_test2(r###""%08.f" % 12.57"###);
-        run_test2(r###""%.2f" % 1.345"###);
-        run_test2(r###""%3.4f" % 1.34578"###);
-        run_test2(r###""%3f" % 1.34578785885"###);
-        run_test2(r###""%15.1e" % 12785.34578e-127"###);
-        run_test2(r###""%15.1E" % 12785.34578e-127"###);
-        run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+        run_tests2(&[
+            r###""-%d-" % 12"###,
+            r###""-%4d-" % 12"###,
+            r###""-%04d-" % 12"###,
+            r###""-%x-" % 12"###,
+            r###""-%4x-" % 12"###,
+            r###""-%04x-" % 12"###,
+            r###""-%X-" % 12"###,
+            r###""-%4X-" % 12"###,
+            r###""-%04X-" % 12"###,
+            r###""-%b-" % 9"###,
+            r###""-%6b-" % 9"###,
+            r###""-%06b-" % 9"###,
+            r###""%40i" % "1257765464656546546546546546546546546""###,
+            r###""%40b" % "1257765464656546546546546546546546546""###,
+            r###""%08.5f" % 12.575824562"###,
+            r###""%08.3f" % 12.57"###,
+            r###""%08.f" % 12.57"###,
+            r###""%.2f" % 1.345"###,
+            r###""%3.4f" % 1.34578"###,
+            r###""%3f" % 1.34578785885"###,
+            r###""%15.1e" % 12785.34578e-127"###,
+            r###""%15.1E" % 12785.34578e-127"###,
+            r###""%c %c %c" % [46, 52.0, "r"]"###,
+        ]);
     }
 
     #[test]
     fn string_format_positional() {
         // `N$` positional argument references, including a flag before
         // the reference (`%-2$d`) and `*N$` width-from-argument.
-        run_test2(r###"sprintf("%1$s %2$s", "a", "b")"###);
-        run_test2(r###"sprintf("%2$s %1$s", "a", "b")"###);
-        run_test2(r###"sprintf("%-2$d", 1, 2, 3)"###);
-        run_test2(r###"sprintf("%1$*2$d", 112, 10)"###);
-        run_test2(r###"sprintf("%1$*2$d", 112, -10)"###);
-        run_test2(r###"sprintf("%1$*2$b", 10, 10)"###);
-        run_test2(r###"sprintf("%1$*2$s", "abc", 10)"###);
+        run_tests2(&[
+            r###"sprintf("%1$s %2$s", "a", "b")"###,
+            r###"sprintf("%2$s %1$s", "a", "b")"###,
+            r###"sprintf("%-2$d", 1, 2, 3)"###,
+            r###"sprintf("%1$*2$d", 112, 10)"###,
+            r###"sprintf("%1$*2$d", 112, -10)"###,
+            r###"sprintf("%1$*2$b", 10, 10)"###,
+            r###"sprintf("%1$*2$s", "abc", 10)"###,
+        ]);
         // Error / edge branches of the positional parser.
         run_test_error(r###"sprintf("%1$s %2$s", "a")"###);
         run_test_error(r###"sprintf("%0$d", 1)"###);
@@ -7399,152 +7403,104 @@ mod tests {
         run_test_error(r###"sprintf("%1$s %s", "a", "b")"###);
         run_test_error(r###"sprintf("%s %1$s", "a", "b")"###);
         run_test_error(r###"sprintf("%*1$d", 5, 42)"###);
-        run_test2(r###"sprintf("%2$*1$d", 5, 42)"###);
-        run_test2(r###"sprintf("%s %s", "a", "b")"###);
+        run_tests2(&[
+            r###"sprintf("%2$*1$d", 5, 42)"###,
+            r###"sprintf("%s %s", "a", "b")"###,
+        ]);
     }
 
     #[test]
-    fn string_format_hash_and_neg_radix() {
-        // `#` flag forces a decimal point for e/E/g/G/a/A and keeps
-        // g/G trailing zeros; `%#f` keeps CRuby's Integer quirk.
-        run_test2(r###""%#.0e" % 100"###);
-        run_test2(r###""%#.0g" % 100"###);
-        run_test2(r###""%#g" % 123.4"###);
-        run_test2(r###""%#.0f" % 1"###);
-        run_test2(r###""%#.0f" % 1.0"###);
-        run_test2(r###""%#.0f" % 5"###);
-        run_test2(r###""%#a" % 16.0"###);
-        // `+`/space on negative b/o/x → sign-magnitude, not two's-complement.
-        run_test2(r###""%+b" % -10"###);
-        run_test2(r###""% o" % -10"###);
-        run_test2(r###""%+x" % -255"###);
-        run_test2(r###""%b" % -10"###);
-        run_test2(r###""%o" % -10"###);
-        run_test2(r###""%x" % -10"###);
-        run_test2(r###""%+8b" % -10"###);
-    }
-
-    #[test]
-    fn string_format_g() {
-        // %g and %G: shortest representation
-        run_test2(r###""%g" % 100.0"###);
-        run_test2(r###""%g" % 0.0001"###);
-        run_test2(r###""%g" % 123456.789"###);
-        run_test2(r###""%g" % 1.0e-5"###);
-        run_test2(r###""%G" % 100.0"###);
-        run_test2(r###""%G" % 1.0e-5"###);
-        run_test2(r###""%g" % 0.0"###);
-        run_test2(r###""%g" % 1.0"###);
-        run_test2(r###""%20.10g" % 1.23456789"###);
-    }
-
-    #[test]
-    fn string_format_b_upper() {
-        // %B: binary uppercase
-        run_test2(r###""%B" % 10"###);
-        run_test2(r###""%#B" % 10"###);
-        run_test2(r###""%B" % 0"###);
-    }
-
-    #[test]
-    fn string_format_u() {
-        // %u: unsigned decimal
-        run_test2(r###""%u" % 42"###);
-        run_test2(r###""%u" % 0"###);
-        run_test2(r###""%10u" % 42"###);
-    }
-
-    #[test]
-    fn string_format_p() {
-        // %p: inspect
-        run_test2(r###""%p" % "hello""###);
-        run_test2(r###""%p" % 42"###);
-        run_test2(r###""%p" % nil"###);
-        run_test2(r###""%20p" % "hello""###);
-    }
-
-    #[test]
-    fn string_format_o() {
-        // %o: octal
-        run_test2(r###""%o" % 255"###);
-        run_test2(r###""%o" % 8"###);
-        run_test2(r###""%o" % 0"###);
-        run_test2(r###""%#o" % 255"###);
-        run_test2(r###""%#o" % 0"###);
-    }
-
-    #[test]
-    fn string_format_alternate() {
-        // # flag (alternate form)
-        run_test2(r###""%#x" % 255"###);
-        run_test2(r###""%#X" % 255"###);
-        run_test2(r###""%#o" % 255"###);
-        run_test2(r###""%#b" % 10"###);
-        run_test2(r###""%#B" % 10"###);
-        // # flag on zero should not add prefix
-        run_test2(r###""%#x" % 0"###);
-        run_test2(r###""%#b" % 0"###);
-    }
-
-    #[test]
-    fn string_format_space_flag() {
-        // space flag
-        run_test2(r###""% d" % 42"###);
-        run_test2(r###""% d" % -42"###);
-    }
-
-    #[test]
-    fn string_format_plus_flag() {
-        // plus flag
-        run_test2(r###""%+d" % 42"###);
-        run_test2(r###""%+d" % -42"###);
-        run_test2(r###""%+d" % 0"###);
-    }
-
-    #[test]
-    fn string_format_minus_flag() {
-        // left-align
-        run_test2(r###""%-10d" % 42"###);
-        run_test2(r###""%-10s" % "hi""###);
-    }
-
-    #[test]
-    fn string_format_dynamic_width() {
-        // * dynamic width
-        run_test2(r###""%*d" % [10, 42]"###);
-        run_test2(r###""%*d" % [-10, 42]"###);
-    }
-
-    #[test]
-    fn string_format_neg_twos_complement() {
-        // Negative numbers with %b, %o, %x (two's complement)
-        run_test2(r###""%b" % -1"###);
-        run_test2(r###""%o" % -1"###);
-        run_test2(r###""%x" % -1"###);
-        run_test2(r###""%b" % -10"###);
-        run_test2(r###""%o" % -10"###);
-        run_test2(r###""%x" % -10"###);
-        run_test2(r###""%X" % -10"###);
-    }
-
-    #[test]
-    fn string_format_scientific() {
-        // Scientific notation %e/%E
-        run_test2(r###""%e" % 1234.5"###);
-        run_test2(r###""%E" % 1234.5"###);
-        run_test2(r###""%.2e" % 1234.5"###);
-        run_test2(r###""%e" % 0.0"###);
-        run_test2(r###""%e" % -1234.5"###);
-        run_test2(r###""%+e" % 1234.5"###);
-        run_test2(r###""% e" % 1234.5"###);
-        run_test2(r###""%015.3e" % 1234.5"###);
-    }
-
-    #[test]
-    fn string_format_hash() {
-        run_test2(r###""%{name} is %{age}" % {name: "Alice", age: 30}"###);
-        run_test2(r###""%{x}" % {x: "hello"}"###);
-        run_test2(r###""%{a}-%{b}" % {a: 1, b: 2}"###);
+    fn string_format_flags_group() {
+        run_tests2(&[
+            // `#` flag forces a decimal point for e/E/g/G/a/A and keeps
+            // g/G trailing zeros; `%#f` keeps CRuby's Integer quirk.
+            r###""%#.0e" % 100"###,
+            r###""%#.0g" % 100"###,
+            r###""%#g" % 123.4"###,
+            r###""%#.0f" % 1"###,
+            r###""%#.0f" % 1.0"###,
+            r###""%#.0f" % 5"###,
+            r###""%#a" % 16.0"###,
+            // `+`/space on negative b/o/x → sign-magnitude, not two's-complement.
+            r###""%+b" % -10"###,
+            r###""% o" % -10"###,
+            r###""%+x" % -255"###,
+            r###""%b" % -10"###,
+            r###""%o" % -10"###,
+            r###""%x" % -10"###,
+            r###""%+8b" % -10"###,
+            // %g and %G: shortest representation
+            r###""%g" % 100.0"###,
+            r###""%g" % 0.0001"###,
+            r###""%g" % 123456.789"###,
+            r###""%g" % 1.0e-5"###,
+            r###""%G" % 100.0"###,
+            r###""%G" % 1.0e-5"###,
+            r###""%g" % 0.0"###,
+            r###""%g" % 1.0"###,
+            r###""%20.10g" % 1.23456789"###,
+            // %B: binary uppercase
+            r###""%B" % 10"###,
+            r###""%#B" % 10"###,
+            r###""%B" % 0"###,
+            // %u: unsigned decimal
+            r###""%u" % 42"###,
+            r###""%u" % 0"###,
+            r###""%10u" % 42"###,
+            // %p: inspect
+            r###""%p" % "hello""###,
+            r###""%p" % 42"###,
+            r###""%p" % nil"###,
+            r###""%20p" % "hello""###,
+            // %o: octal
+            r###""%o" % 255"###,
+            r###""%o" % 8"###,
+            r###""%o" % 0"###,
+            r###""%#o" % 255"###,
+            r###""%#o" % 0"###,
+            // # flag (alternate form)
+            r###""%#x" % 255"###,
+            r###""%#X" % 255"###,
+            r###""%#o" % 255"###,
+            r###""%#b" % 10"###,
+            r###""%#B" % 10"###,
+            // # flag on zero should not add prefix
+            r###""%#x" % 0"###,
+            r###""%#b" % 0"###,
+            // space flag
+            r###""% d" % 42"###,
+            r###""% d" % -42"###,
+            // plus flag
+            r###""%+d" % 42"###,
+            r###""%+d" % -42"###,
+            r###""%+d" % 0"###,
+            // left-align
+            r###""%-10d" % 42"###,
+            r###""%-10s" % "hi""###,
+            // * dynamic width
+            r###""%*d" % [10, 42]"###,
+            r###""%*d" % [-10, 42]"###,
+            // Negative numbers with %b, %o, %x (two's complement)
+            r###""%b" % -1"###,
+            r###""%o" % -1"###,
+            r###""%x" % -1"###,
+            r###""%b" % -10"###,
+            r###""%o" % -10"###,
+            r###""%x" % -10"###,
+            r###""%X" % -10"###,
+            // Scientific notation %e/%E
+            r###""%e" % 1234.5"###,
+            r###""%E" % 1234.5"###,
+            r###""%.2e" % 1234.5"###,
+            r###""%e" % 0.0"###,
+            r###""%e" % -1234.5"###,
+            r###""%+e" % 1234.5"###,
+            r###""% e" % 1234.5"###,
+            r###""%015.3e" % 1234.5"###,
+            r###""%{name} is %{age}" % {name: "Alice", age: 30}"###,
+            r###""%{x}" % {x: "hello"}"###,
+            r###""%{a}-%{b}" % {a: 1, b: 2}"###,
+        ]);
     }
 
     #[test]
