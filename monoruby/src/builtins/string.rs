@@ -10739,4 +10739,25 @@ mod tests {
         );
         run_test_error(r#""abc".dup.freeze.reverse!"#);
     }
+
+    #[test]
+    fn eucjp_sjis_char_width() {
+        // Stateless multibyte (EUC-JP / Shift_JIS) character boundaries
+        // must match CRuby (P0 of the per-encoding iteration layer).
+        run_tests(&[
+            r#""あい".encode("EUC-JP").length"#,
+            r#""あい".encode("EUC-JP").each_char.map(&:bytesize)"#,
+            r#""ｱｲ".encode("EUC-JP").length"#,                 // 0x8E kana
+            r#""abc".force_encoding("EUC-JP").length"#,
+            r#""あAい".encode("Shift_JIS").length"#,
+            r#""あAい".encode("Shift_JIS").each_char.map(&:bytesize)"#,
+            r#""ﾊﾝｶｸ".encode("Shift_JIS").length"#,            // half-width kana
+            r#""日本語".encode("EUC-JP").reverse.encode("UTF-8")"#,
+            r#""日本語".encode("Shift_JIS").chars.map { |c| c.encode("UTF-8") }"#,
+            // EUC-JP 0x8F lead = JIS X 0212 (3-byte char).
+            r#"("\x8F\xA2\xAF".dup.force_encoding("EUC-JP")).length"#,
+            r#"("\x8F\xA2\xAF" + "A").dup.force_encoding("EUC-JP").each_char.map(&:bytesize)"#,
+            r#""".encode("EUC-JP").length"#,
+        ]);
+    }
 }

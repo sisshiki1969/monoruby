@@ -33,14 +33,31 @@ impl<'a> Iterator for CharByteIter<'a> {
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
-            | Encoding::EucJp
-            | Encoding::Sjis(_)
             // ISO-2022-JP groups bytes 1-at-a-time at the codepoint
             // iterator level — the actual char-vs-ESC-sequence
             // chunking happens further up via `encoding_rs`. This
             // matches the behaviour of `String#bytes.length` ==
             // `String#bytesize` for stateful encodings.
             | Encoding::Iso2022Jp => 1,
+            // EUC-JP (stateless, ASCII-compatible multibyte):
+            //   0x8E + 1 byte  -> JIS X 0201 katakana (2)
+            //   0x8F + 2 bytes -> JIS X 0212            (3)
+            //   0xA1..=0xFE    -> JIS X 0208 lead       (2)
+            //   otherwise (incl. 7-bit & malformed)     (1)
+            Encoding::EucJp => match self.bytes[self.pos] {
+                0x8e => 2,
+                0x8f => 3,
+                0xa1..=0xfe => 2,
+                _ => 1,
+            },
+            // Shift_JIS / CP932 (stateless): a double-byte character
+            // is led by 0x81..=0x9F or 0xE0..=0xFC; single-byte
+            // otherwise (ASCII, 0xA1..=0xDF half-width kana, and the
+            // 0x80/0xA0/0xFD..=0xFF singletons).
+            Encoding::Sjis(_) => match self.bytes[self.pos] {
+                0x81..=0x9f | 0xe0..=0xfc => 2,
+                _ => 1,
+            },
             Encoding::Utf16Le | Encoding::Utf16Be => 2,
             Encoding::Utf32Le | Encoding::Utf32Be => 4,
             Encoding::Utf8 => {
@@ -783,9 +800,14 @@ impl RStringInner {
                 // variant before returning; Unknown is unreachable.
                 CodeRange::Unknown => unreachable!(),
             },
-            // EUC-JP / Shift_JIS: byte count (no native multibyte
-            // decoder yet).
-            Encoding::EucJp | Encoding::Sjis(_) => self.content.len(),
+            // EUC-JP / Shift_JIS: native stateless multibyte decode.
+            // ASCII-only content is 1 byte/char, so the cached
+            // SevenBit range answers in O(1); otherwise walk the
+            // encoding-aware character iterator.
+            Encoding::EucJp | Encoding::Sjis(_) => match self.code_range() {
+                CodeRange::SevenBit => self.content.len(),
+                _ => self.iter_char_bytes().count(),
+            },
             // ISO-2022-JP: route through `encoding_rs` to get an
             // accurate count of *characters* (escape sequences
             // shouldn't count). Falls back to byte length on
