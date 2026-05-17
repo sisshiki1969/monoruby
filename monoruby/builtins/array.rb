@@ -266,16 +266,19 @@ class Array
       }
     end
     n = n.to_int
-    len = self.size
+    # Defensive copy: CRuby snapshots the receiver before iterating,
+    # so mutations from the block don't change the generated combos.
+    pool = self.dup
+    len = pool.size
     if n == 0
       yield []
     elsif n == 1
-      each { |x| yield [x] }
+      pool.each { |x| yield [x] }
     elsif n > 0 && n <= len
       # iterative combination generation
       indices = (0...n).to_a
       loop do
-        yield indices.map { |i| self[i] }
+        yield indices.map { |i| pool[i] }
         # find rightmost index that can be incremented
         i = n - 1
         i -= 1 while i >= 0 && indices[i] == len - n + i
@@ -329,12 +332,17 @@ class Array
     mode == :find_min ? low < size ? low : nil : nil
   end
 
-  def permutation(n = self.size)
+  def permutation(n = nil)
     unless block_given?
+      # When called with no argument the Enumerator must use the
+      # receiver's size *at iteration time*, not freeze it now — CRuby
+      # reflects later mutations (`a.permutation; a << x; enum.to_a`).
+      # Replay with no arg so `self.size` is recomputed; with an
+      # explicit `n` the Enumerator is built with that fixed length.
       # Descending factorial size = n * (n-1) * ... * (n-k+1).
-      # 0 for k < 0 or k > size; 1 for k == 0.
-      return to_enum(:permutation, n) {
-        k = n.is_a?(Integer) ? n : n.to_int
+      enum_args = n.nil? ? [] : [n]
+      return to_enum(:permutation, *enum_args) {
+        k = n.nil? ? self.size : (n.is_a?(Integer) ? n : n.to_int)
         len = self.size
         if k < 0 || k > len
           0
@@ -347,7 +355,7 @@ class Array
         end
       }
     end
-    n = n.to_int
+    n = n.nil? ? self.size : n.to_int
     if n == 0
       yield []
       return self
@@ -575,15 +583,17 @@ class Array
       }
     end
     n = n.to_int
-    len = self.size
+    # Defensive copy (see #combination): ignore block mutations.
+    pool = self.dup
+    len = pool.size
     if n == 0
       yield []
     elsif n == 1
-      each { |x| yield [x] }
+      pool.each { |x| yield [x] }
     elsif len > 0 && n > 0
       indices = [0] * n
       loop do
-        yield indices.map { |i| self[i] }
+        yield indices.map { |i| pool[i] }
         # Increment
         i = n - 1
         while i >= 0
