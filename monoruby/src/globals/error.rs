@@ -744,17 +744,18 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Fatal, msg)
     }
 
-    /// Like [`MonorubyErr::fatal`] but seeds the error's trace with a
-    /// single source-location frame so the interpreter's "where did
-    /// it happen?" formatter has something to print. Used by the
-    /// Prism backend when its lowerer hits a node it can't yet
-    /// translate — Prism parsed the file fine, so a regular
-    /// `SyntaxError` would be misleading, but we still want the
-    /// usual "<path>:<line>" prefix on stderr instead of bare
-    /// `location not defined.`.
-    pub fn fatal_with_loc(msg: impl ToString, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    /// Construct a recoverable `SyntaxError` seeded with a single
+    /// source-location frame so the interpreter's "where did it
+    /// happen?" formatter has something to print. Used by the Prism
+    /// backend when its lowerer hits a node it can't yet translate:
+    /// Prism parsed the file fine, but the construct is not accepted
+    /// by this implementation, so `SyntaxError` is the correct Ruby
+    /// class and — unlike a `FatalError` — it can be `rescue`d, so a
+    /// single unsupported construct only fails its own example
+    /// instead of aborting the whole process.
+    pub fn syntax_with_loc(msg: impl ToString, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Fatal,
+            MonorubyErrKind::Syntax,
             msg.to_string(),
             loc,
             sourceinfo,
