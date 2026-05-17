@@ -1795,246 +1795,288 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => Ok(Value::array_from_vec(v)),
         };
     }
-    let string = self_.expect_str(globals)?;
-    let lim = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_int_i64(vm, globals)?
+    // `limit` parsing. CRuby's `NUM2INT` raises RangeError when the
+    // value does not fit in a C `int`.
+    let limit_given = lfp.try_arg(1).is_some();
+    let lim: i64 = if let Some(arg1) = lfp.try_arg(1) {
+        let n = arg1.coerce_to_int_i64(vm, globals)?;
+        if n > i32::MAX as i64 || n < i32::MIN as i64 {
+            return Err(MonorubyErr::rangeerr(format!(
+                "integer {n} too big to convert to `int'"
+            )));
+        }
+        n
     } else {
         0
     };
-    // Element constructor that copies the receiver's encoding tag
-    // onto each split fragment. Skips going through `Value::string`
-    // (which would default to UTF-8) so an EUC-JP / SJIS receiver
-    // gets back fragments tagged with its own encoding.
+
+    // Resolve the separator (CRuby `rb_str_split_m` dispatch). When it
+    // is not given or `nil`, fall back to `$;`; if that is `nil` too,
+    // use AWK whitespace splitting.
+    enum SepKind {
+        Awk,
+        Chars,
+        Str(String),
+        Re(crate::value::Regexp),
+    }
+    let resolve = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<SepKind> {
+        if let Some(re) = v.is_regex() {
+            // A `Regexp` whose source is empty splits into characters;
+            // a single-space source is treated as a literal " " string
+            // split (NOT AWK — only a literal String " " is AWK).
+            let src = re.as_str();
+            Ok(if src.is_empty() {
+                SepKind::Chars
+            } else if src == " " {
+                SepKind::Str(" ".to_string())
+            } else {
+                SepKind::Re(re)
+            })
+        } else if let Some(inner) = v.is_rstring_inner() {
+            let s = inner.check_utf8()?;
+            Ok(if s.is_empty() {
+                SepKind::Chars
+            } else if s == " " {
+                SepKind::Awk
+            } else {
+                SepKind::Str(s.to_string())
+            })
+        } else {
+            let c = v.coerce_to_str(vm, globals)?;
+            let s: &str = &c;
+            Ok(if s.is_empty() {
+                SepKind::Chars
+            } else if s == " " {
+                SepKind::Awk
+            } else {
+                SepKind::Str(s.to_string())
+            })
+        }
+    };
+    let sep = match lfp.try_arg(0) {
+        Some(v) if !v.is_nil() => resolve(vm, globals, v)?,
+        _ => match globals.get_gvar(IdentId::get_id("$;")) {
+            Some(fs) if !fs.is_nil() => {
+                // CRuby emits this as a `:deprecated` category warning
+                // that fires regardless of `$VERBOSE` (ruby/spec relies
+                // on it under `$VERBOSE = false`).
+                crate::value::emit_verbose_warning(
+                    vm,
+                    globals,
+                    "$; is set to non-nil value",
+                )?;
+                resolve(vm, globals, fs)?
+            }
+            _ => SepKind::Awk,
+        },
+    };
+
+    let string = self_.expect_str(globals)?;
+
+    // `limit == 1`: the whole string is returned as the single field
+    // (an empty receiver yields no fields).
+    if limit_given && lim == 1 {
+        let v: Vec<Value> = if string.is_empty() {
+            vec![]
+        } else {
+            vec![Value::string_from_str_with_encoding_of(string, self_)]
+        };
+        return match lfp.block() {
+            Some(bh) => {
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
+                Ok(lfp.self_val())
+            }
+            None => Ok(Value::array_from_vec(v)),
+        };
+    }
+
+    // Element constructor that copies the receiver's encoding tag onto
+    // each split fragment (so an EUC-JP / SJIS receiver gets fragments
+    // tagged with its own encoding rather than UTF-8).
     let mk = |s: &str| Value::string_from_str_with_encoding_of(s, self_);
-    let arg0 = lfp.try_arg(0).unwrap_or(Value::string_from_str(" "));
-    if let Some(sep_inner) = arg0.is_rstring_inner() {
-        let sep = sep_inner.check_utf8()?;
-        if sep.is_empty() {
-            // Per CRuby, an empty separator splits into characters
-            // (not bytes). With `limit > 0`, the last element holds
-            // the remainder of the string.
-            let chars: Vec<&str> = string
-                .char_indices()
-                .map(|(i, c)| &string[i..i + c.len_utf8()])
-                .collect();
-            let v: Vec<Value> = if lim <= 0 || (lim as usize) >= chars.len() {
-                let lim_pos = if lim > 0 { Some(lim as usize) } else { None };
-                let chars_len = chars.len();
-                let mut v: Vec<Value> = chars.into_iter().map(mk).collect();
-                // Trailing empty field is added when:
-                //   * lim is negative, or
-                //   * lim is positive and strictly greater than the
-                //     number of characters (so we still have "room"
-                //     in the limit).
-                if lim < 0 || matches!(lim_pos, Some(l) if l > chars_len) {
-                    v.push(mk(""));
-                }
-                v
-            } else {
-                let take = (lim as usize).saturating_sub(1);
-                let mut v: Vec<Value> = chars
-                    .iter()
-                    .take(take)
-                    .map(|s| mk(s))
-                    .collect();
-                let tail_start = chars
-                    .get(take)
-                    .map(|s| s.as_ptr() as usize - string.as_ptr() as usize)
-                    .unwrap_or(string.len());
-                v.push(mk(&string[tail_start..]));
-                v
-            };
-            return match lfp.block() {
-                Some(bh) => {
-                    let ary = Value::array_from_vec(v);
-                    vm.temp_push(ary);
-                    vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
-                    vm.temp_pop();
-                    Ok(lfp.self_val())
-                }
-                None => Ok(Value::array_from_vec(v)),
-            };
+    let clen = |b: usize| -> usize {
+        string[b..].chars().next().map_or(1, |c| c.len_utf8())
+    };
+
+    // `empty_count` < 0 keeps every (incl. trailing) empty field;
+    // `empty_count` >= 0 defers empty fields, flushing them only when a
+    // non-empty field follows — so trailing empties are dropped. This
+    // mirrors CRuby's `split_string`.
+    let mut out: Vec<Value> = Vec::new();
+    let mut ec: i64 = if lim == 0 { 0 } else { -1 };
+    let push = |out: &mut Vec<Value>, ec: &mut i64, slice: &str| {
+        if *ec >= 0 && slice.is_empty() {
+            *ec += 1;
+            return;
         }
-        let v: Vec<Value> = if sep == " " {
-            match lim {
-                lim if lim < 0 => {
-                    let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
-                    let mut v: Vec<_> = string
-                        .split_ascii_whitespace()
-                        .map(mk)
-                        .collect();
-                    if end_with {
-                        v.push(mk(""))
-                    }
-                    v
-                }
-                0 => {
-                    let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
-                    while let Some(s) = vec.last() {
-                        if s.is_empty() {
-                            vec.pop().unwrap();
-                        } else {
+        if *ec > 0 {
+            for _ in 0..*ec {
+                out.push(mk(""));
+            }
+            *ec = 0;
+        }
+        out.push(mk(slice));
+    };
+
+    // Field counter (`i` in CRuby). Pre-set to 1 when a limit argument
+    // was passed; only consulted for a positive limit.
+    let mut i: i64 = if limit_given { 1 } else { 0 };
+    let len = string.len();
+    let mut beg = 0usize;
+
+    fn is_awk_space(c: char) -> bool {
+        matches!(c, ' ' | '\t' | '\n' | '\x0B' | '\x0C' | '\r')
+    }
+
+    match sep {
+        SepKind::Awk => {
+            let mut skip = true;
+            let mut end = 0usize;
+            for (idx, c) in string.char_indices() {
+                let next = idx + c.len_utf8();
+                if skip {
+                    if is_awk_space(c) {
+                        beg = next;
+                    } else {
+                        end = next;
+                        skip = false;
+                        if lim > 0 && lim <= i {
                             break;
                         }
                     }
-                    vec.into_iter().map(mk).collect()
-                }
-                _ => string
-                    .trim_start()
-                    .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
-                    .map(|s| s.trim_start())
-                    .map(mk)
-                    .collect(),
-            }
-        } else if lim < 0 {
-            string.split(sep).map(mk).collect()
-        } else if lim == 0 {
-            let mut vec: Vec<&str> = string.split(sep).collect();
-            while let Some(s) = vec.last() {
-                if s.is_empty() {
-                    vec.pop().unwrap();
+                } else if is_awk_space(c) {
+                    let s = &string[beg..end];
+                    push(&mut out, &mut ec, s);
+                    skip = true;
+                    beg = next;
+                    if lim > 0 {
+                        i += 1;
+                    }
                 } else {
+                    end = next;
+                }
+            }
+        }
+        SepKind::Chars => {
+            let mut ci = string.char_indices();
+            loop {
+                match ci.next() {
+                    None => {
+                        beg = len;
+                        break;
+                    }
+                    Some((idx, c)) => {
+                        let next = idx + c.len_utf8();
+                        let s = &string[idx..next];
+                        push(&mut out, &mut ec, s);
+                        beg = next;
+                        if lim > 0 {
+                            i += 1;
+                            if lim <= i {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        SepKind::Str(seps) => {
+            let mut substr_start = 0usize;
+            let mut from = 0usize;
+            loop {
+                if from > len {
                     break;
                 }
+                match string[from..].find(seps.as_str()) {
+                    None => break,
+                    Some(rel) => {
+                        let pos = from + rel;
+                        let s = &string[substr_start..pos];
+                        push(&mut out, &mut ec, s);
+                        from = pos + seps.len();
+                        substr_start = from;
+                        if lim > 0 {
+                            i += 1;
+                            if lim <= i {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            vec.into_iter().map(mk).collect()
-        } else {
-            string
-                .splitn(lim as usize, sep)
-                .map(mk)
-                .collect()
-        };
-        match lfp.block() {
-            Some(bh) => {
-                let ary = Value::array_from_vec(v);
-                vm.temp_push(ary);
-                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
-                vm.temp_pop();
-                Ok(lfp.self_val())
-            }
-            None => Ok(Value::array_from_vec(v)),
+            beg = substr_start;
         }
-    } else if let Some(re) = arg0.is_regex() {
-        let all_cap = re.captures_iter(string);
-        let mut cursor = 0usize;
-        let mut res = vec![];
-        let mut count = 0;
-        'l: for c in all_cap {
-            let c = c.unwrap();
-            let mut iter = c.iter();
-            let m = if let Some(m) = iter.next().unwrap() {
-                m
-            } else {
-                continue;
-            };
-            count += 1;
-            if count == lim {
-                break 'l;
-            } else if cursor != 0 || cursor != m.start() || !m.range().is_empty() {
-                res.push(cursor..m.start());
-            }
-            for m in iter {
-                let m = if let Some(m) = m {
-                    m
-                } else {
-                    continue;
+        SepKind::Re(re) => {
+            let mut start = 0usize;
+            let mut last_null = false;
+            loop {
+                if start > len {
+                    break;
+                }
+                let caps = match re.captures_from_pos(string, start, vm)? {
+                    Some(c) => c,
+                    None => break,
                 };
-                count += 1;
-                if count == lim {
-                    cursor = m.start();
-                    break 'l;
-                } else {
-                    res.push(m.range())
-                }
-            }
-            cursor = m.end();
-        }
-        if cursor <= string.len() {
-            res.push(cursor..string.len());
-        }
-        // if lim == 0, remove all empty strings from a tail.
-        if lim == 0 {
-            while let Some(s) = res.last() {
-                if s.is_empty() {
-                    res.pop().unwrap();
-                } else {
-                    break;
-                }
-            }
-        }
-        let iter = res.into_iter().map(|r| mk(&string[r]));
-        match lfp.block() {
-            Some(bh) => {
-                vm.invoke_block_iter1(globals, bh, iter)?;
-                Ok(lfp.self_val())
-            }
-            None => Ok(Value::array_from_iter(iter)),
-        }
-    } else {
-        // Try to_str coercion for the separator
-        let coerced = arg0.coerce_to_str(vm, globals)?;
-        let v: Vec<Value> = if coerced == " " {
-            match lim {
-                lim if lim < 0 => {
-                    let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
-                    let mut v: Vec<_> = string
-                        .split_ascii_whitespace()
-                        .map(mk)
-                        .collect();
-                    if end_with {
-                        v.push(mk(""))
-                    }
-                    v
-                }
-                0 => {
-                    let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
-                    while let Some(s) = vec.last() {
-                        if s.is_empty() {
-                            vec.pop().unwrap();
+                let (b0, e0) = caps.pos(0).unwrap();
+                if start == b0 && b0 == e0 {
+                    if last_null {
+                        let cl = clen(beg);
+                        let s = &string[beg..beg + cl];
+                        push(&mut out, &mut ec, s);
+                        beg = start;
+                        last_null = false;
+                    } else {
+                        if start >= len {
+                            start += 1;
                         } else {
-                            break;
+                            start += clen(start);
                         }
+                        last_null = true;
+                        continue;
                     }
-                    vec.into_iter().map(mk).collect()
-                }
-                _ => string
-                    .trim_start()
-                    .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
-                    .map(|s| s.trim_start())
-                    .map(mk)
-                    .collect(),
-            }
-        } else if lim < 0 {
-            string
-                .split(&*coerced)
-                .map(mk)
-                .collect()
-        } else if lim == 0 {
-            let mut vec: Vec<&str> = string.split(&*coerced).collect();
-            while let Some(s) = vec.last() {
-                if s.is_empty() {
-                    vec.pop().unwrap();
                 } else {
-                    break;
+                    let s = &string[beg..b0];
+                    push(&mut out, &mut ec, s);
+                    beg = e0;
+                    start = e0;
+                    last_null = false;
+                }
+                let ngroups = caps.len();
+                for idx in 1..ngroups {
+                    if let Some((bi, ei)) = caps.pos(idx) {
+                        let s = &string[bi..ei];
+                        push(&mut out, &mut ec, s);
+                    }
+                }
+                if lim > 0 {
+                    i += 1;
+                    if lim <= i {
+                        break;
+                    }
                 }
             }
-            vec.into_iter().map(mk).collect()
-        } else {
-            string
-                .splitn(lim as usize, &*coerced)
-                .map(mk)
-                .collect()
-        };
-        match lfp.block() {
-            Some(bh) => {
-                let ary = Value::array_from_vec(v);
-                vm.temp_push(ary);
-                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
-                vm.temp_pop();
-                Ok(lfp.self_val())
-            }
-            None => Ok(Value::array_from_vec(v)),
         }
+    }
+
+    // Trailing field: pushed unless the string is empty, or the limit
+    // is the default (0) and nothing is left (`beg == len`).
+    if len > 0 && (lim > 0 || len > beg || lim < 0) {
+        let s = &string[beg..len];
+        push(&mut out, &mut ec, s);
+    }
+
+    match lfp.block() {
+        Some(bh) => {
+            let ary = Value::array_from_vec(out);
+            vm.temp_push(ary);
+            vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+            vm.temp_pop();
+            Ok(lfp.self_val())
+        }
+        None => Ok(Value::array_from_vec(out)),
     }
 }
 
@@ -8064,6 +8106,54 @@ mod tests {
         s = "foo\n\r\r"
         [s.chomp!(""), s]
         "##,
+            // Zero-width regexp matches split between characters.
+            r##""hello".split(//, 2)"##,
+            r##""hello".split(//, -1)"##,
+            r##""hello".split(//, 6)"##,
+            r##""hello".split(//, 7)"##,
+            // Captures (including empty ones) are kept in the result.
+            r##""hi!".split(/()/)"##,
+            r##""hi!".split(/()/, -1)"##,
+            r##""hello".split(/(el)/)"##,
+            r##""hello".split(/((el))()/)"##,
+            r##""AabB".split(/([a-z])+/)"##,
+            // Limit counts split substrings, not captures.
+            r##""aBaBa".split(/(B)()()/, 2)"##,
+            // Empty receiver: always [] (even with negative limit).
+            r##""".split(%r!/+!, -1)"##,
+            r##""".split(/x/, -1)"##,
+            r##""".split"##,
+            // AWK-mode collapses runs of whitespace; positive limit
+            // keeps the unsplit remainder verbatim.
+            r##"" now's  the time  ".split(' ')"##,
+            r##"" now's  the time  ".split(' ', -1)"##,
+            r##"" now's  the time  ".split(' ', 3)"##,
+            r##""\t\n a\t\tb \n\r\r\nc\v\vd\v ".split(' ')"##,
+            r##""a\x00a b".split(' ')"##,
+            // A Regexp `/ /` is a literal-" " split (NOT AWK).
+            r##"" now's  the time".split(/ /)"##,
+            // `limit == 1` returns the whole string as one field.
+            r##""a,b,c".split(",", 1)"##,
+            r##""".split(",", 1)"##,
+            // Default field separator falls back to `$;`.
+            r##"
+        begin
+          $; = ","
+          "x,y,z,,,".split(nil)
+        ensure
+          $; = nil
+        end
+        "##,
+            r##"
+        begin
+          $; = ","
+          "x,y,z,,,".split(nil, -1)
+        ensure
+          $; = nil
+        end
+        "##,
+            // Limit larger than a C int raises RangeError.
+            r##"begin; "a,b".split(" ", 2147483649); rescue RangeError; :range_error; end"##,
         ]);
     }
 
