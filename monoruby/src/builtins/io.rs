@@ -314,6 +314,7 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/isatty.html]
 #[monoruby_builtin]
 fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(lfp.self_val().as_io_inner_mut().isatty()))
 }
 
@@ -414,6 +415,7 @@ fn assign_sync(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(lfp.arg(0))
 }
 
@@ -429,6 +431,7 @@ fn assign_sync(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/seek.html]
 #[monoruby_builtin]
 fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = match lfp.try_arg(1) {
         None => 0i32,
@@ -957,6 +960,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pid.html]
 #[monoruby_builtin]
 fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let self_ = lfp.self_val();
     match self_.as_io_inner().pid() {
         Some(pid) => Ok(Value::integer(pid as i64)),
@@ -1036,6 +1040,7 @@ fn io_binmode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(lfp.self_val())
 }
 
@@ -1051,9 +1056,10 @@ fn io_binmode(
 fn io_binmode_(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(true))
 }
 
@@ -1075,6 +1081,7 @@ fn io_autoclose_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let value = lfp.arg(0).as_bool();
     lfp.self_val().as_io_inner().set_autoclose(value);
     Ok(Value::bool(value))
@@ -1096,6 +1103,7 @@ fn io_autoclose_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(lfp.self_val().as_io_inner().is_autoclose()))
 }
 
@@ -1116,6 +1124,7 @@ fn io_advise(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let arg0 = lfp.arg(0);
     let sym = arg0.try_symbol().ok_or_else(|| {
         MonorubyErr::typeerr(format!(
@@ -1152,6 +1161,7 @@ fn io_advise(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pos.html]
 #[monoruby_builtin]
 fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let pos = io
@@ -1174,6 +1184,7 @@ fn io_pos_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let mut self_ = lfp.self_val();
     self_
@@ -1197,6 +1208,7 @@ fn io_rewind(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     self_
         .as_io_inner_mut()
@@ -1379,6 +1391,7 @@ fn io_sysseek(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = match lfp.try_arg(1) {
         None => 0i32,
@@ -1409,6 +1422,7 @@ fn io_lineno(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let stored = globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
@@ -1429,6 +1443,7 @@ fn io_lineno_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     globals.store.set_ivar(
         lfp.self_val(),
@@ -1788,6 +1803,20 @@ fn parse_wait_timeout(
         ms as i32
     };
     Ok(capped)
+}
+
+/// Raise `IOError: closed stream` if the receiver IO is closed.
+///
+/// Shared guard for the query / positioning methods CRuby rejects on a
+/// closed stream (`#pos`, `#pos=`, `#seek`, `#rewind`, `#sysseek`,
+/// `#lineno`, `#lineno=`, `#pid`, `#tty?`, `#binmode`, `#binmode?`,
+/// `#autoclose?`, `#autoclose=`, `#advise`, `#sync=`). Without this the
+/// underlying syscalls fail with `Errno::EBADF` or silently return.
+fn ensure_io_open(self_val: Value) -> Result<()> {
+    if self_val.as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    Ok(())
 }
 
 /// Wait on a single fd via `poll(2)` with the given `events` mask (mixing

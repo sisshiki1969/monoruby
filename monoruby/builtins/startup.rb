@@ -1031,6 +1031,7 @@ class IO
   SEEK_END = 2
 
   def sync
+    raise IOError, "closed stream" if closed?
     false
   end
 
