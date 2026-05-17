@@ -26,8 +26,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
-    globals.define_builtin_func_with(IO_CLASS, "readline", readline, 0, 2, false);
-    globals.define_builtin_funcs(IO_CLASS, "each", &["each_line"], each_line, 0);
     globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "readlines", io_class_readlines, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
@@ -50,9 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "rewind", io_rewind, 0);
     globals.define_builtin_funcs(IO_CLASS, "eof?", &["eof"], io_eof_, 0);
     globals.define_builtin_func(IO_CLASS, "getbyte", io_getbyte, 0);
-    globals.define_builtin_func(IO_CLASS, "readbyte", io_readbyte, 0);
     globals.define_builtin_func(IO_CLASS, "getc", io_getc, 0);
-    globals.define_builtin_func(IO_CLASS, "readchar", io_readchar, 0);
     globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
     globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
@@ -314,6 +310,7 @@ fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/isatty.html]
 #[monoruby_builtin]
 fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(lfp.self_val().as_io_inner_mut().isatty()))
 }
 
@@ -414,6 +411,7 @@ fn assign_sync(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(lfp.arg(0))
 }
 
@@ -429,6 +427,7 @@ fn assign_sync(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/seek.html]
 #[monoruby_builtin]
 fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = match lfp.try_arg(1) {
         None => 0i32,
@@ -487,58 +486,6 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::nil());
     }
     Ok(Value::string_from_vec(buf))
-}
-
-///
-/// ### IO#readline
-///
-/// - readline([NOT SUPPORTED] rs = $/, [NOT SUPPORTED] chomp: false) -> String
-/// - readline([NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
-/// - readline([NOT SUPPORTED] rs, [NOT SUPPORTED] limit, [NOT SUPPORTED] chomp: false) -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
-#[monoruby_builtin]
-fn readline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_io_inner_mut().read_line()? {
-        Some(s) => s,
-        None => return Err(MonorubyErr::runtimeerr("end of file reached")),
-    };
-    Ok(Value::string(s))
-}
-
-///
-/// ### IO#each
-///
-/// - each(rs = $/, chomp: false) {|line| ... } -> self
-/// - each(limit, chomp: false) {|line| ... } -> self
-/// - each(rs, limit, chomp: false) {|line| ... } -> self
-/// - each(rs = $/, chomp: false) -> Enumerator
-/// - each(limit, chomp: false) -> Enumerator
-/// - each(rs, limit, chomp: false) -> Enumerator
-///
-/// - each_line(rs = $/, chomp: false) {|line| ... } -> self
-/// - each_line(limit, chomp: false) {|line| ... } -> self
-/// - each_line(rs, limit, chomp: false) {|line| ... } -> self
-/// - each_line(rs = $/, chomp: false) -> Enumerator
-/// - each_line(limit, chomp: false) -> Enumerator
-/// - each_line(rs, limit, chomp: false) -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/each.html]
-#[monoruby_builtin]
-fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    if let Some(bh) = lfp.block() {
-        let p = vm.get_block_data(globals, bh)?;
-        while let Some(s) = io.read_line()? {
-            vm.invoke_block(globals, &p, &[Value::string(s)])?;
-        }
-    } else {
-        return Err(MonorubyErr::runtimeerr(
-            "IO#each_line without block is not yet supported",
-        ));
-    };
-    Ok(lfp.self_val())
 }
 
 ///
@@ -957,6 +904,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pid.html]
 #[monoruby_builtin]
 fn io_pid(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let self_ = lfp.self_val();
     match self_.as_io_inner().pid() {
         Some(pid) => Ok(Value::integer(pid as i64)),
@@ -1036,6 +984,7 @@ fn io_binmode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(lfp.self_val())
 }
 
@@ -1051,9 +1000,10 @@ fn io_binmode(
 fn io_binmode_(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(true))
 }
 
@@ -1075,6 +1025,7 @@ fn io_autoclose_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let value = lfp.arg(0).as_bool();
     lfp.self_val().as_io_inner().set_autoclose(value);
     Ok(Value::bool(value))
@@ -1096,6 +1047,7 @@ fn io_autoclose_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     Ok(Value::bool(lfp.self_val().as_io_inner().is_autoclose()))
 }
 
@@ -1116,6 +1068,7 @@ fn io_advise(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let arg0 = lfp.arg(0);
     let sym = arg0.try_symbol().ok_or_else(|| {
         MonorubyErr::typeerr(format!(
@@ -1152,6 +1105,7 @@ fn io_advise(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pos.html]
 #[monoruby_builtin]
 fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let pos = io
@@ -1174,6 +1128,7 @@ fn io_pos_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let mut self_ = lfp.self_val();
     self_
@@ -1197,6 +1152,7 @@ fn io_rewind(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     self_
         .as_io_inner_mut()
@@ -1260,30 +1216,6 @@ fn io_getbyte(
     }
 }
 
-///
-/// ### IO#readbyte
-/// - readbyte -> Integer
-///
-/// Like `IO#getbyte` but raises `EOFError` at end of stream.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readbyte.html]
-#[monoruby_builtin]
-fn io_readbyte(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = io.read(Some(1))?;
-    if buf.is_empty() {
-        Err(MonorubyErr::runtimeerr("end of file reached"))
-    } else {
-        Ok(Value::integer(buf[0] as i64))
-    }
-}
-
 /// Read a single UTF-8 character (1-4 bytes) from the IO. Returns the bytes
 /// of the character, an empty Vec on EOF, or the first byte if the byte
 /// sequence is not valid UTF-8 (matching CRuby's invalid-byte behavior in
@@ -1342,30 +1274,6 @@ fn io_getc(
 }
 
 ///
-/// ### IO#readchar
-/// - readchar -> String
-///
-/// Like `IO#getc` but raises `EOFError` at end of stream.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readchar.html]
-#[monoruby_builtin]
-fn io_readchar(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = read_one_char(io)?;
-    if buf.is_empty() {
-        Err(MonorubyErr::runtimeerr("end of file reached"))
-    } else {
-        Ok(Value::string_from_vec(buf))
-    }
-}
-
-///
 /// ### IO#sysseek
 /// - sysseek(offset, whence = IO::SEEK_SET) -> Integer
 ///
@@ -1379,6 +1287,7 @@ fn io_sysseek(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = match lfp.try_arg(1) {
         None => 0i32,
@@ -1409,6 +1318,7 @@ fn io_lineno(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let stored = globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
@@ -1429,6 +1339,7 @@ fn io_lineno_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     globals.store.set_ivar(
         lfp.self_val(),
@@ -1788,6 +1699,20 @@ fn parse_wait_timeout(
         ms as i32
     };
     Ok(capped)
+}
+
+/// Raise `IOError: closed stream` if the receiver IO is closed.
+///
+/// Shared guard for the query / positioning methods CRuby rejects on a
+/// closed stream (`#pos`, `#pos=`, `#seek`, `#rewind`, `#sysseek`,
+/// `#lineno`, `#lineno=`, `#pid`, `#tty?`, `#binmode`, `#binmode?`,
+/// `#autoclose?`, `#autoclose=`, `#advise`, `#sync=`). Without this the
+/// underlying syscalls fail with `Errno::EBADF` or silently return.
+fn ensure_io_open(self_val: Value) -> Result<()> {
+    if self_val.as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    Ok(())
 }
 
 /// Wait on a single fd via `poll(2)` with the given `events` mask (mixing
