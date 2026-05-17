@@ -1292,10 +1292,14 @@ impl RStringInner {
             Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => Some(1),
             Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
             Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
-            // EUC-JP / Shift_JIS / ISO-2022-JP currently iterate
-            // byte-wise too, so a fixed-1-byte shortcut is fine.
-            Encoding::EucJp | Encoding::Sjis(_) | Encoding::Iso2022Jp => Some(1),
-            Encoding::Utf8 => None,
+            // ISO-2022-JP still iterates byte-wise (stateful decode
+            // deferred), so the fixed-1-byte shortcut matches its
+            // iterator.
+            Encoding::Iso2022Jp => Some(1),
+            // EUC-JP / Shift_JIS are variable-width: walk the
+            // (now encoding-aware) char iterator so `String#[]` /
+            // `#slice` index by characters, not bytes.
+            Encoding::EucJp | Encoding::Sjis(_) | Encoding::Utf8 => None,
         };
         if let Some(u) = unit {
             let total = self.content.len();

@@ -10760,4 +10760,25 @@ mod tests {
             r#""".encode("EUC-JP").length"#,
         ]);
     }
+
+    #[test]
+    fn eucjp_sjis_char_indexing() {
+        // `String#[]` / `#slice` must index EUC-JP / Shift_JIS by
+        // *character*, not byte (P1: get_range walks the encoding
+        // iterator for variable-width encodings).
+        run_tests(&[
+            r#""あいうえお".encode("EUC-JP")[1].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[1, 2].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[1..3].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[-2].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP").slice(2, 2).encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[0].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[1].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[2].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[1..].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[5]"#,
+            r#""日本語".encode("EUC-JP")[0, 2].encode("UTF-8")"#,
+            r#""日本語".encode("Shift_JIS")[1, 2].encode("UTF-8")"#,
+        ]);
+    }
 }
