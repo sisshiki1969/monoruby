@@ -3050,11 +3050,13 @@ mod tests {
 
     #[test]
     fn test_teq() {
-        run_test("Integer === 4");
-        run_test("Integer === 4.5");
-        run_test("Integer === 'Ruby'");
-        run_test("Float === 4.5");
-        run_test("Float === 'Ruby'");
+        run_tests(&[
+            "Integer === 4",
+            "Integer === 4.5",
+            "Integer === 'Ruby'",
+            "Float === 4.5",
+            "Float === 'Ruby'",
+        ]);
         run_test(
             r#"
         class C
@@ -4662,10 +4664,12 @@ mod tests {
 
     #[test]
     fn module_to_s() {
-        run_test("Integer.to_s");
-        run_test("String.to_s");
-        run_test("Module.to_s");
-        run_test("Class.to_s");
+        run_tests(&[
+            "Integer.to_s",
+            "String.to_s",
+            "Module.to_s",
+            "Class.to_s",
+        ]);
         run_test(
             r##"
         module Foo; end

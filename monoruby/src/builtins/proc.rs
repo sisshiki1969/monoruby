@@ -404,7 +404,7 @@ mod tests {
     fn proc_new() {
         run_test_no_result_check("Proc.new {}");
         run_test_error("Proc.new");
-        run_test(
+        run_tests(&[
             "
             a = 100
             p = Proc.new {|x, y|
@@ -412,8 +412,6 @@ mod tests {
             }
             p.call(42, 7)
         ",
-        );
-        run_test(
             "
         a = 100
         p = nil
@@ -427,7 +425,7 @@ mod tests {
         p.call
         a
         ",
-        )
+        ]);
     }
 
     #[test]
@@ -522,25 +520,21 @@ mod tests {
     fn duplicate_underscore_param() {
         // `_` can appear multiple times in block parameters (Ruby spec).
         // The name `_` resolves to the first occurrence.
-        run_test(
+        // Destructured block parameters with duplicate `_`.
+        // `_` used alone multiple times.
+        run_tests(&[
             r#"
         [[1,2,3,4]].map { |x, _, y, _| [x, _, y] }
         "#,
-        );
-        // Destructured block parameters with duplicate `_`.
-        run_test(
             r#"
         [[1,2,3,4]].sort_by { |(_, b, _, d)| d }
         "#,
-        );
-        // `_` used alone multiple times.
-        run_test(
             r#"
         res = []
         {a: 1, b: 2}.each { |_, _| res << _ }
         res
         "#,
-        );
+        ]);
     }
 
     #[test]
@@ -563,29 +557,25 @@ mod tests {
 
     #[test]
     fn proc_binding() {
-        run_test(
+        run_tests(&[
             r#"
         x = 42
         p = Proc.new { x }
         b = p.binding
         b.is_a?(Binding)
         "#,
-        );
-        run_test(
             r#"
         x = 42
         p = Proc.new { x }
         b = p.binding
         b.local_variables.include?(:x)
         "#,
-        );
-        run_test(
             r#"
         x = 10
         p = proc { x + 1 }
         eval("x", p.binding)
         "#,
-        );
+        ]);
     }
 
     #[test]
@@ -617,43 +607,35 @@ mod tests {
     #[test]
     fn proc_source_location() {
         // source_location returns [String, Integer]
-        run_test(
+        // source_location line matches the proc creation line
+        // lambda source_location line matches creation line
+        // two procs on consecutive lines have consecutive line numbers
+        // Proc#binding.source_location returns the same line as the proc
+        run_tests(&[
             r#"
         p = proc {}
         sl = p.source_location
         [sl.is_a?(Array), sl.size == 2, sl[0].is_a?(String), sl[1].is_a?(Integer)]
         "#,
-        );
-        // source_location line matches the proc creation line
-        run_test(
             r#"
         line = __LINE__; p = proc {}
         p.source_location[1] == line
         "#,
-        );
-        // lambda source_location line matches creation line
-        run_test(
             r#"
         line = __LINE__; l = lambda {}
         l.source_location[1] == line
         "#,
-        );
-        // two procs on consecutive lines have consecutive line numbers
-        run_test(
             r#"
         p1 = proc {}
         p2 = proc {}
         p2.source_location[1] == p1.source_location[1] + 1
         "#,
-        );
-        // Proc#binding.source_location returns the same line as the proc
-        run_test(
             r#"
         p = proc {}
         b = p.binding
         p.source_location[1] == b.source_location[1]
         "#,
-        );
+        ]);
     }
 
     #[test]
@@ -696,91 +678,66 @@ mod tests {
         );
     }
 
+    // --- regression tests for PR #328 ---
+    //
+    // proc_call_block_constant_lookup:
+    // `->(&b) { b.call }.call { <const> }` used to panic with
+    // `unreachable!` in `FuncInfo::as_iseq()` because the proxy
+    // BlockHandler's depth was under-counted by 1 on Proc#call
+    // passthrough, leaving the block's outer lfp pointing at
+    // Proc#call (a Builtin). Now the constant lookup resolves
+    // normally.
+    //
+    // proc_call_block_raise_class_lookup:
+    // Block passed through `&blk` must preserve the outer lexical
+    // scope of where the block was defined, even when invoked via
+    // `Proc#call`. A `raise` inside the block looks up the
+    // exception class through that scope.
     #[test]
-    fn lambda_q() {
-        run_test("Proc.new {}.lambda?");
-        run_test("lambda {}.lambda?");
-        run_test("->(x) { x }.lambda?");
-    }
-
-    #[test]
-    fn proc_arity() {
-        run_test("Proc.new {}.arity");
-        run_test("Proc.new {|x| x}.arity");
-        run_test("Proc.new {|x, y| x}.arity");
-        run_test("lambda {}.arity");
-        run_test("lambda {|x| x}.arity");
-        run_test("->(x, y) { x }.arity");
-    }
-
-    #[test]
-    fn proc_parameters() {
-        // lambda: required params are :req
-        run_test("->(x, y) {}.parameters");
-        // lambda: optional params are :opt
-        run_test("->(x, y=1) {}.parameters");
-        // lambda: rest params
-        run_test("->(x, *rest) {}.parameters");
-        // lambda: block param
-        run_test("->(x, &blk) {}.parameters");
-        // lambda: mixed
-        run_test("->(x, y=1, *rest, &blk) {}.parameters");
-        // proc: all positional params are :opt
-        run_test("Proc.new {|x, y| }.parameters");
-        // proc: rest
-        run_test("Proc.new {|x, *rest| }.parameters");
-        // no params
-        run_test("lambda {}.parameters");
-        run_test("Proc.new {}.parameters");
-    }
-
-    #[test]
-    fn proc_ruby2_keywords() {
-        run_test(
+    fn proc_lambda_query_arity_parameters_curry_blocklookup() {
+        run_tests(&[
+            "Proc.new {}.lambda?",
+            "lambda {}.lambda?",
+            "->(x) { x }.lambda?",
+            "Proc.new {}.arity",
+            "Proc.new {|x| x}.arity",
+            "Proc.new {|x, y| x}.arity",
+            "lambda {}.arity",
+            "lambda {|x| x}.arity",
+            "->(x, y) { x }.arity",
+            // lambda: required params are :req
+            "->(x, y) {}.parameters",
+            // lambda: optional params are :opt
+            "->(x, y=1) {}.parameters",
+            // lambda: rest params
+            "->(x, *rest) {}.parameters",
+            // lambda: block param
+            "->(x, &blk) {}.parameters",
+            // lambda: mixed
+            "->(x, y=1, *rest, &blk) {}.parameters",
+            // proc: all positional params are :opt
+            "Proc.new {|x, y| }.parameters",
+            // proc: rest
+            "Proc.new {|x, *rest| }.parameters",
+            // no params
+            "lambda {}.parameters",
+            "Proc.new {}.parameters",
             r#"
             p = proc {|*args| args}
             p.ruby2_keywords.equal?(p)
             "#,
-        );
-    }
-
-    #[test]
-    fn proc_curry() {
-        run_test("proc {|a,b,c| a+b+c}.curry[1][2][3]");
-        run_test("proc {|a,b,c| a+b+c}.curry[1,2][3]");
-        run_test("proc {|a,b,c| a+b+c}.curry[1,2,3]");
-        run_test("->(a,b) { a + b }.curry[1][2]");
-        run_test("proc {|a,b,c| [a,b,c]}.curry(3)[1][2][3]");
-    }
-
-    // --- regression tests for PR #328 ---
-
-    /// `->(&b) { b.call }.call { <const> }` used to panic with
-    /// `unreachable!` in `FuncInfo::as_iseq()` because the proxy
-    /// BlockHandler's depth was under-counted by 1 on Proc#call
-    /// passthrough, leaving the block's outer lfp pointing at
-    /// Proc#call (a Builtin). Now the constant lookup resolves
-    /// normally.
-    #[test]
-    fn proc_call_block_constant_lookup() {
-        run_test(r#"->(&b) { b.call }.call { Integer }.equal?(Integer)"#);
-        run_test(
+            "proc {|a,b,c| a+b+c}.curry[1][2][3]",
+            "proc {|a,b,c| a+b+c}.curry[1,2][3]",
+            "proc {|a,b,c| a+b+c}.curry[1,2,3]",
+            "->(a,b) { a + b }.curry[1][2]",
+            "proc {|a,b,c| [a,b,c]}.curry(3)[1][2][3]",
+            r#"->(&b) { b.call }.call { Integer }.equal?(Integer)"#,
             r#"
               step = ->(a, b, &blk) { a.step(b, &blk) }
               seen = []
               step.call(1, 3) { |i| seen << [i, Integer.name] }
               seen
             "#,
-        );
-    }
-
-    /// Block passed through `&blk` must preserve the outer lexical
-    /// scope of where the block was defined, even when invoked via
-    /// `Proc#call`. A `raise` inside the block looks up the
-    /// exception class through that scope.
-    #[test]
-    fn proc_call_block_raise_class_lookup() {
-        run_test(
             r#"
               step = ->(a, b, &blk) { a.step(b, &blk) }
               begin
@@ -790,7 +747,7 @@ mod tests {
                 e.message
               end
             "#,
-        );
+        ]);
     }
 
     /// `&:sym` passed as a block should materialize a Proc only
@@ -831,16 +788,18 @@ mod tests {
         // Trailing keyword args passed to Proc#call/[]/=== are
         // forwarded to the block; the block's own signature decides
         // whether they bind to kw params or fold into a *rest Hash.
-        run_test(r#"->(fmt, *args){ args }.call("x", foo: 123)"#);
-        run_test(r#"->(*a){ a }.call(1, x: 2)"#);
-        run_test(r#"proc {|*a| a }.call(1, y: 3)"#);
-        run_test(r#"lambda {|*a| a }.call(2, z: 4)"#);
-        run_test(r#"->(a, k:){ [a, k] }.call(1, k: 2)"#);
-        run_test(r#"->(a, **kw){ [a, kw] }.call(1, x: 9)"#);
-        run_test(r#"->(*a){ a }.(7, q: 8)"#);
-        run_test(r#"(->(x){ x } === 4)"#);
-        run_test(r#"->(*a){ a }.call(**{})"#);
-        run_test(r#"->(a=0, *r){ [a, r] }.call(k: 1)"#);
+        run_tests(&[
+            r#"->(fmt, *args){ args }.call("x", foo: 123)"#,
+            r#"->(*a){ a }.call(1, x: 2)"#,
+            r#"proc {|*a| a }.call(1, y: 3)"#,
+            r#"lambda {|*a| a }.call(2, z: 4)"#,
+            r#"->(a, k:){ [a, k] }.call(1, k: 2)"#,
+            r#"->(a, **kw){ [a, kw] }.call(1, x: 9)"#,
+            r#"->(*a){ a }.(7, q: 8)"#,
+            r#"(->(x){ x } === 4)"#,
+            r#"->(*a){ a }.call(**{})"#,
+            r#"->(a=0, *r){ [a, r] }.call(k: 1)"#,
+        ]);
         run_test(r#"def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }"#);
     }
 
@@ -849,9 +808,11 @@ mod tests {
         run_test_error(r#""%d %<foo>d" % [1, {foo: 2}]"#);
         run_test_error(r#""%d %{foo}" % [1, {foo: 2}]"#);
         run_test_error(r#""%{a} %d" % {a: 1}"#);
-        run_test(r#""%<a>s %<b>s" % {a: 1, b: 2}"#);
-        run_test(r#""%{a} %{b}" % {a: 1, b: 2}"#);
-        run_test(r#""%s %s" % [1, 2]"#);
-        run_test(r#""%<a>d" % {a: 5}"#);
+        run_tests(&[
+            r#""%<a>s %<b>s" % {a: 1, b: 2}"#,
+            r#""%{a} %{b}" % {a: 1, b: 2}"#,
+            r#""%s %s" % [1, 2]"#,
+            r#""%<a>d" % {a: 5}"#,
+        ]);
     }
 }

@@ -379,8 +379,10 @@ mod tests {
 
     #[test]
     fn numeric_frozen() {
-        run_test(r##"[(2**70).frozen?, (1+2i).frozen?, Rational(1,3).frozen?, 0.1.frozen?, 5.frozen?]"##);
-        run_test(r##"x = 2**80; x.freeze; x.frozen?"##);
+        run_tests(&[
+            r##"[(2**70).frozen?, (1+2i).frozen?, Rational(1,3).frozen?, 0.1.frozen?, 5.frozen?]"##,
+            r##"x = 2**80; x.freeze; x.frozen?"##,
+        ]);
     }
 
     #[test]
@@ -402,15 +404,15 @@ mod tests {
 
     #[test]
     fn equal() {
-        run_test(r##"100.equal?(100)"##);
-        run_test(r##"100.equal?(100.0)"##);
-        run_test(r##""a".equal?("a")"##);
-        run_test(
+        run_tests(&[
+            r##"100.equal?(100)"##,
+            r##"100.equal?(100.0)"##,
+            r##""a".equal?("a")"##,
             r##"
         a = "a"
         b = a
         a.equal?(b)"##,
-        );
+        ]);
     }
 
     #[test]
@@ -479,9 +481,11 @@ mod tests {
     #[test]
     fn instance_eval_lineno() {
         // instance_eval with filename and lineno
-        run_test(r#"instance_eval("__LINE__", "test.rb", 42)"#);
-        run_test(r#"instance_eval("__FILE__", "test.rb", 42)"#);
-        run_test(r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#);
+        run_tests(&[
+            r#"instance_eval("__LINE__", "test.rb", 42)"#,
+            r#"instance_eval("__FILE__", "test.rb", 42)"#,
+            r#"instance_eval("__LINE__\n__LINE__", "test.rb", 10)"#,
+        ]);
     }
 
     #[test]
@@ -531,8 +535,7 @@ mod tests {
     #[test]
     fn initialize() {
         // default initialize returns the new object
-        run_test("Object.new.class");
-        run_test("Object.new.is_a?(Object)");
+        run_tests(&["Object.new.class", "Object.new.is_a?(Object)"]);
         // custom initialize sets instance variables
         run_test(
             r#"

@@ -3556,11 +3556,13 @@ mod tests {
 
     #[test]
     fn nil() {
-        run_test(r##"'woo'.nil?"##);
-        run_test(r##"3.nil?"##);
-        run_test(r##":x.nil?"##);
-        run_test(r##"nil.nil?"##);
-        run_test(r##"false.nil?"##);
+        run_tests(&[
+            r##"'woo'.nil?"##,
+            r##"3.nil?"##,
+            r##":x.nil?"##,
+            r##"nil.nil?"##,
+            r##"false.nil?"##,
+        ]);
     }
 
     #[test]
@@ -3584,8 +3586,8 @@ mod tests {
 
     #[test]
     fn eval() {
-        run_test(r##"eval "1+2+3""##);
-        run_test(
+        run_tests(&[
+            r##"eval "1+2+3""##,
             r##"
         res = []
         5.times do |a|
@@ -3595,7 +3597,7 @@ mod tests {
         end
         res
         "##,
-        );
+        ]);
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
         // Unsupported eval'd syntax is a catchable SyntaxError, not a
@@ -3624,9 +3626,9 @@ mod tests {
 
     #[test]
     fn catch_throw_uncaught() {
-        run_test(r##"catch(:x) { throw :x, 42 }"##);
-        run_test(r##"catch(:a) { catch(:b) { throw :a, 7 } }"##);
-        run_test(
+        run_tests(&[
+            r##"catch(:x) { throw :x, 42 }"##,
+            r##"catch(:a) { catch(:b) { throw :a, 7 } }"##,
             r##"
         begin
           throw :nope
@@ -3634,7 +3636,7 @@ mod tests {
           [e.is_a?(ArgumentError), e.message]
         end
         "##,
-        );
+        ]);
         run_test_error(r##"throw :nope"##);
     }
 
@@ -3658,16 +3660,20 @@ mod tests {
 
     #[test]
     fn array_implicit_hash_element() {
-        run_test(r##"[args: [1, 2], kw: {a: "b"}]"##);
-        run_test(r##"[1, foo: 2, bar: 3]"##);
-        run_test(r##"[0, {a: 1}, b: 2]"##);
+        run_tests(&[
+            r##"[args: [1, 2], kw: {a: "b"}]"##,
+            r##"[1, foo: 2, bar: 3]"##,
+            r##"[0, {a: 1}, b: 2]"##,
+        ]);
     }
 
     #[test]
     fn eval_lineno() {
-        run_test(r#"eval("__LINE__", nil, "test.rb", 42)"#);
-        run_test(r#"eval("__FILE__", nil, "test.rb", 42)"#);
-        run_test(r#"eval("__LINE__\n__LINE__", nil, "test.rb", 10)"#);
+        run_tests(&[
+            r#"eval("__LINE__", nil, "test.rb", 42)"#,
+            r#"eval("__FILE__", nil, "test.rb", 42)"#,
+            r#"eval("__LINE__\n__LINE__", nil, "test.rb", 10)"#,
+        ]);
     }
 
     #[test]
@@ -3691,12 +3697,14 @@ mod tests {
 
     #[test]
     fn float() {
-        run_test(r#"Float(0.0)"#);
-        run_test(r#"Float(1)"#);
-        run_test(r#"Float(1000000000000000000000000000000000000000000000000000000000000)"#);
-        run_test(r#"Float('10.0')"#);
-        run_test(r#"Float('   10.0')"#);
-        run_test(r#"Float(' -0.7e-10')"#);
+        run_tests(&[
+            r#"Float(0.0)"#,
+            r#"Float(1)"#,
+            r#"Float(1000000000000000000000000000000000000000000000000000000000000)"#,
+            r#"Float('10.0')"#,
+            r#"Float('   10.0')"#,
+            r#"Float(' -0.7e-10')"#,
+        ]);
         run_test_error(r#"Float(' -0.7 5')"#);
         run_test_error(r#"Float(' -0.7e-10z')"#);
         run_test_error(r#"Float(:Ruby)"#);
@@ -3704,16 +3712,17 @@ mod tests {
 
     #[test]
     fn complex() {
-        run_test(r#"Complex(30)"#);
-        run_test(r#"Complex(30, 4.5)"#);
+        run_tests(&[r#"Complex(30)"#, r#"Complex(30, 4.5)"#]);
     }
 
     #[test]
     fn array() {
-        run_test(r#"Array([100])"#);
-        run_test(r#"Array(100)"#);
-        run_test(r#"Array(nil)"#);
-        run_test(r#"Array("100")"#);
+        run_tests(&[
+            r#"Array([100])"#,
+            r#"Array(100)"#,
+            r#"Array(nil)"#,
+            r#"Array("100")"#,
+        ]);
         run_test_with_prelude(
             r#"
             Array(C.new(3))
@@ -3737,15 +3746,16 @@ mod tests {
     #[test]
     fn kernel() {
         run_test_no_result_check("sleep 1");
-        run_test("system 'ls'");
-        run_test("system 'ls', '-a'");
+        run_tests(&["system 'ls'", "system 'ls', '-a'"]);
         run_test_error("abort 1");
         run_test_no_result_check("exit");
         run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
-        run_test(r#"eval("__dir__", nil, "foo.rb")"#);
-        run_test(r#"eval("__dir__", nil, "foo/bar.rb")"#);
-        run_test(r#"eval("__dir__", binding).inspect"#);
+        run_tests(&[
+            r#"eval("__dir__", nil, "foo.rb")"#,
+            r#"eval("__dir__", nil, "foo/bar.rb")"#,
+            r#"eval("__dir__", binding).inspect"#,
+        ]);
         run_test_no_result_check("caller(1)");
         run_test_no_result_check("caller()");
         run_test_no_result_check("rand");
@@ -3786,22 +3796,26 @@ mod tests {
 
     #[test]
     fn lambda() {
-        run_test("proc {|x| x * 2}.call(1)");
-        run_test("proc {|x, y| x * y}.call(7,2)");
-        run_test("proc {|x, y| [x, y]}.call(7)");
-        run_test("proc {|x, y| [x, y]}.call(7, 5)");
-        run_test("proc {|x, y| [x, y]}.call(7, 5, 15)");
-        run_test("lambda {|x| x * 2}.call(1)");
-        run_test("lambda {|x, y| x * y}.call(7,2)");
+        run_tests(&[
+            "proc {|x| x * 2}.call(1)",
+            "proc {|x, y| x * y}.call(7,2)",
+            "proc {|x, y| [x, y]}.call(7)",
+            "proc {|x, y| [x, y]}.call(7, 5)",
+            "proc {|x, y| [x, y]}.call(7, 5, 15)",
+            "lambda {|x| x * 2}.call(1)",
+            "lambda {|x, y| x * y}.call(7,2)",
+        ]);
         run_test_error("lambda {|x| puts x}.call(1,2)");
     }
 
     #[test]
     fn warn() {
-        run_test(r#"warn("woo")"#);
-        run_test(r#"warn("woo", :boo, 100)"#);
-        run_test(r#"warn(100, uplevel:1)"#);
-        run_test(r#"warn(100, category: :experimental)"#);
+        run_tests(&[
+            r#"warn("woo")"#,
+            r#"warn("woo", :boo, 100)"#,
+            r#"warn(100, uplevel:1)"#,
+            r#"warn(100, category: :experimental)"#,
+        ]);
         run_test_error(r#"raise "Woo""#);
         // warn writes to $stderr (not directly to OS stderr)
         run_test(
@@ -4120,13 +4134,15 @@ mod tests {
 
     #[test]
     fn dup() {
-        run_test("1.dup");
-        run_test("1.5.dup");
-        run_test("'Ruby'.dup");
-        run_test(":Ruby.dup");
-        run_test("[1,2,3].dup");
-        run_test("{a:1,b:2}.dup");
-        run_test("(1..3).dup");
+        run_tests(&[
+            "1.dup",
+            "1.5.dup",
+            "'Ruby'.dup",
+            ":Ruby.dup",
+            "[1,2,3].dup",
+            "{a:1,b:2}.dup",
+            "(1..3).dup",
+        ]);
     }
 
     #[test]
@@ -4432,9 +4448,9 @@ mod tests {
         // float truncation; exception:false on a float-domain error.
         run_test_error("Integer(nil)");
         run_test_error("Integer(-1.0 / 0.0)");
-        run_test("Integer(3.99)");
-        run_test("Integer(-3.99)");
         run_tests(&[
+            "Integer(3.99)",
+            "Integer(-3.99)",
             r#"Integer(0.0 / 0.0, exception: false).inspect"#,
             r#"Integer(1.0 / 0.0, exception: false).inspect"#,
             r#"Integer("0b1010")"#,
@@ -4496,11 +4512,13 @@ mod tests {
 
     #[test]
     fn object_isa() {
-        run_test("4.is_a? Integer");
-        run_test("4.5.is_a? Integer");
-        run_test("'Ruby'.is_a? Integer");
-        run_test("4.5.is_a? Float");
-        run_test("'Ruby'.is_a? Float");
+        run_tests(&[
+            "4.is_a? Integer",
+            "4.5.is_a? Integer",
+            "'Ruby'.is_a? Integer",
+            "4.5.is_a? Float",
+            "'Ruby'.is_a? Float",
+        ]);
         run_test(
             r#"
         class C
@@ -4517,15 +4535,15 @@ mod tests {
         [c.is_a?(S), c.is_a?(C)]"#,
         );
         // Walks include / superclass chain so JIT must consult ancestors.
-        run_test(
+        // kind_of? alias resolves to the same inline.
+        run_tests(&[
             r#"
             [5.is_a?(Integer), 5.is_a?(Numeric), 5.is_a?(Comparable),
              5.is_a?(Object), 5.is_a?(Kernel), 5.is_a?(BasicObject),
              5.is_a?(Float), 5.is_a?(String)]
             "#,
-        );
-        // kind_of? alias resolves to the same inline.
-        run_test(r#"[5.kind_of?(Integer), 5.kind_of?(Float), "x".kind_of?(String)]"#);
+            r#"[5.kind_of?(Integer), 5.kind_of?(Float), "x".kind_of?(String)]"#,
+        ]);
         // Make is_a? called from a hot method so the JIT compiles and
         // fires the inline (run_test runs the snippet 25 times).
         run_test(
@@ -4540,21 +4558,25 @@ mod tests {
 
     #[test]
     fn object_nil() {
-        run_test("4.nil?");
-        run_test("4.5.nil?");
-        run_test("nil.nil?");
-        run_test("true.nil?");
-        run_test("false.nil?");
-        run_test("[].nil?");
+        run_tests(&[
+            "4.nil?",
+            "4.5.nil?",
+            "nil.nil?",
+            "true.nil?",
+            "false.nil?",
+            "[].nil?",
+        ]);
     }
 
     #[test]
     fn kernel_system() {
-        run_test(r#"system "ls""#);
-        run_test(r#"system "jkjkjk""#);
-        run_test(r#"system "*""#);
-        run_test(r#"`pwd`"#);
-        run_test(r#"`*`"#);
+        run_tests(&[
+            r#"system "ls""#,
+            r#"system "jkjkjk""#,
+            r#"system "*""#,
+            r#"`pwd`"#,
+            r#"`*`"#,
+        ]);
         run_test_error(r#"``"#);
     }
 
@@ -5015,8 +5037,7 @@ mod tests {
     fn exit_bang() {
         // exit! is defined and callable (we test via respond_to? since actually
         // calling it would terminate the process immediately)
-        run_test("respond_to?(:exit!)");
-        run_test("Process.respond_to?(:exit!)");
+        run_tests(&["respond_to?(:exit!)", "Process.respond_to?(:exit!)"]);
     }
 
     #[test]
@@ -5124,7 +5145,7 @@ mod tests {
             "#,
         );
         // TypeError when no conversion method
-        run_test(
+        run_tests(&[
             r#"
             begin
               sprintf("%d", Object.new)
@@ -5132,8 +5153,6 @@ mod tests {
               e.message
             end
             "#,
-        );
-        run_test(
             r#"
             begin
               sprintf("%f", Object.new)
@@ -5141,45 +5160,37 @@ mod tests {
               e.message
             end
             "#,
-        );
+        ]);
     }
 
     #[test]
-    fn sprintf_positional() {
-        run_test(r#"sprintf("%1$d %2$d %1$d", 10, 20)"#);
-        run_test(r#"sprintf("%1$s %2$s %1$s", "a", "b")"#);
-        run_test(r#"sprintf("%2$d", 10, 20)"#);
-        run_test(r#"sprintf("%1$05d", 42)"#);
-        run_test(r#"sprintf("%1$x", 255)"#);
-        run_test(r#"sprintf("%1$o", 8)"#);
-        run_test(r#"sprintf("%1$f", 3.14)"#);
-    }
-
-    #[test]
-    fn sprintf_named() {
-        run_test(r#"sprintf("%{foo}", foo: "hello")"#);
-        run_test(r#"sprintf("%{foo} %{bar}", foo: 1, bar: 2)"#);
-        run_test(r#"sprintf("%{foo} %{foo}", foo: "x")"#);
-    }
-
-    #[test]
-    fn sprintf_named_format() {
-        run_test(r#"sprintf("%<foo>d", foo: 42)"#);
-        run_test(r#"sprintf("%<foo>05d", foo: 42)"#);
-        run_test(r#"sprintf("%<foo>10d", foo: 42)"#);
-        run_test(r#"sprintf("%<foo>x", foo: 255)"#);
-        run_test(r#"sprintf("%<foo>f", foo: 3.14)"#);
-        run_test(r#"sprintf("%<foo>s", foo: "hello")"#);
-    }
-
-    #[test]
-    fn kernel_clone() {
-        run_tests(&["[1,2,3].clone", r#""hello".clone"#, "{a: 1}.clone"]);
-    }
-
-    #[test]
-    fn kernel_hash_method() {
+    fn sprintf_positional_and_named() {
         run_tests(&[
+            r#"sprintf("%1$d %2$d %1$d", 10, 20)"#,
+            r#"sprintf("%1$s %2$s %1$s", "a", "b")"#,
+            r#"sprintf("%2$d", 10, 20)"#,
+            r#"sprintf("%1$05d", 42)"#,
+            r#"sprintf("%1$x", 255)"#,
+            r#"sprintf("%1$o", 8)"#,
+            r#"sprintf("%1$f", 3.14)"#,
+            r#"sprintf("%{foo}", foo: "hello")"#,
+            r#"sprintf("%{foo} %{bar}", foo: 1, bar: 2)"#,
+            r#"sprintf("%{foo} %{foo}", foo: "x")"#,
+            r#"sprintf("%<foo>d", foo: 42)"#,
+            r#"sprintf("%<foo>05d", foo: 42)"#,
+            r#"sprintf("%<foo>10d", foo: 42)"#,
+            r#"sprintf("%<foo>x", foo: 255)"#,
+            r#"sprintf("%<foo>f", foo: 3.14)"#,
+            r#"sprintf("%<foo>s", foo: "hello")"#,
+        ]);
+    }
+
+    #[test]
+    fn kernel_clone_and_hash() {
+        run_tests(&[
+            "[1,2,3].clone",
+            r#""hello".clone"#,
+            "{a: 1}.clone",
             "1.hash.is_a?(Integer)",
             r#""hello".hash.is_a?(Integer)"#,
             ":foo.hash.is_a?(Integer)",
@@ -5249,14 +5260,16 @@ mod tests {
 
     #[test]
     fn kernel_test_fn() {
-        // `test(?e, path)` - exist?
-        run_test(r#"test(?e, "/etc/hosts") == true"#);
-        // `test(?f, path)` - regular file
-        run_test(r#"test(?f, "/etc/hosts") == true"#);
-        // `test(?d, path)` - directory
-        run_test(r#"test(?d, "/etc") == true"#);
-        // integer form accepted too
-        run_test(r#"test(?e.ord, "/etc/hosts") == true"#);
+        run_tests(&[
+            // `test(?e, path)` - exist?
+            r#"test(?e, "/etc/hosts") == true"#,
+            // `test(?f, path)` - regular file
+            r#"test(?f, "/etc/hosts") == true"#,
+            // `test(?d, path)` - directory
+            r#"test(?d, "/etc") == true"#,
+            // integer form accepted too
+            r#"test(?e.ord, "/etc/hosts") == true"#,
+        ]);
     }
 
     #[test]
@@ -5322,18 +5335,12 @@ mod tests {
     }
 
     #[test]
-    fn kernel_eql() {
+    fn kernel_eql_and_loop() {
         run_tests(&[
             "1.eql?(1)",
             "1.eql?(1.0)",
             ":foo.eql?(:foo)",
             ":foo.eql?(:bar)",
-        ]);
-    }
-
-    #[test]
-    fn kernel_loop_stop_iteration() {
-        run_test(
             r#"
             x = 0
             loop do
@@ -5342,7 +5349,7 @@ mod tests {
             end
             x
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -5381,22 +5388,20 @@ mod tests {
     // --- tests for Kernel#catch / Kernel#throw added in PR #440 ---
 
     #[test]
-    fn kernel_catch_basic() {
-        // Matching tag → catch returns the throw value.
-        run_test("catch(:done) { throw :done, 42 }");
-        // No throw → catch returns the block's value.
-        run_test("catch(:done) { 99 }");
-        // throw with no value defaults to nil.
-        run_test("catch(:done) { throw :done }.inspect");
-    }
-
-    #[test]
-    fn kernel_catch_yields_tag() {
-        // The block receives the tag as its argument.
-        run_test("catch(:t) { |x| x }");
-        // catch with no argument allocates a fresh Object as the tag and
-        // yields it; throwing that exact object lets catch return the value.
-        run_test("catch { |t| throw t, :ok }");
+    fn kernel_catch() {
+        run_tests(&[
+            // Matching tag → catch returns the throw value.
+            "catch(:done) { throw :done, 42 }",
+            // No throw → catch returns the block's value.
+            "catch(:done) { 99 }",
+            // throw with no value defaults to nil.
+            "catch(:done) { throw :done }.inspect",
+            // The block receives the tag as its argument.
+            "catch(:t) { |x| x }",
+            // catch with no argument allocates a fresh Object as the tag and
+            // yields it; throwing that exact object lets catch return the value.
+            "catch { |t| throw t, :ok }",
+        ]);
     }
 
     #[test]
@@ -5411,9 +5416,9 @@ mod tests {
     }
 
     #[test]
-    fn kernel_catch_runs_ensure_not_rescue() {
-        // `ensure` runs on the throw path; `rescue` does NOT intercept it.
-        run_test(
+    fn kernel_catch_2() {
+        run_tests(&[
+            // `ensure` runs on the throw path; `rescue` does NOT intercept it.
             r#"
             log = []
             result = catch(:done) do
@@ -5427,14 +5432,8 @@ mod tests {
             end
             [result, log]
             "#,
-        );
-    }
-
-    #[test]
-    fn kernel_catch_nested_different_tags() {
-        // Inner catch's tag does not match → the throw skips it and is
-        // intercepted by the outer catch.
-        run_test(
+            // Inner catch's tag does not match → the throw skips it and is
+            // intercepted by the outer catch.
             r#"
             catch(:outer) do
               catch(:inner) do
@@ -5443,22 +5442,16 @@ mod tests {
               "inner_returned"
             end
             "#,
-        );
-    }
-
-    #[test]
-    fn kernel_catch_nested_same_tag() {
-        // Same symbolic tag at both levels → the innermost matching catch
-        // wins; the outer catch then completes normally with the value of
-        // the expression that follows it.
-        run_test(
+            // Same symbolic tag at both levels → the innermost matching catch
+            // wins; the outer catch then completes normally with the value of
+            // the expression that follows it.
             r#"
             catch(:t) do
               catch(:t) { throw :t, "innermost" }
               "outer_after_inner"
             end
             "#,
-        );
+        ]);
     }
 
     #[test]

@@ -894,23 +894,12 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn marshal_dump_nil() {
-        run_test("Marshal.dump(nil)");
-    }
-
-    #[test]
-    fn marshal_dump_true() {
-        run_test("Marshal.dump(true)");
-    }
-
-    #[test]
-    fn marshal_dump_false() {
-        run_test("Marshal.dump(false)");
-    }
-
-    #[test]
-    fn marshal_dump_integers() {
+    fn marshal_dump_load() {
+        //run_test("Marshal.dump(-0.0)"); // monoruby doesn't preserve -0.0 literal yet
         run_tests(&[
+            "Marshal.dump(nil)",
+            "Marshal.dump(true)",
+            "Marshal.dump(false)",
             "Marshal.dump(0)",
             "Marshal.dump(1)",
             "Marshal.dump(-1)",
@@ -928,21 +917,10 @@ mod tests {
             "Marshal.dump(0x1000000)",
             "Marshal.dump(0x3fffffff)",
             "Marshal.dump(-0x40000000)",
-        ]);
-    }
-
-    #[test]
-    fn marshal_dump_bignum() {
-        run_test("Marshal.dump(0x40000000)");
-        run_test("Marshal.dump(-0x40000001)");
-        run_test("Marshal.dump(2**64)");
-        run_test("Marshal.dump(-(2**64))");
-    }
-
-    #[test]
-    fn marshal_dump_float() {
-        //run_test("Marshal.dump(-0.0)"); // monoruby doesn't preserve -0.0 literal yet
-        run_tests(&[
+            "Marshal.dump(0x40000000)",
+            "Marshal.dump(-0x40000001)",
+            "Marshal.dump(2**64)",
+            "Marshal.dump(-(2**64))",
             "Marshal.dump(0.0)",
             "Marshal.dump(1.0)",
             "Marshal.dump(-1.5)",
@@ -964,57 +942,27 @@ mod tests {
             "Marshal.dump(2.718281828459045)",
             "Marshal.dump(10.0)",
             "Marshal.dump(1000.0)",
-        ]);
-    }
-
-    #[test]
-    fn marshal_dump_symbol() {
-        run_test("Marshal.dump(:hello)");
-        run_test("Marshal.dump(:foo)");
-        run_test("Marshal.dump(:\"\")");
-        run_test("Marshal.dump(:a)");
-        run_test("Marshal.dump(:marshal_test_symbol)");
-    }
-
-    #[test]
-    fn marshal_dump_string() {
-        run_test(r#"Marshal.dump("hello")"#);
-        run_test(r#"Marshal.dump("")"#);
-        run_test(r#"Marshal.dump("a")"#);
-        run_test(r#"Marshal.dump("hello world")"#);
-        run_test(r#"Marshal.dump("hello".b)"#);
-        run_test(r#"Marshal.dump("".b)"#);
-    }
-
-    #[test]
-    fn marshal_dump_array() {
-        run_test("Marshal.dump([])");
-        run_test("Marshal.dump([1, 2, 3])");
-        run_test(r#"Marshal.dump([1, "hello", :foo, nil, true, false])"#);
-        run_test("Marshal.dump([[1, 2], [3, 4]])");
-    }
-
-    #[test]
-    fn marshal_dump_hash() {
-        run_test("Marshal.dump({})");
-        run_test(r#"Marshal.dump({a: 1, b: 2})"#);
-        run_test(r#"Marshal.dump({"key" => "value"})"#);
-    }
-
-    #[test]
-    fn marshal_load_nil() {
-        run_test("Marshal.load(Marshal.dump(nil))");
-    }
-
-    #[test]
-    fn marshal_load_bool() {
-        run_test("Marshal.load(Marshal.dump(true))");
-        run_test("Marshal.load(Marshal.dump(false))");
-    }
-
-    #[test]
-    fn marshal_load_integers() {
-        run_tests(&[
+            "Marshal.dump(:hello)",
+            "Marshal.dump(:foo)",
+            "Marshal.dump(:\"\")",
+            "Marshal.dump(:a)",
+            "Marshal.dump(:marshal_test_symbol)",
+            r#"Marshal.dump("hello")"#,
+            r#"Marshal.dump("")"#,
+            r#"Marshal.dump("a")"#,
+            r#"Marshal.dump("hello world")"#,
+            r#"Marshal.dump("hello".b)"#,
+            r#"Marshal.dump("".b)"#,
+            "Marshal.dump([])",
+            "Marshal.dump([1, 2, 3])",
+            r#"Marshal.dump([1, "hello", :foo, nil, true, false])"#,
+            "Marshal.dump([[1, 2], [3, 4]])",
+            "Marshal.dump({})",
+            r#"Marshal.dump({a: 1, b: 2})"#,
+            r#"Marshal.dump({"key" => "value"})"#,
+            "Marshal.load(Marshal.dump(nil))",
+            "Marshal.load(Marshal.dump(true))",
+            "Marshal.load(Marshal.dump(false))",
             "Marshal.load(Marshal.dump(0))",
             "Marshal.load(Marshal.dump(1))",
             "Marshal.load(Marshal.dump(-1))",
@@ -1030,60 +978,32 @@ mod tests {
             "Marshal.load(Marshal.dump(0x1000000))",
             "Marshal.load(Marshal.dump(0x3fffffff))",
             "Marshal.load(Marshal.dump(-0x40000000))",
+            "Marshal.load(Marshal.dump(0x40000000))",
+            "Marshal.load(Marshal.dump(-0x40000001))",
+            "Marshal.load(Marshal.dump(2**64))",
+            "Marshal.load(Marshal.dump(-(2**64)))",
+            "Marshal.load(Marshal.dump(0.0))",
+            "Marshal.load(Marshal.dump(1.0))",
+            "Marshal.load(Marshal.dump(-1.5))",
+            "Marshal.load(Marshal.dump(3.14159265358979))",
+            "Marshal.load(Marshal.dump(100.0))",
+            "Marshal.load(Marshal.dump(0.1))",
+            "Marshal.load(Marshal.dump(:hello))",
+            "Marshal.load(Marshal.dump(:foo))",
+            "Marshal.load(Marshal.dump(:a))",
+            r#"Marshal.load(Marshal.dump("hello"))"#,
+            r#"Marshal.load(Marshal.dump(""))"#,
+            r#"Marshal.load(Marshal.dump("hello world"))"#,
+            r#"Marshal.load(Marshal.dump("hello".b))"#,
+            "Marshal.load(Marshal.dump([]))",
+            "Marshal.load(Marshal.dump([1, 2, 3]))",
+            r#"Marshal.load(Marshal.dump([1, "hello", :foo, nil, true, false]))"#,
+            "Marshal.load(Marshal.dump([[1, 2], [3, 4]]))",
+            "Marshal.load(Marshal.dump({}))",
+            r#"Marshal.load(Marshal.dump({a: 1, b: 2}))"#,
+            r#"Marshal.load(Marshal.dump({"key" => "value"}))"#,
+            r#"Marshal.load(Marshal.dump({a: [1, 2, 3], b: "hello", c: {d: :e}}))"#,
         ]);
-    }
-
-    #[test]
-    fn marshal_load_bignum() {
-        run_test("Marshal.load(Marshal.dump(0x40000000))");
-        run_test("Marshal.load(Marshal.dump(-0x40000001))");
-        run_test("Marshal.load(Marshal.dump(2**64))");
-        run_test("Marshal.load(Marshal.dump(-(2**64)))");
-    }
-
-    #[test]
-    fn marshal_load_float() {
-        run_test("Marshal.load(Marshal.dump(0.0))");
-        run_test("Marshal.load(Marshal.dump(1.0))");
-        run_test("Marshal.load(Marshal.dump(-1.5))");
-        run_test("Marshal.load(Marshal.dump(3.14159265358979))");
-        run_test("Marshal.load(Marshal.dump(100.0))");
-        run_test("Marshal.load(Marshal.dump(0.1))");
-    }
-
-    #[test]
-    fn marshal_load_symbol() {
-        run_test("Marshal.load(Marshal.dump(:hello))");
-        run_test("Marshal.load(Marshal.dump(:foo))");
-        run_test("Marshal.load(Marshal.dump(:a))");
-    }
-
-    #[test]
-    fn marshal_load_string() {
-        run_test(r#"Marshal.load(Marshal.dump("hello"))"#);
-        run_test(r#"Marshal.load(Marshal.dump(""))"#);
-        run_test(r#"Marshal.load(Marshal.dump("hello world"))"#);
-        run_test(r#"Marshal.load(Marshal.dump("hello".b))"#);
-    }
-
-    #[test]
-    fn marshal_load_array() {
-        run_test("Marshal.load(Marshal.dump([]))");
-        run_test("Marshal.load(Marshal.dump([1, 2, 3]))");
-        run_test(r#"Marshal.load(Marshal.dump([1, "hello", :foo, nil, true, false]))"#);
-        run_test("Marshal.load(Marshal.dump([[1, 2], [3, 4]]))");
-    }
-
-    #[test]
-    fn marshal_load_hash() {
-        run_test("Marshal.load(Marshal.dump({}))");
-        run_test(r#"Marshal.load(Marshal.dump({a: 1, b: 2}))"#);
-        run_test(r#"Marshal.load(Marshal.dump({"key" => "value"}))"#);
-    }
-
-    #[test]
-    fn marshal_roundtrip_complex() {
-        run_test(r#"Marshal.load(Marshal.dump({a: [1, 2, 3], b: "hello", c: {d: :e}}))"#);
     }
 
     #[test]
@@ -1188,18 +1108,16 @@ mod tests {
     fn marshal_range_roundtrip() {
         // A Range reconstructed from the 'o' format should behave as a
         // real Range (responds to begin/end/exclude_end?).
-        run_test(
+        run_tests(&[
             r#"
             r = Marshal.load(Marshal.dump(1..10))
             [r.class.to_s, r.begin, r.end, r.exclude_end?]
             "#,
-        );
-        run_test(
             r#"
             r = Marshal.load(Marshal.dump(1...10))
             [r.begin, r.end, r.exclude_end?]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -1218,8 +1136,10 @@ mod tests {
 
     #[test]
     fn marshal_version_constants() {
-        run_test(r##"Marshal::MAJOR_VERSION"##);
-        run_test(r##"Marshal::MINOR_VERSION"##);
-        run_test(r##"[Marshal::MAJOR_VERSION, Marshal::MINOR_VERSION]"##);
+        run_tests(&[
+            r##"Marshal::MAJOR_VERSION"##,
+            r##"Marshal::MINOR_VERSION"##,
+            r##"[Marshal::MAJOR_VERSION, Marshal::MINOR_VERSION]"##,
+        ]);
     }
 }
