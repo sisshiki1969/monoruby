@@ -347,6 +347,16 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::LocalVariableReadNode { .. } => {
                 self.lower_local_var_read(&node.as_local_variable_read_node().unwrap())?
             }
+            prism::Node::ItLocalVariableReadNode { .. } => {
+                // Ruby 3.4 `it` reference. Bound by the enclosing
+                // block's synthesized `Param("it")` (see the
+                // `ItParametersNode` arm), always at depth 0.
+                let n = node.as_it_local_variable_read_node().unwrap();
+                Node {
+                    kind: NodeKind::LocalVar(0, "it".to_string()),
+                    loc: location_to_loc(&n.location()),
+                }
+            }
             prism::Node::LocalVariableWriteNode { .. } => {
                 self.lower_local_var_write(&node.as_local_variable_write_node().unwrap())?
             }
@@ -2928,6 +2938,18 @@ impl<'pr> Lowerer<'pr> {
                             let pn = p.as_parameters_node().unwrap();
                             this.lower_parameters(&pn)?
                         }
+                        prism::Node::ItParametersNode { .. } => {
+                            // Ruby 3.4 `it` in a `-> { it }` lambda —
+                            // same single-anonymous-param shape as the
+                            // block-form `ItParametersNode` arm.
+                            let ip = p.as_it_parameters_node().unwrap();
+                            let ip_loc = location_to_loc(&ip.location());
+                            this.lvars.insert("it");
+                            vec![ruruby_parse::FormalParam {
+                                kind: ParamKind::Param("it".to_string()),
+                                loc: ip_loc,
+                            }]
+                        }
                         other => return Err(this.unsupported("lambda parameters", &other)),
                     },
                 };
@@ -3011,6 +3033,24 @@ impl<'pr> Lowerer<'pr> {
                                 this.lvars.numbered_param_max = max as u8;
                             }
                             out
+                        }
+                        prism::Node::ItParametersNode { .. } => {
+                            // Ruby 3.4 `it`: an anonymous single block
+                            // parameter. Prism emits `ItParametersNode`
+                            // on the block and every reference as an
+                            // `ItLocalVariableReadNode`. It behaves
+                            // exactly like an explicit `|it|` (one
+                            // required param, no auto-splat), so we
+                            // synthesize a single `Param("it")` and
+                            // bind the local; the read side lowers to
+                            // `LocalVar(0, "it")`.
+                            let ip = p.as_it_parameters_node().unwrap();
+                            let ip_loc = location_to_loc(&ip.location());
+                            this.lvars.insert("it");
+                            vec![ruruby_parse::FormalParam {
+                                kind: ParamKind::Param("it".to_string()),
+                                loc: ip_loc,
+                            }]
                         }
                         other => return Err(this.unsupported("block parameters", &other)),
                     },
