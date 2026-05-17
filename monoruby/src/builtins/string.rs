@@ -11314,6 +11314,17 @@ mod tests {
             r#""abc".encode("EUC-JP").squeeze!"#,            // no change -> nil
             r#"(y = "abcabc".encode("EUC-JP"); y.tr!("b", "B"); y.encode("UTF-8"))"#,
             r#""abc".encode("EUC-JP").tr!("z", "Z")"#,        // no change -> nil
+            // negated `from` with empty `to` deletes (incl. multibyte).
+            r#""aあbいcaab".encode("EUC-JP").tr("^a", "").encode("UTF-8")"#,
+            // tr_s! non-UTF-8: changed, then no-change -> nil.
+            r#"(z = "aabいc".encode("EUC-JP"); z.tr_s!("a", "X"); z.encode("UTF-8"))"#,
+            r#""abc".encode("EUC-JP").tr_s!("z", "Z")"#,
+            // squeeze with a non-ASCII set in a different encoding.
+            r#"begin; "aあ".encode("EUC-JP").squeeze("あ"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            // Map replacement that is a no-op but still "matched".
+            r#""aaあ".encode("EUC-JP").tr("a", "a").encode("UTF-8")"#,
+            // tr! non-UTF-8 on Shift_JIS (changed).
+            r#"(q = "aabc".encode("Shift_JIS"); q.tr!("a", "A"); q.encode("UTF-8"))"#,
         ]);
     }
 
