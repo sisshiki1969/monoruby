@@ -1661,6 +1661,67 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
 #[monoruby_builtin]
 fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    // Non-UTF-8 receiver + empty String separator: split into
+    // characters via the encoding-aware iterator (the generic path
+    // below needs a `&str`, which would error for EUC-JP/Shift_JIS).
+    if let Some(recv) = self_.is_rstring_inner()
+        && !recv.encoding().is_utf8_compatible()
+        && let Some(a0) = lfp.try_arg(0)
+        && let Some(sep_inner) = a0.is_rstring_inner()
+        && sep_inner.as_bytes().is_empty()
+    {
+        let lim = if let Some(a1) = lfp.try_arg(1) {
+            a1.coerce_to_int_i64(vm, globals)?
+        } else {
+            0
+        };
+        let enc = recv.encoding();
+        let chars: Vec<RStringInner> = recv
+            .iter_char_bytes()
+            .map(|s| RStringInner::from_encoding(s, enc))
+            .collect();
+        let n = chars.len();
+        let mut v: Vec<Value> = if lim > 0 && (lim as usize) < n {
+            // `limit` fields: first `limit-1` chars, last field is
+            // the unsplit remainder.
+            let take = (lim as usize) - 1;
+            let mut bytes = Vec::new();
+            for c in &chars[take..] {
+                bytes.extend_from_slice(c.as_bytes());
+            }
+            let mut out: Vec<Value> = chars[..take]
+                .iter()
+                .map(|c| Value::string_from_inner(c.clone()))
+                .collect();
+            out.push(Value::string_from_inner(RStringInner::from_encoding(
+                &bytes, enc,
+            )));
+            out
+        } else {
+            chars
+                .into_iter()
+                .map(Value::string_from_inner)
+                .collect()
+        };
+        // Trailing empty field: only when limit is negative (CRuby
+        // keeps it; default/positive limit drops trailing empties,
+        // and an all-character split has none anyway).
+        if lim < 0 {
+            v.push(Value::string_from_inner(RStringInner::from_encoding(
+                b"", enc,
+            )));
+        }
+        return match lfp.block() {
+            Some(bh) => {
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
+                Ok(lfp.self_val())
+            }
+            None => Ok(Value::array_from_vec(v)),
+        };
+    }
     let string = self_.expect_str(globals)?;
     let lim = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_int_i64(vm, globals)?
@@ -10892,6 +10953,21 @@ mod tests {
             r#"(x = "ABc".encode("EUC-JP"); x.upcase!; x.encode("UTF-8"))"#,
             r#""ABC".encode("EUC-JP").upcase!"#, // no change -> nil
             r#""漢字abc".encode("Shift_JIS").upcase.encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_split_empty_sep() {
+        // P3 (step 2): `split("")` splits an EUC-JP / Shift_JIS
+        // receiver into characters (was ArgumentError).
+        run_tests(&[
+            r#""aあbいc".encode("EUC-JP").split("").map { |x| x.encode("UTF-8") }"#,
+            r#""aあbいc".encode("EUC-JP").split("", 3).map { |x| x.encode("UTF-8") }"#,
+            r#""aあbいc".encode("EUC-JP").split("", -1).map { |x| x.encode("UTF-8") }"#,
+            r#""".encode("EUC-JP").split("")"#,
+            r#""漢A字".encode("Shift_JIS").split("").map { |x| x.encode("UTF-8") }"#,
+            r#"(r = []; "aあb".encode("EUC-JP").split("") { |c| r << c.encode("UTF-8") }; r)"#,
+            r#""aあbいc".encode("EUC-JP").split("", 1).map { |x| x.encode("UTF-8") }"#,
         ]);
     }
 }
