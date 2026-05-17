@@ -5296,6 +5296,12 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             inner.encoding(),
         )));
     }
+    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_bytes(&inner, &from, &to, false)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, inner.encoding()),
+        ));
+    }
     let rec = self_.expect_str(globals)?;
     let (res, _) = tr_translate(rec, &from, &to, false)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
@@ -5320,6 +5326,15 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
+    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
+        let enc = self_.as_rstring_inner().encoding();
+        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, false)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let rec = self_.expect_str(globals)?.to_string();
@@ -5353,6 +5368,12 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             inner.encoding(),
         )));
     }
+    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_bytes(&inner, &from, &to, true)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, inner.encoding()),
+        ));
+    }
     let rec = self_.expect_str(globals)?;
     let (res, _) = tr_translate(rec, &from, &to, true)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
@@ -5377,6 +5398,15 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
+    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
+        let enc = self_.as_rstring_inner().encoding();
+        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, true)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let rec = self_.expect_str(globals)?.to_string();
@@ -5605,6 +5635,115 @@ enum TrMap {
     },
 }
 
+/// Gate for the non-UTF-8 `tr` / `tr_s` path. `Ok(true)` ⇒ receiver
+/// is non-UTF-8 and both spec args are ASCII-only (safe). `Err` ⇒ a
+/// spec arg is non-ASCII in a *different* encoding
+/// (Encoding::CompatibilityError). `Ok(false)` ⇒ caller keeps the
+/// existing path (UTF-8 receiver, or a same-encoding multibyte spec —
+/// documented follow-up).
+fn tr_args_ascii_ok(
+    globals: &Globals,
+    recv: &RStringInner,
+    a: Value,
+    b: Value,
+) -> Result<bool> {
+    if recv.encoding().is_utf8_compatible() {
+        return Ok(false);
+    }
+    for v in [a, b] {
+        if let Some(s) = v.is_rstring_inner()
+            && s.as_bytes().iter().any(|x| *x >= 0x80)
+        {
+            return if s.encoding() != recv.encoding() {
+                Err(MonorubyErr::incompatible_encoding(
+                    &globals.store,
+                    recv.encoding(),
+                    s.encoding(),
+                ))
+            } else {
+                Ok(false)
+            };
+        }
+    }
+    Ok(true)
+}
+
+/// `tr_translate` over a non-UTF-8 receiver: walk the encoding-aware
+/// char iterator. Any multibyte character is treated as a single
+/// sentinel non-ASCII codepoint (`\u{FFFF}`) so an ASCII-only
+/// `from`/`to` spec yields exactly CRuby's behaviour (kept verbatim
+/// unless a negated set replaces/deletes it). `from`/`to` must be
+/// ASCII-only (the caller gates via `tr_args_ascii_ok`).
+fn tr_translate_bytes(
+    inner: &RStringInner,
+    from: &str,
+    to: &str,
+    squeeze: bool,
+) -> Result<(SmallVec<[u8; STRING_INLINE_CAP]>, bool)> {
+    let map = tr_build_map(from, to)?;
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+        SmallVec::with_capacity(inner.as_bytes().len());
+    let mut changed = false;
+    let mut last_translated: Option<char> = None;
+    for ch in inner.iter_char_bytes() {
+        let key = if ch.len() == 1 && ch[0] < 0x80 {
+            ch[0] as char
+        } else {
+            '\u{FFFF}'
+        };
+        enum Out {
+            Keep,
+            Drop,
+            Repl(char),
+        }
+        let outcome = match &map {
+            TrMap::Map(m) => match m.get(&key) {
+                Some(r) => Out::Repl(*r),
+                None => Out::Keep,
+            },
+            TrMap::Delete { chars, negated } => {
+                let in_set = chars.contains(&key);
+                if if *negated { !in_set } else { in_set } {
+                    Out::Drop
+                } else {
+                    Out::Keep
+                }
+            }
+            TrMap::Negated {
+                from_set,
+                replacement,
+            } => {
+                if from_set.contains(&key) {
+                    Out::Keep
+                } else {
+                    Out::Repl(*replacement)
+                }
+            }
+        };
+        match outcome {
+            Out::Drop => {
+                changed = true;
+                last_translated = None;
+            }
+            // Translated to `r` (ASCII for a gated ASCII-only spec).
+            Out::Repl(r) => {
+                changed = true;
+                if !(squeeze && Some(r) == last_translated) {
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(r.encode_utf8(&mut buf).as_bytes());
+                }
+                last_translated = Some(r);
+            }
+            // Kept verbatim (copy the original char bytes).
+            Out::Keep => {
+                out.extend_from_slice(ch);
+                last_translated = None;
+            }
+        }
+    }
+    Ok((out, changed))
+}
+
 /// Run a `tr` translation. Returns `(result, changed)` so callers can
 /// distinguish "no-op → return nil" for the bang variants.
 /// `squeeze` collapses consecutive identical *output* characters that
@@ -5784,6 +5923,24 @@ fn squeeze_compute(
         .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
     let inner = self_val.as_rstring_inner();
+
+    // Non-UTF-8 receiver: collapse runs of identical *characters*
+    // via the encoding-aware iterator.
+    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let squeeze_all2 = sets2.is_empty();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        let mut prev: Option<SmallVec<[u8; 4]>> = None;
+        for ch in inner.iter_char_bytes() {
+            let in_set = squeeze_all2 || ascii_sets_contain(&sets2, ch);
+            if in_set && prev.as_deref() == Some(ch) {
+                continue;
+            }
+            out.extend_from_slice(ch);
+            prev = Some(SmallVec::from_slice(ch));
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
 
     // ASCII fast path: branchless byte-test against the intersection,
     // no allocation when nothing collapses (we still allocate when
@@ -11067,6 +11224,29 @@ mod tests {
             r#""abcabc".encode("EUC-JP").delete("b").encode("UTF-8")"#,
             r#"(s = "abcあ".encode("EUC-JP"); s.delete!("b"); s.encode("UTF-8"))"#,
             r#""ac".encode("EUC-JP").delete!("z")"#, // no change -> nil
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_tr_squeeze() {
+        // P3 (step 4): `tr`/`tr_s`/`squeeze` over a non-UTF-8 receiver
+        // with ASCII-only specs (multibyte kept verbatim unless a
+        // negated `from` replaces/deletes it).
+        run_tests(&[
+            r#""aあbいcaabあ".encode("EUC-JP").squeeze.encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").squeeze("a").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("abc", "xyz").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("a-c", "A-C").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("^a", "_").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("a", "").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr_s("a", "X").encode("UTF-8")"#,
+            r#"begin; "aあ".encode("EUC-JP").tr("あ", "x"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#""AABBＸＸ".encode("Shift_JIS").squeeze.encode("UTF-8")"#,
+            r#""abcabc".encode("Shift_JIS").tr("ac", "AC").encode("UTF-8")"#,
+            r#"(x = "aabc".encode("EUC-JP"); x.squeeze!; x.encode("UTF-8"))"#,
+            r#""abc".encode("EUC-JP").squeeze!"#,            // no change -> nil
+            r#"(y = "abcabc".encode("EUC-JP"); y.tr!("b", "B"); y.encode("UTF-8"))"#,
+            r#""abc".encode("EUC-JP").tr!("z", "Z")"#,        // no change -> nil
         ]);
     }
 }
