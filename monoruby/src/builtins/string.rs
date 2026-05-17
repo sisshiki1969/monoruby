@@ -7122,14 +7122,10 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn string_new() {
-        run_test(r##"String.new"##);
-        run_test(r##"String.new("Ruby")"##);
-    }
-
-    #[test]
-    fn string_subclass_new() {
-        run_test(
+    fn string_new_group() {
+        run_tests(&[
+            r##"String.new"##,
+            r##"String.new("Ruby")"##,
             r##"
         module M; end
         class S < String
@@ -7138,38 +7134,23 @@ mod tests {
         o = S.new("hi")
         [o.class.name, o.is_a?(S), o.is_a?(String), o.is_a?(M), o == "hi"]
         "##,
-        );
-        // Subclass `new` with no argument (the None inner-build arm).
-        run_test(
+            // Subclass `new` with no argument (the None inner-build arm).
             r##"
         class S2 < String; end
         s = S2.new
         [s.class.name, s.is_a?(S2), s, s.encoding.name]
         "##,
-        );
-    }
-
-    #[test]
-    fn string_try_convert() {
-        run_test(r##"String.try_convert("str")"##);
-        run_test(r##"String.try_convert(/re/)"##);
-    }
-
-    #[test]
-    fn string_empty() {
-        run_test(r##""文字列".empty?"##);
-        run_test(r##""".empty?"##);
-    }
-
-    #[test]
-    fn string_add() {
-        run_test(r##"a = "We will"; a + " " + "rock you." "##);
+            r##"String.try_convert("str")"##,
+            r##"String.try_convert(/re/)"##,
+            r##""文字列".empty?"##,
+            r##""".empty?"##,
+            r##"a = "We will"; a + " " + "rock you." "##,
+        ]);
     }
 
     #[test]
     fn string_mul() {
-        run_test(r##""abcde" * 5"##);
-        run_test(r##""機動戦士" * 3"##);
+        run_tests(&[r##""abcde" * 5"##, r##""機動戦士" * 3"##]);
         run_test_error(r##""機動戦士" * -1"##);
     }
 
@@ -7194,30 +7175,26 @@ mod tests {
 
     #[test]
     fn string_shl_encoding() {
-        // UTF-8 << ASCII-8BIT (ASCII chars only) => keeps UTF-8
-        run_test(
+        run_tests(&[
+            // UTF-8 << ASCII-8BIT (ASCII chars only) => keeps UTF-8
             r##"
             s = "hello".encode("UTF-8")
             s << "world".force_encoding("ASCII-8BIT")
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
-        // UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
-        run_test(
+            // UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
             r##"
             s = "hello".encode("UTF-8")
             s << "\x80".force_encoding("ASCII-8BIT")
             s.encoding == Encoding::ASCII_8BIT
         "##,
-        );
-        // ASCII-8BIT (ASCII only) << UTF-8 (non-ASCII) => upgrades to UTF-8
-        run_test(
+            // ASCII-8BIT (ASCII only) << UTF-8 (non-ASCII) => upgrades to UTF-8
             r##"
             s = "hello".force_encoding("ASCII-8BIT")
             s << "こんにちは"
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
+        ]);
         // UTF-8 (non-ASCII) << ASCII-8BIT (non-ASCII) => Encoding::CompatibilityError
         run_test_error(
             r##"
@@ -7225,85 +7202,67 @@ mod tests {
             s << "\x80".force_encoding("ASCII-8BIT")
         "##,
         );
-        // ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
-        run_test(
+        run_tests(&[
+            // ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
             r##"
             s = "hello".force_encoding("ASCII-8BIT")
             s << "world".encode("UTF-8")
             [s, s.encoding == Encoding::ASCII_8BIT]
         "##,
-        );
-        // empty UTF-8 << ASCII-8BIT (ASCII only) => keeps UTF-8
-        run_test(
+            // empty UTF-8 << ASCII-8BIT (ASCII only) => keeps UTF-8
             r##"
             s = "".encode("UTF-8")
             s << "hello".force_encoding("ASCII-8BIT")
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
-        // empty UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
-        run_test(
+            // empty UTF-8 << ASCII-8BIT (non-ASCII) => downgrades to ASCII-8BIT
             r##"
             s = "".encode("UTF-8")
             s << "\x80".force_encoding("ASCII-8BIT")
             s.encoding == Encoding::ASCII_8BIT
         "##,
-        );
-        // empty ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
-        run_test(
+            // empty ASCII-8BIT << UTF-8 (ASCII only) => keeps ASCII-8BIT
             r##"
             s = "".force_encoding("ASCII-8BIT")
             s << "hello".encode("UTF-8")
             [s, s.encoding == Encoding::ASCII_8BIT]
         "##,
-        );
-        // empty ASCII-8BIT << UTF-8 (non-ASCII) => upgrades to UTF-8
-        run_test(
+            // empty ASCII-8BIT << UTF-8 (non-ASCII) => upgrades to UTF-8
             r##"
             s = "".force_encoding("ASCII-8BIT")
             s << "こんにちは"
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
-        // Integer argument: UTF-8 string << Unicode codepoint
-        run_test(
+            // Integer argument: UTF-8 string << Unicode codepoint
             r##"
             s = "hello"
             s << 0x3042
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
-        // Integer argument: ASCII-8BIT << 0x80
-        run_test(
+            // Integer argument: ASCII-8BIT << 0x80
             r##"
             s = "hello".force_encoding("ASCII-8BIT")
             s << 0x80
             [s.bytes.to_a, s.encoding == Encoding::ASCII_8BIT]
         "##,
-        );
-        // Integer argument: ASCII char
-        run_test(
+            // Integer argument: ASCII char
             r##"
             s = "hello"
             s << 33
             [s, s.encoding == Encoding::UTF_8]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn string_eq() {
-        run_test(r##""abcde" == "abcde""##);
-        run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##);
-        run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDAM""##);
-        run_test(r##""機動戦士GUNDOM" == :abs"##);
-    }
-
-    #[test]
-    fn string_eql() {
-        // PR #361: `String#eql?` is now a value-based comparison (alias of
-        // `String#==`), not the identity-based fallback from Object.
         run_tests(&[
+            r##""abcde" == "abcde""##,
+            r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##,
+            r##""機動戦士GUNDOM" == "機動戦士GUNDAM""##,
+            r##""機動戦士GUNDOM" == :abs"##,
+            // PR #361: `String#eql?` is now a value-based comparison (alias of
+            // `String#==`), not the identity-based fallback from Object.
             r##""abcde".eql?("abcde")"##,
             r##""abcde".eql?("xxxxx")"##,
             // eql? does not coerce; non-String returns false.
@@ -7331,8 +7290,7 @@ mod tests {
 
     #[test]
     fn string_ord() {
-        run_test("'ruby'.ord");
-        run_test("'ルビー'.ord");
+        run_tests(&["'ruby'.ord", "'ルビー'.ord"]);
         run_test_error("''.ord");
         run_test(
             r#"
@@ -7346,29 +7304,29 @@ mod tests {
 
     #[test]
     fn string_index() {
-        run_test(r##"'bar'[2]"##);
-        run_test(r##"'bar'[2] == ?r"##);
-        run_test(r##"'bar'[-1]"##);
-        run_test(r##"'bar'[3]"##);
-        run_test(r##"'bar'[-4]"##);
+        run_tests(&[
+            r##"'bar'[2]"##,
+            r##"'bar'[2] == ?r"##,
+            r##"'bar'[-1]"##,
+            r##"'bar'[3]"##,
+            r##"'bar'[-4]"##,
+        ]);
         run_test_with_prelude(
             r##"[str0[2,1], str0[2,0], str0[2,100], str0[-1,1], str0[-1,2], str0[3,1], str0[4,1], str0[-4,1]]"##,
             r#"str0 = "bar""#,
         );
-        run_test(r##""foobar"[/bar/]"##);
-        run_test(r##""def getcnt(line)"[ /def\s+(\w+)/, 1 ]"##);
-        run_test(
+        run_tests(&[
+            r##""foobar"[/bar/]"##,
+            r##""def getcnt(line)"[ /def\s+(\w+)/, 1 ]"##,
             r##"['abcd'[2..1], 'abcd'[2..2], 'abcd'[2..3], 'abcd'[2..4], 'abcd'[2..-1], 'abcd'[3..-1]]"##,
-        );
-        run_test(
             r##"['abcd'[1..2], 'abcd'[2..2], 'abcd'[3..2], 'abcd'[4..2], 'abcd'[5..2], 'abcd'[-3..2], 'abcd'[-4..2], 'abcd'[-5..2]]"##,
-        );
-        // Range with start in-bounds but end out-of-bounds returns ""
-        run_test(r##""symbol"[-2..-10]"##);
-        run_test(r##""symbol"[2..-10]"##);
-        // Range with start out-of-bounds returns nil
-        run_test(r##""symbol"[10..12]"##);
-        run_test(r##""symbol"[-10..-12]"##);
+            // Range with start in-bounds but end out-of-bounds returns ""
+            r##""symbol"[-2..-10]"##,
+            r##""symbol"[2..-10]"##,
+            // Range with start out-of-bounds returns nil
+            r##""symbol"[10..12]"##,
+            r##""symbol"[-10..-12]"##,
+        ]);
     }
 
     #[test]
@@ -7605,26 +7563,22 @@ mod tests {
 
     #[test]
     fn gsub() {
-        run_test(
+        run_tests(&[
             r##"
         res = "abcdefgdef".gsub(/def/, "!!")
         [res, $&, $']
         "##,
-        );
-        run_test(
             r##"
         res = "2.5".gsub(".", ",")
         [res, $&, $']
         "##,
-        );
-        run_test(
             r##"
         res = "abcdefgdddefjklefl".gsub(/d*ef/) {
             |matched| "+" + matched + "+"
         }
         [res, $&, $']
         "##,
-        );
+        ]);
         run_test_error(
             r##"
         "abcdefgdef".gsub(/def/, 3)
@@ -7642,154 +7596,111 @@ mod tests {
         }
         "##,
         );
-        run_test(
+        run_tests(&[
             r##"
         s = "abcdefghdefr"
         res = s.gsub!(/def/, "!!")
         [res, s, $&, $']
         "##,
-        );
-        run_test(
             r##"
         s = "2.5.3..75841."
         res = s.gsub!(".", ",")
         [res, s, $&, $']
         "##,
-        );
-        run_test(
             r##"
         s = "abcdefghdefr"
         res = s.gsub!(/def1/, "!!")
         [res, s, $&, $']
         "##,
-        );
-        // backreference expansion in gsub
-        run_test(
+            // backreference expansion in gsub
             r##"
         "abc-def-ghi".gsub(/(\w+)-(\w+)/, '\2-\1')
         "##,
-        );
-        run_test(
             r##"
         "hello world".gsub(/(\w+)/, '[\1]')
         "##,
-        );
-        // escaped backslash in gsub replacement
-        run_test(
+            // escaped backslash in gsub replacement
             r##"
         "abc".gsub(/b/, '\\\\')
         "##,
-        );
+        ]);
     }
 
     #[test]
-    fn sub() {
-        run_test(r##""abcdefgdef".sub(/def/, "!!")"##);
-        run_test(r##""2.5".sub(".", ",")"##);
-        run_test(
+    fn sub_group() {
+        run_tests(&[
+            r##""abcdefgdef".sub(/def/, "!!")"##,
+            r##""2.5".sub(".", ",")"##,
             r##"
         "abcdefgdddefjklefl".sub(/d*ef/) {
             |matched| "+" + matched + "+"
         }
         "##,
-        );
-        run_test(
             r##"
         s = "abcdefghdefr"
         s.sub!(/def/, "!!")
         "##,
-        );
-        run_test(
             r##"
         s = "2.5.3..75841."
         s.sub!(".", ",")
         "##,
-        );
-        run_test(
             r##"
         s = "abcdefghdefr"
         s.sub!(/def1/, "!!")
         "##,
-        );
-        // backreference expansion in sub
-        run_test(
+            // backreference expansion in sub
             r##"
         "abc-def".sub(/(\w+)-(\w+)/, '\2-\1')
         "##,
-        );
-        // escaped backslash in sub replacement
-        run_test(
+            // escaped backslash in sub replacement
             r##"
         "abc".sub(/b/, '\\\\')
         "##,
-        );
-    }
-
-    #[test]
-    fn sub_gsub_backref_extras() {
-        // \& and \0 → full match.
-        run_test(r#""hello!".sub("he", '<\&>')"#);
-        run_test(r#""hello!".sub("he", '<\0>')"#);
-        // \` → pre-match, \' → post-match.
-        run_test(r#""hello!".sub("l", '<\`>')"#);
-        run_test(r#""hello!".sub("l", "<\\'>")"#);
-        // \+ → highest-numbered participating capture.
-        run_test(r#""hello!".sub(/(.)(.)/, '\+')"#);
-        // \+ with no capture group expands to empty.
-        run_test(r#""hello!".sub(/./, '\+')"#);
-        // Trailing \ kept verbatim.
-        run_test(r#""hello".sub(/./, 'hah\\')"#);
-        // \k<name> for named captures.
-        run_test(r#""hello".gsub(/(?<v>[aeiou])/, '<\k<v>>')"#);
-        run_test(r#""hello".gsub(/(?<c>.)/, '\k<c>\k<c>')"#);
-    }
-
-    #[test]
-    fn sub_gsub_hash_default() {
-        // Hash#default fires for missing keys.
-        run_test(
+            // \& and \0 → full match.
+            r#""hello!".sub("he", '<\&>')"#,
+            r#""hello!".sub("he", '<\0>')"#,
+            // \` → pre-match, \' → post-match.
+            r#""hello!".sub("l", '<\`>')"#,
+            r#""hello!".sub("l", "<\\'>")"#,
+            // \+ → highest-numbered participating capture.
+            r#""hello!".sub(/(.)(.)/, '\+')"#,
+            // \+ with no capture group expands to empty.
+            r#""hello!".sub(/./, '\+')"#,
+            // Trailing \ kept verbatim.
+            r#""hello".sub(/./, 'hah\\')"#,
+            // \k<name> for named captures.
+            r#""hello".gsub(/(?<v>[aeiou])/, '<\k<v>>')"#,
+            r#""hello".gsub(/(?<c>.)/, '\k<c>\k<c>')"#,
+            // Hash#default fires for missing keys.
             r#"
         h = Hash.new { |_, k| "<#{k}>" }
         "abc".gsub(/./, h)
         "#,
-        );
-        // Plain default value also works.
-        run_test(
+            // Plain default value also works.
             r#"
         h = Hash.new("?")
         "abc".gsub(/./, h)
         "#,
-        );
-        // Non-String value coerced via to_s.
-        run_test(
+            // Non-String value coerced via to_s.
             r#"
         "abc".gsub(/./, "a" => 1, "b" => 2, "c" => 3)
         "#,
-        );
-    }
-
-    #[test]
-    fn sub_hash_arg_routes_through_replace_one_hash() {
-        // The single-shot `String#sub` Hash path goes through
-        // `RegexpInner::replace_one_hash`, which is independent
-        // from the gsub variant — these cases exercise it.
-
-        // Plain hit: only the *first* match is rewritten, the rest
-        // of the string is preserved verbatim.
-        run_test(r#""hello".sub(/l/, "l" => "L")"#);
-        run_test(r#""hello".sub("l", "l" => "<L>")"#);
-        // Missing key with no default → match is replaced with "".
-        run_test(r#""hello".sub(/l/, "x" => "L")"#);
-        // Hash#default value used for missing keys.
-        run_test(
+            // The single-shot `String#sub` Hash path goes through
+            // `RegexpInner::replace_one_hash`, which is independent
+            // from the gsub variant — these cases exercise it.
+            // Plain hit: only the *first* match is rewritten, the rest
+            // of the string is preserved verbatim.
+            r#""hello".sub(/l/, "l" => "L")"#,
+            r#""hello".sub("l", "l" => "<L>")"#,
+            // Missing key with no default → match is replaced with "".
+            r#""hello".sub(/l/, "x" => "L")"#,
+            // Hash#default value used for missing keys.
             r#"
             h = Hash.new("<missing>")
             "hello".sub(/l/, h)
             "#,
-        );
-        // Hash#default_proc fires for missing keys (gets called
-        // only once, since `sub` only replaces the first match).
-        run_test(
+            // Hash#default_proc fires for missing keys (gets called
+            // only once, since `sub` only replaces the first match).
             r#"
             calls = 0
             h = Hash.new do |_, k|
@@ -7799,57 +7710,51 @@ mod tests {
             result = "hello".sub(/l/, h)
             [result, calls]
             "#,
-        );
-        // Non-String value is coerced via Object#to_s before
-        // being inserted.
-        run_test(r#""hello".sub(/l/, "l" => 7)"#);
-        // The `!` variant follows the same path and reports
-        // whether the receiver actually changed.
-        run_test(
+            // Non-String value is coerced via Object#to_s before
+            // being inserted.
+            r#""hello".sub(/l/, "l" => 7)"#,
+            // The `!` variant follows the same path and reports
+            // whether the receiver actually changed.
             r#"
             s = "hello"
             r = s.sub!(/l/, "l" => "L")
             [r, s]
             "#,
-        );
-        // No match: receiver unchanged, `sub!` returns nil.
-        run_test(
+            // No match: receiver unchanged, `sub!` returns nil.
             r#"
             s = "hello"
             r = s.sub!(/z/, "z" => "Z")
             [r, s]
             "#,
-        );
-    }
-
-    #[test]
-    fn gsub_multibyte_empty_match() {
-        // Empty match between non-empty matches must be observed
-        // (CRuby gsub of `[a-z\d]*` against "¿por qué?" yields the
-        // 10-char `"*¿** **é*?*"`).
-        run_test(r#""¿por qué?".gsub(/([a-z\d]*)/, "*")"#);
+            // Empty match between non-empty matches must be observed
+            // (CRuby gsub of `[a-z\d]*` against "¿por qué?" yields the
+            // 10-char `"*¿** **é*?*"`).
+            r#""¿por qué?".gsub(/([a-z\d]*)/, "*")"#,
+        ]);
     }
 
     #[test]
     fn delete() {
-        run_test(r##""abcdefg".delete("b")"##);
-        run_test(r##""abcdefg".delete("b", "c")"##);
-        run_test(r##""abcdefg".delete("b", "c", "d")"##);
-        run_test(r##""abcdefg".delete("b", "c", "d", "e")"##);
-        run_test(r##""abcdefg".delete("b", "c", "d", "e", "f")"##);
-        run_test(r##""abcdefg".delete("b", "c", "d", "e", "f", "g")"##);
-        run_test(r##""abcdefg".delete("bcd")"##);
-        run_test(r##""abcdefg".delete("bcd", "efg")"##);
-        run_test(r##""123456789".delete("2378")"##);
-        run_test(r##""123456789".delete("2-8", "^4-6")"##);
-        run_test(r##""12345-6789".delete("-8")"##);
-        run_test(r##""12345-6789".delete("8-")"##);
-        run_test(r##""12345-6789".delete("--")"##);
-        run_test(r##""12345-6789".delete("---")"##);
-        run_test(r##""345678-\\".delete("3\-6")"##);
-        run_test(r##""345678-\\".delete("3\\\-6")"##);
-        run_test(r##""345678-\\".delete("3\\-6")"##);
-        run_test(r##""345678-\\".delete("3\\")"##);
+        run_tests(&[
+            r##""abcdefg".delete("b")"##,
+            r##""abcdefg".delete("b", "c")"##,
+            r##""abcdefg".delete("b", "c", "d")"##,
+            r##""abcdefg".delete("b", "c", "d", "e")"##,
+            r##""abcdefg".delete("b", "c", "d", "e", "f")"##,
+            r##""abcdefg".delete("b", "c", "d", "e", "f", "g")"##,
+            r##""abcdefg".delete("bcd")"##,
+            r##""abcdefg".delete("bcd", "efg")"##,
+            r##""123456789".delete("2378")"##,
+            r##""123456789".delete("2-8", "^4-6")"##,
+            r##""12345-6789".delete("-8")"##,
+            r##""12345-6789".delete("8-")"##,
+            r##""12345-6789".delete("--")"##,
+            r##""12345-6789".delete("---")"##,
+            r##""345678-\\".delete("3\-6")"##,
+            r##""345678-\\".delete("3\\\-6")"##,
+            r##""345678-\\".delete("3\\-6")"##,
+            r##""345678-\\".delete("3\\")"##,
+        ]);
         run_test_error(r##""abcd".delete"##);
         run_test_error(r##""abcd".delete("d-a")"##);
     }
@@ -7865,194 +7770,130 @@ mod tests {
             r##""  abc\n".lstrip"##,
             r##""\t abc\n".lstrip"##,
             r##""abc\n".lstrip"##,
-        ]);
-        run_test(
             r##"
         str = "abc\n"
         str.strip
         str
         "##,
-        );
-        run_test(
             r##"
         str = "  abc\r\n"
         [str.strip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "abc"
         [str.strip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "  \0  abc  \0"
         [str.strip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "abc\n"
         str.lstrip
         str
         "##,
-        );
-        run_test(
             r##"
         str = "  abc\r\n"
         [str.lstrip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "abc"
         [str.lstrip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "  \0  abc  \0"
         [str.lstrip!, str]
         "##,
-        );
-        run_tests(&[
             r##""  abc\n".rstrip"##,
             r##""  abc \t\r\n\0".rstrip"##,
             r##""  abc".rstrip"##,
             r##""  abc\0 ".rstrip"##,
-        ]);
-        run_test(
             r##"
         str = "abc\n"
         str.rstrip
         str
         "##,
-        );
-        run_test(
             r##"
         str = "  abc\r\n"
         [str.rstrip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "abc"
         [str.rstrip!, str]
         "##,
-        );
-        run_test(
             r##"
         str = "  \0  abc  \0"
         [str.rstrip!, str]
         "##,
-        );
+        ]);
     }
 
     #[test]
-    fn scan() {
-        run_test(
+    fn scan_index_group() {
+        run_tests(&[
             r##"
         res = "foobar".scan(/../)
         [res, $&, $']
         "##,
-        );
-        run_test(
             r##"
         res = "foobar".scan("o")
         [res, $&, $']
         "##,
-        );
-        run_test(
             r##"
         res = "foobarbazfoobarbaz".scan(/ba./)
         [res, $&, $']
         "##,
-        );
-        run_test(
             r##"
         a = []
         res = "foobarbazfoobarbaz".scan(/ba./) {|s| a << s.upcase }
         [res, a, $&, $']
         "##,
-        );
-        run_test(
             r##"
         a = []
         "hello world hello".scan(/hel+o/) {|s| a << $& }
         a
         "##,
-        );
-        run_test(
             r##"
         a = []
         "abc def ghi".scan(/\w+/) {|m| a << [$&, m] }
         a
         "##,
-        );
-        run_test(
             r##"
         "nothing".scan(/xyz/) {|s| }
         $&
         "##,
-        );
-        run_test(
             r##"
         "abc-def-ghi".scan(/(.)-(.)/)
         "##,
-        );
-        run_test(
             r##"
         "test".scan(/(z)?e/)
         "##,
-        );
-    }
-
-    #[test]
-    fn set_match() {
-        run_test(
             r##"
         "abcdefgdddefjklefl".match(/d*ef/) {
             |matched| matched.to_s
         }
         "##,
-        );
-        run_test(r##"'hoge hige hege bar'.match('h.ge', 0)[0]"##);
-        run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
-        run_test(r##"'hoge 髭男 hege bar'.match('髭.', 5)[0]"##);
-        run_test(r##"'髭女 髭男 髭面 髭剃'.match('髭.', 5)[0]"##);
-
-        run_test(r##""Ruby".match?(/R.../)"##);
-        run_test(r##""Ruby".match?(/R.../, 1)"##);
-        run_test(r##""Ruby".match?(/P.../)"##);
-
-        // match with negative position returns nil
-        run_test(r##""hello".match(/ell/, -10)"##);
-    }
-
-    #[test]
-    fn length() {
-        run_test(r##""本日は快晴なり".length"##);
-        run_test(r##""本日はsunnyなり".length"##);
-        run_test(r##""本日は快晴なり".bytesize"##);
-        run_test(r##""本日はsunnyなり".bytesize"##);
-    }
-
-    #[test]
-    fn index() {
-        run_test(r##""超時空要塞".index(/時/)"##);
-        run_test(r##""超時空要塞".index(/海/)"##);
-        run_test(r##""超時空要塞".index(/時/, 3)"##);
-        run_test(r##""超時空要塞".index(/時/, 30)"##);
-        run_test(r##""超時空要塞".index(/時/, -30)"##);
-        run_test(r##""超時空要塞".index(/時/, -3)"##);
-        run_test(r##""超時空要塞".index(/時/, -4)"##);
-        run_test(r##""超時空要塞".index(/時/, -4.0)"##);
-    }
-
-    #[test]
-    fn rindex() {
-        run_tests(&[
+            r##"'hoge hige hege bar'.match('h.ge', 0)[0]"##,
+            r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##,
+            r##"'hoge 髭男 hege bar'.match('髭.', 5)[0]"##,
+            r##"'髭女 髭男 髭面 髭剃'.match('髭.', 5)[0]"##,
+            r##""Ruby".match?(/R.../)"##,
+            r##""Ruby".match?(/R.../, 1)"##,
+            r##""Ruby".match?(/P.../)"##,
+            // match with negative position returns nil
+            r##""hello".match(/ell/, -10)"##,
+            r##""本日は快晴なり".length"##,
+            r##""本日はsunnyなり".length"##,
+            r##""本日は快晴なり".bytesize"##,
+            r##""本日はsunnyなり".bytesize"##,
+            r##""超時空要塞".index(/時/)"##,
+            r##""超時空要塞".index(/海/)"##,
+            r##""超時空要塞".index(/時/, 3)"##,
+            r##""超時空要塞".index(/時/, 30)"##,
+            r##""超時空要塞".index(/時/, -30)"##,
+            r##""超時空要塞".index(/時/, -3)"##,
+            r##""超時空要塞".index(/時/, -4)"##,
+            r##""超時空要塞".index(/時/, -4.0)"##,
             r##""astrochemistry".rindex("str")"##,
             r##""character".rindex(?c)"##,
             r##""regexprindex".rindex(/e.*x/, 2)"##,
@@ -8073,18 +7914,22 @@ mod tests {
 
     #[test]
     fn ljust() {
-        run_test(r##""戦闘妖精".ljust 11"##);
-        run_test(r##""戦闘妖精".ljust 11,"$""##);
-        run_test(r##""戦闘妖精".ljust 11,"123""##);
+        run_tests(&[
+            r##""戦闘妖精".ljust 11"##,
+            r##""戦闘妖精".ljust 11,"$""##,
+            r##""戦闘妖精".ljust 11,"123""##,
+        ]);
         run_test_error(r##""戦闘妖精".ljust"##);
         run_test_error(r##""戦闘妖精".ljust 8, """##);
     }
 
     #[test]
     fn rjust() {
-        run_test(r##""戦闘妖精".rjust 11"##);
-        run_test(r##""戦闘妖精".rjust 11,"$""##);
-        run_test(r##""戦闘妖精".rjust 11,"123""##);
+        run_tests(&[
+            r##""戦闘妖精".rjust 11"##,
+            r##""戦闘妖精".rjust 11,"$""##,
+            r##""戦闘妖精".rjust 11,"123""##,
+        ]);
         run_test_error(r##""戦闘妖精".rjust"##);
         run_test_error(r##""戦闘妖精".rjust 8, """##);
     }
@@ -8131,33 +7976,29 @@ mod tests {
     }
 
     #[test]
-    fn lines() {
-        run_test(r##""aa\nbb\ncc\n".lines"##);
-        run_test(r##""hello\nworld\n".lines"##);
-    }
-
-    #[test]
-    fn bytes() {
-        run_test(r##""aa\nbb\ncc\n".bytes"##);
-    }
-
-    #[test]
-    fn getbyte() {
-        run_test(r##""ABC".getbyte(0)"##);
-        run_test(r##""ABC".getbyte(2)"##);
-        run_test(r##""ABC".getbyte(-1)"##);
-        run_test(r##""ABC".getbyte(3)"##);
-        run_test(r##""ABC".getbyte(-4)"##);
+    fn lines_bytes_getbyte_group() {
+        run_tests(&[
+            r##""aa\nbb\ncc\n".lines"##,
+            r##""hello\nworld\n".lines"##,
+            r##""aa\nbb\ncc\n".bytes"##,
+            r##""ABC".getbyte(0)"##,
+            r##""ABC".getbyte(2)"##,
+            r##""ABC".getbyte(-1)"##,
+            r##""ABC".getbyte(3)"##,
+            r##""ABC".getbyte(-4)"##,
+        ]);
     }
 
     #[test]
     fn setbyte() {
-        run_test(r##"s = "ABC"; s.setbyte(0, 90); s"##);
-        run_test(r##"s = "ABC"; s.setbyte(-1, 90); s"##);
-        run_test(r##"s = "ABC"; s.setbyte(0, 255); s.getbyte(0)"##);
-        run_test(r##"s = "ABC"; s.setbyte(0, -1); s.getbyte(0)"##);
-        run_test(r##"s = "ABC"; s.setbyte(0, 256); s.getbyte(0)"##);
-        run_test(r##"s = "ABC"; s.setbyte(0, -129); s.getbyte(0)"##);
+        run_tests(&[
+            r##"s = "ABC"; s.setbyte(0, 90); s"##,
+            r##"s = "ABC"; s.setbyte(-1, 90); s"##,
+            r##"s = "ABC"; s.setbyte(0, 255); s.getbyte(0)"##,
+            r##"s = "ABC"; s.setbyte(0, -1); s.getbyte(0)"##,
+            r##"s = "ABC"; s.setbyte(0, 256); s.getbyte(0)"##,
+            r##"s = "ABC"; s.setbyte(0, -129); s.getbyte(0)"##,
+        ]);
         run_test_error(r##""ABC".setbyte(3, 0)"##);
         run_test_error(r##""ABC".setbyte(-4, 0)"##);
     }
@@ -8177,12 +8018,6 @@ mod tests {
             r##""hello".byteslice(-3..-1)"##,
             r##""hello".byteslice(0, 5)"##,
             r##""hello".byteslice(0, 100)"##,
-        ]);
-    }
-
-    #[test]
-    fn each_line() {
-        run_test(
             r##"
     text = "Hello\nこんにちは\nWorld\n世界\n"
     res = []
@@ -8191,8 +8026,6 @@ mod tests {
     end
     res
     "##,
-        );
-        run_test(
             r##"
     text = "Hello\nこんにちは\nWorld\n世界\n"
     res = []
@@ -8201,7 +8034,7 @@ mod tests {
     end
     res
     "##,
-        );
+        ]);
     }
 
     #[test]
@@ -8234,12 +8067,6 @@ mod tests {
             r##""a,b,c,d,e".split(/,/, 6)"##,
             r##""a,b,c,d,e".split(/,/, 7)"##,
             r##""a,b,c,d,e".split(/,/, -1)"##,
-        ]);
-    }
-
-    #[test]
-    fn chomp() {
-        run_tests(&[
             r##""foo\n".chomp"##,
             r##""foo\n".chomp("\n")"##,
             r##""foo\r\n".chomp("\r\n")"##,
@@ -8253,76 +8080,60 @@ mod tests {
             r##""hello\r\r".chomp"##,
             r##""hello\n\r\n".chomp"##,
             r##""hello".chomp"##,
-        ]);
-    }
-
-    #[test]
-    fn chomp_() {
-        run_test(
             r##"
         s = "foo\n"
         [s.chomp!, s]
         "##,
-        );
-        run_test(
             r##"
         s = "foo\n"
         [s.chomp!("\n"), s]
         "##,
-        );
-        run_test(
             r##"
         s = "foo\r\n"
         [s.chomp!("\r\n"), s]
         "##,
-        );
-        run_test(
             r##"
         s = "string\n"
         [s.chomp!(nil), s]
         "##,
-        );
-        run_test(
             r##"
         s = "foo\r\n\n"
         [s.chomp!(""), s]
         "##,
-        );
-        run_test(
             r##"
         s = "foo\n\r\n"
         [s.chomp!(""), s]
         "##,
-        );
-        run_test(
             r##"
         s = "foo\n\r\r"
         [s.chomp!(""), s]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn to_i() {
-        run_test(r"'42581'.to_i");
-        run_test(r"'-42581'.to_i");
-        run_test(r"'_-42581'.to_i");
-        run_test(r"'-_42581'.to_i");
-        run_test(r"'-42_581'.to_i");
-        run_test(r"'-42_58__1'.to_i");
-        run_test(r"'4a5f1'.to_i(16)");
-        run_test(r"'4258159248352010254587519982001542568633842205196875555'.to_i");
-        run_test(r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)");
-        run_test(r"'42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
-        run_test(r"'42581592483edr__cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
-        run_test(r"'-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
-        run_test(r"'_-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)");
+        run_tests(&[
+            r"'42581'.to_i",
+            r"'-42581'.to_i",
+            r"'_-42581'.to_i",
+            r"'-_42581'.to_i",
+            r"'-42_581'.to_i",
+            r"'-42_58__1'.to_i",
+            r"'4a5f1'.to_i(16)",
+            r"'4258159248352010254587519982001542568633842205196875555'.to_i",
+            r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)",
+            r"'42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)",
+            r"'42581592483edr__cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)",
+            r"'-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)",
+            r"'_-42581592483edr_cs02545875199_82001ipgomrn56863384220_5196_875555'.to_i(36)",
+        ]);
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
     }
 
     #[test]
-    fn hex() {
+    fn hex_oct_tof_case_group() {
         run_tests(&[
             r#""0x0a".hex"#,
             r#""ff".hex"#,
@@ -8336,12 +8147,6 @@ mod tests {
             r#""10".hex"#,
             r#""CE".hex"#,
             r#""0xdeadbeef".hex"#,
-        ]);
-    }
-
-    #[test]
-    fn oct() {
-        run_tests(&[
             r#""77".oct"#,
             r#""0o77".oct"#,
             r#""077".oct"#,
@@ -8355,94 +8160,58 @@ mod tests {
             r#""0".oct"#,
             r#""".oct"#,
             r#""xyz".oct"#,
-        ]);
-    }
-
-    #[test]
-    fn to_f() {
-        run_tests(&[
             r"'4285'.to_f",
             r"'-4285'.to_f",
             r"'428.55'.to_f",
             r"'-428.55'.to_f",
             r"'-428.55e12'.to_f",
             r"'-428.55e-12'.to_f",
+            r"'RubyAndRust'.to_sym",
+            r"'Jane12345'.intern",
+            r"'AkrFj妖精u35]['.upcase",
+            r"'AkrFj妖精u35]['.downcase",
+            r"s = 'AkrFj妖精u35]['; [s.upcase!, s]",
+            r"s = 'RUBY'; [s.upcase!, s]",
+            r"s = 'AkrFj妖精u35]['; [s.downcase!, s]",
+            r"s = 'rust'; [s.downcase!, s]",
+            r"'hello'.capitalize",
+            r"'HELLO'.capitalize",
+            r"'hELLO'.capitalize",
+            r"s = 'hello'; [s.capitalize!, s]",
+            r"s = 'Hello'; [s.capitalize!, s]",
+            r"'Hello'.swapcase",
+            r"'hELLO'.swapcase",
+            r"s = 'Hello'; [s.swapcase!, s]",
+            r"s = 'hello'; [s.swapcase!, s]",
+            r#""abc".casecmp("ABC")"#,
+            r#""abc".casecmp("abd")"#,
+            r#""abc".casecmp?("ABC")"#,
+            r#""abc".casecmp?("abd")"#,
+            r#""abc".casecmp(42)"#,
+            r#""abc".casecmp?(42)"#,
         ]);
     }
 
     #[test]
-    fn to_sym() {
-        run_test(r"'RubyAndRust'.to_sym");
-        run_test(r"'Jane12345'.intern");
-    }
-
-    #[test]
-    fn upcase() {
-        run_test(r"'AkrFj妖精u35]['.upcase");
-        run_test(r"'AkrFj妖精u35]['.downcase");
-        run_test(r"s = 'AkrFj妖精u35]['; [s.upcase!, s]");
-        run_test(r"s = 'RUBY'; [s.upcase!, s]");
-        run_test(r"s = 'AkrFj妖精u35]['; [s.downcase!, s]");
-        run_test(r"s = 'rust'; [s.downcase!, s]");
-    }
-
-    #[test]
-    fn capitalize() {
-        run_test(r"'hello'.capitalize");
-        run_test(r"'HELLO'.capitalize");
-        run_test(r"'hELLO'.capitalize");
-        run_test(r"s = 'hello'; [s.capitalize!, s]");
-        run_test(r"s = 'Hello'; [s.capitalize!, s]");
-    }
-
-    #[test]
-    fn swapcase() {
-        run_test(r"'Hello'.swapcase");
-        run_test(r"'hELLO'.swapcase");
-        run_test(r"s = 'Hello'; [s.swapcase!, s]");
-        run_test(r"s = 'hello'; [s.swapcase!, s]");
-    }
-
-    #[test]
-    fn casecmp() {
-        run_test(r#""abc".casecmp("ABC")"#);
-        run_test(r#""abc".casecmp("abd")"#);
-        run_test(r#""abc".casecmp?("ABC")"#);
-        run_test(r#""abc".casecmp?("abd")"#);
-        run_test(r#""abc".casecmp(42)"#);
-        run_test(r#""abc".casecmp?(42)"#);
-    }
-
-    #[test]
-    fn case_methods_ascii_option() {
-        // `:ascii` skips non-ASCII characters.
-        run_test(r#""aßet".upcase(:ascii)"#);
-        run_test(r#""ABCß".downcase(:ascii)"#);
-        run_test(r#""aßet".capitalize(:ascii)"#);
-        run_test(r#""aßET".swapcase(:ascii)"#);
-    }
-
-    #[test]
-    fn case_methods_turkic_option() {
-        run_test(r#""i".upcase(:turkic)"#);
-        run_test(r#""I".downcase(:turkic)"#);
-        run_test(r#""İ".downcase(:turkic)"#);
-        run_test(r#""aiS".swapcase(:turkic)"#);
-    }
-
-    #[test]
-    fn case_methods_fold_option() {
-        // `ß` folds to `ss` for downcase only.
-        run_test(r#""ß".downcase(:fold)"#);
-        run_test(r#""Straße".downcase(:fold)"#);
-    }
-
-    #[test]
-    fn case_methods_lithuanian_option() {
-        // Lithuanian falls through to default mapping; combined with
-        // turkic the turkic semantics apply.
-        run_test(r#""i".upcase(:lithuanian)"#);
-        run_test(r#""i".upcase(:lithuanian, :turkic)"#);
+    fn case_methods_option_group() {
+        run_tests(&[
+            // `:ascii` skips non-ASCII characters.
+            r#""aßet".upcase(:ascii)"#,
+            r#""ABCß".downcase(:ascii)"#,
+            r#""aßet".capitalize(:ascii)"#,
+            r#""aßET".swapcase(:ascii)"#,
+            r#""i".upcase(:turkic)"#,
+            r#""I".downcase(:turkic)"#,
+            r#""İ".downcase(:turkic)"#,
+            r#""aiS".swapcase(:turkic)"#,
+            // `ß` folds to `ss` for downcase only.
+            r#""ß".downcase(:fold)"#,
+            r#""Straße".downcase(:fold)"#,
+            // Lithuanian falls through to default mapping; combined with
+            // turkic the turkic semantics apply.
+            r#""i".upcase(:lithuanian)"#,
+            r#""i".upcase(:lithuanian, :turkic)"#,
+        ]);
     }
 
     #[test]
@@ -8457,238 +8226,186 @@ mod tests {
     }
 
     #[test]
-    fn capitalize_multichar_first() {
-        // `ß` upcases to `SS`; capitalize keeps the first uppercase
-        // and lowercases the rest of that multi-char expansion.
-        run_test(r#""ß".capitalize"#);
-        run_test(r#""ßeT".capitalize"#);
-    }
-
-    #[test]
-    fn sum() {
-        run_test(r#"File.read("../LICENSE-MIT").sum"#);
-        run_test(r#"File.read("../LICENSE-MIT").sum(11)"#);
-    }
-
-    #[test]
-    fn replace() {
-        run_test(
+    fn capitalize_sum_chars_count_group() {
+        run_tests(&[
+            // `ß` upcases to `SS`; capitalize keeps the first uppercase
+            // and lowercases the rest of that multi-char expansion.
+            r#""ß".capitalize"#,
+            r#""ßeT".capitalize"#,
+            r#"File.read("../LICENSE-MIT").sum"#,
+            r#"File.read("../LICENSE-MIT").sum(11)"#,
             r#"
         str = "foo"
         [str.replace("bar"), str]
         "#,
-        );
-    }
-
-    #[test]
-    fn chars() {
-        run_test(
             r#"
-        "hello世界".chars 
+        "hello世界".chars
         "#,
-        );
-        run_test(
             r#"
         x = []
         ["hello world".chars do |c| x << c.upcase end, x]
         "#,
-        );
-    }
-
-    #[test]
-    fn each_char() {
-        run_test(
             r#"
         x = []; res = "hello世界".each_char {|c| x << c.upcase }; [res, x]
         "#,
-        );
-        run_test(
             r#"
         x = []; "hello世界".each_char.each_with_index {|c, i| x << c + i.to_s }; x
         "#,
-        );
+            r#"'abcdefg'.count('c') "#,
+            r#"'123456789'.count('2378') "#,
+            r#"'123456789'.count('2378', '2378') "#,
+        ]);
     }
 
     #[test]
-    fn count() {
-        run_test(r#"'abcdefg'.count('c') "#);
-        run_test(r#"'123456789'.count('2378') "#);
-        run_test(r#"'123456789'.count('2378', '2378') "#);
-    }
-
-    #[test]
-    fn charset_ops_negation_and_ranges() {
-        // Negation and a-z ranges, ASCII fast path.
-        run_test(r#""hello, world".count("^a-z")"#);
-        run_test(r#""hello, world".delete("^a-z")"#);
-        run_test(r#""hello, world".tr("^a-z", "X")"#);
-        // tr_s squeezes the *replacement region* — non-translated
-        // chars in the middle break the run.
-        run_test(r#""hello, world".tr_s("^a-z", "X")"#);
-        // Multiple sets are intersected.
-        run_test(r#""aeIou abcde".delete("a-y", "^x-z")"#);
-    }
-
-    #[test]
-    fn charset_ops_utf8_fallback() {
-        // Non-ASCII receivers fall back to the char-level slow path.
-        run_test(r#""あいうあいう".count("あ")"#);
-        run_test(r#""あいうあいう".delete("う")"#);
-        run_test(r#""あいう".tr("あい", "AB")"#);
-        run_test(r#""あいううあい".squeeze"#);
-        // Non-ASCII chars in from-spec also force fallback.
-        run_test(r#""hello".count("héllo")"#);
-    }
-
-    #[test]
-    fn charset_ops_bang_changed_matches_cruby() {
-        // Pre-fix: `tr!("a","a")` returned nil because no byte's value
-        // changed. CRuby reports modified whenever the from-set matched
-        // any char — the new fast/slow paths follow that.
-        run_test(
+    fn charset_ops_center_group() {
+        run_tests(&[
+            // Negation and a-z ranges, ASCII fast path.
+            r#""hello, world".count("^a-z")"#,
+            r#""hello, world".delete("^a-z")"#,
+            r#""hello, world".tr("^a-z", "X")"#,
+            // tr_s squeezes the *replacement region* — non-translated
+            // chars in the middle break the run.
+            r#""hello, world".tr_s("^a-z", "X")"#,
+            // Multiple sets are intersected.
+            r#""aeIou abcde".delete("a-y", "^x-z")"#,
+            // Non-ASCII receivers fall back to the char-level slow path.
+            r#""あいうあいう".count("あ")"#,
+            r#""あいうあいう".delete("う")"#,
+            r#""あいう".tr("あい", "AB")"#,
+            r#""あいううあい".squeeze"#,
+            // Non-ASCII chars in from-spec also force fallback.
+            r#""hello".count("héllo")"#,
+            // Pre-fix: `tr!("a","a")` returned nil because no byte's value
+            // changed. CRuby reports modified whenever the from-set matched
+            // any char — the new fast/slow paths follow that.
             r#"
               s = "aabb".dup
               [s.tr!("a", "a"), s]
             "#,
-        );
-        run_test(
             r#"
               s = "a-b".dup
               [s.tr!("^a-z", "-"), s]
             "#,
-        );
-        // tr_s: matched + squeezed run, no byte actually replaced.
-        run_test(
+            // tr_s: matched + squeezed run, no byte actually replaced.
             r#"
               s = "aabb".dup
               [s.tr_s!("a", "a"), s]
             "#,
-        );
-        // No match still returns nil.
-        run_test(
+            // No match still returns nil.
             r#"
               s = "aabb".dup
               [s.tr!("x", "y"), s]
             "#,
-        );
-        run_test(
             r#"
               s = "abc".dup
               [s.tr!("^a-z", "X"), s]
             "#,
-        );
-    }
-
-    #[test]
-    fn charset_ops_tr_s_squeeze_semantics() {
-        // tr_s squeezes only the replacement region.
-        run_test(r#""hello".tr_s("el", "ip")"#);     // "hipo"
-        run_test(r#""aXbXa".tr_s("a", "b")"#);       // "bXbXb" — X resets run
-        run_test(r#""abcd".tr("abc", "AB")"#);       // "ABBd" — last_to fallback
-        // Deletion via empty `to`.
-        run_test(r#""aaabbb".tr_s("a", "")"#);
-    }
-
-    #[test]
-    fn charset_ops_squeeze_bang_changed() {
-        // squeeze! returns nil when no run was collapsed.
-        run_test(
+            // tr_s squeezes only the replacement region.
+            r#""hello".tr_s("el", "ip")"#, // "hipo"
+            r#""aXbXa".tr_s("a", "b")"#,   // "bXbXb" — X resets run
+            r#""abcd".tr("abc", "AB")"#,   // "ABBd" — last_to fallback
+            // Deletion via empty `to`.
+            r#""aaabbb".tr_s("a", "")"#,
+            // squeeze! returns nil when no run was collapsed.
             r#"
               s = "abcd".dup
               [s.squeeze!, s]
             "#,
-        );
-        run_test(
             r#"
               s = "aabb".dup
               [s.squeeze!, s]
             "#,
-        );
-        run_test(
             r#"
               s = "aabb".dup
               [s.squeeze!("a"), s]
             "#,
-        );
-    }
-
-    #[test]
-    fn charset_ops_preserve_encoding() {
-        // Fast path tags the result as the receiver's encoding.
-        run_test(r#""hello".b.tr("e", "E").encoding.to_s"#);
-        run_test(r#""hello".encode("US-ASCII").delete("aeiou").encoding.to_s"#);
-        run_test(r#""hello".encode("US-ASCII").squeeze.encoding.to_s"#);
-    }
-
-    #[test]
-    fn center() {
-        run_test(r#""foo".center(10)"#);
-        run_test(r#""foo".center(9)"#);
-        run_test(r#""foo".center(8)"#);
-        run_test(r#""foo".center(7)"#);
-        run_test(r#""foo".center(3)"#);
-        run_test(r#""foo".center(2)"#);
-        run_test(r#""foo".center(1)"#);
-        run_test(r#""foo".center(10, "*")"#);
+            // Fast path tags the result as the receiver's encoding.
+            r#""hello".b.tr("e", "E").encoding.to_s"#,
+            r#""hello".encode("US-ASCII").delete("aeiou").encoding.to_s"#,
+            r#""hello".encode("US-ASCII").squeeze.encoding.to_s"#,
+            r#""foo".center(10)"#,
+            r#""foo".center(9)"#,
+            r#""foo".center(8)"#,
+            r#""foo".center(7)"#,
+            r#""foo".center(3)"#,
+            r#""foo".center(2)"#,
+            r#""foo".center(1)"#,
+            r#""foo".center(10, "*")"#,
+        ]);
     }
 
     #[test]
     fn index_assign() {
-        run_test(r#"buf = "string"; buf[0]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[1]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[5]="!!"; buf"#);
+        run_tests(&[
+            r#"buf = "string"; buf[0]="!!"; buf"#,
+            r#"buf = "string"; buf[1]="!!"; buf"#,
+            r#"buf = "string"; buf[5]="!!"; buf"#,
+        ]);
         run_test_error(r#"buf = "string"; buf[10]="!!"; buf"#);
         run_test(r#"buf = "string"; buf[-1]="!!"; buf"#);
         run_test_error(r#"buf = "string"; buf[-10]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[1,3]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[-1,3]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[-1,10]="!!"; buf"#);
+        run_tests(&[
+            r#"buf = "string"; buf[1,3]="!!"; buf"#,
+            r#"buf = "string"; buf[-1,3]="!!"; buf"#,
+            r#"buf = "string"; buf[-1,10]="!!"; buf"#,
+        ]);
         run_test_error(r#"buf = "string"; buf[-100,100]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[3,10]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[3,0]="!!"; buf"#);
+        run_tests(&[
+            r#"buf = "string"; buf[3,10]="!!"; buf"#,
+            r#"buf = "string"; buf[3,0]="!!"; buf"#,
+        ]);
         run_test_error(r#"buf = "string"; buf[3,-1]="!!"; buf"#);
-        // Range indexing
-        run_test(r#"buf = "string"; buf[1..3]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[1...3]="!!"; buf"#);
-        run_test(r#"buf = "string"; buf[3..-1]=""; buf"#);
-        run_test(r#"buf = "string"; buf[-3..-1]="!!"; buf"#);
-        run_test(
+        run_tests(&[
+            // Range indexing
+            r#"buf = "string"; buf[1..3]="!!"; buf"#,
+            r#"buf = "string"; buf[1...3]="!!"; buf"#,
+            r#"buf = "string"; buf[3..-1]=""; buf"#,
+            r#"buf = "string"; buf[-3..-1]="!!"; buf"#,
             r#"buf = "hello world"; rindex = buf.rindex("\n"); s = rindex ? buf[rindex+1..-1] : buf; buf[rindex ? rindex+1..-1 : 0..-1] = ""; buf"#,
-        );
+        ]);
     }
 
     #[test]
     fn index_assign_special_int_cases() {
         // CRuby permits `""[0] = "..."` (zero index on an empty
         // string) and `s[length] = "..."` (append at end).
-        run_test(r#"s = ""; s[0] = "bam"; s"#);
-        run_test(r#"s = "abc"; s[3] = "d"; s"#);
+        run_tests(&[
+            r#"s = ""; s[0] = "bam"; s"#,
+            r#"s = "abc"; s[3] = "d"; s"#,
+        ]);
     }
 
     #[test]
     fn index_assign_string_index() {
-        run_test(r#"s = "abcde"; s["cd"] = "ghi"; s"#);
-        run_test(r#"s = "abcde"; s["bcd"] = "f"; s"#);
-        run_test(r#"s = "abcde"; s["cd"] = ""; s"#);
-        // Multibyte source / replacement.
-        run_test(r#"s = "ありgaとう"; s["ga"] = "が"; s"#);
-        run_test(r#"s = "ありがとう"; s["が"] = "ga"; s"#);
-        run_test(r#"s = "ありがとう"; s["が"] = "か"; s"#);
+        run_tests(&[
+            r#"s = "abcde"; s["cd"] = "ghi"; s"#,
+            r#"s = "abcde"; s["bcd"] = "f"; s"#,
+            r#"s = "abcde"; s["cd"] = ""; s"#,
+            // Multibyte source / replacement.
+            r#"s = "ありgaとう"; s["ga"] = "が"; s"#,
+            r#"s = "ありがとう"; s["が"] = "ga"; s"#,
+            r#"s = "ありがとう"; s["が"] = "か"; s"#,
+        ]);
         // Missing substring → IndexError.
         run_test_error(r#"s = "abcde"; s["g"] = "h""#);
     }
 
     #[test]
     fn index_assign_regexp() {
-        run_test(r#"s = "abc"; s[/b/] = "X"; s"#);
-        run_test(r#"s = "abc"; s[/ab/] = "Z"; s"#);
-        // Multibyte.
-        run_test(r#"s = "ありgaとう"; s[/ga/] = "が"; s"#);
+        run_tests(&[
+            r#"s = "abc"; s[/b/] = "X"; s"#,
+            r#"s = "abc"; s[/ab/] = "Z"; s"#,
+            // Multibyte.
+            r#"s = "ありgaとう"; s[/ga/] = "が"; s"#,
+        ]);
         // No match → IndexError.
         run_test_error(r#"s = "hello"; s[/y/] = "bam""#);
-        // Capture-index form.
-        run_test(r#"s = "aaa bbb ccc"; s[/a (bbb) c/, 1] = "ddd"; s"#);
-        run_test(r#"s = "abcd"; s[/(a)(b)(c)(d)/, -2] = "e"; s"#);
+        run_tests(&[
+            // Capture-index form.
+            r#"s = "aaa bbb ccc"; s[/a (bbb) c/, 1] = "ddd"; s"#,
+            r#"s = "abcd"; s[/(a)(b)(c)(d)/, -2] = "e"; s"#,
+        ]);
         // Out-of-range capture → IndexError, both positive and
         // negative-resolving-to-zero.
         run_test_error(r#"s = "aaa bbb ccc"; s[/a (bbb) c/,  2] = "ddd""#);
@@ -8717,15 +8434,11 @@ mod tests {
     }
 
     #[test]
-    fn gsub_without_block_returns_enumerator() {
-        run_test(r#"e = "abca".gsub(/a/); e.is_a?(Enumerator)"#);
-        run_test(r#""abca".gsub(/a/).to_a"#);
-        run_test(r#""abca".gsub!(/a/).to_a"#);
-    }
-
-    #[test]
-    fn succ() {
-        run_test(
+    fn gsub_without_block_succ_group() {
+        run_tests(&[
+            r#"e = "abca".gsub(/a/); e.is_a?(Enumerator)"#,
+            r#""abca".gsub(/a/).to_a"#,
+            r#""abca".gsub!(/a/).to_a"#,
             r#####"
         [
             "aa".succ,
@@ -8756,13 +8469,13 @@ mod tests {
             "9Zz9".succ,
             "###".succ
         ]"#####,
-        );
-        run_test(r#"12.times.reduce("ン"){|c|c.succ}"#);
+            r#"12.times.reduce("ン"){|c|c.succ}"#,
+        ]);
     }
 
     #[test]
     fn pack_unpack() {
-        run_test(
+        run_tests(&[
             r#"
         [
             "\x00\x01\x02\x03\x04\x05\x06\x07\x08".unpack('csl'),
@@ -8797,9 +8510,6 @@ mod tests {
             "Ruby".unpack("C*"),
             "Ruby".unpack1("C*")
         ]"#,
-        );
-
-        run_test(
             r#"
         [
             "\x01\xFE".unpack("c*"),
@@ -8835,29 +8545,29 @@ mod tests {
             [0x1234].pack("v"),
             [0x12345678].pack("V")
         ]"#,
-        );
+        ]);
 
         run_test_error(r#""abc".unpack("Cx3C")"#);
     }
 
     #[test]
-    fn unpack1g() {
-        run_test(r#"'a'.b.encoding.inspect"#);
-    }
-
-    #[test]
-    fn dump() {
-        run_test(r#""abc\r\n\f\x70'\b10\\\"魁\u1234".dump"#);
-        run_test(r#""abc\r\n\f\x80'\b10\\\"魁\u1234".b"#);
+    fn unpack1g_dump_group() {
+        run_tests(&[
+            r#"'a'.b.encoding.inspect"#,
+            r#""abc\r\n\f\x70'\b10\\\"魁\u1234".dump"#,
+            r#""abc\r\n\f\x80'\b10\\\"魁\u1234".b"#,
+        ]);
     }
 
     #[test]
     fn unpack1_offset() {
-        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 4)"#);
-        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 0)"#);
-        run_test(r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack("CC", offset: 2)"#);
-        run_test(r#""\x01\x02\x03\x04".unpack1("L")"#);
-        run_test(r#""\x01\x02".unpack("CC")"#);
+        run_tests(&[
+            r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 4)"#,
+            r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack1("L", offset: 0)"#,
+            r#""\x01\x02\x03\x04\x05\x06\x07\x08".unpack("CC", offset: 2)"#,
+            r#""\x01\x02\x03\x04".unpack1("L")"#,
+            r#""\x01\x02".unpack("CC")"#,
+        ]);
         run_test_error(r#""\x01\x02\x03".unpack1("C", offset: 10)"#);
         run_test_error(r#""\x01\x02\x03".unpack("C", offset: -1)"#);
     }
@@ -9188,99 +8898,69 @@ mod tests {
     }
 
     #[test]
-    fn succ_bang() {
-        run_test(r#"s = "a"; s.succ!; s"#);
-        run_test(r#"s = "az"; s.succ!; s"#);
-        run_test(r#"s = "zz"; s.succ!; s"#);
-        run_test(r#"s = "9"; s.succ!; s"#);
-    }
-
-    #[test]
-    fn insert() {
-        run_test(r#""hello".insert(0, "X")"#);
-        run_test(r#""hello".insert(2, "X")"#);
-    }
-
-    #[test]
-    fn pack_unpack_a() {
-        // pack 'a' — null padded
-        run_test(r#"["abc"].pack("a")"#);
-        run_test(r#"["abc"].pack("a3")"#);
-        run_test(r#"["abc"].pack("a5")"#);
-        run_test(r#"["abc"].pack("a*")"#);
-        run_test(r#"["a", "b"].pack("a3a3")"#);
-        // unpack 'a' — raw bytes
-        run_test(r#""abc\0\0".unpack("a3")"#);
-        run_test(r#""abc\0\0".unpack("a*")"#);
-        run_test(r#""abc\0\0".unpack("a5")"#);
-        run_test(r#""abc".unpack("a")"#);
-        run_test(r#""abcdef".unpack("a3a3")"#);
-    }
-
-    #[test]
-    fn pack_unpack_a_upper() {
-        // pack 'A' — space padded
-        run_test(r#"["abc"].pack("A")"#);
-        run_test(r#"["abc"].pack("A3")"#);
-        run_test(r#"["abc"].pack("A5")"#);
-        run_test(r#"["abc"].pack("A*")"#);
-        // unpack 'A' — strips trailing spaces and nulls
-        run_test(r#""abc  ".unpack("A5")"#);
-        run_test(r#""abc\0\0".unpack("A5")"#);
-        run_test(r#""abc  ".unpack("A*")"#);
-        run_test(r#""abc".unpack("A")"#);
-    }
-
-    #[test]
-    fn pack_unpack_z() {
-        // pack 'Z' — null-terminated
-        run_test(r#"["abc"].pack("Z")"#);
-        run_test(r#"["abc"].pack("Z5")"#);
-        run_test(r#"["abc"].pack("Z*")"#);
-        // unpack 'Z' — stops at null
-        run_test(r#""abc\0def".unpack("Z*")"#);
-        run_test(r#""abc\0def".unpack("Z3")"#);
-        run_test(r#""abc\0def".unpack("Z5")"#);
-    }
-
-    #[test]
-    fn pack_unpack_m() {
-        // Base64
-        run_test(r#"["hello"].pack("m")"#);
-        run_test(r#"["hello"].pack("m0")"#);
-        run_test(r#"["hello"].pack("m").unpack("m")"#);
-        run_test(r#"[""].pack("m")"#);
-        run_test(r#"["a"].pack("m")"#);
-        run_test(r#"["ab"].pack("m")"#);
-        run_test(r#"["abc"].pack("m")"#);
-    }
-
-    #[test]
-    fn pack_unpack_big_m() {
-        // MIME quoted-printable
-        run_test(r#"["hello"].pack("M")"#);
-        run_test(r#"["hello=world"].pack("M")"#);
-        run_test(r#"["hello"].pack("M").unpack("M")"#);
-    }
-
-    #[test]
-    fn pack_unpack_u() {
-        // UU encoding
-        run_test(r#"["hello"].pack("u")"#);
-        run_test(r#"["hello"].pack("u").unpack("u")"#);
-        run_test(r#"["abc"].pack("u")"#);
-    }
-
-    #[test]
-    fn pack_unpack_w() {
-        // BER compressed integer
-        run_test(r#"[0].pack("w")"#);
-        run_test(r#"[127].pack("w")"#);
-        run_test(r#"[128].pack("w")"#);
-        run_test(r#"[16384].pack("w")"#);
-        run_test(r#"[0, 127, 128, 16384].pack("w*")"#);
-        run_test(r#"[0, 127, 128, 16384].pack("w*").unpack("w*")"#);
-        run_test(r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#);
+    fn succ_bang_pack_group() {
+        run_tests(&[
+            r#"s = "a"; s.succ!; s"#,
+            r#"s = "az"; s.succ!; s"#,
+            r#"s = "zz"; s.succ!; s"#,
+            r#"s = "9"; s.succ!; s"#,
+            r#""hello".insert(0, "X")"#,
+            r#""hello".insert(2, "X")"#,
+            // pack 'a' — null padded
+            r#"["abc"].pack("a")"#,
+            r#"["abc"].pack("a3")"#,
+            r#"["abc"].pack("a5")"#,
+            r#"["abc"].pack("a*")"#,
+            r#"["a", "b"].pack("a3a3")"#,
+            // unpack 'a' — raw bytes
+            r#""abc\0\0".unpack("a3")"#,
+            r#""abc\0\0".unpack("a*")"#,
+            r#""abc\0\0".unpack("a5")"#,
+            r#""abc".unpack("a")"#,
+            r#""abcdef".unpack("a3a3")"#,
+            // pack 'A' — space padded
+            r#"["abc"].pack("A")"#,
+            r#"["abc"].pack("A3")"#,
+            r#"["abc"].pack("A5")"#,
+            r#"["abc"].pack("A*")"#,
+            // unpack 'A' — strips trailing spaces and nulls
+            r#""abc  ".unpack("A5")"#,
+            r#""abc\0\0".unpack("A5")"#,
+            r#""abc  ".unpack("A*")"#,
+            r#""abc".unpack("A")"#,
+            // pack 'Z' — null-terminated
+            r#"["abc"].pack("Z")"#,
+            r#"["abc"].pack("Z5")"#,
+            r#"["abc"].pack("Z*")"#,
+            // unpack 'Z' — stops at null
+            r#""abc\0def".unpack("Z*")"#,
+            r#""abc\0def".unpack("Z3")"#,
+            r#""abc\0def".unpack("Z5")"#,
+            // Base64
+            r#"["hello"].pack("m")"#,
+            r#"["hello"].pack("m0")"#,
+            r#"["hello"].pack("m").unpack("m")"#,
+            r#"[""].pack("m")"#,
+            r#"["a"].pack("m")"#,
+            r#"["ab"].pack("m")"#,
+            r#"["abc"].pack("m")"#,
+            // MIME quoted-printable
+            r#"["hello"].pack("M")"#,
+            r#"["hello=world"].pack("M")"#,
+            r#"["hello"].pack("M").unpack("M")"#,
+            // UU encoding
+            r#"["hello"].pack("u")"#,
+            r#"["hello"].pack("u").unpack("u")"#,
+            r#"["abc"].pack("u")"#,
+            // BER compressed integer
+            r#"[0].pack("w")"#,
+            r#"[127].pack("w")"#,
+            r#"[128].pack("w")"#,
+            r#"[16384].pack("w")"#,
+            r#"[0, 127, 128, 16384].pack("w*")"#,
+            r#"[0, 127, 128, 16384].pack("w*").unpack("w*")"#,
+            r#""\x00\x7f\x81\x00\x81\x80\x00".unpack("w*")"#,
+        ]);
     }
 
     #[test]
@@ -9315,25 +8995,23 @@ mod tests {
     }
 
     #[test]
-    fn pack_unpack_j() {
-        // j/J templates (intptr_t / uintptr_t, same as q/Q on x86-64)
-        run_test(r#"[42].pack("j").unpack1("j")"#);
-        run_test(r#"[42].pack("J").unpack1("J")"#);
-        run_test(r#"[-1].pack("j").unpack1("j")"#);
-    }
-
-    #[test]
-    fn unpack_big_m_soft_line_breaks() {
-        // M unpack: =\n is a soft line break (removed)
-        run_test(r#""hello=\nworld".unpack("M")"#);
-        // =\r\n is also a soft line break
-        run_test(r#""hello=\r\nworld".unpack("M")"#);
-        // =\r alone is NOT a soft line break (kept as-is)
-        run_test(r#""hello=\rworld".unpack("M")"#);
-        // =XX hex decoding
-        run_test(r#""=41=42=43".unpack("M")"#);
-        // Mixed content
-        run_test(r#""line1=\r\nline2=\nline3".unpack("M")"#);
+    fn pack_unpack_j_big_m_group() {
+        run_tests(&[
+            // j/J templates (intptr_t / uintptr_t, same as q/Q on x86-64)
+            r#"[42].pack("j").unpack1("j")"#,
+            r#"[42].pack("J").unpack1("J")"#,
+            r#"[-1].pack("j").unpack1("j")"#,
+            // M unpack: =\n is a soft line break (removed)
+            r#""hello=\nworld".unpack("M")"#,
+            // =\r\n is also a soft line break
+            r#""hello=\r\nworld".unpack("M")"#,
+            // =\r alone is NOT a soft line break (kept as-is)
+            r#""hello=\rworld".unpack("M")"#,
+            // =XX hex decoding
+            r#""=41=42=43".unpack("M")"#,
+            // Mixed content
+            r#""line1=\r\nline2=\nline3".unpack("M")"#,
+        ]);
     }
 
     #[test]

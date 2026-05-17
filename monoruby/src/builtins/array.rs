@@ -3948,23 +3948,29 @@ mod tests {
 
     #[test]
     fn to_a() {
-        run_test(r##"[].to_a"##);
-        run_test(r##"[1,2,3].to_a"##);
+        run_tests(&[
+            r##"[].to_a"##,
+            r##"[1,2,3].to_a"##,
+        ]);
     }
 
     #[test]
     fn to_h() {
-        run_test(r##"[[:foo, :bar], [1, 2]].to_h"##);
-        run_test(r##"["foo", "bar"].to_h {|s| [s.ord, s]}"##);
+        run_tests(&[
+            r##"[[:foo, :bar], [1, 2]].to_h"##,
+            r##"["foo", "bar"].to_h {|s| [s.ord, s]}"##,
+        ]);
         run_test_error(r##"[[:foo, :bar], 3].to_h"##);
         run_test_error(r##"[[:foo, :bar], [1,2,3]].to_h"##);
     }
 
     #[test]
     fn size() {
-        run_test(r##"[].size"##);
-        run_test(r##"[].length"##);
-        run_test(r##"[1,2,3].size"##);
+        run_tests(&[
+            r##"[].size"##,
+            r##"[].length"##,
+            r##"[1,2,3].size"##,
+        ]);
         run_test_with_prelude(
             r##"
         a = A.new
@@ -3982,47 +3988,41 @@ mod tests {
 
     #[test]
     fn count() {
-        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count"##);
-        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count(2)"##);
-        run_test(r##"ary = [1, 2, 4, 2.0]; ary.count{|x| x % 2 == 0 }"##);
-        run_test(r##"ary = [1, 2, 4, 5]; ary.count(&:even?)"##);
-    }
-
-    #[test]
-    fn empty() {
-        run_test(r##"[].empty?"##);
-        run_test(r##"[1,2,3].empty?"##);
+        run_tests(&[
+            r##"ary = [1, 2, 4, 2.0]; ary.count"##,
+            r##"ary = [1, 2, 4, 2.0]; ary.count(2)"##,
+            r##"ary = [1, 2, 4, 2.0]; ary.count{|x| x % 2 == 0 }"##,
+            r##"ary = [1, 2, 4, 5]; ary.count(&:even?)"##,
+            r##"[].empty?"##,
+            r##"[1,2,3].empty?"##,
+        ]);
     }
 
     #[test]
     fn shift() {
-        run_test(
+        run_tests(&[
             r##"
             a = [1,2,3,4]
             [a.shift, a]
         "##,
-        );
-        run_test(
             r##"
             a = [1,2,3,4]
             [a.shift(3), a]
         "##,
-        );
-        run_test(
             r##"
             a = [1,2,3,4]
             [a.shift(10), a]
         "##,
-        );
-        run_test(r##"[].shift"##);
-        run_test(r##"[].shift(2)"##);
+            r##"[].shift"##,
+            r##"[].shift(2)"##,
+        ]);
         run_test_error(r##"[1,2,3].shift(:e)"##);
         run_test_error(r##"[1,2,3].shift(-2)"##);
     }
 
     #[test]
     fn unshift() {
-        run_test(
+        run_tests(&[
             r##"
             res = []
             arr = [1,2,3]
@@ -4034,86 +4034,64 @@ mod tests {
             res << arr
             res
         "##,
-        );
-    }
-
-    #[test]
-    fn concat() {
-        run_test(r##"["a", "b"].concat ["c", "d"]"##);
-        run_test(r##"["a"].concat(["b"], ["c", "d"])"##);
-        run_test(r##"a = [1,2]; a.concat(a, a)"##);
-    }
-
-    #[test]
-    fn add() {
-        run_test(r##"[1,2,3] + [4]"##);
-        run_test(
+            r##"["a", "b"].concat ["c", "d"]"##,
+            r##"["a"].concat(["b"], ["c", "d"])"##,
+            r##"a = [1,2]; a.concat(a, a)"##,
+            r##"[1,2,3] + [4]"##,
             r##"
         a = [1,2,3]
         res = a + [4,5,6,7,8]
         [a, res]
         "##,
-        );
-    }
-
-    #[test]
-    fn sub() {
-        run_test(r##"[1,2,3] - [2,5]"##);
-        run_test(
+            r##"[1,2,3] - [2,5]"##,
             r##"
         a = [:a,:b,:c]
         res = a - [:b,:d]
         [a, res]
         "##,
-        );
-    }
-
-    #[test]
-    fn mul() {
-        run_test(r##"[1,2,3] * 4"##);
-        run_test(
+            r##"[1,2,3] * 4"##,
             r##"
         a = [1,2,3]
         res = a * 4
         [a, res]
         "##,
-        );
-        run_test(r##"[] * "|""##);
-        run_test(r##"[1] * "|""##);
-        run_test(r##"[1,2,3,4] * "|""##);
+            r##"[] * "|""##,
+            r##"[1] * "|""##,
+            r##"[1,2,3,4] * "|""##,
+        ]);
     }
 
     #[test]
     fn and() {
         run_test(r##"[] & []"##);
         run_test_error(r##"[] & 100"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] & []"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] & [1]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,2]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,3,7]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] & [1,3,7,2]"##);
+        run_tests(&[
+            r##"[1,1,2,3,5,7,2,1,7] & []"##,
+            r##"[1,1,2,3,5,7,2,1,7] & [1]"##,
+            r##"[1,1,2,3,5,7,2,1,7] & [1,2]"##,
+            r##"[1,1,2,3,5,7,2,1,7] & [1,3,7]"##,
+            r##"[1,1,2,3,5,7,2,1,7] & [1,3,7,2]"##,
+        ]);
     }
 
     #[test]
     fn or() {
         run_test(r##"[] | []"##);
         run_test_error(r##"[] | 100"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] | []"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,2]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,3,7]"##);
-        run_test(r##"[1,1,2,3,5,7,2,1,7] | [1,3,7,2]"##);
+        run_tests(&[
+            r##"[1,1,2,3,5,7,2,1,7] | []"##,
+            r##"[1,1,2,3,5,7,2,1,7] | [1]"##,
+            r##"[1,1,2,3,5,7,2,1,7] | [1,2]"##,
+            r##"[1,1,2,3,5,7,2,1,7] | [1,3,7]"##,
+            r##"[1,1,2,3,5,7,2,1,7] | [1,3,7,2]"##,
+        ]);
     }
 
     #[test]
     fn shl() {
-        run_test(r##"a = [1,2,3]; a << 10; a"##);
-        run_test(r##"a = [1,2,3]; a.<<(10); a"##);
-    }
-
-    #[test]
-    fn push_pop() {
-        run_test(
+        run_tests(&[
+            r##"a = [1,2,3]; a << 10; a"##,
+            r##"a = [1,2,3]; a.<<(10); a"##,
             r##"
         res = []
         array = [1, [2, 3], 4]
@@ -4125,8 +4103,6 @@ mod tests {
         res << array          # => []
         res
         "##,
-        );
-        run_test(
             r##"
         array = [1, 2, 3]
         array.push 4
@@ -4134,12 +4110,6 @@ mod tests {
         array.push 7, 8
         array 
         "##,
-        );
-    }
-
-    #[test]
-    fn eq() {
-        run_tests(&[
             r##"["a","c"] == ["a","c",7]"##,
             r##"["a","c"] === ["a","c",7]"##,
             r##"["a","c",7] == ["a","c",7]"##,
@@ -4152,58 +4122,38 @@ mod tests {
             r##"[ 1, 2, 3 ] <=> [ 1, 2, 3 ] "##,
             r##"[ 1, 2, 3 ] <=> [ 1, 2 ] "##,
             r##"[ 1, 2 ] <=> [ 1, 2, 3 ] "##,
-        ]);
-    }
-
-    #[test]
-    fn eq_recursive() {
-        // Self-referencing array: a == a should return true, not stack overflow
-        run_test("a = []; a << a; a == a");
-        run_test("a = [1]; a << a; a == a");
-        // Two distinct recursive arrays with same structure
-        run_test("a = [1]; a << a; b = [1]; b << b; a == b");
-        // Cross-recursive: a contains b, b contains a
-        run_test("a = [1]; b = [1]; a << b; b << a; a == b");
-        // Different lengths: recursive but not equal
-        run_test("a = [1]; a << a; b = [1, 2]; b << b; a == b");
-        // Non-recursive element differs
-        run_test("a = [1]; a << a; b = [2]; b << b; a == b");
-        // Empty self-referencing
-        run_test("a = []; a << a; b = []; b << b; a == b");
-    }
-
-    #[test]
-    fn cmp_recursive() {
-        // Self-referencing array: a <=> a should return 0, not stack overflow
-        run_test("a = []; a << a; (a <=> a)");
-        run_test("a = [1]; a << a; (a <=> a)");
-        // Cross-recursive same structure
-        run_test("a = [1]; b = [1]; a << b; b << a; (a <=> b)");
-        // Different lengths with recursive element — returns nil, not ArgumentError
-        run_test("a = [1]; a << a; b = [1, 2]; b << b; (a <=> b)");
-        run_test("a = [1, 2]; a << a; b = [1]; b << b; (b <=> a)");
-    }
-
-    #[test]
-    fn cmp_incomparable_elements() {
-        // Incomparable elements return nil instead of ArgumentError
-        run_test("[1, :a] <=> [1, 2]");
-        run_test("[1, 2] <=> [1, :a]");
-    }
-
-    #[test]
-    fn recursive_guard_cleanup() {
-        // Guard must be cleaned up after use: non-recursive comparison after recursive
-        run_test(
+            // Self-referencing array: a == a should return true, not stack overflow
+            "a = []; a << a; a == a",
+            "a = [1]; a << a; a == a",
+            // Two distinct recursive arrays with same structure
+            "a = [1]; a << a; b = [1]; b << b; a == b",
+            // Cross-recursive: a contains b, b contains a
+            "a = [1]; b = [1]; a << b; b << a; a == b",
+            // Different lengths: recursive but not equal
+            "a = [1]; a << a; b = [1, 2]; b << b; a == b",
+            // Non-recursive element differs
+            "a = [1]; a << a; b = [2]; b << b; a == b",
+            // Empty self-referencing
+            "a = []; a << a; b = []; b << b; a == b",
+            // Self-referencing array: a <=> a should return 0, not stack overflow
+            "a = []; a << a; (a <=> a)",
+            "a = [1]; a << a; (a <=> a)",
+            // Cross-recursive same structure
+            "a = [1]; b = [1]; a << b; b << a; (a <=> b)",
+            // Different lengths with recursive element — returns nil, not ArgumentError
+            "a = [1]; a << a; b = [1, 2]; b << b; (a <=> b)",
+            "a = [1, 2]; a << a; b = [1]; b << b; (b <=> a)",
+            // Incomparable elements return nil instead of ArgumentError
+            "[1, :a] <=> [1, 2]",
+            "[1, 2] <=> [1, :a]",
+            // Guard must be cleaned up after use: non-recursive comparison after recursive
             r#"
             a = [1]; a << a
             r1 = a == a
             r2 = [1, 2] == [1, 2]
             [r1, r2]
             "#,
-        );
-        // Multiple recursive operations in sequence
-        run_test(
+            // Multiple recursive operations in sequence
             r#"
             a = []; a << a
             r1 = a == a
@@ -4211,35 +4161,25 @@ mod tests {
             r3 = a == a
             [r1, r2, r3]
             "#,
-        );
-    }
-
-    #[test]
-    fn eql() {
-        run_test(r##"["a", "b", "c"].eql? ["a", "b", "c"]"##);
-        run_test(r##"["a", "b", "c"].eql? ["a", "c", "b"]"##);
-        run_test(r##"["a", "b", 1].eql? ["a", "b", 1.0]"##);
-    }
-
-    #[test]
-    fn eql_recursive() {
-        // Self-referencing array eql?
-        run_test("a = []; a << a; a.eql?(a)");
-        run_test("a = [1]; a << a; b = [1]; b << b; a.eql?(b)");
-        // Cross-recursive via hash
-        run_test(
+            r##"["a", "b", "c"].eql? ["a", "b", "c"]"##,
+            r##"["a", "b", "c"].eql? ["a", "c", "b"]"##,
+            r##"["a", "b", 1].eql? ["a", "b", 1.0]"##,
+            // Self-referencing array eql?
+            "a = []; a << a; a.eql?(a)",
+            "a = [1]; a << a; b = [1]; b << b; a.eql?(b)",
+            // Cross-recursive via hash
             r#"
             x, y, z = [], [], []
             a = {foo: x, bar: 42}; b = {foo: y, bar: 42}; c = {foo: z, bar: 42}
             x << a; y << c; z << b
             y.eql?(z)
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn index() {
-        run_test(
+        run_tests(&[
             r##"
         a = [1,2,3];
         a[2] = 42;
@@ -4247,35 +4187,27 @@ mod tests {
         a[-1] = 14;
         a
         "##,
-        );
-        run_test(
             r##"
         ary = [0, 1, 2, 3]
         ary[1, 2] = ["a", "b", "c", "d"]
         ary
         "##,
-        );
-        run_test(
             r##"
         ary = [0, 1, 2]
         ary[5, 1] = "Z"
         ary
         "##,
-        );
-        run_test(
             r##"
         ary = [0, 1, 2, 3]
         ary[0, 10] = ["a"]
         ary
         "##,
-        );
-        run_test(
             r##"
         ary = [0, 1, 2, 3]
         ary[-1, 10] = ["a"]
         ary
         "##,
-        );
+        ]);
         run_test_error(
             r##"
         ary = [0, 1, 2, 3]
@@ -4283,7 +4215,7 @@ mod tests {
         ary
         "##,
         );
-        run_test(
+        run_tests(&[
             r##"
         a = [1,2,3];
         a.[]=(2, 42);
@@ -4291,143 +4223,113 @@ mod tests {
         a.[]=(-2, 14);
         a
         "##,
-        );
-        run_test(
             r##"
         a = ["a","b","c","d","e"];
         [a[0..1], a[0...1], a[0..-1], a[-2..-1], a[-2..4], a[0..10], a[10..11], a[2..1], a[-1..-2], a[5..10]]
         "##,
-        );
-        run_test(
             r##"
         a = [ "a", "b", "c", "d", "e" ];
         [a.[](0), a.[](1), a.[](-1), a.[](-2), a.[](10)]
         "##,
-        );
-        run_test(
             r##"
         a = [ "a", "b", "c", "d", "e" ];
         [a.[](0..1), a.[](0...1), a.[](0..-1), a.[](-2..-1), a.[](-2..4), a.[](0..10), a.[](10..11), a.[](2..1), a.[](-1..-2), a.[](5..10)]
         "##,
-        );
-        run_test(
             r##"
         a = [ "a", "b", "c", "d", "e" ];
         [a[0, 1], a[-1, 1], a[0, 10], a[0, 0], a[0, -1], a[10, 1], a[5], a[5, 1], a[5..10]]
         "##,
-        );
-        run_test(
             r##"
         a = [*(0..10)];
         x = (a[5..8] = [6,7,8,9,10,11])
         y = (a[2...-2] = 6)
         [a, x, y]
         "##,
-        );
-        run_test(
             r##"
         a = [*(0..10)];
         x = (a[8..6] = 7)
         [a, x]
         "##,
-        );
-        run_test(
             r##"
         a = [*(0..10)];
         x = (a[8..-6] = [:a,:b,:c])
         [a, x]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn index_nil_range() {
-        // Array#[] with beginless range (nil..n)
-        run_test(r##"[1,2,3,4,5][nil..2]"##);
-        run_test(r##"[1,2,3,4,5][nil...2]"##);
-        // Array#[] with endless range (n..nil)
-        run_test(r##"[1,2,3,4,5][2..nil]"##);
-        run_test(r##"[1,2,3,4,5][2...nil]"##);
-        // Array#[] with nil..nil
-        run_test(r##"[1,2,3,4,5][nil..nil]"##);
-        // Array#[] with beginless/endless using .. syntax
-        run_test(r##"[1,2,3,4,5][..2]"##);
-        run_test(r##"[1,2,3,4,5][...2]"##);
-        run_test(r##"[1,2,3,4,5][2..]"##);
-        // Array#[]= with beginless range
-        run_test(
+        run_tests(&[
+            // Array#[] with beginless range (nil..n)
+            r##"[1,2,3,4,5][nil..2]"##,
+            r##"[1,2,3,4,5][nil...2]"##,
+            // Array#[] with endless range (n..nil)
+            r##"[1,2,3,4,5][2..nil]"##,
+            r##"[1,2,3,4,5][2...nil]"##,
+            // Array#[] with nil..nil
+            r##"[1,2,3,4,5][nil..nil]"##,
+            // Array#[] with beginless/endless using .. syntax
+            r##"[1,2,3,4,5][..2]"##,
+            r##"[1,2,3,4,5][...2]"##,
+            r##"[1,2,3,4,5][2..]"##,
+            // Array#[]= with beginless range
             r##"
         a = [1,2,3,4,5]
         a[nil..2] = [10,20]
         a
         "##,
-        );
-        // Array#[]= with endless range
-        run_test(
+            // Array#[]= with endless range
             r##"
         a = [1,2,3,4,5]
         a[2..nil] = [10,20]
         a
         "##,
-        );
-        // Array#[]= with nil..nil
-        run_test(
+            // Array#[]= with nil..nil
             r##"
         a = [1,2,3,4,5]
         a[nil..nil] = [10,20]
         a
         "##,
-        );
-        // values_at with beginless/endless ranges
-        run_test(r##"[1,2,3,4,5].values_at(..2)"##);
-        run_test(r##"[1,2,3,4,5].values_at(2..)"##);
-        run_test(r##"[1,2,3,4,5].values_at(nil..nil)"##);
-    }
-
-    #[test]
-    fn index_negative_count_nil() {
-        // Negative index beyond array size with count returns nil
-        run_test("[1, 2, 3][-10, 2]");
-        // Negative index within range works normally
-        run_test("[1, 2, 3][-2, 2]");
-        // Positive index beyond array size with count returns nil
-        run_test("[1, 2, 3][4, 2]");
-        // At end returns empty
-        run_test("[1, 2, 3][3, 2]");
+            // values_at with beginless/endless ranges
+            r##"[1,2,3,4,5].values_at(..2)"##,
+            r##"[1,2,3,4,5].values_at(2..)"##,
+            r##"[1,2,3,4,5].values_at(nil..nil)"##,
+            // Negative index beyond array size with count returns nil
+            "[1, 2, 3][-10, 2]",
+            // Negative index within range works normally
+            "[1, 2, 3][-2, 2]",
+            // Positive index beyond array size with count returns nil
+            "[1, 2, 3][4, 2]",
+            // At end returns empty
+            "[1, 2, 3][3, 2]",
+        ]);
     }
 
     #[test]
     fn fill() {
-        run_test(
+        run_tests(&[
             r##"
             a = [2, 3, 4, 5]
             a.fill(100)
             a"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3, 4]
             a.fill("a", 0..3)
             a"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3, 4]
             a.fill("x", 1, 2)
             a"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3, 4]
             a.fill { |i| i * 10 }
             a"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3, 4]
             a.fill(-2) { |i| i * 10 }
             a"##,
-        );
+        ]);
         // fill with no arguments fills with nil
         run_test_error(
             r#"
@@ -4436,138 +4338,108 @@ mod tests {
             a
             "#,
         );
-        // fill with range (non-block form)
-        run_test(
+        run_tests(&[
+            // fill with range (non-block form)
             r##"
             a = [1, 2, 3, 4, 5]
             a.fill("z", 1..3)
             a"##,
-        );
-        // fill with block and range
-        run_test(
+            // fill with block and range
             r##"
             a = [1, 2, 3, 4]
             a.fill(0..2) { |i| i * 100 }
             a"##,
-        );
-        // fill extending the array
-        run_test(
+            // fill extending the array
             r##"
             a = [1, 2]
             a.fill("x", 0, 5)
             a"##,
-        );
-        // fill with negative start
-        run_test(
+            // fill with negative start
             r##"
             a = [1, 2, 3, 4]
             a.fill("y", -3, 2)
             a"##,
-        );
-        // fill with beginless range
-        run_test(
+            // fill with beginless range
             r##"
             a = [1, 2, 3, 4, 5]
             a.fill("x", ..2)
             a"##,
-        );
-        // fill with endless range
-        run_test(
+            // fill with endless range
             r##"
             a = [1, 2, 3, 4, 5]
             a.fill("x", 2..)
             a"##,
-        );
-        // fill with nil..nil range
-        run_test(
+            // fill with nil..nil range
             r##"
             a = [1, 2, 3, 4, 5]
             a.fill("x", nil..nil)
             a"##,
-        );
-        // fill with block and beginless range
-        run_test(
+            // fill with block and beginless range
             r##"
             a = [1, 2, 3, 4, 5]
             a.fill(..2) { |i| i * 10 }
             a"##,
-        );
-        // fill(val, start, nil) means fill to end
-        run_test(
+            // fill(val, start, nil) means fill to end
             r##"
             a = [0, 1, 2, 3, 4]
             a.fill(:a, 1, nil)
             a"##,
-        );
-        // fill with block(start, nil) means fill to end
-        run_test(
+            // fill with block(start, nil) means fill to end
             r##"
             a = [0, 1, 2, 3, 4]
             a.fill(1, nil) { |i| i * 10 }
             a"##,
-        );
+        ]);
     }
 
     #[test]
     fn drop() {
-        run_test(
+        run_tests(&[
             r##"
             a = [2, 3, 4, 5]
             [a.drop(2), a.drop(100), a]
             a"##,
-        );
+        ]);
     }
 
     #[test]
     fn zip() {
-        run_test(r##"[1,2,3].zip([4,5,6], [7,8,9])"##);
-        run_test(r##"[1,2].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
-        run_test(r##"[1,2,3,4,5].zip([:a,:b,:c], [:A,:B,:C,:D])"##);
-        run_test(
+        run_tests(&[
+            r##"[1,2,3].zip([4,5,6], [7,8,9])"##,
+            r##"[1,2].zip([:a,:b,:c], [:A,:B,:C,:D])"##,
+            r##"[1,2,3,4,5].zip([:a,:b,:c], [:A,:B,:C,:D])"##,
             r##"
             a = []
             [1,2,3].zip([4,5,6], [7,8,9]) { |ary| a << ary }
             a
         "##,
-        );
-        // zip with enumerator / non-array enumerable (uses #each fallback)
-        run_test("[1, 2, 3].zip((4..6))");
-        // zip with infinite enumerator (must not hang)
-        run_test("[1, 2].zip(10.upto(Float::INFINITY))");
-        // zip with shorter #each-based enumerable fills nil
-        run_test(
+            // zip with enumerator / non-array enumerable (uses #each fallback)
+            "[1, 2, 3].zip((4..6))",
+            // zip with infinite enumerator (must not hang)
+            "[1, 2].zip(10.upto(Float::INFINITY))",
+            // zip with shorter #each-based enumerable fills nil
             r##"
             o = Object.new
             def o.each; yield 10; end
             [1, 2].zip(o)
         "##,
-        );
+        ]);
         // zip raises TypeError for non-enumerable
         run_test_error(r##"[1, 2].zip(42)"##);
     }
 
     #[test]
     fn clear() {
-        run_test(
+        run_tests(&[
             r##"
             a = [2, 3, 4, 5]
             a.clear
             a"##,
-        );
-    }
-
-    #[test]
-    fn inject() {
-        run_test(r##"[2, 3, 4, 5].inject(0) {|result, item| result + item }"##);
-        run_test(r##"[2, 3, 4, 5].inject {|result, item| result + item }"##);
-        run_test(r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##);
-        run_test(r##"[1, 2, 3, 4, 5].inject(:+)"##);
-        run_test(r##"[1, 2, 3, 4, 5].inject(10, :+)"##);
-    }
-
-    #[test]
-    fn inject_method_name_coercion() {
-        run_tests(&[
+            r##"[2, 3, 4, 5].inject(0) {|result, item| result + item }"##,
+            r##"[2, 3, 4, 5].inject {|result, item| result + item }"##,
+            r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##,
+            r##"[1, 2, 3, 4, 5].inject(:+)"##,
+            r##"[1, 2, 3, 4, 5].inject(10, :+)"##,
             // method name given as a String.
             r##"[10, 1, 2, 3].inject("-")"##,
             r##"[1, 2, 3].inject(10, "-")"##,
@@ -4581,12 +4453,6 @@ mod tests {
             r##"[1, 2, 3].inject(10, :-) { raise "unused" }"##,
             // Enumerable receiver mirrors the same rules.
             r##"(class E1; include Enumerable; def each; yield 10; yield 1; yield 2; end; end; begin; E1.new.inject(Object.new); :no; rescue TypeError; :te; end)"##,
-        ]);
-    }
-
-    #[test]
-    fn flat_map_to_ary() {
-        run_tests(&[
             r##"[[1,2],[3,4]].flat_map { |x| x }"##,
             r##"[1, 2, 3].flat_map { |x| x }"##,
             // block result responding to #to_ary is flattened one level.
@@ -4596,52 +4462,36 @@ mod tests {
             r##"[1, 2].collect_concat { |x| [x, x] }"##,
             // #to_ary returning non-Array, non-nil -> TypeError.
             r##"begin; o=Object.new; def o.to_ary; 5; end; [1].flat_map { o }; :no; rescue TypeError; :te; end"##,
-        ]);
-    }
-
-    #[test]
-    fn join() {
-        run_test(r##"[2, 3, 4, 5].join"##);
-        run_test(r##"[2, 3, 4, 5].join("-")"##);
-    }
-
-    #[test]
-    fn join_encoding() {
-        // BINARY ⊔ BINARY = BINARY: rgba blob (the doom regression repro).
-        // 0xFF must NOT be lossily replaced with U+FFFD.
-        run_test(
+            r##"[2, 3, 4, 5].join"##,
+            r##"[2, 3, 4, 5].join("-")"##,
+            // BINARY ⊔ BINARY = BINARY: rgba blob (the doom regression repro).
+            // 0xFF must NOT be lossily replaced with U+FFFD.
             r##"
             s = [255, 0, 0, 255].pack("CCCC")
             v = [s, s].join
             [v.bytes, v.length, v.encoding.name]
             "##,
-        );
-        // BINARY separator forces BINARY result.
-        run_test(
+            // BINARY separator forces BINARY result.
             r##"
             sep = [0xff].pack("C")
             r = ["a", "b", "c"].join(sep)
             [r.bytes, r.encoding.name]
             "##,
-        );
-        // BINARY ⊔ UTF-8 = BINARY (CRuby promotes to the wider, lossless one).
-        run_test(
+            // BINARY ⊔ UTF-8 = BINARY (CRuby promotes to the wider, lossless one).
             r##"
             bin = [0xff, 0x80].pack("CC")
             r = [bin, "x"].join
             [r.bytes, r.encoding.name]
             "##,
-        );
-        // UTF-8 (multibyte) stays UTF-8 byte-for-byte.
-        run_test(r##"["あ","い","う"].join("-")"##);
-        run_test(r##"["あ","い","う"].join("-").encoding.name"##);
-        // Numbers (via to_s): byte content matches CRuby (don't pin encoding,
-        // CRuby reports US-ASCII for ASCII-only output and we keep UTF-8).
-        run_test(r##"[1,2,3].join(",")"##);
-        // Single-element binary array preserves binary encoding.
-        run_test(r##"[[0xff].pack("C")].join.encoding.name"##);
-        // The full doom rendering pipeline shape: palette table + index map.
-        run_test(
+            // UTF-8 (multibyte) stays UTF-8 byte-for-byte.
+            r##"["あ","い","う"].join("-")"##,
+            r##"["あ","い","う"].join("-").encoding.name"##,
+            // Numbers (via to_s): byte content matches CRuby (don't pin encoding,
+            // CRuby reports US-ASCII for ASCII-only output and we keep UTF-8).
+            r##"[1,2,3].join(",")"##,
+            // Single-element binary array preserves binary encoding.
+            r##"[[0xff].pack("C")].join.encoding.name"##,
+            // The full doom rendering pipeline shape: palette table + index map.
             r##"
             pal = [[255, 0, 0, 255].pack("CCCC"),
                    [0, 255, 0, 255].pack("CCCC"),
@@ -4650,54 +4500,40 @@ mod tests {
             blob = indices.map { |i| pal[i] }.join
             [blob.bytes, blob.bytesize, blob.encoding.name]
             "##,
-        );
-    }
-
-    #[test]
-    fn join_array_repeat_string_arg() {
-        // Array#* with a string argument delegates to join — same encoding rule.
-        run_test(
+            // Array#* with a string argument delegates to join — same encoding rule.
             r##"
             s = [255, 0, 0, 255].pack("CCCC")
             v = [s, s] * ""
             [v.bytes, v.encoding.name]
             "##,
-        );
-        run_test(
             r##"
             sep = [0xff].pack("C")
             r = ["a", "b"] * sep
             [r.bytes, r.encoding.name]
             "##,
-        );
-    }
-
-    #[test]
-    fn first() {
-        run_test(r##"[[0,1,2,3].first, [].first]"##);
-        run_test(
+            r##"[[0,1,2,3].first, [].first]"##,
             r##"
         a = [0,1,2]
         [a.first(0), a.first(1), a.first(2), a.first(3), a.first(4)]
         "##,
-        );
-        run_test(r##"[[0,1,2,3].last, [].last]"##);
-        run_test(
+            r##"[[0,1,2,3].last, [].last]"##,
             r##"
         a = [0,1,2]
         [a.last(0), a.last(1), a.last(2), a.last(3), a.last(4)]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn fetch() {
-        run_test(r##"[0,1,2,3].fetch(1)"##);
-        run_test(r##"[0,1,2,3].fetch(-1)"##);
-        run_test(r##"[0,1,2,3].fetch(-4)"##);
-        run_test(r##"[0,1,2,3].fetch(4, 999)"##);
-        run_test(r##"[0,1,2,3].fetch(-5, 999)"##);
-        run_test(r##"[0,1,2,3].fetch(4) { |i| i * 10 }"##);
+        run_tests(&[
+            r##"[0,1,2,3].fetch(1)"##,
+            r##"[0,1,2,3].fetch(-1)"##,
+            r##"[0,1,2,3].fetch(-4)"##,
+            r##"[0,1,2,3].fetch(4, 999)"##,
+            r##"[0,1,2,3].fetch(-5, 999)"##,
+            r##"[0,1,2,3].fetch(4) { |i| i * 10 }"##,
+        ]);
         run_test_error(r##"[0,1,2,3].fetch(4)"##);
         run_test_error(r##"[0,1,2,3].fetch(-5)"##);
     }
@@ -4706,15 +4542,15 @@ mod tests {
     fn take() {
         run_test_error(r##"[0,1,2,3].take(-5)"##);
         run_test_error(r##"[0,1,2,3].take(:a)"##);
-        run_test(r##"[0,1,2,3,4,5].take(3)"##);
-        run_test(r##"[0,1,2,3,4,5].take(100)"##);
-        run_test(r##"[0,1,2,3,4,5].take(0)"##);
-        run_test(
+        run_tests(&[
+            r##"[0,1,2,3,4,5].take(3)"##,
+            r##"[0,1,2,3,4,5].take(100)"##,
+            r##"[0,1,2,3,4,5].take(0)"##,
             r##"
             a = [0,1,2,3,4,5];
             [a.take(3) << 5, a]
             "##,
-        );
+        ]);
     }
 
     #[test]
@@ -4749,12 +4585,14 @@ mod tests {
 
     #[test]
     fn partition() {
-        run_test(r##"[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].partition {|i| i % 3 == 0 }"##);
+        run_tests(&[
+            r##"[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].partition {|i| i % 3 == 0 }"##,
+        ]);
     }
 
     #[test]
     fn sort() {
-        run_test(
+        run_tests(&[
             r##"
             res = []
             a = []
@@ -4768,118 +4606,88 @@ mod tests {
             res << a
             res
             "##,
-        );
-        run_test(
             r##"
             a = [999999999999999999999999999999, -42.4242, 100, 100.001, -555, 0.0, 100, 76543, 100.0]
             res = a.sort
             [res, a]
             "##,
-        );
+        ]);
         run_test_error("[1,:hh].sort!");
         run_test_error("[1,:hh].sort");
         run_test_error("[Float::NAN, Float::NAN].sort!");
         run_test_error("[Float::NAN, Float::NAN].sort");
-        run_test(
+        run_tests(&[
             r#"
         fruits = %w{apple pear fig}
         fruits.sort_by! { |word| word.length }
         fruits
         "#,
-        );
-        run_test(
             r#"
         fruits = %w{apple pear fig}
         new_fruits = fruits.sort_by { |word| word.length }
         [fruits, new_fruits]
         "#,
-        );
-        run_test(
             r##"
         ary2 = ["9", "7", "10", "11", "8"]
         [ary2.sort{|a, b| a.to_i <=> b.to_i }, ary2]
         "##,
-        );
-        run_test(
             r##"
         ary2 = ["9", "7", "10", "11", "8"]
         [ary2.sort, ary2]
         "##,
-        );
-        run_test(
             r##"
         ary2 = ["9", "7", "10", "11", "8"]
         ary2.sort!{|a, b| a.to_i <=> b.to_i }
         ary2
         "##,
-        );
-        run_test(
             r##"
         ary2 = ["9", "7", "10", "11", "8"]
         ary2.sort!
         ary2
         "##,
-        );
-        // Enumerable#sort (delegates to to_a.sort)
-        run_test("[1,2,3].permutation(2).to_a.sort");
-        run_test("[1,2].repeated_combination(2).to_a.sort");
-        run_test("[1,2].repeated_permutation(2).to_a.sort");
-        run_test("[3,1,2].each.sort { |a,b| b <=> a }");
+            // Enumerable#sort (delegates to to_a.sort)
+            "[1,2,3].permutation(2).to_a.sort",
+            "[1,2].repeated_combination(2).to_a.sort",
+            "[1,2].repeated_permutation(2).to_a.sort",
+            "[3,1,2].each.sort { |a,b| b <=> a }",
+        ]);
     }
 
     #[test]
     fn group_by() {
-        run_test(
+        run_tests(&[
             r##"
             [*(1..6)].group_by {|i| i%3}
         "##,
-        );
-        // GC-rooting regression: when keys and bucket arrays returned by
-        // the block are heap-allocated, every block invocation can
-        // trigger a collection (under `--features gc-stress`). Previously
-        // the partial result Hash was held only in a Rust local and the
-        // builtin worked around it by disabling GC; the rooted version
-        // must keep both the Hash and freshly-allocated bucket arrays
-        // alive throughout.
-        run_test(
+            // GC-rooting regression: when keys and bucket arrays returned by
+            // the block are heap-allocated, every block invocation can
+            // trigger a collection (under `--features gc-stress`). Previously
+            // the partial result Hash was held only in a Rust local and the
+            // builtin worked around it by disabling GC; the rooted version
+            // must keep both the Hash and freshly-allocated bucket arrays
+            // alive throughout.
             r##"
             (1..50).to_a.group_by { |i| "k#{i % 7}" }
         "##,
-        );
-    }
-
-    #[test]
-    fn sort_by_heap_keys() {
-        // GC-rooting regression: each `to_s` call returns a freshly
-        // allocated heap String. Under `--features gc-stress` the old
-        // `pairs: Vec<(Value, Value)>` collection loop would let GC
-        // reclaim earlier keys before sorting saw them.
-        run_test(
+            // GC-rooting regression: each `to_s` call returns a freshly
+            // allocated heap String. Under `--features gc-stress` the old
+            // `pairs: Vec<(Value, Value)>` collection loop would let GC
+            // reclaim earlier keys before sorting saw them.
             r##"
             (1..50).to_a.sort_by { |i| i.to_s }
         "##,
-        );
-        run_test(
             r##"
             ary = (1..50).to_a
             ary.sort_by! { |i| (i * 31).to_s }
             ary
         "##,
-        );
-        // sort with comparator block where the block also allocates;
-        // exercises the temp_push of the freshly-built copy in
-        // Array#sort.
-        run_test(
+            // sort with comparator block where the block also allocates;
+            // exercises the temp_push of the freshly-built copy in
+            // Array#sort.
             r##"
             ary = (1..30).to_a.shuffle(random: Random.new(42))
             ary.sort { |a, b| a.to_s <=> b.to_s }
         "##,
-        );
-    }
-
-    #[test]
-    fn each() {
-        run_test(
             r##"
         x = 100
         [2, 3, 4, 5].each do |y|
@@ -4887,8 +4695,6 @@ mod tests {
         end
         x
         "##,
-        );
-        run_test(
             r##"
         x = []
         [2, 3, 4, 5].reverse_each do |y|
@@ -4896,12 +4702,6 @@ mod tests {
         end
         x
         "##,
-        );
-    }
-
-    #[test]
-    fn each_with_index() {
-        run_test(
             r##"
         x = 100
         [2, 3, 4, 5].each_with_index do |item, index|
@@ -4909,43 +4709,29 @@ mod tests {
         end
         x
         "##,
-        );
-    }
-
-    #[test]
-    fn select() {
-        run_test(r##"[1,2,3,4,5].select { |num| num.even? }"##);
-        run_test(r##"[1,2,3,4,5].select(&:even?)"##);
-        run_test(r##"[1,2,3,4,5].reject { |num| num.even? }"##);
-        run_test(r##"[1,2,3,4,5].reject { true }"##);
-        run_test(r##"[1,2,3,4,5].reject(&:even?)"##);
-        run_test(r##"a=[1,2,3,4,5]; a.reject! { |num| num.even? }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.reject! { true }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.reject! { false }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.reject!(&:even?); a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.delete_if { |num| num.even? }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.delete_if { true }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.delete_if { false }; a"##);
-        run_test(r##"a=[1,2,3,4,5]; a.delete_if(&:even?); a"##);
-        run_test(
+            r##"[1,2,3,4,5].select { |num| num.even? }"##,
+            r##"[1,2,3,4,5].select(&:even?)"##,
+            r##"[1,2,3,4,5].reject { |num| num.even? }"##,
+            r##"[1,2,3,4,5].reject { true }"##,
+            r##"[1,2,3,4,5].reject(&:even?)"##,
+            r##"a=[1,2,3,4,5]; a.reject! { |num| num.even? }; a"##,
+            r##"a=[1,2,3,4,5]; a.reject! { true }; a"##,
+            r##"a=[1,2,3,4,5]; a.reject! { false }; a"##,
+            r##"a=[1,2,3,4,5]; a.reject!(&:even?); a"##,
+            r##"a=[1,2,3,4,5]; a.delete_if { |num| num.even? }; a"##,
+            r##"a=[1,2,3,4,5]; a.delete_if { true }; a"##,
+            r##"a=[1,2,3,4,5]; a.delete_if { false }; a"##,
+            r##"a=[1,2,3,4,5]; a.delete_if(&:even?); a"##,
             r##"
         a = %w{ a b c d e f }
         b = a.select! {|v| v =~ /[a-z]/ }   # => nil
         [a, b] # => [["a", "b", "c", "d", "e", "f"], nil]
         "##,
-        );
-        run_test(
             r##"
         a = %w{ a b c d e f }
         b = a.select! {|v| v =~ /[c-e]/ }
         [a, b]
         "##,
-        );
-    }
-
-    #[test]
-    fn map() {
-        run_test(
             r##"
         x = 10
         a = [2, 3, 4, 5, 6, 7, 8]
@@ -4954,8 +4740,6 @@ mod tests {
         end
         [res, a]
         "##,
-        );
-        run_test(
             r##"
         x = 10
         a = [2, 3, 4, 5, 6, 7, 8]
@@ -4964,21 +4748,9 @@ mod tests {
         end
         [res, a]
         "##,
-        );
-    }
-
-    /// No-block path: every iterator that yields once per element
-    /// must return an `Enumerator` whose `.size` matches the
-    /// receiver length (and reports `nil` only when CRuby itself
-    /// reports `nil`). The same path also has to give the right
-    /// `.class` so callers that `case`-dispatch on it don't get
-    /// surprised. Mirrors the spec's `enumeratorized` shared block.
-    #[test]
-    fn no_block_enumerator_size() {
-        // Size == receiver length for the "yield once per element"
-        // family. `run_tests` compares each expression's result
-        // against CRuby.
-        run_tests(&[
+            // Size == receiver length for the "yield once per element"
+            // family. `run_tests` compares each expression's result
+            // against CRuby.
             "[1,2,3,4].each.class",
             "[1,2,3,4].each.size",
             "[1,2,3,4].reverse_each.class",
@@ -5022,125 +4794,130 @@ mod tests {
             "[].each.size",
             "[].map.size",
             "[].select.size",
-        ]);
-
-        // combination / repeated_combination: binomial coefficients
-        // with the CRuby edge cases (k < 0 ⇒ 0, k == 0 ⇒ 1, k > size
-        // ⇒ 0 for combination but k > size is valid for
-        // repeated_combination).
-        run_tests(&[
+            // combination / repeated_combination: binomial coefficients
+            // with the CRuby edge cases (k < 0 ⇒ 0, k == 0 ⇒ 1, k > size
+            // ⇒ 0 for combination but k > size is valid for
+            // repeated_combination).
             // C(4, k)
-            "[1,2,3,4].combination(0).size",     // => 1
-            "[1,2,3,4].combination(1).size",     // => 4
-            "[1,2,3,4].combination(2).size",     // => 6
-            "[1,2,3,4].combination(3).size",     // => 4
-            "[1,2,3,4].combination(4).size",     // => 1
-            "[1,2,3,4].combination(5).size",     // => 0 (k > size)
-            "[1,2,3,4].combination(-1).size",    // => 0
-            "[].combination(0).size",            // => 1
-            "[].combination(1).size",            // => 0
+            "[1,2,3,4].combination(0).size",
+            // => 1
+            "[1,2,3,4].combination(1).size",
+            // => 4
+            "[1,2,3,4].combination(2).size",
+            // => 6
+            "[1,2,3,4].combination(3).size",
+            // => 4
+            "[1,2,3,4].combination(4).size",
+            // => 1
+            "[1,2,3,4].combination(5).size",
+            // => 0 (k > size)
+            "[1,2,3,4].combination(-1).size",
+            // => 0
+            "[].combination(0).size",
+            // => 1
+            "[].combination(1).size",
+            // => 0
             // repeated_combination: C(size + k - 1, k)
-            "[1,2,3].repeated_combination(0).size",   // => 1
-            "[1,2,3].repeated_combination(1).size",   // => 3
-            "[1,2,3].repeated_combination(2).size",   // => 6
-            "[1,2,3].repeated_combination(3).size",   // => 10
-            "[1,2,3].repeated_combination(-1).size",  // => 0
-            "[].repeated_combination(0).size",        // => 1
-            "[].repeated_combination(1).size",        // => 0
+            "[1,2,3].repeated_combination(0).size",
+            // => 1
+            "[1,2,3].repeated_combination(1).size",
+            // => 3
+            "[1,2,3].repeated_combination(2).size",
+            // => 6
+            "[1,2,3].repeated_combination(3).size",
+            // => 10
+            "[1,2,3].repeated_combination(-1).size",
         ]);
+    }
 
-        // permutation / repeated_permutation: descending factorial /
-        // size**k. `Array#permutation` argument is optional (defaults
-        // to size).
+    #[test]
+    fn group_by_2() {
         run_tests(&[
+            // => 0
+            "[].repeated_combination(0).size",
+            // => 1
+            "[].repeated_combination(1).size",
+            // permutation / repeated_permutation: descending factorial /
+            // size**k. `Array#permutation` argument is optional (defaults
+            // to size).
             // P(4, k)
-            "[1,2,3,4].permutation.size",        // => 24
-            "[1,2,3,4].permutation(0).size",     // => 1
-            "[1,2,3,4].permutation(1).size",     // => 4
-            "[1,2,3,4].permutation(2).size",     // => 12
-            "[1,2,3,4].permutation(3).size",     // => 24
-            "[1,2,3,4].permutation(4).size",     // => 24
-            "[1,2,3,4].permutation(5).size",     // => 0 (k > size)
-            "[1,2,3,4].permutation(-1).size",    // => 0
-            "[].permutation(0).size",            // => 1
-            "[].permutation(2).size",            // => 0
+            "[1,2,3,4].permutation.size",
+            // => 24
+            "[1,2,3,4].permutation(0).size",
+            // => 1
+            "[1,2,3,4].permutation(1).size",
+            // => 4
+            "[1,2,3,4].permutation(2).size",
+            // => 12
+            "[1,2,3,4].permutation(3).size",
+            // => 24
+            "[1,2,3,4].permutation(4).size",
+            // => 24
+            "[1,2,3,4].permutation(5).size",
+            // => 0 (k > size)
+            "[1,2,3,4].permutation(-1).size",
+            // => 0
+            "[].permutation(0).size",
+            // => 1
+            "[].permutation(2).size",
+            // => 0
             // repeated_permutation: size ** k
-            "[1,2,3].repeated_permutation(0).size",   // => 1
-            "[1,2,3].repeated_permutation(1).size",   // => 3
-            "[1,2,3].repeated_permutation(2).size",   // => 9
-            "[1,2,3].repeated_permutation(4).size",   // => 81
-            "[1,2,3].repeated_permutation(-1).size",  // => 0
-            "[].repeated_permutation(0).size",        // => 1
-            "[].repeated_permutation(2).size",        // => 0
-        ]);
-
-        // Block-less Enumerator round-trips: `.each` should iterate
-        // back to the original array so the size and yields stay in
-        // sync — guards against the size hint accidentally short-
-        // circuiting the actual iteration.
-        run_tests(&[
+            "[1,2,3].repeated_permutation(0).size",
+            // => 1
+            "[1,2,3].repeated_permutation(1).size",
+            // => 3
+            "[1,2,3].repeated_permutation(2).size",
+            // => 9
+            "[1,2,3].repeated_permutation(4).size",
+            // => 81
+            "[1,2,3].repeated_permutation(-1).size",
+            // => 0
+            "[].repeated_permutation(0).size",
+            // => 1
+            "[].repeated_permutation(2).size",
+            // Block-less Enumerator round-trips: `.each` should iterate
+            // back to the original array so the size and yields stay in
+            // sync — guards against the size hint accidentally short-
+            // circuiting the actual iteration.
             "[1,2,3].each.to_a",
             "[1,2,3].map.each.to_a",
             "[1,2,3].select.to_a",
             "[1,2,3].combination(2).to_a",
             "[1,2,3].permutation(2).to_a.sort",
-        ]);
-    }
-
-    #[test]
-    fn all_any() {
-        run_test(r#"[5,  6, 7].all? {|v| v > 0 }"#);
-        run_test(r#"[5, -1, 7].all? {|v| v > 0 }"#);
-        run_test(r#"[5, -1, 7].all?"#);
-        run_test(r#"[5, nil, 7].all?"#);
-        run_test(r#"[5, -1, false].all?"#);
-        run_test(r#"[nil, false].all?"#);
-        run_test(r#"[1, 2, 3].all?(Integer)"#);
-        run_test(r#"[1, "a", 3].all?(Integer)"#);
-        run_test(r#"[].all?(Integer)"#);
-
-        run_test(r#"[5,  6, 7].any? {|v| v > 0 }"#);
-        run_test(r#"[5, -1, 7].any? {|v| v > 0 }"#);
-        run_test(r#"[5, -1, 7].any?"#);
-        run_test(r#"[5, nil, 7].any?"#);
-        run_test(r#"[5, -1, false].any?"#);
-        run_test(r#"[nil, false].any?"#);
-        run_test(r#"[1, "a", 3].any?(String)"#);
-        run_test(r#"[1, 2, 3].any?(String)"#);
-    }
-
-    #[test]
-    fn pop_with_count() {
-        run_test(
+            r#"[5,  6, 7].all? {|v| v > 0 }"#,
+            r#"[5, -1, 7].all? {|v| v > 0 }"#,
+            r#"[5, -1, 7].all?"#,
+            r#"[5, nil, 7].all?"#,
+            r#"[5, -1, false].all?"#,
+            r#"[nil, false].all?"#,
+            r#"[1, 2, 3].all?(Integer)"#,
+            r#"[1, "a", 3].all?(Integer)"#,
+            r#"[].all?(Integer)"#,
+            r#"[5,  6, 7].any? {|v| v > 0 }"#,
+            r#"[5, -1, 7].any? {|v| v > 0 }"#,
+            r#"[5, -1, 7].any?"#,
+            r#"[5, nil, 7].any?"#,
+            r#"[5, -1, false].any?"#,
+            r#"[nil, false].any?"#,
+            r#"[1, "a", 3].any?(String)"#,
+            r#"[1, 2, 3].any?(String)"#,
             r##"
             a = [1, 2, 3, 4, 5]
             [a.pop(2), a]"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3]
             [a.pop(0), a]"##,
-        );
-        run_test(
             r##"
             a = [1, 2, 3]
             [a.pop(10), a]"##,
-        );
-    }
-
-    #[test]
-    fn detect() {
-        run_test(r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#);
-        run_test(r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#);
-    }
-
-    #[test]
-    fn grep() {
-        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#);
-        //run_test(r#"Array.instance_methods.grep(/gr/)"#);
-        run_test(r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/) {|s| s.upcase }"#);
-        run_test(r#"[1, 2, 3, 4, 5].grep(Integer) {|n| n * 2 }"#);
-        run_test(r#"[1, 'a', 2, 'b'].grep(String)"#);
+            r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#,
+            r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#,
+            r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/)"#,
+            //run_test(r#"Array.instance_methods.grep(/gr/)"#);
+            r#"['aa', 'bb', 'cc', 'dd', 'ee'].grep(/[bc]/) {|s| s.upcase }"#,
+            r#"[1, 2, 3, 4, 5].grep(Integer) {|n| n * 2 }"#,
+            r#"[1, 'a', 2, 'b'].grep(String)"#,
+        ]);
     }
 
     #[test]
@@ -5157,103 +4934,89 @@ mod tests {
 
     #[test]
     fn reverse() {
-        run_test(
+        run_tests(&[
             r#"
             a = [1, 2, 3, 4, 5]
             [a.reverse, a]
         "#,
-        );
-        run_test(
             r#"
             a = [1, 2, 3, 4, 5]
             a.reverse!
             a
         "#,
-        );
+        ]);
     }
 
     #[test]
     fn transpose() {
-        run_test(r#"[[1,2],[3,4],[5,6]].transpose"#);
-        run_test(r#"[].transpose"#);
+        run_tests(&[
+            r#"[[1,2],[3,4],[5,6]].transpose"#,
+            r#"[].transpose"#,
+        ]);
         run_test_error(r#"[1,2,3].transpose"#);
         run_test_error(r#"[[1,2],[3,4,5],[6,7]].transpose"#);
     }
 
     #[test]
     fn rotate() {
-        run_test(
+        run_tests(&[
             r#"
         a = ["a","b","c","d"]
         [a.rotate, a]
         "#,
-        );
-        run_test(
             r#"
         a = ["a","b","c","d"]
         [a.rotate(2), a]
         "#,
-        );
-        run_test(
             r#"
         a = ["a","b","c","d"]
         [a.rotate(-3), a]
         "#,
-        );
-        run_test(
             r#"
         a = []
         b = a.rotate
         [a, b, a.object_id == b.object_id]
         "#,
-        );
-        run_test(
             r#"
         a = ["a","b","c","d"]
         [a.rotate!, a]
         "#,
-        );
-        run_test(
             r#"
         a = ["a","b","c","d"]
         [a.rotate!(2), a]
         "#,
-        );
-        run_test(
             r#"
         a = ["a","b","c","d"]
         [a.rotate!(-3), a]
         "#,
-        );
-        run_test(
             r#"
         a = []
         b = a.rotate!
         [a, b, a.object_id == b.object_id]
         "#,
-        );
+        ]);
     }
 
     #[test]
     fn product() {
-        run_test(r#"[1,2,3].product([4,5])"#);
-        run_test(r#"[1,2].product([1,2])"#);
-        run_test(r#"[1,2].product([3,4],[5,6])"#);
-        run_test(r#"[1,2].product()"#);
-        run_test(r#"[1,2].product([])"#);
-        run_test(
+        run_tests(&[
+            r#"[1,2,3].product([4,5])"#,
+            r#"[1,2].product([1,2])"#,
+            r#"[1,2].product([3,4],[5,6])"#,
+            r#"[1,2].product()"#,
+            r#"[1,2].product([])"#,
             r#"
             a = []
             [1,2,3].product([4,5]) {|e| a << e} # => [1,2,3]
             a # => [[1,4],[1,5],[2,4],[2,5],[3,4],[3,5]]
             "#,
-        );
+        ]);
         run_test_error(r#"[1,2].product(1,2,3)"#);
     }
 
     #[test]
     fn intersect() {
-        run_test(
+        run_tests(&[
             r#"
             a = [ "1", "2", "3" ]
             b = [ "3", "4", "5" ]
@@ -5263,161 +5026,117 @@ mod tests {
                 a.intersect?(c)   # => false
             ]
         "#,
-        );
-        run_test(r#"["a", "b", "c"].intersect?([ "c", "d", "e" ])"#);
-        run_test(r#"["a", "b", "c"].intersect?([ "d", "e", "f" ])"#);
+            r#"["a", "b", "c"].intersect?([ "c", "d", "e" ])"#,
+            r#"["a", "b", "c"].intersect?([ "d", "e", "f" ])"#,
+        ]);
     }
 
     #[test]
     fn union() {
-        run_test(r#"["a", "b", "c"].union([ "c", "d", "a" ])"#);
-        run_test(r#"["a"].union(["e", "b"], ["a", "c", "b"])"#);
-        run_test(r#"["a"].union"#);
+        run_tests(&[
+            r#"["a", "b", "c"].union([ "c", "d", "a" ])"#,
+            r#"["a"].union(["e", "b"], ["a", "c", "b"])"#,
+            r#"["a"].union"#,
+        ]);
         run_test_error(r#"["a"].union([], 100)"#);
     }
 
     #[test]
     fn uniq() {
-        run_test(
+        run_tests(&[
             r#"
         a = [1, 3, 2, 2.0, "2", "3", 3]
         b = a.uniq
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [1, 3, 2, 2.0, "2", "3", 3]
         b = a.uniq {|n| n.to_s }
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [1, 3, 2, 2.0, "2", "3", 3]
         a.uniq!
         a
         "#,
-        );
-        run_test(
             r#"
         a = [1, 3, 2, 2.0, "2", "3", 3]
         a.uniq! {|n| n.to_s }
         a
         "#,
-        );
-    }
-
-    #[test]
-    fn shuffle() {
-        run_test(r#"[*(0..20)].shuffle!.shuffle!().sum"#);
-    }
-
-    #[test]
-    fn slice() {
-        run_test(
+            r#"[*(0..20)].shuffle!.shuffle!().sum"#,
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2, 3)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(-5, 3)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(-200, 3)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2, -200)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2..3)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2...5)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(-100..3)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2..-100)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(2..1)
         [a, b]
         "#,
-        );
-        run_test(
             r#"
         a = [ "a", "b", "c", "d", "e", "f", "g", "h" ]
         b = a.slice!(-100..-30)
         [a, b]
         "#,
-        );
-        // slice! with beginless range
-        run_test(
+            // slice! with beginless range
             r#"
         a = [ "a", "b", "c", "d", "e" ]
         b = a.slice!(..2)
         [a, b]
         "#,
-        );
-        // slice! with endless range
-        run_test(
+            // slice! with endless range
             r#"
         a = [ "a", "b", "c", "d", "e" ]
         b = a.slice!(2..)
         [a, b]
         "#,
-        );
-        // slice! with nil..nil
-        run_test(
+            // slice! with nil..nil
             r#"
         a = [ "a", "b", "c", "d", "e" ]
         b = a.slice!(nil..nil)
         [a, b]
         "#,
-        );
-    }
-
-    #[test]
-    fn slice_with_arithmetic_sequence() {
-        // `Array#[]` and `Array#slice` accept an
-        // `Enumerator::ArithmeticSequence` as a stride-aware index
-        // (`runtime::get_index` / `builtins::array::index` dispatch
-        // to `aseq#[]` instead of `coerce_to_int_i64`).
-        run_tests(&[
+            // `Array#[]` and `Array#slice` accept an
+            // `Enumerator::ArithmeticSequence` as a stride-aware index
+            // (`runtime::get_index` / `builtins::array::index` dispatch
+            // to `aseq#[]` instead of `coerce_to_int_i64`).
             "[10, 20, 30, 40, 50][(0..).step(2)]",
             "[10, 20, 30, 40, 50][(0..-1).step(2)]",
             "[10, 20, 30, 40, 50][(1..3).step(1)]",
@@ -5429,21 +5148,6 @@ mod tests {
             "[1, 2, 3].slice((0..).step(2))",
             // `Range#%` produces the same kind of AS.
             "[10, 20, 30, 40, 50][(0..-1).%(2)]",
-        ]);
-    }
-
-    /// Regression: `Range#%` attaches a singleton method (`inspect`)
-    /// to its AS result, which makes `Value::class` return the
-    /// singleton's `ClassId`. The fast-path `is_arithmetic_sequence`
-    /// check must walk past the singleton (`real_class`) instead of
-    /// comparing against the cached AS class id verbatim — otherwise
-    /// the dispatch falls through to `coerce_to_int_i64` and raises
-    /// `TypeError: no implicit conversion of
-    /// Enumerator::ArithmeticSequence into Integer`. Same hazard
-    /// hits any AS the user decorates with `define_singleton_method`.
-    #[test]
-    fn slice_with_arithmetic_sequence_singleton_class() {
-        run_tests(&[
             // Manually-attached singleton method on a plain AS.
             r#"
               aseq = (0..-1).step(2)
@@ -5454,136 +5158,90 @@ mod tests {
             // internally, so this is the natural-occurring version of
             // the case above.
             "[10, 20, 30, 40, 50][(0..-1).%(2)]",
-        ]);
-    }
-
-    #[test]
-    fn pack() {
-        run_test(r#"[*(0..100)].pack("C*")"#);
-        run_test(r#"[0x12345678].pack("I")"#);
-        run_test(r#"[0x12345678].pack("N")"#);
-    }
-
-    #[test]
-    fn pack_buffer() {
-        run_test(
+            r#"[*(0..100)].pack("C*")"#,
+            r#"[0x12345678].pack("I")"#,
+            r#"[0x12345678].pack("N")"#,
             r#"
             buf = "hello".b
             [3.14].pack("E", buffer: buf)
             [buf.bytesize, buf[0, 5]]
             "#,
-        );
-        run_test(
             r#"
             buf = "".b
             buf << 0x08
             [42].pack("C", buffer: buf)
             buf.bytes.to_a
             "#,
-        );
-    }
-
-    #[test]
-    fn pack_count() {
-        run_test(r#"[1,2,3].pack("L3").unpack("L3")"#);
-        run_test(r#"[1,2,3,4,5].pack("L*").unpack("L*")"#);
-        run_test(r#"[1,2,3].pack("S3").unpack("S3")"#);
-        run_test(r#"[1,2,3,4].pack("C4").unpack("C4")"#);
-        run_test(r#"[1,2,3].pack("Q2").unpack("Q2")"#);
-        run_test(r#"[0x1234, 0x5678].pack("n2").unpack("n2")"#);
-        run_test(r#"[0x12345678, 0xdeadbeef].pack("V2").unpack("V2")"#);
-    }
-
-    #[test]
-    fn pack_endian() {
-        run_test(r#"[0x1234].pack("s<").unpack("s<")"#);
-        run_test(r#"[0x1234].pack("s>").unpack("s>")"#);
-        run_test(r#"[0x12345678].pack("l<").unpack("l<")"#);
-        run_test(r#"[0x12345678].pack("l>").unpack("l>")"#);
-        run_test(r#"[0x123456789ABCDEF0].pack("q<").unpack("q<")"#);
-        run_test(r#"[0x123456789ABCDEF0].pack("q>").unpack("q>")"#);
-        run_test(r#"[0x1234].pack("S<").unpack("S<")"#);
-        run_test(r#"[0x1234].pack("S>").unpack("S>")"#);
-        run_test(r#"[0x12345678].pack("L<").unpack("L<")"#);
-        run_test(r#"[0x12345678].pack("L>").unpack("L>")"#);
-    }
-
-    #[test]
-    fn pack_native_size() {
-        // l!/L! — native long is 64-bit on x86-64
-        run_test(r#"[0x123456789ABCDEF0].pack("l!").unpack("l!")"#);
-        run_test(r#"[0x123456789ABCDEF0].pack("L!").unpack("L!")"#);
-        // s!/S! — native short is still 16-bit
-        run_test(r#"[0x1234].pack("s!").unpack("s!")"#);
-        run_test(r#"[0x1234].pack("S!").unpack("S!")"#);
-        // i!/I! — native int is still 32-bit
-        run_test(r#"[0x12345678].pack("i!").unpack("i!")"#);
-        run_test(r#"[0x12345678].pack("I!").unpack("I!")"#);
-        // _ modifier is equivalent to !
-        run_test(r#"[0x123456789ABCDEF0].pack("l_").unpack("l_")"#);
-        run_test(r#"[0x123456789ABCDEF0].pack("L_").unpack("L_")"#);
-    }
-
-    #[test]
-    fn pack_pointer_size() {
-        // j/J — pointer-sized integer (64-bit on x86-64)
-        run_test(r#"[42].pack("j").unpack("j")"#);
-        run_test(r#"[42].pack("J").unpack("J")"#);
-        run_test(r#"[-1].pack("j").unpack("j")"#);
-        run_test(r#"[123456789].pack("J").unpack("J")"#);
-    }
-
-    #[test]
-    fn pack_whitespace_and_comments() {
-        // Whitespace between directives should be ignored
-        run_test(r#"[1, 2].pack("C C").unpack("C C")"#);
-        run_test(r#"[1, 2, 3].pack("C  C\tC").unpack("CCC")"#);
-        // Comments should be ignored (# to end of line)
-        run_test(r#"[1, 2].pack("C #comment\nC").unpack("CC")"#);
-    }
-
-    #[test]
-    fn pack_bits() {
-        run_test(r#"["10110001"].pack("b8").unpack("b8")"#);
-        run_test(r#"["10110001"].pack("B8").unpack("B8")"#);
-        run_test(r#"["1011"].pack("b4").unpack("b8")"#);
-        run_test(r#"["1011"].pack("B4").unpack("B8")"#);
-        run_test(r#"["10110001010"].pack("b*").unpack("b*")"#);
-        run_test(r#"["10110001010"].pack("B*").unpack("B*")"#);
-    }
-
-    #[test]
-    fn pack_utf8() {
-        run_test(r#"[65, 66, 67].pack("U3")"#);
-        run_test(r#"[0x3042, 0x3044].pack("U*")"#);
-        run_test(r#"[65, 0x3042, 0x1F600].pack("U*").unpack("U*")"#);
-        run_test(r#""ABC".unpack("U3")"#);
-    }
-
-    #[test]
-    fn pack_output_encoding() {
-        // `U` produces UTF-8; `M` / `m` / `u` produce US-ASCII;
-        // mixing a binary directive with text falls to ASCII-8BIT
-        // (the only encoding compatible with arbitrary bytes);
-        // pure-binary template stays ASCII-8BIT.
-        run_tests(&[
+            r#"[1,2,3].pack("L3").unpack("L3")"#,
+            r#"[1,2,3,4,5].pack("L*").unpack("L*")"#,
+            r#"[1,2,3].pack("S3").unpack("S3")"#,
+            r#"[1,2,3,4].pack("C4").unpack("C4")"#,
+            r#"[1,2,3].pack("Q2").unpack("Q2")"#,
+            r#"[0x1234, 0x5678].pack("n2").unpack("n2")"#,
+            r#"[0x12345678, 0xdeadbeef].pack("V2").unpack("V2")"#,
+            r#"[0x1234].pack("s<").unpack("s<")"#,
+            r#"[0x1234].pack("s>").unpack("s>")"#,
+            r#"[0x12345678].pack("l<").unpack("l<")"#,
+            r#"[0x12345678].pack("l>").unpack("l>")"#,
+            r#"[0x123456789ABCDEF0].pack("q<").unpack("q<")"#,
+            r#"[0x123456789ABCDEF0].pack("q>").unpack("q>")"#,
+            r#"[0x1234].pack("S<").unpack("S<")"#,
+            r#"[0x1234].pack("S>").unpack("S>")"#,
+            r#"[0x12345678].pack("L<").unpack("L<")"#,
+            r#"[0x12345678].pack("L>").unpack("L>")"#,
+            // l!/L! — native long is 64-bit on x86-64
+            r#"[0x123456789ABCDEF0].pack("l!").unpack("l!")"#,
+            r#"[0x123456789ABCDEF0].pack("L!").unpack("L!")"#,
+            // s!/S! — native short is still 16-bit
+            r#"[0x1234].pack("s!").unpack("s!")"#,
+            r#"[0x1234].pack("S!").unpack("S!")"#,
+            // i!/I! — native int is still 32-bit
+            r#"[0x12345678].pack("i!").unpack("i!")"#,
+            r#"[0x12345678].pack("I!").unpack("I!")"#,
+            // _ modifier is equivalent to !
+            r#"[0x123456789ABCDEF0].pack("l_").unpack("l_")"#,
+            r#"[0x123456789ABCDEF0].pack("L_").unpack("L_")"#,
+            // j/J — pointer-sized integer (64-bit on x86-64)
+            r#"[42].pack("j").unpack("j")"#,
+            r#"[42].pack("J").unpack("J")"#,
+            r#"[-1].pack("j").unpack("j")"#,
+            r#"[123456789].pack("J").unpack("J")"#,
+            // Whitespace between directives should be ignored
+            r#"[1, 2].pack("C C").unpack("C C")"#,
+            r#"[1, 2, 3].pack("C  C\tC").unpack("CCC")"#,
+            // Comments should be ignored (# to end of line)
+            r#"[1, 2].pack("C #comment\nC").unpack("CC")"#,
+            r#"["10110001"].pack("b8").unpack("b8")"#,
+            r#"["10110001"].pack("B8").unpack("B8")"#,
+            r#"["1011"].pack("b4").unpack("b8")"#,
+            r#"["1011"].pack("B4").unpack("B8")"#,
+            r#"["10110001010"].pack("b*").unpack("b*")"#,
+            r#"["10110001010"].pack("B*").unpack("B*")"#,
+            r#"[65, 66, 67].pack("U3")"#,
+            r#"[0x3042, 0x3044].pack("U*")"#,
+            r#"[65, 0x3042, 0x1F600].pack("U*").unpack("U*")"#,
+            r#""ABC".unpack("U3")"#,
+            // `U` produces UTF-8; `M` / `m` / `u` produce US-ASCII;
+            // mixing a binary directive with text falls to ASCII-8BIT
+            // (the only encoding compatible with arbitrary bytes);
+            // pure-binary template stays ASCII-8BIT.
             r#"[65, 0x3042].pack("U*").encoding.name"#,
             r#"[128].pack("U").encoding.name"#,
             r#"["abc"].pack("M").encoding.name"#,
             r#"["abc"].pack("m").encoding.name"#,
             r#"["abc"].pack("u").encoding.name"#,
-            r#"["x", 65].pack("a*U").encoding.name"#,
-            r#"[65, 66, 67].pack("CCC").encoding.name"#,
         ]);
     }
 
     #[test]
-    fn pack_utf8_extended_range() {
-        // `pack("U")` extends past U+10FFFF using the extended
-        // UTF-8 byte pattern (CRuby parity). 4-byte form covers
-        // up to 0x1FFFFF; 5-/6-byte forms cover up to 2^31-1 /
-        // 2^32-1.
+    fn uniq_2() {
         run_tests(&[
+            r#"["x", 65].pack("a*U").encoding.name"#,
+            r#"[65, 66, 67].pack("CCC").encoding.name"#,
+            // `pack("U")` extends past U+10FFFF using the extended
+            // UTF-8 byte pattern (CRuby parity). 4-byte form covers
+            // up to 0x1FFFFF; 5-/6-byte forms cover up to 2^31-1 /
+            // 2^32-1.
             r#"[0x110000].pack("U").bytes"#,
             r#"[0x1FFFFF].pack("U").bytes"#,
         ]);
@@ -5599,11 +5257,11 @@ mod tests {
 
     #[test]
     fn pack_base64_uuencode_line_length() {
-        // Counts of `1` and `2` are smaller than the 3-byte
-        // Base64/uuencode group and CRuby clamps them to the
-        // default 45. `0` means "no line breaks". `>= 3` is
-        // honoured verbatim.
         run_tests(&[
+            // Counts of `1` and `2` are smaller than the 3-byte
+            // Base64/uuencode group and CRuby clamps them to the
+            // default 45. `0` means "no line breaks". `>= 3` is
+            // honoured verbatim.
             r#"["abcdef"].pack("m1")"#,
             r#"["abcdef"].pack("m2")"#,
             r#"["abcdef"].pack("m3")"#,
@@ -5623,55 +5281,34 @@ mod tests {
 
     #[test]
     fn pack_hex_non_hex_low_nibble() {
-        // CRuby contributes the low nibble of non-hex characters
-        // (`s[i] & 0x0F`), not zero. `^` is 0x5E → low nibble 0xE.
-        // `["^"].pack("H")` ⇒ `"\xE0"` (was `"\x00"`).
         run_tests(&[
+            // CRuby contributes the low nibble of non-hex characters
+            // (`s[i] & 0x0F`), not zero. `^` is 0x5E → low nibble 0xE.
+            // `["^"].pack("H")` ⇒ `"\xE0"` (was `"\x00"`).
             r#"["^"].pack("H").bytes"#,
             r#"["^"].pack("h").bytes"#,
-        ]);
-    }
-
-    #[test]
-    fn flatten() {
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten, a]"##);
-        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(nil)"##);
-        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(-1)"##);
-        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(0)"##);
-        run_test(r##"[1,2,[3,4,[5,6],7],8].flatten(1)"##);
-
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!, a]"##);
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(nil), a]"##);
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(-1), a]"##);
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(0), a]"##);
-        run_test(r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(1), a]"##);
-    }
-
-    #[test]
-    fn compact() {
-        run_test(
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten, a]"##,
+            r##"[1,2,[3,4,[5,6],7],8].flatten(nil)"##,
+            r##"[1,2,[3,4,[5,6],7],8].flatten(-1)"##,
+            r##"[1,2,[3,4,[5,6],7],8].flatten(0)"##,
+            r##"[1,2,[3,4,[5,6],7],8].flatten(1)"##,
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!, a]"##,
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(nil), a]"##,
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(-1), a]"##,
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(0), a]"##,
+            r##"a = [1,2,[3,4,[5,6],7],8]; [a.flatten!(1), a]"##,
             r##"
         ary = [1, nil, 2, nil, 3, nil]
         [ary.compact, ary]
         "##,
-        );
-        run_test(
             r##"
         ary = [1, nil, 2, nil, 3, nil]
         [ary.compact!, ary]
         "##,
-        );
-        run_test(
             r##"
         ary = [1, 2, 3]
         [ary.compact!, ary]
         "##,
-        );
-    }
-
-    #[test]
-    fn delete() {
-        run_test(
             r##"
         res = []
         a = [1, 2, 3, 2.0, 1]
@@ -5682,12 +5319,6 @@ mod tests {
         res << a
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn delete_at() {
-        run_test(
             r##"
         res = []
         a = [1, 2, 3, 2.0, 1]
@@ -5698,20 +5329,10 @@ mod tests {
         res << a
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn find_index() {
-        run_test(r##"[1, 0, 0, 1, 0].index(1) "##);
-        run_test(r##"[1, 0, 0, 0, 0].index(1) "##);
-        run_test(r##"[0, 0, 0, 0, 0].index(1)"##);
-        run_test(r##"[0, 1, 0, 1, 0].index {|v| v > 0}"##);
-    }
-
-    #[test]
-    fn insert() {
-        run_test(
+            r##"[1, 0, 0, 1, 0].index(1) "##,
+            r##"[1, 0, 0, 0, 0].index(1) "##,
+            r##"[0, 0, 0, 0, 0].index(1)"##,
+            r##"[0, 1, 0, 1, 0].index {|v| v > 0}"##,
             r##"
         res = []
         ary = [1, 2, 3]
@@ -5720,12 +5341,6 @@ mod tests {
         res << ary.insert(30, 5, 9)
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn bsearch() {
-        run_test(
             r##"
         res = []
         ary = [0, 4, 7, 10, 12]
@@ -5742,12 +5357,6 @@ mod tests {
         
         res
         "##,
-        );
-    }
-
-    #[test]
-    fn flatten_recursive() {
-        run_test(
             r##"
         a = [1, 2]
         a << a
@@ -5758,28 +5367,16 @@ mod tests {
           true
         end
         "##,
-        );
-    }
-
-    #[test]
-    fn array_tos_recursive() {
-        // Self-containing array
-        run_test(
+            // Self-containing array
             r##"
         a = [1, 2]
         a << a
         a.to_s
         "##,
-        );
-        // Same object appearing multiple times (not recursive)
-        run_test(r#"a = [1]; b = [a, a]; b.to_s"#);
-        run_test(r#"h = {x: 1}; [h, h].to_s"#);
-    }
-
-    #[test]
-    fn array_inspect_user_defined() {
-        // User-defined inspect on custom objects inside arrays
-        run_test(
+            // Same object appearing multiple times (not recursive)
+            r#"a = [1]; b = [a, a]; b.to_s"#,
+            r#"h = {x: 1}; [h, h].to_s"#,
+            // User-defined inspect on custom objects inside arrays
             r##"
         class Foo
           def inspect
@@ -5788,33 +5385,27 @@ mod tests {
         end
         [Foo.new, 1, "hello"].inspect
         "##,
-        );
-    }
-
-    #[test]
-    fn array_inspect() {
-        // Empty array
-        run_test(r#"[].inspect"#);
-        run_test(r#"[].to_s"#);
-        // Single element
-        run_test(r#"[1].inspect"#);
-        // Various types
-        run_test(r#"[1, 2.5, "str", :sym, nil, true, false].inspect"#);
-        // Nested arrays
-        run_test(r#"[[1, 2], [3, [4, 5]]].inspect"#);
-        // Array containing hash
-        run_test(r#"[{a: 1, b: 2}, {c: 3}].inspect"#);
-        // Mixed nesting
-        run_test(r#"[1, [2, {a: 3}], "hello", :world].inspect"#);
-        // Array with string containing special characters
-        run_test(r#"["hello\nworld", "tab\there"].inspect"#);
-        // Array with Range
-        run_test(r#"[1..5, 1...5].inspect"#);
-        // to_s is aliased to inspect
-        run_test(r#"[1, 2, 3].to_s"#);
-        // User-defined to_s should NOT affect inspect output
-        // (inspect uses inspect, not to_s, for each element)
-        run_test(
+            // Empty array
+            r#"[].inspect"#,
+            r#"[].to_s"#,
+            // Single element
+            r#"[1].inspect"#,
+            // Various types
+            r#"[1, 2.5, "str", :sym, nil, true, false].inspect"#,
+            // Nested arrays
+            r#"[[1, 2], [3, [4, 5]]].inspect"#,
+            // Array containing hash
+            r#"[{a: 1, b: 2}, {c: 3}].inspect"#,
+            // Mixed nesting
+            r#"[1, [2, {a: 3}], "hello", :world].inspect"#,
+            // Array with string containing special characters
+            r#"["hello\nworld", "tab\there"].inspect"#,
+            // Array with Range
+            r#"[1..5, 1...5].inspect"#,
+            // to_s is aliased to inspect
+            r#"[1, 2, 3].to_s"#,
+            // User-defined to_s should NOT affect inspect output
+            // (inspect uses inspect, not to_s, for each element)
             r##"
         class Baz
           def to_s
@@ -5826,9 +5417,7 @@ mod tests {
         end
         [Baz.new].inspect
         "##,
-        );
-        // User-defined inspect inside nested structures
-        run_test(
+            // User-defined inspect inside nested structures
             r##"
         class MyObj
           def inspect
@@ -5837,7 +5426,7 @@ mod tests {
         end
         [[MyObj.new], {k: MyObj.new}].inspect
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -5856,103 +5445,77 @@ mod tests {
 
     #[test]
     fn slice_bang_integer() {
-        run_test(
+        run_tests(&[
             r##"
         a = [1, 2, 3, 4, 5]
         [a.slice!(2), a]
         "##,
-        );
+        ]);
     }
 
     #[test]
     fn index_assign_negative() {
-        run_test(r##"a = [1,2,3,4,5]; a[-2, 2] = []; a"##);
-        run_test(r##"a = [1,2,3,4,5]; a[-3, 1] = [99]; a"##);
-        run_test(r##"a = [1,2,3,4,5]; a[-5, 3] = [:a, :b]; a"##);
-        run_test(r##"a = [1,2,3,4,5]; a[-1, 1] = [:x, :y, :z]; a"##);
-        run_test(r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##);
+        run_tests(&[
+            r##"a = [1,2,3,4,5]; a[-2, 2] = []; a"##,
+            r##"a = [1,2,3,4,5]; a[-3, 1] = [99]; a"##,
+            r##"a = [1,2,3,4,5]; a[-5, 3] = [:a, :b]; a"##,
+            r##"a = [1,2,3,4,5]; a[-1, 1] = [:x, :y, :z]; a"##,
+            r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##,
+        ]);
         run_test_error(r##"a = [1,2,3]; a[-4, 1] = []"##);
     }
 
     #[test]
     fn index_assign_self() {
-        // Self-assignment: b[start, length] = b
-        run_test(r##"b = [1, 2, 3, 4, 5]; b[1, 0] = b; b"##);
-        run_test(r##"b = [1, 2, 3, 4, 5]; b[0, 5] = b; b"##);
-        run_test(r##"b = [1, 2, 3, 4, 5]; b[2, 2] = b; b"##);
-        run_test(r##"b = [1, 2, 3]; b[0, 0] = b; b"##);
-        run_test(r##"b = [1]; b[0, 1] = b; b"##);
-        // Self-assignment via range
-        run_test(r##"b = [1, 2, 3, 4, 5]; b[1..2] = b; b"##);
-        run_test(r##"b = [1, 2, 3]; b[0..0] = b; b"##);
-    }
-
-    #[test]
-    fn index_assign_range_end_less_than_start() {
-        // end < start with range: treated as zero-length insert at start
-        run_test(r##"a = [1, 2, 3, 4, 5]; a[3..1] = [:a, :b]; a"##);
-        // start beyond array size: fills with nil then inserts
-        run_test(r##"a = [1, 2, 3]; a[5..2] = [99]; a"##);
-        run_test(r##"a = [1, 2, 3]; a[5..2] = 42; a"##);
-    }
-
-    #[test]
-    fn replace() {
-        run_test(r##"a = [1,2,3]; b = [4,5]; a.replace(b); [a, b]"##);
-        run_test(r##"a = [1,2,3]; a.replace([]); a"##);
-        run_test(r##"a = []; a.replace([1,2,3]); a"##);
-        run_test(r##"a = [1,2,3]; a.replace(a); a"##);
-    }
-
-    #[test]
-    fn cycle() {
-        run_test(
+        run_tests(&[
+            // Self-assignment: b[start, length] = b
+            r##"b = [1, 2, 3, 4, 5]; b[1, 0] = b; b"##,
+            r##"b = [1, 2, 3, 4, 5]; b[0, 5] = b; b"##,
+            r##"b = [1, 2, 3, 4, 5]; b[2, 2] = b; b"##,
+            r##"b = [1, 2, 3]; b[0, 0] = b; b"##,
+            r##"b = [1]; b[0, 1] = b; b"##,
+            // Self-assignment via range
+            r##"b = [1, 2, 3, 4, 5]; b[1..2] = b; b"##,
+            r##"b = [1, 2, 3]; b[0..0] = b; b"##,
+            // end < start with range: treated as zero-length insert at start
+            r##"a = [1, 2, 3, 4, 5]; a[3..1] = [:a, :b]; a"##,
+            // start beyond array size: fills with nil then inserts
+            r##"a = [1, 2, 3]; a[5..2] = [99]; a"##,
+            r##"a = [1, 2, 3]; a[5..2] = 42; a"##,
+            r##"a = [1,2,3]; b = [4,5]; a.replace(b); [a, b]"##,
+            r##"a = [1,2,3]; a.replace([]); a"##,
+            r##"a = []; a.replace([1,2,3]); a"##,
+            r##"a = [1,2,3]; a.replace(a); a"##,
             r##"
             res = []
             [1,2,3].cycle(2) { |x| res << x }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2].cycle(0) { |x| res << x }
             res
             "##,
-        );
-        run_test("[].cycle(3) { |x| x }");
-    }
-
-    #[test]
-    fn combination() {
-        run_test(
+            "[].cycle(3) { |x| x }",
             r##"
             res = []
             [1,2,3,4].combination(2) { |c| res << c }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2,3].combination(0) { |c| res << c }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2,3].combination(1) { |c| res << c }
             res
             "##,
-        );
-    }
-
-    #[test]
-    fn bsearch_index() {
-        run_test("[1,2,3,4,5].bsearch_index { |x| x >= 3 }");
-        run_test("[1,2,3,4,5].bsearch_index { |x| x >= 6 }");
-        run_test("[1,3,5,7,9].bsearch_index { |x| x <=> 5 }");
+            "[1,2,3,4,5].bsearch_index { |x| x >= 3 }",
+            "[1,2,3,4,5].bsearch_index { |x| x >= 6 }",
+            "[1,3,5,7,9].bsearch_index { |x| x <=> 5 }",
+        ]);
     }
 
     #[test]
@@ -6010,56 +5573,42 @@ mod tests {
 
     #[test]
     fn permutation() {
-        run_test(
+        run_tests(&[
             r##"
             res = []
             [1,2,3].permutation(2) { |p| res << p }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2,3].permutation { |p| res << p }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2,3].permutation(0) { |p| res << p }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2,3].permutation(1) { |p| res << p }
             res
             "##,
-        );
-        run_test("[1,2,3].permutation(4).to_a");
-        run_test("[1,2,3].permutation(-1).to_a");
-    }
-
-    #[test]
-    fn repeated_combination() {
-        run_test(
+            "[1,2,3].permutation(4).to_a",
+            "[1,2,3].permutation(-1).to_a",
             r##"
             res = []
             [1,2,3].repeated_combination(2) { |c| res << c }
             res
             "##,
-        );
-        run_test(
             r##"
             res = []
             [1,2].repeated_combination(3) { |c| res << c }
             res
             "##,
-        );
-        run_test("[1,2,3].repeated_combination(0).to_a");
-        run_test("[1,2,3].repeated_combination(1).to_a");
+            "[1,2,3].repeated_combination(0).to_a",
+            "[1,2,3].repeated_combination(1).to_a",
+        ]);
     }
 
     #[test]
@@ -6106,21 +5655,24 @@ mod tests {
 
     #[test]
     fn pack_hex() {
-        run_test(r#"["6162"].pack("h4")"#);
-        run_test(r#"["6162"].pack("H4")"#);
-        run_test(r#"["6162636465"].pack("h*")"#);
-        run_test(r#"["6162636465"].pack("H*")"#);
-        run_test(r#""\x16\x26".unpack("h4")"#);
-        run_test(r#""\x61\x62".unpack("H4")"#);
+        run_tests(&[
+            r#"["6162"].pack("h4")"#,
+            r#"["6162"].pack("H4")"#,
+            r#"["6162636465"].pack("h*")"#,
+            r#"["6162636465"].pack("H*")"#,
+            r#""\x16\x26".unpack("h4")"#,
+            r#""\x61\x62".unpack("H4")"#,
+        ]);
     }
 
     // ===== Tests for new methods =====
-
     #[test]
     fn array_class_bracket() {
-        run_test("Array[1, 2, 3]");
-        run_test("Array[]");
-        run_test("Array[42]");
+        run_tests(&[
+            "Array[1, 2, 3]",
+            "Array[]",
+            "Array[42]",
+        ]);
         // Subclass support
         run_test_with_prelude("A[1, 2, 3]", "class A < Array; end");
         run_test_with_prelude("A[1, 2, 3].class", "class A < Array; end");
@@ -6128,9 +5680,11 @@ mod tests {
 
     #[test]
     fn array_try_convert() {
-        run_test("Array.try_convert([1, 2])");
-        run_test("Array.try_convert(nil)");
-        run_test(r#"Array.try_convert("string")"#);
+        run_tests(&[
+            "Array.try_convert([1, 2])",
+            "Array.try_convert(nil)",
+            r#"Array.try_convert("string")"#,
+        ]);
         // Object with to_ary
         run_test_with_prelude(
             "Array.try_convert(C.new)",
@@ -6144,66 +5698,44 @@ mod tests {
 
     #[test]
     fn array_at() {
-        run_test("[1, 2, 3].at(0)");
-        run_test("[1, 2, 3].at(1)");
-        run_test("[1, 2, 3].at(-1)");
-        run_test("[1, 2, 3].at(5)");
-    }
-
-    #[test]
-    fn array_rindex() {
-        // With value argument
-        run_test("[1, 2, 3, 2, 1].rindex(2)");
-        run_test("[1, 2, 3].rindex(4)");
-        // With block
-        run_test("[1, 2, 3, 4].rindex {|x| x > 2}");
-        run_test("[1, 2, 3].rindex {|x| x > 10}");
-    }
-
-    #[test]
-    fn array_each_index() {
-        run_test("res = []; [10, 20, 30].each_index {|i| res << i}; res");
-        run_test("[].each_index {|i| i}");
-    }
-
-    #[test]
-    fn array_difference() {
-        run_test("[1, 2, 3, 4, 5].difference([2, 4])");
-        run_test("[1, 2, 3].difference([1], [3])");
-        run_test("[1, 2, 3].difference([])");
-        run_test("[1, 2, 3].difference()");
-        // Duplicates preserved from self
-        run_test("[1, 1, 2, 2, 3].difference([1])");
-    }
-
-    #[test]
-    fn array_intersection() {
-        run_test("[1, 2, 3, 4].intersection([2, 3, 5])");
-        run_test("[1, 2, 3].intersection([2, 3], [3, 4])");
-        run_test("[1, 2, 3].intersection([])");
-        // Duplicates removed
-        run_test("[1, 1, 2, 2].intersection([1, 2])");
-    }
-
-    #[test]
-    fn array_repeated_permutation() {
-        run_test("[1, 2].repeated_permutation(2).to_a.sort");
-        run_test("[1, 2, 3].repeated_permutation(0).to_a");
-        run_test("[1, 2].repeated_permutation(1).to_a.sort");
-        run_test("[].repeated_permutation(2).to_a");
-    }
-
-    #[test]
-    fn array_join_nil_separator() {
-        run_test("[1, 2, 3].join(nil)");
-        run_test("[1, 2, 3].join");
-        run_test(r#"[1, 2, 3].join("-")"#);
-        run_test("[].join(nil)");
-        // nested arrays use same separator
-        run_test(r#"[[1, [2]], 3].join("-")"#);
-        // * with string acts like join
-        run_test(r#"[1, 2, 3] * ",""#);
-        run_test(r#"[[1, 2], [3, 4]] * "-""#);
+        run_tests(&[
+            "[1, 2, 3].at(0)",
+            "[1, 2, 3].at(1)",
+            "[1, 2, 3].at(-1)",
+            "[1, 2, 3].at(5)",
+            // With value argument
+            "[1, 2, 3, 2, 1].rindex(2)",
+            "[1, 2, 3].rindex(4)",
+            // With block
+            "[1, 2, 3, 4].rindex {|x| x > 2}",
+            "[1, 2, 3].rindex {|x| x > 10}",
+            "res = []; [10, 20, 30].each_index {|i| res << i}; res",
+            "[].each_index {|i| i}",
+            "[1, 2, 3, 4, 5].difference([2, 4])",
+            "[1, 2, 3].difference([1], [3])",
+            "[1, 2, 3].difference([])",
+            "[1, 2, 3].difference()",
+            // Duplicates preserved from self
+            "[1, 1, 2, 2, 3].difference([1])",
+            "[1, 2, 3, 4].intersection([2, 3, 5])",
+            "[1, 2, 3].intersection([2, 3], [3, 4])",
+            "[1, 2, 3].intersection([])",
+            // Duplicates removed
+            "[1, 1, 2, 2].intersection([1, 2])",
+            "[1, 2].repeated_permutation(2).to_a.sort",
+            "[1, 2, 3].repeated_permutation(0).to_a",
+            "[1, 2].repeated_permutation(1).to_a.sort",
+            "[].repeated_permutation(2).to_a",
+            "[1, 2, 3].join(nil)",
+            "[1, 2, 3].join",
+            r#"[1, 2, 3].join("-")"#,
+            "[].join(nil)",
+            // nested arrays use same separator
+            r#"[[1, [2]], 3].join("-")"#,
+            // * with string acts like join
+            r#"[1, 2, 3] * ",""#,
+            r#"[[1, 2], [3, 4]] * "-""#,
+        ]);
     }
 
     #[test]
@@ -6222,9 +5754,9 @@ mod tests {
 
     #[test]
     fn join_empty_array_us_ascii() {
-        // CRuby tags `[].join` (and `[].join(sep)`) as US-ASCII
-        // — the universal "no content" encoding — not UTF-8.
         run_tests(&[
+            // CRuby tags `[].join` (and `[].join(sep)`) as US-ASCII
+            // — the universal "no content" encoding — not UTF-8.
             r#"[].join.encoding.name"#,
             r#"[].join("xxx").encoding.name"#,
             r#"[].join.bytes"#,
@@ -6249,11 +5781,11 @@ mod tests {
 
     #[test]
     fn join_left_wins_on_seven_bit() {
-        // The first emitted fragment seeds the running encoding,
-        // so a UTF-8 head + US-ASCII tail (both 7-bit clean) stays
-        // UTF-8 (used to drop to US-ASCII). Pure US-ASCII stays
-        // US-ASCII.
         run_tests(&[
+            // The first emitted fragment seeds the running encoding,
+            // so a UTF-8 head + US-ASCII tail (both 7-bit clean) stays
+            // UTF-8 (used to drop to US-ASCII). Pure US-ASCII stays
+            // US-ASCII.
             r#"["bar", "foo".dup.force_encoding("US-ASCII")].join.encoding.name"#,
             r#"a = "x".dup.force_encoding("US-ASCII"); b = "y".dup.force_encoding("US-ASCII"); [a, b].join.encoding.name"#,
         ]);
@@ -6288,11 +5820,13 @@ mod tests {
 
     #[test]
     fn bsearch_nil_result() {
-        // nil block result treated as find-minimum (false)
-        run_test("[1, 2, 3].bsearch { nil }");
-        run_test("[1, 2, 3].bsearch_index { nil }");
-        // empty block => nil
-        run_test("[1, 2, 3, 4].bsearch { |x| nil }");
+        run_tests(&[
+            // nil block result treated as find-minimum (false)
+            "[1, 2, 3].bsearch { nil }",
+            "[1, 2, 3].bsearch_index { nil }",
+            // empty block => nil
+            "[1, 2, 3, 4].bsearch { |x| nil }",
+        ]);
     }
 
     #[test]
@@ -6314,8 +5848,10 @@ mod tests {
 
     #[test]
     fn index_ignores_block_with_arg() {
-        run_test("[1, 2, 3].index(2) { |x| false }");
-        run_test("[1, 2, 3].rindex(2) { |x| false }");
+        run_tests(&[
+            "[1, 2, 3].index(2) { |x| false }",
+            "[1, 2, 3].rindex(2) { |x| false }",
+        ]);
     }
 
     #[test]
@@ -6326,24 +5862,28 @@ mod tests {
 
     #[test]
     fn values_at_range_padding() {
-        run_test("[1, 2, 3].values_at(1..5)");
-        run_test("[].values_at(0..2)");
-        run_test("[1, 2, 3, 4, 5].values_at(1..3)");
-        // endless range
-        run_test("[1, 2, 3, 4].values_at(1..)");
-        run_test("[1, 2, 3, 4].values_at(3...)");
-        run_test("[1, 2, 3].values_at(0...5)");
+        run_tests(&[
+            "[1, 2, 3].values_at(1..5)",
+            "[].values_at(0..2)",
+            "[1, 2, 3, 4, 5].values_at(1..3)",
+            // endless range
+            "[1, 2, 3, 4].values_at(1..)",
+            "[1, 2, 3, 4].values_at(3...)",
+            "[1, 2, 3].values_at(0...5)",
+        ]);
     }
 
     #[test]
     fn cycle_to_int_and_size() {
-        run_test("[1, 2, 3].cycle(2).to_a");
-        run_test("[1, 2, 3].cycle(0).to_a");
-        run_test("[].cycle(5).to_a");
-        // Enumerator size
-        run_test("[1, 2, 3].cycle(2).size");
-        run_test("[1, 2, 3].cycle(0).size");
-        run_test("[].cycle(2).size");
+        run_tests(&[
+            "[1, 2, 3].cycle(2).to_a",
+            "[1, 2, 3].cycle(0).to_a",
+            "[].cycle(5).to_a",
+            // Enumerator size
+            "[1, 2, 3].cycle(2).size",
+            "[1, 2, 3].cycle(0).size",
+            "[].cycle(2).size",
+        ]);
         run_test_no_result_check("[1, 2].cycle.size");
     }
 
@@ -6363,30 +5903,30 @@ mod tests {
 
     #[test]
     fn pattern_arg_ignores_block() {
-        run_test("[1, 2, 3].all?(Integer) { |x| false }");
-        run_test("[1, 2, 3].any?(String) { |x| true }");
-        run_test("[1, 2, 3].count(1) { |x| true }");
-        run_test("[1, 2, 3].none?(String) { |x| true }");
-        run_test("[1, 2, 3].one?(1) { |x| false }");
-    }
-
-    #[test]
-    fn minmax_with_block() {
-        run_test("[1, 3, 2].minmax");
-        run_test("[1, 3, 2].minmax { |a, b| b <=> a }");
-        run_test("[].minmax");
-        run_test("[5].minmax");
+        run_tests(&[
+            "[1, 2, 3].all?(Integer) { |x| false }",
+            "[1, 2, 3].any?(String) { |x| true }",
+            "[1, 2, 3].count(1) { |x| true }",
+            "[1, 2, 3].none?(String) { |x| true }",
+            "[1, 2, 3].one?(1) { |x| false }",
+            "[1, 3, 2].minmax",
+            "[1, 3, 2].minmax { |a, b| b <=> a }",
+            "[].minmax",
+            "[5].minmax",
+        ]);
     }
 
     #[test]
     fn sample() {
-        // sample without arguments returns a single element
-        run_test("[1].sample");
-        run_test("[].sample");
-        // sample(n) returns an array of n elements
-        run_test("[1, 2, 3, 4, 5].sample(0)");
-        run_test("[1, 2, 3].sample(1).size");
-        run_test("[1, 2, 3].sample(5).sort");
+        run_tests(&[
+            // sample without arguments returns a single element
+            "[1].sample",
+            "[].sample",
+            // sample(n) returns an array of n elements
+            "[1, 2, 3, 4, 5].sample(0)",
+            "[1, 2, 3].sample(1).size",
+            "[1, 2, 3].sample(5).sort",
+        ]);
         run_test_no_result_check("[1, 2, 3, 4, 5].sample(3).size");
         // sample with negative n raises error
         run_test_error("[1, 2, 3].sample(-1)");
@@ -6415,148 +5955,110 @@ mod tests {
 
     #[test]
     fn fetch_values() {
-        run_test("[10, 20, 30].fetch_values(0, 2)");
-        run_test("[10, 20, 30].fetch_values(0, -1)");
-        run_test("[10, 20, 30].fetch_values");
-        // with block for missing indices
-        run_test("[10, 20, 30].fetch_values(0, 5) { |i| i * 100 }");
+        run_tests(&[
+            "[10, 20, 30].fetch_values(0, 2)",
+            "[10, 20, 30].fetch_values(0, -1)",
+            "[10, 20, 30].fetch_values",
+            // with block for missing indices
+            "[10, 20, 30].fetch_values(0, 5) { |i| i * 100 }",
+        ]);
         // error for out-of-range without block
         run_test_error("[10, 20, 30].fetch_values(0, 5)");
     }
 
     #[test]
     fn min_max_with_block() {
-        // min with block
-        run_test("[2, 33, 4, 11].min {|a, b| a <=> b}");
-        run_test(r#"["2","33","4","11"].min {|a,b| a.length <=> b.length}"#);
-        run_test("[2, 33, 4, 11].min {|a, b| b <=> a}");
-        // max with block
-        run_test("[2, 33, 4, 11].max {|a, b| a <=> b}");
-        run_test(r#"["2","33","4","11"].max {|a,b| a.length <=> b.length}"#);
-        run_test("[2, 33, 4, 11].max {|a, b| b <=> a}");
-        // block returning constant
-        run_test("[1, 2, 3, 4].min {|a,b| 15}");
-        run_test("[1, 2, 3, 4].max {|a,b| 15}");
+        run_tests(&[
+            // min with block
+            "[2, 33, 4, 11].min {|a, b| a <=> b}",
+            r#"["2","33","4","11"].min {|a,b| a.length <=> b.length}"#,
+            "[2, 33, 4, 11].min {|a, b| b <=> a}",
+            // max with block
+            "[2, 33, 4, 11].max {|a, b| a <=> b}",
+            r#"["2","33","4","11"].max {|a,b| a.length <=> b.length}"#,
+            "[2, 33, 4, 11].max {|a, b| b <=> a}",
+            // block returning constant
+            "[1, 2, 3, 4].min {|a,b| 15}",
+            "[1, 2, 3, 4].max {|a,b| 15}",
+        ]);
         // nil block result raises ArgumentError
         run_test_error("[11, 12, 22, 33].min {|a, b| nil}");
         run_test_error("[11, 12, 22, 33].max {|a, b| nil}");
-        // empty array
-        run_test("[].min {|a,b| a <=> b}");
-        run_test("[].max {|a,b| a <=> b}");
+        run_tests(&[
+            // empty array
+            "[].min {|a,b| a <=> b}",
+            "[].max {|a,b| a <=> b}",
+        ]);
     }
 
     #[test]
     fn assoc() {
-        run_test(
+        run_tests(&[
             r#"
             s1 = [1, 2]
             s2 = [2, 3]
             a = [s1, s2]
             [a.assoc(1), a.assoc(2), a.assoc(42)]
             "#,
-        );
-        // ignores non-array elements
-        run_test(r#"["foo", [1, 2], [3, 4]].assoc(3)"#);
-        run_test(r#"["foo", [1, 2], [3, 4]].assoc("bar")"#);
-    }
-
-    #[test]
-    fn rassoc() {
-        run_test(
+            // ignores non-array elements
+            r#"["foo", [1, 2], [3, 4]].assoc(3)"#,
+            r#"["foo", [1, 2], [3, 4]].assoc("bar")"#,
             r#"
             a = [[1, "one"], [2, "two"], [3, "three"]]
             [a.rassoc("two"), a.rassoc("four")]
             "#,
-        );
-        // ignores non-array elements
-        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(4)"#);
-        run_test(r#"["foo", [1, 2], [3, 4]].rassoc(99)"#);
-    }
-
-    #[test]
-    fn keep_if() {
-        run_test(
+            // ignores non-array elements
+            r#"["foo", [1, 2], [3, 4]].rassoc(4)"#,
+            r#"["foo", [1, 2], [3, 4]].rassoc(99)"#,
             r#"
             a = [1, 2, 3, 4, 5]
             a.keep_if { |x| x > 2 }
             a
             "#,
-        );
-        // returns self even when no changes
-        run_test(
+            // returns self even when no changes
             r#"
             a = [1, 2, 3]
             a.keep_if { |x| true }.equal?(a)
             "#,
-        );
-        run_test("[1, 2, 3].keep_if { |x| x.odd? }");
-    }
-
-    #[test]
-    fn append_method() {
-        run_test("[1, 2].append(3, 4)");
-        run_test("[].append(1)");
-        run_test(
+            "[1, 2, 3].keep_if { |x| x.odd? }",
+            "[1, 2].append(3, 4)",
+            "[].append(1)",
             r#"
             a = [1]
             a.append(2, 3)
             a
             "#,
-        );
-    }
-
-    #[test]
-    fn drop_while() {
-        run_test("[1, 2, 3, 4, 5].drop_while { |x| x < 3 }");
-        run_test("[1, 2, 3].drop_while { |x| true }");
-        run_test("[1, 2, 3].drop_while { |x| false }");
-        run_test("[].drop_while { |x| true }");
-    }
-
-    #[test]
-    fn to_ary() {
-        run_test("[1, 2, 3].to_ary");
-        run_test(
+            "[1, 2, 3, 4, 5].drop_while { |x| x < 3 }",
+            "[1, 2, 3].drop_while { |x| true }",
+            "[1, 2, 3].drop_while { |x| false }",
+            "[].drop_while { |x| true }",
+            "[1, 2, 3].to_ary",
             r#"
             a = [1, 2]
             a.to_ary.equal?(a)
             "#,
-        );
-    }
-
-    #[test]
-    fn deconstruct() {
-        run_test("[1, 2, 3].deconstruct");
-        run_test(
+            "[1, 2, 3].deconstruct",
             r#"
             a = [1, 2]
             a.deconstruct.equal?(a)
             "#,
-        );
-    }
-
-    #[test]
-    fn frozen_returns_enumerator_without_block() {
-        // filter!/select! on frozen array without block should return Enumerator
-        run_test(r#"[1,2,3].freeze.select!.class"#);
-        run_test(r#"[1,2,3].freeze.filter!.class"#);
-        // keep_if on frozen array without block should return Enumerator
-        run_test(r#"[1,2,3].freeze.keep_if.class"#);
-        // reject! on frozen array without block should return Enumerator
-        run_test(r#"[1,2,3].freeze.reject!.class"#);
-        // delete_if on frozen array without block should return Enumerator
-        run_test(r#"[1,2,3].freeze.delete_if.class"#);
-        // sort_by! on frozen array without block should return Enumerator
-        run_test(r#"[1,2,3].freeze.sort_by!.class"#);
-    }
-
-    #[test]
-    fn all_any_ignore_block_with_pattern() {
-        // When pattern argument is given, block should be ignored
-        run_test(r#"[1, 2, 3].all?(Integer) { |x| false }"#);
-        run_test(r#"[1, 2, 3].any?(String) { |x| true }"#);
-        run_test(r#"[1, 2, 3].none?(String) { |x| true }"#);
-        run_test(r#"[1, 2, 3].one?(Integer) { |x| false }"#);
-        run_test(r#"[1, 2, 3].count(2) { |x| true }"#);
+            // filter!/select! on frozen array without block should return Enumerator
+            r#"[1,2,3].freeze.select!.class"#,
+            r#"[1,2,3].freeze.filter!.class"#,
+            // keep_if on frozen array without block should return Enumerator
+            r#"[1,2,3].freeze.keep_if.class"#,
+            // reject! on frozen array without block should return Enumerator
+            r#"[1,2,3].freeze.reject!.class"#,
+            // delete_if on frozen array without block should return Enumerator
+            r#"[1,2,3].freeze.delete_if.class"#,
+            // sort_by! on frozen array without block should return Enumerator
+            r#"[1,2,3].freeze.sort_by!.class"#,
+            // When pattern argument is given, block should be ignored
+            r#"[1, 2, 3].all?(Integer) { |x| false }"#,
+            r#"[1, 2, 3].any?(String) { |x| true }"#,
+            r#"[1, 2, 3].none?(String) { |x| true }"#,
+            r#"[1, 2, 3].one?(Integer) { |x| false }"#,
+            r#"[1, 2, 3].count(2) { |x| true }"#,
+        ]);
     }
 }
