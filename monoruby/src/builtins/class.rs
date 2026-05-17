@@ -1071,8 +1071,7 @@ mod tests {
     #[test]
     fn unmatch_operator() {
         // Default !~ (negation of =~)
-        run_test(r#""hello" !~ /ell/"#);
-        run_test(r#""hello" !~ /xyz/"#);
+        run_tests(&[r#""hello" !~ /ell/"#, r#""hello" !~ /xyz/"#]);
         // Override both =~ and !~
         run_test(
             r#"
