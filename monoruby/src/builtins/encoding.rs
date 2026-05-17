@@ -145,12 +145,10 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "MacThai",
         "MacTurkish",
         "MacUkraine",
-        // `UTF8_MAC` (and the legacy `UTF_8_MAC` spelling) is
-        // CRuby's HFS+/macOS-NFD UTF-8 variant. We expose both
-        // constant identifiers so spec setup resolves; the
-        // underlying transcoder treats them as a UTF-8 alias.
+        // `UTF8_MAC` is CRuby's HFS+/macOS-NFD UTF-8 variant. The
+        // legacy `UTF_8_MAC` spelling is wired as an alias of this
+        // single object below (not a distinct encoding).
         "UTF8_MAC",
-        "UTF_8_MAC",
         // `CESU-8` is a UTF-8 variant used by some legacy systems
         // (encodes supplementary chars as surrogate pairs in
         // UTF-8). We don't transcode it specially; the constant
@@ -215,6 +213,15 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         .get_constant_noautoload(enc.id(), IdentId::UTF_8)
     {
         globals.set_constant_by_str(enc.id(), "CP65001", utf8);
+    }
+    // `UTF_8_MAC` is CRuby's legacy spelling of `UTF8_MAC` — the same
+    // encoding, not a distinct one. Share the object so `Encoding.list`
+    // lists it once and `Encoding.find` round-trips its name.
+    if let Some(utf8_mac) = globals
+        .store
+        .get_constant_noautoload(enc.id(), IdentId::get_id("UTF8_MAC"))
+    {
+        globals.set_constant_by_str(enc.id(), "UTF_8_MAC", utf8_mac);
     }
 
     // Encoding::CompatibilityError < EncodingError < StandardError.
@@ -2491,15 +2498,34 @@ fn enc_err_incomplete_input_p(
 #[monoruby_builtin]
 fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let enc_class = encoding_class(globals);
-    let utf8 = globals
-        .store
-        .get_constant_noautoload(enc_class, IdentId::UTF_8)
-        .unwrap_or(Value::nil());
-    let ascii = globals
-        .store
-        .get_constant_noautoload(enc_class, IdentId::ASCII_8BIT)
-        .unwrap_or(Value::nil());
-    Ok(Value::array2(utf8, ascii))
+    // Every `Encoding::*` constant whose value is an `Encoding`
+    // instance, listed once per distinct encoding object (aliases such
+    // as `BINARY`/`ASCII-8BIT` share an object, so they collapse to a
+    // single entry). The error subclasses (`CompatibilityError`, …) are
+    // `Class` values and are filtered out by the class check.
+    let names = globals.store.get_constant_names(enc_class);
+    let mut seen: Vec<u64> = Vec::new();
+    let mut out: Vec<(String, Value)> = Vec::new();
+    for name in names {
+        if let Some(v) = globals.store.get_constant_noautoload(enc_class, name) {
+            if v.class() == enc_class {
+                let id = v.id();
+                if !seen.contains(&id) {
+                    seen.push(id);
+                    let ename = globals
+                        .store
+                        .get_ivar(v, IdentId::_ENCODING)
+                        .and_then(|s| s.is_str().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    out.push((ename, v));
+                }
+            }
+        }
+    }
+    // `constants` is backed by a `HashMap`; sort by canonical name for
+    // a stable, reproducible order.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(Value::array_from_vec(out.into_iter().map(|(_, v)| v).collect()))
 }
 
 ///
@@ -2519,7 +2545,27 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(arg0);
     }
     let name = arg0.coerce_to_string(vm, globals)?;
-    // Resolve special names first
+    // First, try an exact (separator/case-insensitive) match against
+    // the canonical name of every registered encoding. This lets
+    // `Encoding.find(e.name)` round-trip for *every* encoding in
+    // `Encoding.list` (the hand-maintained `enc_name_to_const` table
+    // below only covers common aliases and would mis-resolve names
+    // like "Big5-HKSCS" to a prefix match).
+    let norm = |s: &str| s.to_uppercase().replace(['-', '_'], "");
+    let want = norm(&name);
+    for cname in globals.store.get_constant_names(enc_class) {
+        if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
+            && v.class() == enc_class
+            && let Some(es) = globals
+                .store
+                .get_ivar(v, IdentId::_ENCODING)
+                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
+            && norm(&es) == want
+        {
+            return Ok(v);
+        }
+    }
+    // Fall back to the alias / pseudo-name table (LOCALE, UTF8, …).
     let const_name = enc_name_to_const(&name);
     let result = if let Some(c) = const_name {
         globals
@@ -2801,15 +2847,37 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
 #[monoruby_builtin]
 fn enc_name_list(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let mut seen: Vec<String> = Vec::new();
     let mut names: Vec<Value> = Vec::new();
+    let mut add = |names: &mut Vec<Value>, seen: &mut Vec<String>, s: &str| {
+        if !seen.iter().any(|x| x == s) {
+            seen.push(s.to_string());
+            names.push(Value::string_from_str(s));
+        }
+    };
     for (canonical, aliases) in ENCODING_NAMES {
-        names.push(Value::string_from_str(canonical));
+        add(&mut names, &mut seen, canonical);
         for alias in *aliases {
-            names.push(Value::string_from_str(alias));
+            add(&mut names, &mut seen, alias);
+        }
+    }
+    // Also include the canonical name of every encoding exposed by
+    // `Encoding.list` so `name_list` is a superset of it (spec:
+    // "name_list includes all non-dummy encodings").
+    let enc_class = encoding_class(globals);
+    for cname in globals.store.get_constant_names(enc_class) {
+        if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
+            && v.class() == enc_class
+            && let Some(es) = globals
+                .store
+                .get_ivar(v, IdentId::_ENCODING)
+                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
+        {
+            add(&mut names, &mut seen, &es);
         }
     }
     Ok(Value::array_from_iter(names.into_iter()))
@@ -4120,6 +4188,30 @@ mod tests {
             // Regexp pairs use the declared encoding of the source.
             r#"Encoding.compatible?(/abc/, /def/).to_s"#,
             r#"Encoding.compatible?("abc", /def/).to_s"#,
+        ]);
+    }
+
+    #[test]
+    fn encoding_list_completeness() {
+        run_tests(&[
+            // `Encoding.list` is a non-trivial Array of Encoding
+            // instances, each listed once.
+            r#"Encoding.list.class.name"#,
+            r#"Encoding.list.all? { |e| e.is_a?(Encoding) }"#,
+            r#"Encoding.list.map(&:name) == Encoding.list.map(&:name).uniq"#,
+            r#"Encoding.list.include?(Encoding::UTF_8)"#,
+            r#"Encoding.list.include?(Encoding::CESU_8)"#,
+            r#"Encoding.list.include?(Encoding.default_external)"#,
+            // Dummy / non-ASCII-compatible selections are non-empty.
+            r#"Encoding.list.any?(&:dummy?)"#,
+            r#"Encoding.list.reject(&:ascii_compatible?).any?"#,
+            // `Encoding.find(e.name)` round-trips for every encoding.
+            r#"Encoding.list.all? { |e| Encoding.find(e.name).equal?(e) }"#,
+            r#"Encoding.find("Big5-HKSCS").name"#,
+            r#"Encoding.find("UTF-8-MAC").equal?(Encoding::UTF8_MAC)"#,
+            r#"Encoding::UTF_8_MAC.equal?(Encoding::UTF8_MAC)"#,
+            // `name_list` is a superset of every listed encoding name.
+            r#"Encoding.list.all? { |e| Encoding.name_list.include?(e.name) }"#,
         ]);
     }
 }
