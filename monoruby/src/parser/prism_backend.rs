@@ -175,11 +175,13 @@ fn try_prism_inner(
         // Prism side too.
         lowerer.lvars = seed;
     }
-    // The lowerer raises `MonorubyErr::fatal_with_loc(...)` directly
-    // when it hits a node it doesn't handle (see `unsupported_node`),
-    // so we just propagate the error here. Prism parsed the file
-    // fine, so a `SyntaxError` would be misleading; the FatalError
-    // kind ensures it surfaces past Ruby `rescue` handlers.
+    // The lowerer raises a recoverable `SyntaxError` (via
+    // `unsupported_node`) when it hits a node it doesn't handle, so
+    // we just propagate the error here. Prism parsed the file fine,
+    // but the construct is not accepted by this implementation, so
+    // `SyntaxError` is the correct Ruby class and — being `rescue`-
+    // able — a single unsupported construct only fails its own
+    // example instead of aborting the whole process.
     let body = lowerer.lower_top(&result.node())?;
     let lvar_collector = lowerer.into_lvars();
 
@@ -225,12 +227,15 @@ impl<'pr> Lowerer<'pr> {
     }
 
     /// Build the canonical "prism lowerer hit an unsupported node"
-    /// FatalError for a given node-kind tag and source location.
-    /// Carries the lowerer's `SourceInfoRef` so the host's error
-    /// formatter can print the usual `<path>:<line>` prefix and an
-    /// arrow under the offending span.
+    /// error for a given node-kind tag and source location. Emitted
+    /// as a recoverable `SyntaxError` (Prism parsed the file fine,
+    /// but the construct is not accepted by this implementation), so
+    /// one unsupported construct only fails its own example instead
+    /// of aborting the whole process. Carries the lowerer's
+    /// `SourceInfoRef` so the host's error formatter can print the
+    /// usual `<path>:<line>` prefix and an arrow under the span.
     fn unsupported_node(&self, kind: &str, loc: Loc) -> MonorubyErr {
-        MonorubyErr::fatal_with_loc(
+        MonorubyErr::syntax_with_loc(
             format!(
                 "prism lowerer hit an unsupported node `{kind}` while parsing {} \
                  — add a handler in monoruby/src/parser/prism_backend.rs",
@@ -341,6 +346,16 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::CallNode { .. } => self.lower_call(&node.as_call_node().unwrap(), loc)?,
             prism::Node::LocalVariableReadNode { .. } => {
                 self.lower_local_var_read(&node.as_local_variable_read_node().unwrap())?
+            }
+            prism::Node::ItLocalVariableReadNode { .. } => {
+                // Ruby 3.4 `it` reference. Bound by the enclosing
+                // block's synthesized `Param("it")` (see the
+                // `ItParametersNode` arm), always at depth 0.
+                let n = node.as_it_local_variable_read_node().unwrap();
+                Node {
+                    kind: NodeKind::LocalVar(0, "it".to_string()),
+                    loc: location_to_loc(&n.location()),
+                }
             }
             prism::Node::LocalVariableWriteNode { .. } => {
                 self.lower_local_var_write(&node.as_local_variable_write_node().unwrap())?
@@ -535,8 +550,8 @@ impl<'pr> Lowerer<'pr> {
             // `BEGIN { ... }` / `END { ... }`. Full Ruby semantics hoist
             // the body before / after the program; for the common cases
             // (notably `eval("BEGIN { ... }")`) lowering the body inline
-            // at its source position is sufficient and, crucially, does
-            // not abort the process with a FatalError.
+            // at its source position is sufficient and avoids the
+            // unsupported-node path entirely.
             prism::Node::PreExecutionNode { .. } => {
                 let n = node.as_pre_execution_node().unwrap();
                 match n.statements() {
@@ -1860,8 +1875,8 @@ impl<'pr> Lowerer<'pr> {
     /// for constant references. The Prism grammar guarantees every
     /// caller that types this signature receives a constant path
     /// node, so a non-constant root would be a parser bug — we
-    /// surface that as a FatalError rather than silently returning a
-    /// non-Const node.
+    /// surface that as a `SyntaxError` rather than silently returning
+    /// a non-Const node.
     fn lower_const_chain(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let chain = self
@@ -2923,6 +2938,18 @@ impl<'pr> Lowerer<'pr> {
                             let pn = p.as_parameters_node().unwrap();
                             this.lower_parameters(&pn)?
                         }
+                        prism::Node::ItParametersNode { .. } => {
+                            // Ruby 3.4 `it` in a `-> { it }` lambda —
+                            // same single-anonymous-param shape as the
+                            // block-form `ItParametersNode` arm.
+                            let ip = p.as_it_parameters_node().unwrap();
+                            let ip_loc = location_to_loc(&ip.location());
+                            this.lvars.insert("it");
+                            vec![ruruby_parse::FormalParam {
+                                kind: ParamKind::Param("it".to_string()),
+                                loc: ip_loc,
+                            }]
+                        }
                         other => return Err(this.unsupported("lambda parameters", &other)),
                     },
                 };
@@ -3006,6 +3033,24 @@ impl<'pr> Lowerer<'pr> {
                                 this.lvars.numbered_param_max = max as u8;
                             }
                             out
+                        }
+                        prism::Node::ItParametersNode { .. } => {
+                            // Ruby 3.4 `it`: an anonymous single block
+                            // parameter. Prism emits `ItParametersNode`
+                            // on the block and every reference as an
+                            // `ItLocalVariableReadNode`. It behaves
+                            // exactly like an explicit `|it|` (one
+                            // required param, no auto-splat), so we
+                            // synthesize a single `Param("it")` and
+                            // bind the local; the read side lowers to
+                            // `LocalVar(0, "it")`.
+                            let ip = p.as_it_parameters_node().unwrap();
+                            let ip_loc = location_to_loc(&ip.location());
+                            this.lvars.insert("it");
+                            vec![ruruby_parse::FormalParam {
+                                kind: ParamKind::Param("it".to_string()),
+                                loc: ip_loc,
+                            }]
                         }
                         other => return Err(this.unsupported("block parameters", &other)),
                     },
@@ -3898,7 +3943,7 @@ mod tests {
     /// PR #439: prism wraps the body of a file with a
     /// `# shareable_constant_value:` magic comment in a
     /// `ShareableConstantNode`. The lowerer must unwrap it; without
-    /// the handler, parsing fatally errors with "unsupported node".
+    /// the handler, parsing errors with "unsupported node".
     #[test]
     fn shareable_constant_value_literal_parses() {
         let source = "# shareable_constant_value: literal\nFOO = [1, 2, 3]\n".to_owned();
