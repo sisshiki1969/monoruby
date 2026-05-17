@@ -551,7 +551,15 @@ impl Value {
     ///
     pub(crate) fn is_frozen(&self) -> bool {
         match self.try_rvalue() {
-            Some(rv) => rv.is_frozen(),
+            Some(rv) => {
+                // All Numeric values are immutable/frozen in Ruby, including
+                // the heap-allocated ones (Bignum, out-of-range Float,
+                // Complex, Rational).
+                matches!(
+                    rv.ty(),
+                    ObjTy::BIGNUM | ObjTy::FLOAT | ObjTy::COMPLEX | ObjTy::RATIONAL
+                ) || rv.is_frozen()
+            }
             None => true, // packed values are always frozen
         }
     }
@@ -992,6 +1000,10 @@ impl Value {
         RValue::new_string_from_inner(inner).pack()
     }
 
+    pub fn string_from_inner_with_class(inner: RStringInner, class_id: ClassId) -> Self {
+        RValue::new_string_from_inner_with_class(inner, class_id).pack()
+    }
+
     pub fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
@@ -1140,8 +1152,44 @@ impl Value {
         RValue::new_method(receiver, func_id, owner).pack()
     }
 
+    pub fn new_method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue::new_method_named(receiver, func_id, owner, lookup_name, original_name).pack()
+    }
+
+    pub fn new_method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue::new_method_missing_proxy(receiver, mm_func_id, target, owner).pack()
+    }
+
     pub fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue::new_unbound_method(func_id, owner).pack()
+    }
+
+    pub fn new_unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue::new_unbound_method_named(func_id, owner, lookup_name, original_name).pack()
+    }
+
+    pub fn new_unbound_method_missing_proxy(
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue::new_unbound_method_missing_proxy(mm_func_id, target, owner).pack()
     }
 
     pub(crate) fn new_fiber(proc: Proc) -> Self {

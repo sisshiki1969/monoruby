@@ -33,7 +33,7 @@ impl<'a> JitContext<'a> {
                 match lhs_class {
                     None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
                     Some(lhs_class) => self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos,
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
                     ),
                 }
             }
@@ -49,9 +49,9 @@ impl<'a> JitContext<'a> {
                 BinaryOpType::Other(None, _) => {
                     Ok(CompileResult::Recompile(RecompileReason::NotCached))
                 }
-                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
-                }
+                BinaryOpType::Other(Some(lhs_class), rhs_class) => self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
+                ),
             },
         }
     }
@@ -65,6 +65,7 @@ impl<'a> JitContext<'a> {
         lhs: SlotId,
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
@@ -80,9 +81,61 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)
+                if polymorphic {
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    state.def_rax2acc(ir, dst);
+                    Ok(CompileResult::Continue)
+                } else {
+                    // Monomorphic compile (POLY not yet set). Make the
+                    // recv-class guard recompile-on-miss so the site
+                    // flips to the generic path once the VM observes
+                    // class variance (Part B).
+                    self.call_binary_method(
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
+                    )
+                }
             }
         }
+    }
+
+    ///
+    /// Emit a non-deopting polymorphic comparison: a generic
+    /// `cmp_*_values` C-call with **no receiver-class guard**, so the
+    /// site never side-exits on receiver class variance (the rubykon
+    /// `== nil` vs `== Symbol` pattern). The class-version guard is
+    /// kept (it tracks the global class-version counter, not the
+    /// receiver class, so it only fires on a real `==`/`<=>`
+    /// redefinition — never on class variance, which preserves the
+    /// Part B monotone-recompile invariant). Result `Option<Value>`
+    /// is left in rax.
+    ///
+    fn emit_generic_cmp(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) {
+        state.write_back_slots(ir, &[lhs, rhs]);
+        self.guard_class_version(state, ir, true);
+        let error = ir.new_error(state);
+        // Part C: `==`/`!=` get an inline immediate fast path with a
+        // generic C-call fallback; other cmp kinds use the plain
+        // generic C-call (Part 3-B).
+        match kind {
+            CmpKind::Eq | CmpKind::Ne => {
+                ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind))
+            }
+            _ => ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind)),
+        }
+        ir.handle_error(error);
+        // The C helper can run arbitrary Ruby (user-defined `==`,
+        // `coerce`); invalidate cached guards so subsequent
+        // instructions re-establish them.
+        state.unset_class_version_guard();
+        state.unset_const_version_guard();
+        state.unset_side_effect_guard();
     }
 
     pub(super) fn binary_cmp_br(
@@ -95,6 +148,7 @@ impl<'a> JitContext<'a> {
         dest_bb: BasicBlockId,
         brkind: BrKind,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
@@ -125,8 +179,18 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                let res = self
-                    .call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos)?;
+                if polymorphic {
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    let src_idx = bc_pos + 1;
+                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                    return Ok(CompileResult::Continue);
+                }
+                // Monomorphic compile (POLY not yet set): recompile
+                // on recv-class-guard miss so the site flips to the
+                // generic path once class variance is observed.
+                let res = self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
+                )?;
                 if let CompileResult::Continue = res {
                     let src_idx = bc_pos + 1;
                     state.unset_class_version_guard();
@@ -136,6 +200,26 @@ impl<'a> JitContext<'a> {
                 Ok(res)
             }
         }
+    }
+}
+
+///
+/// The generic `Option<Value>`-returning C comparison helper for
+/// *kind* — the same `cmp_*_values` functions the VM's generic
+/// binop path calls. These dispatch the fixnum/float fast paths
+/// internally and fall back to live method lookup for heap objects,
+/// so they never require a receiver-class guard.
+///
+fn cmp_generic_fn(kind: CmpKind) -> crate::executor::BinaryOpFn {
+    use crate::executor::op;
+    match kind {
+        CmpKind::Eq => op::cmp_eq_values,
+        CmpKind::Ne => op::cmp_ne_values,
+        CmpKind::Lt => op::cmp_lt_values,
+        CmpKind::Le => op::cmp_le_values,
+        CmpKind::Gt => op::cmp_gt_values,
+        CmpKind::Ge => op::cmp_ge_values,
+        CmpKind::TEq => op::cmp_teq_values,
     }
 }
 

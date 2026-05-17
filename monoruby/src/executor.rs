@@ -98,6 +98,11 @@ pub struct Executor {
     /// "registering an autoload whose feature is the file currently
     /// being loaded" and treat it as a no-op (matches CRuby).
     loading_paths: Vec<std::path::PathBuf>,
+    /// Identity (`Value::id`) of every `catch` tag whose block is
+    /// currently on the stack. `throw` consults this so an
+    /// unmatched tag raises a rescuable `UncaughtThrowError`
+    /// instead of an uncatchable control-flow error.
+    catch_tags: Vec<u64>,
     /// error information.
     exception: Option<MonorubyErr>,
 }
@@ -120,6 +125,7 @@ impl std::default::Default for Executor {
             temp_stack: vec![],
             require_level: 0,
             loading_paths: vec![],
+            catch_tags: vec![],
             exception: None,
         }
     }
@@ -243,6 +249,18 @@ impl Executor {
 
     pub fn temp_pop(&mut self) -> Value {
         self.temp_stack.pop().unwrap()
+    }
+
+    pub(crate) fn push_catch_tag(&mut self, tag: Value) {
+        self.catch_tags.push(tag.id());
+    }
+
+    pub(crate) fn pop_catch_tag(&mut self) {
+        self.catch_tags.pop();
+    }
+
+    pub(crate) fn is_catch_tag_active(&self, tag: Value) -> bool {
+        self.catch_tags.contains(&tag.id())
     }
 
     /// Read a Value previously pushed onto the temp stack. The bit pattern
@@ -626,6 +644,15 @@ impl Executor {
     }
 
     pub fn context_class_id(&self) -> ClassId {
+        self.class_context_id_opt().unwrap_or(OBJECT_CLASS)
+    }
+
+    /// The class of the innermost runtime cref in the current frame,
+    /// or `None` when no runtime class context is active (a plain
+    /// method body or the top level). `undef` / `alias` use this to
+    /// prefer the `class_eval` / `class`-body definee while still
+    /// falling back to the iseq's captured lexical class.
+    pub fn class_context_id_opt(&self) -> Option<ClassId> {
         self.lexical_class
             .last()
             .unwrap()
@@ -634,7 +661,6 @@ impl Executor {
                 DefinitionContext::Class(class_id) => class_id,
                 DefinitionContext::Receiver(val) => val.class(),
             })
-            .unwrap_or(OBJECT_CLASS)
     }
 
     /// Lexical parent for `module Foo; end` / `class Foo; end` /
@@ -1101,6 +1127,22 @@ impl Executor {
         visibility: Visibility,
     ) -> Result<()> {
         globals.add_method(class_id, name, func_id, visibility);
+        self.invoke_method_added(globals, class_id, name)
+    }
+
+    /// Like `add_method`, but records an explicit *original* definition
+    /// name (used by `define_method` from a Method/UnboundMethod so that
+    /// `Method#original_name` recovers the source method's name).
+    pub(crate) fn add_method_with_original(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+        original_name: IdentId,
+    ) -> Result<()> {
+        globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
         self.invoke_method_added(globals, class_id, name)
     }
 
@@ -1687,7 +1729,7 @@ impl Executor {
         proc: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
-        self.invoke_proc_with_block(globals, proc, args, None)
+        self.invoke_proc_with_block(globals, proc, args, None, None)
     }
 
     pub(crate) fn invoke_proc_with_block(
@@ -1696,6 +1738,7 @@ impl Executor {
         proc: &ProcInner,
         args: &[Value],
         bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
     ) -> Result<Value> {
         let proc = ProcData::from_proc(proc);
         // A proxy BlockHandler encodes its lexical scope as "walk N
@@ -1719,7 +1762,7 @@ impl Executor {
             block_val,
             args.as_ptr(),
             args.len(),
-            None,
+            kw,
         )
         .ok_or_else(|| {
             let err = self.take_error();
@@ -2443,6 +2486,12 @@ pub enum RecompileReason {
     MethodNotFound = 1,
     IvarIdNotFound = 2,
     ClassVersionGuardFailed = 3,
+    /// A monomorphic-compiled BinCmp site's receiver-class guard
+    /// missed after the VM flagged the site polymorphic (POLY bit).
+    /// Recompiling lets `binary_cmp` re-emit it on the non-deopting
+    /// generic-C-call path. Monotone & one-shot: the recompiled site
+    /// has no receiver-class guard, so it can never re-trigger.
+    BecamePolymorphic = 4,
 }
 
 struct Root<'a, 'b> {

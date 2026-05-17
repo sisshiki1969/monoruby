@@ -29,7 +29,9 @@ pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, 
 pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
-pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner};
+pub use string::{
+    CharByteIter, CodeRange, Encoding, RString, RStringInner, eucjp_char_width, sjis_char_width,
+};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
 mod arithmetic_sequence;
@@ -340,9 +342,64 @@ impl ObjKind {
         }
     }
 
+    fn method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner::new_named(
+                receiver,
+                func_id,
+                owner,
+                lookup_name,
+                original_name,
+            )),
+        }
+    }
+
+    fn method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner::new_method_missing(
+                receiver, mm_func_id, target, owner,
+            )),
+        }
+    }
+
+    fn unbound_method_missing_proxy(mm_func_id: FuncId, target: IdentId, owner: ClassId) -> Self {
+        Self {
+            umethod: ManuallyDrop::new(UMethodInner::new_method_missing(
+                mm_func_id, target, owner,
+            )),
+        }
+    }
+
     fn unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         Self {
             umethod: ManuallyDrop::new(UMethodInner::new(func_id, owner)),
+        }
+    }
+
+    fn unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        Self {
+            umethod: ManuallyDrop::new(UMethodInner::new_named(
+                func_id,
+                owner,
+                lookup_name,
+                original_name,
+            )),
         }
     }
 
@@ -622,12 +679,13 @@ impl RValue {
             name.to_s(store)
         } else {
             let mut s = String::new();
-            for (id, v) in self.get_ivars(store).into_iter() {
-                s += &format!(" {id}={}", v.inspect_inner(store, set));
+            for (i, (id, v)) in self.get_ivars(store).into_iter().enumerate() {
+                s += if i == 0 { " " } else { ", " };
+                s += &format!("{id}={}", v.inspect_inner(store, set));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
-                store.get_class_name(self.class()),
+                store.get_class_name(self.real_class(store).id()),
                 self.id()
             )
         }
@@ -1334,6 +1392,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_string_from_inner_with_class(inner: RStringInner, class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::STRING),
+            kind: ObjKind::string_from_inner(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_string_from_str(s: &str) -> Self {
         RValue {
             header: Header::new(STRING_CLASS, ObjTy::STRING),
@@ -1548,10 +1614,62 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_method_named(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue {
+            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
+            kind: ObjKind::method_named(receiver, func_id, owner, lookup_name, original_name),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_method_missing_proxy(
+        receiver: Value,
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue {
+            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
+            kind: ObjKind::method_missing_proxy(receiver, mm_func_id, target, owner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_unbound_method(func_id: FuncId, owner: ClassId) -> Self {
         RValue {
             header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
             kind: ObjKind::unbound_method(func_id, owner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_unbound_method_named(
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue {
+            header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
+            kind: ObjKind::unbound_method_named(func_id, owner, lookup_name, original_name),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_unbound_method_missing_proxy(
+        mm_func_id: FuncId,
+        target: IdentId,
+        owner: ClassId,
+    ) -> Self {
+        RValue {
+            header: Header::new(UMETHOD_CLASS, ObjTy::UMETHOD),
+            kind: ObjKind::unbound_method_missing_proxy(mm_func_id, target, owner),
             var_table: None,
         }
     }

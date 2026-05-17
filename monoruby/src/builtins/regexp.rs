@@ -829,6 +829,9 @@ fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let regexp = self_.is_regex().unwrap();
+    if !regexp.initialized() {
+        return Err(MonorubyErr::typeerr("uninitialized Regexp"));
+    }
     Ok(Value::integer(regexp.option() as i64))
 }
 
@@ -970,13 +973,36 @@ fn regexp_try_convert(
 /// - linear_time?(re) -> bool
 /// - linear_time?(string, options=0) -> bool
 ///
-/// monoruby's regex engine (Onigmo) classifies linear-time vs.
-/// possibly-exponential matchers conservatively. CRuby treats the
-/// vast majority of patterns as linear-time. We don't expose
-/// Onigmo's internal classifier, so return `true` for any pattern
-/// that compiles — the spec only checks for boolean shape.
+/// monoruby's regex engine (Onigmo) does not expose its internal
+/// linear-time classifier. CRuby's `linear_time?` is `false` for
+/// patterns that defeat the linear matcher — backreferences
+/// (`\1`..`\9`, `\k<…>`/`\k'…'`) and subexpression calls (`\g<…>`) —
+/// and `true` otherwise (look-around, atomic groups and possessive
+/// quantifiers all match in linear time). We apply that same
+/// syntactic test, which matches CRuby 4.0.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/linear_time=3f.html]
+fn pattern_is_linear_time(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            // `\1`..`\9` (backref), `\k` (named backref) and `\g`
+            // (subexpression call) force backtracking; every other
+            // escape is linear-time.
+            if let Some(&n) = bytes.get(i + 1) {
+                if (n.is_ascii_digit() && n != b'0') || n == b'k' || n == b'g' {
+                    return false;
+                }
+            }
+            i += 2; // skip the escaped character
+            continue;
+        }
+        i += 1;
+    }
+    true
+}
+
 #[monoruby_builtin]
 fn regexp_linear_time_p(
     vm: &mut Executor,
@@ -985,10 +1011,13 @@ fn regexp_linear_time_p(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg = lfp.arg(0);
-    // If a Regexp is given, options on the second arg are ignored
-    // by CRuby (with a warning); we just accept and ignore.
-    if arg.is_regex().is_some() {
-        return Ok(Value::bool(true));
+    // If a Regexp is given, options on the second arg are ignored by
+    // CRuby (with a warning).
+    if let Some(re) = arg.is_regex() {
+        if lfp.try_arg(1).is_some() {
+            warn_flags_ignored(vm, globals);
+        }
+        return Ok(Value::bool(pattern_is_linear_time(re.as_str())));
     }
     // Otherwise, compile the source to validate the pattern. The
     // option arg may be Integer/String/nil/Boolean — we only need
@@ -1009,8 +1038,8 @@ fn regexp_linear_time_p(
     } else {
         0
     };
-    let _ = RegexpInner::with_option(s, opt)?;
-    Ok(Value::bool(true))
+    let _ = RegexpInner::with_option(s.clone(), opt)?;
+    Ok(Value::bool(pattern_is_linear_time(&s)))
 }
 
 ///
@@ -1551,6 +1580,27 @@ mod tests {
         run_test(r#"Regexp.linear_time?(/abc/)"#);
         run_test(r#"Regexp.linear_time?("abc")"#);
         run_test(r#"Regexp.linear_time?("abc", Regexp::IGNORECASE)"#);
+        // Backreferences are not linear-time; look-around / atomic /
+        // possessive / subexpression-call patterns still are.
+        run_tests(&[
+            r#"Regexp.linear_time?(/(a)\1/)"#,
+            r#"Regexp.linear_time?("(a)\\1")"#,
+            r#"Regexp.linear_time?(/a*(?:(?=a*)a)*b/)"#,
+            r#"Regexp.linear_time?(/a*(?:(?<=a)a*)*b/)"#,
+            r#"Regexp.linear_time?(/.(?<=(a))/)"#,
+            r#"Regexp.linear_time?(/(?<a>a){0}\g<a>/)"#,
+            r#"Regexp.linear_time?(/[\x80-\xff]/n)"#,
+        ]);
+        // Flags are ignored (with a warning) for a Regexp argument.
+        run_test_no_result_check(
+            r#"Regexp.linear_time?(/a/, Regexp::IGNORECASE)"#,
+        );
+    }
+
+    #[test]
+    fn regexp_options_uninitialized() {
+        // `Regexp.allocate` is uninitialized -> `#options` is a TypeError.
+        run_test_error(r#"Regexp.allocate.options"#);
     }
 
     #[test]
@@ -2009,5 +2059,30 @@ mod tests {
               [kept, $~[0], ok, fail]
             "#,
         );
+    }
+
+    #[test]
+    fn regexp_to_s_option_group_folding() {
+        // A whole-pattern-spanning `(?flags:...)` / `(?:...)` wrapper
+        // folds into the outer option block (CRuby `rb_reg_to_s`).
+        run_tests(&[
+            r#"/(?i:nothing outside this group)/.to_s"#,
+            r#"/(?i:.)/.to_s"#,
+            r#"/(?mmmmix-miiiix:)/.to_s"#,
+            r#"/(?:.)/.to_s"#,
+            // No folding when the group does not span the whole pattern.
+            r#"/(?ix:foo)(?m:bar)/.to_s"#,
+            r#"/(?ix:foo)bar/m.to_s"#,
+            r#"/whatever(?:0d)/ix.to_s"#,
+            r#"/(?=5)/.to_s"#,
+            r#"/(?!5)/.to_s"#,
+            // Plain option rendering still correct.
+            r#"/abc/mxi.to_s"#,
+            r#"/abc/i.to_s"#,
+            r#"/abc/.to_s"#,
+            r#"/(a)(b)/.to_s"#,
+            // Char class containing parens must not confuse the scan.
+            r#"/(?i:[()])/.to_s"#,
+        ]);
     }
 }

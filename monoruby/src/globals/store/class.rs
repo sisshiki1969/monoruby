@@ -776,6 +776,20 @@ impl ClassInfoTable {
     }
 
     ///
+    /// Get the method-table entry for *name* defined *directly* on
+    /// *class_id* (no ancestor walk). Used by `Method#super_method` to
+    /// locate the exact node a method (or its visibility shadow / alias)
+    /// is installed on.
+    ///
+    pub(crate) fn own_method_entry(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<&MethodTableEntry> {
+        self[class_id].methods.get(&name)
+    }
+
+    ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
     /// This fn checks whole superclass chain everytime called.
@@ -1539,7 +1553,24 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false)
+        self.add_method_inner(class_id, name, func_id, visibility, false, name)
+    }
+
+    ///
+    /// Add a method whose *original* definition name differs from the
+    /// installed *name* (used by `alias_method` and `define_method`
+    /// from a Method/UnboundMethod, so `Method#original_name` and the
+    /// `#name(original)` inspect form can recover the source name).
+    ///
+    pub(crate) fn add_method_with_original(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        func_id: FuncId,
+        visibility: Visibility,
+        original_name: IdentId,
+    ) {
+        self.add_method_inner(class_id, name, func_id, visibility, false, original_name)
     }
 
     ///
@@ -1554,7 +1585,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, true)
+        self.add_method_inner(class_id, name, func_id, visibility, true, name)
     }
 
     ///
@@ -1569,6 +1600,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
         is_basic_op: bool,
+        original_name: IdentId,
     ) {
         self[func_id].set_owner_class(owner);
         self.insert_method(
@@ -1579,6 +1611,7 @@ impl Store {
                 func_id: Some(func_id),
                 visibility,
                 is_basic_op,
+                original_name,
             },
         );
         #[cfg(feature = "perf")]
@@ -1608,6 +1641,7 @@ impl Store {
                 func_id: None,
                 visibility,
                 is_basic_op: false,
+                original_name: name,
             },
         );
     }
@@ -1770,6 +1804,13 @@ impl Store {
                     if inherited_vis == visibility {
                         continue;
                     }
+                    // Preserve the inherited method's original definition
+                    // name so `Method#original_name` survives a
+                    // `private`/`public` visibility re-declaration.
+                    let original_name = self
+                        .search_method(self[class_id].get_module(), *name)
+                        .map(|e| e.original_name())
+                        .unwrap_or(*name);
                     // Insert a *visibility-modifier* entry that shares
                     // `func_id` with the inherited method but does NOT
                     // change the func's owner_class — otherwise asking
@@ -1784,6 +1825,7 @@ impl Store {
                             func_id: Some(func_id),
                             visibility,
                             is_basic_op: false,
+                            original_name,
                         },
                     );
                 }
@@ -1892,20 +1934,36 @@ impl Store {
         name: IdentId,
     ) -> Option<FuncId> {
         let owner = self[current_func_id].owner_class();
-        let mut module = self.get_module(self_class);
-        loop {
-            if !module.has_origin() && owner.contains(&module.id()) {
-                let super_module = module.superclass()?;
-                let super_fid = self.search_method(super_module, name)?.func_id()?;
-                if super_fid != current_func_id {
+        let mut module = Some(self.get_module(self_class));
+        let mut matched_owner = false;
+        while let Some(m) = module {
+            if !m.has_origin() && owner.contains(&m.id()) {
+                matched_owner = true;
+                if let Some(super_module) = m.superclass()
+                    && let Some(entry) = self.search_method(super_module, name)
+                    && let Some(super_fid) = entry.func_id()
+                    && super_fid != current_func_id
+                {
                     return Some(super_fid);
                 }
-                // The super method has the same func_id as the current method,
-                // meaning we found a duplicate iclass of the same module in the chain.
-                // Continue walking to find the next occurrence.
+                // Same func_id as the current method: a duplicate iclass
+                // of the same module in the chain — keep walking to the
+                // next occurrence.
             }
-            module = module.superclass()?;
+            module = m.superclass();
         }
+        // The method's defining module is not in the receiver's
+        // ancestor chain — e.g. a Module's UnboundMethod bound to an
+        // unrelated object via `#bind` / `#bind_call`. CRuby resolves
+        // `super` against the receiver's actual class hierarchy here.
+        if !matched_owner
+            && let Some(entry) = self.search_method(self.get_module(self_class), name)
+            && let Some(fid) = entry.func_id()
+            && fid != current_func_id
+        {
+            return Some(fid);
+        }
+        None
     }
 }
 

@@ -60,6 +60,7 @@ class Object
   end
 
   def then
+    return to_enum(:then) { 1 } unless block_given?
     yield self
   end
   alias yield_self then
@@ -69,7 +70,15 @@ class Object
   end
 
   def <=>(other)
-    0 if equal?(other)
+    return 0 if equal?(other)
+    # The `self == other` fallback would recurse infinitely when
+    # `==` is `Comparable#==` (a Comparable class that did not
+    # override `==`): that `==` calls `<=>`, which reaches here
+    # again. Skip the fallback in that case (covers both a missing
+    # `<=>` and a user `<=>` that calls `super`). Net behaviour
+    # matches CRuby, which uses an equivalent recursion guard.
+    return nil if self.class.instance_method(:==).owner == Comparable
+    0 if (self == other)
   end
 end
 
@@ -178,13 +187,19 @@ class Module
 end
 
 module Warning
-  @categories = { deprecated: false, experimental: true, performance: false }
+  @categories = {
+    deprecated: false, experimental: true, performance: false,
+    strict_unused_block: false,
+  }
 
-  def self.warn(*x)
+  def self.categories
+    @categories.keys
   end
 
   def self.[](category)
-    category = category.to_sym if category.is_a?(String)
+    unless category.is_a?(Symbol)
+      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
+    end
     unless @categories.key?(category)
       raise ArgumentError, "unknown category: #{category}"
     end
@@ -192,12 +207,20 @@ module Warning
   end
 
   def self.[]=(category, value)
-    category = category.to_sym if category.is_a?(String)
+    unless category.is_a?(Symbol)
+      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
+    end
     unless @categories.key?(category)
       raise ArgumentError, "unknown category: #{category}"
     end
     @categories[category] = value ? true : false
   end
+
+  def warn(msg, category: nil)
+    $stderr.write(msg)
+    nil
+  end
+  extend self
 end
 
 class Process
@@ -580,6 +603,28 @@ class Exception
       msg + "\n"
     end
   end
+
+  # CRuby `Exception#detailed_message(highlight: false, **)`:
+  # decorate the message with the class name; empty-message and
+  # anonymous-class cases have special forms.
+  def detailed_message(highlight: false, **)
+    msg = message.to_s
+    cls = self.class
+    if msg.empty?
+      base = instance_of?(::RuntimeError) ? "unhandled exception" : (cls.name || cls.to_s)
+      return highlight ? "\e[1;4m#{base}\e[m" : base
+    end
+    nl = msg.index("\n")
+    first = nl ? msg[0...nl] : msg
+    rest = nl ? msg[nl..] : ""
+    if cls.name.nil?
+      highlight ? "\e[1m#{first}\e[m#{rest}" : "#{first}#{rest}"
+    elsif highlight
+      "\e[1m#{first} (\e[1;4m#{cls}\e[m\e[1m)\e[m#{rest}"
+    else
+      "#{first} (#{cls})#{rest}"
+    end
+  end
 end
 
 Mutex = Thread::Mutex
@@ -746,7 +791,12 @@ module Kernel
   end
 
   def putc(ch)
-    s = ch.is_a?(Integer) ? (ch & 0xff).chr : ch.to_s[0]
+    if ch.is_a?(String)
+      s = ch[0]
+    else
+      i = ch.is_a?(Integer) ? ch : __to_int(ch)
+      s = (i & 0xff).chr
+    end
     $stdout.write(s)
     ch
   end
@@ -951,7 +1001,31 @@ require_relative 'comparable'
 # reference `Data.define`.
 class Data
   def self.define(*members, &block)
+    members = members.map { |m| m.is_a?(String) ? m.to_sym : m }
     klass = ::Struct.new(*members)
+    # CRuby renders `Data` instances as `#<data ...>` rather than
+    # `#<struct ...>`. Reuse Struct's (correct) inspect — which already
+    # handles qualified/anonymous class names and bypasses an overridden
+    # `#name` — and only relabel the prefix.
+    klass.class_eval do
+      def inspect
+        ::Struct.instance_method(:inspect).bind(self).call.sub(/\A#<struct/, '#<data')
+      end
+      alias_method :to_s, :inspect
+
+      # Returns a copy with the given members replaced. Does not go
+      # through `self.class.new` (CRuby allocates + initializes directly).
+      def with(**kw)
+        return self if kw.empty?
+        kw = kw.map { |k, v| [k.is_a?(String) ? k.to_sym : k, v] }.to_h
+        ms = self.class.members
+        merged = to_h.merge(kw)
+        copy = self.class.allocate
+        copy.send(:initialize, *ms.map { |m| merged[m] })
+        copy.freeze
+        copy
+      end
+    end
     klass.class_eval(&block) if block
     klass
   end

@@ -638,9 +638,73 @@ impl RegexpInner {
 
     pub fn tos(&self) -> String {
         let option = self.option();
-        let m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
-        let i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
-        let x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+        let mut m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
+        let mut i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
+        let mut x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+        // CRuby `rb_reg_to_s`: while the whole pattern is a single
+        // wrapping option group `(?on-off:body)` (or `(?:body)`), fold
+        // its flags into the displayed options and recurse on `body`.
+        let mut src = self.as_str().to_string();
+        loop {
+            let b = src.as_bytes();
+            if b.len() < 4 || b[0] != b'(' || b[1] != b'?' {
+                break;
+            }
+            let mut p = 2;
+            let (mut on_m, mut on_i, mut on_x) = (false, false, false);
+            while p < b.len() {
+                match b[p] {
+                    b'm' => on_m = true,
+                    b'i' => on_i = true,
+                    b'x' => on_x = true,
+                    _ => break,
+                }
+                p += 1;
+            }
+            let (mut off_m, mut off_i, mut off_x) = (false, false, false);
+            if p < b.len() && b[p] == b'-' {
+                p += 1;
+                while p < b.len() {
+                    match b[p] {
+                        b'm' => off_m = true,
+                        b'i' => off_i = true,
+                        b'x' => off_x = true,
+                        _ => break,
+                    }
+                    p += 1;
+                }
+            }
+            // Must be an option group (`...:`), not `(?=`, `(?<`, `(?#`,
+            // `(?>`, a named or capturing group, etc.
+            if p >= b.len() || b[p] != b':' {
+                break;
+            }
+            // The opening paren must match the final character, i.e. the
+            // group spans the entire pattern.
+            if regexp_matching_close(b, 0) != Some(b.len() - 1) {
+                break;
+            }
+            // CRuby applies the `on` set then the `off` set.
+            if on_m {
+                m = true;
+            }
+            if on_i {
+                i = true;
+            }
+            if on_x {
+                x = true;
+            }
+            if off_m {
+                m = false;
+            }
+            if off_i {
+                i = false;
+            }
+            if off_x {
+                x = false;
+            }
+            src = src[p + 1..src.len() - 1].to_string();
+        }
         format!(
             "(?{}{}{}{}{}{}{}:{})",
             if m { "m" } else { "" },
@@ -650,7 +714,7 @@ impl RegexpInner {
             if !m { "m" } else { "" },
             if !i { "i" } else { "" },
             if !x { "x" } else { "" },
-            self.as_str()
+            src
         )
     }
 
@@ -661,6 +725,38 @@ impl RegexpInner {
             self.option_string()
         )
     }
+}
+
+/// Index of the `)` matching the `(` at `open`, or `None` if
+/// unbalanced. Skips backslash escapes and `[...]` character classes
+/// (where `(`/`)` are literal).
+fn regexp_matching_close(b: &[u8], open: usize) -> Option<usize> {
+    if open >= b.len() || b[open] != b'(' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut k = open;
+    let mut in_class = false;
+    while k < b.len() {
+        match b[k] {
+            b'\\' => {
+                k += 2;
+                continue;
+            }
+            b'[' if !in_class => in_class = true,
+            b']' if in_class => in_class = false,
+            b'(' if !in_class => depth += 1,
+            b')' if !in_class => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k);
+                }
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
 }
 
 /// Escape forward slashes that aren't already escaped, leaving every

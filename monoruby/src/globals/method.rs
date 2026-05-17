@@ -903,6 +903,14 @@ impl Globals {
         let (func_id, visibility, _) = self
             .find_method_for_class(class_id, old_name)
             .map_err(|_| MonorubyErr::undefined_method(old_name, class_id.get_name(&self.store)))?;
+        // The alias inherits the *source* method's original definition
+        // name, so chained aliases all report the root: `Method#name`
+        // is the alias, `#original_name` the original.
+        let original_name = self
+            .store
+            .search_method_by_class_id(class_id, old_name)
+            .map(|e| e.original_name())
+            .unwrap_or(old_name);
         // Special "always-private" method names: aliasing TO one of these
         // forces the alias to be private regardless of the source method's
         // visibility, matching CRuby's `rb_method_entry_make`/`rb_alias`.
@@ -911,7 +919,7 @@ impl Globals {
         } else {
             visibility
         };
-        self.add_method(class_id, new_name, func_id, forced_visibility);
+        self.add_method_with_original(class_id, new_name, func_id, forced_visibility, original_name);
         Ok(())
     }
 }

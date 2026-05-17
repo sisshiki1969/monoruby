@@ -250,11 +250,11 @@ fn struct_members(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let members = globals
-        .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/members"))
-        .unwrap();
-    Ok(members)
+    // `self` is the struct class itself. A class produced via
+    // `Class.new(SomeStruct)` stores `/members` on its ancestor, so walk
+    // the superclass chain rather than assuming the ivar is local.
+    let members = get_members(globals, lfp.self_val().as_class())?;
+    Ok(members.into())
 }
 
 #[monoruby_builtin]
@@ -682,12 +682,11 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
 #[monoruby_builtin]
 fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class_obj = lfp.self_val().get_class_obj(globals).as_val();
-    let members = globals
-        .store
-        .get_ivar(class_obj, IdentId::get_id("/members"))
-        .unwrap();
-    Ok(members)
+    // Walk the superclass chain: an instance of a `Class.new(SomeStruct)`
+    // subclass has `/members` defined on the ancestor, not its own class.
+    let class_obj = lfp.self_val().get_class_obj(globals);
+    let members = get_members(globals, class_obj)?;
+    Ok(members.into())
 }
 
 ///
@@ -1679,5 +1678,37 @@ mod tests {
             S.new("a", "b", c: "c")
             "#,
         );
+    }
+
+    #[test]
+    fn struct_members_via_anonymous_subclass() {
+        // Regression: `Class.new(SomeStruct)` stores `/members` on the
+        // ancestor; class- and instance-level `members` must walk the
+        // superclass chain instead of panicking on a missing ivar.
+        run_tests(&[
+            r#"S = Struct.new(:a, :b); Class.new(S).members"#,
+            r#"S = Struct.new(:a, :b); Class.new(S).new(1, 2).members"#,
+            r#"D = Data.define(:x, :y); Class.new(D).members"#,
+            r#"D = Data.define(:x, :y); Class.new(D).new(1, 2).members"#,
+        ]);
+    }
+
+    #[test]
+    fn data_define_and_inspect() {
+        run_tests(&[
+            // String / mixed members are coerced to symbols.
+            r#"Data.define("title", :year, "genre").members"#,
+            r#"Data.define.members"#,
+            // Instances render as `#<data ...>` (named and anonymous),
+            // reusing Struct's name/anonymity handling.
+            r#"M = Data.define(:amount, :unit); M.new(42, "km").inspect"#,
+            r#"M = Data.define(:amount, :unit); M.new(42, "km").to_s"#,
+            r#"Data.define(:a).new("").inspect"#,
+            // #with returns an updated copy and is frozen.
+            r#"M = Data.define(:amount, :unit); m = M.new(42, "km"); m.with(amount: 4).to_h"#,
+            r#"M = Data.define(:amount, :unit); m = M.new(42, "km"); m.with.equal?(m)"#,
+            r#"M = Data.define(:amount, :unit); M.new(1, "m").with("amount" => 9).to_h"#,
+            r#"M = Data.define(:amount, :unit); M.new(1, "m").with(amount: 9).frozen?"#,
+        ]);
     }
 }

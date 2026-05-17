@@ -10,7 +10,9 @@ use chrono::{
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
-    globals.define_builtin_class_funcs_with(TIME_CLASS, "new", &["now"], time_now, 0, 7, false);
+    globals.define_builtin_class_func_with_kw(
+        TIME_CLASS, "new", time_now, 0, 7, false, &["in"], false,
+    );
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,
         "local",
@@ -21,8 +23,12 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_class_funcs_with(TIME_CLASS, "gm", &["utc"], time_gm, 1, 10, false);
-    globals.define_builtin_class_func(TIME_CLASS, "now", time_now, 0);
-    globals.define_builtin_class_func_with(TIME_CLASS, "at", time_at, 1, 2, false);
+    globals.define_builtin_class_func_with_kw(
+        TIME_CLASS, "now", time_now, 0, 7, false, &["in"], false,
+    );
+    globals.define_builtin_class_func_with_kw(
+        TIME_CLASS, "at", time_at, 1, 2, false, &["in"], false,
+    );
     globals.store[TIME_CLASS].set_alloc_func(time_alloc_func);
 
     globals.define_builtin_funcs(TIME_CLASS, "gmtime", &["utc"], gmtime, 0);
@@ -654,18 +660,43 @@ fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
 fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // `Time.now` is registered separately with arity 0, so its frame
-    // has no arg slots — `lfp.try_arg(i)` would read past the
-    // allocated frame. Bail to "now" when `arg_len() == 0` *before*
-    // touching any arg slot.
+    // `Time.new`/`Time.now` called on a subclass must return an
+    // instance of that subclass.
+    let cls = lfp.self_val().as_class().id();
+    // The `in:` keyword (slot 7) gives the UTC offset for both
+    // `Time.now(in:)` and `Time.new(y, …, in:)`.
+    let in_arg = lfp.try_arg(7).filter(|v| !v.is_nil());
+    // No positional args → "now" (optionally in a given offset).
     if lfp.arg_len() == 0 || (0..7).all(|i| lfp.try_arg(i).is_none()) {
-        let time_info = TimeInner::Local(Local::now().into());
-        return Ok(Value::new_time(time_info));
+        let time_info = if let Some(off) = in_arg {
+            let fixed = parse_utc_offset(vm, globals, off)?;
+            TimeInner::Local(Utc::now().with_timezone(&fixed))
+        } else {
+            TimeInner::Local(Local::now().into())
+        };
+        return Ok(Value::new_time_with_class(time_info, cls));
+    }
+    // `Time.new("2020-12-25 00:56:17 +09:00")` — single String
+    // argument is parsed as a date-time, optionally with a trailing
+    // offset (else the `in:` keyword, else local).
+    if let Some(s) = lfp.arg(0).is_str()
+        && (1..6).all(|i| lfp.try_arg(i).is_none())
+        && {
+            // Only the `YYYY-MM-DD…` shape is a date-time string;
+            // a bare numeric string (`"2020"`) is a year argument
+            // and falls through to the normal component path.
+            let b = s.trim().as_bytes();
+            b.len() >= 10 && b[4] == b'-' && b[7] == b'-'
+        }
+    {
+        let time_info = parse_time_string(vm, globals, s, in_arg)?;
+        return Ok(Value::new_time_with_class(time_info, cls));
     }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
     // `utc_offset`, so we pre-extract it before calling `from_args`
-    // (which expects `usec` in slot 6).
-    let utc_offset_arg = lfp.try_arg(6);
+    // (which expects `usec` in slot 6). An explicit `in:` keyword
+    // takes precedence over the positional offset.
+    let utc_offset_arg = in_arg.or_else(|| lfp.try_arg(6));
     let naive = from_args_skip_last(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
     let time_info = if let Some(off_arg) = utc_offset_arg {
@@ -697,7 +728,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         };
         TimeInner::Local(local.into())
     };
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 /// Variant of `from_args` used by `Time.new`: the 7th positional arg
@@ -802,6 +833,16 @@ fn parse_utc_offset(
         return FixedOffset::east_opt(secs)
             .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
     }
+    // An object that responds to `#to_str` (but is not itself numeric)
+    // is coerced to a String offset like `"+05:00"`.
+    if !v.is_integer()
+        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+    {
+        let s = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = s.is_str() {
+            return parse_utc_offset_string(s);
+        }
+    }
     let secs = match i32::try_from(v.coerce_to_int_i64(vm, globals)?) {
         Ok(s) => s,
         Err(_) => {
@@ -813,71 +854,160 @@ fn parse_utc_offset(
 }
 
 fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
+    // CRuby uses one uniform message for every malformed utc_offset
+    // String, with the offending value appended.
+    let err = || {
+        MonorubyErr::argumenterr(format!(
+            r#""+HH:MM", "-HH:MM", "UTC" or "A".."I","K".."Z" expected for utc_offset: {s}"#
+        ))
+    };
     if !s.is_ascii() {
-        return Err(MonorubyErr::argumenterr("string must be ASCII-compatible"));
+        return Err(err());
     }
-    // CRuby accepts `"Z"` and `"UTC"` as aliases for `+00:00`. The
-    // spec's `Time.new(2022, 1, 1, 0, 0, 0, "Z").strftime("%-z")`
-    // case (RFC 3339 unknown-offset) exercises this path.
-    if s == "Z" || s == "UTC" {
+    if s == "UTC" {
         return Ok(FixedOffset::east_opt(0).unwrap());
     }
-    let bytes = s.as_bytes();
-    let sign = match bytes.first() {
-        Some(b'+') => 1,
-        Some(b'-') => -1,
-        _ => return Err(MonorubyErr::argumenterr(format!(
-            r#""+HH:MM" or "-HH:MM" expected for utc_offset"#
-        ))),
+    // Single-letter military zone: A..I = +1..+9, K..M = +10..+12,
+    // N..Y = -1..-12, Z = 0. `J` ("local") is invalid.
+    if s.len() == 1 {
+        let c = s.as_bytes()[0];
+        let hours: i32 = match c {
+            b'A'..=b'I' => (c - b'A' + 1) as i32,
+            b'K'..=b'M' => (c - b'K' + 10) as i32,
+            b'N'..=b'Y' => -((c - b'N' + 1) as i32),
+            b'Z' => 0,
+            _ => return Err(err()),
+        };
+        return FixedOffset::east_opt(hours * 3600).ok_or_else(err);
+    }
+    let (sign, rest) = match s.strip_prefix('+') {
+        Some(r) => (1, r),
+        None => match s.strip_prefix('-') {
+            Some(r) => (-1, r),
+            None => return Err(err()),
+        },
     };
-    let parse2 = |idx: usize| -> Result<i32> {
-        if bytes.len() < idx + 2 {
-            return Err(MonorubyErr::argumenterr(format!(
-                r#""+HH:MM" or "-HH:MM" expected for utc_offset"#
-            )));
-        }
-        let pair = &bytes[idx..idx + 2];
-        if !pair[0].is_ascii_digit() || !pair[1].is_ascii_digit() {
-            return Err(MonorubyErr::argumenterr(format!(
-                r#""+HH:MM" or "-HH:MM" expected for utc_offset"#
-            )));
-        }
-        Ok(((pair[0] - b'0') as i32) * 10 + (pair[1] - b'0') as i32)
+    // Accept colon and no-colon numeric forms: HH, HH:MM, HHMM,
+    // HH:MM:SS, HHMMSS.
+    let digits: String = rest.chars().filter(|&c| c != ':').collect();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(err());
+    }
+    let val = |a: usize, b: usize| -> i32 {
+        digits[a..b].parse::<i32>().unwrap_or(0)
     };
-    let h = parse2(1)?;
+    let (h, m, sec) = match digits.len() {
+        2 => (val(0, 2), 0, 0),
+        4 => (val(0, 2), val(2, 4), 0),
+        6 => (val(0, 2), val(2, 4), val(4, 6)),
+        _ => return Err(err()),
+    };
     if h > 23 {
+        // CRuby reports a well-formed but too-large hour distinctly
+        // from a malformed string.
         return Err(MonorubyErr::argumenterr("utc_offset out of range"));
     }
-    if bytes.get(3) != Some(&b':') {
-        return Err(MonorubyErr::argumenterr(format!(
-            r#""+HH:MM" or "-HH:MM" expected for utc_offset"#
-        )));
+    if m > 59 || sec > 59 {
+        return Err(err());
     }
-    let m = parse2(4)?;
-    if m > 59 {
-        return Err(MonorubyErr::argumenterr("utc_offset out of range"));
-    }
-    let s_secs = if bytes.len() == 9 {
-        if bytes.get(6) != Some(&b':') {
-            return Err(MonorubyErr::argumenterr(format!(
-                r#""+HH:MM:SS" expected for utc_offset"#
-            )));
-        }
-        let s = parse2(7)?;
-        if s > 59 {
-            return Err(MonorubyErr::argumenterr("utc_offset out of range"));
-        }
-        s
-    } else if bytes.len() == 6 {
-        0
-    } else {
-        return Err(MonorubyErr::argumenterr(format!(
-            r#""+HH:MM" or "-HH:MM" expected for utc_offset"#
-        )));
-    };
-    let total = sign * (h * 3600 + m * 60 + s_secs);
+    let total = sign * (h * 3600 + m * 60 + sec);
     FixedOffset::east_opt(total)
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+}
+
+/// Parse `Time.new`'s single-String form:
+/// `YYYY-MM-DD[ T]HH:MM:SS[.frac][ ]?[offset]`. A trailing offset
+/// (`+HH:MM`, `+HHMM`, `Z`, military letter, …) wins; otherwise the
+/// `in:` keyword, otherwise local time. CRuby messages:
+/// `no time information` (date only) / `can't parse: "<s>"`.
+fn parse_time_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    s: &str,
+    in_arg: Option<Value>,
+) -> Result<TimeInner> {
+    let cant = || MonorubyErr::argumenterr(format!("can't parse: {s:?}"));
+    let t = s.trim();
+    let b = t.as_bytes();
+    if t.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return Err(cant());
+    }
+    let num = |a: usize, c: usize| -> Result<i64> {
+        t.get(a..c)
+            .and_then(|x| x.parse::<i64>().ok())
+            .ok_or_else(cant)
+    };
+    let year = num(0, 4)?;
+    let mon = num(5, 7)? as u32;
+    let day = num(8, 10)? as u32;
+    let after = &t[10..];
+    if after.is_empty() {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    let sep = after.as_bytes()[0];
+    if sep != b' ' && sep != b'T' {
+        return Err(cant());
+    }
+    let tpart = after[1..].trim_start();
+    let tb = tpart.as_bytes();
+    if tpart.len() < 8 || tb[2] != b':' || tb[5] != b':' {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    let hh: u32 = tpart[0..2].parse().map_err(|_| cant())?;
+    let mi: u32 = tpart[3..5].parse().map_err(|_| cant())?;
+    let ss: u32 = tpart[6..8].parse().map_err(|_| cant())?;
+    let mut idx = 8;
+    let mut nsec: u32 = 0;
+    if tpart.as_bytes().get(idx) == Some(&b'.') {
+        idx += 1;
+        let start = idx;
+        while tpart.as_bytes().get(idx).is_some_and(|c| c.is_ascii_digit()) {
+            idx += 1;
+        }
+        let frac = &tpart[start..idx];
+        if !frac.is_empty() {
+            // Left-justify to 9 digits (truncate beyond nanoseconds).
+            let mut f = frac.to_string();
+            f.truncate(9);
+            while f.len() < 9 {
+                f.push('0');
+            }
+            nsec = f.parse().unwrap_or(0);
+        }
+    }
+    let off_str = tpart[idx..].trim();
+    let date = NaiveDate::from_ymd_opt(year as i32, mon, day)
+        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
+    let time = NaiveTime::from_hms_nano_opt(hh, mi, ss, nsec)
+        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
+    let naive = NaiveDateTime::new(date, time);
+
+    let fixed = if !off_str.is_empty() {
+        Some(parse_utc_offset_string(off_str)?)
+    } else if let Some(off) = in_arg {
+        Some(parse_utc_offset(vm, globals, off)?)
+    } else {
+        None
+    };
+    match fixed {
+        Some(fixed) => {
+            let dt = fixed
+                .from_local_datetime(&naive)
+                .single()
+                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+            Ok(TimeInner::Local(dt))
+        }
+        None => {
+            let local = match Local.from_local_datetime(&naive) {
+                LocalResult::Single(d) => d,
+                LocalResult::Ambiguous(d, _) => d,
+                LocalResult::None => {
+                    return Err(MonorubyErr::argumenterr("argument out of range."))
+                }
+            };
+            Ok(TimeInner::Local(local.into()))
+        }
+    }
 }
 
 ///
@@ -888,7 +1018,21 @@ fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/at.html]
 #[monoruby_builtin]
 fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let secs_val = lfp.arg(0);
+    // `Time.at(time)` copies the instant of an existing Time, keeping
+    // its UTC/offset-ness; a subclass receiver yields a subclass instance.
+    if matches!(secs_val.unpack(), RV::Object(rv) if rv.ty() == ObjTy::TIME) {
+        // A second positional (usec) argument together with a Time is
+        // an error in CRuby (bug #8173).
+        if lfp.try_arg(1).is_some_and(|v| !v.is_nil()) {
+            return Err(MonorubyErr::typeerr(
+                "can't convert Time into an exact number",
+            ));
+        }
+        let inner = secs_val.as_time().clone();
+        return Ok(Value::new_time_with_class(inner, cls));
+    }
     let (secs, nsecs) = if let Some(f) = secs_val.try_float() {
         let s = f.floor() as i64;
         let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
@@ -906,9 +1050,17 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let total_ns = nsecs + usec_ns;
     let dt = DateTime::from_timestamp(secs, total_ns)
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
-    let local: DateTime<Local> = dt.into();
-    let time_info = TimeInner::Local(local.into());
-    Ok(Value::new_time(time_info))
+    // `Time.at(t, in: offset)` — keyword UTC offset.
+    let time_info = if let Some(off) = lfp.try_arg(2)
+        && !off.is_nil()
+    {
+        let fixed = parse_utc_offset(vm, globals, off)?;
+        TimeInner::Local(dt.with_timezone(&fixed))
+    } else {
+        let local: DateTime<Local> = dt.into();
+        TimeInner::Local(local.into())
+    };
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 /// Allocator for `Time` and its subclasses.
@@ -925,9 +1077,10 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/local.html]
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let t = generate_time(vm, globals, Local, lfp)?;
     let time_info = TimeInner::Local(t.into());
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 ///
@@ -938,9 +1091,10 @@ fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [utc(year, mon = 1, day = 1, hour = 0, min = 0, sec = 0, usec = 0) -> Time]
 #[monoruby_builtin]
 fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cls = lfp.self_val().as_class().id();
     let t = generate_time(vm, globals, Utc, lfp)?;
     let time_info = TimeInner::Utc(t);
-    Ok(Value::new_time(time_info))
+    Ok(Value::new_time_with_class(time_info, cls))
 }
 
 fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
@@ -1126,14 +1280,27 @@ fn time_arg_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
 /// `"dec"` → 12, etc. Names that don't match still fall through to the
 /// numeric parse so `"12"` works.
 fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
-    if let Some(s) = v.is_str() {
+    let parse_str = |s: &str| -> Result<i64> {
         let trimmed = s.trim();
         if let Some(n) = month_name_to_num(trimmed) {
             return Ok(n);
         }
-        return trimmed.parse::<i64>().map_err(|_| {
+        trimmed.parse::<i64>().map_err(|_| {
             MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed))
-        });
+        })
+    };
+    if let Some(s) = v.is_str() {
+        return parse_str(s);
+    }
+    // A non-numeric object that responds to `#to_str` is coerced to a
+    // String first (CRuby allows a month name via `#to_str`).
+    if !v.is_integer()
+        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+    {
+        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = r.is_str() {
+            return parse_str(s);
+        }
     }
     v.coerce_to_int_i64(vm, globals)
 }
@@ -2581,6 +2748,102 @@ mod tests {
     }
 
     #[test]
+    fn time_new_string_form() {
+        run_test(
+            r#"
+            [Time.new("2020-12-25 00:56:17").iso8601,
+             Time.new("2020-12-25T00:56:17.123456789 +09:00").iso8601(9),
+             Time.new("2020-12-25 00:56:17 +0300").utc_offset,
+             Time.new("2020-12-25 00:56:17Z").utc_offset,
+             Time.new("2020-12-25 00:56:17", in: "+05:00").utc_offset,
+             Time.new("2020-12-25 00:56:17.5").nsec,
+             Time.new("2020-12-25T00:56:17 Z").utc_offset,
+             Time.new("2020").iso8601,
+             Time.new("2020", 3, 4).iso8601]
+            "#,
+        );
+        run_test_error(r#"Time.new("2020-12-25")"#);
+        run_test_error(r#"Time.new("2020-12-25 00:56:17 +00:60")"#);
+        run_test_error(r#"Time.new("2020-13-25 00:00:00")"#);
+        run_test_error(r#"Time.new("20x0-12-25 00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 ab:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 1:2")"#);
+        run_test_error(r#"Time.new("2020-12-25x00:00:00")"#);
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 bogusoffset")"#);
+    }
+
+    #[test]
+    fn time_new_now_in_keyword_and_military_zone() {
+        run_test(
+            r#"
+            a = Time.new(2000, 1, 1, 12, 0, 0, in: "+05:00")
+            b = Time.new(2000, 1, 1, 12, 0, 0, in: 5*3600)
+            c = Time.new(2000, 1, 1, 0, 0, 0, in: "W")
+            d = Time.new(2000, 1, 1, 12, 0, 0, "+03:00")
+            [a.utc_offset, a.hour, b.utc_offset, c.utc_offset, d.utc_offset,
+             Time.now(in: "+09:00").utc_offset, Time.now.is_a?(Time),
+             Time.new.is_a?(Time)]
+            "#,
+        );
+        // Single-letter military timezone (A..I,K..M=+, N..Y=-, Z=0).
+        run_test(
+            r#"
+            %w[A B I K M N W Y Z].map { |z| Time.new(2000,1,1,0,0,0,z).utc_offset }
+            "#,
+        );
+        // `J` and malformed strings → unified message; well-formed but
+        // hour > 23 → "utc_offset out of range".
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"J")"#);
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"junk")"#);
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"+24:00")"#);
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"+23:60")"#);
+        run_test_error(r#"Time.new(2000,1,1,0,0,0,"+01:00:99")"#);
+        run_test_error("Time.new(2000,1,1,0,0,0,\"+0\u{00C4}:00\")");
+        run_test_error(r#"Time.at(0, in: "+24:00")"#);
+    }
+
+    #[test]
+    fn time_at_in_keyword() {
+        run_test(
+            r#"
+            t = 1_700_000_000
+            a = Time.at(t, in: "+05:00")
+            b = Time.at(t, in: "-09:00:01")
+            c = Time.at(t, in: 5*3600)
+            d = Time.at(t, in: "UTC")
+            [a.utc_offset, a.to_i, b.utc_offset, c.utc_offset, d.utc_offset,
+             Time.at(t).to_i, Time.at(t, 500).usec]
+            "#,
+        );
+    }
+
+    #[test]
+    fn time_arg_to_str_coercion() {
+        run_test(
+            r#"
+            m = Object.new; def m.to_str; "feb"; end
+            s = Object.new; def s.to_str; "+05:00"; end
+            i = Object.new; def i.to_int; 3; end
+            [Time.utc(2000, m, 1).month,
+             Time.new(2000, 1, 1, 0, 0, 0, s).utc_offset,
+             Time.utc(2000, i, 1).month]
+            "#,
+        );
+        // #to_str returning a non-String falls through (TypeError);
+        // an offset via #to_int is accepted.
+        run_test_error(
+            r#"o = Object.new; def o.to_str; 99; end; Time.utc(2000, o, 1)"#,
+        );
+        run_test_error(
+            r#"o = Object.new; def o.to_str; :sym; end; Time.new(2000,1,1,0,0,0, o)"#,
+        );
+        run_test(
+            r#"o = Object.new; def o.to_int; 7*3600; end
+               Time.new(2000,1,1,0,0,0, o).utc_offset"#,
+        );
+    }
+
+    #[test]
     fn time_new_with_utc_offset_integer() {
         run_test(
             r#"
@@ -2822,6 +3085,23 @@ mod tests {
         run_tests(&[
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).to_a.size",
             "t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end; (t..t.succ).include?(t)",
+        ]);
+    }
+
+    #[test]
+    fn time_subclass_and_at_time_arg() {
+        run_tests(&[
+            // `Time.{new,at,utc,local}` on a subclass yield that subclass.
+            "k = Class.new(Time); k.new(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.at(0).instance_of?(k)",
+            "k = Class.new(Time); k.utc(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.local(2020,1,1).instance_of?(k)",
+            "k = Class.new(Time); k.at(Time.utc(1999,12,31)).instance_of?(k)",
+            // `Time.at(time)` copies the instant, preserving UTC-ness.
+            "o = Time.utc(2000,1,1,2,3,4); a = Time.at(o); [a == o, a.utc?, a.equal?(o), a.year]",
+            "o = Time.at(123456789); b = Time.at(o); [b == o, b.to_i]",
+            // `Time.at(Time, usec)` is a TypeError (bug #8173).
+            "begin; Time.at(Time.now, 500000); :no; rescue TypeError; :te; end",
         ]);
     }
 }

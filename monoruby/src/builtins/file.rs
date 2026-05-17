@@ -61,6 +61,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "writable?", writable_, 1);
     globals.define_builtin_module_func(file_test, "writable?", writable_, 1);
 
+    // `*_real?` test with the real uid/gid. In monoruby's typical
+    // single-user runtime real == effective, so they delegate to the
+    // effective-uid predicates (matches CRuby's result here).
+    globals.define_builtin_class_func(file, "executable_real?", executable_, 1);
+    globals.define_builtin_module_func(file_test, "executable_real?", executable_, 1);
+    globals.define_builtin_class_func(file, "readable_real?", readable_, 1);
+    globals.define_builtin_module_func(file_test, "readable_real?", readable_, 1);
+    globals.define_builtin_class_func(file, "writable_real?", writable_, 1);
+    globals.define_builtin_module_func(file_test, "writable_real?", writable_, 1);
+
     globals.define_builtin_func_rest(file, "write", write);
     globals.define_builtin_funcs(file, "path", &["to_path"], path, 0);
     globals.define_builtin_func(file, "size", size, 0);
@@ -605,7 +615,16 @@ fn file_basename(
         "/"
     };
     if let Some(suffix) = suffix {
-        if basename.ends_with(&suffix) {
+        if suffix == ".*" {
+            // CRuby treats the ".*" suffix specially: strip the last
+            // extension (a '.' that is not the leading char, so
+            // dotfiles like ".bashrc" are preserved).
+            if let Some(pos) = basename.rfind('.') {
+                if pos > 0 {
+                    return Ok(Value::string_from_str(&basename[..pos]));
+                }
+            }
+        } else if basename.ends_with(&suffix) {
             return Ok(Value::string_from_str(
                 &basename[..basename.len() - suffix.len()],
             ));
@@ -2288,6 +2307,19 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn basename_suffix() {
+        run_tests(&[
+            r##"File.basename("complex.so", ".*")"##,
+            r##"File.basename("a.tar.gz", ".*")"##,
+            r##"File.basename(".bashrc", ".*")"##,
+            r##"File.basename("noext", ".*")"##,
+            r##"File.basename("/x/y/foo.rb", ".rb")"##,
+            r##"File.basename("/x/y/foo.rb")"##,
+            r##"File.basename("dir.d/", ".*")"##,
+        ]);
+    }
+
+    #[test]
     fn join() {
         run_tests(&[
             r##"File.join("a","b")"##,
@@ -2568,6 +2600,22 @@ mod tests {
             raise "expected nil for empty" unless s.nil?
             s = File.size?("/tmp/monoruby_nonexistent_file_xyz")
             raise "expected nil for nonexistent" unless s.nil?
+            File.delete(path)
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_test_real_predicates() {
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_real_pred_#{Process.pid}"
+            File.write(path, "x")
+            raise unless FileTest.readable_real?(path) == true
+            raise unless FileTest.writable_real?(path) == true
+            raise unless File.readable_real?(path) == true
+            raise unless FileTest.executable_real?(path) == false
+            raise unless FileTest.readable_real?("/tmp/nope_#{Process.pid}_zzz") == false
             File.delete(path)
             "#,
         );

@@ -57,9 +57,36 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
-    globals.define_builtin_module_func_with(kernel_class, "Integer", kernel_integer, 1, 2, false);
-    globals.define_builtin_module_func(kernel_class, "Float", kernel_float, 1);
-    globals.define_builtin_module_func_with(kernel_class, "Complex", kernel_complex, 1, 2, false);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Integer",
+        kernel_integer,
+        1,
+        2,
+        false,
+        &["exception"],
+        false,
+    );
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Float",
+        kernel_float,
+        1,
+        1,
+        false,
+        &["exception"],
+        false,
+    );
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Complex",
+        kernel_complex,
+        1,
+        2,
+        false,
+        &["exception"],
+        false,
+    );
     globals.define_builtin_module_func_with(kernel_class, "Rational", kernel_rational, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
@@ -95,6 +122,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
+    // `__callee__` differs from `__method__` only for aliased methods
+    // (it reports the called alias). monoruby does not track the
+    // call-site alias, so it shares `__method__`'s resolution.
+    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
@@ -690,7 +721,44 @@ fn kernel_integer(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `exception:` keyword is stored after the positional max (2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    match kernel_integer_inner(vm, globals, lfp) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if exception {
+                Err(e)
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    }
+}
+
+/// Build a `FloatDomainError` (falls back to `RangeError` if the constant
+/// is unavailable).
+fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
+    match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
+        .map(|v| v.as_class_id())
+    {
+        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
+        None => MonorubyErr::rangeerr(msg),
+    }
+}
+
+fn kernel_integer_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
+    // nil -> TypeError ("can't convert nil into Integer"), always; under
+    // `exception: false` the outer wrapper turns this into nil.
+    if arg0.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Integer"));
+    }
     // Optional second argument: explicit `base` (0 = autodetect from
     // the string's prefix; 2..=36 = forced base, with the prefix
     // optional — `Integer("0x42", 16)` is ok but `("0x42", 10)` errors).
@@ -706,22 +774,32 @@ fn kernel_integer(
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
-        RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
+        RV::Float(num) => {
+            if num.is_nan() {
+                return Err(float_domain_error(globals, "NaN"));
+            }
+            if num.is_infinite() {
+                return Err(float_domain_error(
+                    globals,
+                    if num < 0.0 { "-Infinity" } else { "Infinity" },
+                ));
+            }
+            return Ok(Value::integer(num.trunc() as i64));
+        }
         RV::String(b) => {
             let s = b.check_utf8()?;
             return parse_kernel_integer(s, base.unwrap_or(0));
         }
         _ => {}
     };
-    // Try to_int coercion
+    // Try to_int coercion. If it returns a non-Integer (or nil), fall
+    // through to `to_i` instead of erroring immediately (CRuby semantics).
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         match result.unpack() {
             RV::Fixnum(i) => return Ok(Value::integer(i)),
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
-            _ => {
-                return Err(MonorubyErr::cant_convert_error_int(globals, arg0, result));
-            }
+            _ => {}
         }
     }
     // Try to_i coercion as a fallback
@@ -895,12 +973,12 @@ pub(crate) fn parse_kernel_float(s: &str) -> Result<Value> {
     }
     // Hex prefix branch.
     if bytes.len() >= i + 2 && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
-        let payload = strip_underscores(&bytes[i + 2..], &invalid)?;
+        let payload = strip_underscores(&bytes[i + 2..], true, &invalid)?;
         let f = parse_hex_float(&payload).ok_or_else(invalid)?;
         return Ok(Value::float(if neg { -f } else { f }));
     }
     // Decimal branch.
-    let payload = strip_underscores(&bytes[i..], &invalid)?;
+    let payload = strip_underscores(&bytes[i..], false, &invalid)?;
     let s = std::str::from_utf8(&payload).map_err(|_| invalid())?;
     // Reject CRuby-rejected forms that Rust's parser would accept.
     if s.is_empty()
@@ -914,21 +992,36 @@ pub(crate) fn parse_kernel_float(s: &str) -> Result<Value> {
     // CRuby allows a trailing `.` (e.g. `"10."`) but Rust's `f64::from_str`
     // does too, so no special handling needed.
     let f: f64 = s.parse().map_err(|_| invalid())?;
-    if !f.is_finite() {
+    // Reaching here, the literal `nan`/`inf`/`infinity` spellings were
+    // already rejected, so a non-finite result is numeric overflow of a
+    // valid literal (e.g. `"2e1000"`) which CRuby maps to Infinity.
+    if f.is_nan() {
         return Err(invalid());
     }
     Ok(Value::float(if neg { -f } else { f }))
 }
 
 /// Strip underscores from a digit run, validating that each `_` sits
-/// strictly between two digit (or hex-digit / `.`/`p`/`e`) characters.
-fn strip_underscores(bytes: &[u8], invalid: &dyn Fn() -> MonorubyErr) -> Result<Vec<u8>> {
+/// strictly between two digit characters. For a decimal payload only
+/// `0-9` count as digits (so `2e_100`, `2_e100`, `0x1p_3` are rejected);
+/// for a hex-float mantissa `0-9a-fA-F` count.
+fn strip_underscores(
+    bytes: &[u8],
+    hex: bool,
+    invalid: &dyn Fn() -> MonorubyErr,
+) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len());
-    let is_alnum = |b: u8| b.is_ascii_alphanumeric();
+    let is_digit = |b: u8| {
+        if hex {
+            b.is_ascii_hexdigit()
+        } else {
+            b.is_ascii_digit()
+        }
+    };
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'_' {
-            let prev_ok = i > 0 && is_alnum(bytes[i - 1]);
-            let next_ok = i + 1 < bytes.len() && is_alnum(bytes[i + 1]);
+            let prev_ok = i > 0 && is_digit(bytes[i - 1]);
+            let next_ok = i + 1 < bytes.len() && is_digit(bytes[i + 1]);
             if !prev_ok || !next_ok {
                 return Err(invalid());
             }
@@ -1016,7 +1109,29 @@ fn kernel_float(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `exception:` keyword is stored after the positional max (1).
+    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    match kernel_float_inner(vm, globals, lfp) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if exception {
+                Err(e)
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    }
+}
+
+fn kernel_float_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
+    if arg0.is_nil() {
+        return Err(MonorubyErr::typeerr("can't convert nil into Float"));
+    }
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::float(num as f64)),
         RV::BigInt(num) => return Ok(Value::float(num.to_f64().unwrap())),
@@ -1027,12 +1142,12 @@ fn kernel_float(
         }
         _ => {}
     };
-    // Try to_f coercion
+    // Try to_f coercion. CRuby requires `#to_f` to return a Float; an
+    // Integer (or anything else) is a TypeError.
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         match result.unpack() {
             RV::Float(f) => return Ok(Value::float(f)),
-            RV::Fixnum(i) => return Ok(Value::float(i as f64)),
             _ => {
                 return Err(MonorubyErr::cant_convert_error_f(globals, arg0, result));
             }
@@ -1050,18 +1165,318 @@ fn kernel_float(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Complex.html]
 #[monoruby_builtin]
 fn kernel_complex(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let r = Real::try_from(globals, lfp.arg(0))?;
-    let i = if let Some(i) = lfp.try_arg(1) {
-        Real::try_from(globals, i)?
-    } else {
-        Real::zero()
+    // `exception:` keyword is stored after the positional max (2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let arg0 = lfp.arg(0);
+    let arg1 = lfp.try_arg(1);
+
+    // nil argument -> TypeError, always raised (even with exception: false).
+    if arg0.is_nil() || arg1.map_or(false, |v| v.is_nil()) {
+        if exception {
+            return Err(MonorubyErr::typeerr("can't convert nil into Complex"));
+        }
+        return Ok(Value::nil());
+    }
+
+    // Single String argument: parse it. Parse errors are ArgumentError /
+    // Encoding::CompatibilityError. With `exception: false`, the
+    // Encoding::CompatibilityError is still raised but ArgumentError is
+    // swallowed (-> nil).
+    if arg1.is_none() {
+        if let RV::String(b) = arg0.unpack() {
+            return match parse_complex_string(globals, b) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    if exception || e.kind() != &MonorubyErrKind::Arguments {
+                        Err(e)
+                    } else {
+                        Ok(Value::nil())
+                    }
+                }
+            };
+        }
+    }
+
+    // When a second argument is present, evaluate it first: a non-Numeric
+    // second argument is always swallowable with `exception: false`
+    // (`Complex(0, :sym, exception: false)` -> nil), whereas a non-Numeric
+    // first argument paired with a *Numeric* second argument always raises
+    // (`Complex(:sym, 0, exception: false)` -> TypeError "not a real").
+    if let Some(i) = arg1 {
+        let im = match real_for_complex(vm, globals, i)? {
+            Some(i) => i,
+            None => {
+                if exception {
+                    return Err(MonorubyErr::typeerr("not a real"));
+                }
+                return Ok(Value::nil());
+            }
+        };
+        let re = match real_for_complex(vm, globals, arg0)? {
+            Some(r) => r,
+            None => return Err(MonorubyErr::typeerr("not a real")),
+        };
+        return Ok(Value::complex(re, im));
+    }
+
+    let r = match real_for_complex(vm, globals, arg0)? {
+        Some(r) => r,
+        None => {
+            // Single non-Numeric argument: try #to_c coercion.
+            let to_c_id = IdentId::get_id("to_c");
+            if let Some(func_id) = globals.check_method(arg0, to_c_id) {
+                let result =
+                    vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+                if result.try_complex().is_some() {
+                    return Ok(result);
+                }
+            }
+            // Single non-Numeric, no usable #to_c: swallowable.
+            if exception {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} into Complex",
+                    arg0.get_real_class_name(globals)
+                )));
+            }
+            return Ok(Value::nil());
+        }
     };
-    Ok(Value::complex(r, i))
+    Ok(Value::complex(r, Real::zero()))
+}
+
+/// Convert `v` into a `Real` suitable for a Complex component, returning
+/// `Ok(None)` when `v` is not a numeric (so the caller can decide between
+/// `#to_c` coercion and a `TypeError`).
+fn real_for_complex(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<Real>> {
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(Some(Real::from(i))),
+        RV::BigInt(b) => Ok(Some(Real::from(b.clone()))),
+        RV::Float(f) => Ok(Some(Real::from(f))),
+        RV::String(b) => {
+            // A numeric string component is accepted; a non-numeric string
+            // is reported as `None` so the caller raises the right error.
+            match parse_complex_string(globals, b) {
+                Ok(parsed) => Ok(Some(Real::try_from(globals, parsed)?)),
+                Err(e) => {
+                    // Encoding::CompatibilityError must still propagate.
+                    if e.kind() == &MonorubyErrKind::Arguments {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        }
+        _ => {
+            if v.try_rational().is_some() {
+                return Ok(Some(Real::try_from(globals, v)?));
+            }
+            let numeric_id = IdentId::get_id("Numeric");
+            if let Some(numeric) = globals
+                .store
+                .get_constant_noautoload(OBJECT_CLASS, numeric_id)
+                .map(|c| c.as_class_id())
+            {
+                if v.is_kind_of(&globals.store, numeric) {
+                    return Ok(Some(Real::try_from(globals, v)?));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Parse a Ruby `String` value as a Complex, the way `Kernel#Complex(str)`
+/// does. Raises `ArgumentError`/`TypeError`/`Encoding::CompatibilityError`
+/// on invalid input.
+fn parse_complex_string(globals: &mut Globals, b: &RStringInner) -> Result<Value> {
+    // ASCII-incompatible encodings raise Encoding::CompatibilityError.
+    if !b.encoding().is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", b.encoding().name()),
+        ));
+    }
+    let s = b.check_utf8()?;
+    let original = s;
+    if s.bytes().any(|c| c == 0) {
+        return Err(MonorubyErr::argumenterr("string contains null byte"));
+    }
+    match parse_complex_literal(s) {
+        Some((re, im)) => {
+            let re = Real::try_from(globals, re)?;
+            let im = Real::try_from(globals, im)?;
+            Ok(Value::complex(re, im))
+        }
+        None => Err(MonorubyErr::argumenterr(format!(
+            "invalid value for convert(): {:?}",
+            original
+        ))),
+    }
+}
+
+/// Parse a complex literal string into `(real, imaginary)` `Value`s.
+/// Returns `None` for any unrecognised / garbage input.
+fn parse_complex_literal(s: &str) -> Option<(Value, Value)> {
+    let s = s.trim_matches(|c: char| c == ' ' || c == '\t' || c == '\n' || c == '\r');
+    if s.is_empty() {
+        return Some((Value::integer(0), Value::integer(0)));
+    }
+    // Reject sequences of consecutive underscores and leading/trailing `_`.
+    let bytes = s.as_bytes();
+    for (idx, &c) in bytes.iter().enumerate() {
+        if c == b'_' {
+            // `_` must be surrounded by digits.
+            let prev_digit = idx > 0 && bytes[idx - 1].is_ascii_digit();
+            let next_digit =
+                idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit();
+            if !prev_digit || !next_digit {
+                return None;
+            }
+        }
+    }
+    let s: String = s.chars().filter(|&c| c != '_').collect();
+    let s = s.as_str();
+
+    // Polar form: `m@a`.
+    if let Some(at) = s.find('@') {
+        let m = parse_complex_component(&s[..at])?;
+        let a = parse_complex_component(&s[at + 1..])?;
+        let m = value_to_f64(m);
+        let a = value_to_f64(a);
+        let re = m * a.cos();
+        let im = m * a.sin();
+        return Some((complex_real_value(re), complex_real_value(im)));
+    }
+
+    // Normalise imaginary unit characters.
+    let has_imag = s.ends_with(['i', 'I', 'j', 'J']);
+    if has_imag {
+        let body = &s[..s.len() - 1];
+        if body.is_empty() {
+            return Some((Value::integer(0), Value::integer(1)));
+        }
+        if body == "+" {
+            return Some((Value::integer(0), Value::integer(1)));
+        }
+        if body == "-" {
+            return Some((Value::integer(0), Value::integer(-1)));
+        }
+        // Split into `real` + `imag` on a top-level sign that is not part
+        // of an exponent.
+        if let Some(pos) = find_complex_sign_split(body) {
+            let real_str = &body[..pos];
+            let imag_str = &body[pos..];
+            let re = parse_complex_component(real_str)?;
+            let im = if imag_str == "+" {
+                Value::integer(1)
+            } else if imag_str == "-" {
+                Value::integer(-1)
+            } else {
+                parse_complex_component(imag_str)?
+            };
+            return Some((re, im));
+        }
+        // Pure imaginary.
+        let im = parse_complex_component(body)?;
+        return Some((Value::integer(0), im));
+    }
+
+    // Pure real.
+    let re = parse_complex_component(s)?;
+    Some((re, Value::integer(0)))
+}
+
+/// Find the index of a `+`/`-` separating the real and imaginary parts,
+/// skipping a leading sign and exponent signs.
+fn find_complex_sign_split(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
+            if bytes[i - 1] == b'e' || bytes[i - 1] == b'E' {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Parse a single real component: an integer, float, or `a/b` rational.
+/// Returns `None` for garbage (including `Infinity`/`NaN`).
+fn parse_complex_component(s: &str) -> Option<Value> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Rational `a/b`.
+    if let Some(slash) = s.find('/') {
+        let num = s[..slash].trim();
+        let den = s[slash + 1..].trim();
+        let n: i64 = parse_strict_int(num)?;
+        let d: i64 = parse_strict_int(den)?;
+        if d == 0 {
+            return None;
+        }
+        return Some(Value::rational_from_inner(RationalInner::new(n, d)));
+    }
+    // Float (contains `.`, `e`, or `E`).
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        let f: f64 = s.parse().ok()?;
+        if !f.is_finite() {
+            return None;
+        }
+        return Some(Value::float(f));
+    }
+    // Integer.
+    let n: i64 = parse_strict_int(s)?;
+    Some(Value::integer(n))
+}
+
+/// Parse a strict optionally-signed decimal integer. Rejects empty and
+/// any non-digit characters.
+fn parse_strict_int(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let v: i64 = digits.parse().ok()?;
+    Some(if neg { -v } else { v })
+}
+
+fn value_to_f64(v: Value) -> f64 {
+    match v.unpack() {
+        RV::Fixnum(i) => i as f64,
+        RV::BigInt(b) => b.to_f64().unwrap_or(0.0),
+        RV::Float(f) => f,
+        _ => v.try_rational().map_or(0.0, |r| r.to_f()),
+    }
+}
+
+fn complex_real_value(f: f64) -> Value {
+    if f == (f as i64) as f64 && f.is_finite() {
+        Value::integer(f as i64)
+    } else {
+        Value::float(f)
+    }
 }
 
 ///
@@ -1194,10 +1609,49 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // NOTE: `require` is intentionally left on `coerce_to_string`.
+    // It is intercepted by CRuby's rubygems `kernel_require.rb`
+    // shim, and routing the arg through `#to_path` here perturbs
+    // `$LOADED_FEATURES` bookkeeping in that shim. `require_relative`
+    // and `load` use the direct builtin path and do get the
+    // CRuby-accurate `#to_path`/`#to_str` coercion.
     let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
+}
+
+/// CRuby's `rb_get_path`: convert a path argument to a String via
+/// `#to_path` (if present) and then `#to_str` (if the `#to_path`
+/// result is not already a String). A bare `#to_str` object is also
+/// accepted. Anything else is a TypeError.
+fn path_arg_to_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<String> {
+    if let Some(s) = arg.is_str() {
+        return Ok(s.to_string());
+    }
+    let v = if let Some(fid) = globals.check_method(arg, IdentId::TO_PATH) {
+        vm.invoke_func_inner(globals, fid, arg, &[], None, None)?
+    } else {
+        arg
+    };
+    if let Some(s) = v.is_str() {
+        return Ok(s.to_string());
+    }
+    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if let Some(s) = r.is_str() {
+            return Ok(s.to_string());
+        }
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        arg,
+        STRING_CLASS,
+    ))
 }
 
 ///
@@ -1215,7 +1669,7 @@ fn require_relative(
 ) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let feature = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
     let b = vm.require(globals, &file_name, true)?;
@@ -1230,7 +1684,7 @@ fn require_relative(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let file_name = std::path::PathBuf::from(lfp.arg(0).coerce_to_string(vm, globals)?);
+    let file_name = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
@@ -1259,6 +1713,21 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - eval(expr, bind, fname = "(eval)", lineno = 1) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/eval.html]
+///
+/// A FatalError from compiling the eval'd source (e.g. the prism
+/// lowerer hitting a node monoruby does not yet support) would
+/// otherwise propagate uncatchably and abort the process. Inside
+/// `eval`, downgrade it to a catchable SyntaxError — the closest
+/// CRuby analogue for "this source cannot be run here" — so callers
+/// can `rescue` it.
+fn downgrade_eval_fatal(err: MonorubyErr) -> MonorubyErr {
+    if err.is_fatal() {
+        MonorubyErr::new(MonorubyErrKind::Syntax, err.message().to_string())
+    } else {
+        err
+    }
+}
+
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
@@ -1283,10 +1752,14 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         } else {
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
-        globals.compile_script_binding(expr, fname, binding, lineno)?;
+        globals
+            .compile_script_binding(expr, fname, binding, lineno)
+            .map_err(downgrade_eval_fatal)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
-        let fid = globals.compile_script_eval(expr, fname, caller_cfp, None, lineno)?;
+        let fid = globals
+            .compile_script_eval(expr, fname, caller_cfp, None, lineno)
+            .map_err(downgrade_eval_fatal)?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to
@@ -1505,7 +1978,22 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
         let s = arg0.coerce_to_str(vm, globals)?;
-        eprintln!("{}", s);
+        // Write to the Ruby `$stderr` (which may be reassigned /
+        // mocked), not the OS stderr, matching CRuby.
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or(Value::nil());
+        if !stderr.is_nil() {
+            let line = Value::string(format!("{}\n", s));
+            vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("write"),
+                stderr,
+                &[line],
+                None,
+                None,
+            )?;
+        }
         s
     } else {
         "abort".to_string()
@@ -1611,8 +2099,19 @@ fn warn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
 #[monoruby_builtin]
 fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = globals.current_source_path(vm).parent().unwrap();
-    Ok(Value::string(path.to_string_lossy().to_string()))
+    let path = globals.current_source_path(vm);
+    let s = path.to_string_lossy();
+    // `eval` with a binding (and no explicit filename) yields a
+    // synthetic "(eval at ...)" source; there is no directory.
+    if s.starts_with("(eval") || s.starts_with("(irb") {
+        return Ok(Value::nil());
+    }
+    // File.dirname semantics: a bare filename has directory ".".
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
+        _ => ".".to_string(),
+    };
+    Ok(Value::string(dir))
 }
 
 ///
@@ -1644,7 +2143,10 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => Value::object(OBJECT_CLASS),
     };
     let bh = lfp.expect_block()?;
-    match vm.invoke_block_once(globals, bh, &[tag]) {
+    vm.push_catch_tag(tag);
+    let res = vm.invoke_block_once(globals, bh, &[tag]);
+    vm.pop_catch_tag();
+    match res {
         Ok(val) => Ok(val),
         Err(err) => {
             if let MonorubyErrKind::Throw(throw_tag, throw_val) = err.kind() {
@@ -1664,13 +2166,29 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 #[monoruby_builtin]
 fn throw_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let tag = lfp.arg(0);
     let value = lfp.try_arg(1).unwrap_or(Value::nil());
+    // No active `catch` for this tag: raise a rescuable
+    // `UncaughtThrowError` (< ArgumentError) rather than letting the
+    // control-flow `Throw` escape uncatchably.
+    if !vm.is_catch_tag_active(tag) {
+        let msg = format!("uncaught throw {}", tag.inspect(&globals.store));
+        if let Some(klass) = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
+        {
+            return Err(MonorubyErr::new(
+                MonorubyErrKind::Other(klass.as_class_id()),
+                msg,
+            ));
+        }
+        return Err(MonorubyErr::argumenterr(msg));
+    }
     Err(MonorubyErr::throw(tag, value))
 }
 
@@ -2230,14 +2748,30 @@ fn define_singleton_method(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let class_id = globals.store.get_singleton(self_val)?.id();
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
+    }
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // For a proc/block body, the runtime LFP carries the *block*'s
+    // FuncId. `super` resolution (`find_super`) reads that FuncId's
+    // `name`, so it must be set or it panics. Mirror the decoration
+    // that `Module#define_method` performs.
+    let block_fid_to_decorate: Option<FuncId>;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
-            globals.define_proc_method(proc)
-        } else if let Some(method) = method.is_method() {
-            method.func_id()
-        } else if let Some(method) = method.is_umethod() {
-            method.func_id()
+            let fid = globals.define_proc_method(proc);
+            globals.store[fid].set_method_style();
+            globals.store[fid].set_name(name);
+            block_fid_to_decorate = Some(proc.func_id());
+            fid
+        } else if let Some(m) = method.is_method() {
+            super::module::validate_bind_target(globals, m.owner(), class_id)?;
+            block_fid_to_decorate = None;
+            m.func_id()
+        } else if let Some(m) = method.is_umethod() {
+            super::module::validate_bind_target(globals, m.owner(), class_id)?;
+            block_fid_to_decorate = None;
+            m.func_id()
         } else {
             return Err(MonorubyErr::wrong_argument_type(
                 globals,
@@ -2247,11 +2781,24 @@ fn define_singleton_method(
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(globals, bh, pc)?;
-        globals.define_proc_method(proc)
+        let fid = globals.define_proc_method(proc);
+        globals.store[fid].set_method_style();
+        globals.store[fid].set_name(name);
+        block_fid_to_decorate = Some(proc.func_id());
+        fid
     } else {
         return Err(MonorubyErr::wrong_number_of_arg(2, 1));
     };
     vm.add_public_method(globals, class_id, name, func_id)?;
+    if let Some(block_fid) = block_fid_to_decorate {
+        if globals.store[block_fid].name().is_none() {
+            globals.store[block_fid].set_name(name);
+        }
+        if !globals.store[block_fid].owner_class().contains(&class_id) {
+            globals.store[block_fid].set_owner_class(class_id);
+        }
+        globals.store[block_fid].set_proc_method();
+    }
     Ok(Value::symbol(name))
 }
 
@@ -2440,8 +2987,62 @@ fn object_respond_to(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.self_val().inspect(&globals.store);
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    // Only plain objects participate in the ivar / hook formatting;
+    // every other kind (immediates, internally `/name`-tagged objects,
+    // and types with their own `inspect`) keeps the default rendering.
+    if self_val.ty() != Some(ObjTy::OBJECT)
+        || globals
+            .store
+            .get_ivar(self_val, IdentId::_NAME)
+            .is_some()
+    {
+        let s = self_val.inspect(&globals.store);
+        return Ok(Value::string(s));
+    }
+
+    // CRuby consults the (private) `instance_variables_to_inspect`
+    // hook: an Array selects/orders the ivars to show, `nil` shows
+    // all, anything else is a TypeError.
+    let hook = IdentId::get_id("instance_variables_to_inspect");
+    let selection = vm.invoke_method_if_exists(globals, hook, self_val, &[], None, None)?;
+
+    let all_ivars = globals.store.get_ivars(self_val);
+    let chosen: Vec<(IdentId, Value)> = match selection {
+        None => all_ivars,
+        Some(v) if v.is_nil() => all_ivars,
+        Some(v) => match v.try_array_ty() {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|e| e.try_symbol())
+                .filter_map(|nm| {
+                    all_ivars
+                        .iter()
+                        .find(|(n, _)| *n == nm)
+                        .map(|(n, val)| (*n, *val))
+                })
+                .collect(),
+            None => {
+                let cls = globals
+                    .store
+                    .get_class_name(v.real_class(&globals.store).id());
+                return Err(MonorubyErr::typeerr(format!(
+                    "Expected #instance_variables_to_inspect to return an Array or nil, but it returned {cls}"
+                )));
+            }
+        },
+    };
+
+    let class_name = globals
+        .store
+        .get_class_name(self_val.real_class(&globals.store).id());
+    let mut s = format!("#<{}:0x{:016x}", class_name, self_val.id());
+    for (i, (name, val)) in chosen.iter().enumerate() {
+        s += if i == 0 { " " } else { ", " };
+        s += &format!("{name}={}", val.inspect(&globals.store));
+    }
+    s += ">";
     Ok(Value::string(s))
 }
 
@@ -2503,11 +3104,51 @@ fn instance_of(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
 #[monoruby_builtin]
-fn method(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let (func_id, _, owner) = globals.find_method_for_object(receiver, method_name)?;
-    Ok(Value::new_method(receiver, func_id, owner))
+    match globals.find_method_for_object(receiver, method_name) {
+        Ok((func_id, _, owner)) => {
+            let original_name = globals
+                .store
+                .original_name_by_class_id(receiver.class(), method_name);
+            Ok(Value::new_method_named(
+                receiver,
+                func_id,
+                owner,
+                method_name,
+                original_name,
+            ))
+        }
+        Err(err) => {
+            // CRuby: if `receiver.respond_to_missing?(name, true)` is truthy,
+            // return a Method that proxies to `method_missing`.
+            if let Some(rtm_fid) =
+                globals.check_method(receiver, IdentId::RESPOND_TO_MISSING_)
+            {
+                let responds = vm.invoke_func_inner(
+                    globals,
+                    rtm_fid,
+                    receiver,
+                    &[Value::symbol(method_name), Value::bool(true)],
+                    None,
+                    None,
+                )?;
+                if responds.as_bool()
+                    && let Some(mm_fid) =
+                        globals.check_method(receiver, IdentId::METHOD_MISSING)
+                {
+                    return Ok(Value::new_method_missing_proxy(
+                        receiver,
+                        mm_fid,
+                        method_name,
+                        receiver.class(),
+                    ));
+                }
+            }
+            Err(err)
+        }
+    }
 }
 
 ///
@@ -2539,7 +3180,16 @@ fn singleton_method(
         }
     };
     let (func_id, _, owner) = globals.store.find_method_for_class(class_id, method_name)?;
-    Ok(Value::new_method(receiver, func_id, owner))
+    let original_name = globals
+        .store
+        .original_name_by_class_id(class_id, method_name);
+    Ok(Value::new_method_named(
+        receiver,
+        func_id,
+        owner,
+        method_name,
+        original_name,
+    ))
 }
 
 ///
@@ -2674,6 +3324,47 @@ fn singleton_methods(
     }))
 }
 
+/// True for a syntactically valid instance-variable name: `@`
+/// followed by an identifier whose first char is not a digit
+/// (and not another `@`, which would be a class variable).
+fn is_valid_ivar_name(s: &str) -> bool {
+    let mut it = s.chars();
+    if it.next() != Some('@') {
+        return false;
+    }
+    match it.next() {
+        Some(c) if c == '_' || c.is_alphabetic() || !c.is_ascii() => {}
+        _ => return false,
+    }
+    it.all(|c| c == '_' || c.is_alphanumeric() || !c.is_ascii())
+}
+
+/// Resolve an `instance_variable_*` name argument with CRuby
+/// semantics: Symbol/String are used directly, anything else is
+/// coerced via `#to_str` (TypeError otherwise), and the resulting
+/// name must be a valid instance-variable name (NameError otherwise).
+fn ivar_name_id(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<IdentId> {
+    let name = if let Some(sym) = arg.try_symbol() {
+        sym.get_name().to_string()
+    } else if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
+        let r = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        match r.is_str() {
+            Some(s) => s.to_string(),
+            None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),
+        }
+    } else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    if !is_valid_ivar_name(&name) {
+        return Err(MonorubyErr::nameerr(format!(
+            "'{name}' is not allowed as an instance variable name"
+        )));
+    }
+    Ok(IdentId::get_id(&name))
+}
+
 ///
 /// ### Kernel#instance_variable_defined?
 ///
@@ -2682,16 +3373,12 @@ fn singleton_methods(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
 fn iv_defined(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let id = match lfp.arg(0).unpack() {
-        RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id(s.check_utf8()?),
-        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, lfp.arg(0))),
-    };
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }
@@ -2703,8 +3390,8 @@ fn iv_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -2717,8 +3404,8 @@ fn iv_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn iv_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)
@@ -2749,8 +3436,8 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
 #[monoruby_builtin]
-fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = lfp.arg(0).expect_symbol_or_string(globals)?;
+fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
     match globals.store.remove_ivar(lfp.self_val(), id) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr(format!(
@@ -2762,6 +3449,110 @@ fn iv_remove(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn define_singleton_method_super() {
+        run_test(
+            r##"
+        cls = Class.new do
+          def bar; ['a']; end
+        end
+        object = cls.new
+        object.define_singleton_method(:bar) { ['b', *super()] }
+        a = object.bar
+        object.define_singleton_method(:baz, proc { |x| ['z', x] })
+        a + object.baz(1)
+        "##,
+        );
+    }
+
+    #[test]
+    fn define_singleton_method_errors() {
+        run_test_error(
+            r##"
+        o = Object.new
+        o.freeze
+        o.define_singleton_method(:foo) { 1 }
+        "##,
+        );
+        run_test_error(
+            r##"
+        class P1; end
+        other = P1.new
+        p1 = P1.new
+        class << p1
+          def sm; :s; end
+        end
+        um = p1.method(:sm).unbind
+        other.send(:define_singleton_method, :osm, um)
+        "##,
+        );
+    }
+
+    #[test]
+    fn instance_variable_name_validation() {
+        run_test(
+            r##"
+        o = Object.new
+        o.instance_variable_set(:@a, 1)
+        s = Object.new
+        def s.to_str; "@a"; end
+        [o.instance_variable_get(s), o.instance_variable_get("@a"),
+         o.instance_variable_defined?(:@a), o.instance_variable_defined?(:@z)]
+        "##,
+        );
+        run_test_error(r##"Object.new.instance_variable_get(:foo)"##);
+        run_test_error(r##"Object.new.instance_variable_get(:"@")"##);
+        run_test_error(r##"Object.new.instance_variable_get("@1x")"##);
+        run_test_error(r##"Object.new.instance_variable_set("@@c", 1)"##);
+        run_test_error(r##"Object.new.instance_variable_get(42)"##);
+        run_test_error(r##"Object.new.instance_variable_defined?(:bad)"##);
+        run_test_error(r##"Object.new.instance_variable_get(Object.new)"##);
+        // #to_str returning a non-String is a TypeError.
+        run_test_error(
+            r##"o=Object.new; def o.to_str; 5; end; Object.new.instance_variable_get(o)"##,
+        );
+    }
+
+    #[test]
+    fn path_arg_to_path_to_str_coercion() {
+        // Exercises `path_arg_to_string` (#to_path then #to_str, and
+        // the TypeError arm) through `load`.
+        run_test_once(
+            r##"
+        pth = "/tmp/mono_cov_#{Process.pid}_#{rand(1 << 30)}.rb"
+        File.write(pth, "$cov = (defined?($cov) && $cov ? $cov : 0) + 1\n")
+        $cov = 0
+        $pth = pth
+        o1 = Object.new
+        def o1.to_path; $pth; end
+        load(o1)
+        inner = Object.new
+        def inner.to_str; $pth; end
+        $inner = inner
+        o2 = Object.new
+        def o2.to_path; $inner; end
+        load(o2)
+        err = begin
+          load(Object.new)
+          :no
+        rescue TypeError
+          :te
+        end
+        File.delete(pth)
+        [$cov, err]
+        "##,
+        );
+    }
+
+    #[test]
+    fn kernel_putc() {
+        run_test(r##"putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)"##);
+        run_test_error(r##"putc(nil)"##);
+        run_test_error(r##"putc(true)"##);
+        run_test_error(r##"putc(false)"##);
+        run_test_error(r##"putc(Object.new)"##);
+    }
 
     #[test]
     fn nil() {
@@ -2807,6 +3598,69 @@ mod tests {
         );
         run_test_error(r##"eval "1/0""##);
         run_test_error(r##"eval "jk""##);
+        // Unsupported eval'd syntax is a catchable SyntaxError, not a
+        // process-aborting FatalError.
+        run_test(
+            r##"
+        begin
+          eval("x=1; y=2; x..y if x")
+          :no_raise
+        rescue SyntaxError
+          :syntax
+        end
+        "##,
+        );
+    }
+
+    #[test]
+    fn eval_begin_block() {
+        // `BEGIN { ... }` (PreExecutionNode), incl. `return`, is only
+        // lowered by the Prism backend; ruruby-parse rejects it.
+        if parser_is_ruruby() {
+            return;
+        }
+        run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
+    }
+
+    #[test]
+    fn catch_throw_uncaught() {
+        run_test(r##"catch(:x) { throw :x, 42 }"##);
+        run_test(r##"catch(:a) { catch(:b) { throw :a, 7 } }"##);
+        run_test(
+            r##"
+        begin
+          throw :nope
+        rescue UncaughtThrowError => e
+          [e.is_a?(ArgumentError), e.message]
+        end
+        "##,
+        );
+        run_test_error(r##"throw :nope"##);
+    }
+
+    #[test]
+    fn block_shadow_locals() {
+        // Block-local shadow vars (`|x; a|`) are only lowered by the
+        // Prism backend; ruruby-parse raises a SyntaxError.
+        if parser_is_ruruby() {
+            return;
+        }
+        run_test(
+            r##"
+        x = 10
+        [1, 2, 3].each { |i; x| x = i * 100 }
+        a = nil
+        f = ->(n; a) { a = n + 1; a }
+        [x, f.call(2), a.inspect, (proc { |; z| z = 9; z }.call)]
+        "##,
+        );
+    }
+
+    #[test]
+    fn array_implicit_hash_element() {
+        run_test(r##"[args: [1, 2], kw: {a: "b"}]"##);
+        run_test(r##"[1, foo: 2, bar: 3]"##);
+        run_test(r##"[0, {a: 1}, b: 2]"##);
     }
 
     #[test]
@@ -2889,6 +3743,9 @@ mod tests {
         run_test_no_result_check("exit");
         run_test_no_result_check("exit 0");
         run_test_no_result_check("__dir__");
+        run_test(r#"eval("__dir__", nil, "foo.rb")"#);
+        run_test(r#"eval("__dir__", nil, "foo/bar.rb")"#);
+        run_test(r#"eval("__dir__", binding).inspect"#);
         run_test_no_result_check("caller(1)");
         run_test_no_result_check("caller()");
         run_test_no_result_check("rand");
@@ -3046,6 +3903,24 @@ mod tests {
         rescue SystemExit => e
           e.status
         end
+        "##,
+        );
+    }
+
+    #[test]
+    fn abort_writes_to_dollar_stderr() {
+        run_test(
+            r##"
+        class MyIO; def initialize; @s=+""; end; def write(*a); a.each{|x| @s<<x.to_s}; end; attr_reader :s; end
+        io = MyIO.new
+        old = $stderr
+        $stderr = io
+        begin
+          begin; abort("a message"); rescue SystemExit; end
+        ensure
+          $stderr = old
+        end
+        io.s
         "##,
         );
     }
@@ -3469,6 +4344,134 @@ mod tests {
         run_test_error("Rational(1, 0)");
         // Type error
         run_test_error("Rational(:foo)");
+    }
+
+    #[test]
+    fn kernel_integer_exception_and_coercion() {
+        // `exception: false` swallows conversion errors -> nil.
+        run_tests(&[
+            r#"Integer("abc", exception: false).inspect"#,
+            r#"Integer(nil, exception: false).inspect"#,
+            r#"Integer("---1", exception: false).inspect"#,
+            r#"Integer("42", exception: false)"#,
+        ]);
+        // NaN / Infinity raise FloatDomainError.
+        run_test_error("Integer(0.0 / 0.0)");
+        run_test_error("Integer(1.0 / 0.0)");
+        // to_int returning a non-Integer falls back to to_i.
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; "1"; end; def to_i; 42; end; end; o = C.new"#,
+        );
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; nil; end; def to_i; 7; end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_float_exception_and_overflow() {
+        // Overflow of a valid literal -> Infinity (not ArgumentError).
+        run_tests(&[
+            r#"Float("2e1000").infinite?"#,
+            r#"Float("2E1000") == Float::INFINITY"#,
+            r#"Float("abc", exception: false).inspect"#,
+            r#"Float(nil, exception: false).inspect"#,
+        ]);
+        // nil -> TypeError.
+        run_test_error("Float(nil)");
+        // `_` adjacent to the exponent marker is rejected.
+        run_test_error(r#"Float("2e_100")"#);
+        run_test_error(r#"Float("2_e100")"#);
+        run_test_error(r#"Float("20e100_")"#);
+        // #to_f must return a Float, not an Integer.
+        run_test_error(
+            r#"o = Object.new; def o.to_f; 123; end; Float(o)"#,
+        );
+    }
+
+    #[test]
+    fn kernel_complex_string_parsing() {
+        run_tests(&[
+            r#"Complex("9").to_s"#,
+            r#"Complex("-3").to_s"#,
+            r#"Complex("2/3").to_s"#,
+            r#"Complex("4+2/3i").to_s"#,
+            r#"Complex("2.3").to_s"#,
+            r#"Complex("4+2.3i").to_s"#,
+            r#"Complex("35i").to_s"#,
+            r#"Complex("i").to_s"#,
+            r#"Complex("-i").to_s"#,
+            r#"Complex("79+4i").to_s"#,
+            r#"Complex("79-i").to_s"#,
+            r#"Complex("79+4J").to_s"#,
+            r#"Complex("2e3+4i").to_s"#,
+            r#"Complex("  79+4i  ").to_s"#,
+            r#"Complex("7_9+4_0i").to_s"#,
+            // exception: false swallows parse errors.
+            r#"Complex("ruby", exception: false).inspect"#,
+            r#"Complex("79+4iruby", exception: false).inspect"#,
+            r#"Complex("NaN", exception: false).inspect"#,
+            r#"Complex("7__9+4__0i", exception: false).inspect"#,
+        ]);
+        // Invalid strings raise ArgumentError; nil raises TypeError.
+        run_test_error(r#"Complex("ruby")"#);
+        run_test_error(r#"Complex("Infinity")"#);
+        run_test_error("Complex(nil)");
+        run_test_error("Complex(0, nil)");
+        // #to_c coercion for a single non-Numeric argument.
+        run_test_with_prelude(
+            r#"Complex(o).to_s"#,
+            r#"class C; def to_c; Complex(0, 1); end; end; o = C.new"#,
+        );
+    }
+
+    #[test]
+    fn kernel_conversion_branch_coverage() {
+        // Integer: bare nil -> TypeError; -Infinity branch; valid
+        // float truncation; exception:false on a float-domain error.
+        run_test_error("Integer(nil)");
+        run_test_error("Integer(-1.0 / 0.0)");
+        run_test("Integer(3.99)");
+        run_test("Integer(-3.99)");
+        run_tests(&[
+            r#"Integer(0.0 / 0.0, exception: false).inspect"#,
+            r#"Integer(1.0 / 0.0, exception: false).inspect"#,
+            r#"Integer("0b1010")"#,
+            r#"Integer("0o17")"#,
+            r#"Integer("0xff")"#,
+            r#"Integer("  -10  ")"#,
+        ]);
+        run_test_with_prelude(
+            r#"Integer(o)"#,
+            r#"class C; def to_int; 99; end; end; o = C.new"#,
+        );
+        // Float: successful #to_f coercion; exception:false -> nil;
+        // hex float literal string.
+        run_test_with_prelude(
+            r#"Float(o)"#,
+            r#"class C; def to_f; 1.5; end; end; o = C.new"#,
+        );
+        run_tests(&[
+            r#"Float(nil, exception: false).inspect"#,
+            r#"Float("1.0e3")"#,
+            r#"Float("0x1.8p3")"#,
+            r#"Float(:sym, exception: false).inspect"#,
+        ]);
+        run_test_error("Float(:sym)");
+        // Complex: exception:false -> nil; symbol real part; numeric
+        // pairs; invalid polar.
+        run_tests(&[
+            r#"Complex(nil, exception: false).inspect"#,
+            r#"Complex(1, 2).to_s"#,
+            r#"Complex(1.5, -2).to_s"#,
+            r#"Complex("ruby", exception: false).inspect"#,
+        ]);
+        // A non-real (Symbol) part is a TypeError even with
+        // `exception: false` (CRuby raises regardless).
+        run_test_error("Complex(:x, 0)");
+        run_test_error("Complex(:x, 0, exception: false)");
+        run_test_error(r#"Complex("1@")"#);
     }
 
     #[test]
@@ -4462,5 +5465,57 @@ mod tests {
     fn kernel_uncaught_throw() {
         // Throwing a tag with no matching catch raises an error.
         run_test_error("throw :nope");
+    }
+
+    #[test]
+    fn kernel_inspect_ivars_and_hook() {
+        // Comma-separated ivars; the `instance_variables_to_inspect`
+        // hook selects (Array) / shows-all (nil); addresses normalized.
+        // Classic `def...end` only (the ruruby parser used by `bin/test`
+        // has no endless-method support).
+        run_test(
+            r#"
+            o = Object.new
+            o.instance_eval { @host="h"; @user="u"; @password="p" }
+            a = o.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o2 = Object.new
+            o2.instance_eval { @host="h"; @user="u"; @password="p" }
+            o2.singleton_class.class_eval do
+              def instance_variables_to_inspect; [:@host, :@user, :@nope]; end
+              private :instance_variables_to_inspect
+            end
+            b = o2.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o3 = Object.new
+            o3.instance_eval { @a=1 }
+            o3.singleton_class.class_eval do
+              def instance_variables_to_inspect; []; end
+              private :instance_variables_to_inspect
+            end
+            c = o3.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            o4 = Object.new
+            o4.instance_eval { @x=1; @y=2 }
+            o4.singleton_class.class_eval do
+              def instance_variables_to_inspect; nil; end
+              private :instance_variables_to_inspect
+            end
+            d = o4.inspect.sub(/0x[0-9a-f]+/, '0xX')
+            [a, b, c, d]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_inspect_hook_type_error() {
+        run_test_error(
+            r#"
+            o = Object.new
+            o.instance_eval { @a=1 }
+            o.singleton_class.class_eval do
+              def instance_variables_to_inspect; {}; end
+              private :instance_variables_to_inspect
+            end
+            o.inspect
+            "#,
+        );
     }
 }

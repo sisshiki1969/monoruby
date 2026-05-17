@@ -1619,56 +1619,63 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val().as_array();
     let mut iter = self_.iter().cloned();
-    if let Some(bh) = lfp.block() {
+    // A block is used only for the 0/1-argument forms. With two
+    // arguments (init, sym) the block is ignored (CRuby warns).
+    if let Some(bh) = lfp.block()
+        && lfp.try_arg(1).is_none()
+    {
         let res = if lfp.try_arg(0).is_none() {
             iter.next().unwrap_or_default()
         } else {
             lfp.arg(0)
         };
-        vm.invoke_block_fold1(globals, bh, iter, res)
-    } else {
-        // The `inject(sym)` form may consume the first element as the
-        // initial accumulator; track where the remaining elements start.
-        let (sym, mut res, mut start) = if let Some(arg0) = lfp.try_arg(0) {
-            if let Some(arg1) = lfp.try_arg(1) {
-                (arg1.expect_symbol_or_string(globals)?, arg0, 0usize)
-            } else {
-                let sym = arg0.expect_symbol_or_string(globals)?;
-                if self_.len() == 0 {
-                    return Ok(Value::nil());
-                }
-                (sym, self_[0], 1usize)
-            }
-        } else {
-            return Err(MonorubyErr::argumenterr("wrong number of arguments"));
-        };
-        // Fast path for `inject(:+)` on a Fixnum accumulator: skip method
-        // dispatch entirely while elements stay in i64 range.
-        if sym == IdentId::_ADD
-            && let Some(acc_i) = res.try_fixnum()
-        {
-            let mut acc = acc_i;
-            let len = self_.len();
-            let mut i = start;
-            while i < len {
-                let v = self_[i];
-                let Some(x) = v.try_fixnum() else { break };
-                let Some(new) = acc.checked_add(x) else { break };
-                acc = new;
-                i += 1;
-            }
-            if i == len {
-                return Ok(Value::integer(acc));
-            }
-            // Resume generic dispatch with the partial sum we have so far.
-            res = Value::integer(acc);
-            start = i;
-        }
-        for v in self_[start..].iter() {
-            res = vm.invoke_method_inner(globals, sym, res, &[*v], None, None)?;
-        }
-        Ok(res)
+        return vm.invoke_block_fold1(globals, bh, iter, res);
     }
+    if lfp.block().is_some() && lfp.try_arg(1).is_some() {
+        vm.ruby_warn(globals, "warning: given block not used")?;
+    }
+    // The `inject(sym)` form may consume the first element as the
+    // initial accumulator; track where the remaining elements start.
+    // A non-Symbol/String method name is coerced via `#to_str`.
+    let (sym, mut res, mut start) = if let Some(arg0) = lfp.try_arg(0) {
+        if let Some(arg1) = lfp.try_arg(1) {
+            (arg1.coerce_to_symbol_or_string(vm, globals)?, arg0, 0usize)
+        } else {
+            let sym = arg0.coerce_to_symbol_or_string(vm, globals)?;
+            if self_.len() == 0 {
+                return Ok(Value::nil());
+            }
+            (sym, self_[0], 1usize)
+        }
+    } else {
+        return Err(MonorubyErr::argumenterr("wrong number of arguments"));
+    };
+    // Fast path for `inject(:+)` on a Fixnum accumulator: skip method
+    // dispatch entirely while elements stay in i64 range.
+    if sym == IdentId::_ADD
+        && let Some(acc_i) = res.try_fixnum()
+    {
+        let mut acc = acc_i;
+        let len = self_.len();
+        let mut i = start;
+        while i < len {
+            let v = self_[i];
+            let Some(x) = v.try_fixnum() else { break };
+            let Some(new) = acc.checked_add(x) else { break };
+            acc = new;
+            i += 1;
+        }
+        if i == len {
+            return Ok(Value::integer(acc));
+        }
+        // Resume generic dispatch with the partial sum we have so far.
+        res = Value::integer(acc);
+        start = i;
+    }
+    for v in self_[start..].iter() {
+        res = vm.invoke_method_inner(globals, sym, res, &[*v], None, None)?;
+    }
+    Ok(res)
 }
 
 ///
@@ -2876,9 +2883,33 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    let ary = lfp.self_val().as_array();
-    let size_hint = ary.len();
-    vm.invoke_block_flat_map1(globals, bh, ary.iter().cloned(), size_hint)
+    let elems: Vec<Value> = lfp.self_val().as_array().iter().copied().collect();
+    let data = vm.get_block_data(globals, bh)?;
+    let mut res: Vec<Value> = Vec::with_capacity(elems.len());
+    for x in elems {
+        let r = vm.invoke_block(globals, &data, &[x])?;
+        if let Some(a) = r.try_array_ty() {
+            res.extend(a.iter().copied());
+        } else if globals.check_method(r, IdentId::TO_ARY).is_some() {
+            // One level of `#to_ary` flattening, matching CRuby.
+            let a = vm.invoke_method_inner(globals, IdentId::TO_ARY, r, &[], None, None)?;
+            if let Some(arr) = a.try_array_ty() {
+                res.extend(arr.iter().copied());
+            } else if a.is_nil() {
+                res.push(r);
+            } else {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Array ({}#to_ary gives {})",
+                    r.get_real_class_name(&globals.store),
+                    r.get_real_class_name(&globals.store),
+                    a.get_real_class_name(&globals.store),
+                )));
+            }
+        } else {
+            res.push(r);
+        }
+    }
+    Ok(Value::array_from_vec(res))
 }
 
 fn all_any_inner(
@@ -4532,6 +4563,40 @@ mod tests {
         run_test(r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##);
         run_test(r##"[1, 2, 3, 4, 5].inject(:+)"##);
         run_test(r##"[1, 2, 3, 4, 5].inject(10, :+)"##);
+    }
+
+    #[test]
+    fn inject_method_name_coercion() {
+        run_tests(&[
+            // method name given as a String.
+            r##"[10, 1, 2, 3].inject("-")"##,
+            r##"[1, 2, 3].inject(10, "-")"##,
+            // method name coerced with #to_str.
+            r##"(n=Object.new; def n.to_str; "-"; end; [10,1,2,3].inject(n))"##,
+            r##"(n=Object.new; def n.to_str; "-"; end; [1,2,3].inject(10, n))"##,
+            // non-Symbol/String, no #to_str -> TypeError.
+            r##"begin; [10,1,2,3].inject(Object.new); :no; rescue TypeError; :te; end"##,
+            r##"begin; [1,2,3].inject(10, Object.new); :no; rescue TypeError; :te; end"##,
+            // two args + block: block ignored, symbol form used.
+            r##"[1, 2, 3].inject(10, :-) { raise "unused" }"##,
+            // Enumerable receiver mirrors the same rules.
+            r##"(class E1; include Enumerable; def each; yield 10; yield 1; yield 2; end; end; begin; E1.new.inject(Object.new); :no; rescue TypeError; :te; end)"##,
+        ]);
+    }
+
+    #[test]
+    fn flat_map_to_ary() {
+        run_tests(&[
+            r##"[[1,2],[3,4]].flat_map { |x| x }"##,
+            r##"[1, 2, 3].flat_map { |x| x }"##,
+            // block result responding to #to_ary is flattened one level.
+            r##"(o=Object.new; def o.to_ary; [:a,:b]; end; [1,2].flat_map { o })"##,
+            // non-Array, non-to_ary result is kept as-is.
+            r##"[1, 2].flat_map { |x| x * 2 }"##,
+            r##"[1, 2].collect_concat { |x| [x, x] }"##,
+            // #to_ary returning non-Array, non-nil -> TypeError.
+            r##"begin; o=Object.new; def o.to_ary; 5; end; [1].flat_map { o }; :no; rescue TypeError; :te; end"##,
+        ]);
     }
 
     #[test]

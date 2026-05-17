@@ -243,21 +243,31 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.try_arg(0) {
+    let class = lfp.self_val().as_class_id();
+    let inner = match lfp.try_arg(0) {
         Some(string) => {
             // Preserve the source string's encoding by going through
             // `coerce_to_rstring` and cloning the inner.
-            let other = string.coerce_to_rstring(vm, globals)?;
-            Ok(Value::string_from_inner((*other).clone()))
+            (*string.coerce_to_rstring(vm, globals)?).clone()
         }
         None => {
             // CRuby's `String.new` (no arg) returns a binary string.
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                b"",
-                Encoding::Ascii8,
-            )))
+            RStringInner::from_encoding(b"", Encoding::Ascii8)
         }
+    };
+    let obj = Value::string_from_inner_with_class(inner, class);
+    // For a subclass, run its `initialize` so user-defined side effects
+    // (e.g. `self.extend`) take effect, matching `Class#new` semantics.
+    // Plain `String.new` keeps the fast direct construction above.
+    if class != STRING_CLASS {
+        let arg = lfp.try_arg(0);
+        let args: &[Value] = match &arg {
+            Some(v) => std::slice::from_ref(v),
+            None => &[],
+        };
+        vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, args, lfp.block(), None)?;
     }
+    Ok(obj)
 }
 
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
@@ -1651,6 +1661,67 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
 #[monoruby_builtin]
 fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    // Non-UTF-8 receiver + empty String separator: split into
+    // characters via the encoding-aware iterator (the generic path
+    // below needs a `&str`, which would error for EUC-JP/Shift_JIS).
+    if let Some(recv) = self_.is_rstring_inner()
+        && !recv.encoding().is_utf8_compatible()
+        && let Some(a0) = lfp.try_arg(0)
+        && let Some(sep_inner) = a0.is_rstring_inner()
+        && sep_inner.as_bytes().is_empty()
+    {
+        let lim = if let Some(a1) = lfp.try_arg(1) {
+            a1.coerce_to_int_i64(vm, globals)?
+        } else {
+            0
+        };
+        let enc = recv.encoding();
+        let chars: Vec<RStringInner> = recv
+            .iter_char_bytes()
+            .map(|s| RStringInner::from_encoding(s, enc))
+            .collect();
+        let n = chars.len();
+        let mut v: Vec<Value> = if lim > 0 && (lim as usize) < n {
+            // `limit` fields: first `limit-1` chars, last field is
+            // the unsplit remainder.
+            let take = (lim as usize) - 1;
+            let mut bytes = Vec::new();
+            for c in &chars[take..] {
+                bytes.extend_from_slice(c.as_bytes());
+            }
+            let mut out: Vec<Value> = chars[..take]
+                .iter()
+                .map(|c| Value::string_from_inner(c.clone()))
+                .collect();
+            out.push(Value::string_from_inner(RStringInner::from_encoding(
+                &bytes, enc,
+            )));
+            out
+        } else {
+            chars
+                .into_iter()
+                .map(Value::string_from_inner)
+                .collect()
+        };
+        // Trailing empty field: only when limit is negative (CRuby
+        // keeps it; default/positive limit drops trailing empties,
+        // and an all-character split has none anyway).
+        if lim < 0 {
+            v.push(Value::string_from_inner(RStringInner::from_encoding(
+                b"", enc,
+            )));
+        }
+        return match lfp.block() {
+            Some(bh) => {
+                let ary = Value::array_from_vec(v);
+                vm.temp_push(ary);
+                vm.invoke_block_iter1(globals, bh, ary.as_array().iter().cloned())?;
+                vm.temp_pop();
+                Ok(lfp.self_val())
+            }
+            None => Ok(Value::array_from_vec(v)),
+        };
+    }
     let string = self_.expect_str(globals)?;
     let lim = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_int_i64(vm, globals)?
@@ -2620,6 +2691,22 @@ fn string_index(
     let given = self_.is_rstring().unwrap();
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
+        // Non-UTF-8 receiver + String needle: encoding-aware byte
+        // search at character boundaries (the regex path below needs
+        // valid UTF-8).
+        if !given.encoding().is_utf8_compatible() {
+            let from = match given.conv_char_index(char_pos) {
+                Some(p) => p,
+                None => return Ok(Value::nil()),
+            };
+            let needle = arg_inner.as_bytes().to_vec();
+            return Ok(
+                match nonutf8_substring_index(&given, &needle, from, false) {
+                    Some(cp) => Value::integer(cp as i64),
+                    None => Value::nil(),
+                },
+            );
+        }
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
@@ -2952,6 +3039,46 @@ fn string_rindex(
 /// matches right-to-left and is bytewise correct because it works on
 /// `&str`: candidate positions inside a multibyte char's interior are
 /// skipped by `str::Searcher`'s boundary check.
+/// Character index of `needle`'s bytes within a non-UTF-8 receiver,
+/// constrained to character boundaries (so an ASCII needle never
+/// matches a Shift_JIS trail byte). `rev=false` ⇒ first match at or
+/// after `anchor`; `rev=true` ⇒ last match at or before `anchor`.
+/// The caller has already passed `check_string_encoding_compat`, so
+/// `needle` is ASCII or same-encoding bytes.
+fn nonutf8_substring_index(
+    inner: &RStringInner,
+    needle: &[u8],
+    anchor: usize,
+    rev: bool,
+) -> Option<usize> {
+    let bytes = inner.as_bytes();
+    let mut bounds: Vec<usize> = Vec::new();
+    let mut off = 0usize;
+    for ch in inner.iter_char_bytes() {
+        bounds.push(off);
+        off += ch.len();
+    }
+    let char_len = bounds.len();
+    if needle.is_empty() {
+        return if rev {
+            Some(anchor.min(char_len))
+        } else if anchor <= char_len {
+            Some(anchor)
+        } else {
+            None
+        };
+    }
+    let hit = |cp: usize| {
+        let bp = bounds[cp];
+        bytes[bp..].starts_with(needle)
+    };
+    if rev {
+        (0..char_len.min(anchor + 1)).rev().find(|&cp| hit(cp))
+    } else {
+        (anchor..char_len).find(|&cp| hit(cp))
+    }
+}
+
 fn string_rindex_string(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2981,6 +3108,17 @@ fn string_rindex_string(
     // Empty needle: `rindex("", k)` == k, capped at char_len.
     if needle_bytes.is_empty() {
         return Ok(Value::integer(max_char_pos as i64));
+    }
+
+    // Non-UTF-8 receiver: encoding-aware reverse byte search at
+    // character boundaries.
+    if !given.encoding().is_utf8_compatible() {
+        return Ok(
+            match nonutf8_substring_index(given, needle_bytes, max_char_pos, true) {
+                Some(cp) => Value::integer(cp as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     // The regex path requires valid UTF-8; preserve that contract for
@@ -4510,7 +4648,51 @@ fn ascii_case_fast_path(
     op: CaseOp,
     mode: CaseMode,
 ) -> Option<RStringInner> {
-    if !inner.is_ascii_only() || matches!(mode, CaseMode::Turkic) {
+    if matches!(mode, CaseMode::Turkic) {
+        return None;
+    }
+    if !inner.is_ascii_only() {
+        // EUC-JP / Shift_JIS: CRuby's default (non-`:unicode`) case
+        // mapping touches ASCII bytes only; multibyte characters are
+        // copied verbatim. Walk the encoding-aware char iterator so
+        // a Shift_JIS trail byte in 0x40..=0x7E is never mistaken for
+        // a foldable ASCII letter.
+        if matches!(
+            inner.encoding(),
+            crate::value::Encoding::EucJp | crate::value::Encoding::Sjis(_)
+        ) {
+            let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+                SmallVec::with_capacity(inner.as_bytes().len());
+            let mut first = true;
+            for ch in inner.iter_char_bytes() {
+                if ch.len() == 1 && ch[0] < 0x80 {
+                    let b = ch[0];
+                    let mapped = match op {
+                        CaseOp::Upcase => b.to_ascii_uppercase(),
+                        CaseOp::Downcase => b.to_ascii_lowercase(),
+                        CaseOp::Swapcase => {
+                            if b.is_ascii_alphabetic() {
+                                b ^ 0x20
+                            } else {
+                                b
+                            }
+                        }
+                        CaseOp::Capitalize => {
+                            if first {
+                                b.to_ascii_uppercase()
+                            } else {
+                                b.to_ascii_lowercase()
+                            }
+                        }
+                    };
+                    out.push(mapped);
+                } else {
+                    out.extend_from_slice(ch);
+                }
+                first = false;
+            }
+            return Some(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+        }
         return None;
     }
     let bytes = inner.as_bytes();
@@ -5126,6 +5308,19 @@ fn delete_compute(
         .collect::<Result<_>>()?;
     let inner = self_val.as_rstring_inner();
 
+    // Non-UTF-8 receiver: delete by character via the encoding-aware
+    // iterator (multibyte chars are kept unless the set is negated).
+    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        for ch in inner.iter_char_bytes() {
+            if !ascii_sets_contain(&sets2, ch) {
+                out.extend_from_slice(ch);
+            }
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
+
     if inner.is_ascii_only() {
         let bytes = inner.as_bytes();
         let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
@@ -5168,6 +5363,12 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             inner.encoding(),
         )));
     }
+    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_bytes(&inner, &from, &to, false)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, inner.encoding()),
+        ));
+    }
     let rec = self_.expect_str(globals)?;
     let (res, _) = tr_translate(rec, &from, &to, false)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
@@ -5192,6 +5393,15 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
+    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
+        let enc = self_.as_rstring_inner().encoding();
+        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, false)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let rec = self_.expect_str(globals)?.to_string();
@@ -5225,6 +5435,12 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             inner.encoding(),
         )));
     }
+    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_bytes(&inner, &from, &to, true)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, inner.encoding()),
+        ));
+    }
     let rec = self_.expect_str(globals)?;
     let (res, _) = tr_translate(rec, &from, &to, true)?;
     Ok(Value::string_from_str_with_encoding_of(&res, self_))
@@ -5249,6 +5465,15 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
+        return Ok(self_);
+    }
+    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
+        let enc = self_.as_rstring_inner().encoding();
+        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, true)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let rec = self_.expect_str(globals)?.to_string();
@@ -5477,6 +5702,115 @@ enum TrMap {
     },
 }
 
+/// Gate for the non-UTF-8 `tr` / `tr_s` path. `Ok(true)` ⇒ receiver
+/// is non-UTF-8 and both spec args are ASCII-only (safe). `Err` ⇒ a
+/// spec arg is non-ASCII in a *different* encoding
+/// (Encoding::CompatibilityError). `Ok(false)` ⇒ caller keeps the
+/// existing path (UTF-8 receiver, or a same-encoding multibyte spec —
+/// documented follow-up).
+fn tr_args_ascii_ok(
+    globals: &Globals,
+    recv: &RStringInner,
+    a: Value,
+    b: Value,
+) -> Result<bool> {
+    if recv.encoding().is_utf8_compatible() {
+        return Ok(false);
+    }
+    for v in [a, b] {
+        if let Some(s) = v.is_rstring_inner()
+            && s.as_bytes().iter().any(|x| *x >= 0x80)
+        {
+            return if s.encoding() != recv.encoding() {
+                Err(MonorubyErr::incompatible_encoding(
+                    &globals.store,
+                    recv.encoding(),
+                    s.encoding(),
+                ))
+            } else {
+                Ok(false)
+            };
+        }
+    }
+    Ok(true)
+}
+
+/// `tr_translate` over a non-UTF-8 receiver: walk the encoding-aware
+/// char iterator. Any multibyte character is treated as a single
+/// sentinel non-ASCII codepoint (`\u{FFFF}`) so an ASCII-only
+/// `from`/`to` spec yields exactly CRuby's behaviour (kept verbatim
+/// unless a negated set replaces/deletes it). `from`/`to` must be
+/// ASCII-only (the caller gates via `tr_args_ascii_ok`).
+fn tr_translate_bytes(
+    inner: &RStringInner,
+    from: &str,
+    to: &str,
+    squeeze: bool,
+) -> Result<(SmallVec<[u8; STRING_INLINE_CAP]>, bool)> {
+    let map = tr_build_map(from, to)?;
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+        SmallVec::with_capacity(inner.as_bytes().len());
+    let mut changed = false;
+    let mut last_translated: Option<char> = None;
+    for ch in inner.iter_char_bytes() {
+        let key = if ch.len() == 1 && ch[0] < 0x80 {
+            ch[0] as char
+        } else {
+            '\u{FFFF}'
+        };
+        enum Out {
+            Keep,
+            Drop,
+            Repl(char),
+        }
+        let outcome = match &map {
+            TrMap::Map(m) => match m.get(&key) {
+                Some(r) => Out::Repl(*r),
+                None => Out::Keep,
+            },
+            TrMap::Delete { chars, negated } => {
+                let in_set = chars.contains(&key);
+                if if *negated { !in_set } else { in_set } {
+                    Out::Drop
+                } else {
+                    Out::Keep
+                }
+            }
+            TrMap::Negated {
+                from_set,
+                replacement,
+            } => {
+                if from_set.contains(&key) {
+                    Out::Keep
+                } else {
+                    Out::Repl(*replacement)
+                }
+            }
+        };
+        match outcome {
+            Out::Drop => {
+                changed = true;
+                last_translated = None;
+            }
+            // Translated to `r` (ASCII for a gated ASCII-only spec).
+            Out::Repl(r) => {
+                changed = true;
+                if !(squeeze && Some(r) == last_translated) {
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(r.encode_utf8(&mut buf).as_bytes());
+                }
+                last_translated = Some(r);
+            }
+            // Kept verbatim (copy the original char bytes).
+            Out::Keep => {
+                out.extend_from_slice(ch);
+                last_translated = None;
+            }
+        }
+    }
+    Ok((out, changed))
+}
+
 /// Run a `tr` translation. Returns `(result, changed)` so callers can
 /// distinguish "no-op → return nil" for the bang variants.
 /// `squeeze` collapses consecutive identical *output* characters that
@@ -5566,6 +5900,17 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
 
+    // Non-UTF-8 receiver: walk the encoding-aware char iterator.
+    if let Some(sets) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let mut c = 0i64;
+        for ch in inner.iter_char_bytes() {
+            if ascii_sets_contain(&sets, ch) {
+                c += 1;
+            }
+        }
+        return Ok(Value::integer(c));
+    }
+
     // ASCII haystack fast path: bitmap test per byte, branchless
     // `all(...)` over the intersection of sets.
     if inner.is_ascii_only() {
@@ -5646,6 +5991,24 @@ fn squeeze_compute(
     let squeeze_all = sets.is_empty();
     let inner = self_val.as_rstring_inner();
 
+    // Non-UTF-8 receiver: collapse runs of identical *characters*
+    // via the encoding-aware iterator.
+    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
+        let squeeze_all2 = sets2.is_empty();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        let mut prev: Option<SmallVec<[u8; 4]>> = None;
+        for ch in inner.iter_char_bytes() {
+            let in_set = squeeze_all2 || ascii_sets_contain(&sets2, ch);
+            if in_set && prev.as_deref() == Some(ch) {
+                continue;
+            }
+            out.extend_from_slice(ch);
+            prev = Some(SmallVec::from_slice(ch));
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
+
     // ASCII fast path: branchless byte-test against the intersection,
     // no allocation when nothing collapses (we still allocate when
     // building the output, but the inner loop is one bitmap test).
@@ -5694,6 +6057,59 @@ fn squeeze_compute(
 ///
 /// Empty specs match nothing (`"".count("") == 0`); `negated` is the
 /// leading `^` flag from `expand_tr_spec`.
+/// For a non-UTF-8 receiver, classify the `tr`-style set arguments:
+/// - `Ok(Some(sets))`  — every set is ASCII-only; safe to use.
+/// - `Err(..)`         — a set has non-ASCII bytes in a *different*
+///   encoding than the receiver → `Encoding::CompatibilityError`
+///   (CRuby behaviour, e.g. `euc.count("あ")`).
+/// - `Ok(None)`        — UTF-8 receiver, or a non-ASCII set in the
+///   *same* encoding → caller keeps the existing path (the
+///   same-encoding multibyte set case is a documented follow-up).
+fn nonutf8_ascii_charsets(
+    globals: &Globals,
+    recv: &RStringInner,
+    args: Array,
+) -> Result<Option<Vec<Charset>>> {
+    if recv.encoding().is_utf8_compatible() {
+        return Ok(None);
+    }
+    let mut sets = Vec::with_capacity(args.len());
+    for a in args.iter() {
+        let Some(s) = a.is_rstring_inner() else {
+            return Ok(None);
+        };
+        let b = s.as_bytes();
+        if b.iter().any(|x| *x >= 0x80) {
+            return if s.encoding() != recv.encoding() {
+                Err(MonorubyErr::incompatible_encoding(
+                    &globals.store,
+                    recv.encoding(),
+                    s.encoding(),
+                ))
+            } else {
+                Ok(None)
+            };
+        }
+        // SAFETY: every byte < 0x80, so this is valid ASCII/UTF-8.
+        sets.push(Charset::parse(std::str::from_utf8(b).unwrap())?);
+    }
+    Ok(Some(sets))
+}
+
+/// Membership of one character (given as its raw bytes under the
+/// receiver's encoding) in the intersection of ASCII-only `sets`.
+/// A single ASCII byte uses the byte bitmap; any multibyte character
+/// is never an ASCII member, so its membership is uniformly the
+/// negation flag (`contains_char` of any non-ASCII char == `negated`
+/// for an ASCII-only spec).
+fn ascii_sets_contain(sets: &[Charset], ch: &[u8]) -> bool {
+    if ch.len() == 1 && ch[0] < 0x80 {
+        sets.iter().all(|s| s.contains_ascii_byte(ch[0]))
+    } else {
+        sets.iter().all(|s| s.contains_char('\u{FFFF}'))
+    }
+}
+
 struct Charset {
     ascii_bitmap: [u64; 2],
     non_ascii: std::collections::BTreeSet<char>,
@@ -6142,7 +6558,14 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
                 "replacement must be a valid byte sequence",
             ));
         }
-        if r_enc != self_enc && !(r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible()) {
+        // An all-ASCII replacement is compatible with any
+        // ASCII-compatible target encoding (CRuby allows
+        // `s.scrub("?")` regardless of `s`'s encoding).
+        let repl_ascii_only = r_inner.as_bytes().iter().all(|b| *b < 0x80);
+        let compatible = r_enc == self_enc
+            || (r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible())
+            || (repl_ascii_only && self_enc.is_ascii_compatible());
+        if !compatible {
             return Err(MonorubyErr::argumenterr(format!(
                 "incompatible character encodings: {} and {}",
                 self_enc.name(),
@@ -6182,6 +6605,27 @@ fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner
                     out.push(b);
                 } else {
                     out.extend_from_slice(repl.as_bytes());
+                }
+            }
+        }
+        Encoding::EucJp | Encoding::Sjis(_) => {
+            let char_w = if matches!(enc, Encoding::EucJp) {
+                eucjp_char_width
+            } else {
+                sjis_char_width
+            };
+            let mut i = 0;
+            while i < bytes.len() {
+                if let Some(w) = char_w(&bytes[i..]) {
+                    out.extend_from_slice(&bytes[i..i + w]);
+                    i += w;
+                } else {
+                    // An invalid byte that cannot begin a valid
+                    // character is its own ill-formed subpart
+                    // (CRuby replaces each independently, e.g.
+                    // SJIS `\xFF\xFE` -> two replacements).
+                    out.extend_from_slice(repl.as_bytes());
+                    i += 1;
                 }
             }
         }
@@ -6557,6 +7001,28 @@ mod tests {
     }
 
     #[test]
+    fn string_subclass_new() {
+        run_test(
+            r##"
+        module M; end
+        class S < String
+          def initialize(*); super; self.extend(M); end
+        end
+        o = S.new("hi")
+        [o.class.name, o.is_a?(S), o.is_a?(String), o.is_a?(M), o == "hi"]
+        "##,
+        );
+        // Subclass `new` with no argument (the None inner-build arm).
+        run_test(
+            r##"
+        class S2 < String; end
+        s = S2.new
+        [s.class.name, s.is_a?(S2), s, s.encoding.name]
+        "##,
+        );
+    }
+
+    #[test]
     fn string_try_convert() {
         run_test(r##"String.try_convert("str")"##);
         run_test(r##"String.try_convert(/re/)"##);
@@ -6826,6 +7292,51 @@ mod tests {
         run_test2(r###""%15.1e" % 12785.34578e-127"###);
         run_test2(r###""%15.1E" % 12785.34578e-127"###);
         run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+    }
+
+    #[test]
+    fn string_format_positional() {
+        // `N$` positional argument references, including a flag before
+        // the reference (`%-2$d`) and `*N$` width-from-argument.
+        run_test2(r###"sprintf("%1$s %2$s", "a", "b")"###);
+        run_test2(r###"sprintf("%2$s %1$s", "a", "b")"###);
+        run_test2(r###"sprintf("%-2$d", 1, 2, 3)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, 10)"###);
+        run_test2(r###"sprintf("%1$*2$d", 112, -10)"###);
+        run_test2(r###"sprintf("%1$*2$b", 10, 10)"###);
+        run_test2(r###"sprintf("%1$*2$s", "abc", 10)"###);
+        // Error / edge branches of the positional parser.
+        run_test_error(r###"sprintf("%1$s %2$s", "a")"###);
+        run_test_error(r###"sprintf("%0$d", 1)"###);
+        run_test2(r###"sprintf("%1$s %1$s", "x")"###);
+        // Mixing numbered and unnumbered references is an
+        // ArgumentError (matches CRuby's exact messages).
+        run_test_error(r###"sprintf("%1$s %s", "a", "b")"###);
+        run_test_error(r###"sprintf("%s %1$s", "a", "b")"###);
+        run_test_error(r###"sprintf("%*1$d", 5, 42)"###);
+        run_test2(r###"sprintf("%2$*1$d", 5, 42)"###);
+        run_test2(r###"sprintf("%s %s", "a", "b")"###);
+    }
+
+    #[test]
+    fn string_format_hash_and_neg_radix() {
+        // `#` flag forces a decimal point for e/E/g/G/a/A and keeps
+        // g/G trailing zeros; `%#f` keeps CRuby's Integer quirk.
+        run_test2(r###""%#.0e" % 100"###);
+        run_test2(r###""%#.0g" % 100"###);
+        run_test2(r###""%#g" % 123.4"###);
+        run_test2(r###""%#.0f" % 1"###);
+        run_test2(r###""%#.0f" % 1.0"###);
+        run_test2(r###""%#.0f" % 5"###);
+        run_test2(r###""%#a" % 16.0"###);
+        // `+`/space on negative b/o/x → sign-magnitude, not two's-complement.
+        run_test2(r###""%+b" % -10"###);
+        run_test2(r###""% o" % -10"###);
+        run_test2(r###""%+x" % -255"###);
+        run_test2(r###""%b" % -10"###);
+        run_test2(r###""%o" % -10"###);
+        run_test2(r###""%x" % -10"###);
+        run_test2(r###""%+8b" % -10"###);
     }
 
     #[test]
@@ -10661,5 +11172,172 @@ mod tests {
             "#,
         );
         run_test_error(r#""abc".dup.freeze.reverse!"#);
+    }
+
+    #[test]
+    fn eucjp_sjis_char_width() {
+        // Stateless multibyte (EUC-JP / Shift_JIS) character boundaries
+        // must match CRuby (P0 of the per-encoding iteration layer).
+        run_tests(&[
+            r#""あい".encode("EUC-JP").length"#,
+            r#""あい".encode("EUC-JP").each_char.map(&:bytesize)"#,
+            r#""ｱｲ".encode("EUC-JP").length"#,                 // 0x8E kana
+            r#""abc".force_encoding("EUC-JP").length"#,
+            r#""あAい".encode("Shift_JIS").length"#,
+            r#""あAい".encode("Shift_JIS").each_char.map(&:bytesize)"#,
+            r#""ﾊﾝｶｸ".encode("Shift_JIS").length"#,            // half-width kana
+            r#""日本語".encode("EUC-JP").reverse.encode("UTF-8")"#,
+            r#""日本語".encode("Shift_JIS").chars.map { |c| c.encode("UTF-8") }"#,
+            // EUC-JP 0x8F lead = JIS X 0212 (3-byte char).
+            r#"("\x8F\xA2\xAF".dup.force_encoding("EUC-JP")).length"#,
+            r#"("\x8F\xA2\xAF" + "A").dup.force_encoding("EUC-JP").each_char.map(&:bytesize)"#,
+            r#""".encode("EUC-JP").length"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_char_indexing() {
+        // `String#[]` / `#slice` must index EUC-JP / Shift_JIS by
+        // *character*, not byte (P1: get_range walks the encoding
+        // iterator for variable-width encodings).
+        run_tests(&[
+            r#""あいうえお".encode("EUC-JP")[1].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[1, 2].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[1..3].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP")[-2].encode("UTF-8")"#,
+            r#""あいうえお".encode("EUC-JP").slice(2, 2).encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[0].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[1].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[2].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[1..].encode("UTF-8")"#,
+            r#""漢A字".encode("Shift_JIS")[5]"#,
+            r#""日本語".encode("EUC-JP")[0, 2].encode("UTF-8")"#,
+            r#""日本語".encode("Shift_JIS")[1, 2].encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_validity_and_scrub() {
+        // P2: per-encoding validity + scrub for EUC-JP / Shift_JIS.
+        run_tests(&[
+            r#""あい".encode("EUC-JP").valid_encoding?"#,
+            r#""漢字".encode("Shift_JIS").valid_encoding?"#,
+            r#""abc".force_encoding("EUC-JP").valid_encoding?"#,
+            r#""\xFF\xFEok".dup.force_encoding("EUC-JP").valid_encoding?"#,
+            r#""a\x80b".dup.force_encoding("Shift_JIS").valid_encoding?"#,
+            r#""\x8F\xA2\xAF".dup.force_encoding("EUC-JP").valid_encoding?"#, // JIS X 0212
+            r#""a\x80b".dup.force_encoding("Shift_JIS").scrub("?")"#,
+            // valid JIS X 0208 left unchanged (compare by bytes to
+            // avoid String#inspect's non-UTF-8 rendering).
+            r#""a\xA1\xA1b".dup.force_encoding("EUC-JP").scrub("?").bytes"#,
+            // each lone invalid byte is its own replacement.
+            r#"("\x82\xA0\xFF\xFE".dup.force_encoding("Shift_JIS")).scrub("?").encode("UTF-8")"#,
+            // valid content is returned unchanged (scrub is a no-op).
+            r#""漢字".encode("EUC-JP").scrub.encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_case_mapping() {
+        // P3: ASCII-only case mapping for EUC-JP / Shift_JIS;
+        // multibyte characters (incl. Shift_JIS trail bytes that
+        // fall in the ASCII range) are copied verbatim.
+        run_tests(&[
+            r#""AaＡあBc".encode("EUC-JP").upcase.encode("UTF-8")"#,
+            r#""AaＡあBc".encode("EUC-JP").downcase.encode("UTF-8")"#,
+            r#""AaＡあBc".encode("EUC-JP").swapcase.encode("UTF-8")"#,
+            r#""aAＡあBc".encode("EUC-JP").capitalize.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").upcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").downcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").swapcase.encode("UTF-8")"#,
+            r#""ＸyＺz漢K".encode("Shift_JIS").capitalize.encode("UTF-8")"#,
+            r#"(x = "ABc".encode("EUC-JP"); x.upcase!; x.encode("UTF-8"))"#,
+            r#""ABC".encode("EUC-JP").upcase!"#, // no change -> nil
+            r#""漢字abc".encode("Shift_JIS").upcase.encode("UTF-8")"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_split_empty_sep() {
+        // P3 (step 2): `split("")` splits an EUC-JP / Shift_JIS
+        // receiver into characters (was ArgumentError).
+        run_tests(&[
+            r#""aあbいc".encode("EUC-JP").split("").map { |x| x.encode("UTF-8") }"#,
+            r#""aあbいc".encode("EUC-JP").split("", 3).map { |x| x.encode("UTF-8") }"#,
+            r#""aあbいc".encode("EUC-JP").split("", -1).map { |x| x.encode("UTF-8") }"#,
+            r#""".encode("EUC-JP").split("")"#,
+            r#""漢A字".encode("Shift_JIS").split("").map { |x| x.encode("UTF-8") }"#,
+            r#"(r = []; "aあb".encode("EUC-JP").split("") { |c| r << c.encode("UTF-8") }; r)"#,
+            r#""aあbいc".encode("EUC-JP").split("", 1).map { |x| x.encode("UTF-8") }"#,
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_count_delete() {
+        // P3 (step 3): `count` / `delete` over a non-UTF-8 receiver
+        // with ASCII-only sets (multibyte chars participate only via
+        // a negated set); a non-ASCII set in a different encoding is
+        // an Encoding::CompatibilityError.
+        run_tests(&[
+            r#""aあbいcaa".encode("EUC-JP").count("a")"#,
+            r#""aあbいcaa".encode("EUC-JP").count("^a")"#,
+            r#""aあbいcaa".encode("EUC-JP").delete("a").encode("UTF-8")"#,
+            r#""aあbいcaa".encode("EUC-JP").delete("^a").encode("UTF-8")"#,
+            r#"begin; "aあ".encode("EUC-JP").count("あ"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#"begin; "aあ".encode("EUC-JP").delete("あ"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#""AxＡあ".encode("Shift_JIS").count("A-Z")"#,
+            r#""AxＡあ".encode("Shift_JIS").delete("a-z").encode("UTF-8")"#,
+            r#""漢字".encode("EUC-JP").count("a")"#,
+            r#""abcabc".encode("EUC-JP").delete("b").encode("UTF-8")"#,
+            r#"(s = "abcあ".encode("EUC-JP"); s.delete!("b"); s.encode("UTF-8"))"#,
+            r#""ac".encode("EUC-JP").delete!("z")"#, // no change -> nil
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_tr_squeeze() {
+        // P3 (step 4): `tr`/`tr_s`/`squeeze` over a non-UTF-8 receiver
+        // with ASCII-only specs (multibyte kept verbatim unless a
+        // negated `from` replaces/deletes it).
+        run_tests(&[
+            r#""aあbいcaabあ".encode("EUC-JP").squeeze.encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").squeeze("a").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("abc", "xyz").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("a-c", "A-C").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("^a", "_").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr("a", "").encode("UTF-8")"#,
+            r#""aあbいcaabあ".encode("EUC-JP").tr_s("a", "X").encode("UTF-8")"#,
+            r#"begin; "aあ".encode("EUC-JP").tr("あ", "x"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#""AABBＸＸ".encode("Shift_JIS").squeeze.encode("UTF-8")"#,
+            r#""abcabc".encode("Shift_JIS").tr("ac", "AC").encode("UTF-8")"#,
+            r#"(x = "aabc".encode("EUC-JP"); x.squeeze!; x.encode("UTF-8"))"#,
+            r#""abc".encode("EUC-JP").squeeze!"#,            // no change -> nil
+            r#"(y = "abcabc".encode("EUC-JP"); y.tr!("b", "B"); y.encode("UTF-8"))"#,
+            r#""abc".encode("EUC-JP").tr!("z", "Z")"#,        // no change -> nil
+        ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_index_rindex() {
+        // P3 (step 5): `index`/`rindex` with a String needle over a
+        // non-UTF-8 receiver — character index, matches constrained to
+        // character boundaries; incompatible needle encoding raises.
+        run_tests(&[
+            r#""aあbいcあb".encode("EUC-JP").index("b")"#,
+            r#""aあbいcあb".encode("EUC-JP").index("b", 4)"#,
+            r#""aあbいcあb".encode("EUC-JP").index("z")"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("b")"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("b", 3)"#,
+            r#""aあbいcあb".encode("EUC-JP").index("")"#,
+            r#""aあbいcあb".encode("EUC-JP").index("", 99)"#,
+            r#""aあbいcあb".encode("EUC-JP").rindex("")"#,
+            r#"begin; "aあ".encode("EUC-JP").index("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            r#"begin; "aあ".encode("EUC-JP").rindex("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
+            // Shift_JIS: 'z' (0x7A) must not match a trail byte.
+            r#""X漢Yz漢Y".encode("Shift_JIS").index("Y")"#,
+            r#""X漢Yz漢Y".encode("Shift_JIS").rindex("Y")"#,
+            r#""X漢Yz漢Y".encode("Shift_JIS").index("z")"#,
+            r#""abcabc".encode("EUC-JP").index("bc", 2)"#,
+        ]);
     }
 }

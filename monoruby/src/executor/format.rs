@@ -242,7 +242,21 @@ fn hex_digit_val(b: u8) -> u8 {
 /// Format a float using %g/%G rules:
 /// Use scientific notation if exponent < -4 or >= precision, otherwise fixed.
 /// Strip trailing zeros after decimal point (and the point itself if no digits remain).
-fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
+/// For the `#` flag: ensure the mantissa contains a decimal point
+/// (CRuby keeps the point even when no fractional digits follow).
+/// Inserts `.` just before the exponent marker (`e`/`E`/`p`/`P`) or
+/// at the end if there is none. No-op if a `.` is already present.
+fn force_decimal_point(s: &str) -> String {
+    if s.contains('.') {
+        return s.to_string();
+    }
+    match s.find(['e', 'E', 'p', 'P']) {
+        Some(pos) => format!("{}.{}", &s[..pos], &s[pos..]),
+        None => format!("{}.", s),
+    }
+}
+
+fn format_g(f: f64, precision: usize, uppercase: bool, strip: bool) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
@@ -266,7 +280,11 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
             format!("{:.p$e}", f, p = sci_prec)
         };
         // Strip trailing zeros in the mantissa part (before 'e'/'E')
-        strip_trailing_zeros_scientific(&s)
+        if strip {
+            strip_trailing_zeros_scientific(&s)
+        } else {
+            s
+        }
     } else {
         // Use fixed notation
         // precision means total significant digits
@@ -276,7 +294,11 @@ fn format_g(f: f64, precision: usize, uppercase: bool) -> String {
             0
         };
         let s = format!("{:.p$}", f, p = fixed_prec);
-        strip_trailing_zeros_fixed(&s)
+        if strip {
+            strip_trailing_zeros_fixed(&s)
+        } else {
+            s
+        }
     }
 }
 
@@ -505,6 +527,43 @@ impl Executor {
         arguments: &[Value],
     ) -> Result<String> {
         let mut arg_no = 0;
+        // Track whether the format string has used a numbered (`N$`)
+        // and/or an unnumbered (sequential `%s` / `*`) argument
+        // reference. CRuby forbids mixing the two within one format
+        // string.
+        let mut used_numbered = false;
+        let mut used_unnumbered = false;
+        // A named reference (`%<n>` / `%{n}`) may not be mixed with
+        // numbered or unnumbered references in one format string.
+        let mut used_named = false;
+        fn mark_numbered(
+            n: usize,
+            used_numbered: &mut bool,
+            used_unnumbered: bool,
+            arg_no: usize,
+        ) -> Result<()> {
+            if used_unnumbered {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "numbered({n}) after unnumbered({arg_no})"
+                )));
+            }
+            *used_numbered = true;
+            Ok(())
+        }
+        fn mark_unnumbered(
+            used_numbered: bool,
+            used_unnumbered: &mut bool,
+            arg_no: usize,
+        ) -> Result<()> {
+            if used_numbered {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unnumbered({}) mixed with numbered",
+                    arg_no + 1
+                )));
+            }
+            *used_unnumbered = true;
+            Ok(())
+        }
         let mut format_str = String::new();
         let fchars: Vec<char> = self_str.chars().collect();
         let flen = fchars.len();
@@ -559,31 +618,48 @@ impl Executor {
                 flen,
             )?;
 
-            // Check for positional argument: non-zero digit(s) followed by '$'
-            let positional_arg = if named_val.is_none()
-                && i < flen
-                && fchars[i].is_ascii_digit()
-                && fchars[i] != '0'
-            {
-                // Look ahead: collect digits then check for '$'
-                let mut j = i;
+            // Detect (and consume) a `N$` positional argument reference at
+            // the current position. Returns the parsed argument index
+            // (1-based) without bounds-checking, advancing `*pos` past the
+            // `$`. CRuby allows the `N$` reference both immediately after
+            // `%` and after the flag characters (e.g. `%-2$d`).
+            fn try_positional(
+                fchars: &[char],
+                flen: usize,
+                pos: &mut usize,
+            ) -> Option<usize> {
+                let start = *pos;
+                if start >= flen || !fchars[start].is_ascii_digit() || fchars[start] == '0'
+                {
+                    return None;
+                }
+                let mut j = start;
                 while j < flen && fchars[j].is_ascii_digit() {
                     j += 1;
                 }
                 if j < flen && fchars[j] == '$' {
-                    // Parse the number
                     let mut num = 0usize;
-                    for k in i..j {
-                        num = num * 10 + (fchars[k] as usize) - ('0' as usize);
+                    for &c in &fchars[start..j] {
+                        num = num * 10 + (c as usize) - ('0' as usize);
                     }
-                    i = j + 1; // skip past '$'
-                    if num == 0 || num > arguments.len() {
-                        return Err(MonorubyErr::argumenterr("too few arguments"));
-                    }
-                    Some(arguments[num - 1])
+                    *pos = j + 1;
+                    Some(num)
                 } else {
-                    // Not positional — digits are part of width, don't advance i
                     None
+                }
+            }
+
+            // Check for positional argument: non-zero digit(s) followed by '$'
+            let mut positional_arg = if named_val.is_none() {
+                match try_positional(&fchars, flen, &mut i) {
+                    Some(num) => {
+                        mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                        if num == 0 || num > arguments.len() {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                        Some(arguments[num - 1])
+                    }
+                    None => None,
                 }
             } else {
                 None
@@ -639,6 +715,24 @@ impl Executor {
                     }
                 }
             }
+            // A `N$` positional reference may also follow the flag
+            // characters (e.g. `%-2$d`, `% 2$d`). Detect it here when it
+            // was not already consumed before the flags.
+            if positional_arg.is_none() && named_val.is_none() {
+                if let Some(num) = try_positional(&fchars, flen, &mut i) {
+                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    positional_arg = Some(arguments[num - 1]);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
+            }
             // Left-align overrides zero-fill
             if minus_flag {
                 zero_flag = false;
@@ -647,14 +741,29 @@ impl Executor {
             if plus_flag {
                 space_flag = false;
             }
-            // Width (may be '*')
+            // Width (may be '*' or '*N$' to take the width from a
+            // positional argument, e.g. `%1$*2$d`).
             let mut width = 0usize;
             if ch == '*' {
-                if arguments.len() <= arg_no {
-                    return Err(MonorubyErr::argumenterr("too few arguments"));
-                }
-                let w = arguments[arg_no].coerce_to_integer(self, globals)?;
-                arg_no += 1;
+                i += 1; // skip '*'
+                let width_val = if let Some(num) =
+                    try_positional(&fchars, flen, &mut i)
+                {
+                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    arguments[num - 1]
+                } else {
+                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
+                    if arguments.len() <= arg_no {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    let v = arguments[arg_no];
+                    arg_no += 1;
+                    v
+                };
+                let w = width_val.coerce_to_integer(self, globals)?;
                 match w {
                     IntegerBase::Fixnum(v) => {
                         if v < 0 {
@@ -669,7 +778,6 @@ impl Executor {
                         return Err(MonorubyErr::argumenterr("width too big"));
                     }
                 }
-                i += 1;
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
                         "Invalid termination of format string",
@@ -723,6 +831,7 @@ impl Executor {
                 ch = fchars[i];
                 let mut prec = 0usize;
                 if ch == '*' {
+                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
                     if arguments.len() <= arg_no {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -801,6 +910,12 @@ impl Executor {
                 if named_val.is_some() {
                     return Err(MonorubyErr::argumenterr("named<name> after named{name}"));
                 }
+                if used_numbered || used_unnumbered {
+                    return Err(MonorubyErr::argumenterr(
+                        "named reference is mixed with numbered/unnumbered",
+                    ));
+                }
+                used_named = true;
                 let hash = get_named_hash(arguments, &mut named_hash_cache)
                     .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
                 let key_val = Value::symbol_from_str(&key);
@@ -816,12 +931,27 @@ impl Executor {
                 i = j + 1;
                 continue;
             }
+            // Enforce CRuby's rule that named references cannot be
+            // mixed with numbered/unnumbered ones.
+            if named_val.is_some() {
+                if used_numbered || used_unnumbered {
+                    return Err(MonorubyErr::argumenterr(
+                        "named reference is mixed with numbered/unnumbered",
+                    ));
+                }
+                used_named = true;
+            } else if used_named {
+                return Err(MonorubyErr::argumenterr(
+                    "numbered/unnumbered reference is mixed with named",
+                ));
+            }
             // Determine val: positional, named, or sequential
             let val = if let Some(v) = positional_arg {
                 v
             } else if let Some(v) = named_val {
                 v
             } else {
+                mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
                 if arguments.len() <= arg_no {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
@@ -900,14 +1030,32 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 2, ch == 'B');
-                            let prefix = if hash_flag {
-                                if ch == 'B' { "0B" } else { "0b" }
+                            if plus_flag || space_flag {
+                                // `+`/space disables two's-complement and
+                                // uses sign-magnitude (`-1010`).
+                                let digits = apply_int_precision(
+                                    &format!("{:b}", v.unsigned_abs()),
+                                    precision,
+                                );
+                                let prefix = if hash_flag {
+                                    if ch == 'B' { "0B" } else { "0b" }
+                                } else {
+                                    ""
+                                };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
                             } else {
-                                ""
-                            };
-                            let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
+                                let tc = format_neg_twos_complement(v, 2, ch == 'B');
+                                let prefix = if hash_flag {
+                                    if ch == 'B' { "0B" } else { "0b" }
+                                } else {
+                                    ""
+                                };
+                                let body = format!("{}{}", prefix, tc);
+                                apply_width(&body, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -932,8 +1080,20 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 8, false);
-                            apply_width(&tc, width, minus_flag, ' ')
+                            if plus_flag || space_flag {
+                                let digits = apply_int_precision(
+                                    &format!("{:o}", v.unsigned_abs()),
+                                    precision,
+                                );
+                                let prefix = if hash_flag { "0" } else { "" };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
+                            } else {
+                                let tc = format_neg_twos_complement(v, 8, false);
+                                apply_width(&tc, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -957,14 +1117,34 @@ impl Executor {
                     let ival = val.coerce_to_integer(self, globals)?;
                     match ival {
                         IntegerBase::Fixnum(v) if v < 0 => {
-                            let tc = format_neg_twos_complement(v, 16, ch == 'X');
-                            let prefix = if hash_flag {
-                                if ch == 'X' { "0X" } else { "0x" }
+                            if plus_flag || space_flag {
+                                let digits = apply_int_precision(
+                                    &if ch == 'X' {
+                                        format!("{:X}", v.unsigned_abs())
+                                    } else {
+                                        format!("{:x}", v.unsigned_abs())
+                                    },
+                                    precision,
+                                );
+                                let prefix = if hash_flag {
+                                    if ch == 'X' { "0X" } else { "0x" }
+                                } else {
+                                    ""
+                                };
+                                format_int_with_prefix(
+                                    true, &digits, prefix, width, zero_flag, minus_flag,
+                                    plus_flag, space_flag,
+                                )
                             } else {
-                                ""
-                            };
-                            let body = format!("{}{}", prefix, tc);
-                            apply_width(&body, width, minus_flag, ' ')
+                                let tc = format_neg_twos_complement(v, 16, ch == 'X');
+                                let prefix = if hash_flag {
+                                    if ch == 'X' { "0X" } else { "0x" }
+                                } else {
+                                    ""
+                                };
+                                let body = format!("{}{}", prefix, tc);
+                                apply_width(&body, width, minus_flag, ' ')
+                            }
                         }
                         _ => {
                             let digits = match ival {
@@ -1007,6 +1187,13 @@ impl Executor {
                     } else {
                         format!("{:.p$}", f.abs(), p = prec)
                     };
+                    // CRuby quirk: `%#f` does NOT force a point for an
+                    // Integer argument (unlike `%#e`/`%#g`/`%#a`).
+                    let s = if hash_flag && f.is_finite() && !val.is_integer() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1023,6 +1210,11 @@ impl Executor {
                     } else {
                         normalize_sci_exponent(&format!("{:.p$e}", f.abs(), p = prec))
                     };
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1031,8 +1223,15 @@ impl Executor {
                     let f = val.coerce_to_float(self, globals)?;
                     let prec = precision.unwrap_or(6);
                     let prec = if prec == 0 { 1 } else { prec };
-                    let s = format_g(f.abs(), prec, ch == 'G');
+                    // The `#` flag keeps trailing zeros and forces a
+                    // decimal point.
+                    let s = format_g(f.abs(), prec, ch == 'G', !hash_flag);
                     let s = normalize_sci_exponent(&s);
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )
@@ -1040,6 +1239,11 @@ impl Executor {
                 'a' | 'A' => {
                     let f = val.coerce_to_float(self, globals)?;
                     let s = format_hex_float(f.abs(), precision, ch == 'A');
+                    let s = if hash_flag && f.is_finite() {
+                        force_decimal_point(&s)
+                    } else {
+                        s
+                    };
                     format_float_with_flags(
                         &s, f, width, zero_flag, minus_flag, plus_flag, space_flag,
                     )

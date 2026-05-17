@@ -67,6 +67,20 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // `Proc#call` is declared with keyword-rest, so trailing keyword
+    // arguments land in the kw-rest slot (`arg(1)`, after the
+    // positional rest at `arg(0)`). Forward them to the block invoker
+    // so the *block's own* signature decides whether they bind to
+    // keyword parameters or fold into a trailing positional Hash
+    // (matches CRuby; previously these were dropped).
+    let kw = match lfp.try_arg(1) {
+        Some(v)
+            if v.ty() == Some(ObjTy::HASH) && !Hashmap::new(v).inner().is_empty() =>
+        {
+            Some(Hashmap::new(v))
+        }
+        _ => None,
+    };
     // Fast path for Symbol#to_proc procs: dispatch directly so that the
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
@@ -97,10 +111,10 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
         }
         let bh = lfp.block();
-        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, None);
+        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, kw);
     }
     let bh = lfp.block();
-    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh)
+    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh, kw)
 }
 
 ///
@@ -117,11 +131,18 @@ fn source_location(
     _: BytecodePtr,
 ) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
-    // fallback: use the proc's own ISeq location
-    let func_id = proc.func_id();
-    if let Some(iseq) = globals.store[func_id].is_iseq() {
+    // A Method#to_proc proc reports the method's source location.
+    let func_id = if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        m.func_id()
+    } else {
+        proc.func_id()
+    };
+    if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
-        let file_name = Value::string(iseq_info.sourceinfo.short_file_name().to_string());
+        // Absolute path, consistent with Method#source_location.
+        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {
@@ -136,8 +157,16 @@ fn source_location(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/binding.html]
 #[monoruby_builtin]
-fn binding_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn binding_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // For a Method#to_proc proc, the outer self is the Method object;
+    // its binding's receiver must be the *method's* receiver (CRuby).
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        let frame = Lfp::heap_frame(m.receiver(), globals[m.func_id()].meta());
+        return Ok(Binding::from_outer(frame, proc.source()).as_val());
+    }
     let outer_lfp = proc.outer_lfp();
     let pc = proc.source();
     Ok(Binding::from_outer(outer_lfp.unwrap(), pc).as_val())
@@ -159,6 +188,12 @@ fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+        && m.method_missing_name().is_none()
+    {
+        return Ok(build_parameters(globals, m.func_id(), true));
+    }
     let func_id = proc.func_id();
     let is_lambda = !globals[func_id].is_block_style();
     Ok(build_parameters(globals, func_id, is_lambda))
@@ -182,7 +217,11 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     let key_tag = Value::symbol(IdentId::get_id("key"));
     let keyreq_tag = Value::symbol(IdentId::get_id("keyreq"));
     let keyrest_tag = Value::symbol(IdentId::get_id("keyrest"));
+    let nokey_tag = Value::symbol(IdentId::get_id("nokey"));
     let block_tag = Value::symbol(IdentId::get_id("block"));
+    let star_sym = Value::symbol(IdentId::get_id("*"));
+    let dstar_sym = Value::symbol(IdentId::get_id("**"));
+    let amp_sym = Value::symbol(IdentId::get_id("&"));
     let mut result = vec![];
     let args_names = &params.args_names;
     let mut name_idx = 0;
@@ -212,10 +251,14 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     // the runtime arg dispatcher to absorb extras under block style.
     if params.is_rest().is_some() {
         if !params.rest_is_implicit() {
-            let entry = if let Some(Some(name)) = args_names.get(name_idx) {
-                Value::array2(rest_tag, Value::symbol(*name))
-            } else {
-                Value::array1(rest_tag)
+            let entry = match args_names.get(name_idx) {
+                Some(Some(name)) => Value::array2(rest_tag, Value::symbol(*name)),
+                // A slot exists but is unnamed: Ruby-level anonymous
+                // `*` (incl. the rest synthesized by `...`). CRuby
+                // reports its name as `:*`.
+                Some(None) => Value::array2(rest_tag, star_sym),
+                // No slot at all: a native/builtin rest -> `[:rest]`.
+                None => Value::array1(rest_tag),
             };
             result.push(entry);
         }
@@ -241,25 +284,114 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
         result.push(Value::array2(tag, Value::symbol(*kw_name)));
     }
     // keyword rest
-    if params.kw_rest.is_some() {
-        let entry = if let Some(name) = params.kw_rest_name() {
-            Value::array2(keyrest_tag, Value::symbol(name))
+    if let Some(slot) = params.kw_rest {
+        if params.kw_rest_name() == Some(IdentId::get_id("nil")) {
+            // `**nil` is modeled by the parser as a kwrest literally
+            // named `nil` (impossible as a real identifier). CRuby
+            // reports it as the lone parameter `[[:nokey]]`.
+            result.push(Value::array1(nokey_tag));
         } else {
-            Value::array1(keyrest_tag)
-        };
-        result.push(entry);
+            let entry = match params.kw_rest_name() {
+                Some(name) => Value::array2(keyrest_tag, Value::symbol(name)),
+                // Distinguish a Ruby-level anonymous `**` (a slot
+                // exists, unnamed -> CRuby `:**`) from a native
+                // kwrest (no slot -> `[:keyrest]`).
+                None => match args_names.get(slot.0 as usize - 1) {
+                    Some(_) => Value::array2(keyrest_tag, dstar_sym),
+                    None => Value::array1(keyrest_tag),
+                },
+            };
+            result.push(entry);
+        }
     }
     // block param
     if let Some(block_name) = params.block_param {
-        result.push(Value::array2(block_tag, Value::symbol(block_name)));
+        // An empty name is the parser's marker for an anonymous `&`
+        // (and the block synthesized by `...`); CRuby reports `:&`.
+        let entry = if block_name == IdentId::get_id("") {
+            Value::array2(block_tag, amp_sym)
+        } else {
+            Value::array2(block_tag, Value::symbol(block_name))
+        };
+        result.push(entry);
     }
     Value::array_from_vec(result)
+}
+
+/// Build the CRuby `Method#inspect`-style parameter signature string,
+/// e.g. `(a, b=..., *c, key:, opt: ..., **kw, &blk)`. The parameter
+/// order mirrors `build_parameters` so the two stay consistent.
+pub(crate) fn signature_string(store: &Store, func_id: FuncId) -> String {
+    let params = store[func_id].params();
+    let args_names = &params.args_names;
+    let named = |o: Option<&Option<IdentId>>| -> Option<IdentId> {
+        match o {
+            Some(Some(id)) => Some(*id),
+            _ => None,
+        }
+    };
+    let mut parts: Vec<String> = vec![];
+    let mut idx = 0;
+    for _ in 0..params.req_num() {
+        parts.push(named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string()));
+        idx += 1;
+    }
+    for _ in 0..params.opt_num() {
+        let n = named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string());
+        parts.push(format!("{n}=..."));
+        idx += 1;
+    }
+    if params.is_rest().is_some() {
+        if !params.rest_is_implicit() {
+            match named(args_names.get(idx)) {
+                Some(id) => parts.push(format!("*{id}")),
+                None => parts.push("*".to_string()),
+            }
+        }
+        idx += 1;
+    }
+    for _ in 0..params.post_num() {
+        parts.push(named(args_names.get(idx)).map_or_else(|| "_".to_string(), |id| id.to_string()));
+        idx += 1;
+    }
+    for (i, kw) in params.kw_names.iter().enumerate() {
+        if params.kw_is_required(i) {
+            parts.push(format!("{kw}:"));
+        } else {
+            parts.push(format!("{kw}: ..."));
+        }
+    }
+    if params.kw_rest.is_some() {
+        match params.kw_rest_name() {
+            Some(id) => parts.push(format!("**{id}")),
+            None => parts.push("**".to_string()),
+        }
+    }
+    if let Some(bn) = params.block_param {
+        let s = bn.to_string();
+        if s.is_empty() {
+            parts.push("&".to_string());
+        } else {
+            parts.push(format!("&{s}"));
+        }
+    }
+    format!("({})", parts.join(", "))
 }
 
 /// ### Proc#arity
 #[monoruby_builtin]
 fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // A Method#to_proc proc reports the *method's* arity, not the
+    // shared rest-style body's (-1).
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        if m.method_missing_name().is_some() {
+            return Ok(Value::integer(-1));
+        }
+        return Ok(Value::integer(globals[m.func_id()].arity()));
+    }
     let func_id = proc.func_id();
     Ok(Value::integer(globals[func_id].arity()))
 }
@@ -692,5 +824,34 @@ mod tests {
               forward(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn proc_call_forwards_trailing_kwargs() {
+        // Trailing keyword args passed to Proc#call/[]/=== are
+        // forwarded to the block; the block's own signature decides
+        // whether they bind to kw params or fold into a *rest Hash.
+        run_test(r#"->(fmt, *args){ args }.call("x", foo: 123)"#);
+        run_test(r#"->(*a){ a }.call(1, x: 2)"#);
+        run_test(r#"proc {|*a| a }.call(1, y: 3)"#);
+        run_test(r#"lambda {|*a| a }.call(2, z: 4)"#);
+        run_test(r#"->(a, k:){ [a, k] }.call(1, k: 2)"#);
+        run_test(r#"->(a, **kw){ [a, kw] }.call(1, x: 9)"#);
+        run_test(r#"->(*a){ a }.(7, q: 8)"#);
+        run_test(r#"(->(x){ x } === 4)"#);
+        run_test(r#"->(*a){ a }.call(**{})"#);
+        run_test(r#"->(a=0, *r){ [a, r] }.call(k: 1)"#);
+        run_test(r#"def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }"#);
+    }
+
+    #[test]
+    fn sprintf_named_unnamed_mix_is_error() {
+        run_test_error(r#""%d %<foo>d" % [1, {foo: 2}]"#);
+        run_test_error(r#""%d %{foo}" % [1, {foo: 2}]"#);
+        run_test_error(r#""%{a} %d" % {a: 1}"#);
+        run_test(r#""%<a>s %<b>s" % {a: 1, b: 2}"#);
+        run_test(r#""%{a} %{b}" % {a: 1, b: 2}"#);
+        run_test(r#""%s %s" % [1, 2]"#);
+        run_test(r#""%<a>d" % {a: 5}"#);
     }
 }
