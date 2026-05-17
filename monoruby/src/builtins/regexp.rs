@@ -2060,4 +2060,29 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn regexp_to_s_option_group_folding() {
+        // A whole-pattern-spanning `(?flags:...)` / `(?:...)` wrapper
+        // folds into the outer option block (CRuby `rb_reg_to_s`).
+        run_tests(&[
+            r#"/(?i:nothing outside this group)/.to_s"#,
+            r#"/(?i:.)/.to_s"#,
+            r#"/(?mmmmix-miiiix:)/.to_s"#,
+            r#"/(?:.)/.to_s"#,
+            // No folding when the group does not span the whole pattern.
+            r#"/(?ix:foo)(?m:bar)/.to_s"#,
+            r#"/(?ix:foo)bar/m.to_s"#,
+            r#"/whatever(?:0d)/ix.to_s"#,
+            r#"/(?=5)/.to_s"#,
+            r#"/(?!5)/.to_s"#,
+            // Plain option rendering still correct.
+            r#"/abc/mxi.to_s"#,
+            r#"/abc/i.to_s"#,
+            r#"/abc/.to_s"#,
+            r#"/(a)(b)/.to_s"#,
+            // Char class containing parens must not confuse the scan.
+            r#"/(?i:[()])/.to_s"#,
+        ]);
+    }
 }
