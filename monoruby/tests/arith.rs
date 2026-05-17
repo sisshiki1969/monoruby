@@ -305,8 +305,8 @@ fn bench_factorialpoly() {
 }
 
 #[test]
-fn bench_while2() {
-    run_test2(
+fn bench_while_until_for() {
+    run_tests2(&[
         r#"
             i = 0
             while i < 1000
@@ -314,12 +314,6 @@ fn bench_while2() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_while_postfix() {
-    run_test2(
         r#"
             i = 0
             begin
@@ -327,15 +321,11 @@ fn bench_while_postfix() {
             end while i < 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             i += 1 while i < 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             begin
@@ -343,19 +333,11 @@ fn bench_while_postfix() {
             end while i > 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             i += 1 while i > 10
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_while_and() {
-    run_test2(
         r#"
             i = 0
             while i < 1000 && i < 120
@@ -363,8 +345,6 @@ fn bench_while_and() {
             end
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             while i < 120 && i < 1000 
@@ -372,12 +352,6 @@ fn bench_while_and() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_while_or() {
-    run_test2(
         r#"
             i = 0
             while i < 1000 || i < 120
@@ -385,8 +359,6 @@ fn bench_while_or() {
             end
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             while i < 120 || i < 1000 
@@ -394,12 +366,6 @@ fn bench_while_or() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_until() {
-    run_test2(
         r#"
             i = 0
             until i == 1000
@@ -407,12 +373,6 @@ fn bench_until() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_until_postfix() {
-    run_test2(
         r#"
             i = 0
             begin
@@ -420,15 +380,11 @@ fn bench_until_postfix() {
             end until i > 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             i += 1 until i > 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             begin
@@ -436,19 +392,11 @@ fn bench_until_postfix() {
             end until i < 10
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             i += 1 until i < 10
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_until_and() {
-    run_test2(
         r#"
             i = 0
             until i > 1000 && i > 120
@@ -456,8 +404,6 @@ fn bench_until_and() {
             end
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             until i > 120 && i > 1000 
@@ -465,12 +411,6 @@ fn bench_until_and() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_until_or() {
-    run_test2(
         r#"
             i = 0
             until i > 1000 || i > 120
@@ -478,8 +418,6 @@ fn bench_until_or() {
             end
             i
             "#,
-    );
-    run_test2(
         r#"
             i = 0
             until i > 120 || i > 1000 
@@ -487,12 +425,6 @@ fn bench_until_or() {
             end
             i
             "#,
-    );
-}
-
-#[test]
-fn bench_for() {
-    run_test2(
         r#"
             j = 0
             for i in 0..1000
@@ -500,8 +432,6 @@ fn bench_for() {
             end
             j
             "#,
-    );
-    run_test2(
         r#"
             j = 0
             for i in 0..0
@@ -509,8 +439,6 @@ fn bench_for() {
             end
             j
             "#,
-    );
-    run_test2(
         r#"
             j = 0
             for i in 0...1000
@@ -518,8 +446,6 @@ fn bench_for() {
             end
             j
             "#,
-    );
-    run_test2(
         r#"
             j = 0
             for i in 0...0
@@ -527,7 +453,7 @@ fn bench_for() {
             end
             j
             "#,
-    );
+    ]);
 }
 
 #[test]
