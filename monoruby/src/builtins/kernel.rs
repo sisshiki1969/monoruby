@@ -5187,6 +5187,18 @@ mod tests {
             r#"sprintf("%<foo>x", foo: 255)"#,
             r#"sprintf("%<foo>f", foo: 3.14)"#,
             r#"sprintf("%<foo>s", foo: "hello")"#,
+            // Positional `*N$` width / `.*N$` precision stars, mixed
+            // with a positional value reference.
+            r#""%*1$.*2$3$d" % [10, 5, 1]"#,
+            r#""%*1$.*2$3$d" % [-10, 5, 1]"#,
+            r#""%-*1$.*2$3$d" % [10, 5, 1]"#,
+            r#""%-*1$.*2$3$d" % [-10, 5, 1]"#,
+            r#""%*1$.*2$3$d" % [10, -5, 1]"#,
+            r#""%2$*1$d" % [5, 42]"#,
+            r#""%1$*2$d" % [42, 5]"#,
+            // Negative `.*` precision is ignored (sequential form).
+            r#""%.*s" % [-1, "abc"]"#,
+            r#""%10.*d" % [-3, 7]"#,
         ]);
     }
 
