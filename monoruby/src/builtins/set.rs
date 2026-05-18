@@ -1218,8 +1218,16 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let data = vm.get_block_data(globals, bh)?;
     let keys = set_keys(lfp.self_val());
 
-    // Check block arity to determine mode
-    let arity = if let Some(fid) = data.func_id() {
+    // Check block arity to determine mode.
+    //
+    // When `divide` is driven through its own no-block Enumerator
+    // (`set.divide` then `.each { |a, b| ... }`), the block it receives
+    // is the internal enumerator yielder proc, not the user's block, so
+    // its declared arity is meaningless here. `Enumerator#each` records
+    // the real user-block arity on `Globals`; use that instead.
+    let arity = if data.func_id() == Some(crate::globals::YIELDER_FUNCID) {
+        globals.current_enum_block_arity().unwrap_or(1)
+    } else if let Some(fid) = data.func_id() {
         globals[fid].arity()
     } else {
         1
