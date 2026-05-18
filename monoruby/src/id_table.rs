@@ -305,6 +305,22 @@ impl IdentId {
     }
 
     ///
+    /// Record the source-string encoding a symbol was created from
+    /// (only when it differs from the default `Symbol#to_s`
+    /// derivation). Called by `String#to_sym`.
+    ///
+    pub(crate) fn set_symbol_encoding(self, enc: crate::value::Encoding) {
+        ID.write().unwrap().enc_map.insert(self, enc);
+    }
+
+    ///
+    /// The recorded source encoding for this symbol, if any.
+    ///
+    pub(crate) fn symbol_encoding(self) -> Option<crate::value::Encoding> {
+        ID.read().unwrap().enc_map.get(&self).copied()
+    }
+
+    ///
     /// Compare *self* to *other* by raw bytes.
     ///
     pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
@@ -354,6 +370,13 @@ pub struct IdentifierTable {
     rev_table_bytes: HashMap<Vec<u8>, IdentId>,
     /// Forward table: IdentId -> IdentName.
     table: Vec<IdentName>,
+    /// Sparse side-map: the source-string encoding a symbol was
+    /// created from, when it is *not* the one `Symbol#to_s` would
+    /// derive by default (i.e. not US-ASCII / UTF-8 / ASCII-8BIT).
+    /// Only `String#to_sym` populates it; method/ivar/constant
+    /// interning never touches it, so symbol identity and dispatch
+    /// are unaffected.
+    enc_map: HashMap<IdentId, crate::value::Encoding>,
 }
 
 impl IdentifierTable {
@@ -362,6 +385,7 @@ impl IdentifierTable {
             rev_table: HashMap::default(),
             rev_table_bytes: HashMap::default(),
             table: vec![IdentName::Utf8(String::new()); 100],
+            enc_map: HashMap::default(),
         };
         table.set_id("initialize", IdentId::INITIALIZE);
         table.set_id("Object", IdentId::OBJECT);

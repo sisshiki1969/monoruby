@@ -1361,6 +1361,11 @@ fn enc_default_external(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL")) {
+        if !v.is_nil() {
+            return Ok(v);
+        }
+    }
     let enc_class = encoding_class(globals);
     let utf8 = globals
         .store
@@ -1376,13 +1381,43 @@ fn enc_default_external(
 /// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/default_external=3d.html]
 #[monoruby_builtin]
 fn enc_set_default_external(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // Stub: accept the argument but do nothing
-    Ok(lfp.arg(0))
+    let val = lfp.arg(0);
+    if val.is_nil() {
+        return Err(MonorubyErr::argumenterr(
+            "default external can not be nil",
+        ));
+    }
+    // A String argument is resolved through `Encoding.find`.
+    let enc_val = if val.is_str().is_some() {
+        let find_id = IdentId::get_id("find");
+        let enc_class_val = lfp.self_val();
+        vm.invoke_method_inner(globals, find_id, enc_class_val, &[val], None, None)?
+    } else {
+        val
+    };
+    globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), enc_val);
+    Ok(enc_val)
+}
+
+/// CRuby renders container (`Array`/`Hash`) `#inspect` with non-ASCII
+/// escaped as `\uXXXX` and a US-ASCII result string whenever
+/// `Encoding.default_external` is not UTF-8 (when it is UTF-8 — the
+/// default — non-ASCII is shown literally, the existing behaviour).
+pub(crate) fn inspect_escape_nonascii(globals: &mut Globals) -> bool {
+    match globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL")) {
+        Some(v) if !v.is_nil() => globals
+            .store
+            .get_ivar(v, IdentId::_ENCODING)
+            .and_then(|s| s.is_str().map(|s| s.to_string()))
+            .map(|n| n != "UTF-8")
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 ///
@@ -3594,6 +3629,43 @@ mod tests {
             raise "should be Encoding" unless enc.is_a?(Encoding)
             "#,
         );
+    }
+
+    #[test]
+    fn inspect_under_default_external() {
+        // `Encoding.default_external` is now stateful (get/set via a
+        // gvar). Container #inspect escapes non-ASCII as \uXXXX and
+        // tags the result US-ASCII unless default_external is UTF-8.
+        run_tests(&[
+            // round-trips get/set
+            r#"o = Encoding.default_external
+               Encoding.default_external = Encoding::US_ASCII
+               r = Encoding.default_external.name
+               Encoding.default_external = o
+               r"#,
+            // non-UTF-8 default_external => escaped + US-ASCII result
+            r#"o = Encoding.default_external
+               Encoding.default_external = Encoding::US_ASCII
+               r = [{ "あ": 1 }.inspect, ["café"].inspect,
+                    [1, 2].inspect.encoding.name,
+                    { a: 1 }.inspect]
+               Encoding.default_external = o
+               r"#,
+            r#"o = Encoding.default_external
+               Encoding.default_external = Encoding.find('UTF-32')
+               r = [["jp".encode("EUC-JP"), "utf8"].inspect,
+                    ["jp".encode("EUC-JP"), "utf8"].inspect.encoding.name,
+                    { あ: 1 }.to_s]
+               Encoding.default_external = o
+               r"#,
+            // UTF-8 default_external => unchanged (bare, UTF-8 result)
+            r#"o = Encoding.default_external
+               Encoding.default_external = Encoding::UTF_8
+               r = [{ あ: 1 }.inspect, ["café"].inspect,
+                    ["café"].inspect.encoding.name]
+               Encoding.default_external = o
+               r"#,
+        ]);
     }
 
     #[test]
