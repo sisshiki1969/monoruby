@@ -49,9 +49,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(IO_CLASS, "eof?", &["eof"], io_eof_, 0);
     globals.define_builtin_func(IO_CLASS, "getbyte", io_getbyte, 0);
     globals.define_builtin_func(IO_CLASS, "getc", io_getc, 0);
+    globals.define_builtin_func(IO_CLASS, "ungetc", io_ungetc, 1);
+    globals.define_builtin_func(IO_CLASS, "ungetbyte", io_ungetbyte, 1);
     globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
     globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
+    globals.define_builtin_funcs(IO_CLASS, "path", &["to_path"], io_path, 0);
+    globals.define_builtin_func(IO_CLASS, "fsync", io_fsync, 0);
+    globals.define_builtin_func(IO_CLASS, "fdatasync", io_fdatasync, 0);
+    globals.define_builtin_func(IO_CLASS, "close_on_exec?", io_close_on_exec_, 0);
+    globals.define_builtin_func(IO_CLASS, "close_on_exec=", io_close_on_exec_set, 1);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
@@ -97,8 +104,8 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         // Pick up `:autoclose` and `:path` from the options Hash. See
         // `io_open_opts` for the rationale.
-        let (name, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
-        let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        let (name, has_path, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
+        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path);
         io_inner.set_autoclose(autoclose);
         return Ok(Value::new_io(io_inner));
     }
@@ -124,9 +131,10 @@ pub(super) fn io_open_opts(
     lfp: Lfp,
     range: std::ops::Range<usize>,
     fd: i64,
-) -> Result<(String, bool)> {
+) -> Result<(String, bool, bool)> {
     let mut autoclose = true;
     let mut name = format!("fd {}", fd);
+    let mut has_path = false;
     for i in range {
         if let Some(arg) = lfp.try_arg(i)
             && let Some(h) = arg.try_hash_ty()
@@ -138,10 +146,11 @@ pub(super) fn io_open_opts(
                 && !v.is_nil()
             {
                 name = v.coerce_to_string(vm, globals)?;
+                has_path = true;
             }
         }
     }
-    Ok((name, autoclose))
+    Ok((name, has_path, autoclose))
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -291,14 +300,30 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gets(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    Ok(if let Some(buf) = io.read_line()? {
-        Value::string(buf)
-    } else {
-        Value::nil()
-    })
+    let line = self_.as_io_inner_mut().read_line()?;
+    match line {
+        Some(buf) => {
+            let cur = globals
+                .store
+                .get_ivar(self_, IdentId::get_id("/lineno"))
+                .and_then(|v| v.try_fixnum())
+                .unwrap_or(0);
+            let n = cur + 1;
+            globals
+                .store
+                .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(n))?;
+            globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+            let s = Value::string(buf);
+            globals.set_gvar(IdentId::get_id("$_"), s);
+            Ok(s)
+        }
+        None => {
+            globals.set_gvar(IdentId::get_id("$_"), Value::nil());
+            Ok(Value::nil())
+        }
+    }
 }
 
 ///
@@ -733,8 +758,8 @@ fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
     }
-    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
-    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
+    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string(), false));
+    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string(), false));
     Ok(Value::array2(read_io, write_io))
 }
 
@@ -1108,10 +1133,11 @@ fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
+    let pb = io.pushback_len() as i64;
     let pos = io
         .seek(0, 1)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
-    Ok(Value::integer(pos as i64))
+    Ok(Value::integer((pos as i64 - pb).max(0)))
 }
 
 ///
@@ -1158,6 +1184,9 @@ fn io_rewind(
         .as_io_inner_mut()
         .seek(0, 0)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    globals
+        .store
+        .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(0))?;
     Ok(Value::integer(0))
 }
 
@@ -1180,6 +1209,9 @@ fn io_eof_(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
+    if io.pushback_len() > 0 {
+        return Ok(Value::bool(false));
+    }
     // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
     let buf = io.read(Some(1))?;
     if buf.is_empty() {
@@ -1274,6 +1306,63 @@ fn io_getc(
 }
 
 ///
+/// ### IO#ungetbyte
+/// - ungetbyte(string or integer) -> nil
+///
+/// Pushes bytes back so the next read returns them first. An Integer is
+/// reduced modulo 256 (never raises RangeError); `nil` is a no-op.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/ungetbyte.html]
+#[monoruby_builtin]
+fn io_ungetbyte(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        return Ok(Value::nil());
+    }
+    let bytes = if arg.is_integer() {
+        vec![(arg.coerce_to_pack_u64(vm, globals)? & 0xff) as u8]
+    } else {
+        arg.coerce_to_string(vm, globals)?.into_bytes()
+    };
+    lfp.self_val().as_io_inner_mut().unget(&bytes)?;
+    Ok(Value::nil())
+}
+
+///
+/// ### IO#ungetc
+/// - ungetc(string or integer) -> nil
+///
+/// Pushes a character back so the next read returns it first. An Integer
+/// is interpreted as a codepoint.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/ungetc.html]
+#[monoruby_builtin]
+fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion of nil into Integer",
+        ));
+    }
+    let bytes = if arg.is_integer() {
+        let cp = (arg.coerce_to_pack_u64(vm, globals)? & 0xffff_ffff) as u32;
+        match char::from_u32(cp) {
+            Some(c) => c.to_string().into_bytes(),
+            None => vec![cp as u8],
+        }
+    } else {
+        arg.coerce_to_string(vm, globals)?.into_bytes()
+    };
+    lfp.self_val().as_io_inner_mut().unget(&bytes)?;
+    Ok(Value::nil())
+}
+
+///
 /// ### IO#sysseek
 /// - sysseek(offset, whence = IO::SEEK_SET) -> Integer
 ///
@@ -1306,9 +1395,9 @@ fn io_sysseek(
 /// ### IO#lineno
 /// - lineno -> Integer
 ///
-/// Returns the value last assigned via `lineno=`, or 0 if it was never
-/// assigned. monoruby does not auto-increment `lineno` on `gets`/`readline`
-/// the way CRuby does — only the explicit setter is honored.
+/// Returns the current line number: incremented by each `gets`/`readline`
+/// (and the default-separator `each_line`), reset to 0 by `rewind`, and
+/// overridable via `lineno=`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/lineno.html]
 #[monoruby_builtin]
@@ -1341,12 +1430,94 @@ fn io_lineno_set(
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if n > i32::MAX as i64 || n < i32::MIN as i64 {
+        return Err(MonorubyErr::rangeerr(format!(
+            "integer {n} too big to convert to `int'"
+        )));
+    }
     globals.store.set_ivar(
         lfp.self_val(),
         IdentId::get_id("/lineno"),
         Value::integer(n),
     )?;
     Ok(Value::integer(n))
+}
+
+///
+/// ### IO#path / IO#to_path
+/// - path -> String | nil
+/// - to_path -> String | nil
+///
+/// Returns the path associated with the IO, the pseudo-path for the
+/// standard streams (`<STDIN>` etc.), or `nil` for pipes/`popen`/raw fds
+/// without an explicit `path:` and for closed streams.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/path.html]
+#[monoruby_builtin]
+fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match lfp.self_val().as_io_inner().path() {
+        Some(p) => Value::string(p),
+        None => Value::nil(),
+    })
+}
+
+///
+/// ### IO#fsync
+/// - fsync -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fsync.html]
+#[monoruby_builtin]
+fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(false)?;
+    Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#fdatasync
+/// - fdatasync -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fdatasync.html]
+#[monoruby_builtin]
+fn io_fdatasync(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(true)?;
+    Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#close_on_exec?
+/// - close_on_exec? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close_on_exec=3f.html]
+#[monoruby_builtin]
+fn io_close_on_exec_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_io_inner().close_on_exec()?))
+}
+
+///
+/// ### IO#close_on_exec=
+/// - close_on_exec = bool -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close_on_exec=3d.html]
+#[monoruby_builtin]
+fn io_close_on_exec_set(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let v = lfp.arg(0);
+    lfp.self_val().as_io_inner().set_close_on_exec(v.as_bool())?;
+    Ok(v)
 }
 
 /// ### IO#write
@@ -3087,5 +3258,149 @@ mod tests {
             f.gets
             "#,
         );
+    }
+
+    #[test]
+    fn io_path_to_path() {
+        run_test(r#"File.open("Cargo.toml") { |f| f.path }"#);
+        run_test(r#"File.open("Cargo.toml") { |f| f.to_path }"#);
+        run_test(r#"$stdin.path"#);
+        run_test(r#"$stdout.path"#);
+        run_test(r#"$stderr.path"#);
+        run_test(r#"r, w = IO.pipe; v = [r.path, w.path]; r.close; w.close; v"#);
+        run_test(
+            r#"File.open("Cargo.toml") { |f| IO.new(f.fileno, path: "X", autoclose: false).path }"#,
+        );
+        run_test(
+            r#"File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }"#,
+        );
+    }
+
+    #[test]
+    fn io_fsync_fdatasync() {
+        run_test_once(
+            r#"
+            path = "/tmp/mr_fsync_test.txt"
+            r = File.open(path, "w") { |f| f.write("payload"); [f.fsync, f.fdatasync] }
+            File.unlink(path)
+            r
+            "#,
+        );
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.fsync
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_close_on_exec() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              before = f.close_on_exec?
+              f.close_on_exec = false
+              a = f.close_on_exec?
+              f.close_on_exec = true
+              b = f.close_on_exec?
+              f.close_on_exec = nil
+              [before, a, b, f.close_on_exec?]
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.close_on_exec?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_ungetbyte() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.getbyte
+              r = f.ungetbyte("cat")
+              [r, f.getbyte, f.getbyte, f.getbyte, f.getbyte]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              [f.ungetbyte(nil), f.ungetbyte(4095), f.getbyte,
+               f.ungetbyte(0x4f7574206f6620636861722072616e67ff), f.getbyte]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_ungetc() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              c = f.getc
+              r = f.ungetc(c)
+              p = f.pos
+              [r, p, f.getc, f.eof?]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.read
+              f.ungetc(100)
+              [f.eof?, f.getc]
+            end
+            "#,
+        );
+        run_test(r#"File.open("Cargo.toml") { |f| f.ungetc(100) }"#);
+    }
+
+    #[test]
+    fn io_ungetc_errors() {
+        run_test_error(r#"$stdout.ungetc(100)"#);
+        run_test_error(r#"$stdout.ungetbyte(42)"#);
+        run_test_error(r#"File.open("Cargo.toml") { |f| f.getc; f.ungetc(nil) }"#);
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.ungetc(100)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_lineno_autoincrement() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              a = f.lineno
+              f.gets; f.gets
+              b = f.lineno
+              line = f.gets
+              [a, b, f.lineno, $. , $_ == line, f.readline ? f.lineno : nil]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.gets; f.gets
+              n = f.lineno
+              f.rewind
+              [n, f.lineno, f.gets.nil?]
+            end
+            "#,
+        );
+        run_test_error(r#"File.open("Cargo.toml") { |f| f.lineno = 4294967296 }"#);
     }
 }

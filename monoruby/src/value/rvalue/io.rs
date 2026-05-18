@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write},
     mem::ManuallyDrop,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
@@ -21,6 +21,11 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
 pub struct FileDescriptor {
     reader: ManuallyDrop<std::io::BufReader<std::fs::File>>,
     name: String,
+    /// Whether `name` is a real filesystem path (surfaced via `IO#path`).
+    /// `false` for placeholder names like `fd 3`/`pipe` created from a raw
+    /// fd without an explicit `path:` option — CRuby's `IO#path` is `nil`
+    /// in that case.
+    has_path: bool,
     /// CRuby's `IO#autoclose=` semantics. When `true` (the default), the
     /// underlying fd is closed when this `FileDescriptor` is dropped. When
     /// `false`, ownership is released via `into_raw_fd` so the fd is *not*
@@ -28,6 +33,10 @@ pub struct FileDescriptor {
     /// (see `logger/log_device.rb#fixup_mode`) where the original IO is
     /// expected to relinquish ownership of the fd to the new wrapper.
     autoclose: Cell<bool>,
+    /// Bytes pushed back via `IO#ungetc` / `IO#ungetbyte`, served before
+    /// the underlying reader on the next read. Stored in read order (front
+    /// = next byte out); each unget splices its bytes at the front.
+    pushback: RefCell<Vec<u8>>,
 }
 
 impl Drop for FileDescriptor {
@@ -53,6 +62,8 @@ pub struct PopenDescriptor {
     child: std::process::Child,
     pub(crate) reader: Option<std::io::BufReader<std::process::ChildStdout>>,
     pub(crate) writer: Option<std::process::ChildStdin>,
+    /// See `FileDescriptor::pushback`.
+    pushback: RefCell<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -158,7 +169,9 @@ impl IoInner {
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            has_path: true,
             autoclose: Cell::new(true),
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -169,6 +182,7 @@ impl IoInner {
             child,
             reader,
             writer,
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -179,13 +193,15 @@ impl IoInner {
         }
     }
 
-    pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
+    pub(crate) fn from_raw_fd(fd: i32, name: String, has_path: bool) -> Self {
         // SAFETY: fd is a valid file descriptor obtained from pipe().
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            has_path,
             autoclose: Cell::new(true),
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -224,7 +240,81 @@ impl IoInner {
         }
     }
 
+    /// Bytes currently sitting in the `ungetc`/`ungetbyte` pushback buffer.
+    pub fn pushback_len(&self) -> usize {
+        match self {
+            Self::File(f) => f.pushback.borrow().len(),
+            Self::Popen(p) => p.pushback.borrow().len(),
+            _ => 0,
+        }
+    }
+
+    fn pushback_cell(&self) -> Option<&RefCell<Vec<u8>>> {
+        match self {
+            Self::File(f) => Some(&f.pushback),
+            Self::Popen(p) => Some(&p.pushback),
+            _ => None,
+        }
+    }
+
+    /// Push `bytes` back so the next read returns them first. CRuby raises
+    /// `IOError` on closed streams and on streams not opened for reading
+    /// (`STDOUT`/`STDERR`). Each call splices at the front, so successive
+    /// ungets behave LIFO while a single multi-byte unget preserves order.
+    pub fn unget(&mut self, bytes: &[u8]) -> Result<()> {
+        match self {
+            Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
+            Self::Stdin | Self::Stdout | Self::Stderr => {
+                Err(MonorubyErr::ioerr("not opened for reading"))
+            }
+            Self::File(_) | Self::Popen(_) => {
+                let cell = self.pushback_cell().unwrap();
+                let mut pb = cell.borrow_mut();
+                pb.splice(0..0, bytes.iter().copied());
+                Ok(())
+            }
+        }
+    }
+
+    /// Take up to `max` bytes (all if `None`) from the front of the
+    /// pushback buffer.
+    fn take_pushback(&mut self, max: Option<usize>) -> Vec<u8> {
+        let cell = match self.pushback_cell() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let mut pb = cell.borrow_mut();
+        let n = match max {
+            Some(m) => m.min(pb.len()),
+            None => pb.len(),
+        };
+        pb.drain(..n).collect()
+    }
+
     pub fn read(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+        if self.pushback_len() > 0 {
+            match length {
+                Some(0) => return Ok(vec![]),
+                Some(n) if n <= self.pushback_len() => {
+                    return Ok(self.take_pushback(Some(n)));
+                }
+                Some(n) => {
+                    let mut out = self.take_pushback(None);
+                    let need = n - out.len();
+                    out.extend_from_slice(&self.read_underlying(Some(need))?);
+                    return Ok(out);
+                }
+                None => {
+                    let mut out = self.take_pushback(None);
+                    out.extend_from_slice(&self.read_underlying(None)?);
+                    return Ok(out);
+                }
+            }
+        }
+        self.read_underlying(length)
+    }
+
+    fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
         match self {
             Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
@@ -286,6 +376,29 @@ impl IoInner {
     }
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
+        if self.pushback_len() > 0 {
+            let cell = self.pushback_cell().unwrap();
+            let nl = cell.borrow().iter().position(|&b| b == b'\n');
+            match nl {
+                Some(idx) => {
+                    let line = self.take_pushback(Some(idx + 1));
+                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                }
+                None => {
+                    let mut line = self.take_pushback(None);
+                    match self.read_line_underlying()? {
+                        Some(rest) => line.extend_from_slice(rest.as_bytes()),
+                        None if line.is_empty() => return Ok(None),
+                        None => {}
+                    }
+                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                }
+            }
+        }
+        self.read_line_underlying()
+    }
+
+    fn read_line_underlying(&mut self) -> Result<Option<String>> {
         match self {
             Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
@@ -386,6 +499,74 @@ impl IoInner {
             Self::File(file) => Some(&file.name),
             _ => None,
         }
+    }
+
+    /// CRuby `IO#path` / `IO#to_path`. Returns the pseudo-path for the
+    /// standard streams, the real filesystem path for file-backed IO (and
+    /// raw-fd IO opened with an explicit `path:`), and `nil` for pipes,
+    /// `popen`, raw fds without a path, and closed streams.
+    pub fn path(&self) -> Option<String> {
+        match self {
+            Self::Stdin => Some("<STDIN>".to_string()),
+            Self::Stdout => Some("<STDOUT>".to_string()),
+            Self::Stderr => Some("<STDERR>".to_string()),
+            Self::File(file) if file.has_path => Some(file.name.clone()),
+            Self::File(_) | Self::Popen(_) | Self::Closed => None,
+        }
+    }
+
+    /// CRuby `IO#fsync` / `IO#fdatasync`. Flushes user-space buffers, then
+    /// asks the kernel to flush to permanent storage. `data_only` selects
+    /// `fdatasync(2)` (skip metadata) over `fsync(2)`. Returns `0` on
+    /// success (matching CRuby), `IOError` on a closed stream.
+    pub fn fsync(&mut self, data_only: bool) -> Result<i32> {
+        self.flush()?;
+        let fd = self.fileno()?;
+        let ret = unsafe {
+            if data_only {
+                libc::fdatasync(fd)
+            } else {
+                libc::fsync(fd)
+            }
+        };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(0)
+    }
+
+    /// CRuby `IO#close_on_exec?`. Reads the `FD_CLOEXEC` flag via
+    /// `fcntl(F_GETFD)`. `IOError` on a closed stream.
+    pub fn close_on_exec(&self) -> Result<bool> {
+        let fd = self.fileno()?;
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(flags & libc::FD_CLOEXEC != 0)
+    }
+
+    /// CRuby `IO#close_on_exec=`. Sets/clears `FD_CLOEXEC` via
+    /// `fcntl(F_GETFD)`/`fcntl(F_SETFD)`. `IOError` on a closed stream.
+    pub fn set_close_on_exec(&self, value: bool) -> Result<()> {
+        let fd = self.fileno()?;
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        let new_flags = if value {
+            flags | libc::FD_CLOEXEC
+        } else {
+            flags & !libc::FD_CLOEXEC
+        };
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, new_flags) } == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(())
     }
 
     /// Set the autoclose flag for a File IO. No-op for stdio/pipe/popen/closed
