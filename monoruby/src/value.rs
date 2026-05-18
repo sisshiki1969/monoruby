@@ -1577,10 +1577,13 @@ pub(crate) fn escape_unicode_noncompat_component(inner: &RStringInner) -> Option
 /// the quoted `"name":` form. This is *stricter* than
 /// `Symbol#inspect`'s `is_simple_symbol` (which leaves operators
 /// unquoted), so it needs its own predicate.
-pub(crate) fn symbol_hash_label(id: IdentId) -> String {
+pub(crate) fn symbol_hash_label(id: IdentId, escape: bool) -> String {
     let name = id.get_ident_name_clone();
     if let Some(s) = name.as_str() {
-        if is_label_symbol(s) {
+        // Under `escape` mode (non-UTF-8 `default_external`) a name
+        // with non-ASCII can't be a bare label — it must be quoted so
+        // the caller's `\u` pass can escape it.
+        if is_label_symbol(s) && !(escape && !s.is_ascii()) {
             return s.to_string();
         }
     }
@@ -1597,6 +1600,29 @@ pub(crate) fn symbol_hash_label(id: IdentId) -> String {
     };
     let inner = RStringInner::from_encoding(bytes, enc);
     format!("\"{}\"", inner.inspect())
+}
+
+/// Replace every non-ASCII character with `\uXXXX` / `\u{XXXXX}`,
+/// leaving ASCII bytes untouched. Used by container `#inspect` when
+/// `Encoding.default_external` is not UTF-8.
+pub(crate) fn escape_nonascii_to_u(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii() {
+            out.push(ch);
+        } else {
+            let cp = ch as u32;
+            if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{:04X}", cp));
+            } else {
+                out.push_str(&format!("\\u{{{:X}}}", cp));
+            }
+        }
+    }
+    out
 }
 
 /// `true` iff `s` is a plain-identifier symbol name (with an optional

@@ -1146,9 +1146,20 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     crate::value::exec_recursive(
         self_val.id(),
         || {
+            let escape = crate::builtins::encoding::inspect_escape_nonascii(globals);
+            let mk = |s: String| {
+                if escape {
+                    Value::string_from_inner(RStringInner::from_encoding(
+                        crate::value::escape_nonascii_to_u(&s).as_bytes(),
+                        Encoding::UsAscii,
+                    ))
+                } else {
+                    Value::string(s)
+                }
+            };
             let hash = self_val.as_hash();
             if hash.len() == 0 {
-                return Ok(Value::string("{}".to_string()));
+                return Ok(mk("{}".to_string()));
             }
             let mut s = String::from("{");
             let mut first = true;
@@ -1163,7 +1174,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     // identifier symbols; operators / `=`-setters /
                     // `@`/`$` / quoted names use `"name":` (stricter
                     // than `Symbol#inspect`).
-                    let key_str = crate::value::symbol_hash_label(sym);
+                    let key_str = crate::value::symbol_hash_label(sym, escape);
                     s.push_str(&format!("{key_str}: {v_str}"));
                 } else {
                     let k_str = inspect_value_for_hash(vm, globals, k)?;
@@ -1171,7 +1182,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 }
             }
             s.push('}');
-            Ok(Value::string(s))
+            Ok(mk(s))
         },
         Value::string("{...}".to_string()),
     )
