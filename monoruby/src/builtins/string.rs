@@ -4798,6 +4798,19 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         Ok(s) => IdentId::get_id(s),
         Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec()),
     };
+    // Preserve the source encoding when `Symbol#to_s` cannot
+    // re-derive it from the bytes alone (UTF-16/32, EUC-JP, …).
+    // US-ASCII / UTF-8 / ASCII-8BIT are reconstructed correctly by
+    // the default derivation, so they need no side-map entry.
+    let enc = inner.encoding();
+    if !matches!(
+        enc,
+        crate::value::Encoding::UsAscii
+            | crate::value::Encoding::Utf8
+            | crate::value::Encoding::Ascii8
+    ) {
+        id.set_symbol_encoding(enc);
+    }
     Ok(Value::symbol(id))
 }
 

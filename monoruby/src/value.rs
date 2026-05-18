@@ -1519,7 +1519,7 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
         }
         return res;
     }
-    let (bytes, enc) = match &ident_name {
+    let (bytes, default_enc) = match &ident_name {
         IdentName::Utf8(s) => {
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
@@ -1530,6 +1530,7 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
         }
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
+    let enc = id.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     let mut res = String::from(":\"");
     res.push_str(&inner.inspect());
@@ -1587,7 +1588,7 @@ pub(crate) fn symbol_hash_label(id: IdentId, escape: bool) -> String {
             return s.to_string();
         }
     }
-    let (bytes, enc): (&[u8], Encoding) = match &name {
+    let (bytes, default_enc): (&[u8], Encoding) = match &name {
         IdentName::Utf8(s) => (
             s.as_bytes(),
             if s.is_ascii() {
@@ -1598,6 +1599,7 @@ pub(crate) fn symbol_hash_label(id: IdentId, escape: bool) -> String {
         ),
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
+    let enc = id.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     format!("\"{}\"", inner.inspect())
 }

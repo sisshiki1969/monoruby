@@ -38,7 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
     let ident_name = sym.get_ident_name_clone();
-    let (bytes, enc) = match &ident_name {
+    let (bytes, default_enc) = match &ident_name {
         IdentName::Utf8(s) => {
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
@@ -49,6 +49,9 @@ fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
         }
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
+    // A recorded source encoding (set by `String#to_sym` for
+    // UTF-16/32 etc.) overrides the byte-derived default.
+    let enc = sym.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     let mut result = Value::string_from_inner(inner);
     result.set_chilled();
@@ -71,7 +74,7 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         return Ok(v);
     }
     let ident_name = sym.get_ident_name_clone();
-    let (bytes, enc) = match &ident_name {
+    let (bytes, default_enc) = match &ident_name {
         IdentName::Utf8(s) => {
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
@@ -82,6 +85,7 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         }
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
     };
+    let enc = sym.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     let mut v = Value::string_from_inner(inner);
     v.set_frozen();
@@ -561,5 +565,26 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn symbol_preserves_source_encoding() {
+        // `String#to_sym` records a non-default source encoding
+        // (UTF-16/32) so Symbol#{to_s,name,encoding,inspect,end_with?}
+        // round-trip it. ASCII / UTF-8 keep the default derivation.
+        run_tests(&[
+            r#""foo".encode("UTF-16LE").to_sym.encoding.name"#,
+            r#""foo".encode("UTF-16LE").to_sym.inspect"#,
+            r#""foo".encode("UTF-16LE").to_sym.to_s.encoding.name"#,
+            r#""foo".encode("UTF-16LE").to_sym.name.encoding.name"#,
+            r#""abç".encode("UTF-16BE").to_sym.inspect"#,
+            r#""x".encode("UTF-32LE").to_sym.encoding.name"#,
+            r#"s = "\xd8\x00\xdc\x00".dup.force_encoding("UTF-16BE").to_sym
+               s.end_with?("\xdc\x00".dup.force_encoding("UTF-16BE"))"#,
+            r#""abcd".encode("UTF-16BE").to_sym.end_with?("cd".encode("UTF-16BE"))"#,
+            // ASCII / UTF-8 unchanged
+            r#""abc".to_sym.encoding.name"#,
+            r#":café.encoding.name"#,
+        ]);
     }
 }
