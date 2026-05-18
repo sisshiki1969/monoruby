@@ -2713,6 +2713,100 @@ mod tests {
     }
 
     #[test]
+    fn io_encoding_resolution() {
+        // default_internal unset, read mode: external tracks
+        // default_external live; internal nil.
+        run_test_once(
+            r#"
+            File.write("/tmp/mr_enc2.txt", "")
+            Encoding.default_internal = nil
+            Encoding.default_external = Encoding::IBM866
+            r = []
+            File.open("/tmp/mr_enc2.txt", "r") do |f|
+              r << f.external_encoding.equal?(Encoding::IBM866)
+              r << f.internal_encoding.nil?
+              Encoding.default_external = Encoding::IBM437
+              r << f.external_encoding.equal?(Encoding::IBM437)
+            end
+            Encoding.default_external = Encoding::UTF_8
+            File.unlink("/tmp/mr_enc2.txt")
+            r
+            "#,
+        );
+        // default_internal set: external is snapshot of default_external
+        // at creation (frozen); internal = default_internal.
+        run_test_once(
+            r#"
+            File.write("/tmp/mr_enc3.txt", "")
+            Encoding.default_external = Encoding::IBM437
+            Encoding.default_internal = Encoding::IBM866
+            r = []
+            File.open("/tmp/mr_enc3.txt", "r") do |f|
+              Encoding.default_external = Encoding::UTF_8
+              r << f.external_encoding.equal?(Encoding::IBM437)
+              r << f.internal_encoding.equal?(Encoding::IBM866)
+              f.set_encoding(nil, nil)
+              r << f.external_encoding.equal?(Encoding::UTF_8)
+              r << f.internal_encoding.nil?
+            end
+            Encoding.default_external = Encoding::UTF_8
+            Encoding.default_internal = nil
+            File.unlink("/tmp/mr_enc3.txt")
+            r
+            "#,
+        );
+        // di == de => internal nil.
+        run_test_once(
+            r#"
+            File.write("/tmp/mr_enc4.txt", "")
+            Encoding.default_external = Encoding::IBM866
+            Encoding.default_internal = Encoding::IBM866
+            r = []
+            File.open("/tmp/mr_enc4.txt", "r") do |f|
+              r << f.external_encoding.equal?(Encoding::IBM866)
+              r << f.internal_encoding.nil?
+            end
+            Encoding.default_external = Encoding::UTF_8
+            Encoding.default_internal = nil
+            File.unlink("/tmp/mr_enc4.txt")
+            r
+            "#,
+        );
+        // IO.new with :external_encoding / :internal_encoding options;
+        // set_encoding with a string name (enc_same name fallback).
+        run_test_once(
+            r#"
+            File.write("/tmp/mr_enc5.txt", "")
+            r = []
+            f = File.open("/tmp/mr_enc5.txt", "r")
+            io = IO.new(f.fileno, "r",
+                        external_encoding: "EUC-JP",
+                        internal_encoding: Encoding::UTF_8,
+                        autoclose: false)
+            r << io.external_encoding.equal?(Encoding::EUC_JP)
+            r << io.internal_encoding.equal?(Encoding::UTF_8)
+            io.set_encoding("shift_jis")
+            r << io.external_encoding.equal?(Encoding::SHIFT_JIS)
+            r << io.internal_encoding.nil?
+            f.close
+            File.unlink("/tmp/mr_enc5.txt")
+            r
+            "#,
+        );
+        // Pipe / stdio not created through the open path: external
+        // reports default_external, internal nil.
+        run_test(
+            r#"
+            r, w = IO.pipe
+            v = [r.external_encoding.equal?(Encoding.default_external),
+                 r.internal_encoding.nil?, $stdin.internal_encoding.nil?]
+            r.close; w.close
+            v
+            "#,
+        );
+    }
+
+    #[test]
     fn io_foreach_test() {
         run_test(
             r#"
