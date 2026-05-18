@@ -77,9 +77,7 @@ impl<'a> MarshalReader<'a> {
 
     fn read_byte(&mut self) -> Result<u8> {
         if self.pos >= self.data.len() {
-            return Err(MonorubyErr::argumenterr(
-                "marshal data too short",
-            ));
+            return Err(MonorubyErr::argumenterr("marshal data too short"));
         }
         let b = self.data[self.pos];
         self.pos += 1;
@@ -88,9 +86,7 @@ impl<'a> MarshalReader<'a> {
 
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.pos + n > self.data.len() {
-            return Err(MonorubyErr::argumenterr(
-                "marshal data too short",
-            ));
+            return Err(MonorubyErr::argumenterr("marshal data too short"));
         }
         let slice = &self.data[self.pos..self.pos + n];
         self.pos += n;
@@ -148,9 +144,8 @@ impl<'a> MarshalReader<'a> {
     fn read_new_symbol(&mut self) -> Result<IdentId> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
-        let name = std::str::from_utf8(bytes).map_err(|_| {
-            MonorubyErr::argumenterr("invalid symbol encoding in marshal data")
-        })?;
+        let name = std::str::from_utf8(bytes)
+            .map_err(|_| MonorubyErr::argumenterr("invalid symbol encoding in marshal data"))?;
         let id = IdentId::get_id(name);
         self.symbols.push(id);
         Ok(id)
@@ -178,11 +173,7 @@ impl<'a> MarshalReader<'a> {
     }
 
     /// Read and return the next marshalled value.
-    fn read_value(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_value(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let tag = self.read_byte()?;
         match tag {
             b'0' => Ok(Value::nil()),
@@ -259,9 +250,8 @@ impl<'a> MarshalReader<'a> {
     fn read_float(&mut self) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
-        let s = std::str::from_utf8(bytes).map_err(|_| {
-            MonorubyErr::argumenterr("invalid float encoding in marshal data")
-        })?;
+        let s = std::str::from_utf8(bytes)
+            .map_err(|_| MonorubyErr::argumenterr("invalid float encoding in marshal data"))?;
         let f = match s {
             "inf" => f64::INFINITY,
             "-inf" => f64::NEG_INFINITY,
@@ -299,11 +289,7 @@ impl<'a> MarshalReader<'a> {
     /// Format: inner_object + marshal_int(ivar_count) + (symbol + value) pairs
     ///
     /// The most common case is a UTF-8 string: I + " + data + 1 + :E + T
-    fn read_ivar_wrapped(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_ivar_wrapped(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let inner_tag = self.read_byte()?;
         match inner_tag {
             b'"' => {
@@ -327,7 +313,8 @@ impl<'a> MarshalReader<'a> {
                                 let enc_val = self.read_value(vm, globals)?;
                                 if let Some(s) = enc_val.is_rstring_inner() {
                                     let enc_name = std::str::from_utf8(s.as_bytes()).unwrap_or("");
-                                    encoding = Encoding::try_from_str(enc_name).unwrap_or(Encoding::Ascii8);
+                                    encoding = Encoding::try_from_str(enc_name)
+                                        .unwrap_or(Encoding::Ascii8);
                                 }
                             }
                         }
@@ -357,11 +344,7 @@ impl<'a> MarshalReader<'a> {
 
     /// Read an Array.
     /// Format: marshal_int(length) + elements
-    fn read_array(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_array(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         // Reserve an object slot so nested references work correctly
         let obj_idx = self.objects.len();
@@ -378,11 +361,7 @@ impl<'a> MarshalReader<'a> {
 
     /// Read a Hash.
     /// Format: marshal_int(length) + (key + value) pairs
-    fn read_hash(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_hash(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         // Reserve an object slot
         let obj_idx = self.objects.len();
@@ -402,11 +381,7 @@ impl<'a> MarshalReader<'a> {
     /// Format: symbol(class_name) + marshal_int(ivar_count) + (symbol + value) pairs
     ///
     /// We create a generic object with instance variables stored as a Hash.
-    fn read_user_object(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_user_object(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let class_sym = self.read_symbol()?;
         let ivar_count = self.read_fixnum()? as usize;
         // Reserve an object slot
@@ -429,8 +404,7 @@ impl<'a> MarshalReader<'a> {
                     // we can reconstruct or raise.
                     let uses_default = globals.store[module.id()]
                         .alloc_func()
-                        .map(|f| f as usize
-                            == crate::default_alloc_func as usize)
+                        .map(|f| f as *const () == crate::default_alloc_func as *const ())
                         .unwrap_or(true);
                     (Value::object(module.id()), !uses_default)
                 } else {
@@ -490,11 +464,7 @@ impl<'a> MarshalReader<'a> {
     ///
     /// Currently, this reads the class name symbol, then reads and returns
     /// the nested value, effectively ignoring the class information.
-    fn read_user_marshal(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
+    fn read_user_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let _class_sym = self.read_symbol()?;
         let val = self.read_value(vm, globals)?;
         Ok(val)
@@ -812,69 +782,67 @@ fn marshal_dump_value(
         RV::Object(_rv) => {
             let obj_id = obj.id();
             if !in_progress.insert(obj_id) {
-                return Err(MonorubyErr::argumenterr(
-                    "can't dump cyclic reference",
-                ));
+                return Err(MonorubyErr::argumenterr("can't dump cyclic reference"));
             }
             let r = (|| -> Result<()> {
-            // Check for Array and Hash via ty()
-            match obj.ty() {
-                Some(ObjTy::ARRAY) => {
-                    let inner = obj.as_array_inner();
-                    buf.push(b'[');
-                    marshal_write_fixnum(buf, inner.len() as i32);
-                    for elem in inner.iter() {
-                        marshal_dump_value(buf, *elem, globals, symbols, in_progress)?;
+                // Check for Array and Hash via ty()
+                match obj.ty() {
+                    Some(ObjTy::ARRAY) => {
+                        let inner = obj.as_array_inner();
+                        buf.push(b'[');
+                        marshal_write_fixnum(buf, inner.len() as i32);
+                        for elem in inner.iter() {
+                            marshal_dump_value(buf, *elem, globals, symbols, in_progress)?;
+                        }
+                    }
+                    Some(ObjTy::RANGE) => {
+                        // Serialize Range as a generic 'o' object with the
+                        // three ivars CRuby uses: @begin, @end, @excl.
+                        let range = obj.as_range();
+                        let begin = range.start();
+                        let end = range.end();
+                        let excl = range.exclude_end();
+                        buf.push(b'o');
+                        marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
+                        marshal_write_fixnum(buf, 3);
+                        marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
+                        marshal_dump_value(buf, begin, globals, symbols, in_progress)?;
+                        marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
+                        marshal_dump_value(buf, end, globals, symbols, in_progress)?;
+                        marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
+                        buf.push(if excl { b'T' } else { b'F' });
+                    }
+                    Some(ObjTy::HASH) => {
+                        let inner = obj.as_hashmap_inner();
+                        buf.push(b'{');
+                        marshal_write_fixnum(buf, inner.len() as i32);
+                        for (k, v) in inner.iter() {
+                            marshal_dump_value(buf, k, globals, symbols, in_progress)?;
+                            marshal_dump_value(buf, v, globals, symbols, in_progress)?;
+                        }
+                    }
+                    Some(ObjTy::OBJECT) => {
+                        // User-defined object with instance variables: 'o' tag
+                        let class_id = obj.class();
+                        let class_name = globals.get_class_name(class_id);
+                        let class_name_id = IdentId::get_id(&class_name);
+                        let ivars = globals.get_ivars(obj);
+                        buf.push(b'o');
+                        marshal_write_symbol(buf, class_name_id, symbols);
+                        marshal_write_fixnum(buf, ivars.len() as i32);
+                        for (name, val) in ivars {
+                            marshal_write_symbol(buf, name, symbols);
+                            marshal_dump_value(buf, val, globals, symbols, in_progress)?;
+                        }
+                    }
+                    _ => {
+                        return Err(MonorubyErr::typeerr(format!(
+                            "no _dump_data is defined for class {}",
+                            globals.get_class_name(obj.class())
+                        )));
                     }
                 }
-                Some(ObjTy::RANGE) => {
-                    // Serialize Range as a generic 'o' object with the
-                    // three ivars CRuby uses: @begin, @end, @excl.
-                    let range = obj.as_range();
-                    let begin = range.start();
-                    let end = range.end();
-                    let excl = range.exclude_end();
-                    buf.push(b'o');
-                    marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
-                    marshal_write_fixnum(buf, 3);
-                    marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
-                    marshal_dump_value(buf, begin, globals, symbols, in_progress)?;
-                    marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
-                    marshal_dump_value(buf, end, globals, symbols, in_progress)?;
-                    marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
-                    buf.push(if excl { b'T' } else { b'F' });
-                }
-                Some(ObjTy::HASH) => {
-                    let inner = obj.as_hashmap_inner();
-                    buf.push(b'{');
-                    marshal_write_fixnum(buf, inner.len() as i32);
-                    for (k, v) in inner.iter() {
-                        marshal_dump_value(buf, k, globals, symbols, in_progress)?;
-                        marshal_dump_value(buf, v, globals, symbols, in_progress)?;
-                    }
-                }
-                Some(ObjTy::OBJECT) => {
-                    // User-defined object with instance variables: 'o' tag
-                    let class_id = obj.class();
-                    let class_name = globals.get_class_name(class_id);
-                    let class_name_id = IdentId::get_id(&class_name);
-                    let ivars = globals.get_ivars(obj);
-                    buf.push(b'o');
-                    marshal_write_symbol(buf, class_name_id, symbols);
-                    marshal_write_fixnum(buf, ivars.len() as i32);
-                    for (name, val) in ivars {
-                        marshal_write_symbol(buf, name, symbols);
-                        marshal_dump_value(buf, val, globals, symbols, in_progress)?;
-                    }
-                }
-                _ => {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "no _dump_data is defined for class {}",
-                        globals.get_class_name(obj.class())
-                    )));
-                }
-            }
-            Ok(())
+                Ok(())
             })();
             in_progress.remove(&obj_id);
             r?;

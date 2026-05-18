@@ -235,7 +235,7 @@ impl Codegen {
             sarq rdi, 1;
             sarq rsi, 1;
             movq rdx, rbx;
-            movq rax, (pow_ii as u64);
+            movq rax, (pow_ii as *const ());
             call rax;
         );
         self.xmm_restore(using_xmm);
@@ -269,7 +269,7 @@ impl Codegen {
         self.load_fpr_into_xmm0(lhs_xmm, base);
         self.load_fpr_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
-            movq rax, (rem_ff as u64);
+            movq rax, (rem_ff as *const ());
             call rax;
         );
         self.xmm_restore(using_xmm);
@@ -304,7 +304,7 @@ impl Codegen {
         self.load_fpr_into_xmm0(lhs_xmm, base);
         self.load_fpr_into_xmm1(rhs_xmm, base);
         monoasm!( &mut self.jit,
-            movq rax, (pow_ff as u64);
+            movq rax, (pow_ff as *const ());
             call rax;
         );
         self.xmm_restore(using_xmm);

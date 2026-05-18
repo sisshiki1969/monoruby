@@ -1,9 +1,7 @@
 #![feature(box_patterns)]
-#![feature(int_roundings)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
 #![feature(step_trait)]
-#![feature(iter_array_chunks)]
 #![feature(coverage_attribute)]
 
 mod alloc;
