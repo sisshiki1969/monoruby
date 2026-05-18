@@ -300,14 +300,30 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gets(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    Ok(if let Some(buf) = io.read_line()? {
-        Value::string(buf)
-    } else {
-        Value::nil()
-    })
+    let line = self_.as_io_inner_mut().read_line()?;
+    match line {
+        Some(buf) => {
+            let cur = globals
+                .store
+                .get_ivar(self_, IdentId::get_id("/lineno"))
+                .and_then(|v| v.try_fixnum())
+                .unwrap_or(0);
+            let n = cur + 1;
+            globals
+                .store
+                .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(n))?;
+            globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+            let s = Value::string(buf);
+            globals.set_gvar(IdentId::get_id("$_"), s);
+            Ok(s)
+        }
+        None => {
+            globals.set_gvar(IdentId::get_id("$_"), Value::nil());
+            Ok(Value::nil())
+        }
+    }
 }
 
 ///
@@ -1168,6 +1184,9 @@ fn io_rewind(
         .as_io_inner_mut()
         .seek(0, 0)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    globals
+        .store
+        .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(0))?;
     Ok(Value::integer(0))
 }
 
@@ -1376,9 +1395,9 @@ fn io_sysseek(
 /// ### IO#lineno
 /// - lineno -> Integer
 ///
-/// Returns the value last assigned via `lineno=`, or 0 if it was never
-/// assigned. monoruby does not auto-increment `lineno` on `gets`/`readline`
-/// the way CRuby does — only the explicit setter is honored.
+/// Returns the current line number: incremented by each `gets`/`readline`
+/// (and the default-separator `each_line`), reset to 0 by `rewind`, and
+/// overridable via `lineno=`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/lineno.html]
 #[monoruby_builtin]
@@ -1411,6 +1430,11 @@ fn io_lineno_set(
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if n > i32::MAX as i64 || n < i32::MIN as i64 {
+        return Err(MonorubyErr::rangeerr(format!(
+            "integer {n} too big to convert to `int'"
+        )));
+    }
     globals.store.set_ivar(
         lfp.self_val(),
         IdentId::get_id("/lineno"),
@@ -3352,5 +3376,31 @@ mod tests {
             f.ungetc(100)
             "#,
         );
+    }
+
+    #[test]
+    fn io_lineno_autoincrement() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              a = f.lineno
+              f.gets; f.gets
+              b = f.lineno
+              line = f.gets
+              [a, b, f.lineno, $. , $_ == line, f.readline ? f.lineno : nil]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.gets; f.gets
+              n = f.lineno
+              f.rewind
+              [n, f.lineno, f.gets.nil?]
+            end
+            "#,
+        );
+        run_test_error(r#"File.open("Cargo.toml") { |f| f.lineno = 4294967296 }"#);
     }
 }
