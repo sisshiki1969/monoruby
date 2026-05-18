@@ -759,13 +759,17 @@ where
     where
         Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
     {
-        Ok(match self.as_entries() {
-            [] => None,
-            [x] => key.equivalent(&x.key, e, g)?.then_some(0),
-            _ => {
-                let hash = self.hash(key, e, g)?;
-                self.core.get_index_of(hash, key, e, g)?
-            }
+        // CRuby's `Hash#[]` always hashes the query key (when the hash
+        // is non-empty) and only consults `#eql?` on a hash collision.
+        // A single-entry fast path that compared via `#eql?` without
+        // hashing diverged from that: object keys never received
+        // `#hash`, and `#eql?` was called even for differing hashes
+        // (and Set-of-Sets membership / mock-count specs failed).
+        Ok(if self.as_entries().is_empty() {
+            None
+        } else {
+            let hash = self.hash(key, e, g)?;
+            self.core.get_index_of(hash, key, e, g)?
         })
     }
 
