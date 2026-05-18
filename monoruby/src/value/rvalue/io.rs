@@ -21,6 +21,11 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
 pub struct FileDescriptor {
     reader: ManuallyDrop<std::io::BufReader<std::fs::File>>,
     name: String,
+    /// Whether `name` is a real filesystem path (surfaced via `IO#path`).
+    /// `false` for placeholder names like `fd 3`/`pipe` created from a raw
+    /// fd without an explicit `path:` option — CRuby's `IO#path` is `nil`
+    /// in that case.
+    has_path: bool,
     /// CRuby's `IO#autoclose=` semantics. When `true` (the default), the
     /// underlying fd is closed when this `FileDescriptor` is dropped. When
     /// `false`, ownership is released via `into_raw_fd` so the fd is *not*
@@ -158,6 +163,7 @@ impl IoInner {
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            has_path: true,
             autoclose: Cell::new(true),
         }))
     }
@@ -179,12 +185,13 @@ impl IoInner {
         }
     }
 
-    pub(crate) fn from_raw_fd(fd: i32, name: String) -> Self {
+    pub(crate) fn from_raw_fd(fd: i32, name: String, has_path: bool) -> Self {
         // SAFETY: fd is a valid file descriptor obtained from pipe().
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
+            has_path,
             autoclose: Cell::new(true),
         }))
     }
@@ -386,6 +393,74 @@ impl IoInner {
             Self::File(file) => Some(&file.name),
             _ => None,
         }
+    }
+
+    /// CRuby `IO#path` / `IO#to_path`. Returns the pseudo-path for the
+    /// standard streams, the real filesystem path for file-backed IO (and
+    /// raw-fd IO opened with an explicit `path:`), and `nil` for pipes,
+    /// `popen`, raw fds without a path, and closed streams.
+    pub fn path(&self) -> Option<String> {
+        match self {
+            Self::Stdin => Some("<STDIN>".to_string()),
+            Self::Stdout => Some("<STDOUT>".to_string()),
+            Self::Stderr => Some("<STDERR>".to_string()),
+            Self::File(file) if file.has_path => Some(file.name.clone()),
+            Self::File(_) | Self::Popen(_) | Self::Closed => None,
+        }
+    }
+
+    /// CRuby `IO#fsync` / `IO#fdatasync`. Flushes user-space buffers, then
+    /// asks the kernel to flush to permanent storage. `data_only` selects
+    /// `fdatasync(2)` (skip metadata) over `fsync(2)`. Returns `0` on
+    /// success (matching CRuby), `IOError` on a closed stream.
+    pub fn fsync(&mut self, data_only: bool) -> Result<i32> {
+        self.flush()?;
+        let fd = self.fileno()?;
+        let ret = unsafe {
+            if data_only {
+                libc::fdatasync(fd)
+            } else {
+                libc::fsync(fd)
+            }
+        };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(0)
+    }
+
+    /// CRuby `IO#close_on_exec?`. Reads the `FD_CLOEXEC` flag via
+    /// `fcntl(F_GETFD)`. `IOError` on a closed stream.
+    pub fn close_on_exec(&self) -> Result<bool> {
+        let fd = self.fileno()?;
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(flags & libc::FD_CLOEXEC != 0)
+    }
+
+    /// CRuby `IO#close_on_exec=`. Sets/clears `FD_CLOEXEC` via
+    /// `fcntl(F_GETFD)`/`fcntl(F_SETFD)`. `IOError` on a closed stream.
+    pub fn set_close_on_exec(&self, value: bool) -> Result<()> {
+        let fd = self.fileno()?;
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        let new_flags = if value {
+            flags | libc::FD_CLOEXEC
+        } else {
+            flags & !libc::FD_CLOEXEC
+        };
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, new_flags) } == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::ioerr(err.to_string()));
+        }
+        Ok(())
     }
 
     /// Set the autoclose flag for a File IO. No-op for stdio/pipe/popen/closed

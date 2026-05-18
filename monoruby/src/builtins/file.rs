@@ -72,7 +72,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(file_test, "writable_real?", writable_, 1);
 
     globals.define_builtin_func_rest(file, "write", write);
-    globals.define_builtin_funcs(file, "path", &["to_path"], path, 0);
     globals.define_builtin_func(file, "size", size, 0);
     globals.define_builtin_func(file, "flock", flock_, 1);
 
@@ -905,9 +904,9 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // patterns like `File.new(io.fileno, autoclose: false, path: "")`
         // (logger/log_device.rb feature-detection code) where the caller
         // explicitly disclaims ownership of the borrowed fd.
-        let (name, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
+        let (name, has_path, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
         // SAFETY: fd has been validated as a valid file descriptor above.
-        let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path);
         io_inner.set_autoclose(autoclose);
         let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
         if let Some(bh) = lfp.block() {
@@ -1495,22 +1494,6 @@ fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             }
         }
         Err(_) => Ok(Value::nil()),
-    }
-}
-
-///
-/// ### File#path / File#to_path
-/// - path -> String
-/// - to_path -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/File/i/path.html]
-#[monoruby_builtin]
-fn path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let io = self_.as_io_inner();
-    match io.name() {
-        Some(name) => Ok(Value::string_from_str(name)),
-        None => Err(MonorubyErr::runtimeerr("path not available for this IO")),
     }
 }
 

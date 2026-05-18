@@ -52,6 +52,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
     globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
+    globals.define_builtin_funcs(IO_CLASS, "path", &["to_path"], io_path, 0);
+    globals.define_builtin_func(IO_CLASS, "fsync", io_fsync, 0);
+    globals.define_builtin_func(IO_CLASS, "fdatasync", io_fdatasync, 0);
+    globals.define_builtin_func(IO_CLASS, "close_on_exec?", io_close_on_exec_, 0);
+    globals.define_builtin_func(IO_CLASS, "close_on_exec=", io_close_on_exec_set, 1);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
     globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
@@ -97,8 +102,8 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         // Pick up `:autoclose` and `:path` from the options Hash. See
         // `io_open_opts` for the rationale.
-        let (name, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
-        let io_inner = IoInner::from_raw_fd(fd_i32, name);
+        let (name, has_path, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
+        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path);
         io_inner.set_autoclose(autoclose);
         return Ok(Value::new_io(io_inner));
     }
@@ -124,9 +129,10 @@ pub(super) fn io_open_opts(
     lfp: Lfp,
     range: std::ops::Range<usize>,
     fd: i64,
-) -> Result<(String, bool)> {
+) -> Result<(String, bool, bool)> {
     let mut autoclose = true;
     let mut name = format!("fd {}", fd);
+    let mut has_path = false;
     for i in range {
         if let Some(arg) = lfp.try_arg(i)
             && let Some(h) = arg.try_hash_ty()
@@ -138,10 +144,11 @@ pub(super) fn io_open_opts(
                 && !v.is_nil()
             {
                 name = v.coerce_to_string(vm, globals)?;
+                has_path = true;
             }
         }
     }
-    Ok((name, autoclose))
+    Ok((name, has_path, autoclose))
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -733,8 +740,8 @@ fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
     }
-    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string()));
-    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string()));
+    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string(), false));
+    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string(), false));
     Ok(Value::array2(read_io, write_io))
 }
 
@@ -1347,6 +1354,83 @@ fn io_lineno_set(
         Value::integer(n),
     )?;
     Ok(Value::integer(n))
+}
+
+///
+/// ### IO#path / IO#to_path
+/// - path -> String | nil
+/// - to_path -> String | nil
+///
+/// Returns the path associated with the IO, the pseudo-path for the
+/// standard streams (`<STDIN>` etc.), or `nil` for pipes/`popen`/raw fds
+/// without an explicit `path:` and for closed streams.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/path.html]
+#[monoruby_builtin]
+fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match lfp.self_val().as_io_inner().path() {
+        Some(p) => Value::string(p),
+        None => Value::nil(),
+    })
+}
+
+///
+/// ### IO#fsync
+/// - fsync -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fsync.html]
+#[monoruby_builtin]
+fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(false)?;
+    Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#fdatasync
+/// - fdatasync -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fdatasync.html]
+#[monoruby_builtin]
+fn io_fdatasync(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(true)?;
+    Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#close_on_exec?
+/// - close_on_exec? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close_on_exec=3f.html]
+#[monoruby_builtin]
+fn io_close_on_exec_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_io_inner().close_on_exec()?))
+}
+
+///
+/// ### IO#close_on_exec=
+/// - close_on_exec = bool -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close_on_exec=3d.html]
+#[monoruby_builtin]
+fn io_close_on_exec_set(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let v = lfp.arg(0);
+    lfp.self_val().as_io_inner().set_close_on_exec(v.as_bool())?;
+    Ok(v)
 }
 
 /// ### IO#write
@@ -3085,6 +3169,65 @@ mod tests {
             f = File.open("Cargo.toml")
             f.close
             f.gets
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_path_to_path() {
+        run_test(r#"File.open("Cargo.toml") { |f| f.path }"#);
+        run_test(r#"File.open("Cargo.toml") { |f| f.to_path }"#);
+        run_test(r#"$stdin.path"#);
+        run_test(r#"$stdout.path"#);
+        run_test(r#"$stderr.path"#);
+        run_test(r#"r, w = IO.pipe; v = [r.path, w.path]; r.close; w.close; v"#);
+        run_test(
+            r#"File.open("Cargo.toml") { |f| IO.new(f.fileno, path: "X", autoclose: false).path }"#,
+        );
+        run_test(
+            r#"File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }"#,
+        );
+    }
+
+    #[test]
+    fn io_fsync_fdatasync() {
+        run_test_once(
+            r#"
+            path = "/tmp/mr_fsync_test.txt"
+            r = File.open(path, "w") { |f| f.write("payload"); [f.fsync, f.fdatasync] }
+            File.unlink(path)
+            r
+            "#,
+        );
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.fsync
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_close_on_exec() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              before = f.close_on_exec?
+              f.close_on_exec = false
+              a = f.close_on_exec?
+              f.close_on_exec = true
+              b = f.close_on_exec?
+              f.close_on_exec = nil
+              [before, a, b, f.close_on_exec?]
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.close_on_exec?
             "#,
         );
     }
