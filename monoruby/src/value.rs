@@ -317,7 +317,16 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
-                    ObjTy::ARRAY | ObjTy::HASH => {
+                    // Only a *true* Array / Hash uses the native
+                    // structural hash. `Set` is `ObjTy::HASH` with class
+                    // `Set` and a Ruby-level, order-independent
+                    // `Set#hash` (and a Hash subclass may override
+                    // `#hash`); those fall through to the Ruby `#hash`
+                    // dispatch in the `_` arm so e.g. `Set[1,3]` and
+                    // `Set[3,1]` hash equal and compare as set members.
+                    ObjTy::ARRAY | ObjTy::HASH
+                        if lhs.ty() == ObjTy::ARRAY || lhs.class() == HASH_CLASS =>
+                    {
                         let id = self.id();
                         let is_recursive =
                             HASH_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
