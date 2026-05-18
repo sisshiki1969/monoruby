@@ -263,9 +263,8 @@ impl IoInner {
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.ensure_writable()?;
         match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
-            Self::Stdin => Err(MonorubyErr::argumenterr("can't write to $stdin")),
             Self::Stdout => match std::io::stdout().write(data) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(MonorubyErr::rangeerr(e.to_string())),
@@ -275,9 +274,6 @@ impl IoInner {
                 Err(e) => Err(MonorubyErr::rangeerr(e.to_string())),
             },
             Self::File(file) => {
-                if !file.writable {
-                    return Err(MonorubyErr::ioerr("not opened for writing"));
-                }
                 let _ = Rc::get_mut(file)
                     .unwrap()
                     .reader
@@ -288,15 +284,15 @@ impl IoInner {
             }
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
-                if let Some(ref mut writer) = popen.writer {
-                    writer
-                        .write(data)
-                        .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
-                    Ok(())
-                } else {
-                    Err(MonorubyErr::ioerr("not opened for writing"))
-                }
+                // `ensure_writable` guaranteed the writer is present.
+                let writer = popen.writer.as_mut().unwrap();
+                writer
+                    .write(data)
+                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                Ok(())
             }
+            // `ensure_writable` already rejected non-writable streams.
+            Self::Stdin | Self::Closed => unreachable!(),
         }
     }
 

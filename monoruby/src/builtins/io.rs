@@ -3452,4 +3452,27 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn io_directional_mode_errors_streams() {
+        // ensure_readable: closed stream -> "closed stream".
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.lineno
+            "#,
+        );
+        // is_readable Stdout arm + ensure_readable "not opened for reading".
+        run_test_error(r#"$stdout.lineno"#);
+        run_test_error(r#"$stderr.lineno"#);
+        // ensure_writable Stdin arm -> "not opened for writing".
+        run_test_error(r#"$stdin.write("x")"#);
+        // fd_rw_mode through IO.pipe: read end is RO, write end is WO.
+        run_test_error(r#"r, w = IO.pipe; begin; w.gets; ensure; r.close; w.close; end"#);
+        run_test_error(r#"r, w = IO.pipe; begin; r.write("x"); ensure; r.close; w.close; end"#);
+        // is_readable / is_writable Popen arms.
+        run_test_error(r#"IO.popen("cat", "w") { |p| p.gets }"#);
+        run_test_error(r#"IO.popen("cat", "r") { |p| p.write("x") }"#);
+    }
 }
