@@ -482,8 +482,8 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
         E::EucJp => b"euc-jp",
         E::Sjis(_) => b"shift_jis",
         E::Iso2022Jp => b"iso-2022-jp",
-        // Handled by callers as fast paths.
-        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii => return None,
+        // Handled by callers as fast paths / no native codec.
+        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii | E::Other(_) => return None,
     };
     encoding_rs::Encoding::for_label(label)
 }
@@ -1263,6 +1263,14 @@ pub(super) fn encoding_constant_name(enc: Encoding) -> &'static str {
         Encoding::Sjis(0) => "SHIFT_JIS",
         Encoding::Sjis(_) => "Windows_31J",
         Encoding::Iso2022Jp => "ISO_2022_JP",
+        // Name-preserving byte encodings: map the canonical display
+        // name back to its registered `Encoding::<CONST>` identifier.
+        Encoding::Other(i) => match i {
+            0 => "UTF_7",
+            1 => "CP50220",
+            2 => "CP50221",
+            _ => "ASCII_8BIT",
+        },
     }
 }
 
@@ -4401,6 +4409,30 @@ mod tests {
             // Regexp pairs use the declared encoding of the source.
             r#"Encoding.compatible?(/abc/, /def/).to_s"#,
             r#"Encoding.compatible?("abc", /def/).to_s"#,
+        ]);
+    }
+
+    #[test]
+    fn other_dummy_encodings_name_preserved() {
+        // UTF-7 / CP50220 / CP50221: name-preserved, ASCII-
+        // incompatible — `#inspect` escapes every byte, symbols are
+        // quoted, and the encoding round-trips through force_encoding.
+        run_tests(&[
+            r#""abcd".dup.force_encoding("UTF-7").encoding.name"#,
+            r#""abcd".dup.force_encoding("UTF-7").inspect"#,
+            r#""abcd".dup.force_encoding("CP50220").inspect"#,
+            r#""abcd".dup.force_encoding("CP50221").encoding.name"#,
+            r#""a\"b".dup.force_encoding("UTF-7").inspect"#,
+            r#"Encoding.find("UTF-7").name"#,
+            r#"Encoding.find("CP50220").name"#,
+            r#""abc".dup.force_encoding("UTF-7").to_sym.inspect"#,
+            r#""abc".dup.force_encoding("UTF-7").to_sym.encoding.name"#,
+            // ascii_compatible? false => Encoding.compatible? rules
+            r#"Encoding.compatible?(Encoding::UTF_7, Encoding::UTF_7) == Encoding::UTF_7"#,
+            r#"Encoding.compatible?("x".dup.force_encoding("UTF-7"), "y").inspect"#,
+            // Emacs-Mule / CESU-8 stay ASCII-compatible (unchanged)
+            r#""abcd".dup.force_encoding("Emacs-Mule").inspect"#,
+            r#""abcd".dup.force_encoding("CESU-8").inspect"#,
         ]);
     }
 
