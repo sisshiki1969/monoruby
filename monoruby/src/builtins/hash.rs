@@ -3798,6 +3798,10 @@ mod tests {
             "#,
             r#"{ a: 1, "b c": 2, "+": 3 }.to_s"#,
             r#"{ foo?: 1, bar!: 2, "baz=": 3 }.inspect"#,
+            // Symbol key whose name is invalid UTF-8 (interned as
+            // bytes): quoted, per-byte `\xNN` form.
+            r#"{ "\xff".b.to_sym => 1 }.inspect"#,
+            r#"{ "\xe3\x81".b.to_sym => 2, ok: 3 }.to_s"#,
         ]);
     }
 
