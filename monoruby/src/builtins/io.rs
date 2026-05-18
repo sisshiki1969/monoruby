@@ -64,6 +64,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
+    globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
     globals.define_builtin_func_rest(IO_CLASS, "wait", io_wait);
     globals.define_builtin_func_with(IO_CLASS, "wait_readable", io_wait_readable, 0, 1, false);
     globals.define_builtin_func_with(IO_CLASS, "wait_writable", io_wait_writable, 0, 1, false);
@@ -108,7 +109,20 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let (readable, writable) = fd_rw_mode(fd_i32);
         let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path, readable, writable);
         io_inner.set_autoclose(autoclose);
-        return Ok(Value::new_io(io_inner));
+        let res = Value::new_io(io_inner);
+        let mode_for_enc = lfp
+            .try_arg(1)
+            .and_then(|a| a.is_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                match (readable, writable) {
+                    (true, true) => "r+",
+                    (false, true) => "w",
+                    _ => "r",
+                }
+                .to_string()
+            });
+        init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..3)?;
+        return Ok(res);
     }
     Err(MonorubyErr::argumenterr(
         "IO.new requires an integer file descriptor",
@@ -167,6 +181,253 @@ pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
         libc::O_WRONLY => (false, true),
         _ => (true, true),
     }
+}
+
+// ----------------------------------------------------------------------
+// IO external/internal encoding (state + reporting; no content transcode)
+//
+// Mirrors CRuby's `rb_io_ext_int_to_encs`: an IO's encodings are resolved
+// once at creation (and again on `#set_encoding`) from the explicit
+// encodings (mode-string suffix / options / args) and the *current*
+// `Encoding.default_{external,internal}`. The resolved values are stored
+// as ivars so they survive `#close`. The only case that tracks the
+// default live is "no explicit encodings, default_internal unset, read
+// mode" (CRuby leaves `io->encs.enc` unset and reads default_external on
+// demand).
+// ----------------------------------------------------------------------
+
+const ENC_EXT_IVAR: &str = "/enc_ext";
+const ENC_INT_IVAR: &str = "/enc_int";
+const ENC_DYN_MARKER: &str = "__io_dynamic_default_external__";
+const BINMODE_IVAR: &str = "/binmode";
+
+#[derive(Clone, Copy)]
+enum ExtSlot {
+    Fixed(Value),
+    /// Track `Encoding.default_external` live.
+    Dynamic,
+    Nil,
+}
+
+/// Encoding *object* (preserving identity, unlike the `Encoding` enum
+/// which folds e.g. IBM866 -> ASCII-8BIT) for a name.
+fn enc_by_name(globals: &Globals, name: &str) -> Option<Value> {
+    super::encoding::find_encoding_object(globals, name)
+}
+
+/// `Encoding.default_external` object (UTF-8 if unset).
+fn enc_default_external_obj(globals: &mut Globals) -> Value {
+    if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+        && !v.is_nil()
+    {
+        return v;
+    }
+    enc_by_name(globals, "UTF-8").unwrap_or(Value::nil())
+}
+
+/// `Encoding.default_internal` object, or `None` if unset.
+fn enc_default_internal_obj(globals: &mut Globals) -> Option<Value> {
+    let v = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))?;
+    if v.is_nil() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+fn enc_norm(s: &str) -> String {
+    s.to_uppercase().replace(['-', '_'], "")
+}
+
+fn enc_is_binary(globals: &Globals, v: Value) -> bool {
+    super::encoding::encoding_object_name(globals, v)
+        .map(|n| {
+            let u = n.to_uppercase();
+            u == "ASCII-8BIT" || u == "BINARY"
+        })
+        .unwrap_or(false)
+}
+
+fn enc_same(globals: &Globals, a: Value, b: Value) -> bool {
+    if a.id() == b.id() {
+        return true;
+    }
+    match (
+        super::encoding::encoding_object_name(globals, a),
+        super::encoding::encoding_object_name(globals, b),
+    ) {
+        (Some(x), Some(y)) => enc_norm(&x) == enc_norm(&y),
+        _ => false,
+    }
+}
+
+/// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
+/// String is resolved by name; anything else (incl. `nil`) -> `None`.
+fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
+    if v.is_nil() {
+        return None;
+    }
+    if v.class() == super::encoding::encoding_class(globals) {
+        return Some(v);
+    }
+    if let Some(s) = v.is_str() {
+        return enc_by_name(globals, &s);
+    }
+    None
+}
+
+/// CRuby's `rb_io_ext_int_to_encs` external/internal resolution,
+/// operating on Encoding objects.
+fn resolve_io_encodings(
+    globals: &Globals,
+    explicit_ext: Option<Value>,
+    explicit_int: Option<Value>,
+    binmode: bool,
+    readable: bool,
+    de: Value,
+    di: Option<Value>,
+    at_creation: bool,
+) -> (ExtSlot, Option<Value>) {
+    // `b`/binmode forces a BINARY external only when none was given.
+    let ext = if explicit_ext.is_none() && binmode {
+        enc_by_name(globals, "ASCII-8BIT")
+    } else {
+        explicit_ext
+    };
+    if let Some(e) = ext {
+        let mut i = explicit_int;
+        if enc_is_binary(globals, e) || i.map(|x| enc_same(globals, x, e)).unwrap_or(false) {
+            i = None;
+        }
+        return (ExtSlot::Fixed(e), i);
+    }
+    if explicit_int.is_none() {
+        match di {
+            Some(di) => {
+                let i = if enc_is_binary(globals, de) || enc_same(globals, di, de) {
+                    None
+                } else {
+                    Some(di)
+                };
+                (ExtSlot::Fixed(de), i)
+            }
+            None => {
+                if at_creation && readable {
+                    (ExtSlot::Dynamic, None)
+                } else {
+                    (ExtSlot::Nil, None)
+                }
+            }
+        }
+    } else {
+        let it = explicit_int.unwrap();
+        let i = if enc_is_binary(globals, de) || enc_same(globals, it, de) {
+            None
+        } else {
+            Some(it)
+        };
+        (ExtSlot::Fixed(de), i)
+    }
+}
+
+/// Persist a resolved encoding pair as ivars on the IO object.
+fn store_io_encodings(globals: &mut Globals, io: Value, ext: ExtSlot, int: Option<Value>) {
+    let ext_val = match ext {
+        ExtSlot::Fixed(v) => v,
+        ExtSlot::Dynamic => Value::symbol(IdentId::get_id(ENC_DYN_MARKER)),
+        ExtSlot::Nil => Value::nil(),
+    };
+    let int_val = int.unwrap_or_else(Value::nil);
+    let _ = globals
+        .store
+        .set_ivar(io, IdentId::get_id(ENC_EXT_IVAR), ext_val);
+    let _ = globals
+        .store
+        .set_ivar(io, IdentId::get_id(ENC_INT_IVAR), int_val);
+}
+
+/// Split a mode string's `":ext[:int]"` suffix into encoding names.
+fn mode_encoding_names(mode: &str) -> (Option<&str>, Option<&str>) {
+    let mut it = mode.split(':');
+    let _base = it.next();
+    let ext = it.next().filter(|s| !s.is_empty());
+    let int = it.next().filter(|s| !s.is_empty());
+    (ext, int)
+}
+
+/// Parse the explicit external/internal encoding objects and binmode
+/// flag from a mode string and an options Hash. Precedence:
+/// `:external_encoding` / `:internal_encoding` > `:encoding` >
+/// mode-string suffix.
+fn parse_open_encodings(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    opt_range: std::ops::Range<usize>,
+    mode: &str,
+) -> Result<(Option<Value>, Option<Value>, bool)> {
+    let base = mode.split(':').next().unwrap_or("");
+    let binmode = base.contains('b');
+    let (mext, mint) = mode_encoding_names(mode);
+    let mut ext = mext.and_then(|s| enc_by_name(globals, s));
+    let mut int = mint.and_then(|s| enc_by_name(globals, s));
+
+    for i in opt_range {
+        let Some(arg) = lfp.try_arg(i) else { continue };
+        let Some(h) = arg.try_hash_ty() else { continue };
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            if let Some(s) = v.is_str() {
+                let mut parts = s.split(':');
+                ext = parts
+                    .next()
+                    .filter(|x| !x.is_empty())
+                    .and_then(|x| enc_by_name(globals, x));
+                int = parts
+                    .next()
+                    .filter(|x| !x.is_empty())
+                    .and_then(|x| enc_by_name(globals, x));
+            } else {
+                ext = arg_to_enc_obj(globals, v);
+            }
+        }
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            ext = arg_to_enc_obj(globals, v);
+        }
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            int = arg_to_enc_obj(globals, v);
+        }
+    }
+    Ok((ext, int, binmode))
+}
+
+/// Resolve + store IO encodings at creation time. `opt_range` is the
+/// `lfp` arg span to scan for a trailing options Hash.
+pub(super) fn init_io_encodings(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    io: Value,
+    mode: &str,
+    readable: bool,
+    opt_range: std::ops::Range<usize>,
+) -> Result<()> {
+    let (ext, int, binmode) = parse_open_encodings(vm, globals, lfp, opt_range, mode)?;
+    let de = enc_default_external_obj(globals);
+    let di = enc_default_internal_obj(globals);
+    let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, de, di, true);
+    store_io_encodings(globals, io, slot, i);
+    if binmode {
+        let _ = globals
+            .store
+            .set_ivar(io, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+    }
+    Ok(())
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -1033,31 +1294,45 @@ fn io_readlines(
 #[monoruby_builtin]
 fn io_binmode(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    ensure_io_open(lfp.self_val())?;
-    Ok(lfp.self_val())
+    let self_ = lfp.self_val();
+    ensure_io_open(self_)?;
+    // CRuby: binmode forces external = ASCII-8BIT, internal = nil.
+    let bin = enc_by_name(globals, "ASCII-8BIT")
+        .map(ExtSlot::Fixed)
+        .unwrap_or(ExtSlot::Nil);
+    store_io_encodings(globals, self_, bin, None);
+    let _ = globals
+        .store
+        .set_ivar(self_, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+    Ok(self_)
 }
 
 ///
 /// ### IO#binmode?
 /// - binmode? -> bool
 ///
-/// Always returns `true` because monoruby operates every stream in binary
-/// mode.
+/// True once the stream has been put in binary mode (opened with a `b`
+/// mode flag or via `#binmode`).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/binmode=3f.html]
 #[monoruby_builtin]
 fn io_binmode_(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
-    Ok(Value::bool(true))
+    let b = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id(BINMODE_IVAR))
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    Ok(Value::bool(b))
 }
 
 ///
@@ -1814,55 +2089,97 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// - set_encoding(ext_enc, int_enc, opt) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding.html]
-///
-/// Stub: validates encoding arguments but does not actually change encoding.
 #[monoruby_builtin]
 fn set_encoding(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    use crate::Encoding;
+    let self_ = lfp.self_val();
     let arg0 = lfp.arg(0);
-    // Validate the encoding name if it's a string
+    let (mut ext, mut int) = (None, None);
     if let Some(s) = arg0.is_str() {
-        // Handle "enc1:enc2" format (e.g. "UTF-8:UTF-8")
-        let ext = s.split(':').next().unwrap_or(s);
-        Encoding::try_from_str(ext)?;
+        // A single string may carry both as "ext:int".
+        let mut parts = s.split(':');
+        if let Some(e) = parts.next().filter(|x| !x.is_empty()) {
+            ext = Some(enc_by_name(globals, e).ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("unknown encoding name - {e}"))
+            })?);
+        }
+        if let Some(i) = parts.next().filter(|x| !x.is_empty()) {
+            int = Some(enc_by_name(globals, i).ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("unknown encoding name - {i}"))
+            })?);
+        }
+    } else if !arg0.is_nil() {
+        ext = arg_to_enc_obj(globals, arg0);
     }
-    // Validate optional second argument
-    if let Some(arg1) = lfp.try_arg(1) {
-        if let Some(s) = arg1.is_str() {
-            Encoding::try_from_str(s)?;
+    if int.is_none()
+        && let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        int = arg_to_enc_obj(globals, arg1);
+    }
+    let readable = self_.as_io_inner().is_readable();
+    let de = enc_default_external_obj(globals);
+    let di = enc_default_internal_obj(globals);
+    let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, de, di, false);
+    store_io_encodings(globals, self_, slot, i);
+    Ok(self_)
+}
+
+/// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
+fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
+    let id = IdentId::get_id(if internal { ENC_INT_IVAR } else { ENC_EXT_IVAR });
+    match globals.store.get_ivar(io, id) {
+        None => {
+            // IOs not created through our path (pipe/popen/stdio):
+            // external defaults to default_external, internal to nil.
+            if internal {
+                Value::nil()
+            } else {
+                enc_default_external_obj(globals)
+            }
+        }
+        Some(v) => {
+            if !internal && v.try_symbol() == Some(IdentId::get_id(ENC_DYN_MARKER)) {
+                enc_default_external_obj(globals)
+            } else {
+                v
+            }
         }
     }
-    Ok(lfp.self_val())
 }
 
 ///
 /// ### IO#external_encoding
-///
-/// - external_encoding -> Encoding
+/// - external_encoding -> Encoding | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/external_encoding.html]
-///
-/// Stub: always returns Encoding::UTF_8.
 #[monoruby_builtin]
 fn external_encoding(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _lfp: Lfp,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let enc_class = globals
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
-        .unwrap()
-        .as_class_id();
-    let utf8 = globals
-        .get_constant_noautoload(enc_class, IdentId::UTF_8)
-        .unwrap();
-    Ok(utf8)
+    Ok(read_io_encoding(globals, lfp.self_val(), false))
+}
+
+///
+/// ### IO#internal_encoding
+/// - internal_encoding -> Encoding | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/internal_encoding.html]
+#[monoruby_builtin]
+fn internal_encoding(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(read_io_encoding(globals, lfp.self_val(), true))
 }
 
 ///
@@ -2359,6 +2676,38 @@ mod tests {
         run_test_no_result_check(
             r#"
             $stdout.internal_encoding
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_encoding_state() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_enc.txt", "")
+            r = []
+            File.open("/tmp/mr_enc.txt", "r:utf-8:euc-jp") do |f|
+              r << f.external_encoding.equal?(Encoding::UTF_8)
+              r << f.internal_encoding.equal?(Encoding::EUC_JP)
+            end
+            File.open("/tmp/mr_enc.txt", "rb") do |f|
+              r << f.external_encoding.equal?(Encoding::BINARY)
+              r << f.internal_encoding.nil?
+              r << f.binmode?
+            end
+            File.open("/tmp/mr_enc.txt", "w") do |f|
+              r << f.external_encoding.nil?
+              r << f.internal_encoding.nil?
+              f.set_encoding(Encoding::US_ASCII, Encoding::IBM437)
+              r << f.external_encoding.equal?(Encoding::US_ASCII)
+              r << f.internal_encoding.equal?(Encoding::IBM437)
+              f.binmode
+              r << f.external_encoding.equal?(Encoding::BINARY)
+              r << f.internal_encoding.nil?
+              r << f.binmode?
+            end
+            File.unlink("/tmp/mr_enc.txt")
+            r
             "#,
         );
     }
