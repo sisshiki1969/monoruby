@@ -10,7 +10,7 @@ mod printable;
 /// `b[0]`, or `None` if no valid character starts there. Encodes the
 /// onigenc EUC-JP rules: ASCII (1); `0x8E`+kana (2, JIS X 0201);
 /// `0x8F`+2 (3, JIS X 0212); `0xA1..=0xFE` pair (2, JIS X 0208).
-pub fn eucjp_char_width(b: &[u8]) -> Option<usize> {
+pub(crate) fn eucjp_char_width(b: &[u8]) -> Option<usize> {
     let c0 = *b.first()?;
     match c0 {
         0x00..=0x7f => Some(1),
@@ -34,7 +34,7 @@ pub fn eucjp_char_width(b: &[u8]) -> Option<usize> {
 /// `b[0]`, or `None`. ASCII & `0xA1..=0xDF` half-width kana are
 /// single byte; a `0x81..=0x9F | 0xE0..=0xFC` lead with a
 /// `0x40..=0x7E | 0x80..=0xFC` trail is a double-byte character.
-pub fn sjis_char_width(b: &[u8]) -> Option<usize> {
+pub(crate) fn sjis_char_width(b: &[u8]) -> Option<usize> {
     let c0 = *b.first()?;
     match c0 {
         0x00..=0x7f | 0xa1..=0xdf => Some(1),
@@ -584,10 +584,7 @@ impl RStringInner {
             // normal escape rules and every non-ASCII codepoint as
             // `\uXXXX` / `\u{XXXXX}` (CRuby never shows them literally
             // because the result encoding differs from the string's).
-            Encoding::Utf16Le
-            | Encoding::Utf16Be
-            | Encoding::Utf32Le
-            | Encoding::Utf32Be => {
+            Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be => {
                 let chars = decode_unicode_units(self.as_bytes(), self.ty);
                 let mut res = String::with_capacity(self.len());
                 for (idx, &c) in chars.iter().enumerate() {
@@ -883,6 +880,31 @@ fn utf8_dump_one(s: &mut String, ch: char, next_ch: char) {
     utf8_escape(s, ch);
 }
 
+fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
+    // Walk the byte stream, replacing each "maximal subpart" of an
+    // ill-formed sequence with a single replacement (matches the
+    // Unicode/CRuby definition of `scrub`).
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(rest) => {
+                out.extend_from_slice(rest.as_bytes());
+                return;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    out.extend_from_slice(&bytes[i..i + valid_up_to]);
+                    i += valid_up_to;
+                }
+                let bad_len = e.error_len().unwrap_or(bytes.len() - i);
+                out.extend_from_slice(repl);
+                i += bad_len;
+            }
+        }
+    }
+}
+
 impl RStringInner {
     /// Low-level constructor. Callers pass the `cr` they want to
     /// record — either `Unknown` (defer classification to the first
@@ -1125,6 +1147,62 @@ impl RStringInner {
             Ok(s) => Ok(s),
             Err(_) => Err(MonorubyErr::argumenterr("invalid byte sequence in UTF-8")),
         }
+    }
+
+    /// Returns a copy of `self` with each invalid byte sequence replaced
+    /// by `repl` (default `"\u{FFFD}"` for Unicode-aware encodings, `"?"`
+    /// for ASCII-only encodings).
+    pub fn scrub(&self, repl: &RStringInner) -> Result<RStringInner> {
+        let bytes = self.as_bytes();
+        let enc = self.encoding();
+        if self.is_valid_encoding() {
+            // Already valid — clone the receiver so the result inherits
+            // its cached cr instead of reverting to Unknown. Same alloc
+            // cost as `from_encoding(bytes, enc)` (both copy `bytes`),
+            // but preserves the SevenBit/Valid classification the caller
+            // had already paid for.
+            return Ok(self.clone());
+        }
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        match enc {
+            Encoding::Utf8 => scrub_utf8(bytes, repl.as_bytes(), &mut out),
+            Encoding::UsAscii => {
+                for &b in bytes {
+                    if b < 0x80 {
+                        out.push(b);
+                    } else {
+                        out.extend_from_slice(repl.as_bytes());
+                    }
+                }
+            }
+            Encoding::EucJp | Encoding::Sjis(_) => {
+                let char_w = if matches!(enc, Encoding::EucJp) {
+                    eucjp_char_width
+                } else {
+                    sjis_char_width
+                };
+                let mut i = 0;
+                while i < bytes.len() {
+                    if let Some(w) = char_w(&bytes[i..]) {
+                        out.extend_from_slice(&bytes[i..i + w]);
+                        i += w;
+                    } else {
+                        // An invalid byte that cannot begin a valid
+                        // character is its own ill-formed subpart
+                        // (CRuby replaces each independently, e.g.
+                        // SJIS `\xFF\xFE` -> two replacements).
+                        out.extend_from_slice(repl.as_bytes());
+                        i += 1;
+                    }
+                }
+            }
+            _ => out.extend_from_slice(bytes),
+        }
+        // Scrub by definition produces a fully valid byte sequence under
+        // `enc`, so we eagerly classify the result. Skipping this leaves
+        // cr=Unknown and the next operation that touches cr would walk
+        // the whole buffer again.
+        Ok(RStringInner::from_encoding_scanned(&out, enc))
     }
 
     /// O(1): build a UTF-8 string from `&str` without scanning.

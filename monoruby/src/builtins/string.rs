@@ -2,6 +2,7 @@ use num::{BigInt, Zero};
 use smallvec::SmallVec;
 
 use super::*;
+use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
 use jitgen::JitContext;
 
 //
@@ -376,7 +377,8 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     // called.) This lets a mock that defines both `to_str` and a
     // custom `==` exercise the fallback branch.
     if globals.check_method(rhs, IdentId::TO_STR).is_some() {
-        let result = vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
+        let result =
+            vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
         return Ok(Value::bool(result.as_bool()));
     }
     Ok(Value::bool(false))
@@ -427,7 +429,8 @@ fn string_cmp(
     // also delegates back (CRuby short-circuits the recursion via a
     // thread-local guard; we just dispatch once).
     if let Some(func_id) = globals.check_method(other, IdentId::_CMP) {
-        let result = vm.invoke_func_inner(globals, func_id, other, &[lfp.self_val()], None, None)?;
+        let result =
+            vm.invoke_func_inner(globals, func_id, other, &[lfp.self_val()], None, None)?;
         if let Some(ord) = Value::ord_from(result) {
             return Ok(Some(ord.reverse()));
         }
@@ -735,10 +738,9 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let result_enc = result_inner.encoding();
     let format_str = vm.format_by_args(globals, self_.as_str(), &arguments)?;
-    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-        format_str.as_bytes(),
-        result_enc,
-    )))
+    Ok(Value::string_from_inner(
+        RStringInner::from_encoding_scanned(format_str.as_bytes(), result_enc),
+    ))
 }
 
 ///
@@ -1155,8 +1157,7 @@ fn index_assign(
         }
         if let Some(info) = arg0_val.is_range() {
             let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
-            let end_raw =
-                info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+            let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
             if start_raw > char_len as i64 {
                 return Err(MonorubyErr::rangeerr(format!(
                     "{start_raw}..{end_raw} out of range"
@@ -1796,10 +1797,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             )));
             out
         } else {
-            chars
-                .into_iter()
-                .map(Value::string_from_inner)
-                .collect()
+            chars.into_iter().map(Value::string_from_inner).collect()
         };
         // Trailing empty field: only when limit is negative (CRuby
         // keeps it; default/positive limit drops trailing empties,
@@ -1885,11 +1883,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 // CRuby emits this as a `:deprecated` category warning
                 // that fires regardless of `$VERBOSE` (ruby/spec relies
                 // on it under `$VERBOSE = false`).
-                crate::value::emit_verbose_warning(
-                    vm,
-                    globals,
-                    "$; is set to non-nil value",
-                )?;
+                crate::value::emit_verbose_warning(vm, globals, "$; is set to non-nil value")?;
                 resolve(vm, globals, fs)?
             }
             _ => SepKind::Awk,
@@ -1922,9 +1916,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // each split fragment (so an EUC-JP / SJIS receiver gets fragments
     // tagged with its own encoding rather than UTF-8).
     let mk = |s: &str| Value::string_from_str_with_encoding_of(s, self_);
-    let clen = |b: usize| -> usize {
-        string[b..].chars().next().map_or(1, |c| c.len_utf8())
-    };
+    let clen = |b: usize| -> usize { string[b..].chars().next().map_or(1, |c| c.len_utf8()) };
 
     // `empty_count` < 0 keeps every (incl. trailing) empty field;
     // `empty_count` >= 0 defers empty fields, flushing them only when a
@@ -2137,41 +2129,39 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     {
         let enc = self_.as_rstring_inner().encoding();
         let char_len = self_.as_rstring_inner().char_length();
-        let (start, count): (usize, usize) =
-            if let Some(i) = arg0.try_fixnum() {
-                let idx = match conv_index(i, char_len) {
-                    Some(i) => i,
-                    None => return Ok(Value::nil()),
-                };
-                if let Some(a1) = lfp.try_arg(1) {
-                    match a1.coerce_to_int_i64(vm, globals)? {
-                        l if l < 0 => return Ok(Value::nil()),
-                        l => (idx, l as usize),
-                    }
-                } else if idx < char_len {
-                    (idx, 1)
-                } else {
-                    return Ok(Value::nil());
-                }
-            } else {
-                let info = arg0.is_range().unwrap();
-                let s_raw = info.start().coerce_to_int_i64(vm, globals)?;
-                let e_raw =
-                    info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
-                let start = match conv_index(s_raw, char_len) {
-                    Some(i) => i,
-                    None => return Ok(Value::nil()),
-                };
-                let end = if e_raw >= 0 {
-                    e_raw as usize
-                } else if char_len as i64 + e_raw >= 0 {
-                    (char_len as i64 + e_raw) as usize
-                } else {
-                    return Ok(Value::nil());
-                };
-                let count = if end >= start { end - start + 1 } else { 0 };
-                (start, count)
+        let (start, count): (usize, usize) = if let Some(i) = arg0.try_fixnum() {
+            let idx = match conv_index(i, char_len) {
+                Some(i) => i,
+                None => return Ok(Value::nil()),
             };
+            if let Some(a1) = lfp.try_arg(1) {
+                match a1.coerce_to_int_i64(vm, globals)? {
+                    l if l < 0 => return Ok(Value::nil()),
+                    l => (idx, l as usize),
+                }
+            } else if idx < char_len {
+                (idx, 1)
+            } else {
+                return Ok(Value::nil());
+            }
+        } else {
+            let info = arg0.is_range().unwrap();
+            let s_raw = info.start().coerce_to_int_i64(vm, globals)?;
+            let e_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+            let start = match conv_index(s_raw, char_len) {
+                Some(i) => i,
+                None => return Ok(Value::nil()),
+            };
+            let end = if e_raw >= 0 {
+                e_raw as usize
+            } else if char_len as i64 + e_raw >= 0 {
+                (char_len as i64 + e_raw) as usize
+            } else {
+                return Ok(Value::nil());
+            };
+            let count = if end >= start { end - start + 1 } else { 0 };
+            (start, count)
+        };
         let r = self_.as_rstring_inner().get_range(start, count);
         if r.is_empty() && lfp.try_arg(1).is_none() && arg0.try_fixnum().is_some() {
             return Ok(Value::nil());
@@ -3523,11 +3513,7 @@ fn pad_byte_size(pad: &RStringInner, n_chars: usize) -> usize {
     }
     let repeats = n_chars / pad_chars;
     let remainder = n_chars % pad_chars;
-    let remainder_bytes: usize = pad
-        .iter_char_bytes()
-        .take(remainder)
-        .map(|s| s.len())
-        .sum();
+    let remainder_bytes: usize = pad.iter_char_bytes().take(remainder).map(|s| s.len()).sum();
     repeats * pad_bytes + remainder_bytes
 }
 
@@ -3624,12 +3610,7 @@ fn pad_string_inner(
 /// Common entry point shared by `ljust` / `rjust` / `center`. Handles
 /// argument coercion, encoding compatibility check, and the empty-pad
 /// `ArgumentError`, then delegates to `pad_string_inner`.
-fn pad_builtin(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    side: PadSide,
-) -> Result<Value> {
+fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_inner = self_val.as_rstring_inner();
     let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
@@ -4837,11 +4818,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// flag — that branchless byte-→byte map is the part the auto-
 /// vectoriser can turn into wide SIMD, so the bang variants compute
 /// changed-vs-unchanged with a single `memcmp` afterward instead.
-fn ascii_case_fast_path(
-    inner: &RStringInner,
-    op: CaseOp,
-    mode: CaseMode,
-) -> Option<RStringInner> {
+fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Option<RStringInner> {
     if matches!(mode, CaseMode::Turkic) {
         return None;
     }
@@ -4955,11 +4932,7 @@ fn reverse_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// preserving the encoding tag. Returns `None` for other encodings so
 /// the caller's normal `&str` path runs. (`expect_str` would fail on
 /// the UTF-16/32 byte stream.)
-fn unicode_noncompat_case(
-    self_val: Value,
-    op: CaseOp,
-    mode: CaseMode,
-) -> Option<RStringInner> {
+fn unicode_noncompat_case(self_val: Value, op: CaseOp, mode: CaseMode) -> Option<RStringInner> {
     let inner = self_val.is_rstring_inner()?;
     let enc = inner.encoding();
     if !matches!(
@@ -5973,12 +5946,7 @@ enum TrMap {
 /// (Encoding::CompatibilityError). `Ok(false)` ⇒ caller keeps the
 /// existing path (UTF-8 receiver, or a same-encoding multibyte spec —
 /// documented follow-up).
-fn tr_args_ascii_ok(
-    globals: &Globals,
-    recv: &RStringInner,
-    a: Value,
-    b: Value,
-) -> Result<bool> {
+fn tr_args_ascii_ok(globals: &Globals, recv: &RStringInner, a: Value, b: Value) -> Result<bool> {
     if recv.encoding().is_utf8_compatible() {
         return Ok(false);
     }
@@ -6282,8 +6250,7 @@ fn squeeze_compute(
         let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
         let mut prev: Option<u8> = None;
         for &b in bytes {
-            let in_squeeze_set =
-                squeeze_all || sets.iter().all(|s| s.contains_ascii_byte(b));
+            let in_squeeze_set = squeeze_all || sets.iter().all(|s| s.contains_ascii_byte(b));
             if in_squeeze_set && Some(b) == prev {
                 continue;
             }
@@ -6652,7 +6619,10 @@ fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn next(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let recv = self_.expect_str(globals)?;
-    Ok(Value::string_from_str_with_encoding_of(&str_next(recv), self_))
+    Ok(Value::string_from_str_with_encoding_of(
+        &str_next(recv),
+        self_,
+    ))
 }
 
 ///
@@ -6684,7 +6654,12 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_string(vm, globals)?;
-    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, false, offset)
+    rvalue::unpack(
+        &self_.as_rstring_inner()[offset..],
+        &template,
+        false,
+        offset,
+    )
 }
 
 ///
@@ -6751,10 +6726,9 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // bytes once at construction so subsequent cr queries are
     // O(1); skipping the eager scan would force every later
     // operation to re-walk the buffer through `Encoding::classify`.
-    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-        &bytes,
-        Encoding::Utf8,
-    )))
+    Ok(Value::string_from_inner(
+        RStringInner::from_encoding_scanned(&bytes, Encoding::Utf8),
+    ))
 }
 
 ///
@@ -6779,7 +6753,7 @@ fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         scrub_inner_with_block(vm, globals, inner, bh)?
     } else {
         let repl = scrub_replacement(globals, lfp, inner.encoding())?;
-        scrub_inner(inner, &repl)?
+        inner.scrub(&repl)?
     };
     Ok(Value::string_from_inner(scrubbed))
 }
@@ -6797,13 +6771,22 @@ fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn scrub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
+    if self_.as_rstring_inner().is_valid_encoding() {
+        // Already valid: `scrub!` makes no change and (matching CRuby)
+        // does not raise even on a frozen receiver.
+        return Ok(self_);
+    }
     let inner = self_.as_rstring_inner();
     let scrubbed = if let Some(bh) = lfp.block() {
         scrub_inner_with_block(vm, globals, inner, bh)?
     } else {
         let repl = scrub_replacement(globals, lfp, inner.encoding())?;
-        scrub_inner(inner, &repl)?
+        inner.scrub(&repl)?
     };
+    // The receiver is being modified, so it must not be frozen. CRuby
+    // checks this only when an actual replacement occurs (it raises
+    // FrozenError after running the block, not before).
+    self_.ensure_not_frozen(&globals.store)?;
     *self_.as_rstring_inner_mut() = scrubbed;
     Ok(self_)
 }
@@ -6848,59 +6831,6 @@ fn default_scrub_replacement(enc: Encoding) -> RStringInner {
         Encoding::Utf8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::Utf8),
         _ => RStringInner::from_encoding(b"?", enc),
     }
-}
-
-fn scrub_inner(inner: &RStringInner, repl: &RStringInner) -> Result<RStringInner> {
-    let bytes = inner.as_bytes();
-    let enc = inner.encoding();
-    if inner.is_valid_encoding() {
-        // Already valid — clone the receiver so the result inherits
-        // its cached cr instead of reverting to Unknown. Same alloc
-        // cost as `from_encoding(bytes, enc)` (both copy `bytes`),
-        // but preserves the SevenBit/Valid classification the caller
-        // had already paid for.
-        return Ok(inner.clone());
-    }
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    match enc {
-        Encoding::Utf8 => scrub_utf8(bytes, repl.as_bytes(), &mut out),
-        Encoding::UsAscii => {
-            for &b in bytes {
-                if b < 0x80 {
-                    out.push(b);
-                } else {
-                    out.extend_from_slice(repl.as_bytes());
-                }
-            }
-        }
-        Encoding::EucJp | Encoding::Sjis(_) => {
-            let char_w = if matches!(enc, Encoding::EucJp) {
-                eucjp_char_width
-            } else {
-                sjis_char_width
-            };
-            let mut i = 0;
-            while i < bytes.len() {
-                if let Some(w) = char_w(&bytes[i..]) {
-                    out.extend_from_slice(&bytes[i..i + w]);
-                    i += w;
-                } else {
-                    // An invalid byte that cannot begin a valid
-                    // character is its own ill-formed subpart
-                    // (CRuby replaces each independently, e.g.
-                    // SJIS `\xFF\xFE` -> two replacements).
-                    out.extend_from_slice(repl.as_bytes());
-                    i += 1;
-                }
-            }
-        }
-        _ => out.extend_from_slice(bytes),
-    }
-    // Scrub by definition produces a fully valid byte sequence under
-    // `enc`, so we eagerly classify the result. Skipping this leaves
-    // cr=Unknown and the next operation that touches cr would walk
-    // the whole buffer again.
-    Ok(RStringInner::from_encoding_scanned(&out, enc))
 }
 
 /// Block-form scrub. For each "maximal subpart" of an ill-formed
@@ -6969,37 +6899,42 @@ fn scrub_inner_with_block(
                 }
             }
         }
+        Encoding::EucJp | Encoding::Sjis(_) => {
+            let char_w = if matches!(enc, Encoding::EucJp) {
+                eucjp_char_width
+            } else {
+                sjis_char_width
+            };
+            let mut i = 0;
+            while i < bytes.len() {
+                if let Some(w) = char_w(&bytes[i..]) {
+                    out.extend_from_slice(&bytes[i..i + w]);
+                    i += w;
+                } else {
+                    // An invalid byte that cannot begin a valid
+                    // character is its own ill-formed subpart; yield
+                    // it to the block independently (mirrors the
+                    // argument-form `scrub`, which replaces each
+                    // such byte separately, e.g. SJIS `\xFF\xFE`).
+                    let bad_arg = Value::string_from_inner(RStringInner::from_encoding(
+                        &bytes[i..i + 1],
+                        enc,
+                    ));
+                    let result = vm.invoke_block(globals, &data, &[bad_arg])?;
+                    let result_inner = result
+                        .is_rstring_inner()
+                        .ok_or_else(|| MonorubyErr::typeerr("scrub block must return a String"))?;
+                    out.extend_from_slice(result_inner.as_bytes());
+                    i += 1;
+                }
+            }
+        }
         _ => out.extend_from_slice(bytes),
     }
     // Same eagerness rationale as `scrub_inner` — block-driven
     // replacements produce a final buffer that's expected to satisfy
     // `enc`, so we cache the cr now.
     Ok(RStringInner::from_encoding_scanned(&out, enc))
-}
-
-fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
-    // Walk the byte stream, replacing each "maximal subpart" of an
-    // ill-formed sequence with a single replacement (matches the
-    // Unicode/CRuby definition of `scrub`).
-    let mut i = 0;
-    while i < bytes.len() {
-        match std::str::from_utf8(&bytes[i..]) {
-            Ok(rest) => {
-                out.extend_from_slice(rest.as_bytes());
-                return;
-            }
-            Err(e) => {
-                let valid_up_to = e.valid_up_to();
-                if valid_up_to > 0 {
-                    out.extend_from_slice(&bytes[i..i + valid_up_to]);
-                    i += valid_up_to;
-                }
-                let bad_len = e.error_len().unwrap_or(bytes.len() - i);
-                out.extend_from_slice(repl);
-                i += bad_len;
-            }
-        }
-    }
 }
 
 /// Parser for the dump-quoted format. Errors are returned as
@@ -8512,10 +8447,7 @@ mod tests {
     fn index_assign_special_int_cases() {
         // CRuby permits `""[0] = "..."` (zero index on an empty
         // string) and `s[length] = "..."` (append at end).
-        run_tests(&[
-            r#"s = ""; s[0] = "bam"; s"#,
-            r#"s = "abc"; s[3] = "d"; s"#,
-        ]);
+        run_tests(&[r#"s = ""; s[0] = "bam"; s"#, r#"s = "abc"; s[3] = "d"; s"#]);
     }
 
     #[test]
@@ -10064,6 +9996,12 @@ mod tests {
             r##"xE3x80 = [0xE3, 0x80].pack("CC").force_encoding("utf-8"); s = +xE3x80; s.scrub! { |b| "<#{b.unpack("H*")[0]}>" }; s"##,
             // Valid string returns a copy unchanged (block not invoked).
             r##""abcあ".scrub { |b| "X" }"##,
+            // Non-UTF-8 encodings: the block must be invoked for each
+            // invalid byte (Shift_JIS / EUC-JP), not silently passed
+            // through.
+            r##""a\x80b".dup.force_encoding("Shift_JIS").scrub { |bad| "<#{bad.unpack("H*")[0]}>" }"##,
+            r##""\xA1\xA1\xFF".dup.force_encoding("EUC-JP").scrub { |bad| "?" }.bytes"##,
+            r##"s = "abc\x80def".dup.force_encoding("Shift_JIS"); s.scrub! { |b| "" }; s"##,
         ]);
     }
 
@@ -10461,10 +10399,7 @@ mod tests {
         ]);
         // `inspect`: same codepoint-form rules (BMP `\uNNNN`, beyond
         // BMP `\u{N}`).
-        run_tests(&[
-            r##""\u{0080}".inspect"##,
-            r##""\u{0001}".inspect"##,
-        ]);
+        run_tests(&[r##""\u{0080}".inspect"##, r##""\u{0001}".inspect"##]);
     }
 
     #[test]
@@ -10983,9 +10918,7 @@ mod tests {
         // gsub with Regexp + String.
         run_test(r#""abc".dup.force_encoding("US-ASCII").gsub(/b/, "x").encoding.to_s"#);
         // gsub with Regexp + block.
-        run_test(
-            r#""abc".dup.force_encoding("US-ASCII").gsub(/b/) { |m| "X" }.encoding.to_s"#,
-        );
+        run_test(r#""abc".dup.force_encoding("US-ASCII").gsub(/b/) { |m| "X" }.encoding.to_s"#);
         // sub variants too.
         run_test(r#""abc".dup.force_encoding("US-ASCII").sub("a", "z").encoding.to_s"#);
         run_test(r#""abc".dup.force_encoding("US-ASCII").sub(/a/) { "Z" }.encoding.to_s"#);
@@ -11124,9 +11057,7 @@ mod tests {
     #[test]
     fn modulo_raises_on_incompatible_encodings() {
         // UTF-8 format + UTF-16LE arg → CompatibilityError.
-        run_test_error(
-            r#""hello %s".encode("utf-8") % "world".encode("UTF-16LE")"#,
-        );
+        run_test_error(r#""hello %s".encode("utf-8") % "world".encode("UTF-16LE")"#);
     }
 
     #[test]
@@ -11202,9 +11133,7 @@ mod tests {
         // Mixed valid + invalid: per-codepoint reverse keeps the
         // invalid byte in place between the two ASCII chars.
         run_test(r#""a\xC3z".dup.force_encoding("UTF-8").reverse.bytes"#);
-        run_test(
-            r#""a\xC3z".dup.force_encoding("UTF-8").reverse.valid_encoding?"#,
-        );
+        run_test(r#""a\xC3z".dup.force_encoding("UTF-8").reverse.valid_encoding?"#);
     }
 
     #[test]
@@ -11226,11 +11155,11 @@ mod tests {
         run_tests(&[
             r#""あい".encode("EUC-JP").length"#,
             r#""あい".encode("EUC-JP").each_char.map(&:bytesize)"#,
-            r#""ｱｲ".encode("EUC-JP").length"#,                 // 0x8E kana
+            r#""ｱｲ".encode("EUC-JP").length"#, // 0x8E kana
             r#""abc".force_encoding("EUC-JP").length"#,
             r#""あAい".encode("Shift_JIS").length"#,
             r#""あAい".encode("Shift_JIS").each_char.map(&:bytesize)"#,
-            r#""ﾊﾝｶｸ".encode("Shift_JIS").length"#,            // half-width kana
+            r#""ﾊﾝｶｸ".encode("Shift_JIS").length"#, // half-width kana
             r#""日本語".encode("EUC-JP").reverse.encode("UTF-8")"#,
             r#""日本語".encode("Shift_JIS").chars.map { |c| c.encode("UTF-8") }"#,
             // EUC-JP 0x8F lead = JIS X 0212 (3-byte char).
@@ -11356,9 +11285,9 @@ mod tests {
             r#""AABBＸＸ".encode("Shift_JIS").squeeze.encode("UTF-8")"#,
             r#""abcabc".encode("Shift_JIS").tr("ac", "AC").encode("UTF-8")"#,
             r#"(x = "aabc".encode("EUC-JP"); x.squeeze!; x.encode("UTF-8"))"#,
-            r#""abc".encode("EUC-JP").squeeze!"#,            // no change -> nil
+            r#""abc".encode("EUC-JP").squeeze!"#, // no change -> nil
             r#"(y = "abcabc".encode("EUC-JP"); y.tr!("b", "B"); y.encode("UTF-8"))"#,
-            r#""abc".encode("EUC-JP").tr!("z", "Z")"#,        // no change -> nil
+            r#""abc".encode("EUC-JP").tr!("z", "Z")"#, // no change -> nil
             // negated `from` with empty `to` deletes (incl. multibyte).
             r#""aあbいcaab".encode("EUC-JP").tr("^a", "").encode("UTF-8")"#,
             // tr_s! non-UTF-8: changed, then no-change -> nil.

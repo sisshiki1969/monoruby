@@ -29,9 +29,8 @@ pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, 
 pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
-pub use string::{
-    CharByteIter, CodeRange, Encoding, RString, RStringInner, eucjp_char_width, sjis_char_width,
-};
+pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner};
+pub(crate) use string::{eucjp_char_width, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
 mod arithmetic_sequence;
@@ -375,9 +374,7 @@ impl ObjKind {
 
     fn unbound_method_missing_proxy(mm_func_id: FuncId, target: IdentId, owner: ClassId) -> Self {
         Self {
-            umethod: ManuallyDrop::new(UMethodInner::new_method_missing(
-                mm_func_id, target, owner,
-            )),
+            umethod: ManuallyDrop::new(UMethodInner::new_method_missing(mm_func_id, target, owner)),
         }
     }
 
