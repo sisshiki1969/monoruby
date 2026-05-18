@@ -3006,6 +3006,35 @@ mod tests {
             r
             "#,
         );
+        // Shift_JIS (2-byte lead), UTF-16LE (2-byte units), UTF-32LE
+        // (4-byte units) and a single-byte encoding (ISO-8859-1)
+        // exercise the remaining per-encoding width arms.
+        run_test(
+            r#"
+            File.binwrite("/tmp/mr_gc4.txt", [0x82, 0xA0, 0x41].pack("C*"))
+            r = []
+            File.open("/tmp/mr_gc4.txt", "r:shift_jis") do |f|
+              c = f.getc
+              r << [c.bytes, c.encoding.name]
+              r << f.getc.bytes
+            end
+            File.binwrite("/tmp/mr_gc4.txt", [0x41, 0x00, 0x42, 0x00].pack("C*"))
+            File.open("/tmp/mr_gc4.txt", "rb:utf-16le") do |f|
+              r << f.getc.bytes
+            end
+            File.binwrite("/tmp/mr_gc4.txt", [0x41, 0, 0, 0].pack("C*"))
+            File.open("/tmp/mr_gc4.txt", "rb:utf-32le") do |f|
+              r << f.getc.bytes
+            end
+            File.binwrite("/tmp/mr_gc4.txt", [0xE9, 0x41].pack("C*"))
+            File.open("/tmp/mr_gc4.txt", "r:iso-8859-1") do |f|
+              c = f.getc
+              r << [c.bytes, c.encoding.name]
+            end
+            File.unlink("/tmp/mr_gc4.txt")
+            r
+            "#,
+        );
     }
 
     #[test]
