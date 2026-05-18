@@ -1659,4 +1659,50 @@ mod tests {
             r#"(s=Set.new; s.compare_by_identity?)"#,
         ]);
     }
+
+    #[test]
+    fn divide_enumerator_arity() {
+        // Arity-2 via the no-block Enumerator: graph/SCC grouping.
+        run_test(
+            r#"Set[1,2,3,4].divide.each { |a, b| (a + b).even? } == Set[Set[1, 3], Set[2, 4]]"#,
+        );
+        // Arity-1 via the no-block Enumerator: classify grouping.
+        run_test(r#"Set[1,2,3,4].divide.each { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#);
+        // No block -> Enumerator.
+        run_test(r#"Set[1,2,3,4].divide.is_a?(Enumerator)"#);
+        // Direct (non-enumerator) arity-2 / arity-1 still correct.
+        run_test(
+            r#"Set[1,3,4,6,9,10,11].divide { |x, y| (x - y).abs == 1 }.map { |s| s.to_a.sort }.sort"#,
+        );
+        run_test(r#"Set[1,2,3,4].divide { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#);
+    }
+
+    #[test]
+    fn object_keys_use_ruby_hash_eql() {
+        // Set#hash is order-independent and a Set works as a
+        // content-based Hash/Set key (object keys dispatch to Ruby
+        // #hash / #eql?).
+        run_tests(&[
+            r#"Set[1,3].hash == Set[3,1].hash"#,
+            r#"Set[Set[3,1],Set[4,2]] == Set[Set[1,3],Set[2,4]]"#,
+            r#"{Set[1,3] => :x}[Set[3,1]]"#,
+            r#"Set[Set[1,2]].include?(Set[2,1])"#,
+            r#"{[1,2] => :a}[[1,2]]"#,
+            r#"({}[Object.new]).nil?"#,
+        ]);
+        // A user object's #hash / #eql? are consulted on Hash lookup.
+        run_test(
+            r#"
+            class K
+              def initialize(n); @n = n; end
+              def hash; @n.hash; end
+              def eql?(o); o.is_a?(K) && o.instance_variable_get(:@n) == @n; end
+            end
+            h = {}
+            h[K.new(1)] = :a
+            h[K.new(2)] = :b
+            [h[K.new(1)], h[K.new(2)], h[K.new(3)]]
+            "#,
+        );
+    }
 }
