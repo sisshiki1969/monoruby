@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write},
     mem::ManuallyDrop,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
@@ -33,6 +33,10 @@ pub struct FileDescriptor {
     /// (see `logger/log_device.rb#fixup_mode`) where the original IO is
     /// expected to relinquish ownership of the fd to the new wrapper.
     autoclose: Cell<bool>,
+    /// Bytes pushed back via `IO#ungetc` / `IO#ungetbyte`, served before
+    /// the underlying reader on the next read. Stored in read order (front
+    /// = next byte out); each unget splices its bytes at the front.
+    pushback: RefCell<Vec<u8>>,
 }
 
 impl Drop for FileDescriptor {
@@ -58,6 +62,8 @@ pub struct PopenDescriptor {
     child: std::process::Child,
     pub(crate) reader: Option<std::io::BufReader<std::process::ChildStdout>>,
     pub(crate) writer: Option<std::process::ChildStdin>,
+    /// See `FileDescriptor::pushback`.
+    pushback: RefCell<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -165,6 +171,7 @@ impl IoInner {
             name,
             has_path: true,
             autoclose: Cell::new(true),
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -175,6 +182,7 @@ impl IoInner {
             child,
             reader,
             writer,
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -193,6 +201,7 @@ impl IoInner {
             name,
             has_path,
             autoclose: Cell::new(true),
+            pushback: RefCell::new(Vec::new()),
         }))
     }
 
@@ -231,7 +240,81 @@ impl IoInner {
         }
     }
 
+    /// Bytes currently sitting in the `ungetc`/`ungetbyte` pushback buffer.
+    pub fn pushback_len(&self) -> usize {
+        match self {
+            Self::File(f) => f.pushback.borrow().len(),
+            Self::Popen(p) => p.pushback.borrow().len(),
+            _ => 0,
+        }
+    }
+
+    fn pushback_cell(&self) -> Option<&RefCell<Vec<u8>>> {
+        match self {
+            Self::File(f) => Some(&f.pushback),
+            Self::Popen(p) => Some(&p.pushback),
+            _ => None,
+        }
+    }
+
+    /// Push `bytes` back so the next read returns them first. CRuby raises
+    /// `IOError` on closed streams and on streams not opened for reading
+    /// (`STDOUT`/`STDERR`). Each call splices at the front, so successive
+    /// ungets behave LIFO while a single multi-byte unget preserves order.
+    pub fn unget(&mut self, bytes: &[u8]) -> Result<()> {
+        match self {
+            Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
+            Self::Stdin | Self::Stdout | Self::Stderr => {
+                Err(MonorubyErr::ioerr("not opened for reading"))
+            }
+            Self::File(_) | Self::Popen(_) => {
+                let cell = self.pushback_cell().unwrap();
+                let mut pb = cell.borrow_mut();
+                pb.splice(0..0, bytes.iter().copied());
+                Ok(())
+            }
+        }
+    }
+
+    /// Take up to `max` bytes (all if `None`) from the front of the
+    /// pushback buffer.
+    fn take_pushback(&mut self, max: Option<usize>) -> Vec<u8> {
+        let cell = match self.pushback_cell() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let mut pb = cell.borrow_mut();
+        let n = match max {
+            Some(m) => m.min(pb.len()),
+            None => pb.len(),
+        };
+        pb.drain(..n).collect()
+    }
+
     pub fn read(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+        if self.pushback_len() > 0 {
+            match length {
+                Some(0) => return Ok(vec![]),
+                Some(n) if n <= self.pushback_len() => {
+                    return Ok(self.take_pushback(Some(n)));
+                }
+                Some(n) => {
+                    let mut out = self.take_pushback(None);
+                    let need = n - out.len();
+                    out.extend_from_slice(&self.read_underlying(Some(need))?);
+                    return Ok(out);
+                }
+                None => {
+                    let mut out = self.take_pushback(None);
+                    out.extend_from_slice(&self.read_underlying(None)?);
+                    return Ok(out);
+                }
+            }
+        }
+        self.read_underlying(length)
+    }
+
+    fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
         match self {
             Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
@@ -293,6 +376,29 @@ impl IoInner {
     }
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
+        if self.pushback_len() > 0 {
+            let cell = self.pushback_cell().unwrap();
+            let nl = cell.borrow().iter().position(|&b| b == b'\n');
+            match nl {
+                Some(idx) => {
+                    let line = self.take_pushback(Some(idx + 1));
+                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                }
+                None => {
+                    let mut line = self.take_pushback(None);
+                    match self.read_line_underlying()? {
+                        Some(rest) => line.extend_from_slice(rest.as_bytes()),
+                        None if line.is_empty() => return Ok(None),
+                        None => {}
+                    }
+                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                }
+            }
+        }
+        self.read_line_underlying()
+    }
+
+    fn read_line_underlying(&mut self) -> Result<Option<String>> {
         match self {
             Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {

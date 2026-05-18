@@ -49,6 +49,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(IO_CLASS, "eof?", &["eof"], io_eof_, 0);
     globals.define_builtin_func(IO_CLASS, "getbyte", io_getbyte, 0);
     globals.define_builtin_func(IO_CLASS, "getc", io_getc, 0);
+    globals.define_builtin_func(IO_CLASS, "ungetc", io_ungetc, 1);
+    globals.define_builtin_func(IO_CLASS, "ungetbyte", io_ungetbyte, 1);
     globals.define_builtin_func_with(IO_CLASS, "sysseek", io_sysseek, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "lineno", io_lineno, 0);
     globals.define_builtin_func(IO_CLASS, "lineno=", io_lineno_set, 1);
@@ -1115,10 +1117,11 @@ fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
+    let pb = io.pushback_len() as i64;
     let pos = io
         .seek(0, 1)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
-    Ok(Value::integer(pos as i64))
+    Ok(Value::integer((pos as i64 - pb).max(0)))
 }
 
 ///
@@ -1187,6 +1190,9 @@ fn io_eof_(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
+    if io.pushback_len() > 0 {
+        return Ok(Value::bool(false));
+    }
     // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
     let buf = io.read(Some(1))?;
     if buf.is_empty() {
@@ -1278,6 +1284,63 @@ fn io_getc(
     } else {
         Ok(Value::string_from_vec(buf))
     }
+}
+
+///
+/// ### IO#ungetbyte
+/// - ungetbyte(string or integer) -> nil
+///
+/// Pushes bytes back so the next read returns them first. An Integer is
+/// reduced modulo 256 (never raises RangeError); `nil` is a no-op.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/ungetbyte.html]
+#[monoruby_builtin]
+fn io_ungetbyte(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        return Ok(Value::nil());
+    }
+    let bytes = if arg.is_integer() {
+        vec![(arg.coerce_to_pack_u64(vm, globals)? & 0xff) as u8]
+    } else {
+        arg.coerce_to_string(vm, globals)?.into_bytes()
+    };
+    lfp.self_val().as_io_inner_mut().unget(&bytes)?;
+    Ok(Value::nil())
+}
+
+///
+/// ### IO#ungetc
+/// - ungetc(string or integer) -> nil
+///
+/// Pushes a character back so the next read returns it first. An Integer
+/// is interpreted as a codepoint.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/ungetc.html]
+#[monoruby_builtin]
+fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion of nil into Integer",
+        ));
+    }
+    let bytes = if arg.is_integer() {
+        let cp = (arg.coerce_to_pack_u64(vm, globals)? & 0xffff_ffff) as u32;
+        match char::from_u32(cp) {
+            Some(c) => c.to_string().into_bytes(),
+            None => vec![cp as u8],
+        }
+    } else {
+        arg.coerce_to_string(vm, globals)?.into_bytes()
+    };
+    lfp.self_val().as_io_inner_mut().unget(&bytes)?;
+    Ok(Value::nil())
 }
 
 ///
@@ -3228,6 +3291,65 @@ mod tests {
             f = File.open("Cargo.toml")
             f.close
             f.close_on_exec?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_ungetbyte() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.getbyte
+              r = f.ungetbyte("cat")
+              [r, f.getbyte, f.getbyte, f.getbyte, f.getbyte]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              [f.ungetbyte(nil), f.ungetbyte(4095), f.getbyte,
+               f.ungetbyte(0x4f7574206f6620636861722072616e67ff), f.getbyte]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_ungetc() {
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              c = f.getc
+              r = f.ungetc(c)
+              p = f.pos
+              [r, p, f.getc, f.eof?]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            File.open("Cargo.toml") do |f|
+              f.read
+              f.ungetc(100)
+              [f.eof?, f.getc]
+            end
+            "#,
+        );
+        run_test(r#"File.open("Cargo.toml") { |f| f.ungetc(100) }"#);
+    }
+
+    #[test]
+    fn io_ungetc_errors() {
+        run_test_error(r#"$stdout.ungetc(100)"#);
+        run_test_error(r#"$stdout.ungetbyte(42)"#);
+        run_test_error(r#"File.open("Cargo.toml") { |f| f.getc; f.ungetc(nil) }"#);
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.ungetc(100)
             "#,
         );
     }
