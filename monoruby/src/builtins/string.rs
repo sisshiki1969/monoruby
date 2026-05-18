@@ -478,6 +478,7 @@ fn encoding_ordinal(enc: Encoding) -> i32 {
         Encoding::Sjis(_) => 8,
         Encoding::Iso8859(n) => 100 + n as i32,
         Encoding::Iso2022Jp => 200,
+        Encoding::Other(_) => 300,
     }
 }
 

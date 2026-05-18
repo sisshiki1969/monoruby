@@ -1511,7 +1511,13 @@ pub(crate) fn emit_deprecated_constant_warning(
 ///
 pub(crate) fn inspect_symbol(id: IdentId) -> String {
     let ident_name = id.get_ident_name_clone();
-    if is_simple_symbol(&ident_name) {
+    // A symbol whose recorded source encoding is ASCII-incompatible
+    // (UTF-16/32, ISO-2022-JP, UTF-7, …) is always quoted and
+    // byte-escaped, never rendered bare.
+    let ascii_incompat_enc = id
+        .symbol_encoding()
+        .is_some_and(|e| !e.is_ascii_compatible());
+    if !ascii_incompat_enc && is_simple_symbol(&ident_name) {
         let mut res = String::from(":");
         match &ident_name {
             IdentName::Utf8(name) => res.push_str(name),

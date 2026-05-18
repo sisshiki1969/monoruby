@@ -73,6 +73,7 @@ impl<'a> Iterator for CharByteIter<'a> {
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
+            | Encoding::Other(_)
             // ISO-2022-JP groups bytes 1-at-a-time at the codepoint
             // iterator level — the actual char-vs-ESC-sequence
             // chunking happens further up via `encoding_rs`. This
@@ -184,7 +185,22 @@ pub enum Encoding {
     /// either `'B'` or part of a JIS X 0208 codepoint depending
     /// on the surrounding ESC state.
     Iso2022Jp,
+    /// A byte-oriented encoding monoruby has no native codec for but
+    /// must still name-preserve and treat as ASCII-incompatible
+    /// (CRuby's stateful / dummy encodings: UTF-7, CP50220/1,
+    /// ISO-2022-JP-2/KDDI, the BOM-form UTF-16/UTF-32, IBM037, …).
+    /// The payload indexes [`OTHER_ENC_NAMES`] (kept `u8` so the enum
+    /// stays small — `RValue` must remain exactly 64 bytes).
+    /// Transcoding and per-char iteration behave like ASCII-8BIT (raw
+    /// bytes); only `#name`, `#inspect` and ASCII-incompatibility
+    /// differ.
+    Other(u8),
 }
+
+/// Canonical names for [`Encoding::Other`] variants (stateful /
+/// dummy byte encodings monoruby has no native codec for). The
+/// index is the `Encoding::Other` payload.
+pub(crate) const OTHER_ENC_NAMES: &[&str] = &["UTF-7", "CP50220", "CP50221"];
 
 impl Encoding {
     /// True if the encoding is a strict superset of US-ASCII for
@@ -194,7 +210,12 @@ impl Encoding {
     pub fn is_ascii_compatible(self) -> bool {
         !matches!(
             self,
-            Self::Utf16Le | Self::Utf16Be | Self::Utf32Le | Self::Utf32Be | Self::Iso2022Jp
+            Self::Utf16Le
+                | Self::Utf16Be
+                | Self::Utf32Le
+                | Self::Utf32Be
+                | Self::Iso2022Jp
+                | Self::Other(_)
         )
     }
 
@@ -217,6 +238,7 @@ impl Encoding {
     /// hyphenated forms users see in `Encoding#to_s`.
     pub fn name(self) -> &'static str {
         match self {
+            Encoding::Other(i) => OTHER_ENC_NAMES[i as usize],
             Encoding::Ascii8 => "ASCII-8BIT",
             Encoding::Utf8 => "UTF-8",
             Encoding::UsAscii => "US-ASCII",
@@ -283,6 +305,8 @@ impl Encoding {
                 Err(_) => CodeRange::Broken,
             },
             Encoding::Ascii8 => CodeRange::Valid, // every byte is "valid"
+            // No native codec: raw bytes, every sequence "valid".
+            Encoding::Other(_) => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
             // For encodings we don't decode natively, treat any
             // sequence as Valid unless its byte count contradicts
@@ -350,6 +374,13 @@ impl Encoding {
             "UTF_8" | "UTF8" | "CP65001" | "UTF8_MAC" | "UTF_8_MAC" | "CESU_8" | "CESU8" => {
                 Ok(Encoding::Utf8)
             }
+
+            // ASCII-incompatible stateful / dummy byte encodings with
+            // no native codec: name-preserved, `#inspect` escapes
+            // every byte, symbols are quoted (CRuby semantics).
+            "UTF_7" => Ok(Encoding::Other(0)),
+            "CP50220" => Ok(Encoding::Other(1)),
+            "CP50221" => Ok(Encoding::Other(2)),
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
             "US_ASCII" | "ASCII" | "ANSI_X3_4_1968" | "646" => Ok(Encoding::UsAscii),
             "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
@@ -402,7 +433,7 @@ impl Encoding {
             | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869" | "CP869" | "KOI8_R"
             | "KOI8_U" | "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
             | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW" | "EUCTW"
-            | "TIS_620" | "TIS620" | "UTF_7" | "EMACS_MULE" | "CP50220" | "CP50221" | "GB12345"
+            | "TIS_620" | "TIS620" | "EMACS_MULE" | "GB12345"
             | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
             | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
@@ -612,8 +643,18 @@ impl RStringInner {
                 }
                 res
             }
-            // US-ASCII, ASCII-8BIT, ISO-8859-N, ISO-2022-JP (dummy):
-            // pure per-byte — ASCII rules for < 0x80, `\xHH` otherwise.
+            // ASCII-incompatible stateful / no-codec byte encodings
+            // (ISO-2022-JP, UTF-7, CP50220/1, …): CRuby escapes
+            // *every* byte as `\xHH`, even printable ASCII.
+            Encoding::Iso2022Jp | Encoding::Other(_) => {
+                let mut res = String::with_capacity(self.len() * 4);
+                for b in self.as_bytes() {
+                    res.push_str(&format!("\\x{:0>2X}", b));
+                }
+                res
+            }
+            // US-ASCII, ASCII-8BIT, ISO-8859-N: pure per-byte —
+            // ASCII rules for < 0x80, `\xHH` otherwise.
             _ => {
                 let mut res = String::with_capacity(self.len());
                 for c in self.as_bytes() {
@@ -959,7 +1000,10 @@ impl RStringInner {
     pub fn char_length(&self) -> usize {
         match self.ty {
             // Fixed 1-byte-per-char.
-            Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => self.content.len(),
+            Encoding::Ascii8
+            | Encoding::UsAscii
+            | Encoding::Iso8859(_)
+            | Encoding::Other(_) => self.content.len(),
             // UTF-16 / UTF-32 with one extra unit per broken trailing
             // byte. CRuby's `String#length` for these reports the
             // number of *complete* code units plus one per stray byte
@@ -1341,7 +1385,9 @@ impl RStringInner {
             CodeRange::Valid => match parent.encoding() {
                 // Single-byte encodings: every byte position is a
                 // character boundary; Valid trivially propagates.
-                Encoding::Ascii8 | Encoding::Iso8859(_) => CodeRange::Valid,
+                Encoding::Ascii8 | Encoding::Iso8859(_) | Encoding::Other(_) => {
+                    CodeRange::Valid
+                }
                 // UTF-8: the cut points must land on character
                 // boundaries (a non-continuation byte or one-past-the-
                 // end). When both endpoints align, the byte sequence
@@ -1530,7 +1576,10 @@ impl RStringInner {
         // is what `iter_char_bytes` would do anyway, but we
         // shortcut it for performance).
         let unit = match self.ty {
-            Encoding::Ascii8 | Encoding::UsAscii | Encoding::Iso8859(_) => Some(1),
+            Encoding::Ascii8
+            | Encoding::UsAscii
+            | Encoding::Iso8859(_)
+            | Encoding::Other(_) => Some(1),
             Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
             Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
             // ISO-2022-JP still iterates byte-wise (stateful decode
