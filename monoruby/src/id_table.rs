@@ -286,8 +286,13 @@ impl IdentId {
     ///
     /// Get *IdentId* from raw bytes (binary/ASCII-8BIT).
     ///
-    pub fn get_id_from_bytes(bytes: Vec<u8>) -> IdentId {
-        ID.write().unwrap().get_id_from_bytes(bytes)
+    /// `enc` discriminates the symbol: same bytes interned under a
+    /// different (ASCII-incompatible / non-UTF-8) encoding produce a
+    /// distinct `IdentId`, matching CRuby's per-(bytes, encoding)
+    /// symbol identity. The encoding is recorded so
+    /// `Symbol#{to_s,name,encoding,inspect}` round-trip it.
+    pub fn get_id_from_bytes(bytes: Vec<u8>, enc: crate::value::Encoding) -> IdentId {
+        ID.write().unwrap().get_id_from_bytes(bytes, enc)
     }
 
     ///
@@ -302,15 +307,6 @@ impl IdentId {
     ///
     pub fn get_ident_name_clone(&self) -> IdentName {
         ID.read().unwrap().get_ident_name(*self).clone()
-    }
-
-    ///
-    /// Record the source-string encoding a symbol was created from
-    /// (only when it differs from the default `Symbol#to_s`
-    /// derivation). Called by `String#to_sym`.
-    ///
-    pub(crate) fn set_symbol_encoding(self, enc: crate::value::Encoding) {
-        ID.write().unwrap().enc_map.insert(self, enc);
     }
 
     ///
@@ -366,16 +362,17 @@ impl IdentId {
 pub struct IdentifierTable {
     /// Reverse lookup for UTF-8 names.
     rev_table: HashMap<String, IdentId>,
-    /// Reverse lookup for binary names.
-    rev_table_bytes: HashMap<Vec<u8>, IdentId>,
+    /// Reverse lookup for binary names, keyed by `(bytes, encoding)`
+    /// so the same bytes under different (ASCII-incompatible /
+    /// non-UTF-8) encodings are distinct symbols.
+    rev_table_bytes: HashMap<(Vec<u8>, crate::value::Encoding), IdentId>,
     /// Forward table: IdentId -> IdentName.
     table: Vec<IdentName>,
-    /// Sparse side-map: the source-string encoding a symbol was
-    /// created from, when it is *not* the one `Symbol#to_s` would
-    /// derive by default (i.e. not US-ASCII / UTF-8 / ASCII-8BIT).
-    /// Only `String#to_sym` populates it; method/ivar/constant
-    /// interning never touches it, so symbol identity and dispatch
-    /// are unaffected.
+    /// The source encoding each byte-interned symbol carries, set
+    /// atomically by `get_id_from_bytes` at intern time. Collision-
+    /// free now that the byte table is keyed by `(bytes, encoding)`.
+    /// String/identifier interning never touches it, so method /
+    /// ivar / constant dispatch is unaffected.
     enc_map: HashMap<IdentId, crate::value::Encoding>,
 }
 
@@ -500,13 +497,16 @@ impl IdentifierTable {
         }
     }
 
-    fn get_id_from_bytes(&mut self, bytes: Vec<u8>) -> IdentId {
-        match self.rev_table_bytes.get(&bytes) {
+    fn get_id_from_bytes(&mut self, bytes: Vec<u8>, enc: crate::value::Encoding) -> IdentId {
+        let key = (bytes, enc);
+        match self.rev_table_bytes.get(&key) {
             Some(id) => *id,
             None => {
                 let id = IdentId::from(self.table.len() as u32 + 1);
-                self.rev_table_bytes.insert(bytes.clone(), id);
+                let (bytes, enc) = key;
+                self.rev_table_bytes.insert((bytes.clone(), enc), id);
                 self.table.push(IdentName::Bytes(bytes));
+                self.enc_map.insert(id, enc);
                 id
             }
         }

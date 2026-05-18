@@ -1391,9 +1391,19 @@ pub(crate) fn emit_chilled_string_mutation_warning(
     let sym = match self_val.is_rstring() {
         Some(s) => {
             let bytes = s.as_bytes();
-            match std::str::from_utf8(bytes) {
-                Ok(utf8) => IdentId::get_id(utf8),
-                Err(_) => IdentId::get_id_from_bytes(bytes.to_vec()),
+            let src = s.encoding();
+            let canon = if bytes.is_ascii() && src.is_ascii_compatible() {
+                Encoding::UsAscii
+            } else {
+                src
+            };
+            if matches!(canon, Encoding::UsAscii | Encoding::Utf8) {
+                match std::str::from_utf8(bytes) {
+                    Ok(utf8) => IdentId::get_id(utf8),
+                    Err(_) => IdentId::get_id_from_bytes(bytes.to_vec(), Encoding::Ascii8),
+                }
+            } else {
+                IdentId::get_id_from_bytes(bytes.to_vec(), canon)
             }
         }
         None => return Ok(()),

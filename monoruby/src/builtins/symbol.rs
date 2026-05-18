@@ -587,4 +587,26 @@ mod tests {
             r#":café.encoding.name"#,
         ]);
     }
+
+    #[test]
+    fn symbol_per_bytes_encoding_identity() {
+        // Symbols are interned per (bytes, encoding): same bytes under
+        // different (ASCII-incompatible / non-UTF-8) encodings are
+        // distinct symbols; ASCII content in an ASCII-compatible
+        // encoding collapses to the US-ASCII symbol.
+        run_tests(&[
+            r#""あ".encode("UTF-16LE").to_sym == "あ".encode("UTF-16BE").to_sym"#,
+            r#""あ".encode("UTF-16LE").to_sym.equal?("あ".encode("UTF-16LE").to_sym)"#,
+            r#"["abcd".force_encoding("UTF-7").to_sym.inspect,
+               "abcd".force_encoding("CP50221").to_sym.inspect,
+               "abcd".force_encoding("UTF-7").to_sym ==
+                 "abcd".force_encoding("CP50221").to_sym]"#,
+            r#""a".force_encoding("KOI8-R").to_sym == :a"#,
+            r#""a".force_encoding("UTF-7").to_sym == :a"#,
+            r#""foo".encode("UTF-16LE").to_sym == :foo"#,
+            r#":café.encoding.name"#,
+            r#":foo == :foo"#,
+            r#":hello.upcase"#,
+        ]);
+    }
 }
