@@ -905,8 +905,9 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // (logger/log_device.rb feature-detection code) where the caller
         // explicitly disclaims ownership of the borrowed fd.
         let (name, has_path, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
+        let (readable, writable) = super::io::fd_rw_mode(fd_i32);
         // SAFETY: fd has been validated as a valid file descriptor above.
-        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path);
+        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path, readable, writable);
         io_inner.set_autoclose(autoclose);
         let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
         if let Some(bh) = lfp.block() {
@@ -962,6 +963,12 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Strip encoding suffix (e.g. ":UTF-8") and normalize the mode string:
     // remove 'b' (binary) flag since it has no effect on Unix.
     let mode_base = mode.split(':').next().unwrap().replace('b', "");
+    let (readable, writable) = match mode_base.as_str() {
+        "r" => (true, false),
+        "w" | "a" => (false, true),
+        "r+" | "+r" | "w+" | "+w" | "a+" | "+a" => (true, true),
+        _ => (true, false),
+    };
     let opt = match mode_base.as_str() {
         "r" => opt.read(true),
         "w" => opt.write(true).create(true).truncate(true),
@@ -988,7 +995,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             ));
         }
     };
-    let mut res = Value::new_file(file, path);
+    let mut res = Value::new_file(file, path, readable, writable);
     if let Some(bh) = lfp.block() {
         let r = vm.invoke_block_once(globals, bh, &[res]);
         // CRuby File.open(...) {|io| ... } closes the file at block exit.

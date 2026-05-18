@@ -1549,8 +1549,13 @@ impl RValue {
         Self::new_io(IoInner::stderr())
     }
 
-    pub(super) fn new_file(file: std::fs::File, name: String) -> Self {
-        let inner = IoInner::file(file, name);
+    pub(super) fn new_file(
+        file: std::fs::File,
+        name: String,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
+        let inner = IoInner::file(file, name, readable, writable);
         RValue {
             header: Header::new(FILE_CLASS, ObjTy::IO),
             kind: ObjKind::io(inner),

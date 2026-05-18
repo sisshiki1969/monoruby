@@ -26,6 +26,11 @@ pub struct FileDescriptor {
     /// fd without an explicit `path:` option — CRuby's `IO#path` is `nil`
     /// in that case.
     has_path: bool,
+    /// Access mode the descriptor was opened with. Read operations on a
+    /// non-`readable` descriptor and write operations on a non-`writable`
+    /// one raise `IOError`, matching CRuby.
+    readable: bool,
+    writable: bool,
     /// CRuby's `IO#autoclose=` semantics. When `true` (the default), the
     /// underlying fd is closed when this `FileDescriptor` is dropped. When
     /// `false`, ownership is released via `into_raw_fd` so the fd is *not*
@@ -127,6 +132,48 @@ impl IoInner {
         matches!(self, Self::Closed)
     }
 
+    /// Whether the stream may be read from.
+    pub fn is_readable(&self) -> bool {
+        match self {
+            Self::Stdin => true,
+            Self::Stdout | Self::Stderr | Self::Closed => false,
+            Self::File(f) => f.readable,
+            Self::Popen(p) => p.reader.is_some(),
+        }
+    }
+
+    /// Whether the stream may be written to.
+    pub fn is_writable(&self) -> bool {
+        match self {
+            Self::Stdout | Self::Stderr => true,
+            Self::Stdin | Self::Closed => false,
+            Self::File(f) => f.writable,
+            Self::Popen(p) => p.writer.is_some(),
+        }
+    }
+
+    /// `IOError` unless the stream is open for reading.
+    pub fn ensure_readable(&self) -> Result<()> {
+        if self.is_closed() {
+            return Err(MonorubyErr::ioerr("closed stream"));
+        }
+        if !self.is_readable() {
+            return Err(MonorubyErr::ioerr("not opened for reading"));
+        }
+        Ok(())
+    }
+
+    /// `IOError` unless the stream is open for writing.
+    pub fn ensure_writable(&self) -> Result<()> {
+        if self.is_closed() {
+            return Err(MonorubyErr::ioerr("closed stream"));
+        }
+        if !self.is_writable() {
+            return Err(MonorubyErr::ioerr("not opened for writing"));
+        }
+        Ok(())
+    }
+
     /// Close the IO. Returns `(raw_wait_status, pid)` for Popen, `None`
     /// otherwise. `raw_wait_status` is the POSIX `wait(2)` status word, so
     /// callers (and `Process::Status`) can distinguish exit code, signal
@@ -165,11 +212,13 @@ impl IoInner {
         Self::Stderr
     }
 
-    pub(super) fn file(file: std::fs::File, name: String) -> Self {
+    pub(super) fn file(file: std::fs::File, name: String, readable: bool, writable: bool) -> Self {
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
             has_path: true,
+            readable,
+            writable,
             autoclose: Cell::new(true),
             pushback: RefCell::new(Vec::new()),
         }))
@@ -193,22 +242,29 @@ impl IoInner {
         }
     }
 
-    pub(crate) fn from_raw_fd(fd: i32, name: String, has_path: bool) -> Self {
+    pub(crate) fn from_raw_fd(
+        fd: i32,
+        name: String,
+        has_path: bool,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
         // SAFETY: fd is a valid file descriptor obtained from pipe().
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
             has_path,
+            readable,
+            writable,
             autoclose: Cell::new(true),
             pushback: RefCell::new(Vec::new()),
         }))
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.ensure_writable()?;
         match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
-            Self::Stdin => Err(MonorubyErr::argumenterr("can't write to $stdin")),
             Self::Stdout => match std::io::stdout().write(data) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(MonorubyErr::rangeerr(e.to_string())),
@@ -228,15 +284,15 @@ impl IoInner {
             }
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
-                if let Some(ref mut writer) = popen.writer {
-                    writer
-                        .write(data)
-                        .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
-                    Ok(())
-                } else {
-                    Err(MonorubyErr::ioerr("not opened for writing"))
-                }
+                // `ensure_writable` guaranteed the writer is present.
+                let writer = popen.writer.as_mut().unwrap();
+                writer
+                    .write(data)
+                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                Ok(())
             }
+            // `ensure_writable` already rejected non-writable streams.
+            Self::Stdin | Self::Closed => unreachable!(),
         }
     }
 
@@ -265,6 +321,9 @@ impl IoInner {
         match self {
             Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin | Self::Stdout | Self::Stderr => {
+                Err(MonorubyErr::ioerr("not opened for reading"))
+            }
+            Self::File(f) if !f.readable => {
                 Err(MonorubyErr::ioerr("not opened for reading"))
             }
             Self::File(_) | Self::Popen(_) => {
@@ -336,6 +395,9 @@ impl IoInner {
             Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
+                if !file.readable {
+                    return Err(MonorubyErr::ioerr("not opened for reading"));
+                }
                 // `&mut *...reader` peels the ManuallyDrop wrapper to yield
                 // `&mut BufReader<File>`, which is needed because `Read::bytes`
                 // takes `self` by value and would otherwise try to move out of
@@ -411,6 +473,9 @@ impl IoInner {
             Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
+                if !file.readable {
+                    return Err(MonorubyErr::ioerr("not opened for reading"));
+                }
                 let file = &mut *Rc::get_mut(file).unwrap().reader;
                 let mut buf = String::new();
                 let size = file

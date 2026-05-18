@@ -1097,8 +1097,13 @@ impl Value {
         RValue::new_io_stderr().pack()
     }
 
-    pub(crate) fn new_file(file: std::fs::File, name: String) -> Self {
-        RValue::new_file(file, name).pack()
+    pub(crate) fn new_file(
+        file: std::fs::File,
+        name: String,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
+        RValue::new_file(file, name, readable, writable).pack()
     }
 
     pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {

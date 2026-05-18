@@ -105,7 +105,8 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // Pick up `:autoclose` and `:path` from the options Hash. See
         // `io_open_opts` for the rationale.
         let (name, has_path, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
-        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path);
+        let (readable, writable) = fd_rw_mode(fd_i32);
+        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path, readable, writable);
         io_inner.set_autoclose(autoclose);
         return Ok(Value::new_io(io_inner));
     }
@@ -151,6 +152,21 @@ pub(super) fn io_open_opts(
         }
     }
     Ok((name, has_path, autoclose))
+}
+
+/// Query a raw fd's access mode via `fcntl(F_GETFL)` and map `O_ACCMODE`
+/// to `(readable, writable)`. Falls back to `(true, true)` if the query
+/// fails so we never spuriously reject I/O on a valid fd.
+pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return (true, true);
+    }
+    match flags & libc::O_ACCMODE {
+        libc::O_RDONLY => (true, false),
+        libc::O_WRONLY => (false, true),
+        _ => (true, true),
+    }
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -758,8 +774,20 @@ fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
     }
-    let read_io = Value::new_io(IoInner::from_raw_fd(fds[0], "pipe".to_string(), false));
-    let write_io = Value::new_io(IoInner::from_raw_fd(fds[1], "pipe".to_string(), false));
+    let read_io = Value::new_io(IoInner::from_raw_fd(
+        fds[0],
+        "pipe".to_string(),
+        false,
+        true,
+        false,
+    ));
+    let write_io = Value::new_io(IoInner::from_raw_fd(
+        fds[1],
+        "pipe".to_string(),
+        false,
+        false,
+        true,
+    ));
     Ok(Value::array2(read_io, write_io))
 }
 
@@ -1407,7 +1435,7 @@ fn io_lineno(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    ensure_io_open(lfp.self_val())?;
+    lfp.self_val().as_io_inner().ensure_readable()?;
     let stored = globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
@@ -1428,7 +1456,7 @@ fn io_lineno_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    ensure_io_open(lfp.self_val())?;
+    lfp.self_val().as_io_inner().ensure_readable()?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if n > i32::MAX as i64 || n < i32::MIN as i64 {
         return Err(MonorubyErr::rangeerr(format!(
@@ -3402,5 +3430,49 @@ mod tests {
             "#,
         );
         run_test_error(r#"File.open("Cargo.toml") { |f| f.lineno = 4294967296 }"#);
+    }
+
+    #[test]
+    fn io_directional_mode_errors() {
+        // Read ops on a write-only stream raise IOError.
+        run_test_error(r#"File.open("/tmp/mr_mode_w.txt", "w") { |f| f.read }"#);
+        run_test_error(r#"File.open("/tmp/mr_mode_w.txt", "w") { |f| f.gets }"#);
+        run_test_error(r#"File.open("/tmp/mr_mode_w.txt", "w") { |f| f.lineno }"#);
+        run_test_error(r#"File.open("/tmp/mr_mode_w.txt", "w") { |f| f.lineno = 1 }"#);
+        run_test_error(r#"File.open("/tmp/mr_mode_w.txt", "w") { |f| f.ungetc(65) }"#);
+        // Write op on a read-only stream raises IOError.
+        run_test_error(r#"File.open("Cargo.toml", "r") { |f| f.write("x") }"#);
+        // Read/write modes still work both ways.
+        run_test(
+            r#"
+            path = "/tmp/mr_mode_rw.txt"
+            r = File.open(path, "w+") { |f| f.write("hello"); f.rewind; f.read }
+            File.unlink(path)
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_directional_mode_errors_streams() {
+        // ensure_readable: closed stream -> "closed stream".
+        run_test_error(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            f.lineno
+            "#,
+        );
+        // is_readable Stdout arm + ensure_readable "not opened for reading".
+        run_test_error(r#"$stdout.lineno"#);
+        run_test_error(r#"$stderr.lineno"#);
+        // ensure_writable Stdin arm -> "not opened for writing".
+        run_test_error(r#"$stdin.write("x")"#);
+        // fd_rw_mode through IO.pipe: read end is RO, write end is WO.
+        run_test_error(r#"r, w = IO.pipe; begin; w.gets; ensure; r.close; w.close; end"#);
+        run_test_error(r#"r, w = IO.pipe; begin; r.write("x"); ensure; r.close; w.close; end"#);
+        // is_readable / is_writable Popen arms.
+        run_test_error(r#"IO.popen("cat", "w") { |p| p.gets }"#);
+        run_test_error(r#"IO.popen("cat", "r") { |p| p.write("x") }"#);
     }
 }
