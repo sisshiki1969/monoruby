@@ -1518,6 +1518,7 @@ fn encoding_value(globals: &Globals, enc: crate::value::Encoding) -> Value {
         .unwrap_or(Value::nil())
 }
 
+
 /// Pull the source encoding out of a `Encoding::Converter`
 /// instance's stashed ivar. Returns `Encoding::Ascii8` as a
 /// best-effort fallback if the ivar is missing or unparseable —
@@ -2780,6 +2781,39 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             name
         ))),
     }
+}
+
+/// Resolve an encoding *name* to its registered `Encoding` object,
+/// preserving object identity (so e.g. `IBM866` stays `IBM866` rather
+/// than collapsing to `ASCII-8BIT` the way the `Encoding` enum does).
+/// Mirrors `Encoding.find` without the `to_str`/error handling.
+pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Value> {
+    let enc_class = encoding_class(globals);
+    let norm = |s: &str| s.to_uppercase().replace(['-', '_'], "");
+    let want = norm(name);
+    for cname in globals.store.get_constant_names(enc_class) {
+        if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
+            && v.class() == enc_class
+            && let Some(es) = globals
+                .store
+                .get_ivar(v, IdentId::_ENCODING)
+                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
+            && norm(&es) == want
+        {
+            return Some(v);
+        }
+    }
+    enc_name_to_const(name)
+        .and_then(|c| globals.store.get_constant_noautoload(enc_class, IdentId::get_id(c)))
+}
+
+/// The canonical name string carried by an `Encoding` object's
+/// `_ENCODING` ivar (e.g. `"IBM866"`, `"UTF-8"`).
+pub(super) fn encoding_object_name(globals: &Globals, v: Value) -> Option<String> {
+    globals
+        .store
+        .get_ivar(v, IdentId::_ENCODING)
+        .and_then(|ev| ev.is_str().map(|s| s.to_string()))
 }
 
 /// Map an encoding name (as given by the user) to the Encoding constant name.

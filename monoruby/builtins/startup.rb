@@ -1171,10 +1171,6 @@ class IO
   end
   alias each each_line
 
-  def internal_encoding
-    nil
-  end
-
   def self.for_fd(fd, mode = nil, **opts)
     new(fd, mode, **opts)
   end
