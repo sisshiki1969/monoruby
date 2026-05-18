@@ -6,7 +6,7 @@ mod binding;
 mod bool_class;
 mod class;
 mod dir;
-mod encoding;
+pub(crate) mod encoding;
 pub(crate) mod errno;
 #[cfg(test)]
 mod encoding_tests;

@@ -50,6 +50,13 @@ pub(super) fn is_printable(x: char) -> bool {
     } else if x < 127 {
         // ASCII fast path
         true
+    } else if x == 0xA0 || x == 0xAD {
+        // CRuby's `rb_enc_isprint` (Onigmo) treats NBSP (U+00A0) and
+        // SOFT HYPHEN (U+00AD) as printable, so `String#inspect` shows
+        // them literally. The Rust core table (this module's source)
+        // classifies them as White_Space / Default_Ignorable instead;
+        // override here since this fn is inspect-only.
+        true
     } else if x < 0x10000 {
         check(lower, SINGLETONS0U, SINGLETONS0L, NORMAL0)
     } else if x < 0x20000 {

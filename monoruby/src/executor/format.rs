@@ -842,7 +842,9 @@ impl Executor {
                     ch = fchars[i];
                 }
             }
-            // Precision
+            // Precision: `.N`, `.*` (sequential), or `.*N$`
+            // (positional). A negative `.*` precision is ignored
+            // (treated as no precision), matching CRuby.
             let mut precision = None;
             if ch == '.' {
                 i += 1;
@@ -852,25 +854,36 @@ impl Executor {
                     ));
                 }
                 ch = fchars[i];
-                let mut prec = 0usize;
                 if ch == '*' {
-                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
-                    if arguments.len() <= arg_no {
-                        return Err(MonorubyErr::argumenterr("too few arguments"));
-                    }
-                    let p = arguments[arg_no].coerce_to_integer(self, globals)?;
-                    arg_no += 1;
-                    match p {
+                    i += 1; // skip '*'
+                    let prec_val = if let Some(num) =
+                        try_positional(&fchars, flen, &mut i)
+                    {
+                        mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                        if num == 0 || num > arguments.len() {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                        arguments[num - 1]
+                    } else {
+                        mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
+                        if arguments.len() <= arg_no {
+                            return Err(MonorubyErr::argumenterr("too few arguments"));
+                        }
+                        let v = arguments[arg_no];
+                        arg_no += 1;
+                        v
+                    };
+                    match prec_val.coerce_to_integer(self, globals)? {
                         IntegerBase::Fixnum(v) => {
                             if v >= 0 {
-                                prec = v as usize;
+                                precision = Some(v as usize);
                             }
+                            // negative precision: ignored (stays None)
                         }
                         IntegerBase::BigInt(_) => {
                             return Err(MonorubyErr::argumenterr("precision too big"));
                         }
                     }
-                    i += 1;
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
                             "Invalid termination of format string",
@@ -878,6 +891,7 @@ impl Executor {
                     }
                     ch = fchars[i];
                 } else {
+                    let mut prec = 0usize;
                     while ch.is_ascii_digit() {
                         prec = prec
                             .checked_mul(10)
@@ -891,8 +905,25 @@ impl Executor {
                         }
                         ch = fchars[i];
                     }
+                    precision = Some(prec);
                 }
-                precision = Some(prec);
+            }
+            // A `N$` positional *value* reference may follow the width
+            // / precision (e.g. `%*1$.*2$3$d`).
+            if positional_arg.is_none() && named_val.is_none() {
+                if let Some(num) = try_positional(&fchars, flen, &mut i) {
+                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    if num == 0 || num > arguments.len() {
+                        return Err(MonorubyErr::argumenterr("too few arguments"));
+                    }
+                    positional_arg = Some(arguments[num - 1]);
+                    if i >= flen {
+                        return Err(MonorubyErr::argumenterr(
+                            "Invalid termination of format string",
+                        ));
+                    }
+                    ch = fchars[i];
+                }
             }
             // `<name>` may appear between precision and the type char.
             if ch == '<' {

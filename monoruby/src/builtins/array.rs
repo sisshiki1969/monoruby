@@ -540,19 +540,31 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 // If #inspect returned a String, use it directly.
                 // Otherwise, call Ruby #to_s on the result.
                 if let Some(str_inner) = inspected.is_rstring_inner() {
-                    let bytes = str_inner.as_bytes();
-                    match std::str::from_utf8(bytes) {
-                        Ok(utf8) => s.push_str(utf8),
-                        Err(_) => s.push_str(&inspected.to_s(&globals.store)),
+                    if let Some(esc) =
+                        crate::value::escape_unicode_noncompat_component(str_inner)
+                    {
+                        s.push_str(&esc);
+                    } else {
+                        let bytes = str_inner.as_bytes();
+                        match std::str::from_utf8(bytes) {
+                            Ok(utf8) => s.push_str(utf8),
+                            Err(_) => s.push_str(&inspected.to_s(&globals.store)),
+                        }
                     }
                 } else {
                     let to_s_result =
                         vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
                     if let Some(str_inner) = to_s_result.is_rstring_inner() {
-                        let bytes = str_inner.as_bytes();
-                        match std::str::from_utf8(bytes) {
-                            Ok(utf8) => s.push_str(utf8),
-                            Err(_) => s.push_str(&to_s_result.to_s(&globals.store)),
+                        if let Some(esc) =
+                            crate::value::escape_unicode_noncompat_component(str_inner)
+                        {
+                            s.push_str(&esc);
+                        } else {
+                            let bytes = str_inner.as_bytes();
+                            match std::str::from_utf8(bytes) {
+                                Ok(utf8) => s.push_str(utf8),
+                                Err(_) => s.push_str(&to_s_result.to_s(&globals.store)),
+                            }
                         }
                     } else {
                         // If #to_s also doesn't return a String, use default representation
@@ -5988,6 +6000,35 @@ mod tests {
             // empty array
             "[].min {|a,b| a <=> b}",
             "[].max {|a,b| a <=> b}",
+        ]);
+    }
+
+    #[test]
+    fn inspect_noncompat_component_escaped() {
+        // When a component's #inspect returns a UTF-16/UTF-32 string,
+        // Array#inspect / Hash#inspect must not splice the raw bytes
+        // (or raise) — ASCII stays, non-ASCII becomes \uXXXX.
+        run_tests(&[
+            r#"
+            o = Object.new
+            def o.inspect; "abあc".encode("UTF-16BE"); end
+            [o].inspect
+            "#,
+            r#"
+            o = Object.new
+            def o.inspect; "x\u{1F600}y".encode("UTF-32LE"); end
+            [1, o].inspect
+            "#,
+            r#"
+            o = Object.new
+            def o.inspect; "kあ".encode("UTF-16LE"); end
+            { a: o }.inspect
+            "#,
+            r#"
+            o = Object.new
+            def o.inspect; "v".encode("UTF-16BE"); end
+            { 1 => o }.to_s
+            "#,
         ]);
     }
 
