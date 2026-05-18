@@ -1537,6 +1537,39 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
     res
 }
 
+/// When a container (`Array`/`Hash`) `#inspect` concatenates a
+/// component whose `#inspect` returned a string in a non-ASCII-
+/// compatible Unicode encoding (UTF-16/UTF-32), CRuby does not raise
+/// and does not splice the raw bytes — it keeps ASCII bytes verbatim
+/// and renders every non-ASCII codepoint as `\uXXXX` / `\u{XXXXX}`.
+/// Returns `Some(rendered)` for those encodings, `None` otherwise (so
+/// the caller keeps its existing path).
+pub(crate) fn escape_unicode_noncompat_component(inner: &RStringInner) -> Option<String> {
+    use crate::value::Encoding as E;
+    let enc = inner.encoding();
+    if !matches!(
+        enc,
+        E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+    ) {
+        return None;
+    }
+    let (decoded, _) = crate::builtins::encoding::decode_utf16_32(inner.as_bytes(), enc);
+    let mut out = String::with_capacity(decoded.len());
+    for ch in decoded.chars() {
+        if ch.is_ascii() {
+            out.push(ch);
+        } else {
+            let cp = ch as u32;
+            if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{:04X}", cp));
+            } else {
+                out.push_str(&format!("\\u{{{:X}}}", cp));
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Hash short-form key label for a symbol. CRuby renders `{ sym: v }`
 /// where `sym` is the bare name only if it is a plain identifier
 /// (optionally with a single trailing `?`/`!`); operators, `=`-suffix

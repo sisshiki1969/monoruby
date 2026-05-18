@@ -1187,11 +1187,21 @@ fn inspect_value_for_hash(
     v: Value,
 ) -> Result<String> {
     let inspected = vm.invoke_method_inner(globals, IdentId::INSPECT, v, &[], None, None)?;
+    if let Some(inner) = inspected.is_rstring_inner() {
+        if let Some(esc) = crate::value::escape_unicode_noncompat_component(inner) {
+            return Ok(esc);
+        }
+    }
     if let Some(s) = inspected.is_str() {
         return Ok(s.to_string());
     }
     let to_s_result =
         vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
+    if let Some(inner) = to_s_result.is_rstring_inner() {
+        if let Some(esc) = crate::value::escape_unicode_noncompat_component(inner) {
+            return Ok(esc);
+        }
+    }
     if let Some(s) = to_s_result.is_str() {
         Ok(s.to_string())
     } else {
