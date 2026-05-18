@@ -561,18 +561,35 @@ module Enumerable
   end
   alias member? include?
 
-  def first(n = nil)
-    if n.nil?
-      __gather_each { |x| return x }
-      nil
-    else
-      res = []
-      __gather_each do |x|
-        break if res.size >= n
-        res << x
-      end
-      res
+  def first(*args)
+    if args.size > 1
+      raise ArgumentError,
+            "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
+    if args.empty?
+      __gather_each { |x| return x }
+      return nil
+    end
+    n = args[0]
+    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
+    unless n.is_a?(Integer)
+      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+    end
+    raise ArgumentError, "negative array size" if n < 0
+    # CRuby converts the count with NUM2LONG; a Bignum that does not
+    # fit in a C long raises RangeError.
+    if n > 0x7fff_ffff_ffff_ffff
+      raise RangeError, "bignum too big to convert into `long'"
+    end
+    res = []
+    return res if n == 0
+    # Push-then-break so exactly `n` elements are consumed (the
+    # underlying `each` is not advanced past what is needed).
+    __gather_each do |x|
+      res << x
+      break if res.size >= n
+    end
+    res
   end
 
   def to_a(*args)

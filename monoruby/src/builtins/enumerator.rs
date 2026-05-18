@@ -385,6 +385,30 @@ mod tests {
     }
 
     #[test]
+    fn enumerable_first_arg_validation() {
+        run_tests(&[
+            // no arg / explicit count
+            r#"(1..5).first"#,
+            r#"(1..5).first(0)"#,
+            r#"(1..5).first(3)"#,
+            r#"(1..5).first(100)"#,
+            // #to_int coercion
+            r#"o = Object.new; def o.to_int; 2; end; (10..20).first(o)"#,
+            // negative -> ArgumentError; explicit nil / non-numeric -> TypeError
+            r#"begin; (1..3).first(-1); rescue ArgumentError; :ae; end"#,
+            r#"begin; (1..3).first(nil); rescue TypeError; :te; end"#,
+            r#"begin; (1..3).first("a"); rescue TypeError; :te; end"#,
+            r#"begin; [].first(2 ** 70); rescue RangeError; :re; end"#,
+            r#"begin; (1..3).first(1, 2); rescue ArgumentError; :ae; end"#,
+            // laziness: consumes only what is needed
+            r#"
+            e = Enumerator.new { |y| y << 1; y << 2; raise "boom"; y << 3 }
+            e.first(2)
+            "#,
+        ]);
+    }
+
+    #[test]
     fn enumerator2() {
         run_test_no_result_check(
             r##"
