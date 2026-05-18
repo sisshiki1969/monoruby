@@ -1532,10 +1532,8 @@ fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
         let arg_bytes = arg_inner.as_bytes();
         if self_bytes.starts_with(arg_bytes) {
-            if self_enc.is_utf8_compatible() && arg_bytes.len() < self_bytes.len() {
-                if !is_utf8_char_boundary(self_bytes, arg_bytes.len()) {
-                    continue;
-                }
+            if !enc_char_boundary(self_enc, self_bytes, arg_bytes.len()) {
+                continue;
             }
             return Ok(Value::bool(true));
         }
@@ -1566,11 +1564,9 @@ fn end_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
         let arg_bytes = arg_inner.as_bytes();
         if self_bytes.ends_with(arg_bytes) {
-            if self_enc.is_utf8_compatible() && arg_bytes.len() < self_bytes.len() {
-                let boundary = self_bytes.len() - arg_bytes.len();
-                if !is_utf8_char_boundary(self_bytes, boundary) {
-                    continue;
-                }
+            let boundary = self_bytes.len() - arg_bytes.len();
+            if !enc_char_boundary(self_enc, self_bytes, boundary) {
+                continue;
             }
             return Ok(Value::bool(true));
         }
@@ -1720,6 +1716,35 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
     }
     // A byte is NOT at a character boundary if it's a continuation byte (10xxxxxx)
     (bytes[pos] & 0xC0) != 0x80
+}
+
+/// True iff byte offset `pos` is the head of a character in `enc`.
+/// Used so `start_with?` / `end_with?` only accept a prefix/suffix
+/// that aligns to a character (CRuby: a match must start at a char
+/// head). UTF-16 is surrogate-aware — a low surrogate (the 2nd half
+/// of an astral character) is not a head. Encodings other than
+/// UTF-8/16/32 keep the previous "no boundary constraint" behaviour.
+fn enc_char_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> bool {
+    use crate::value::Encoding as E;
+    if pos == 0 || pos >= bytes.len() {
+        return true;
+    }
+    match enc {
+        E::Utf8 => is_utf8_char_boundary(bytes, pos),
+        E::Utf16Le | E::Utf16Be => {
+            if pos % 2 != 0 || pos + 1 >= bytes.len() {
+                return pos % 2 == 0;
+            }
+            let u = if matches!(enc, E::Utf16Be) {
+                u16::from_be_bytes([bytes[pos], bytes[pos + 1]])
+            } else {
+                u16::from_le_bytes([bytes[pos], bytes[pos + 1]])
+            };
+            !(0xDC00..=0xDFFF).contains(&u)
+        }
+        E::Utf32Le | E::Utf32Be => pos % 4 == 0,
+        _ => true,
+    }
 }
 
 ///
@@ -11391,6 +11416,28 @@ mod tests {
             r#""aあbいcb".encode("EUC-JP").rpartition("b").map { |x| x.encode("UTF-8") }"#,
             r#"begin; "aあbいc".encode("EUC-JP").rpartition("い"); :no; rescue Encoding::CompatibilityError; :ce; end"#,
             r#"begin; ("ab".encode("EUC-JP"))[5] = "x"; :no; rescue IndexError; :ie; end"#,
+        ]);
+    }
+
+    #[test]
+    fn start_end_with_char_boundary_by_encoding() {
+        run_tests(&[
+            // UTF-8: a suffix/prefix that splits a multibyte char does
+            // not match (must align to a character head).
+            r#""\xC3\xA9".end_with?("\xA9")"#,
+            r#""\xe3\x81\x82".end_with?("\x82")"#,
+            r#""café".end_with?("é")"#,
+            r#""café".start_with?("c")"#,
+            // UTF-16BE: a surrogate pair is ONE 4-byte character, so a
+            // 2-byte suffix landing inside it must not match; an
+            // aligned suffix does.
+            r#"s = "\xd8\x00\xdc\x00".dup.force_encoding("UTF-16BE")
+               s.end_with?("\xdc\x00".dup.force_encoding("UTF-16BE"))"#,
+            r#"s = "\xd8\x00\xdc\x00".dup.force_encoding("UTF-16BE")
+               s.end_with?("\x00\xdc\x00".dup.force_encoding("UTF-16BE"))"#,
+            r#""abcd".encode("UTF-16BE").end_with?("cd".encode("UTF-16BE"))"#,
+            r#""abcd".encode("UTF-16LE").start_with?("ab".encode("UTF-16LE"))"#,
+            r#""abcd".encode("UTF-32BE").end_with?("d".encode("UTF-32BE"))"#,
         ]);
     }
 }
