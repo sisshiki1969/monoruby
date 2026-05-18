@@ -592,7 +592,7 @@ fn gets(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 .store
                 .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(n))?;
             globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
-            let s = Value::string(buf);
+            let s = tagged_read_string(globals, self_, buf.into_bytes(), false);
             globals.set_gvar(IdentId::get_id("$_"), s);
             Ok(s)
         }
@@ -787,7 +787,12 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if buf.is_empty() && length.is_some() && length != Some(0) {
         return Ok(Value::nil());
     }
-    Ok(Value::string_from_vec(buf))
+    Ok(tagged_read_string(
+        globals,
+        lfp.self_val(),
+        buf,
+        length.is_some(),
+    ))
 }
 
 ///
@@ -1269,16 +1274,19 @@ fn io_to_io(
 #[monoruby_builtin]
 fn io_readlines(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let mut result = Vec::new();
-    while let Some(s) = io.read_line()? {
-        result.push(Value::string(s));
+    let mut lines = Vec::new();
+    while let Some(s) = self_.as_io_inner_mut().read_line()? {
+        lines.push(s);
     }
+    let result = lines
+        .into_iter()
+        .map(|s| tagged_read_string(globals, self_, s.into_bytes(), false))
+        .collect();
     Ok(Value::array_from_vec(result))
 }
 
@@ -2129,6 +2137,62 @@ fn set_encoding(
     Ok(self_)
 }
 
+/// An Encoding object -> the internal `Encoding` enum (folding the
+/// names the enum doesn't represent distinctly down to ASCII-8BIT).
+fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
+    super::encoding::encoding_object_name(globals, v)
+        .and_then(|n| crate::value::Encoding::try_from_str(&n).ok())
+}
+
+/// Build the String returned by a read: tag it with the IO's external
+/// encoding, transcoding external -> internal when an internal encoding
+/// is set. `sized` reads (an explicit byte count) return ASCII-8BIT,
+/// matching CRuby.
+fn tagged_read_string(
+    globals: &mut Globals,
+    io: Value,
+    bytes: Vec<u8>,
+    sized: bool,
+) -> Value {
+    use crate::value::Encoding as E;
+    if sized {
+        let mut s = Value::string_from_vec(bytes);
+        s.as_rstring_inner_mut().set_encoding(E::Ascii8);
+        return s;
+    }
+    let ext_v = read_io_encoding(globals, io, false);
+    let int_v = read_io_encoding(globals, io, true);
+    let ext = enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8);
+    let intl = if int_v.is_nil() {
+        None
+    } else {
+        enc_obj_to_enum(globals, int_v)
+    };
+    let (out, final_enc) = match intl {
+        Some(i) if i != ext => {
+            let opts = super::encoding::TranscodeOpts {
+                invalid_replace: false,
+                undef_replace: false,
+                replace: None,
+            };
+            match super::encoding::transcode_bytes_with_opts(
+                &bytes,
+                ext,
+                i,
+                &opts,
+                &globals.store,
+            ) {
+                Ok(b) => (b, i),
+                Err(_) => (bytes, ext),
+            }
+        }
+        _ => (bytes, ext),
+    };
+    let mut s = Value::string_from_vec(out);
+    s.as_rstring_inner_mut().set_encoding(final_enc);
+    s
+}
+
 /// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
 fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
     let id = IdentId::get_id(if internal { ENC_INT_IVAR } else { ENC_EXT_IVAR });
@@ -2802,6 +2866,50 @@ mod tests {
                  r.internal_encoding.nil?, $stdin.internal_encoding.nil?]
             r.close; w.close
             v
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_read_encoding_tagging() {
+        // NB: only explicit encodings are asserted — the default
+        // external encoding differs between the sandbox CRuby (LANG
+        // unset => US-ASCII) and CI, so asserting it would be flaky.
+        run_test(
+            r#"
+            File.write("/tmp/mr_rd.txt", "hello world\nsecond\n")
+            r = []
+            File.open("/tmp/mr_rd.txt", "r") do |f|
+              r << f.read   # content only (encoding is env-dependent)
+            end
+            File.open("/tmp/mr_rd.txt", "r") do |f|
+              r << f.read(5).encoding.name
+              r << f.read(0).encoding.name
+            end
+            File.open("/tmp/mr_rd.txt", "r:iso-8859-1") do |f|
+              r << f.read.encoding.name
+            end
+            File.open("/tmp/mr_rd.txt", "r:iso-8859-1") do |f|
+              r << f.gets.encoding.name
+            end
+            File.open("/tmp/mr_rd.txt", "r:iso-8859-1") do |f|
+              r << f.readlines.map { |l| l.encoding.name }
+            end
+            File.unlink("/tmp/mr_rd.txt")
+            r
+            "#,
+        );
+        run_test(
+            r#"
+            File.write("/tmp/mr_rd2.txt", "abc")
+            r = []
+            File.open("/tmp/mr_rd2.txt", "r:utf-8:utf-16le") do |f|
+              s = f.read
+              r << s.encoding.name
+              r << s.bytes
+            end
+            File.unlink("/tmp/mr_rd2.txt")
+            r
             "#,
         );
     }
