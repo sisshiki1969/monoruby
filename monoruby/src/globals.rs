@@ -118,6 +118,13 @@ pub struct Globals {
     pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// address of invokers.
     pub(crate) invokers: Invokers,
+    /// Stack of the *user* block arities for the `Enumerator`s
+    /// currently being driven via `Enumerator#each`. A predicate-
+    /// consuming method (e.g. `Set#divide`) driven through its
+    /// no-block enumerator only sees the internal yielder proc as its
+    /// block, so it reads the real arity from here instead. A stack
+    /// supports nested enumerators.
+    pub(crate) enum_block_arity: Vec<i64>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -150,6 +157,24 @@ impl alloc::GC<RValue> for Globals {
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
         self.symbol_names.values().for_each(|v| v.mark(alloc));
+    }
+}
+
+impl Globals {
+    /// Record the arity of the user block driving the current
+    /// `Enumerator#each`, so a predicate-consuming method invoked
+    /// through its no-block enumerator (which only sees the yielder
+    /// proc) can recover the real arity.
+    pub(crate) fn push_enum_block_arity(&mut self, arity: i64) {
+        self.enum_block_arity.push(arity);
+    }
+
+    pub(crate) fn pop_enum_block_arity(&mut self) {
+        self.enum_block_arity.pop();
+    }
+
+    pub(crate) fn current_enum_block_arity(&self) -> Option<i64> {
+        self.enum_block_arity.last().copied()
     }
 }
 
@@ -189,6 +214,7 @@ impl Globals {
             loaded_features,
             symbol_names: HashMap::default(),
             invokers,
+            enum_block_arity: Vec::new(),
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]

@@ -175,9 +175,19 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(self_val.into());
     };
 
+    // Record the user block's arity so a predicate-consuming method
+    // driven through its no-block enumerator (e.g. `Set#divide`, which
+    // only receives the internal yielder proc as its block) can pick
+    // the right mode from the real arity.
+    let blk_arity = data
+        .func_id()
+        .map(|fid| globals[fid].arity())
+        .unwrap_or(-1);
     let internal = Fiber::from(self_val.proc);
     vm.temp_push(internal.into());
+    globals.push_enum_block_arity(blk_arity);
     let res = each_inner(vm, globals, internal, &data, self_val);
+    globals.pop_enum_block_arity();
     vm.temp_pop();
     res
 }
