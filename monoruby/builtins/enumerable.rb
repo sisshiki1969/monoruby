@@ -136,8 +136,13 @@ module Enumerable
   def map
     return self.to_enum(:map) unless block_given?
     res = []
-    __gather_each do |x|
-      res << yield(x)
+    # The user block is called with the *original* values `each`
+    # yields (arity-adaptive), not the packed element: for
+    # `yield 1, 2` a `{ |e| }` block sees `1`, a `{ |a, b| }` block
+    # sees `1, 2` (matches CRuby `rb_yield_values2`). Internal
+    # packed-element callers use `__gather_each` directly instead.
+    self.each do |*vs|
+      res << yield(*vs)
     end
     res
   end
@@ -357,7 +362,9 @@ module Enumerable
       n = n.to_int unless n.is_a?(Integer)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
-      self.map { |x| [yield(x), x] }.sort_by { |pair| pair[0] }.first(n).map { |pair| pair[1] }
+      pairs = []
+      __gather_each { |x| pairs << [yield(x), x] }
+      pairs.sort_by { |pair| pair[0] }.first(n).map { |pair| pair[1] }
     end
   end
 
@@ -500,7 +507,14 @@ module Enumerable
 
   def sort_by
     return self.to_enum(:sort_by) unless block_given?
-    map { |x| [yield(x), x] }.sort { |a, b| a[0] <=> b[0] }.map { |x| x[1] }
+    # Use the *packed* element (`__gather_each`) — `sort_by` treats a
+    # multi-value `yield` as a single Array element. (Public `map`
+    # forwards the raw values arity-adaptively, which is the wrong
+    # shape here.)
+    pairs = []
+    __gather_each { |x| pairs << [yield(x), x] }
+    pairs.sort! { |a, b| a[0] <=> b[0] }
+    pairs.map { |p| p[1] }
   end
 
   def max_by(n = nil)
@@ -525,7 +539,9 @@ module Enumerable
       n = n.to_int unless n.is_a?(Integer)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
-      self.map { |x| [yield(x), x] }.sort_by { |pair| pair[0] }.last(n).reverse.map { |pair| pair[1] }
+      pairs = []
+      __gather_each { |x| pairs << [yield(x), x] }
+      pairs.sort_by { |pair| pair[0] }.last(n).reverse.map { |pair| pair[1] }
     end
   end
 
@@ -561,18 +577,35 @@ module Enumerable
   end
   alias member? include?
 
-  def first(n = nil)
-    if n.nil?
-      __gather_each { |x| return x }
-      nil
-    else
-      res = []
-      __gather_each do |x|
-        break if res.size >= n
-        res << x
-      end
-      res
+  def first(*args)
+    if args.size > 1
+      raise ArgumentError,
+            "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
+    if args.empty?
+      __gather_each { |x| return x }
+      return nil
+    end
+    n = args[0]
+    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
+    unless n.is_a?(Integer)
+      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+    end
+    raise ArgumentError, "negative array size" if n < 0
+    # CRuby converts the count with NUM2LONG; a Bignum that does not
+    # fit in a C long raises RangeError.
+    if n > 0x7fff_ffff_ffff_ffff
+      raise RangeError, "bignum too big to convert into `long'"
+    end
+    res = []
+    return res if n == 0
+    # Push-then-break so exactly `n` elements are consumed (the
+    # underlying `each` is not advanced past what is needed).
+    __gather_each do |x|
+      res << x
+      break if res.size >= n
+    end
+    res
   end
 
   def to_a(*args)
