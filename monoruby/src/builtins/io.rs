@@ -1591,28 +1591,76 @@ fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Per-encoding character width from the lead byte (mirrors
+/// `CharByteIter::next`). UTF-8 is handled separately because it needs
+/// post-read validation; this returns 0 for it.
+fn char_width_from_lead(enc: crate::value::Encoding, b: u8) -> usize {
+    use crate::value::Encoding as E;
+    match enc {
+        E::Ascii8 | E::UsAscii | E::Iso8859(_) | E::Other(_) | E::Iso2022Jp => 1,
+        E::EucJp => match b {
+            0x8e => 2,
+            0x8f => 3,
+            0xa1..=0xfe => 2,
+            _ => 1,
+        },
+        E::Sjis(_) => match b {
+            0x81..=0x9f | 0xe0..=0xfc => 2,
+            _ => 1,
+        },
+        E::Utf16Le | E::Utf16Be => 2,
+        E::Utf32Le | E::Utf32Be => 4,
+        E::Utf8 => 0,
+    }
+}
+
+/// Read one character of `enc` from the stream. UTF-8 delegates to
+/// `read_one_char` so the (validated, EOF-tolerant) UTF-8 path stays
+/// byte-identical to before.
+fn read_one_char_enc(io: &mut IoInner, enc: crate::value::Encoding) -> Result<Vec<u8>> {
+    if enc == crate::value::Encoding::Utf8 {
+        return read_one_char(io);
+    }
+    let first = io.read(Some(1))?;
+    if first.is_empty() {
+        return Ok(vec![]);
+    }
+    let total = char_width_from_lead(enc, first[0]);
+    let mut buf = first;
+    while buf.len() < total {
+        let next = io.read(Some(total - buf.len()))?;
+        if next.is_empty() {
+            break;
+        }
+        buf.extend_from_slice(&next);
+    }
+    Ok(buf)
+}
+
 ///
 /// ### IO#getc
 /// - getc -> String | nil
 ///
-/// Reads one UTF-8 character (1-4 bytes) and returns it as a String, or
-/// `nil` at EOF.
+/// Reads one character in the stream's external encoding and returns it
+/// as a String (transcoded to the internal encoding when one is set),
+/// or `nil` at EOF.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/getc.html]
 #[monoruby_builtin]
 fn io_getc(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = read_one_char(io)?;
+    let ext_obj = read_io_encoding(globals, self_, false);
+    let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
+    let buf = read_one_char_enc(self_.as_io_inner_mut(), ext)?;
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
-        Ok(Value::string_from_vec(buf))
+        Ok(tagged_read_string(globals, self_, buf, false))
     }
 }
 
@@ -2909,6 +2957,52 @@ mod tests {
               r << s.bytes
             end
             File.unlink("/tmp/mr_rd2.txt")
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_getc_readchar_encoding() {
+        // EUC-JP external, no internal: one EUC-JP char, tagged EUC-JP.
+        run_test(
+            r#"
+            File.binwrite("/tmp/mr_gc.txt", [164, 162, 164, 164].pack("C*"))
+            r = []
+            File.open("/tmp/mr_gc.txt", "r:euc-jp") do |f|
+              c = f.getc
+              r << c.bytes
+              r << c.encoding.name
+              r << f.readchar.bytes
+            end
+            File.unlink("/tmp/mr_gc.txt")
+            r
+            "#,
+        );
+        // external EUC-JP -> internal UTF-8: transcoded char, UTF-8 tag.
+        // (Assert bytes/name only — printing the raw char hits a
+        // sandbox-CRuby locale inspect artifact.)
+        run_test(
+            r#"
+            File.binwrite("/tmp/mr_gc2.txt", [164, 162].pack("C*"))
+            r = []
+            File.open("/tmp/mr_gc2.txt", "r:euc-jp:utf-8") do |f|
+              c = f.readchar
+              r << c.encoding.name
+              r << c.bytes
+            end
+            File.unlink("/tmp/mr_gc2.txt")
+            r
+            "#,
+        );
+        // Plain UTF-8 multibyte still works (regression guard).
+        run_test(
+            r#"
+            File.write("/tmp/mr_gc3.txt", "A" + [0xC3, 0xA8].pack("C*").force_encoding("UTF-8"))
+            r = File.open("/tmp/mr_gc3.txt", "r:utf-8") do |f|
+              [f.getc.bytes, f.getc.bytes, f.getc]
+            end
+            File.unlink("/tmp/mr_gc3.txt")
             r
             "#,
         );
