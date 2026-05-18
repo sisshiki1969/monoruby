@@ -1159,19 +1159,11 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 first = false;
                 let v_str = inspect_value_for_hash(vm, globals, v)?;
                 if let Some(sym) = k.try_symbol() {
-                    // Use the symbol's #inspect form ("name" / ":\"foo\"") to
-                    // decide whether the shorthand `name:` is valid. If the
-                    // canonical inspect quotes the symbol, mirror that here
-                    // and write `"name":`; otherwise use bare `name:`.
-                    let sym_inspect = crate::value::inspect_symbol(sym);
-                    let key_str = if let Some(rest) = sym_inspect.strip_prefix(":\"") {
-                        // `:\"...\"` -> `"..."`
-                        let inner = rest.strip_suffix('"').unwrap_or(rest);
-                        format!("\"{inner}\"")
-                    } else {
-                        // `:name` -> `name`
-                        sym_inspect.trim_start_matches(':').to_string()
-                    };
+                    // Hash short form: bare `name:` only for plain-
+                    // identifier symbols; operators / `=`-setters /
+                    // `@`/`$` / quoted names use `"name":` (stricter
+                    // than `Symbol#inspect`).
+                    let key_str = crate::value::symbol_hash_label(sym);
                     s.push_str(&format!("{key_str}: {v_str}"));
                 } else {
                     let k_str = inspect_value_for_hash(vm, globals, k)?;
@@ -3775,6 +3767,28 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn hash_inspect_symbol_key_label_quoting() {
+        // Hash short form: bare `name:` only for plain-identifier
+        // symbols (optional single trailing ?/!); operators,
+        // `=`-setters, `@`/`$`-prefixed, digit-leading, embedded
+        // spaces/dashes, and the empty symbol use `"name":`.
+        // (Non-ASCII-identifier keys like `:"あ"` are bare on CI but
+        // would false-fail here against the sandbox's broken-locale
+        // CRuby — covered by `core/hash/inspect_spec.rb` instead.)
+        run_tests(&[
+            r#"
+            h = {}
+            [:a, :A, :_x, :foo?, :foo!, :"foo=", :"0", :"!", :"+",
+             :"a b", :"a-b", :"", :x1, :CONST, :"1abc",
+             :"@iv", :"$g", :"==", :"[]", :"[]="].each { |s| h[s] = 1 }
+            h.inspect
+            "#,
+            r#"{ a: 1, "b c": 2, "+": 3 }.to_s"#,
+            r#"{ foo?: 1, bar!: 2, "baz=": 3 }.inspect"#,
+        ]);
     }
 
     #[test]

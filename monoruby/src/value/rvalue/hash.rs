@@ -320,7 +320,7 @@ impl HashmapInner {
                     let k_inspect = k.inspect_inner(store, set);
                     let v_inspect = v.inspect_inner(store, set);
                     let s = if let Some(k) = k.try_symbol() {
-                        format!("{k}: {v_inspect}")
+                        format!("{}: {v_inspect}", crate::value::symbol_hash_label(k))
                     } else {
                         format!("{k_inspect} => {v_inspect}")
                     };

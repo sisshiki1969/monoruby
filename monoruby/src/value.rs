@@ -1537,6 +1537,52 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
     res
 }
 
+/// Hash short-form key label for a symbol. CRuby renders `{ sym: v }`
+/// where `sym` is the bare name only if it is a plain identifier
+/// (optionally with a single trailing `?`/`!`); operators, `=`-suffix
+/// setters, `@`/`$`-prefixed names, digit-leading or empty names use
+/// the quoted `"name":` form. This is *stricter* than
+/// `Symbol#inspect`'s `is_simple_symbol` (which leaves operators
+/// unquoted), so it needs its own predicate.
+pub(crate) fn symbol_hash_label(id: IdentId) -> String {
+    let name = id.get_ident_name_clone();
+    if let Some(s) = name.as_str() {
+        if is_label_symbol(s) {
+            return s.to_string();
+        }
+    }
+    let (bytes, enc): (&[u8], Encoding) = match &name {
+        IdentName::Utf8(s) => (
+            s.as_bytes(),
+            if s.is_ascii() {
+                Encoding::UsAscii
+            } else {
+                Encoding::Utf8
+            },
+        ),
+        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+    };
+    let inner = RStringInner::from_encoding(bytes, enc);
+    format!("\"{}\"", inner.inspect())
+}
+
+/// `true` iff `s` is a plain-identifier symbol name (with an optional
+/// single trailing `?`/`!`) — the names CRuby renders bare as a Hash
+/// short-form key.
+fn is_label_symbol(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let body = match s.as_bytes().last() {
+        Some(b'!') | Some(b'?') => &s[..s.len() - 1],
+        _ => s,
+    };
+    if body.is_empty() {
+        return false;
+    }
+    is_plain_identifier(body)
+}
+
 /// Test whether a symbol name can be rendered without surrounding quotes.
 fn is_simple_symbol(name: &IdentName) -> bool {
     let s = match name.as_str() {
