@@ -239,7 +239,18 @@ pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)>
     }
 
     match inner(path) {
-        Ok(res) => Ok(res),
+        Ok(res) => {
+            // Closure-measurement hook (Phase 1 of decoupling from a host
+            // Ruby): when MONORUBY_TRACE_LOAD is set, emit every resolved
+            // load path so the transitive stdlib closure can be captured
+            // by running the test/spec suite and filtering paths that
+            // resolve under the CRuby $LOAD_PATH vs ~/.monoruby. Gated by
+            // an env var so it has zero cost in normal runs.
+            if std::env::var_os("MONORUBY_TRACE_LOAD").is_some() {
+                eprintln!("MONORUBY_LOADED\t{}", res.1.display());
+            }
+            Ok(res)
+        }
         Err(err) => Err(MonorubyErr::cant_load(Some(err), path)),
     }
 }
