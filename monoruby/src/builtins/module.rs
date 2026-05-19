@@ -3087,6 +3087,31 @@ mod tests {
     }
 
     #[test]
+    fn toplevel_protected_and_direct() {
+        // obj.protected_methods(true) includes Object's own protected
+        // instance methods (incl_object walk); the `(false)` direct
+        // variants; and Kernel's instance view must not bleed Object's.
+        run_test(
+            r#"
+            class Object
+              def tp1; 1; end
+              protected :tp1
+              def tp2; 2; end
+            end
+            Object.send(:private, :tp2)
+            r = []
+            r << Object.protected_instance_methods(false).include?(:tp1)
+            r << Object.protected_methods(true).include?(:tp1)
+            r << Object.new.protected_methods(true).include?(:tp1)
+            r << Object.private_methods(false).include?(:tp2)
+            r << Object.protected_methods(false).include?(:tp1)
+            r << Kernel.protected_instance_methods(true).include?(:tp1)
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn test_teq() {
         run_tests(&[
             "Integer === 4",
