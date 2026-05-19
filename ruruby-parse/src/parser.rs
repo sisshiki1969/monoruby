@@ -654,13 +654,6 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                 };
                 if reserved_kw.is_none() && self.consume_punct(Punct::Assign)? {
                     // Optional param
-                    let default = if let Some(Punct::BitOr) = terminator {
-                        let node = self.parse_primary()?;
-                        node
-                    } else {
-                        self.parse_arg(false)?
-                    };
-                    loc = loc.merge(self.prev_loc());
                     match state {
                         Kind::Required => state = Kind::Optional,
                         Kind::Optional => {}
@@ -671,7 +664,20 @@ impl<'a, OuterContext: LocalsContext> Parser<'a, OuterContext> {
                             ));
                         }
                     };
+                    // The parameter is in scope (as `nil`) while its own
+                    // default expression is parsed, matching CRuby:
+                    // `->(a = a) { a }` is `nil`, `->(a = a + 1) {}`
+                    // raises NoMethodError. Register the name *before*
+                    // parsing the default so a self-reference resolves to
+                    // the local var instead of a method call on `self`.
                     self.new_param(&name, loc)?;
+                    let default = if let Some(Punct::BitOr) = terminator {
+                        let node = self.parse_primary()?;
+                        node
+                    } else {
+                        self.parse_arg(false)?
+                    };
+                    loc = loc.merge(self.prev_loc());
                     args.push(FormalParam::optional(name, default, loc));
                 } else if self.consume_punct_no_term(Punct::Colon)? {
                     // Keyword param

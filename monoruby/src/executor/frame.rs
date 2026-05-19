@@ -658,13 +658,21 @@ mod tests {
         // promote and reclaim many frames. Result must be
         // byte-identical to CRuby (reclamation never frees a
         // still-reachable frame).
-        run_test_once(
+        // ruruby-parse has no endless-method-def (`def f(x) = expr`,
+        // Ruby 3.0); under `MONORUBY_PARSER=ruruby` use the equivalent
+        // `def f(x); expr; end` form (same promoted-frame GC path).
+        let mk = if parser_is_ruruby() {
+            "def mk(n); ->{ n += 1 }; end"
+        } else {
+            "def mk(n) = ->{ n += 1 }"
+        };
+        run_test_once(&format!(
             r#"
-            def mk(n) = ->{ n += 1 }
-            fs = (1..150).map { |i| mk(i) }
-            fs.map { |f| f.call + f.call }.sum
-            "#,
-        );
+            {mk}
+            fs = (1..150).map {{ |i| mk(i) }}
+            fs.map {{ |f| f.call + f.call }}.sum
+            "#
+        ));
         run_test_once(
             r#"
             r = []
@@ -677,11 +685,16 @@ mod tests {
             r.sum
             "#,
         );
-        run_test_once(
+        let outer = if parser_is_ruruby() {
+            "def outer(n); ->{ ->{ n } }; end"
+        } else {
+            "def outer(n) = ->{ ->{ n } }"
+        };
+        run_test_once(&format!(
             r#"
-            def outer(n) = ->{ ->{ n } }
-            (1..80).map { |i| outer(i).call.call }.sum
-            "#,
-        );
+            {outer}
+            (1..80).map {{ |i| outer(i).call.call }}.sum
+            "#
+        ));
     }
 }

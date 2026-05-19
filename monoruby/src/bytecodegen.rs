@@ -615,6 +615,15 @@ impl<'a> BytecodeGen<'a> {
             let local = local.into();
             let next = self.new_label();
             self.emit_check_local(local, next);
+            // The parameter is in scope (as `nil`) while its own
+            // default expression runs: CRuby `-> (a = a) { a }` is
+            // `nil`, `-> (a = a + 1) {}` raises NoMethodError. The opt
+            // slot is `None` ("not given") for `CheckLocal`; once we
+            // fall through (not given) initialize it to `nil` so a
+            // self-reference reads `nil` instead of the uninitialized
+            // sentinel (which made the proc invoker return an
+            // error-less `None` and abort).
+            self.emit_nil(local);
             self.gen_store_expr(local, initializer)?;
             self.apply_label(next);
         }
@@ -1718,5 +1727,26 @@ impl UnOpK {
             3 => UnOpK::Not,
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn optional_param_self_reference() {
+        // An optional parameter is in scope (as `nil`) while its own
+        // default expression is evaluated. `->(a = a) { a }` yields
+        // `nil`; `->(a = a + 1) {}` raises NoMethodError on nil.
+        // Previously the slot held the "not given" sentinel, so a
+        // self-reference made the proc invoker return an error-less
+        // `None` and abort the process.
+        run_test(r#"->(a = a) { a }.call"#);
+        run_test(r#"->(x, y = x) { [x, y] }.call(5)"#);
+        run_test(r#"->(a = 1, b = a) { [a, b] }.call"#);
+        run_test_error(r#"->(a = a + 1) { a }.call"#);
+        run_test(r#"def m(a = a); a; end; m"#);
+        run_test(r#"def f(x, y = x, z = y + 1); [x, y, z]; end; f(3)"#);
     }
 }
