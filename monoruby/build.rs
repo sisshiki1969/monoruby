@@ -90,7 +90,36 @@ fn main() {
             match Command::new(&ruby).args(["-e", "puts($:)"]).output() {
                 Ok(output) => {
                     let dest_path = lib_path.join("library_path");
-                    let load_path = std::str::from_utf8(&output.stdout).unwrap();
+                    let mut load_path =
+                        std::str::from_utf8(&output.stdout).unwrap().to_string();
+                    // Per the decoupling policy: the pure-Ruby standard
+                    // library and *default* gems are vendored
+                    // (monoruby/vendor/ruby-stdlib, copied to
+                    // ~/.monoruby/lib which is prepended to $LOAD_PATH so
+                    // it shadows the host). *Non-default* gems
+                    // (ostruct/base64/Rails/… — anything `gem install`ed)
+                    // are intentionally still resolved from the host gem
+                    // directory at runtime, so capture every installed
+                    // gem's require paths and append them. Default-gem
+                    // entries here are harmless: the vendored copies take
+                    // priority. rubygems normally adds these lazily on
+                    // `require`; the vendored rubygems falls back to
+                    // $LOAD_PATH, so they must be present up front.
+                    if let Ok(g) = Command::new(&ruby)
+                        .args([
+                            "-e",
+                            "Gem::Specification.latest_specs(true).each{|s| \
+                             s.require_paths.each{|p| d=File.join(s.full_gem_path,p); \
+                             puts d if Dir.exist?(d)}}",
+                        ])
+                        .output()
+                        && g.status.success()
+                    {
+                        if !load_path.ends_with('\n') {
+                            load_path.push('\n');
+                        }
+                        load_path.push_str(std::str::from_utf8(&g.stdout).unwrap());
+                    }
                     fs::write(dest_path, load_path).unwrap();
                 }
                 Err(_) => {
