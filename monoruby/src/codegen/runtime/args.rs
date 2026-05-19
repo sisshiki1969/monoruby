@@ -607,9 +607,23 @@ fn hash_splat_and_kw_rest(
         }
         if unused > 0 && globals[callee].kw_rest().is_none() {
             for (k, _) in h.iter() {
-                let sym = k.as_symbol();
-                if !globals[callee].kw_names().contains(&sym) {
-                    return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{sym}")));
+                // A non-Symbol key (e.g. a String) can never name a
+                // keyword parameter, so it is always "unknown" here.
+                // CRuby reports it via the key's `inspect`
+                // (`unknown keyword: "b"`); a Symbol key uses `:name`.
+                match k.try_symbol() {
+                    Some(sym) if globals[callee].kw_names().contains(&sym) => {}
+                    Some(sym) => {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "unknown keyword: :{sym}"
+                        )));
+                    }
+                    None => {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "unknown keyword: {}",
+                            k.inspect(&globals.store)
+                        )));
+                    }
                 }
             }
         }
@@ -687,5 +701,18 @@ mod tests {
             B3.new.a(1, 2)
             "#,
         );
+    }
+
+    #[test]
+    fn kwarg_nonsymbol_key_no_panic() {
+        // A non-Symbol key passed where keyword params are expected
+        // (no **rest) is an "unknown keyword" reported via inspect;
+        // previously `as_symbol().unwrap()` aborted the process.
+        run_test_error(r#"def m(a:); a; end; m("a"=>1)"#);
+        run_test_error(r#"def m(a:); end; m(:a=>1, "b"=>2)"#);
+        run_test_error(r#"def m(a:); end; m(:a=>1, :c=>2)"#);
+        // **rest accepts non-Symbol keys verbatim.
+        run_test(r#"def m(**k); k; end; m("a"=>1, :b=>2)"#);
+        run_test(r#"def m(a:); a; end; m(a: 5)"#);
     }
 }
