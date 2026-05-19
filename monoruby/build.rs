@@ -71,9 +71,18 @@ fn main() {
         (PathBuf::from("gem"), lib_dir.clone()),
     ];
 
-    //for (src, _) in &sources {
-    //    println!("cargo:rerun-if-changed={}", src.display());
-    //}
+    // Re-run when the installed sources change so edits to the vendored
+    // stdlib or monoruby's stubs reinstall on the next build.
+    for (src, _) in &sources {
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
+    // Self-heal: track a stamp file we write into ~/.monoruby. If the
+    // user deletes ~/.monoruby, the stamp disappears, Cargo sees a
+    // tracked input change and re-runs this script, repopulating the
+    // directory. Without this, a plain `cargo build` after `rm -rf
+    // ~/.monoruby` would NOT recreate it (the build script is cached).
+    let stamp = lib_path.join(".build-stamp");
+    println!("cargo:rerun-if-changed={}", stamp.display());
 
     if !lib_path.exists() {
         fs::create_dir(&lib_path).unwrap();
@@ -160,6 +169,11 @@ fn main() {
     for (src, dst) in &sources {
         copy_dir_all(src, dst).unwrap();
     }
+
+    // Write the stamp last so its presence means a complete install.
+    // Its path is tracked above via cargo:rerun-if-changed, so deleting
+    // ~/.monoruby makes the next build re-run this script.
+    fs::write(&stamp, env!("CARGO_PKG_VERSION")).unwrap();
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
