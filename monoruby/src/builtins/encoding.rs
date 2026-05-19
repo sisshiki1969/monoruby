@@ -1269,6 +1269,8 @@ pub(super) fn encoding_constant_name(enc: Encoding) -> &'static str {
             0 => "UTF_7",
             1 => "CP50220",
             2 => "CP50221",
+            3 => "UTF_16",
+            4 => "UTF_32",
             _ => "ASCII_8BIT",
         },
     }
@@ -3354,17 +3356,20 @@ fn enc_inspect(
 /// match to match CRuby observed behaviour.
 fn is_cruby_dummy_name(name: &str) -> bool {
     let normalized = name.to_uppercase().replace('-', "_");
+    // CRuby's actual dummy-encoding set (Emacs-Mule / CESU-8 /
+    // stateless-ISO-2022-JP are *not* dummy in CRuby — they are
+    // ASCII-compatible).
     matches!(
         normalized.as_str(),
         "UTF_7"
             | "UTF_16"
             | "UTF_32"
-            | "EMACS_MULE"
             | "CP50220"
             | "CP50221"
             | "ISO_2022_JP"
-            | "STATELESS_ISO_2022_JP"
-            | "CESU_8"
+            | "ISO_2022_JP_2"
+            | "ISO_2022_JP_KDDI"
+            | "IBM037"
     )
 }
 
@@ -3420,7 +3425,6 @@ fn is_ascii_compatible_encoding(name: &str) -> bool {
             | "UTF-32BE"
             | "UTF-32LE"
             | "ISO-2022-JP"
-            | "STATELESS-ISO-2022-JP"
             | "CP50220"
             | "CP50221"
             | "UTF-7"
@@ -4467,6 +4471,33 @@ mod tests {
             // Emacs-Mule / CESU-8 stay ASCII-compatible (unchanged)
             r#""abcd".dup.force_encoding("Emacs-Mule").inspect"#,
             r#""abcd".dup.force_encoding("CESU-8").inspect"#,
+        ]);
+    }
+
+    #[test]
+    fn dummy_encoding_classification() {
+        run_tests(&[
+            // CRuby dummy set: dummy => not ASCII-compatible; the
+            // ASCII-only-content `to_sym` is byte-escaped + quoted.
+            r#"Encoding.list.select(&:dummy?).all? { |e| !e.ascii_compatible? }"#,
+            r#"Encoding.list.select(&:dummy?).map { |e|
+                 "abcd".dup.force_encoding(e).to_sym.inspect
+               }.uniq"#,
+            // Emacs-Mule / CESU-8 / stateless-ISO-2022-JP are NOT dummy
+            // and ARE ASCII-compatible (CRuby).
+            r#"[Encoding::CESU_8.dummy?, Encoding::Emacs_Mule.dummy?,
+                Encoding::STATELESS_ISO_2022_JP.dummy?]"#,
+            r#"[Encoding::CESU_8.ascii_compatible?,
+                Encoding::Emacs_Mule.ascii_compatible?,
+                Encoding::STATELESS_ISO_2022_JP.ascii_compatible?]"#,
+            r#""abcd".dup.force_encoding("Emacs-Mule").to_sym.inspect"#,
+            r#""abcd".dup.force_encoding("CESU-8").to_sym.inspect"#,
+            // bare UTF-16/UTF-32 are dummy (distinct from the LE codecs)
+            r#"[Encoding::UTF_16.dummy?, Encoding::UTF_16LE.dummy?]"#,
+            r#""abcd".dup.force_encoding("UTF-16").to_sym.inspect"#,
+            r#""abcd".dup.force_encoding("UTF-32").to_sym.inspect"#,
+            r#"Encoding.find("UTF-16").name"#,
+            r#""x".encode("UTF-16LE").bytes.size"#,
         ]);
     }
 
