@@ -84,6 +84,25 @@ pub struct Allocator<T> {
     pub gc_enabled: bool,
     /// Threshold of malloced memory for invoking GC.
     pub malloc_threshold: usize,
+    /// Registry of promoted heap frames (`Box<[u64]>` buffers that
+    /// `move_frame_to_heap` / `heap_frame` previously leaked via
+    /// `Box::into_raw`). Keyed by the LFP address. Reclaimed by
+    /// `sweep_heap_frames` after the mark phase: a frame must stay
+    /// unmarked for two consecutive GC cycles before its buffer is
+    /// freed (a one-cycle grace covering the promote→root-store
+    /// window).
+    heap_frames: std::collections::HashMap<usize, FrameRec>,
+}
+
+#[derive(Clone, Copy)]
+struct FrameRec {
+    /// Base pointer of the original `Box<[u64]>` allocation.
+    base: *mut u64,
+    /// Length of that slice in `u64` units.
+    len: usize,
+    marked: bool,
+    /// Consecutive GC cycles seen unmarked.
+    unmarked_age: u8,
 }
 
 impl<T: GCBox> Allocator<T> {
@@ -107,6 +126,76 @@ impl<T: GCBox> Allocator<T> {
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
+            heap_frames: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register a promoted heap frame so the GC can reclaim its
+    /// `Box<[u64]>` buffer once it becomes unreachable.
+    pub(crate) fn register_heap_frame(&mut self, lfp_addr: usize, base: *mut u64, len: usize) {
+        self.heap_frames.insert(
+            lfp_addr,
+            FrameRec {
+                base,
+                len,
+                // A freshly promoted frame is conceptually live until
+                // proven otherwise; start marked so the very next GC
+                // (before it is necessarily root-reachable) never frees
+                // it.
+                marked: true,
+                unmarked_age: 0,
+            },
+        );
+    }
+
+    /// Mark a heap frame reached during the GC mark phase. Returns
+    /// `true` if it was already marked this cycle (caller then stops
+    /// recursing — the outer chain is a DAG). Unknown addresses (a
+    /// frame whose registration was skipped) return `false` and are
+    /// never reclaimed.
+    pub(crate) fn mark_heap_frame(&mut self, lfp_addr: usize) -> bool {
+        match self.heap_frames.get_mut(&lfp_addr) {
+            Some(rec) => {
+                let was = rec.marked;
+                rec.marked = true;
+                was
+            }
+            None => false,
+        }
+    }
+
+    fn clear_frame_marks(&mut self) {
+        for rec in self.heap_frames.values_mut() {
+            rec.marked = false;
+        }
+    }
+
+    /// Free the `Box<[u64]>` of every heap frame that has stayed
+    /// unmarked for two consecutive GC cycles.
+    fn sweep_heap_frames(&mut self) {
+        let mut dead = vec![];
+        for (&addr, rec) in self.heap_frames.iter_mut() {
+            if rec.marked {
+                rec.unmarked_age = 0;
+            } else {
+                rec.unmarked_age = rec.unmarked_age.saturating_add(1);
+                if rec.unmarked_age >= 2 {
+                    dead.push(addr);
+                }
+            }
+        }
+        for addr in dead {
+            if let Some(rec) = self.heap_frames.remove(&addr) {
+                // SAFETY: `base`/`len` are exactly the raw parts of the
+                // original `Box<[u64]>` (recorded at promotion); the
+                // frame has been unreachable for two GC cycles, so no
+                // live `Lfp` aliases it.
+                unsafe {
+                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                        rec.base, rec.len,
+                    )));
+                }
+            }
         }
     }
 
@@ -244,6 +333,7 @@ impl<T: GCBox> Allocator<T> {
             );
         }
         self.clear_mark();
+        self.clear_frame_marks();
         root.mark(self);
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -251,6 +341,7 @@ impl<T: GCBox> Allocator<T> {
         }
         self.salvage_empty_pages();
         self.sweep();
+        self.sweep_heap_frames();
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             assert_eq!(self.free_list_count, self.check_free_list());

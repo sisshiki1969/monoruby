@@ -1,5 +1,40 @@
 use super::*;
 
+/// Diagnostics: cumulative count / bytes of heap-frame promotions
+/// (`MONORUBY_FRAME_STATS=1` prints them at exit). The buffers are no
+/// longer leaked — they are registered with the GC and reclaimed by
+/// `Allocator::sweep_heap_frames` once unreachable.
+pub(crate) static FRAME_PROMOTIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FRAME_LEAK_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Bump the promotion counters and hand the `Box<[u64]>` raw parts to
+/// the GC frame registry. Registration uses `try_borrow_mut` so it is
+/// a safe no-op (the frame simply stays un-reclaimed, as before) if
+/// the allocator is already borrowed — promotion never runs during a
+/// GC cycle, so this is purely defensive.
+#[inline]
+fn register_promoted_frame(lfp_addr: usize, base: *mut u64, len_u64: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    FRAME_PROMOTIONS.fetch_add(1, Relaxed);
+    FRAME_LEAK_BYTES.fetch_add((len_u64 * 8) as u64, Relaxed);
+    let _ = alloc::ALLOC.try_with(|a| {
+        if let Ok(mut g) = a.try_borrow_mut() {
+            g.register_heap_frame(lfp_addr, base, len_u64);
+        }
+    });
+}
+
+/// `(count, bytes)` of heap frames promoted so far (diagnostics).
+pub fn frame_leak_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        FRAME_PROMOTIONS.load(Relaxed),
+        FRAME_LEAK_BYTES.load(Relaxed),
+    )
+}
+
 ///
 /// Control frame pointer.
 ///
@@ -201,6 +236,12 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
 
 impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        // A reachable heap frame: record it live this cycle. If it was
+        // already marked, the outer chain below it has been walked too
+        // (DAG) — stop to keep marking O(n) and cycle-safe.
+        if !self.on_stack() && alloc.mark_heap_frame(self.0.as_ptr() as usize) {
+            return;
+        }
         let meta = self.meta();
         for r in meta.regs() {
             if let Some(v) = self.register(r) {
@@ -367,8 +408,20 @@ impl Lfp {
         unsafe {
             let mut cfp = self.cfp();
             let len = self.frame_bytes();
-            let v = self.frame_ref().to_vec().into_boxed_slice();
-            let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            // `frame_bytes` is always a multiple of 8 (LFP_SELF=24 plus
+            // 8*reg_num), so copy the frame as a `Box<[u64]>` — uniform
+            // with `heap_frame`/`dummy_*` so the GC can reclaim every
+            // promoted buffer with one `Box::from_raw(*mut [u64])`.
+            let n = len / 8;
+            let src = std::slice::from_raw_parts(
+                (self.0.as_ptr() as usize + 8 - len) as *const u64,
+                n,
+            );
+            let v: Box<[u64]> = src.to_vec().into_boxed_slice();
+            let base = Box::into_raw(v) as *mut u64;
+            let lfp_addr = base as usize + len - 8;
+            register_promoted_frame(lfp_addr, base, n);
+            let mut heap_lfp = Lfp::new(lfp_addr as _);
             heap_lfp.meta_mut().set_on_heap();
             cfp.set_lfp(heap_lfp);
             // Mark the stack slot as a tombstone so any future reader
@@ -398,19 +451,27 @@ impl Lfp {
         // outer
         v.push(0);
         let v = v.into_boxed_slice();
-        let len = v.len() * 8;
+        let n = v.len();
+        let len = n * 8;
         unsafe {
-            let heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            let base = Box::into_raw(v) as *mut u64;
+            let lfp_addr = base as usize + len - 8;
+            register_promoted_frame(lfp_addr, base, n);
+            let heap_lfp = Lfp::new(lfp_addr as _);
             assert!(!heap_lfp.on_stack());
             heap_lfp
         }
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
-        let v = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
-        let len = v.len() * 8;
+        let v: Box<[u64]> = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
+        let n = v.len();
+        let len = n * 8;
         unsafe {
-            let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            let base = Box::into_raw(v) as *mut u64;
+            let lfp_addr = base as usize + len - 8;
+            register_promoted_frame(lfp_addr, base, n);
+            let mut heap_lfp = Lfp::new(lfp_addr as _);
             heap_lfp.meta_mut().set_on_heap();
             heap_lfp.meta_mut().set_reg_num(1);
             assert!(!heap_lfp.on_stack());
@@ -581,5 +642,46 @@ impl Lfp {
             }
         }
         max
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn heap_frame_reclaim_correctness() {
+        // Exercise the promote → register → mark → sweep → free path.
+        // `run_test_once` keeps it cheap under the instrumented CI
+        // (llvm-cov + gc-stress + nextest); gc-stress GCs on every
+        // allocation regardless of run count, so even small loops
+        // promote and reclaim many frames. Result must be
+        // byte-identical to CRuby (reclamation never frees a
+        // still-reachable frame).
+        run_test_once(
+            r#"
+            def mk(n) = ->{ n += 1 }
+            fs = (1..150).map { |i| mk(i) }
+            fs.map { |f| f.call + f.call }.sum
+            "#,
+        );
+        run_test_once(
+            r#"
+            r = []
+            60.times do |i|
+              x = i
+              b = binding
+              b.local_variable_set(:y, i * 2)
+              r << b.eval("x + y")
+            end
+            r.sum
+            "#,
+        );
+        run_test_once(
+            r#"
+            def outer(n) = ->{ ->{ n } }
+            (1..80).map { |i| outer(i).call.call }.sum
+            "#,
+        );
     }
 }
