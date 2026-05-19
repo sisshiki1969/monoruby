@@ -406,6 +406,95 @@ fn parse_open_encodings(
     Ok((ext, int, binmode))
 }
 
+/// Pull `(mode, ext, int)` out of a single options Hash element (mode
+/// string suffix + `:encoding`/`:external_encoding`/`:internal_encoding`).
+fn read_opts_from_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    h: crate::value::Hashmap,
+    mode: &mut String,
+    ext: &mut Option<Value>,
+    int: &mut Option<Value>,
+) -> Result<()> {
+    if let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
+        && let Some(s) = m.is_str()
+    {
+        *mode = s.to_string();
+        let (me, mi) = mode_encoding_names(mode);
+        if let Some(e) = me {
+            *ext = enc_by_name(globals, e);
+        }
+        if let Some(i) = mi {
+            *int = enc_by_name(globals, i);
+        }
+    }
+    if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
+        && !v.is_nil()
+    {
+        if let Some(s) = v.is_str() {
+            let mut parts = s.split(':');
+            *ext = parts
+                .next()
+                .filter(|x| !x.is_empty())
+                .and_then(|x| enc_by_name(globals, x));
+            *int = parts
+                .next()
+                .filter(|x| !x.is_empty())
+                .and_then(|x| enc_by_name(globals, x));
+        } else {
+            *ext = arg_to_enc_obj(globals, v);
+        }
+    }
+    if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
+        && !v.is_nil()
+    {
+        *ext = arg_to_enc_obj(globals, v);
+    }
+    if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
+        && !v.is_nil()
+    {
+        *int = arg_to_enc_obj(globals, v);
+    }
+    Ok(())
+}
+
+/// Resolve `(mode, ext, int)` for `IO.read`. When `:open_args` is given
+/// it fully determines mode/encoding and the other options are ignored
+/// (CRuby semantics).
+fn class_read_opts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    opts: Option<crate::value::Hashmap>,
+) -> Result<(String, Option<Value>, Option<Value>)> {
+    let mut mode = "r".to_string();
+    let mut ext = None;
+    let mut int = None;
+    let Some(h) = opts else {
+        return Ok((mode, ext, int));
+    };
+    if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
+        && let Some(ary) = oa.try_array_ty()
+    {
+        for v in ary.iter() {
+            if let Some(s) = v.is_str() {
+                mode = s.to_string();
+                let (me, mi) = mode_encoding_names(&mode);
+                if let Some(e) = me {
+                    ext = enc_by_name(globals, e);
+                }
+                if let Some(i) = mi {
+                    int = enc_by_name(globals, i);
+                }
+            } else if let Some(hh) = v.try_hash_ty() {
+                read_opts_from_hash(vm, globals, hh, &mut mode, &mut ext, &mut int)?;
+            }
+        }
+        return Ok((mode, ext, int));
+    }
+    read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int)?;
+    Ok((mode, ext, int))
+}
+
 /// Resolve + store IO encodings at creation time. `opt_range` is the
 /// `lfp` arg span to scan for a trailing options Hash.
 pub(super) fn init_io_encodings(
@@ -808,31 +897,107 @@ fn io_class_read(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let mut file = match File::open(&filename) {
-        Ok(file) => file,
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_sysopen",
-                &filename,
-            ));
+    use std::io::{Read, Seek, SeekFrom};
+    let filename = lfp
+        .arg(0)
+        .coerce_to_path_rstring(vm, globals)?
+        .to_str()?
+        .to_string();
+
+    // Trailing options Hash (anywhere in args 1..4).
+    let mut opts = None;
+    for i in 1..4 {
+        if let Some(a) = lfp.try_arg(i)
+            && let Some(h) = a.try_hash_ty()
+        {
+            opts = Some(h);
+        }
+    }
+    // length = arg1 (Integer); nil / Hash / absent => whole file.
+    let length = match lfp.try_arg(1) {
+        Some(v) if v.try_fixnum().is_some() => {
+            let n = v.try_fixnum().unwrap();
+            if n < 0 {
+                return Err(MonorubyErr::argumenterr(format!("negative length {n} given")));
+            }
+            Some(n as usize)
+        }
+        _ => None,
+    };
+    // offset = arg2 (Integer); nil / absent => 0.
+    let offset = match lfp.try_arg(2) {
+        Some(v) if v.try_fixnum().is_some() => {
+            let n = v.try_fixnum().unwrap();
+            if n < 0 {
+                return Err(MonorubyErr::argumenterr("negative offset"));
+            }
+            n as u64
+        }
+        _ => 0,
+    };
+
+    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
+    // A write/append-only mode can't be used for reading.
+    let base = mode.split(':').next().unwrap_or("").replace('b', "");
+    if base == "w" || base == "a" {
+        return Err(MonorubyErr::ioerr("not opened for reading"));
+    }
+
+    let mut file = File::open(&filename).map_err(|err| {
+        MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename)
+    })?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset)).map_err(|err| {
+            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_seek", &filename)
+        })?;
+    }
+
+    if let Some(n) = length {
+        let mut buf = Vec::new();
+        Read::by_ref(&mut file)
+            .take(n as u64)
+            .read_to_end(&mut buf)
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
+        if buf.is_empty() && n > 0 {
+            return Ok(Value::nil());
+        }
+        // A sized read is always ASCII-8BIT.
+        let mut s = Value::string_from_vec(buf);
+        s.as_rstring_inner_mut()
+            .set_encoding(crate::value::Encoding::Ascii8);
+        return Ok(s);
+    }
+
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
+
+    use crate::value::Encoding as E;
+    let ext = match ext_obj {
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        None => {
+            let de = enc_default_external_obj(globals);
+            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
         }
     };
-    let mut contents = Vec::new();
-    match std::io::Read::read_to_end(&mut file, &mut contents) {
-        Ok(_) => {}
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_io_read",
-                &filename,
-            ));
+    let intl = int_obj.and_then(|o| enc_obj_to_enum(globals, o));
+    let (out, final_enc) = match intl {
+        Some(i) if i != ext => {
+            let topts = super::encoding::TranscodeOpts {
+                invalid_replace: false,
+                undef_replace: false,
+                replace: None,
+            };
+            match super::encoding::transcode_bytes_with_opts(&buf, ext, i, &topts, &globals.store) {
+                Ok(b) => (b, i),
+                Err(_) => (buf, ext),
+            }
         }
+        _ => (buf, ext),
     };
-    Ok(Value::bytes(contents))
+    let mut s = Value::string_from_vec(out);
+    s.as_rstring_inner_mut().set_encoding(final_enc);
+    Ok(s)
 }
 
 ///
@@ -3897,6 +4062,96 @@ mod tests {
     #[test]
     fn io_class_binread_negative_length_raises() {
         run_test_error(r#"IO.binread("Cargo.toml", -1)"#);
+    }
+
+    #[test]
+    fn io_class_read_length_offset_encoding() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_cr.txt", "1234567890")
+            r = []
+            r << IO.read("/tmp/mr_cr.txt")
+            r << IO.read("/tmp/mr_cr.txt", 5)
+            r << IO.read("/tmp/mr_cr.txt", 5, 3)
+            r << IO.read("/tmp/mr_cr.txt", 5).encoding.name
+            r << IO.read("/tmp/mr_cr.txt", 0)
+            r << IO.read("/tmp/mr_cr.txt", 0).encoding.name
+            r << IO.read("/tmp/mr_cr.txt", 1, 100)
+            r << IO.read("/tmp/mr_cr.txt", nil, 5)
+            r << IO.read("/tmp/mr_cr.txt", mode: "r")
+            r << IO.read("/tmp/mr_cr.txt", encoding: Encoding::ISO_8859_1).encoding.name
+            r << IO.read("/tmp/mr_cr.txt", external_encoding: "EUC-JP").encoding.name
+            r << IO.read("/tmp/mr_cr.txt", nil, 0,
+                         open_args: [{ encoding: Encoding::US_ASCII }]).encoding.name
+            r << IO.read("/tmp/mr_cr.txt", mode: "w",
+                         open_args: ["r", encoding: "UTF-8"]).encoding.name
+            File.unlink("/tmp/mr_cr.txt")
+            r
+            "#,
+        );
+        run_test_error(
+            r#"File.write("/tmp/mr_cr2.txt","x"); IO.read("/tmp/mr_cr2.txt", mode: "w")"#,
+        );
+        run_test_error(
+            r#"File.write("/tmp/mr_cr3.txt","x"); IO.read("/tmp/mr_cr3.txt", 1, 0, mode: "a")"#,
+        );
+        run_test_error(r#"IO.read("Cargo.toml", -1)"#);
+        run_test_error(r#"IO.read("Cargo.toml", 0, -1)"#);
+        run_test_error(r#"IO.read(nil)"#);
+    }
+
+    #[test]
+    fn io_class_read_mode_and_transcode_paths() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_cr4.txt", "abcdef")
+            r = []
+            # :mode string carrying an encoding suffix
+            s = IO.read("/tmp/mr_cr4.txt", mode: "r:iso-8859-1")
+            r << [s, s.encoding.name]
+            # explicit external + internal via options -> transcoded
+            t = IO.read("/tmp/mr_cr4.txt", external_encoding: "utf-8",
+                        internal_encoding: "utf-16le")
+            r << [t.encoding.name, t.bytes]
+            # mode encoding suffix with both ext:int
+            u = IO.read("/tmp/mr_cr4.txt", mode: "r:utf-8:utf-16le")
+            r << [u.encoding.name, u.bytes]
+            # :open_args hash carrying a mode that itself has a suffix
+            v = IO.read("/tmp/mr_cr4.txt", open_args: [{ mode: "r:euc-jp" }])
+            r << v.encoding.name
+            # offset past data with no length -> empty string
+            w = IO.read("/tmp/mr_cr4.txt", nil, 100)
+            r << w
+            File.unlink("/tmp/mr_cr4.txt")
+            r
+            "#,
+        );
+        // ENOENT path (open failure map_err).
+        run_test_error(r#"IO.read("/tmp/mr_no_such_dir_zzz/missing.txt", 4)"#);
+    }
+
+    #[test]
+    fn io_class_read_misc_arg_forms() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_cr5.txt", "abcdef")
+            r = []
+            # integer :mode (File::RDONLY) -> not a String, mode stays "r"
+            r << IO.read("/tmp/mr_cr5.txt", mode: File::RDONLY)
+            # options Hash at the 3rd positional slot (length nil, no offset)
+            r << IO.read("/tmp/mr_cr5.txt", nil, mode: "r")
+            # empty options Hash with a length
+            r << IO.read("/tmp/mr_cr5.txt", 3, **{})
+            # internal == external -> no transcode, tagged that encoding
+            s = IO.read("/tmp/mr_cr5.txt", mode: "r:utf-8:utf-8")
+            r << [s, s.encoding.name]
+            # path object that responds to #to_path
+            klass = Class.new { def initialize(p); @p = p; end; def to_path; @p; end }
+            r << IO.read(klass.new("/tmp/mr_cr5.txt"))
+            File.unlink("/tmp/mr_cr5.txt")
+            r
+            "#,
+        );
     }
 
     #[test]
