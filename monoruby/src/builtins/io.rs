@@ -1041,11 +1041,12 @@ fn io_class_readlines(
             if i == 1 {
                 sep = s.to_string();
             }
+        } else if i == 1 {
+            sep = arg.coerce_to_str(vm, globals)?;
         } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                globals.get_class_name(arg.class()),
-            )));
+            // limit position: coerce via #to_int (raises TypeError on a
+            // non-convertible object), matching CRuby. Not enforced.
+            let _ = arg.coerce_to_int_i64(vm, globals)?;
         }
     }
     let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
@@ -3999,6 +4000,37 @@ mod tests {
         );
         // missing file -> Errno::ENOENT.
         run_test_error(r#"IO.readlines("/tmp/mr_no_dir_qq/none.txt")"#);
+    }
+
+    #[test]
+    fn io_class_readlines_foreach_more_paths() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_rlf4.txt", "x\ny\nz\n")
+            r = []
+            # foreach: whole content when separator is nil
+            acc = []
+            IO.foreach("/tmp/mr_rlf4.txt", nil) { |c| acc << c }
+            r << acc
+            # limit object: #to_int is invoked (value not enforced) and
+            # the lines are still yielded -> no error, full lines.
+            lim = Object.new
+            def lim.to_int; 3; end
+            cnt = []
+            IO.foreach("/tmp/mr_rlf4.txt", "\n", lim) { |l| cnt << l }
+            r << cnt
+            r << IO.readlines("/tmp/mr_rlf4.txt", "\n", lim)
+            # tag_with_encs: external BINARY => internal ignored.
+            s = IO.readlines("/tmp/mr_rlf4.txt", mode: "rb:binary:utf-8").first
+            r << s.encoding.name
+            File.unlink("/tmp/mr_rlf4.txt")
+            r
+            "#,
+        );
+        // A limit object that can't convert -> TypeError.
+        run_test_error(
+            r#"File.write("/tmp/mr_rlf5.txt","a\n"); IO.foreach("/tmp/mr_rlf5.txt", "\n", Object.new) { |l| l }"#,
+        );
     }
 
     #[test]
