@@ -3247,7 +3247,9 @@ fn private_methods(
     Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_private_method_names_direct(class_id)
     } else {
-        globals.store.get_private_method_names_inherit(class_id)
+        globals
+            .store
+            .get_private_method_names_inherit_incl_object(class_id)
     }))
 }
 
@@ -3269,7 +3271,9 @@ fn protected_methods(
     Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_protected_method_names_direct(class_id)
     } else {
-        globals.store.get_protected_method_names_inherit(class_id)
+        globals
+            .store
+            .get_protected_method_names_inherit_incl_object(class_id)
     }))
 }
 
