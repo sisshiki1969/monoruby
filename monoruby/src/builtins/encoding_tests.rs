@@ -318,4 +318,45 @@ mod tests {
             r#"Encoding::Converter.new("UTF-32LE", "UTF-16BE").class.name"#,
         ]);
     }
+
+    #[test]
+    fn encoding_compatible_rb_enc_compatible() {
+        // CRuby's `rb_enc_compatible` truth table (encoding.c),
+        // verified byte-exact against `LANG=C.UTF-8 ruby`. Covers
+        // the String/Symbol/Encoding mixes and the dummy /
+        // Encoding-pair rules. Each value below is the expected
+        // `Encoding.compatible?` result name (or "nil").
+        run_tests(&[
+            // 7-bit BINARY content widens into UTF-32LE.
+            r#""def".b.encode("utf-32le").bytes"#,
+            // empty ASCII-compatible String + non-ASCII-only String
+            // → the second's encoding.
+            r#"Encoding.compatible?("".dup.force_encoding("utf-8"), "def".encode("utf-32le")).to_s"#,
+            // String + non-ASCII-compatible Encoding → nil.
+            r#"Encoding.compatible?("abc".encode("us-ascii"), Encoding::UTF_32LE).inspect"#,
+            // ASCII-only String + ASCII-compatible Encoding → the
+            // Encoding (not the String's encoding).
+            r#"Encoding.compatible?("abc".encode("utf-8"), Encoding::BINARY).to_s"#,
+            r#"Encoding.compatible?("abc".encode("us-ascii"), Encoding::BINARY).to_s"#,
+            // Encoding == US-ASCII → the String's encoding.
+            r#"Encoding.compatible?("abc".dup.force_encoding("utf-8"), Encoding::US_ASCII).to_s"#,
+            // ASCII-compatible String, not ASCII-only, + BINARY → nil.
+            r#"Encoding.compatible?("\xe3\x81\x82".dup.force_encoding("utf-8"), Encoding::BINARY).inspect"#,
+            // non-ASCII Symbol (recorded source encoding preserved)
+            // vs ASCII-only Symbol → the first's encoding.
+            r#"Encoding.compatible?("\xa4\xa2".dup.force_encoding("euc-jp").to_sym, :abc).to_s"#,
+            r#"Encoding.compatible?(:abc, :def).to_s"#,
+            // Encoding × Encoding rules.
+            r#"Encoding.compatible?(Encoding::UTF_8, Encoding::BINARY).inspect"#,
+            r#"Encoding.compatible?(Encoding::UTF_8, Encoding::US_ASCII).to_s"#,
+            r#"Encoding.compatible?(Encoding::UTF_7, Encoding::UTF_7).to_s"#,
+            r#"Encoding.compatible?(Encoding::UTF_7, Encoding::US_ASCII).inspect"#,
+            // non-ASCII-only BINARY String + US-ASCII String → BINARY.
+            r#"Encoding.compatible?("\xff".dup.force_encoding("binary"), "def".encode("us-ascii")).to_s"#,
+            // empty non-ASCII-compatible String + String → second.
+            r#"Encoding.compatible?("".dup.force_encoding("utf-7"), "def".encode("us-ascii")).to_s"#,
+            // non-encoding-bearing operand → nil.
+            r#"Encoding.compatible?(Object.new, "abc").inspect"#,
+        ]);
+    }
 }
