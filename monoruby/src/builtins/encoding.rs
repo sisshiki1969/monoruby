@@ -2070,53 +2070,85 @@ fn stream_convert(
         return (result, limit, src_bytes[..limit].to_vec());
     }
     // US-ASCII / ASCII-8BIT destination: `encoding_rs` has no
-    // encoder for these. Decode the source to UTF-8, then every
-    // character must be ASCII — a non-ASCII char is
-    // `:undefined_conversion` (or the configured replacement when
-    // `undef: :replace`). The first non-ASCII char wins over any
-    // later malformed byte (CRuby converts incrementally), so the
-    // undef check precedes the decode-error check.
+    // encoder for these. Decode the source to UTF-8 *without*
+    // replacement (so a malformed source byte stays an error
+    // rather than a U+FFFD that would masquerade as an undefined
+    // conversion), then every character must be ASCII. A non-ASCII
+    // char is `:undefined_conversion` (or the configured
+    // replacement under `undef: :replace`); a malformed source
+    // byte is `:invalid_byte_sequence` (or the replacement under
+    // `invalid: :replace`). The decoder yields the valid prefix
+    // *before* each malformed run, so a non-ASCII char that occurs
+    // positionally before a later bad byte naturally wins —
+    // matching CRuby's incremental ordering.
     if encoding_to_rs(dst_enc).is_none() && matches!(dst_enc, E::UsAscii | E::Ascii8) {
-        let (decoded, had_decode_err): (String, bool) =
-            if let Some(src_rs) = encoding_to_rs(src_enc) {
-                let (s, e) = src_rs.decode_without_bom_handling(src_bytes);
-                (s.into_owned(), e)
-            } else {
-                match std::str::from_utf8(src_bytes) {
-                    Ok(s) => (s.to_string(), false),
-                    Err(_) => (String::from_utf8_lossy(src_bytes).into_owned(), true),
-                }
-            };
         let repl = opts.replace_str(dst_enc);
         let mut out: Vec<u8> = Vec::with_capacity(src_bytes.len());
-        for ch in decoded.chars() {
-            if ch.is_ascii() {
-                out.push(ch as u8);
-            } else if opts.undef_replace {
-                out.extend_from_slice(repl.as_bytes());
-            } else {
-                return (
-                    StreamConvertResult::UndefinedConversion,
-                    src_bytes.len(),
-                    out,
-                );
+        // Closure-free helper macro: append `ch`, honouring undef
+        // replacement and the destination cap.
+        macro_rules! push_char {
+            ($ch:expr) => {{
+                let ch = $ch;
+                if ch.is_ascii() {
+                    out.push(ch as u8);
+                } else if opts.undef_replace {
+                    out.extend_from_slice(repl.as_bytes());
+                } else {
+                    return (StreamConvertResult::UndefinedConversion, src_bytes.len(), out);
+                }
+                if let Some(max) = max_dst_bytes
+                    && out.len() > max
+                {
+                    out.truncate(max);
+                    return (StreamConvertResult::DestinationBufferFull, src_bytes.len(), out);
+                }
+            }};
+        }
+        if let Some(src_rs) = encoding_to_rs(src_enc) {
+            use encoding_rs::DecoderResult;
+            let mut decoder = src_rs.new_decoder();
+            let last = !partial_input;
+            let mut rest = src_bytes;
+            loop {
+                let mut buf = vec![0u8; rest.len() + 16];
+                let (res, read, written) =
+                    decoder.decode_to_utf8_without_replacement(rest, &mut buf, last);
+                for ch in std::str::from_utf8(&buf[..written]).unwrap_or("").chars() {
+                    push_char!(ch);
+                }
+                match res {
+                    DecoderResult::InputEmpty => break,
+                    DecoderResult::Malformed(..) => {
+                        if !opts.invalid_replace {
+                            return (
+                                StreamConvertResult::InvalidByteSequence,
+                                src_bytes.len(),
+                                out,
+                            );
+                        }
+                        out.extend_from_slice(repl.as_bytes());
+                        rest = &rest[read..];
+                    }
+                    DecoderResult::OutputFull => {
+                        rest = &rest[read..];
+                    }
+                }
             }
-        }
-        if had_decode_err && !opts.invalid_replace {
-            return (
-                StreamConvertResult::InvalidByteSequence,
-                src_bytes.len(),
-                out,
-            );
-        }
-        if let Some(max) = max_dst_bytes {
-            if out.len() > max {
-                out.truncate(max);
-                return (
-                    StreamConvertResult::DestinationBufferFull,
-                    src_bytes.len(),
-                    out,
-                );
+        } else {
+            match std::str::from_utf8(src_bytes) {
+                Ok(s) => {
+                    for ch in s.chars() {
+                        push_char!(ch);
+                    }
+                }
+                Err(_) if opts.invalid_replace => {
+                    for ch in String::from_utf8_lossy(src_bytes).chars() {
+                        push_char!(ch);
+                    }
+                }
+                Err(_) => {
+                    return (StreamConvertResult::InvalidByteSequence, src_bytes.len(), out);
+                }
             }
         }
         return (StreamConvertResult::Finished, src_bytes.len(), out);

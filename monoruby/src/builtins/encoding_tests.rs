@@ -359,6 +359,30 @@ mod tests {
                 ec.replacement
               end
             "#,
+            // Malformed source byte (no flags) → US-ASCII is
+            // :invalid_byte_sequence, not :undefined_conversion.
+            r#"
+              ec = Encoding::Converter.new("utf-8", "us-ascii")
+              d = +""
+              s = ec.primitive_convert("\xFF".b.dup.force_encoding('utf-8'), d)
+              [s, d]
+            "#,
+            // invalid: + undef: :replace together, mixed bad byte +
+            // non-ASCII char.
+            r#"
+              ec = Encoding::Converter.new("utf-8","us-ascii", invalid: :replace, undef: :replace)
+              d = +""
+              s = ec.primitive_convert("a\xFFb中".dup.force_encoding('utf-8'), d)
+              [s, d]
+            "#,
+            // `dst_bytesize` cap truncates the US-ASCII branch
+            // (destination_buffer_full) with undef: :replace.
+            r#"
+              ec = Encoding::Converter.new("utf-8","us-ascii", undef: :replace)
+              d = +""
+              s = ec.primitive_convert(+"中文ok", d, nil, 2)
+              [s, d]
+            "#,
         ]);
     }
 
