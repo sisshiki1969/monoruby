@@ -764,15 +764,28 @@ impl<'a> BytecodeGen<'a> {
                 //return Ok(());
             }
             NodeKind::UndefMethod(box undef) => {
-                match undef.kind {
-                    NodeKind::Symbol(undef) => {
-                        let temp = self.temp;
-                        let undef = IdentId::get_id_from_string(undef);
-                        self.temp = temp;
-                        self.emit(BytecodeInst::UndefMethod { undef }, loc);
-                    }
-                    _ => unimplemented!(),
-                };
+                if let NodeKind::Symbol(name) = &undef.kind {
+                    let temp = self.temp;
+                    let undef = IdentId::get_id(name);
+                    self.temp = temp;
+                    self.emit(BytecodeInst::UndefMethod { undef }, loc);
+                } else {
+                    // Dynamic name, e.g. `undef :"#{expr}"`. The static
+                    // `UndefMethod` instruction bakes in an `IdentId`, so
+                    // lower this to an implicit-self `undef_method(<expr>)`
+                    // call (Module#undef_method coerces String/Symbol),
+                    // matching CRuby. `undef` evaluates to nil, so discard
+                    // the call result and push nil like the static path.
+                    let arglist = ArgList::from_args(vec![undef]);
+                    self.gen_method_call(
+                        IdentId::get_id("undef_method"),
+                        None,
+                        arglist,
+                        false,
+                        UseMode2::NotUse,
+                        loc,
+                    )?;
+                }
                 self.push_nil();
             }
             NodeKind::Defined(box node) => {
@@ -1301,5 +1314,46 @@ impl<'a> BytecodeGen<'a> {
             self.push();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn undef_dynamic_name() {
+        // `undef :"#{expr}"` (interpolated symbol) is lowered to an
+        // implicit-self `undef_method(<expr>)` call. Previously the
+        // non-`Symbol` branch hit `unimplemented!()` in the
+        // `NodeKind::UndefMethod` codegen and aborted.
+        run_test(
+            r##"
+            c = Class.new do
+              def m; 1; end
+              undef :"#{'m'}"
+            end
+            c.new.respond_to?(:m)
+        "##,
+        );
+        run_test(
+            r##"
+            c = Class.new do
+              def foo; 'x'; end
+              undef :"#{'fo' + 'o'}"
+            end
+            c.new.respond_to?(:foo)
+        "##,
+        );
+        // Non-literal interpolation (call .to_s on a Symbol).
+        run_test(
+            r##"
+            c = Class.new do
+              def bar; end
+              undef :"#{:bar.to_s}"
+            end
+            c.new.respond_to?(:bar)
+        "##,
+        );
     }
 }

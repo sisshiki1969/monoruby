@@ -63,26 +63,36 @@ impl MatchDataInner {
         self.matches[pos]
     }
 
-    pub fn at(&self, pos: usize) -> Option<&str> {
-        self.matches[pos].map(|(start, end)| &self.heystack[start..end])
+    /// Matched bytes for capture `pos`. Slices the haystack on
+    /// **byte** boundaries (always safe) — required for binary
+    /// (`/n`) regexps whose onigmo byte offsets land mid-UTF-8 of
+    /// the underlying Rust `String`. Returning `&str` here would
+    /// panic in `core::str::slice_error_fail` on a non-char boundary
+    /// (which is a `panic_nounwind` ⇒ process abort across the
+    /// `#[monoruby_builtin]` extern "C" boundary).
+    pub fn at(&self, pos: usize) -> Option<&[u8]> {
+        self.matches[pos].map(|(start, end)| &self.heystack.as_bytes()[start..end])
     }
 
     pub fn len(&self) -> usize {
         self.matches.len()
     }
 
-    pub fn captures(&self) -> impl Iterator<Item = Option<&str>> {
+    pub fn captures(&self) -> impl Iterator<Item = Option<&[u8]>> {
         self.matches
             .iter()
-            .map(|m| m.map(|(start, end)| &self.heystack[start..end]))
+            .map(|m| m.map(|(start, end)| &self.heystack.as_bytes()[start..end]))
     }
 
     pub fn to_s(&self) -> String {
-        self.at(0).unwrap().to_string()
+        String::from_utf8_lossy(self.at(0).unwrap()).into_owned()
     }
 
     pub fn inspect(&self) -> String {
-        let mut s = format!("#<MatchData \"{}\"", self.at(0).unwrap());
+        let mut s = format!(
+            "#<MatchData \"{}\"",
+            String::from_utf8_lossy(self.at(0).unwrap())
+        );
         let names = self
             .regexp()
             .and_then(|r| r.capture_names().ok())
@@ -94,7 +104,7 @@ impl MatchDataInner {
                 s.push_str(&format!(" {}:", names[i - 1]));
             }
             if let Some(capture) = self.at(i) {
-                s.push_str(&format!("\"{capture}\""));
+                s.push_str(&format!("\"{}\"", String::from_utf8_lossy(capture)));
             } else {
                 s.push_str(&format!("nil"));
             }

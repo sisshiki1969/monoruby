@@ -374,7 +374,17 @@ impl ClassInfoTable {
         // `$stderr.write` and uses the proper qualified path. We
         // intentionally do *not* re-emit here.
         let _prev = self[class_id].constants.insert(name, new_state);
-        if let Some(klass) = val.is_class_or_module() {
+        // Auto-naming: only for *non-singleton* anonymous classes/modules.
+        // CRuby never names a singleton class from constant assignment
+        // (`class << o; CONST = self; end` ⇒ `o.singleton_class.name == nil`).
+        // Without this guard `CONST = self` set inside `class << o`
+        // would store `target.parent = target` (the singleton class is
+        // both the constant's owner and value), turning the parent
+        // chain into a self-loop and hanging `get_parents`
+        // (`#to_s`/`#inspect`/error formatting → OOM).
+        if let Some(klass) = val.is_class_or_module()
+            && klass.is_singleton().is_none()
+        {
             // The new owner is "permanent" iff its parent's chain is
             // already reachable from a top-level constant. `Object`
             // counts as permanent at the root.

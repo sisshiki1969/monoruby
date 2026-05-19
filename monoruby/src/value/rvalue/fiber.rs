@@ -71,6 +71,27 @@ impl FiberInner {
 impl Fiber {
     pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
         let arg0 = lfp.arg(0).as_array();
+        // The "running" state is not representable via `rsp_save`
+        // (a live fiber still reads as `Suspended`), so resuming the
+        // currently-executing fiber — or an ancestor still on the
+        // active resume chain — would do a native stack switch into a
+        // frame that is already live and corrupt the stack (SIGSEGV).
+        // CRuby raises FiberError instead.
+        let target = (&*self.handle) as *const Executor;
+        if target == (vm as *const Executor) {
+            return Err(MonorubyErr::fibererr(
+                "attempt to resume the current fiber".to_string(),
+            ));
+        }
+        let mut cur = vm.parent_fiber();
+        while let Some(p) = cur {
+            if (p.as_ptr() as *const Executor) == target {
+                return Err(MonorubyErr::fibererr(
+                    "attempt to resume a resumed fiber (double resume)".to_string(),
+                ));
+            }
+            cur = unsafe { p.as_ref().parent_fiber() };
+        }
         match self.state() {
             FiberState::Created => self.invoke_fiber(vm, globals, &[lfp.arg(0)]),
             FiberState::Suspended => self.resume_fiber(vm, arg0.peel()),
