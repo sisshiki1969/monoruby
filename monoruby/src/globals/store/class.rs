@@ -909,10 +909,23 @@ impl ClassInfoTable {
 
     /// Stop predicate for `(true)` / inherited variants — process every
     /// ancestor up to but excluding `OBJECT_CLASS`.
+    /// Stop predicate for the `*_instance_methods(true)` family: stop
+    /// once the next ancestor would be `Object` (or there is none), so a
+    /// module such as `Kernel` reports only its own instance methods and
+    /// does not bleed in `Object`'s (monoruby links `Kernel`'s internal
+    /// superclass to `Object` for lookup).
     fn stop_before_object(module: Module) -> bool {
         module
             .superclass()
             .is_none_or(|superclass| superclass.id() == OBJECT_CLASS)
+    }
+
+    /// Stop predicate for the receiver-level `obj.{private,public,
+    /// protected}_methods(true)` accessors: walk up to and *including*
+    /// `Object`'s own method table (where toplevel `def`s / `private :m`
+    /// land), then stop before `Kernel` / `BasicObject` builtin noise.
+    fn stop_at_object(module: Module) -> bool {
+        module.id() == OBJECT_CLASS || module.superclass().is_none()
     }
 
     /// Stop predicate for `(false)` / direct variants — process the
@@ -1168,6 +1181,24 @@ impl ClassInfoTable {
     ///
     pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
         self.walk_method_names(class_id, MethodTableEntry::is_private, Self::stop_before_object)
+    }
+
+    /// `obj.private_methods(true)`: like the above but also includes
+    /// `Object`'s own private instance methods (toplevel `private :m`),
+    /// which CRuby reports.
+    pub(crate) fn get_private_method_names_inherit_incl_object(
+        &self,
+        class_id: ClassId,
+    ) -> Vec<Value> {
+        self.walk_method_names(class_id, MethodTableEntry::is_private, Self::stop_at_object)
+    }
+
+    /// `obj.protected_methods(true)` counterpart of the above.
+    pub(crate) fn get_protected_method_names_inherit_incl_object(
+        &self,
+        class_id: ClassId,
+    ) -> Vec<Value> {
+        self.walk_method_names(class_id, Self::is_protected, Self::stop_at_object)
     }
 
     ///

@@ -3005,7 +3005,15 @@ pub(super) fn change_visi(
         return Ok(Value::nil());
     }
     let (res, names) = extract_names(globals, arg)?;
-    let class_id = self_val.as_class_id();
+    // At top level `self` is the `main` object (an Object instance, not
+    // a Module); CRuby's default definee there is `Object`, so e.g.
+    // `private :m` makes `Object#m` private. Fall back to OBJECT_CLASS
+    // for any non-module receiver.
+    let class_id = if self_val.is_class().is_some() || self_val.is_module().is_some() {
+        self_val.as_class_id()
+    } else {
+        OBJECT_CLASS
+    };
     // CRuby fires `method_added` only when `private` / `protected` /
     // `public` adds a *new* entry to the receiver's method table —
     // i.e. when the method was inherited rather than defined locally.
@@ -3047,6 +3055,61 @@ fn extract_names(store: &Store, arg: Array) -> Result<(Value, Vec<IdentId>)> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn toplevel_private_public() {
+        // Top-level `private`/`public`/`protected` target Object, and
+        // Object's own private instance methods surface in
+        // `Object.private_methods(true)` (CRuby semantics).
+        run_test(
+            r#"
+            def mp1; 1; end
+            def mp2; 2; end
+            def mp3; 3; end
+            private :mp1
+            private :mp2, :mp3
+            r = []
+            r << Object.private_instance_methods(false).include?(:mp1)
+            r << Object.private_methods(true).include?(:mp1)
+            r << Object.private_methods(true).include?(:mp2)
+            r << Object.private_methods(true).include?(:mp3)
+            public :mp1
+            r << Object.private_methods(true).include?(:mp1)
+            # array argument form + return value
+            r << (private([:mp2, :mp3]))
+            r << (private :mp1)
+            # Kernel's instance-method list must NOT bleed in Object's
+            r << Kernel.public_instance_methods(true).include?(:mp1)
+            r
+            "#,
+        );
+        run_test_error(r#"private :no_such_toplevel_method_xyz"#);
+    }
+
+    #[test]
+    fn toplevel_protected_and_direct() {
+        // obj.protected_methods(true) includes Object's own protected
+        // instance methods (incl_object walk); the `(false)` direct
+        // variants; and Kernel's instance view must not bleed Object's.
+        run_test(
+            r#"
+            class Object
+              def tp1; 1; end
+              protected :tp1
+              def tp2; 2; end
+            end
+            Object.send(:private, :tp2)
+            r = []
+            r << Object.protected_instance_methods(false).include?(:tp1)
+            r << Object.protected_methods(true).include?(:tp1)
+            r << Object.new.protected_methods(true).include?(:tp1)
+            r << Object.private_methods(false).include?(:tp2)
+            r << Object.protected_methods(false).include?(:tp1)
+            r << Kernel.protected_instance_methods(true).include?(:tp1)
+            r
+            "#,
+        );
+    }
 
     #[test]
     fn test_teq() {
