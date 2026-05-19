@@ -897,6 +897,26 @@ mod tests {
     }
 
     #[test]
+    fn match_data_binary_n_byte_safe() {
+        // `/n` regex matches per *byte*. On a haystack whose bytes
+        // are not valid UTF-8 char boundaries (e.g. a single high
+        // byte under ASCII-8BIT), `MatchDataInner::at` previously
+        // sliced `&str` and aborted (`panic_nounwind` across the
+        // builtin's extern "C" boundary). The byte-slice path must
+        // return the matched bytes intact.
+        run_tests(&[
+            r##"/./n.match("\xC3\xA9".dup.force_encoding(Encoding::ASCII_8BIT)).to_a"##,
+            r##"/./n.match("\xC3\xA9".dup.force_encoding(Encoding::ASCII_8BIT))[0]"##,
+            r##"/./n.match("\xC3\xA9".dup.force_encoding(Encoding::ASCII_8BIT)).pre_match"##,
+            r##"/./n.match("\xC3\xA9".dup.force_encoding(Encoding::ASCII_8BIT)).post_match"##,
+            // Sanity: ASCII haystack still works through the same path.
+            r##"/(\w)(\w)/.match("abc").to_a"##,
+            r##"/(\w)(\w)/.match("abc")[0..]"##,
+            r##"/(\w)(\w)/.match("abc").pre_match + /(\w)/.match("abc").post_match"##,
+        ]);
+    }
+
+    #[test]
     fn match_data_deconstruct_keys() {
         run_test(
             r##"

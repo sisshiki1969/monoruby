@@ -1316,3 +1316,44 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn undef_dynamic_name() {
+        // `undef :"#{expr}"` (interpolated symbol) is lowered to an
+        // implicit-self `undef_method(<expr>)` call. Previously the
+        // non-`Symbol` branch hit `unimplemented!()` in the
+        // `NodeKind::UndefMethod` codegen and aborted.
+        run_test(
+            r##"
+            c = Class.new do
+              def m; 1; end
+              undef :"#{'m'}"
+            end
+            c.new.respond_to?(:m)
+        "##,
+        );
+        run_test(
+            r##"
+            c = Class.new do
+              def foo; 'x'; end
+              undef :"#{'fo' + 'o'}"
+            end
+            c.new.respond_to?(:foo)
+        "##,
+        );
+        // Non-literal interpolation (call .to_s on a Symbol).
+        run_test(
+            r##"
+            c = Class.new do
+              def bar; end
+              undef :"#{:bar.to_s}"
+            end
+            c.new.respond_to?(:bar)
+        "##,
+        );
+    }
+}

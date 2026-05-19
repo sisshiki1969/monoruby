@@ -154,6 +154,34 @@ mod tests {
     }
 
     #[test]
+    fn fiber_resume_self_or_ancestor() {
+        // Resuming the currently-running fiber, or a still-active
+        // ancestor on the resume chain, must raise `FiberError` (was
+        // SIGSEGV from native-stack switching into a live frame).
+        // CRuby:
+        //   self-resume      ⇒ "attempt to resume the current fiber"
+        //   ancestor-resume  ⇒ "attempt to resume a resumed fiber (double resume)"
+        run_test_error(
+            r#"
+            f = nil
+            f = Fiber.new { f.resume }
+            f.resume
+        "#,
+        );
+        run_test_error(
+            r#"
+            outer = nil
+            inner = nil
+            outer = Fiber.new {
+              inner = Fiber.new { outer.resume }
+              inner.resume
+            }
+            outer.resume
+        "#,
+        );
+    }
+
+    #[test]
     fn fiber() {
         run_test(
             r##"
