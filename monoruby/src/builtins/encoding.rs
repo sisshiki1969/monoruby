@@ -1491,6 +1491,37 @@ const CONVERTER_ERRINFO_IVAR: &str = "/converter_errinfo";
 /// Prepended to the next call's source bytes so streaming works
 /// across multiple calls. Stored as a binary String value.
 const CONVERTER_PENDING_IVAR: &str = "/converter_pending";
+/// Conversion flags configured at construction (`invalid: :replace`
+/// / `undef: :replace` kwargs, or the `INVALID_REPLACE` /
+/// `UNDEF_REPLACE` Integer-flag bits). Stored as a Fixnum:
+/// bit0 = invalid→replace, bit1 = undef→replace.
+const CONVERTER_FLAGS_IVAR: &str = "/converter_flags";
+const CONVERTER_FLAG_INVALID_REPLACE: i64 = 0b01;
+const CONVERTER_FLAG_UNDEF_REPLACE: i64 = 0b10;
+
+/// Build the `TranscodeOpts` for a Converter instance from its
+/// stored replacement string + conversion flags. Shared by
+/// `#convert` and `#primitive_convert` so both honour
+/// `invalid:`/`undef: :replace` and a user-set `#replacement=`.
+fn converter_transcode_opts(globals: &Globals, recv: Value) -> TranscodeOpts {
+    let mut opts = TranscodeOpts::default();
+    if let Some(v) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR))
+        && let Some(s) = v.is_str()
+    {
+        opts.replace = Some(s.to_string());
+    }
+    if let Some(v) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_FLAGS_IVAR))
+        && let Some(n) = v.try_fixnum()
+    {
+        opts.invalid_replace = n & CONVERTER_FLAG_INVALID_REPLACE != 0;
+        opts.undef_replace = n & CONVERTER_FLAG_UNDEF_REPLACE != 0;
+    }
+    opts
+}
 
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
@@ -1671,8 +1702,30 @@ fn converter_new(
     let opts_hash = (2..=3)
         .filter_map(|i| lfp.try_arg(i))
         .find_map(|v| v.try_hash_ty());
+    // Conversion flags: either an Integer 3rd arg (the
+    // `INVALID_REPLACE` / `UNDEF_REPLACE` bitmask) or
+    // `invalid:`/`undef: :replace` kwargs.
+    let mut flags: i64 = 0;
+    if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
+        if n & 0x0000_0002 != 0 {
+            flags |= CONVERTER_FLAG_INVALID_REPLACE;
+        }
+        if n & 0x0000_0020 != 0 {
+            flags |= CONVERTER_FLAG_UNDEF_REPLACE;
+        }
+    }
     if let Some(hash) = opts_hash {
         {
+            if let Some(v) = find_hash_value_for_symbol(&hash, "invalid")
+                && v.try_symbol().map(|s| s.get_name() == "replace") == Some(true)
+            {
+                flags |= CONVERTER_FLAG_INVALID_REPLACE;
+            }
+            if let Some(v) = find_hash_value_for_symbol(&hash, "undef")
+                && v.try_symbol().map(|s| s.get_name() == "replace") == Some(true)
+            {
+                flags |= CONVERTER_FLAG_UNDEF_REPLACE;
+            }
             if let Some(rep) = find_hash_value_for_symbol(&hash, "replace") {
                 // `replace: nil` → keep the destination's default
                 // replacement (handled lazily by `#replacement`).
@@ -1695,6 +1748,13 @@ fn converter_new(
                 }
             }
         }
+    }
+    if flags != 0 {
+        let _ = globals.store.set_ivar(
+            obj,
+            IdentId::get_id(CONVERTER_FLAGS_IVAR),
+            Value::integer(flags),
+        );
     }
     Ok(obj)
 }
@@ -1795,6 +1855,16 @@ fn converter_replacement_set(
                 ),
             ));
         }
+    } else if dst == crate::value::Encoding::UsAscii && !s.is_ascii() {
+        // `encoding_rs` has no US-ASCII encoder; a non-ASCII
+        // replacement is unrepresentable there (CRuby raises).
+        return Err(MonorubyErr::undefined_conversion_error(
+            &globals.store,
+            format!(
+                "U+{:04X} from UTF-8 to US-ASCII",
+                s.chars().find(|c| !c.is_ascii()).map(|c| c as u32).unwrap_or(0)
+            ),
+        ));
     }
     // Tag the stored value with the destination's encoding so a
     // subsequent `replacement` call returns it correctly classified.
@@ -1846,16 +1916,9 @@ fn converter_convert(
         .to_vec();
     let src = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
-    // Plumb the configured replacement through the transcoder so a
-    // user-set `replacement = "..."` is honoured by `convert`.
-    let mut opts = TranscodeOpts::default();
-    if let Some(v) = globals
-        .store
-        .get_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR))
-        && let Some(s) = v.is_str()
-    {
-        opts.replace = Some(s.to_string());
-    }
+    // Honour the configured replacement + `invalid:`/`undef:
+    // :replace` flags (a user-set `#replacement=` too).
+    let opts = converter_transcode_opts(globals, recv);
     let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
     // A successful `convert` leaves the converter "drained":
     // `primitive_errinfo` reports `[:source_buffer_empty, nil×4]`
@@ -1986,6 +2049,7 @@ fn stream_convert(
     dst_enc: crate::value::Encoding,
     max_dst_bytes: Option<usize>,
     partial_input: bool,
+    opts: &TranscodeOpts,
 ) -> (StreamConvertResult, usize, Vec<u8>) {
     use crate::value::Encoding as E;
     // Identity-copy fast path: only safe when the *source* is
@@ -2004,6 +2068,58 @@ fn stream_convert(
             StreamConvertResult::Finished
         };
         return (result, limit, src_bytes[..limit].to_vec());
+    }
+    // US-ASCII / ASCII-8BIT destination: `encoding_rs` has no
+    // encoder for these. Decode the source to UTF-8, then every
+    // character must be ASCII — a non-ASCII char is
+    // `:undefined_conversion` (or the configured replacement when
+    // `undef: :replace`). The first non-ASCII char wins over any
+    // later malformed byte (CRuby converts incrementally), so the
+    // undef check precedes the decode-error check.
+    if encoding_to_rs(dst_enc).is_none() && matches!(dst_enc, E::UsAscii | E::Ascii8) {
+        let (decoded, had_decode_err): (String, bool) =
+            if let Some(src_rs) = encoding_to_rs(src_enc) {
+                let (s, e) = src_rs.decode_without_bom_handling(src_bytes);
+                (s.into_owned(), e)
+            } else {
+                match std::str::from_utf8(src_bytes) {
+                    Ok(s) => (s.to_string(), false),
+                    Err(_) => (String::from_utf8_lossy(src_bytes).into_owned(), true),
+                }
+            };
+        let repl = opts.replace_str(dst_enc);
+        let mut out: Vec<u8> = Vec::with_capacity(src_bytes.len());
+        for ch in decoded.chars() {
+            if ch.is_ascii() {
+                out.push(ch as u8);
+            } else if opts.undef_replace {
+                out.extend_from_slice(repl.as_bytes());
+            } else {
+                return (
+                    StreamConvertResult::UndefinedConversion,
+                    src_bytes.len(),
+                    out,
+                );
+            }
+        }
+        if had_decode_err && !opts.invalid_replace {
+            return (
+                StreamConvertResult::InvalidByteSequence,
+                src_bytes.len(),
+                out,
+            );
+        }
+        if let Some(max) = max_dst_bytes {
+            if out.len() > max {
+                out.truncate(max);
+                return (
+                    StreamConvertResult::DestinationBufferFull,
+                    src_bytes.len(),
+                    out,
+                );
+            }
+        }
+        return (StreamConvertResult::Finished, src_bytes.len(), out);
     }
     // Resolve the encoding_rs encoders. The Converter constructor
     // already validated this pair, so the lookups should succeed —
@@ -2331,8 +2447,15 @@ fn converter_primitive_convert(
     let src_enc = converter_get_src(globals, recv);
     let dst_enc = converter_get_dst(globals, recv);
 
-    let (result, src_consumed, out_bytes) =
-        stream_convert(&src_bytes, src_enc, dst_enc, max_dst_bytes, partial_input);
+    let conv_opts = converter_transcode_opts(globals, recv);
+    let (result, src_consumed, out_bytes) = stream_convert(
+        &src_bytes,
+        src_enc,
+        dst_enc,
+        max_dst_bytes,
+        partial_input,
+        &conv_opts,
+    );
 
     // After-call mutation rules (CRuby observed behaviour):
     //
