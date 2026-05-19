@@ -363,7 +363,19 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     // 2..3 positional args: (src, dst, opts?). `opts` accepts an
     // Integer flag mask or an option Hash; both are tolerated and
     // ignored beyond construction-time validation.
-    globals.define_builtin_class_func_with(converter.id(), "new", converter_new, 2, 3, false);
+    // kw_rest=true so `Converter.new(src, dst, replace: …)` and
+    // `**opts` deliver the options as a trailing Hash (read via
+    // `get_options_hash_value`, like `String#encode`).
+    globals.define_builtin_class_func_with_kw(
+        converter.id(),
+        "new",
+        converter_new,
+        2,
+        3,
+        false,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func(
         converter.id(),
         "asciicompat_encoding",
@@ -1606,8 +1618,34 @@ fn converter_new(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let src = resolve_dst_encoding(vm, globals, lfp.arg(0))?;
-    let dst = resolve_dst_encoding(vm, globals, lfp.arg(1))?;
+    // Resolve to canonical constant names *once* (so a `#to_str`
+    // mock argument is converted exactly once, per spec).
+    let src_name = encode_resolve_enc_arg(vm, globals, lfp.arg(0))?;
+    let dst_name = encode_resolve_enc_arg(vm, globals, lfp.arg(1))?;
+    let src = encoding_from_canonical_name(src_name).ok_or_else(|| {
+        MonorubyErr::converter_not_found_error(
+            &globals.store,
+            format!("code converter not found ({})", src_name),
+        )
+    })?;
+    let dst = encoding_from_canonical_name(dst_name).ok_or_else(|| {
+        MonorubyErr::converter_not_found_error(
+            &globals.store,
+            format!("code converter not found ({})", dst_name),
+        )
+    })?;
+    // CRuby raises `Encoding::ConverterNotFoundError` for identical
+    // source/destination encodings — there is no "X to X" transcoder.
+    // Compare the resolved canonical *names*, not the internal
+    // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
+    // `Utf8`, but CRuby treats them as distinct and DOES build a
+    // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
+    if src_name == dst_name {
+        return Err(MonorubyErr::converter_not_found_error(
+            &globals.store,
+            format!("code converter not found ({} to {})", src.name(), dst.name()),
+        ));
+    }
     validate_converter_pair(src, dst, &globals.store)?;
     let class = lfp.self_val();
     let obj = Value::object(class.as_class_id());
@@ -1624,6 +1662,40 @@ fn converter_new(
         IdentId::get_id(CONVERTER_DST_IVAR),
         Value::string_from_str(dst.name()),
     );
+    // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
+    // With `kw_rest=true` the collected kwargs Hash is delivered in
+    // the slot after the positional args (index 3 here); a literal
+    // positional Hash lands at index 2. An Integer 3rd arg is a
+    // flags bitmask and carries no `replace:`. The encoding args at
+    // 0/1 are never Hashes, so scanning 2..=3 is unambiguous.
+    let opts_hash = (2..=3)
+        .filter_map(|i| lfp.try_arg(i))
+        .find_map(|v| v.try_hash_ty());
+    if let Some(hash) = opts_hash {
+        {
+            if let Some(rep) = find_hash_value_for_symbol(&hash, "replace") {
+                // `replace: nil` → keep the destination's default
+                // replacement (handled lazily by `#replacement`).
+                if !rep.is_nil() {
+                    // CRuby coerces via `#to_str`; a non-String
+                    // return or an object without `#to_str`
+                    // (true/false/Integer) raises TypeError.
+                    let s = if let Some(st) = rep.is_str() {
+                        st.to_string()
+                    } else {
+                        rep.coerce_to_string(vm, globals)?
+                    };
+                    let mut inner = crate::value::RStringInner::from_string_scanned(s);
+                    inner.set_encoding(dst);
+                    let _ = globals.store.set_ivar(
+                        obj,
+                        IdentId::get_id(CONVERTER_REPLACE_IVAR),
+                        Value::string_from_inner(inner),
+                    );
+                }
+            }
+        }
+    }
     Ok(obj)
 }
 

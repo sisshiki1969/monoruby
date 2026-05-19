@@ -320,6 +320,30 @@ mod tests {
     }
 
     #[test]
+    fn encoding_converter_new_replacement_and_same_encoding() {
+        // `Converter.new` option/argument handling, verified
+        // byte-exact against `LANG=C.UTF-8 ruby`.
+        run_tests(&[
+            // `replace:` String (incl. empty) sets the replacement.
+            r#"Encoding::Converter.new("us-ascii","utf-8", replace: "fubar").replacement"#,
+            r#"Encoding::Converter.new("us-ascii","utf-8", replace: "").replacement"#,
+            // nil → keep the destination default ("?" / "�").
+            r#"Encoding::Converter.new("us-ascii","binary", replace: nil).replacement"#,
+            r#"Encoding::Converter.new("us-ascii","utf-8", replace: nil).replacement"#,
+            // #to_str coercion for the replacement object.
+            r#"o = Object.new; def o.to_str; "X"; end; Encoding::Converter.new("us-ascii","utf-8", replace: o).replacement"#,
+            // Identical encodings raise ConverterNotFoundError…
+            r#"(Encoding::Converter.new("utf-8","utf-8") rescue $!.class.name)"#,
+            // …but alias-distinct pairs (UTF-8 vs UTF8-MAC) do not.
+            r#"Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC).class.name"#,
+            // Non-String / non-#to_str replacement → TypeError.
+            r#"(Encoding::Converter.new("us-ascii","utf-8", replace: true) rescue $!.class.name)"#,
+            r#"(Encoding::Converter.new("us-ascii","utf-8", replace: 1) rescue $!.class.name)"#,
+            r#"b = Object.new; def b.to_str; 1; end; (Encoding::Converter.new("us-ascii","utf-8", replace: b) rescue $!.class.name)"#,
+        ]);
+    }
+
+    #[test]
     fn encoding_compatible_rb_enc_compatible() {
         // CRuby's `rb_enc_compatible` truth table (encoding.c),
         // verified byte-exact against `LANG=C.UTF-8 ruby`. Covers
