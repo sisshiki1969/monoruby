@@ -694,6 +694,15 @@ pub(super) fn transcode_bytes_with_opts(
     if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
         return Ok(src_bytes.to_vec());
     }
+    // 7-bit content from any ASCII-compatible source (incl. BINARY,
+    // which `encoding_rs` doesn't model) widens cleanly into the
+    // non-ASCII-compatible UTF-16/UTF-32 targets — every byte is a
+    // valid one-codepoint character. `"def".b.encode("utf-32le")`
+    // works in CRuby; without this it raised ConverterNotFound.
+    if all_ascii && src_enc.is_ascii_compatible() && is_utf16_or_32(dst_enc) {
+        let s = std::str::from_utf8(src_bytes).expect("bytes < 0x80 are valid UTF-8");
+        return Ok(encode_utf16_32(s, dst_enc));
+    }
     // BINARY → ascii-compat with non-ASCII bytes is "undef":
     // there's no Unicode for "byte 0x82 in BINARY".
     if src_enc == E::Ascii8 && dst_enc.is_ascii_compatible() {
@@ -3189,62 +3198,157 @@ fn compute_encoding_compatibility(
         let b_enc = pure_encoding_value(globals, b)?;
         return compatible_encoding_pair(a_enc, b_enc);
     }
-    // String / Symbol / Regexp: route through the "value with
-    // bytes" view. Anything else (Object, nil, …) → nil.
-    let lhs = encoded_view(globals, a)?;
-    let rhs = encoded_view(globals, b)?;
-    let l_inner = RStringInner::from_encoding_scanned(&lhs.bytes, lhs.encoding);
-    let r_inner = RStringInner::from_encoding_scanned(&rhs.bytes, rhs.encoding);
-    l_inner.compatible_encoding(&r_inner)
+    // String / Symbol / Regexp / (bare) Encoding: CRuby's
+    // `rb_enc_compatible`. Anything else (Object, nil, …) → nil.
+    let lhs = encoded_operand(globals, a)?;
+    let rhs = encoded_operand(globals, b)?;
+    rb_enc_compatible(&lhs, &rhs)
 }
 
-/// A `(bytes, encoding)` view of a value that carries an encoding.
-/// String / Symbol / Regexp resolve to one; everything else doesn't.
-struct EncodedView {
+/// An encoding-bearing operand for `Encoding.compatible?`. `is_string`
+/// distinguishes a real `String` (whose emptiness / coderange feed the
+/// extra `rb_enc_compatible` rules) from `Symbol`/`Regexp`/bare
+/// `Encoding`, which CRuby treats as "objects whose encoding is the
+/// same as the contents" (the non-String branches).
+struct EncodedOperand {
     bytes: Vec<u8>,
     encoding: Encoding,
+    is_string: bool,
 }
 
-fn encoded_view(globals: &Globals, v: Value) -> Option<EncodedView> {
+impl EncodedOperand {
+    /// CRuby `rb_enc_str_asciionly_p`: ASCII-compatible encoding AND
+    /// 7-bit content. Non-ASCII-compatible encodings (UTF-16/32, …)
+    /// are never "ASCII only" even for `"abc"`.
+    fn ascii_only(&self) -> bool {
+        self.encoding.is_ascii_compatible()
+            && matches!(
+                RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range(),
+                crate::value::CodeRange::SevenBit
+            )
+    }
+
+    fn code_range(&self) -> crate::value::CodeRange {
+        RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range()
+    }
+}
+
+/// CRuby's `rb_enc_compatible(str1, str2)` (encoding.c). Returns the
+/// negotiated encoding, or `None` for incompatible (the caller maps
+/// that to `nil`). This is the exact algorithm `compatible_spec.rb`
+/// verifies — keep it byte-for-byte faithful.
+fn rb_enc_compatible(a: &EncodedOperand, b: &EncodedOperand) -> Option<Encoding> {
+    use crate::value::CodeRange;
+    let enc1 = a.encoding;
+    let enc2 = b.encoding;
+    if enc1 == enc2 {
+        return Some(enc1);
+    }
+    // An empty *String* second operand yields to the first
+    // unconditionally (even when enc1 is dummy / non-ASCII-compat).
+    if b.is_string && b.bytes.is_empty() {
+        return Some(enc1);
+    }
+    // An empty *String* first operand: the second wins, unless the
+    // first's encoding is ASCII-compatible and the second is ASCII
+    // only (then the first's encoding is kept).
+    if a.is_string && a.bytes.is_empty() {
+        return Some(if enc1.is_ascii_compatible() && b.ascii_only() {
+            enc1
+        } else {
+            enc2
+        });
+    }
+    if !enc1.is_ascii_compatible() || !enc2.is_ascii_compatible() {
+        return None;
+    }
+    // "objects whose encoding is the same as the contents": a
+    // non-String US-ASCII operand defers to the other side.
+    if !b.is_string && enc2 == Encoding::UsAscii {
+        return Some(enc1);
+    }
+    if !a.is_string && enc1 == Encoding::UsAscii {
+        return Some(enc2);
+    }
+    // Orient so the (only / first) String is the left operand; the
+    // coderange negotiation below is written from that viewpoint.
+    let (s1, s2, enc1, enc2) = if !a.is_string {
+        (b, a, enc2, enc1)
+    } else {
+        (a, b, enc1, enc2)
+    };
+    let cr1 = s1.code_range();
+    if s2.is_string {
+        let cr2 = s2.code_range();
+        if cr1 != cr2 {
+            if cr1 == CodeRange::SevenBit {
+                return Some(enc2);
+            }
+            if cr2 == CodeRange::SevenBit {
+                return Some(enc1);
+            }
+        }
+        if cr2 == CodeRange::SevenBit {
+            return Some(enc1);
+        }
+    }
+    if cr1 == CodeRange::SevenBit {
+        return Some(enc2);
+    }
+    None
+}
+
+fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
     if let Some(s) = v.is_rstring_inner() {
-        return Some(EncodedView {
+        return Some(EncodedOperand {
             bytes: s.as_bytes().to_vec(),
             encoding: s.encoding(),
+            is_string: true,
         });
     }
     if let Some(sym) = v.try_symbol() {
         let ident = sym.get_ident_name_clone();
-        let (bytes, encoding) = match &ident {
+        let default_enc = match &ident {
             crate::id_table::IdentName::Utf8(s) => {
-                let enc = if s.is_ascii() {
+                if s.is_ascii() {
                     Encoding::UsAscii
                 } else {
                     Encoding::Utf8
-                };
-                (s.as_bytes().to_vec(), enc)
+                }
             }
-            crate::id_table::IdentName::Bytes(b) => (b.clone(), Encoding::Ascii8),
+            crate::id_table::IdentName::Bytes(_) => Encoding::Ascii8,
         };
-        return Some(EncodedView { bytes, encoding });
+        return Some(EncodedOperand {
+            bytes: ident.as_bytes().to_vec(),
+            // Preserve the symbol's recorded source encoding (set by
+            // the per-(bytes, encoding) interner). Without this, a
+            // `force_encoding("euc-jp").to_sym` symbol would report
+            // ASCII-8BIT and mis-negotiate against ASCII-only sides.
+            encoding: sym.symbol_encoding().unwrap_or(default_enc),
+            is_string: false,
+        });
     }
     if let Some(re) = v.is_regex() {
+        // NOTE: monoruby stores the regexp source as a Rust `String`,
+        // so a non-UTF-8 source (`Regexp.new("\xa4\xa2".b)`) is lossy
+        // before it reaches here — those `compatible_spec.rb` cases
+        // stay failing pending lossless regexp-source storage. The
+        // ASCII / UTF-8 cases are exact.
         let src = re.as_str().as_bytes().to_vec();
-        return Some(EncodedView {
+        return Some(EncodedOperand {
             bytes: src,
             encoding: re.declared_encoding(),
+            is_string: false,
         });
     }
     if v.class() == encoding_class(globals) {
-        // Bare `Encoding` object — treat as an empty string in
-        // that encoding. CRuby's String/Encoding combination
-        // matches `String#<<("".encode(enc))` semantics: the
-        // encoding alone tags the (empty) byte stream so the
-        // empty-side rules in `compatible_encoding` produce
-        // the right result.
+        // Bare `Encoding` object — a non-String operand whose
+        // "contents" are empty in that encoding.
         if let Some(enc) = pure_encoding_value(globals, v) {
-            return Some(EncodedView {
+            return Some(EncodedOperand {
                 bytes: Vec::new(),
                 encoding: enc,
+                is_string: false,
             });
         }
     }
