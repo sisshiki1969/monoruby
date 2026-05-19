@@ -1,5 +1,31 @@
 use super::*;
 
+/// Phase-0 instrumentation for the heap-frame leak: every promoted /
+/// heap-allocated frame is `Box::into_raw`'d and never reclaimed, so
+/// these monotonic counters measure exactly the bytes leaked over a
+/// run. Printed at process exit when `MONORUBY_FRAME_STATS` is set;
+/// `Relaxed` atomics ⇒ negligible overhead, no behaviour change.
+pub(crate) static FRAME_PROMOTIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FRAME_LEAK_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn record_frame_leak(bytes: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    FRAME_PROMOTIONS.fetch_add(1, Relaxed);
+    FRAME_LEAK_BYTES.fetch_add(bytes as u64, Relaxed);
+}
+
+/// `(count, bytes)` of heap frames allocated (= leaked) so far.
+pub fn frame_leak_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        FRAME_PROMOTIONS.load(Relaxed),
+        FRAME_LEAK_BYTES.load(Relaxed),
+    )
+}
+
 ///
 /// Control frame pointer.
 ///
@@ -368,6 +394,7 @@ impl Lfp {
             let mut cfp = self.cfp();
             let len = self.frame_bytes();
             let v = self.frame_ref().to_vec().into_boxed_slice();
+            record_frame_leak(len);
             let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();
             cfp.set_lfp(heap_lfp);
@@ -400,6 +427,7 @@ impl Lfp {
         let v = v.into_boxed_slice();
         let len = v.len() * 8;
         unsafe {
+            record_frame_leak(len);
             let heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             assert!(!heap_lfp.on_stack());
             heap_lfp
@@ -410,6 +438,7 @@ impl Lfp {
         let v = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
         let len = v.len() * 8;
         unsafe {
+            record_frame_leak(len);
             let mut heap_lfp = Lfp::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             heap_lfp.meta_mut().set_on_heap();
             heap_lfp.meta_mut().set_reg_num(1);
