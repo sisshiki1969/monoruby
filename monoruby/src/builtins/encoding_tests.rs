@@ -320,6 +320,42 @@ mod tests {
     }
 
     #[test]
+    fn encoding_converter_primitive_errinfo_non_error_states() {
+        // CRuby's `primitive_errinfo` non-error tuple is
+        // `[state, nil, nil, nil, nil]` — verified byte-exact
+        // against `LANG=C.UTF-8 ruby`.
+        run_tests(&[
+            // No conversion attempted yet.
+            r#"Encoding::Converter.new('ascii','utf-8').primitive_errinfo"#,
+            // After a `:finished` primitive_convert.
+            r#"
+              ec = Encoding::Converter.new('ascii','utf-8')
+              ec.primitive_convert("a".dup,"".dup)
+              ec.primitive_errinfo
+            "#,
+            // After a successful `#convert`.
+            r#"
+              ec = Encoding::Converter.new('ascii','utf-8')
+              ec.convert("a".dup.force_encoding('ascii'))
+              ec.primitive_errinfo
+            "#,
+            // After `:destination_buffer_full`.
+            r#"
+              ec = Encoding::Converter.new("utf-8", "iso-2022-jp")
+              ec.primitive_convert("\u{9999}", "".dup, 0, 0, partial_input: false)
+              ec.primitive_errinfo
+            "#,
+            // Last result wins: error then success → success tuple.
+            r#"
+              ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+              ec.primitive_convert("\xf1abcd".dup,"".dup)
+              ec.primitive_convert("glark".dup.force_encoding('utf-8'),"".dup)
+              ec.primitive_errinfo
+            "#,
+        ]);
+    }
+
+    #[test]
     fn encoding_converter_new_replacement_and_same_encoding() {
         // `Converter.new` option/argument handling, verified
         // byte-exact against `LANG=C.UTF-8 ruby`.

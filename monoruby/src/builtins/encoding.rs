@@ -1857,6 +1857,22 @@ fn converter_convert(
         opts.replace = Some(s.to_string());
     }
     let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+    // A successful `convert` leaves the converter "drained":
+    // `primitive_errinfo` reports `[:source_buffer_empty, nil×4]`
+    // (overwriting any stale tuple from a prior `primitive_convert`).
+    let errinfo = Value::array_from_iter(
+        [
+            Value::symbol_from_str("source_buffer_empty"),
+            Value::nil(),
+            Value::nil(),
+            Value::nil(),
+            Value::nil(),
+        ]
+        .into_iter(),
+    );
+    let _ = globals
+        .store
+        .set_ivar(recv, IdentId::get_id(CONVERTER_ERRINFO_IVAR), errinfo);
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(&out, dst),
     ))
@@ -2381,16 +2397,41 @@ fn converter_primitive_convert(
     dst_arg.replace_with_inner(new_dst);
 
     // Stash the errinfo tuple for `Encoding::Converter#primitive_errinfo`.
-    let errinfo = Value::array_from_iter(
-        [
-            Value::symbol_from_str(result.symbol_name()),
-            Value::string_from_str(src_enc.name()),
-            Value::string_from_str(dst_enc.name()),
-            Value::string_from_str(""),
-            Value::string_from_str(""),
-        ]
-        .into_iter(),
+    // CRuby's non-error results (`:source_buffer_empty`, `:finished`,
+    // `:destination_buffer_full`) carry only the state symbol — the
+    // four trailing fields are `nil`. Error results keep the
+    // src/dst names; the precise erroneous / read-again byte runs
+    // (and the transcoding-path leg encodings) are a separate
+    // follow-up — left as empty strings here, unchanged.
+    let is_error = matches!(
+        result,
+        StreamConvertResult::InvalidByteSequence
+            | StreamConvertResult::UndefinedConversion
+            | StreamConvertResult::IncompleteInput
     );
+    let errinfo = if is_error {
+        Value::array_from_iter(
+            [
+                Value::symbol_from_str(result.symbol_name()),
+                Value::string_from_str(src_enc.name()),
+                Value::string_from_str(dst_enc.name()),
+                Value::string_from_str(""),
+                Value::string_from_str(""),
+            ]
+            .into_iter(),
+        )
+    } else {
+        Value::array_from_iter(
+            [
+                Value::symbol_from_str(result.symbol_name()),
+                Value::nil(),
+                Value::nil(),
+                Value::nil(),
+                Value::nil(),
+            ]
+            .into_iter(),
+        )
+    };
     let _ = globals.store.set_ivar(
         recv,
         IdentId::get_id(CONVERTER_ERRINFO_IVAR),
@@ -2426,13 +2467,15 @@ fn converter_primitive_errinfo(
     {
         return Ok(v);
     }
+    // No `primitive_convert` has run yet — CRuby's "nothing
+    // pending" form is `[:source_buffer_empty, nil, nil, nil, nil]`.
     Ok(Value::array_from_iter(
         [
             Value::symbol_from_str("source_buffer_empty"),
-            Value::string_from_str(""),
-            Value::string_from_str(""),
-            Value::string_from_str(""),
-            Value::string_from_str(""),
+            Value::nil(),
+            Value::nil(),
+            Value::nil(),
+            Value::nil(),
         ]
         .into_iter(),
     ))
@@ -4544,22 +4587,17 @@ mod tests {
 
     #[test]
     fn primitive_errinfo_reflects_last_primitive_convert() {
-        // `primitive_errinfo` returns the 5-tuple
-        // `[result, src_enc_name, dst_enc_name, error_bytes, readagain_bytes]`
-        // of the most recent `primitive_convert`. The exact
-        // `error_bytes` / `readagain_bytes` diverge from CRuby
-        // (monoruby stores empty strings), so check structure rather
-        // than full equality.
+        // CRuby's `primitive_errinfo` for a non-error result
+        // (`:source_buffer_empty` / `:finished` /
+        // `:destination_buffer_full`) is `[state, nil, nil, nil,
+        // nil]` — only the state symbol; the four trailing fields
+        // are nil. (Verified byte-exact vs `LANG=C.UTF-8 ruby`.)
         run_test_no_result_check(
             r#"
               ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
               ec.primitive_convert("hello", "")
               info = ec.primitive_errinfo
-              raise unless info.is_a?(Array)
-              raise unless info.length == 5
-              raise unless info[0] == :finished
-              raise unless info[1] == "UTF-8"
-              raise unless info[2] == "ISO-8859-1"
+              raise unless info == [:finished, nil, nil, nil, nil]
             "#,
         );
     }
