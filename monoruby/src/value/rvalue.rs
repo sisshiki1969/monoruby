@@ -1133,6 +1133,9 @@ impl RValue {
                                 (*self.kind.arithmetic_sequence).clone(),
                             ),
                         },
+                        ObjTy::BINDING => ObjKind {
+                            binding: ManuallyDrop::new((*self.kind.binding).clone()),
+                        },
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -1209,6 +1212,9 @@ impl RValue {
                             arithmetic_sequence: ManuallyDrop::new(
                                 (*self.kind.arithmetic_sequence).clone(),
                             ),
+                        },
+                        ObjTy::BINDING => ObjKind {
+                            binding: ManuallyDrop::new((*self.kind.binding).clone()),
                         },
                         ty => unreachable!("{ty:?}"),
                     }

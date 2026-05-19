@@ -314,6 +314,32 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn binding_dup_clone() {
+        // Cloning a Binding RValue previously hit
+        // `unreachable!("BINDING")` and aborted (ERB dups `binding`).
+        run_test(
+            r#"
+            x = 41
+            b = binding
+            b2 = b.dup
+            b3 = b.clone
+            [b2.class.name, b2.eval("x"), b3.eval("x + 1"),
+             b2.local_variable_get(:x)]
+            "#,
+        );
+        run_test(
+            r#"
+            def m
+              y = 7
+              binding
+            end
+            b = m.dup
+            [b.eval("y"), b.class == Binding]
+            "#,
+        );
+    }
+
+    #[test]
     fn binding_new() {
         run_test(
             r#"
