@@ -81,6 +81,13 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Begin { body: box n, .. }
             | NodeKind::UnOp(_, box n) => self.check_defined(n, nil_label, ret, false)?,
             NodeKind::BinOp(op, box l, box r) => {
+                // `&&` / `||` (and `and`/`or`) are not method calls:
+                // CRuby `defined?(a && b)` is always "expression" and
+                // the operands are *not* checked. Keep the "expression"
+                // string set by `gen_defined` and never jump to nil.
+                if matches!(op, BinOp::LAnd | BinOp::LOr) {
+                    return Ok(());
+                }
                 if top {
                     let body_start = self.new_label();
                     let body_end = self.new_label();
@@ -109,7 +116,11 @@ impl<'a> BytecodeGen<'a> {
                             CmpKind::Ge => IdentId::_GE,
                             CmpKind::TEq => IdentId::_TEQ,
                         },
-                        _ => unimplemented!(),
+                        BinOp::Match => IdentId::_MATCH,
+                        BinOp::Unmatch => IdentId::_UNMATCH,
+                        // LAnd/LOr handled above; all BinOp variants are
+                        // now covered.
+                        BinOp::LAnd | BinOp::LOr => unreachable!(),
                     };
                     self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
                     self.exception_table.push(ExceptionEntry {
@@ -327,6 +338,8 @@ fn defined_str(node: &Node) -> &'static str {
         NodeKind::GlobalVar(..) => "global-variable",
         NodeKind::ClassVar(..) => "class-variable",
         NodeKind::Const { .. } => "constant",
+        // `&&` / `||` are expressions, not method calls.
+        NodeKind::BinOp(BinOp::LAnd | BinOp::LOr, ..) => "expression",
         NodeKind::BinOp(..)
         | NodeKind::FuncCall { .. }
         | NodeKind::MethodCall { .. }
@@ -339,5 +352,27 @@ fn defined_str(node: &Node) -> &'static str {
             None => "nil",
         },
         NodeKind::DiscardLhs => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn defined_logical_and_match_ops() {
+        // `&&` / `||` / `and` / `or` are expressions (operands not
+        // checked); `=~` / `!~` are method calls. Previously these
+        // panicked (`unimplemented!`) and aborted the process.
+        run_test(r#"a = 1; b = 2; defined?(a && b)"#);
+        run_test(r#"defined?(1 || 2)"#);
+        run_test(r#"a = 1; defined?(a and 2)"#);
+        run_test(r#"defined?(1 or 2)"#);
+        run_test(r#"defined?(undef_x && 1)"#);
+        run_test(r#"defined?(undef_x || undef_y)"#);
+        run_test(r#"defined?("x" =~ /x/)"#);
+        run_test(r#"defined?(1 =~ 2).inspect"#);
+        run_test(r#"defined?(1 !~ 2)"#);
+        run_test(r#"defined?(undef_x =~ /a/).inspect"#);
     }
 }
