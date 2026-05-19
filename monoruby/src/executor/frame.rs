@@ -644,3 +644,41 @@ impl Lfp {
         max
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn heap_frame_reclaim_correctness() {
+        // Exercise the promote → register → mark → sweep → free path
+        // (run_test runs the snippet 25× and GCs throughout). The
+        // result must be byte-identical to CRuby, i.e. reclamation
+        // never frees a still-reachable frame.
+        run_test(
+            r#"
+            def mk(n) = ->{ n += 1 }
+            fs = (1..2000).map { |i| mk(i) }
+            fs.map { |f| f.call + f.call }.sum
+            "#,
+        );
+        run_test(
+            r#"
+            r = []
+            500.times do |i|
+              x = i
+              b = binding
+              b.local_variable_set(:y, i * 2)
+              r << b.eval("x + y")
+            end
+            r.sum
+            "#,
+        );
+        run_test(
+            r#"
+            def outer(n) = ->{ ->{ n } }
+            (1..300).map { |i| outer(i).call.call }.sum
+            "#,
+        );
+    }
+}
