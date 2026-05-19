@@ -91,16 +91,23 @@ fn main() {
                 }
             }
 
+            // Bake the build-host Ruby version into the binary as a
+            // compile-time env var instead of a runtime file. This keeps
+            // differential-test parity with the host Ruby when one is
+            // present at build time, while removing any runtime file
+            // dependency (and the startup panic when it is absent).
             match Command::new(&ruby)
-                .args(["-e", "puts(RUBY_VERSION)"])
+                .args(["-e", "print(RUBY_VERSION)"])
                 .output()
             {
-                Ok(output) => {
-                    let dest_path = lib_path.join("ruby_version");
-                    let load_path = std::str::from_utf8(&output.stdout).unwrap();
-                    fs::write(dest_path, load_path).unwrap();
+                Ok(output) if output.status.success() => {
+                    let ver = String::from_utf8_lossy(&output.stdout);
+                    let ver = ver.trim();
+                    if !ver.is_empty() {
+                        println!("cargo:rustc-env=MONORUBY_RUBY_VERSION={ver}");
+                    }
                 }
-                Err(_) => {
+                _ => {
                     println!("cargo:warning=failed to read ruby version from {ruby}");
                 }
             }

@@ -304,12 +304,17 @@ impl Globals {
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
 
-        let version_path = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("ruby_version");
-        let ruby_version = std::fs::read_to_string(&version_path).unwrap();
-        let ruby_version = ruby_version.trim().to_string();
+        // The reported Ruby language level is baked in at compile time by
+        // build.rs (env `MONORUBY_RUBY_VERSION`, set from the build-host
+        // Ruby for differential-test parity). When no Ruby was available
+        // at build time we fall back to the language level monoruby
+        // targets, so the interpreter runs with zero runtime Ruby
+        // dependency instead of panicking on a missing cache file.
+        const DEFAULT_RUBY_VERSION: &str = "4.0.0";
+        let ruby_version = option_env!("MONORUBY_RUBY_VERSION")
+            .unwrap_or(DEFAULT_RUBY_VERSION)
+            .trim()
+            .to_string();
 
         // Build all the top-level RUBY_* String constants up-front.
         // CRuby exposes these as frozen Strings; ruby/spec
