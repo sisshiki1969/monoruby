@@ -2320,11 +2320,71 @@ impl Executor {
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
     ) {
-        let positions: Vec<Option<(usize, usize)>> = captures
-            .iter()
-            .map(|m| m.as_ref().map(|m| (m.start(), m.end())))
-            .collect();
-        let mut md = MatchDataInner::new(haystack.to_string(), positions);
+        // Onigmo's `Match::{as_str, post, to_string}` slice the
+        // haystack as `&str`, which panics (`panic_nounwind` ⇒
+        // extern "C" boundary abort) when a `/n` (binary) regexp
+        // returns byte offsets that land mid-UTF-8 of the source
+        // string. Slice on bytes and lossy-decode for the `String`
+        // fields, which preserves valid UTF-8 unchanged and avoids
+        // the abort for binary subjects.
+        let bytes = haystack.as_bytes();
+        match captures.get(0) {
+            Some(m) => {
+                let (s, e) = (m.start(), m.end());
+                self.sp_last_match =
+                    Some(String::from_utf8_lossy(&bytes[s..e]).into_owned());
+                self.sp_pre_match =
+                    Some(String::from_utf8_lossy(&bytes[..s]).into_owned());
+                self.sp_post_match =
+                    Some(String::from_utf8_lossy(&bytes[e..]).into_owned());
+            }
+            None => {
+                self.sp_last_match = None;
+                self.sp_pre_match = None;
+                self.sp_post_match = None;
+            }
+        };
+
+        self.sp_matches.clear();
+        self.sp_match_positions.clear();
+        self.sp_match_haystack = Some(haystack.to_string());
+        for m in captures.iter() {
+            self.sp_match_positions
+                .push(m.as_ref().map(|m| (m.start(), m.end())));
+            self.sp_matches.push(
+                m.map(|m| String::from_utf8_lossy(&bytes[m.start()..m.end()]).into_owned()),
+            );
+        }
+    }
+
+    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
+        // `MatchData#[]` (and therefore `Regexp.last_match(n)`)
+        // negative-indexes within `captures` only — `sp_matches[0]`
+        // (the full match) is *not* reachable through a negative
+        // index. For `(\w)(\w)(\w)` matched against "abc",
+        // `last_match(-3)` is "a" but `last_match(-4)` is nil even
+        // though `to_a` has 4 entries.
+        if nth < 0 {
+            let captures_len = self.sp_matches.len() as i64 - 1;
+            if -nth > captures_len {
+                return None;
+            }
+            nth += self.sp_matches.len() as i64;
+        }
+        if nth >= 0
+            && let Some(Some(s)) = self.sp_matches.get(nth as usize)
+        {
+            return Some(Value::string_from_str(s));
+        }
+        None
+    }
+
+    pub(crate) fn get_last_matchdata(&self) -> Value {
+        if self.sp_match_positions.is_empty() {
+            return Value::nil();
+        }
+        let haystack = self.sp_match_haystack.as_deref().unwrap_or("");
+        let mut md = MatchDataInner::new(haystack.to_string(), self.sp_match_positions.clone());
         if let Some(regex_val) = self.sp_match_regex
             && let Some(regex) = regex_val.is_regex()
         {
