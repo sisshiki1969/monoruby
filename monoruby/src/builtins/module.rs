@@ -3057,6 +3057,30 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn bare_visibility_no_cref_no_panic() {
+        // Bare `private`/`public` at the top level — where the
+        // lexical-class frame carries no Cref — previously aborted the
+        // process at `set_context_visibility().unwrap()`. It must now
+        // toggle the top-level default visibility (CRuby: top level
+        // starts `private`).
+        run_test(
+            r#"
+            def pa; end
+            public
+            def pb; end
+            private
+            def pc; end
+            [Object.public_instance_methods(false).include?(:pb),
+             Object.private_instance_methods(false).include?(:pa),
+             Object.private_instance_methods(false).include?(:pc)]
+            "#,
+        );
+        // bare modifier at top level returns nil and does not abort
+        run_test(r#"def t; end; (private).inspect"#);
+        run_test(r#"def t; end; (public).inspect"#);
+    }
+
+    #[test]
     fn toplevel_private_public() {
         // Top-level `private`/`public`/`protected` target Object, and
         // Object's own private instance methods surface in

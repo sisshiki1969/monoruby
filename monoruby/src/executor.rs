@@ -80,6 +80,11 @@ pub struct Executor {
     stack_limit: usize,
     /// lexical class stack.
     lexical_class: Vec<Vec<Cref>>,
+    /// Default method visibility for the top level (and any context
+    /// whose lexical-class frame carries no `Cref`), toggled by a
+    /// bare `private` / `public` / `protected`. CRuby's top-level
+    /// default is `private`.
+    toplevel_visibility: Visibility,
     sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
     sp_pre_match: Option<String>,    // $`        : Regexp.pre_match
     sp_post_match: Option<String>,   // $'        : Regexp.post_match
@@ -115,6 +120,7 @@ impl std::default::Default for Executor {
             parent_fiber: None,
             stack_limit: 0,
             lexical_class: vec![vec![]],
+            toplevel_visibility: Visibility::Private,
             sp_last_match: None,
             sp_pre_match: None,
             sp_post_match: None,
@@ -651,7 +657,7 @@ impl Executor {
             .unwrap()
             .last()
             .cloned()
-            .unwrap_or_else(|| Cref::new(OBJECT_CLASS, false, Visibility::Private))
+            .unwrap_or_else(|| Cref::new(OBJECT_CLASS, false, self.toplevel_visibility))
     }
 
     pub fn context_class_id(&self) -> ClassId {
@@ -726,16 +732,19 @@ impl Executor {
             .unwrap()
             .last()
             .map(|cref| cref.visibility)
-            .unwrap_or(Visibility::Private)
+            .unwrap_or(self.toplevel_visibility)
     }
 
+    /// Set the current default method visibility (bare `private` /
+    /// `public` / `protected`). When the current lexical-class frame
+    /// carries no `Cref` (top level, or a method body whose frame is
+    /// empty) there is nothing to write to, so the toggle is recorded
+    /// in `toplevel_visibility` instead of panicking.
     pub(crate) fn set_context_visibility(&mut self, visi: Visibility) {
-        self.lexical_class
-            .last_mut()
-            .unwrap()
-            .last_mut()
-            .unwrap()
-            .visibility = visi;
+        match self.lexical_class.last_mut().and_then(|f| f.last_mut()) {
+            Some(cref) => cref.visibility = visi,
+            None => self.toplevel_visibility = visi,
+        }
     }
 }
 
