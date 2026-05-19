@@ -1887,7 +1887,11 @@ mod encoding_tests {
             Encoding::try_from_str("UTF-16BE").unwrap(),
             Encoding::Utf16Be
         );
-        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Utf32Le);
+        // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
+        // encodings — distinct ASCII-incompatible `Other` variants,
+        // not the real LE codecs.
+        assert_eq!(Encoding::try_from_str("UTF-16").unwrap(), Encoding::Other(3));
+        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Other(4));
         // Japanese.
         assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
         assert_eq!(
