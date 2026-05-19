@@ -77,9 +77,23 @@ fn dump_ast(code: &str, path: &std::path::Path, kind: ParserKind, globals: &Glob
     }
 }
 
+/// Phase-0 measurement: print the heap-frame leak tally at process
+/// exit when `MONORUBY_FRAME_STATS` is set. Drop runs on normal
+/// `main` return (every exit path here returns rather than aborting).
+struct FrameStatsGuard;
+impl Drop for FrameStatsGuard {
+    fn drop(&mut self) {
+        if std::env::var_os("MONORUBY_FRAME_STATS").is_some() {
+            let (n, bytes) = monoruby::frame_leak_stats();
+            eprintln!("[frame-leak] promotions={n} leaked_bytes={bytes}");
+        }
+    }
+}
+
 fn main() {
     use clap::Parser;
     install_panic_hook();
+    let _frame_stats = FrameStatsGuard;
     let mut finish_flag = false;
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit, args.disable_gems);
