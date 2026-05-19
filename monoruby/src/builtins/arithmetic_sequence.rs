@@ -23,6 +23,16 @@ pub(super) fn init(globals: &mut Globals) {
         ENUMERATOR_CLASS,
         ObjTy::ARITHMETIC_SEQUENCE,
     );
+    // CRuby: `Enumerator::ArithmeticSequence.allocate` raises
+    // `TypeError: allocator undefined for ...` and `.new` raises
+    // `NoMethodError`. Without this the default object allocator
+    // produces an `ObjTy::OBJECT` instance whose class is
+    // ArithmeticSequence; any subsequent ArithmeticSequence builtin
+    // (e.g. `inspect`) then hits `as_arithmetic_sequence_inner`'s
+    // type assertion and aborts the process (non-unwinding builtin).
+    globals.store[ARITHMETIC_SEQUENCE_CLASS].clear_alloc_func();
+    let meta = globals.store.get_metaclass(ARITHMETIC_SEQUENCE_CLASS).id();
+    globals.undef_method_for_class(meta, IdentId::NEW).unwrap();
     globals.define_builtin_class_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "__build",
