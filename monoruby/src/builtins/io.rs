@@ -1017,38 +1017,80 @@ fn io_class_readlines(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    // Validate any subsequent positional arguments. Hash arguments
-    // (forwarded keyword opts) are accepted; Integer limit is accepted but
-    // not enforced.
+    let path = lfp
+        .arg(0)
+        .coerce_to_path_rstring(vm, globals)?
+        .to_str()?
+        .to_string();
+    // arg1 may be a separator (String/nil), a limit (Integer) or an
+    // options Hash; arg2 may be the limit or the options Hash.
+    let mut opts = None;
+    let mut sep = "\n".to_string();
+    let mut whole = false;
     for i in 1..3 {
-        if let Some(arg) = lfp.try_arg(i)
-            && !arg.is_nil()
-            && arg.try_hash_ty().is_none()
-            && arg.try_fixnum().is_none()
-            && arg.is_rstring().is_none()
-        {
+        let Some(arg) = lfp.try_arg(i) else { continue };
+        if arg.is_nil() {
+            if i == 1 {
+                whole = true; // explicit nil separator -> read all
+            }
+        } else if let Some(h) = arg.try_hash_ty() {
+            opts = Some(h);
+        } else if arg.try_fixnum().is_some() {
+            // limit: accepted, not enforced
+        } else if let Some(s) = arg.is_str() {
+            if i == 1 {
+                sep = s.to_string();
+            }
+        } else {
             return Err(MonorubyErr::typeerr(format!(
                 "no implicit conversion of {} into String",
                 globals.get_class_name(arg.class()),
             )));
         }
     }
-    let content = std::fs::read_to_string(&path)
+    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
+    let base = mode.split(':').next().unwrap_or("").replace('b', "");
+    if base == "w" || base == "a" {
+        return Err(MonorubyErr::ioerr("not opened for reading"));
+    }
+    let content = std::fs::read(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let mut lines: Vec<Value> = Vec::new();
-    let mut start = 0;
-    let bytes = content.as_bytes();
-    while start < bytes.len() {
-        if let Some(pos) = content[start..].find('\n') {
-            let end = start + pos + 1;
-            lines.push(Value::string(content[start..end].to_string()));
-            start = end;
-        } else {
-            lines.push(Value::string(content[start..].to_string()));
-            break;
+
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    if whole {
+        if !content.is_empty() {
+            chunks.push(content);
+        }
+    } else if sep.is_empty() {
+        // Paragraph mode: split on blank lines.
+        let text = String::from_utf8_lossy(&content);
+        for part in text.split("\n\n") {
+            let t = part.trim_start_matches('\n');
+            if !t.is_empty() {
+                chunks.push(format!("{t}\n").into_bytes());
+            }
+        }
+    } else {
+        let sb = sep.as_bytes();
+        let mut start = 0;
+        while start < content.len() {
+            if let Some(pos) = content[start..]
+                .windows(sb.len())
+                .position(|w| w == sb)
+            {
+                let end = start + pos + sb.len();
+                chunks.push(content[start..end].to_vec());
+                start = end;
+            } else {
+                chunks.push(content[start..].to_vec());
+                break;
+            }
         }
     }
+    let lines = chunks
+        .into_iter()
+        .map(|c| tag_with_encs(globals, c, ext_obj, int_obj))
+        .collect();
     Ok(Value::array_from_vec(lines))
 }
 
@@ -1074,71 +1116,71 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     };
     let p = vm.get_block_data(globals, bh)?;
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
-    // arg1 may be a separator (String/nil), a limit (Integer), or an options
-    // Hash forwarded from `**opts` (CRuby allows
-    // `IO.foreach(path, chomp: true)` etc.). arg2, if present, is normally
-    // the limit, but may also be the options Hash. Both options and limit
-    // are currently accepted but not enforced — line slicing returns whole
-    // lines and the chomp/mode flags are ignored.
-    let sep = if let Some(sep_val) = lfp.try_arg(1) {
-        if sep_val.is_nil() {
-            None
-        } else if sep_val.try_fixnum().is_some() {
-            // arg1 is a limit, sep defaults to "\n".
-            Some("\n".to_string())
-        } else if sep_val.try_hash_ty().is_some() {
-            // arg1 is the options hash; sep defaults to "\n".
-            Some("\n".to_string())
+    // arg1: separator (String/nil), limit (Integer) or options Hash;
+    // arg2: limit or options Hash.
+    let mut opts = None;
+    let mut sep = Some("\n".to_string());
+    for i in 1..3 {
+        let Some(arg) = lfp.try_arg(i) else { continue };
+        if arg.is_nil() {
+            if i == 1 {
+                sep = None;
+            }
+        } else if let Some(h) = arg.try_hash_ty() {
+            opts = Some(h);
+        } else if arg.try_fixnum().is_some() {
+            // limit: accepted, not enforced
+        } else if i == 1 {
+            sep = Some(arg.coerce_to_str(vm, globals)?);
         } else {
-            Some(sep_val.coerce_to_str(vm, globals)?)
+            // limit position: coerce via #to_int (raises TypeError if
+            // the object converts to neither Integer nor responds to
+            // #to_int), matching CRuby. Value itself is not enforced.
+            let _ = arg.coerce_to_int_i64(vm, globals)?;
         }
-    } else {
-        Some("\n".to_string())
-    };
-    if let Some(arg2) = lfp.try_arg(2)
-        && !arg2.is_nil()
-        && arg2.try_hash_ty().is_none()
-    {
-        let _ = arg2.coerce_to_int_i64(vm, globals)?;
     }
-    match sep {
+    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
+    let base = mode.split(':').next().unwrap_or("").replace('b', "");
+    if base == "w" || base == "a" {
+        return Err(MonorubyErr::ioerr("not opened for reading"));
+    }
+    let content = std::fs::read(&path)
+        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
+
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    match &sep {
         None => {
-            // When sep is nil, yield the entire content as one string
-            vm.invoke_block(globals, &p, &[Value::string(content)])?;
+            if !content.is_empty() {
+                chunks.push(content);
+            }
         }
-        Some(sep) => {
-            let mut start = 0;
-            let content_bytes = content.as_bytes();
-            let sep_bytes = sep.as_bytes();
-            if sep_bytes.is_empty() {
-                // Paragraph mode: split on double newlines
-                let parts: Vec<&str> = content.split("\n\n").collect();
-                for part in parts {
-                    let trimmed = part.trim_start_matches('\n');
-                    if !trimmed.is_empty() {
-                        let mut line = trimmed.to_string();
-                        line.push('\n');
-                        vm.invoke_block(globals, &p, &[Value::string(line)])?;
-                    }
-                }
-            } else {
-                while start < content_bytes.len() {
-                    if let Some(pos) = content[start..].find(&sep) {
-                        let end = start + pos + sep.len();
-                        let line = &content[start..end];
-                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
-                        start = end;
-                    } else {
-                        // Last line without separator
-                        let line = &content[start..];
-                        vm.invoke_block(globals, &p, &[Value::string(line.to_string())])?;
-                        break;
-                    }
+        Some(s) if s.is_empty() => {
+            let text = String::from_utf8_lossy(&content);
+            for part in text.split("\n\n") {
+                let t = part.trim_start_matches('\n');
+                if !t.is_empty() {
+                    chunks.push(format!("{t}\n").into_bytes());
                 }
             }
         }
+        Some(s) => {
+            let sb = s.as_bytes();
+            let mut start = 0;
+            while start < content.len() {
+                if let Some(pos) = content[start..].windows(sb.len()).position(|w| w == sb) {
+                    let end = start + pos + sb.len();
+                    chunks.push(content[start..end].to_vec());
+                    start = end;
+                } else {
+                    chunks.push(content[start..].to_vec());
+                    break;
+                }
+            }
+        }
+    }
+    for c in chunks {
+        let line = tag_with_encs(globals, c, ext_obj, int_obj);
+        vm.invoke_block(globals, &p, &[line])?;
     }
     Ok(Value::nil())
 }
@@ -2355,6 +2397,45 @@ fn set_encoding(
 fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
     super::encoding::encoding_object_name(globals, v)
         .and_then(|n| crate::value::Encoding::try_from_str(&n).ok())
+}
+
+/// Tag `bytes` with the resolved external encoding (defaulting to
+/// `Encoding.default_external`), transcoding external -> internal when
+/// an internal encoding is set and differs and the external is not
+/// BINARY. Used by the `IO.readlines` / `IO.foreach` class methods.
+fn tag_with_encs(
+    globals: &mut Globals,
+    bytes: Vec<u8>,
+    ext_obj: Option<Value>,
+    int_obj: Option<Value>,
+) -> Value {
+    use crate::value::Encoding as E;
+    let ext = match ext_obj {
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        None => {
+            let de = enc_default_external_obj(globals);
+            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
+        }
+    };
+    let intl = int_obj.and_then(|o| enc_obj_to_enum(globals, o));
+    let (out, final_enc) = match intl {
+        Some(i) if i != ext && !matches!(ext, E::Ascii8) => {
+            let topts = super::encoding::TranscodeOpts {
+                invalid_replace: false,
+                undef_replace: false,
+                replace: None,
+            };
+            match super::encoding::transcode_bytes_with_opts(&bytes, ext, i, &topts, &globals.store)
+            {
+                Ok(b) => (b, i),
+                Err(_) => (bytes, ext),
+            }
+        }
+        _ => (bytes, ext),
+    };
+    let mut s = Value::string_from_vec(out);
+    s.as_rstring_inner_mut().set_encoding(final_enc);
+    s
 }
 
 /// Build the String returned by a read: tag it with the IO's external
@@ -3879,6 +3960,45 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn io_class_readlines_foreach_encoding() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_rlf.txt", "a\nb\nc\n")
+            r = []
+            r << IO.readlines("/tmp/mr_rlf.txt")
+            # (default-external name is locale-dependent in the sandbox
+            # oracle, so only explicit encodings are asserted)
+            r << IO.readlines("/tmp/mr_rlf.txt", encoding: "iso-8859-1")
+                     .map { |l| l.encoding.name }.uniq
+            r << IO.readlines("/tmp/mr_rlf.txt", nil)            # whole file, one elem
+            r << IO.readlines("/tmp/mr_rlf.txt", 2)              # limit (ignored)
+            r << IO.readlines("/tmp/mr_rlf.txt",
+                              open_args: ["r:euc-jp"]).first.encoding.name
+            acc = []
+            IO.foreach("/tmp/mr_rlf.txt", encoding: "iso-8859-1") do |line|
+              acc << [line, line.encoding.name]
+            end
+            r << acc
+            ext = []
+            IO.foreach("/tmp/mr_rlf.txt", external_encoding: "utf-8",
+                       internal_encoding: "utf-16le") { |l| ext << l.encoding.name }
+            r << ext.uniq
+            File.unlink("/tmp/mr_rlf.txt")
+            r
+            "#,
+        );
+        // write/append-only mode (no :open_args) -> IOError.
+        run_test_error(
+            r#"File.write("/tmp/mr_rlf2.txt","x"); IO.readlines("/tmp/mr_rlf2.txt", mode: "w")"#,
+        );
+        run_test_error(
+            r#"File.write("/tmp/mr_rlf3.txt","x"); IO.foreach("/tmp/mr_rlf3.txt", mode: "a") { |l| l }"#,
+        );
+        // missing file -> Errno::ENOENT.
+        run_test_error(r#"IO.readlines("/tmp/mr_no_dir_qq/none.txt")"#);
     }
 
     #[test]
