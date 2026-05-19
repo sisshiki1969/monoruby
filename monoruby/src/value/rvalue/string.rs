@@ -200,7 +200,8 @@ pub enum Encoding {
 /// Canonical names for [`Encoding::Other`] variants (stateful /
 /// dummy byte encodings monoruby has no native codec for). The
 /// index is the `Encoding::Other` payload.
-pub(crate) const OTHER_ENC_NAMES: &[&str] = &["UTF-7", "CP50220", "CP50221"];
+pub(crate) const OTHER_ENC_NAMES: &[&str] =
+    &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
 
 impl Encoding {
     /// True if the encoding is a strict superset of US-ASCII for
@@ -385,9 +386,14 @@ impl Encoding {
             "US_ASCII" | "ASCII" | "ANSI_X3_4_1968" | "646" => Ok(Encoding::UsAscii),
             "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
 
-            "UTF_16" | "UTF_16LE" => Ok(Encoding::Utf16Le),
+            // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
+            // encodings, distinct from the real `UTF-16LE` / … codecs:
+            // ASCII-incompatible, byte-oriented, name-preserved.
+            "UTF_16" => Ok(Encoding::Other(3)),
+            "UTF_32" => Ok(Encoding::Other(4)),
+            "UTF_16LE" => Ok(Encoding::Utf16Le),
             "UTF_16BE" => Ok(Encoding::Utf16Be),
-            "UTF_32" | "UTF_32LE" => Ok(Encoding::Utf32Le),
+            "UTF_32LE" => Ok(Encoding::Utf32Le),
             "UTF_32BE" => Ok(Encoding::Utf32Be),
 
             "ISO_8859_1" | "ISO8859_1" | "LATIN1" => Ok(Encoding::Iso8859(1)),
@@ -1881,7 +1887,11 @@ mod encoding_tests {
             Encoding::try_from_str("UTF-16BE").unwrap(),
             Encoding::Utf16Be
         );
-        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Utf32Le);
+        // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
+        // encodings — distinct ASCII-incompatible `Other` variants,
+        // not the real LE codecs.
+        assert_eq!(Encoding::try_from_str("UTF-16").unwrap(), Encoding::Other(3));
+        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Other(4));
         // Japanese.
         assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
         assert_eq!(
