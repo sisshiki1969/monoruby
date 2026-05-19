@@ -157,7 +157,7 @@ fn deconstruct_keys_md(
             }
         }
         match last.and_then(|i| m.at(i + 1)) {
-            Some(s) => Value::string_from_str(s),
+            Some(s) => Value::string_from_vec(s.to_vec()),
             None => Value::nil(),
         }
     };
@@ -313,7 +313,9 @@ fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
     match m.pos(0) {
-        Some((start, _)) => Ok(Value::string_from_str(&m.string()[..start])),
+        Some((start, _)) => Ok(Value::string_from_vec(
+            m.string().as_bytes()[..start].to_vec(),
+        )),
         None => Ok(Value::string_from_str("")),
     }
 }
@@ -331,7 +333,9 @@ fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
     match m.pos(0) {
-        Some((_, end)) => Ok(Value::string_from_str(&m.string()[end..])),
+        Some((_, end)) => Ok(Value::string_from_vec(
+            m.string().as_bytes()[end..].to_vec(),
+        )),
         None => Ok(Value::string_from_str("")),
     }
 }
@@ -391,7 +395,7 @@ fn last_matched_named<'a>(
     m: &'a crate::value::rvalue::MatchDataInner,
     capture_names: &[String],
     name: &str,
-) -> Option<&'a str> {
+) -> Option<&'a [u8]> {
     let mut result = None;
     for (i, n) in capture_names.iter().enumerate() {
         if n == name
@@ -436,7 +440,11 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             let s = start as usize;
             let e = (s + slice_len as usize).min(m.len());
             for i in s..e {
-                res.push(m.at(i).map(Value::string_from_str).unwrap_or_default());
+                res.push(
+                    m.at(i)
+                        .map(|b| Value::string_from_vec(b.to_vec()))
+                        .unwrap_or_default(),
+                );
             }
             // Pad with nil for positions past the end.
             let requested = (start + slice_len) as usize;
@@ -467,7 +475,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 })?;
             res.push(
                 m.at(i)
-                    .map(Value::string_from_str)
+                    .map(|b| Value::string_from_vec(b.to_vec()))
                     .unwrap_or_else(Value::nil),
             );
             continue;
@@ -486,7 +494,11 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         if idx >= m.len() {
             res.push(Value::nil());
         } else {
-            res.push(m.at(idx).map(Value::string_from_str).unwrap_or_default());
+            res.push(
+                m.at(idx)
+                    .map(|b| Value::string_from_vec(b.to_vec()))
+                    .unwrap_or_default(),
+            );
         }
     }
     Ok(Value::array_from_vec(res))
@@ -505,7 +517,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn deconstruct(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().skip(1).map(|s| {
-            s.map(Value::string_from_str).unwrap_or_default()
+            s.map(|b| Value::string_from_vec(b.to_vec())).unwrap_or_default()
         }),
     ))
 }
@@ -535,14 +547,18 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         if idx >= m.len() {
             return Ok(Value::nil());
         }
-        Ok(m.at(idx).map(Value::string_from_str).unwrap_or_default())
+        Ok(m.at(idx)
+            .map(|b| Value::string_from_vec(b.to_vec()))
+            .unwrap_or_default())
     } else if let Some(sym) = arg.try_symbol_or_string() {
         if let Some(i) = m
             .regexp()
             .map(|r| r.get_group_members(&format!("{sym}")))
             .and_then(|g| g.last().copied())
         {
-            Ok(m.at(i as usize).map(Value::string_from_str).unwrap_or_default())
+            Ok(m.at(i as usize)
+                .map(|b| Value::string_from_vec(b.to_vec()))
+                .unwrap_or_default())
         } else {
             Err(MonorubyErr::indexerr(format!(
                 "undefined group name reference: {sym}"
@@ -599,7 +615,9 @@ fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         return Ok(Value::nil());
     }
     match m.at(idx) {
-        Some(s) => Ok(Value::integer(s.chars().count() as i64)),
+        Some(s) => Ok(Value::integer(
+            String::from_utf8_lossy(s).chars().count() as i64,
+        )),
         None => Ok(Value::nil()),
     }
 }
@@ -615,7 +633,7 @@ fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().skip(1).map(|s| {
             if let Some(s) = s {
-                Value::string_from_str(s)
+                Value::string_from_vec(s.to_vec())
             } else {
                 Value::nil()
             }
@@ -633,7 +651,7 @@ fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::array_from_iter(
         lfp.self_val().as_match_data().captures().map(|s| {
             if let Some(s) = s {
-                Value::string_from_str(s)
+                Value::string_from_vec(s.to_vec())
             } else {
                 Value::nil()
             }
@@ -682,7 +700,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             return Ok(Value::nil());
         }
         Ok(m.at(idx as usize)
-            .map(|s| Value::string_from_str(s))
+            .map(|s| Value::string_from_vec(s.to_vec()))
             .unwrap_or_default())
     } else if let Some(range) = lfp.arg(0).is_range() {
         // `[start..end]` / `[start...]` / `[..end]` slicing.
@@ -707,7 +725,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let mut result = Value::nil();
         for i in members {
             if let Some(s) = m.at(i as usize) {
-                result = Value::string_from_str(s);
+                result = Value::string_from_vec(s.to_vec());
             }
         }
         Ok(result)
@@ -738,7 +756,7 @@ fn slice_match_data(
     for i in s..e {
         out.push(
             m.at(i)
-                .map(|v| Value::string_from_str(v))
+                .map(|v| Value::string_from_vec(v.to_vec()))
                 .unwrap_or_default(),
         );
     }
@@ -855,7 +873,7 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
             Value::string_from_str(name)
         };
         let val = last_matched_named(&m, &names, name)
-            .map(Value::string_from_str)
+            .map(|b| Value::string_from_vec(b.to_vec()))
             .unwrap_or_default();
         map.insert(key, val, vm, globals)?;
     }

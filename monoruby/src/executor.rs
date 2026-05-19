@@ -2190,15 +2190,23 @@ impl Executor {
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
     ) {
+        // Onigmo's `Match::{as_str, post, to_string}` slice the
+        // haystack as `&str`, which panics (`panic_nounwind` ⇒
+        // extern "C" boundary abort) when a `/n` (binary) regexp
+        // returns byte offsets that land mid-UTF-8 of the source
+        // string. Slice on bytes and lossy-decode for the `String`
+        // fields, which preserves valid UTF-8 unchanged and avoids
+        // the abort for binary subjects.
+        let bytes = haystack.as_bytes();
         match captures.get(0) {
             Some(m) => {
-                let matched = m.as_str();
-                let post = m.post();
-                // `haystack = pre ++ matched ++ post`
-                let pre_len = haystack.len() - matched.len() - post.len();
-                self.sp_last_match = Some(matched.to_string());
-                self.sp_pre_match = Some(haystack[..pre_len].to_string());
-                self.sp_post_match = Some(post.to_string());
+                let (s, e) = (m.start(), m.end());
+                self.sp_last_match =
+                    Some(String::from_utf8_lossy(&bytes[s..e]).into_owned());
+                self.sp_pre_match =
+                    Some(String::from_utf8_lossy(&bytes[..s]).into_owned());
+                self.sp_post_match =
+                    Some(String::from_utf8_lossy(&bytes[e..]).into_owned());
             }
             None => {
                 self.sp_last_match = None;
@@ -2213,7 +2221,9 @@ impl Executor {
         for m in captures.iter() {
             self.sp_match_positions
                 .push(m.as_ref().map(|m| (m.start(), m.end())));
-            self.sp_matches.push(m.map(|m| m.to_string()));
+            self.sp_matches.push(
+                m.map(|m| String::from_utf8_lossy(&bytes[m.start()..m.end()]).into_owned()),
+            );
         }
     }
 
