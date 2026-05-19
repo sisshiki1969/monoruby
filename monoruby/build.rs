@@ -58,7 +58,14 @@ fn main() {
 
     let lib_dir = lib_path.join("lib");
     let builtins_dir = lib_path.join("builtins");
+    // Order matters: the checked-in CRuby stdlib snapshot is laid down
+    // first, then monoruby's own builtins/stdlib/gem stubs overwrite any
+    // name clash so monoruby's host-independent implementations of
+    // C-extension-backed libraries stay authoritative. No `ruby` is
+    // invoked here — the snapshot is produced offline by
+    // bin/vendor-ruby-stdlib, so the build works without CRuby.
     let sources = [
+        (PathBuf::from("vendor/ruby-stdlib"), lib_dir.clone()),
         (PathBuf::from("builtins"), builtins_dir.clone()),
         (PathBuf::from("stdlib"), lib_dir.clone()),
         (PathBuf::from("gem"), lib_dir.clone()),

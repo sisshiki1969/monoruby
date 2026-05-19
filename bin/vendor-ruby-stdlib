@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# Maintenance tool: snapshot CRuby's pure-Ruby standard library and
+# *default* gems into monoruby/vendor/ruby-stdlib/ so monoruby resolves
+# them from its own checked-in copy instead of a host Ruby installation.
+#
+# This is NOT run by `cargo build`. Like bin/refresh-prism-vendored it
+# is a one-off/maintenance step; the checked-in snapshot is what build.rs
+# copies (build.rs never invokes ruby for the stdlib). The snapshot is
+# pinned to the CRuby version below; the content is identical to what the
+# matching ruby-X.Y.Z release tarball expands.
+#
+# Excluded on purpose:
+#  - C-extension-backed default gems (json, date, digest, stringio,
+#    strscan, psych/yaml, zlib, openssl, etc, io-console/-wait/-nonblock,
+#    fcntl) and prism: their .rb requires a native extension monoruby
+#    cannot dlopen. monoruby ships its own host-independent Rust/Ruby
+#    implementations for these (monoruby/builtins, monoruby/stdlib,
+#    monoruby/gem) which remain authoritative.
+#  - Bundled gems (rake, minitest, rbs, debug, …): not part of the
+#    standard library; resolved at runtime from the host's gem-install
+#    directory by the vendored rubygems.
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+DEST="monoruby/vendor/ruby-stdlib"
+
+command -v ruby >/dev/null || { echo "ruby not found (maintenance tool needs it to enumerate paths)"; exit 1; }
+
+RUBY_VER=$(ruby -e 'print RUBY_VERSION')
+STDLIB=$(ruby -e 'print RbConfig::CONFIG["rubylibdir"]')
+ARCHLIB=$(ruby -e 'print RbConfig::CONFIG["archdir"]')
+
+# Names whose Ruby code needs a native extension monoruby cannot load,
+# or which monoruby already implements itself. Keep authoritative copies
+# in monoruby/{builtins,stdlib,gem}; never vendor these from the host.
+EXCLUDE_RE='^(json|date|digest|stringio|strscan|psych|yaml|zlib|openssl|bigdecimal|fiddle|socket|fcntl|io/console|io/wait|io/nonblock|fiber|monitor|set|weakref|prism|did_you_mean|error_highlight|syntax_suggest|objspace|ripper|rbconfig/sizeof)(\.rb|/.*)$'
+
+rm -rf "$DEST"
+mkdir -p "$DEST"
+
+copy_tree() {
+  local src="$1"
+  [ -d "$src" ] || return 0
+  while IFS= read -r -d '' f; do
+    rel="${f#"$src"/}"
+    if [[ "$rel" =~ $EXCLUDE_RE ]]; then continue; fi
+    mkdir -p "$DEST/$(dirname "$rel")"
+    cp "$f" "$DEST/$rel"
+  done < <(find "$src" -name '*.rb' -type f -print0)
+}
+
+echo "Pinning to CRuby $RUBY_VER"
+echo "  stdlib : $STDLIB"
+copy_tree "$STDLIB"
+# arch-specific stdlib (rbconfig.rb lives here; vendored verbatim — it is
+# exactly what CRuby's tool/mkconfig.rb produced for this build, so the
+# monoruby build needs no CRuby to obtain it).
+echo "  archlib: $ARCHLIB"
+copy_tree "$ARCHLIB"
+
+# *Default* gems only (Gem::Specification.default_stubs); bundled gems
+# are intentionally skipped.
+ruby -e 'Gem::Specification.default_stubs.each { |s| s.require_paths.each { |p| d=File.join(s.full_gem_path,p); puts d if Dir.exist?(d) } }' \
+  | sort -u | while IFS= read -r gd; do
+  echo "  gem    : $gd"
+  copy_tree "$gd"
+done
+
+echo "$RUBY_VER" > "$DEST/.ruby-version"
+echo "Vendored $(find "$DEST" -name '*.rb' | wc -l) files into $DEST (pinned $RUBY_VER)"
