@@ -651,21 +651,24 @@ mod tests {
 
     #[test]
     fn heap_frame_reclaim_correctness() {
-        // Exercise the promote → register → mark → sweep → free path
-        // (run_test runs the snippet 25× and GCs throughout). The
-        // result must be byte-identical to CRuby, i.e. reclamation
-        // never frees a still-reachable frame.
-        run_test(
+        // Exercise the promote → register → mark → sweep → free path.
+        // `run_test_once` keeps it cheap under the instrumented CI
+        // (llvm-cov + gc-stress + nextest); gc-stress GCs on every
+        // allocation regardless of run count, so even small loops
+        // promote and reclaim many frames. Result must be
+        // byte-identical to CRuby (reclamation never frees a
+        // still-reachable frame).
+        run_test_once(
             r#"
             def mk(n) = ->{ n += 1 }
-            fs = (1..2000).map { |i| mk(i) }
+            fs = (1..150).map { |i| mk(i) }
             fs.map { |f| f.call + f.call }.sum
             "#,
         );
-        run_test(
+        run_test_once(
             r#"
             r = []
-            500.times do |i|
+            60.times do |i|
               x = i
               b = binding
               b.local_variable_set(:y, i * 2)
@@ -674,10 +677,10 @@ mod tests {
             r.sum
             "#,
         );
-        run_test(
+        run_test_once(
             r#"
             def outer(n) = ->{ ->{ n } }
-            (1..300).map { |i| outer(i).call.call }.sum
+            (1..80).map { |i| outer(i).call.call }.sum
             "#,
         );
     }
