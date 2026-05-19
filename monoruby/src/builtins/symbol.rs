@@ -587,4 +587,59 @@ mod tests {
             r#":café.encoding.name"#,
         ]);
     }
+
+    #[test]
+    fn chilled_symbol_to_s_mutation_reinterns_by_encoding() {
+        // Mutating a `Symbol#to_s` chilled string emits the
+        // "will be frozen" deprecation (gated on Warning[:deprecated])
+        // after re-interning the symbol. Exercises all three
+        // re-intern branches of `emit_chilled_string_mutation_warning`
+        // (ASCII via get_id, non-ASCII-compat via get_id_from_bytes,
+        // invalid-UTF-8 via the Ascii8 fallback). Execute-only: the
+        // message text/stream differs from CRuby's, so no comparison.
+        run_test_no_result_check(
+            r#"
+            Warning[:deprecated] = true
+            cap = Object.new
+            def cap.write(*a) (@b ||= +""); @b << a.join; end
+            def cap.b; @b || ""; end
+            old = $stderr
+            $stderr = cap
+            begin
+              a = :hello.to_s;                       a << "x"
+              b = "foo".encode("UTF-16LE").to_sym.to_s; b.upcase!
+              c = "\xA9".to_sym.to_s;                c << "z"
+            ensure
+              $stderr = old
+            end
+            msg = cap.b
+            raise "ascii branch"   unless msg.include?("string returned by :hello.to_s")
+            raise "utf16 branch"   unless msg.include?(%q{:"foo".to_s})
+            raise "binary branch"  unless msg.include?(%q{:"\xA9".to_s})
+            :ok
+            "#,
+        );
+    }
+
+    #[test]
+    fn symbol_per_bytes_encoding_identity() {
+        // Symbols are interned per (bytes, encoding): same bytes under
+        // different (ASCII-incompatible / non-UTF-8) encodings are
+        // distinct symbols; ASCII content in an ASCII-compatible
+        // encoding collapses to the US-ASCII symbol.
+        run_tests(&[
+            r#""あ".encode("UTF-16LE").to_sym == "あ".encode("UTF-16BE").to_sym"#,
+            r#""あ".encode("UTF-16LE").to_sym.equal?("あ".encode("UTF-16LE").to_sym)"#,
+            r#"["abcd".force_encoding("UTF-7").to_sym.inspect,
+               "abcd".force_encoding("CP50221").to_sym.inspect,
+               "abcd".force_encoding("UTF-7").to_sym ==
+                 "abcd".force_encoding("CP50221").to_sym]"#,
+            r#""a".force_encoding("KOI8-R").to_sym == :a"#,
+            r#""a".force_encoding("UTF-7").to_sym == :a"#,
+            r#""foo".encode("UTF-16LE").to_sym == :foo"#,
+            r#":café.encoding.name"#,
+            r#":foo == :foo"#,
+            r#":hello.upcase"#,
+        ]);
+    }
 }

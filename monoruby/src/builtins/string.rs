@@ -4791,27 +4791,29 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
 fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    // Intern based on actual byte validity rather than the encoding tag:
-    // a UTF-8 labeled string may legitimately contain invalid byte
-    // sequences (e.g. `"\xA9"` from a source literal) and must round-trip
-    // through a Bytes-variant IdentName.
-    let id = match std::str::from_utf8(inner.as_bytes()) {
-        Ok(s) => IdentId::get_id(s),
-        Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec()),
+    use crate::value::Encoding as E;
+    let src = inner.encoding();
+    // CRuby symbol-encoding rule: ASCII-only content in an
+    // ASCII-compatible encoding collapses to US-ASCII (so e.g.
+    // `"a".force_encoding("KOI8-R").to_sym == :a`); otherwise the
+    // source encoding is significant and discriminates identity.
+    let canon = if inner.as_bytes().is_ascii() && src.is_ascii_compatible() {
+        E::UsAscii
+    } else {
+        src
     };
-    // Preserve the source encoding when `Symbol#to_s` cannot
-    // re-derive it from the bytes alone (UTF-16/32, EUC-JP, …).
-    // US-ASCII / UTF-8 / ASCII-8BIT are reconstructed correctly by
-    // the default derivation, so they need no side-map entry.
-    let enc = inner.encoding();
-    if !matches!(
-        enc,
-        crate::value::Encoding::UsAscii
-            | crate::value::Encoding::Utf8
-            | crate::value::Encoding::Ascii8
-    ) {
-        id.set_symbol_encoding(enc);
-    }
+    // US-ASCII / UTF-8 names dedup by string/bytes and have their
+    // encoding re-derived by `Symbol#to_s` (US-ASCII vs UTF-8); other
+    // encodings are byte-interned keyed by `(bytes, encoding)` so the
+    // symbol carries (and round-trips) its distinct identity.
+    let id = if matches!(canon, E::UsAscii | E::Utf8) {
+        match std::str::from_utf8(inner.as_bytes()) {
+            Ok(s) => IdentId::get_id(s),
+            Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), E::Ascii8),
+        }
+    } else {
+        IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), canon)
+    };
     Ok(Value::symbol(id))
 }
 
