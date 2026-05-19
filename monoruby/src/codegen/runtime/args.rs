@@ -142,18 +142,29 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
         // *before* post params for implicit `super` of `def m(a,*r,z)`.
         let sp = cs.splat_pos[0];
         let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
-        // args live at descending addresses: arg i at args_ptr.sub(i)
-        let ary = unsafe { *args_ptr.sub(sp) }
-            .try_array_ty()
-            .expect("internal error: forwarding splat must be an array");
+        // args live at descending addresses: arg i at args_ptr.sub(i).
+        // The splat slot is normally an Array, but a rest parameter
+        // reassigned to a scalar and forwarded via zsuper reaches here
+        // as a non-Array: CRuby wraps a scalar into `[scalar]` and
+        // treats `nil` as empty.
+        let splat_v = unsafe { *args_ptr.sub(sp) };
+        let splat_ary = splat_v.try_array_ty();
+        let splat_len = splat_ary.as_ref().map_or(
+            if splat_v.is_nil() { 0 } else { 1 },
+            |a| a.len(),
+        );
         // buffer order matches the generic splat branch exactly:
-        // lead [0..sp] ++ splat-array ++ post [sp+1..pos_args]
+        // lead [0..sp] ++ splat ++ post [sp+1..pos_args]
         let mut buf: smallvec::SmallVec<[Value; 8]> =
-            smallvec::SmallVec::with_capacity(pos_args - 1 + ary.len());
+            smallvec::SmallVec::with_capacity(pos_args - 1 + splat_len);
         for i in 0..sp {
             buf.push(unsafe { *args_ptr.sub(i) });
         }
-        buf.extend_from_slice(&ary);
+        match &splat_ary {
+            Some(ary) => buf.extend_from_slice(ary),
+            None if !splat_v.is_nil() => buf.push(splat_v),
+            None => {}
+        }
         for i in (sp + 1)..pos_args {
             buf.push(unsafe { *args_ptr.sub(i) });
         }
@@ -268,10 +279,16 @@ fn set_callee_frame_arguments(
         for i in 0..pos_args {
             let v = unsafe { *src.sub(i) };
             if splat_pos.contains(&i) {
-                let ary = v
-                    .try_array_ty()
-                    .expect("internal error: splat arguments must be an array");
-                buf.extend_from_slice(&ary);
+                // The splatted value is normally an Array, but a rest
+                // parameter reassigned to a scalar and then forwarded
+                // via zsuper (`def m(*r); r = x; super; end`) reaches
+                // here as a non-Array. CRuby wraps a scalar into a
+                // single-element array and treats `nil` as empty.
+                if let Some(ary) = v.try_array_ty() {
+                    buf.extend_from_slice(&ary);
+                } else if !v.is_nil() {
+                    buf.push(v);
+                }
             } else {
                 buf.push(v);
             }
@@ -637,4 +654,38 @@ fn hash_splat_and_kw_rest(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn zsuper_reassigned_scalar_rest() {
+        // `def m(*r); r = scalar; super; end` forwards the reassigned
+        // rest via zsuper. CRuby wraps a scalar into `[scalar]` and
+        // treats `nil` as empty; previously this aborted the process
+        // (`expect("splat must be array")`).
+        run_test(
+            r#"
+            class A; def a(*r); r; end; end
+            class B < A; def a(*r); r = "foo"; super; end; end
+            B.new.a("bar")
+            "#,
+        );
+        run_test(
+            r#"
+            class A2; def a(*r, **k); [r, k]; end; end
+            class B2 < A2; def a(*r); r = 7; super; end; end
+            B2.new.a(1, 2)
+            "#,
+        );
+        run_test(
+            r#"
+            class A3; def a(*r); r; end; end
+            class B3 < A3; def a(*r); r = nil; super; end; end
+            B3.new.a(1, 2)
+            "#,
+        );
+    }
 }
