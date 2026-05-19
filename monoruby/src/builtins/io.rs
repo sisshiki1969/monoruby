@@ -4101,6 +4101,36 @@ mod tests {
     }
 
     #[test]
+    fn io_class_read_mode_and_transcode_paths() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_cr4.txt", "abcdef")
+            r = []
+            # :mode string carrying an encoding suffix
+            s = IO.read("/tmp/mr_cr4.txt", mode: "r:iso-8859-1")
+            r << [s, s.encoding.name]
+            # explicit external + internal via options -> transcoded
+            t = IO.read("/tmp/mr_cr4.txt", external_encoding: "utf-8",
+                        internal_encoding: "utf-16le")
+            r << [t.encoding.name, t.bytes]
+            # mode encoding suffix with both ext:int
+            u = IO.read("/tmp/mr_cr4.txt", mode: "r:utf-8:utf-16le")
+            r << [u.encoding.name, u.bytes]
+            # :open_args hash carrying a mode that itself has a suffix
+            v = IO.read("/tmp/mr_cr4.txt", open_args: [{ mode: "r:euc-jp" }])
+            r << v.encoding.name
+            # offset past data with no length -> empty string
+            w = IO.read("/tmp/mr_cr4.txt", nil, 100)
+            r << w
+            File.unlink("/tmp/mr_cr4.txt")
+            r
+            "#,
+        );
+        // ENOENT path (open failure map_err).
+        run_test_error(r#"IO.read("/tmp/mr_no_such_dir_zzz/missing.txt", 4)"#);
+    }
+
+    #[test]
     fn io_open_invalid_fd_raises() {
         run_test_error(r#"IO.open(-1)"#);
         run_test_error(r#"IO.open(99999)"#);
