@@ -4131,6 +4131,30 @@ mod tests {
     }
 
     #[test]
+    fn io_class_read_misc_arg_forms() {
+        run_test(
+            r#"
+            File.write("/tmp/mr_cr5.txt", "abcdef")
+            r = []
+            # integer :mode (File::RDONLY) -> not a String, mode stays "r"
+            r << IO.read("/tmp/mr_cr5.txt", mode: File::RDONLY)
+            # options Hash at the 3rd positional slot (length nil, no offset)
+            r << IO.read("/tmp/mr_cr5.txt", nil, mode: "r")
+            # empty options Hash with a length
+            r << IO.read("/tmp/mr_cr5.txt", 3, **{})
+            # internal == external -> no transcode, tagged that encoding
+            s = IO.read("/tmp/mr_cr5.txt", mode: "r:utf-8:utf-8")
+            r << [s, s.encoding.name]
+            # path object that responds to #to_path
+            klass = Class.new { def initialize(p); @p = p; end; def to_path; @p; end }
+            r << IO.read(klass.new("/tmp/mr_cr5.txt"))
+            File.unlink("/tmp/mr_cr5.txt")
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn io_open_invalid_fd_raises() {
         run_test_error(r#"IO.open(-1)"#);
         run_test_error(r#"IO.open(99999)"#);
