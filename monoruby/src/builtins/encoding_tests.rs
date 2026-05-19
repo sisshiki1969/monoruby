@@ -320,6 +320,73 @@ mod tests {
     }
 
     #[test]
+    fn encoding_converter_replacement_and_flags() {
+        // `#replacement=` / `invalid:`/`undef: :replace` flags
+        // applied through `primitive_convert`, plus US-ASCII-dest
+        // undefined-conversion detection. Verified byte-exact vs
+        // `LANG=C.UTF-8 ruby`.
+        run_tests(&[
+            // undef:replace + custom replacement, UTF-8 → US-ASCII.
+            r#"
+              ec = Encoding::Converter.new("utf-8", "us-ascii", invalid: :replace, undef: :replace)
+              ec.replacement = "!"
+              d = +""
+              s = ec.primitive_convert(+"中文123", d)
+              [s, d]
+            "#,
+            // Integer-flag form (UNDEF_REPLACE bitmask).
+            r#"
+              ec = Encoding::Converter.new("utf-8","us-ascii", Encoding::Converter::UNDEF_REPLACE)
+              d = +""
+              [ec.primitive_convert(+"a中b", d), d]
+            "#,
+            // No flags: non-ASCII → US-ASCII is :undefined_conversion.
+            r#"
+              ec = Encoding::Converter.new("sjis", "ascii")
+              q = "\u{986}".dup.force_encoding('utf-8')
+              ec.primitive_convert(q.dup, +"")
+            "#,
+            // `#replacement=` with a value unrepresentable in the
+            // US-ASCII destination raises (and leaves it unchanged).
+            r#"
+              ec = Encoding::Converter.new("sjis", "ascii")
+              q = "\u{986}".dup.force_encoding('utf-8')
+              ec.primitive_convert(q.dup, +"")
+              begin
+                ec.replacement = q
+                "no-raise"
+              rescue Encoding::UndefinedConversionError
+                ec.replacement
+              end
+            "#,
+            // Malformed source byte (no flags) → US-ASCII is
+            // :invalid_byte_sequence, not :undefined_conversion.
+            r#"
+              ec = Encoding::Converter.new("utf-8", "us-ascii")
+              d = +""
+              s = ec.primitive_convert("\xFF".b.dup.force_encoding('utf-8'), d)
+              [s, d]
+            "#,
+            // invalid: + undef: :replace together, mixed bad byte +
+            // non-ASCII char.
+            r#"
+              ec = Encoding::Converter.new("utf-8","us-ascii", invalid: :replace, undef: :replace)
+              d = +""
+              s = ec.primitive_convert("a\xFFb中".dup.force_encoding('utf-8'), d)
+              [s, d]
+            "#,
+            // `dst_bytesize` cap truncates the US-ASCII branch
+            // (destination_buffer_full) with undef: :replace.
+            r#"
+              ec = Encoding::Converter.new("utf-8","us-ascii", undef: :replace)
+              d = +""
+              s = ec.primitive_convert(+"中文ok", d, nil, 2)
+              [s, d]
+            "#,
+        ]);
+    }
+
+    #[test]
     fn encoding_converter_primitive_errinfo_non_error_states() {
         // CRuby's `primitive_errinfo` non-error tuple is
         // `[state, nil, nil, nil, nil]` — verified byte-exact
