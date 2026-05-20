@@ -91,7 +91,47 @@ pub struct Allocator<T> {
     /// unmarked for two consecutive GC cycles before its buffer is
     /// freed (a one-cycle grace covering the promote→root-store
     /// window).
-    heap_frames: std::collections::HashMap<usize, FrameRec>,
+    heap_frames: std::collections::HashMap<usize, FrameRec, AddrHashBuilder>,
+}
+
+/// Fast hasher for the heap-frame registry. Keys are LFP addresses
+/// (8-byte-aligned `usize`s). The default SipHash is far too slow for
+/// a table that is inserted into on every frame promotion and probed
+/// on every heap-frame mark — under `gc-stress` that is once per
+/// allocation, so SipHash there dominates the whole run. A single
+/// Fibonacci-hash multiply spreads the aligned addresses well enough
+/// for the Swiss table.
+#[derive(Default, Clone, Copy)]
+struct AddrHasher(u64);
+
+impl std::hash::Hasher for AddrHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        // Only ever used with `usize` keys (`write_usize`); this path
+        // is unreachable but kept total for safety.
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0 = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct AddrHashBuilder;
+
+impl std::hash::BuildHasher for AddrHashBuilder {
+    type Hasher = AddrHasher;
+    #[inline]
+    fn build_hasher(&self) -> AddrHasher {
+        AddrHasher(0)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -126,7 +166,7 @@ impl<T: GCBox> Allocator<T> {
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
-            heap_frames: std::collections::HashMap::new(),
+            heap_frames: std::collections::HashMap::default(),
         }
     }
 
@@ -173,30 +213,31 @@ impl<T: GCBox> Allocator<T> {
     /// Free the `Box<[u64]>` of every heap frame that has stayed
     /// unmarked for two consecutive GC cycles.
     fn sweep_heap_frames(&mut self) {
-        let mut dead = vec![];
-        for (&addr, rec) in self.heap_frames.iter_mut() {
+        // Single pass, no per-GC scratch allocation: `retain` ages
+        // every entry and frees + drops the ones unreachable for two
+        // consecutive cycles in place. Avoiding the old `Vec<usize>`
+        // matters because under `gc-stress` this runs once per
+        // allocation.
+        self.heap_frames.retain(|_, rec| {
             if rec.marked {
                 rec.unmarked_age = 0;
-            } else {
-                rec.unmarked_age = rec.unmarked_age.saturating_add(1);
-                if rec.unmarked_age >= 2 {
-                    dead.push(addr);
-                }
+                return true;
             }
-        }
-        for addr in dead {
-            if let Some(rec) = self.heap_frames.remove(&addr) {
-                // SAFETY: `base`/`len` are exactly the raw parts of the
-                // original `Box<[u64]>` (recorded at promotion); the
-                // frame has been unreachable for two GC cycles, so no
-                // live `Lfp` aliases it.
-                unsafe {
-                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                        rec.base, rec.len,
-                    )));
-                }
+            rec.unmarked_age = rec.unmarked_age.saturating_add(1);
+            if rec.unmarked_age < 2 {
+                return true;
             }
-        }
+            // SAFETY: `base`/`len` are exactly the raw parts of the
+            // original `Box<[u64]>` (recorded at promotion); the
+            // frame has been unreachable for two GC cycles, so no
+            // live `Lfp` aliases it.
+            unsafe {
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    rec.base, rec.len,
+                )));
+            }
+            false
+        });
     }
 
     fn new_page(&mut self) -> PageRef<T> {
@@ -333,7 +374,15 @@ impl<T: GCBox> Allocator<T> {
             );
         }
         self.clear_mark();
-        self.clear_frame_marks();
+        // Skip all heap-frame bookkeeping entirely when nothing has
+        // been promoted. The common case (optcarrot and most
+        // benchmarks promote few or no frames) then pays exactly zero
+        // — important under `gc-stress`, where `gc()` runs once per
+        // allocation.
+        let has_heap_frames = !self.heap_frames.is_empty();
+        if has_heap_frames {
+            self.clear_frame_marks();
+        }
         root.mark(self);
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -341,7 +390,9 @@ impl<T: GCBox> Allocator<T> {
         }
         self.salvage_empty_pages();
         self.sweep();
-        self.sweep_heap_frames();
+        if has_heap_frames {
+            self.sweep_heap_frames();
+        }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             assert_eq!(self.free_list_count, self.check_free_list());

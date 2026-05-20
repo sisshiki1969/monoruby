@@ -184,6 +184,34 @@ impl Globals {
 
         WARNING.store(warning, std::sync::atomic::Ordering::Relaxed);
 
+        // Propagate the host CRuby's gem-root directories to the vendored
+        // rubygems via GEM_PATH so `Gem::Specification.find_by_name` can
+        // discover host-installed gems (e.g. those added by `gem install`).
+        // The decoupling policy only injects each gem's *require paths*
+        // into $LOAD_PATH — that lets `require` succeed but leaves the
+        // rubygems specification index empty unless we also point it at
+        // the host gem roots. Done here, before `init_builtins`, because
+        // monoruby's `ENV` hash is materialized from `std::env::vars()`
+        // during builtin init and vendored rubygems reads GEM_PATH at
+        // require-time from that snapshot. Only set when the user hasn't
+        // supplied their own value.
+        if std::env::var_os("GEM_PATH").is_none() {
+            let gem_path_file = dirs::home_dir()
+                .unwrap()
+                .join(".monoruby")
+                .join("gem_path");
+            if let Ok(s) = std::fs::read_to_string(&gem_path_file) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    // SAFETY: `Globals::new` runs single-threaded on the
+                    // main thread before any worker threads are spawned.
+                    unsafe {
+                        std::env::set_var("GEM_PATH", s);
+                    }
+                }
+            }
+        }
+
         let main_object = Value::object(OBJECT_CLASS);
 
         let loaded_features =
@@ -304,12 +332,17 @@ impl Globals {
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
 
-        let version_path = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("ruby_version");
-        let ruby_version = std::fs::read_to_string(&version_path).unwrap();
-        let ruby_version = ruby_version.trim().to_string();
+        // The reported Ruby language level is baked in at compile time by
+        // build.rs (env `MONORUBY_RUBY_VERSION`, set from the build-host
+        // Ruby for differential-test parity). When no Ruby was available
+        // at build time we fall back to the language level monoruby
+        // targets, so the interpreter runs with zero runtime Ruby
+        // dependency instead of panicking on a missing cache file.
+        const DEFAULT_RUBY_VERSION: &str = "4.0.0";
+        let ruby_version = option_env!("MONORUBY_RUBY_VERSION")
+            .unwrap_or(DEFAULT_RUBY_VERSION)
+            .trim()
+            .to_string();
 
         // Build all the top-level RUBY_* String constants up-front.
         // CRuby exposes these as frozen Strings; ruby/spec

@@ -2439,7 +2439,15 @@ mod tests {
 
     #[test]
     fn open() {
-        run_test(r##"$LOAD_PATH.resolve_feature_path("pp")"##);
+        // The resolved path differs between monoruby (vendored stdlib under
+        // ~/.monoruby/lib) and the reference CRuby (host install), so we
+        // assert the shape instead of comparing the absolute path.
+        run_test(
+            r##"
+              res = $LOAD_PATH.resolve_feature_path("pp")
+              [res.class, res[0], res[1].is_a?(String), res[1].end_with?("/pp.rb")]
+            "##,
+        );
         run_test(r##"$LOAD_PATH.resolve_feature_path("zzzz")"##);
     }
 
