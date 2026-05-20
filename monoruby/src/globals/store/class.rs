@@ -73,6 +73,9 @@ pub const BOOL_CLASS: ClassId = ClassId::new(54);
 
 pub const ARITHMETIC_SEQUENCE_CLASS: ClassId = ClassId::new(55);
 
+pub const SIGNAL_EXCEPTION_CLASS: ClassId = ClassId::new(56);
+pub const INTERRUPT_CLASS: ClassId = ClassId::new(57);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -137,6 +140,8 @@ impl std::fmt::Debug for ClassId {
             53 => write!(f, "FATAL_ERROR"),
             54 => write!(f, "BOOL"),
             55 => write!(f, "ARITHMETIC_SEQUENCE"),
+            56 => write!(f, "SIGNAL_EXCEPTION"),
+            57 => write!(f, "INTERRUPT"),
             n => write!(f, "ClassId({n})"),
         }
     }

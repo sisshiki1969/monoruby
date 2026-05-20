@@ -39,7 +39,15 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
-    globals.define_class("SignalException", standarderr, OBJECT_CLASS);
+    let signal_exception = globals.define_builtin_exception_class(
+        "SignalException",
+        SIGNAL_EXCEPTION_CLASS,
+        standarderr,
+    );
+    // `Interrupt` is the Ruby class raised on SIGINT (Ctrl-C). It is a
+    // subclass of SignalException — `rescue SignalException` catches it
+    // but a bare `rescue` (StandardError) does not.
+    globals.define_builtin_exception_class("Interrupt", INTERRUPT_CLASS, signal_exception);
 
     let scripterr = globals.define_class("ScriptError", standarderr, OBJECT_CLASS);
     let loaderr = globals.define_builtin_exception_class("LoadError", LOAD_ERROR_CLASS, scripterr);

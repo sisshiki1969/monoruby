@@ -7,7 +7,7 @@ impl JitModule {
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let sigint_flag = jit.data_i32(0);
+        let pending_signals = jit.data_i32(0);
         let entry_raise = jit.label();
         let entry_panic = jit.label();
         let exec_gc = jit.label();
@@ -31,7 +31,7 @@ impl JitModule {
             class_version,
             const_version,
             alloc_flag,
-            sigint_flag,
+            pending_signals,
             entry_raise,
             exec_gc,
             f64_to_val,
