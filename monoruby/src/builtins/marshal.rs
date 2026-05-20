@@ -1618,6 +1618,21 @@ mod tests {
             Marshal.load("\x04\x08c\x12MMissingClass")
             "##,
         );
+        // 'm' naming a missing constant ⇒ ArgumentError. Same shape
+        // as the 'c' case, just under the module reader.
+        run_test_error(
+            r##"
+            # 'm' + length(13 ⇒ marshal_int 0x12) + "MMissingModul"
+            Marshal.load("\x04\x08m\x12MMissingModul")
+            "##,
+        );
+        // 'M' (TYPE_MODULE_OLD) naming a missing constant ⇒ ArgumentError.
+        run_test_error(
+            r##"
+            # 'M' + length(13 ⇒ marshal_int 0x12) + "MMissingThing"
+            Marshal.load("\x04\x08M\x12MMissingThing")
+            "##,
+        );
         // Dump of an anonymous class ⇒ TypeError.
         run_test_error(
             r##"
