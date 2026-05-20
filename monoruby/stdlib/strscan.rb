@@ -206,6 +206,10 @@ class StringScanner
   private
 
   def _match_at_pos(pattern, advance, return_string)
+    # CRuby's StringScanner (C extension) treats String pattern arguments as
+    # literal byte sequences (memcmp-style), not as Regexps. Convert via
+    # Regexp.escape so metacharacters in the String are matched literally.
+    pattern = Regexp.new(Regexp.escape(pattern)) if pattern.is_a?(String)
     @prev_pos = @pos
     rest_str = @str.byteslice(@pos..-1)
     return nil if rest_str.nil?
@@ -224,6 +228,10 @@ class StringScanner
   end
 
   def _match_forward(pattern, advance, return_string)
+    # CRuby's StringScanner (C extension) treats String pattern arguments as
+    # literal byte sequences (memcmp-style), not as Regexps. Convert via
+    # Regexp.escape so metacharacters in the String are matched literally.
+    pattern = Regexp.new(Regexp.escape(pattern)) if pattern.is_a?(String)
     @prev_pos = @pos
     rest_str = @str.byteslice(@pos..-1)
     return nil if rest_str.nil?
