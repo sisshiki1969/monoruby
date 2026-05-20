@@ -2948,6 +2948,31 @@ mod tests {
         );
     }
 
+    /// A `nil` value in the merged hash deletes the key from ENV and
+    /// libc's `environ` (matching CRuby and `ENV[k] = nil`). yjit-bench
+    /// relies on `ENV.merge!("GEM_HOME" => nil, "GEM_PATH" => nil)`
+    /// at every benchmark's harness top — without this branch every
+    /// monoruby benchmark aborted at load with TypeError.
+    #[test]
+    fn env_merge_bang_nil_deletes() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_MN1"] = "v1"
+            ENV["MONORUBY_ENV_TEST_MN2"] = "v2"
+            before = [ENV["MONORUBY_ENV_TEST_MN1"], ENV["MONORUBY_ENV_TEST_MN2"]]
+            ENV.merge!("MONORUBY_ENV_TEST_MN1" => nil,
+                       "MONORUBY_ENV_TEST_MN2" => nil,
+                       "MONORUBY_ENV_TEST_MN3" => "new")
+            after = [ENV["MONORUBY_ENV_TEST_MN1"],
+                     ENV["MONORUBY_ENV_TEST_MN2"],
+                     ENV["MONORUBY_ENV_TEST_MN3"]]
+            ENV.delete("MONORUBY_ENV_TEST_MN3")
+            [before, after]
+            "##,
+        );
+    }
+
     /// `update` is an alias for `merge!`.
     #[test]
     fn env_update_alias() {
