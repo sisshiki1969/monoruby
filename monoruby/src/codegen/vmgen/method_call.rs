@@ -184,6 +184,11 @@ impl Codegen {
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
+            // SVAR / CME: zero-fill so the GC mark walker stays
+            // sound. Lazy `$~` allocation writes SVAR on first
+            // MatchData; CME stays zero pending its own migration.
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         }
         monoasm! { &mut self.jit,
             movzxw r9, [r13 + (POS_NUM)];

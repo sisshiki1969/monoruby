@@ -220,7 +220,7 @@ impl Meta {
         (self.kind & 0b1_0000) != 0
     }
 
-    fn is_block_style(&self) -> bool {
+    pub(crate) fn is_block_style(&self) -> bool {
         (self.kind & 0b100) != 0
     }
 
