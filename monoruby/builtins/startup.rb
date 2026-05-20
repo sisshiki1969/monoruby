@@ -30,6 +30,32 @@ if File.exist?('/proc/self/exe')
   RbConfig::CONFIG['exec_prefix'] = prefix
 end
 
+
+# Re-derive host-Ruby-dependent RbConfig keys from env vars populated
+# by `Globals::new` (Rust side) when GEM_PATH points at a host CRuby
+# install.
+#
+# The vendored rbconfig.rb captures the *build* host's prefix
+# (e.g. `/opt/rbenv/versions/4.0.2`) but expands every `$(rubylibprefix)`
+# / `$(libdir)` reference eagerly at load time. After that the only way
+# to fix downstream consumers (chiefly `Gem.default_dir`, which sources
+# default gems like `bundler` from
+# `$(rubylibprefix)/gems/$(ruby_version)`) is to overwrite the expanded
+# values directly. The Rust side derives them from GEM_PATH (avoiding
+# Ruby-level String operations that would otherwise set `$~` at this
+# top-level scope and leak `defined?($&)` truthiness into user code)
+# and stashes the result in two env vars; we just read and apply.
+host_rubylibprefix = ENV['MONORUBY_HOST_RUBYLIBPREFIX']
+ruby_api_version   = ENV['MONORUBY_HOST_RUBY_API_VERSION']
+if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby_api_version.empty?
+  RbConfig::CONFIG['rubylibprefix']  = host_rubylibprefix
+  RbConfig::CONFIG['rubylibdir']     = "#{host_rubylibprefix}/#{ruby_api_version}"
+  RbConfig::CONFIG['sitedir']        = "#{host_rubylibprefix}/site_ruby"
+  RbConfig::CONFIG['vendordir']      = "#{host_rubylibprefix}/vendor_ruby"
+  # libdir is one level above rubylibprefix (rubylibprefix == libdir/ruby).
+  RbConfig::CONFIG['libdir']         = File.dirname(host_rubylibprefix)
+end
+
 class BasicObject
   private
   def singleton_method_added(name)

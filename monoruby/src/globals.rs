@@ -234,6 +234,42 @@ impl Globals {
             }
         }
 
+        // Derive the host CRuby's `rubylibprefix` / `ruby_api_version`
+        // from GEM_PATH and stash them in env vars for `startup.rb` to
+        // pick up. Done in Rust (not Ruby) so the substring slicing
+        // doesn't run through monoruby's String#[] / String#split,
+        // which currently set `$~` as a side effect and would leak
+        // `defined?($&)` truthiness into user code (caught by the
+        // `defined_hooked_special_vars` unit test).
+        //
+        // Expected GEM_PATH entry form: `<rubylibprefix>/gems/<X.Y.Z>`
+        // (matches a standard system-style install). When no entry
+        // matches this shape, the override is silently skipped — the
+        // vendored `rbconfig.rb` then keeps its build-time-baked
+        // values, which is the pre-existing behaviour.
+        if let Ok(gp) = std::env::var("GEM_PATH") {
+            for entry in gp.split(':') {
+                let entry = entry.trim_end_matches('/');
+                let Some(idx) = entry.rfind("/gems/") else {
+                    continue;
+                };
+                let prefix = &entry[..idx];
+                let api = &entry[idx + "/gems/".len()..];
+                let mut parts = api.split('.');
+                let ok = parts.clone().count() == 3
+                    && parts.all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+                if !ok {
+                    continue;
+                }
+                // SAFETY: as above — single-threaded main-thread init.
+                unsafe {
+                    std::env::set_var("MONORUBY_HOST_RUBYLIBPREFIX", prefix);
+                    std::env::set_var("MONORUBY_HOST_RUBY_API_VERSION", api);
+                }
+                break;
+            }
+        }
+
         let main_object = Value::object(OBJECT_CLASS);
 
         let loaded_features =
