@@ -2058,6 +2058,25 @@ fn env_merge_bang(
         let pairs: Vec<(Value, Value)> = other.iter().collect();
         for (k, v) in pairs {
             let key = coerce_env_string(k, vm, globals)?;
+            // CRuby: a `nil` value in the merged hash deletes the
+            // variable instead of coercing-then-setting. yjit-bench's
+            // `harness-common.rb` relies on this exact form:
+            // `ENV.merge!("GEM_HOME" => nil, "GEM_PATH" => nil)`.
+            // Without this branch monoruby raises
+            // `TypeError: no implicit conversion of NilClass into String`
+            // in `coerce_env_string`, breaking every benchmark.
+            if v.is_nil() {
+                let key_v = Value::string(key.clone());
+                lfp.self_val().as_hash().remove(key_v, vm, globals)?;
+                if let Ok(c_key) = std::ffi::CString::new(key.as_bytes()) {
+                    // SAFETY: NUL-terminated C string; `unsetenv` is
+                    // thread-safe on Linux.
+                    unsafe {
+                        libc::unsetenv(c_key.as_ptr());
+                    }
+                }
+                continue;
+            }
             check_env_key_for_set(&key, &globals.store)?;
             let mut value = coerce_env_string(v, vm, globals)?;
 
@@ -2925,6 +2944,31 @@ mod tests {
             ENV.delete("MONORUBY_ENV_TEST_BLK")
             ENV.delete("MONORUBY_ENV_TEST_BLK_NEW")
             r
+            "##,
+        );
+    }
+
+    /// A `nil` value in the merged hash deletes the key from ENV and
+    /// libc's `environ` (matching CRuby and `ENV[k] = nil`). yjit-bench
+    /// relies on `ENV.merge!("GEM_HOME" => nil, "GEM_PATH" => nil)`
+    /// at every benchmark's harness top — without this branch every
+    /// monoruby benchmark aborted at load with TypeError.
+    #[test]
+    fn env_merge_bang_nil_deletes() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            ENV["MONORUBY_ENV_TEST_MN1"] = "v1"
+            ENV["MONORUBY_ENV_TEST_MN2"] = "v2"
+            before = [ENV["MONORUBY_ENV_TEST_MN1"], ENV["MONORUBY_ENV_TEST_MN2"]]
+            ENV.merge!("MONORUBY_ENV_TEST_MN1" => nil,
+                       "MONORUBY_ENV_TEST_MN2" => nil,
+                       "MONORUBY_ENV_TEST_MN3" => "new")
+            after = [ENV["MONORUBY_ENV_TEST_MN1"],
+                     ENV["MONORUBY_ENV_TEST_MN2"],
+                     ENV["MONORUBY_ENV_TEST_MN3"]]
+            ENV.delete("MONORUBY_ENV_TEST_MN3")
+            [before, after]
             "##,
         );
     }
