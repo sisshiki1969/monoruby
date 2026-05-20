@@ -87,7 +87,16 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         &["exception"],
         false,
     );
-    globals.define_builtin_module_func_with(kernel_class, "Rational", kernel_rational, 1, 2, false);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "Rational",
+        kernel_rational,
+        1,
+        2,
+        false,
+        &["exception"],
+        false,
+    );
     globals.define_builtin_module_func_with(kernel_class, "Array", kernel_array, 1, 1, false);
     globals.define_builtin_module_func(kernel_class, "require", require, 1);
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
@@ -1482,7 +1491,7 @@ fn complex_real_value(f: f64) -> Value {
 ///
 /// ### Kernel.#Rational
 ///
-/// - Rational(a, b = 1) -> Rational
+/// - Rational(a, b = 1, exception: true) -> Rational | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Rational.html]
 #[monoruby_builtin]
@@ -1491,6 +1500,25 @@ fn kernel_rational(
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
+) -> Result<Value> {
+    // `exception:` keyword is stored after the positional max (2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    match kernel_rational_inner(vm, globals, lfp) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if exception {
+                Err(e)
+            } else {
+                Ok(Value::nil())
+            }
+        }
+    }
+}
+
+fn kernel_rational_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
 ) -> Result<Value> {
     let a = lfp.arg(0);
     if let Some(b) = lfp.try_arg(1) {
@@ -4387,6 +4415,23 @@ mod tests {
         run_test_error("Rational(1, 0)");
         // Type error
         run_test_error("Rational(:foo)");
+    }
+
+    /// `Rational(*, exception: false)` swallows conversion errors and
+    /// returns nil instead of raising — same shape as
+    /// `Float(*, exception: …)` and `Integer(*, exception: …)`.
+    #[test]
+    fn kernel_rational_exception_kw() {
+        run_tests(&[
+            // Symbol can't coerce; with exception: false ⇒ nil.
+            r#"Rational(:foo, exception: false).inspect"#,
+            // Two-arg form also honors the kwarg.
+            r#"Rational(:foo, 2, exception: false).inspect"#,
+            // exception: true is the default — still returns the result.
+            r#"Rational(3, 2, exception: true).to_s"#,
+        ]);
+        // exception: true preserves the error (`Rational(:foo)`).
+        run_test_error(r#"Rational(:foo, exception: true)"#);
     }
 
     #[test]
