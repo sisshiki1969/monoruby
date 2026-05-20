@@ -27,6 +27,43 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "wait2", process_wait2, 0, 2, false);
     globals.define_builtin_module_func_with(klass, "waitpid2", process_wait2, 0, 2, false);
     globals.define_builtin_module_func_rest(klass, "kill", process_kill);
+    globals.define_builtin_module_func(klass, "getrlimit", process_getrlimit, 1);
+    globals.define_builtin_module_func_with(klass, "setrlimit", process_setrlimit, 2, 3, false);
+
+    // Process::RLIMIT_* constants for getrlimit / setrlimit (POSIX
+    // `<sys/resource.h>` values).
+    let rlim_consts: &[(&str, i64)] = &[
+        ("RLIMIT_AS",         libc::RLIMIT_AS         as i64),
+        ("RLIMIT_CORE",       libc::RLIMIT_CORE       as i64),
+        ("RLIMIT_CPU",        libc::RLIMIT_CPU        as i64),
+        ("RLIMIT_DATA",       libc::RLIMIT_DATA       as i64),
+        ("RLIMIT_FSIZE",      libc::RLIMIT_FSIZE      as i64),
+        ("RLIMIT_MEMLOCK",    libc::RLIMIT_MEMLOCK    as i64),
+        ("RLIMIT_MSGQUEUE",   libc::RLIMIT_MSGQUEUE   as i64),
+        ("RLIMIT_NICE",       libc::RLIMIT_NICE       as i64),
+        ("RLIMIT_NOFILE",     libc::RLIMIT_NOFILE     as i64),
+        ("RLIMIT_NPROC",      libc::RLIMIT_NPROC      as i64),
+        ("RLIMIT_RSS",        libc::RLIMIT_RSS        as i64),
+        ("RLIMIT_RTPRIO",     libc::RLIMIT_RTPRIO     as i64),
+        ("RLIMIT_RTTIME",     libc::RLIMIT_RTTIME     as i64),
+        ("RLIMIT_SIGPENDING", libc::RLIMIT_SIGPENDING as i64),
+        ("RLIMIT_STACK",      libc::RLIMIT_STACK      as i64),
+    ];
+    for (name, val) in rlim_consts {
+        globals.set_constant_by_str(klass, name, Value::integer(*val));
+    }
+    // `RLIM_INFINITY` / `RLIM_SAVED_CUR` / `RLIM_SAVED_MAX` (all
+    // `u64::MAX` on Linux glibc; cast through i64 — the bit pattern
+    // is what specs compare).
+    globals.set_constant_by_str(
+        klass, "RLIM_INFINITY", Value::integer(libc::RLIM_INFINITY as i64),
+    );
+    globals.set_constant_by_str(
+        klass, "RLIM_SAVED_CUR", Value::integer(libc::RLIM_SAVED_CUR as i64),
+    );
+    globals.set_constant_by_str(
+        klass, "RLIM_SAVED_MAX", Value::integer(libc::RLIM_SAVED_MAX as i64),
+    );
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -85,6 +122,125 @@ fn times(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::integer(std::process::id() as i64))
+}
+
+///
+/// ### Process.getrlimit
+///
+/// - getrlimit(resource) -> [cur_limit, max_limit]
+///
+/// Thin wrapper over POSIX `getrlimit(2)`. The resource argument is
+/// one of the `Process::RLIMIT_*` integer constants; the returned
+/// pair is `[soft_limit, hard_limit]` as Integers (`RLIM_INFINITY`
+/// shows up as the libc sentinel — `u64::MAX` cast through i64, the
+/// shape monoruby uses for the corresponding constant).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/getrlimit.html]
+/// CRuby accepts the resource argument as Integer, Symbol, or
+/// String — the Symbol/String form is the bare suffix of the
+/// `RLIMIT_*` name (e.g. `:CORE`, `"NOFILE"`). Map them to the
+/// corresponding libc constant.
+fn coerce_rlimit_resource(
+    val: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<i64> {
+    if let Some(sym) = val.try_symbol() {
+        return rlim_resource_from_name(sym.get_name().as_str());
+    }
+    if let Some(s) = val.is_rstring()
+        && let Ok(s) = std::str::from_utf8(&s)
+    {
+        return rlim_resource_from_name(s);
+    }
+    val.coerce_to_int_i64(vm, globals)
+}
+
+fn rlim_resource_from_name(name: &str) -> Result<i64> {
+    let n = match name {
+        "AS" => libc::RLIMIT_AS,
+        "CORE" => libc::RLIMIT_CORE,
+        "CPU" => libc::RLIMIT_CPU,
+        "DATA" => libc::RLIMIT_DATA,
+        "FSIZE" => libc::RLIMIT_FSIZE,
+        "MEMLOCK" => libc::RLIMIT_MEMLOCK,
+        "MSGQUEUE" => libc::RLIMIT_MSGQUEUE,
+        "NICE" => libc::RLIMIT_NICE,
+        "NOFILE" => libc::RLIMIT_NOFILE,
+        "NPROC" => libc::RLIMIT_NPROC,
+        "RSS" => libc::RLIMIT_RSS,
+        "RTPRIO" => libc::RLIMIT_RTPRIO,
+        "RTTIME" => libc::RLIMIT_RTTIME,
+        "SIGPENDING" => libc::RLIMIT_SIGPENDING,
+        "STACK" => libc::RLIMIT_STACK,
+        other => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid resource name: {}",
+                other
+            )));
+        }
+    };
+    Ok(n as i64)
+}
+
+#[monoruby_builtin]
+fn process_getrlimit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let resource = coerce_rlimit_resource(lfp.arg(0), vm, globals)?;
+    let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::getrlimit(resource as u32, &mut rlim) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("getrlimit"),
+        ));
+    }
+    Ok(Value::array_from_vec(vec![
+        Value::integer(rlim.rlim_cur as i64),
+        Value::integer(rlim.rlim_max as i64),
+    ]))
+}
+
+///
+/// ### Process.setrlimit
+///
+/// - setrlimit(resource, cur_limit, max_limit = cur_limit) -> nil
+///
+/// Thin wrapper over POSIX `setrlimit(2)`. When `max_limit` is
+/// omitted, the soft limit is used for both arms (CRuby contract).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/setrlimit.html]
+#[monoruby_builtin]
+fn process_setrlimit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let resource = coerce_rlimit_resource(lfp.arg(0), vm, globals)?;
+    let cur = lfp.arg(1).coerce_to_int_i64(vm, globals)? as libc::rlim_t;
+    let max = if let Some(v) = lfp.try_arg(2) {
+        v.coerce_to_int_i64(vm, globals)? as libc::rlim_t
+    } else {
+        cur
+    };
+    let rlim = libc::rlimit { rlim_cur: cur, rlim_max: max };
+    let rc = unsafe { libc::setrlimit(resource as u32, &rlim) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("setrlimit"),
+        ));
+    }
+    Ok(Value::nil())
 }
 
 ///
@@ -818,5 +974,29 @@ mod tests {
     fn process_kill_missing_pid() {
         // No pid at all -> ArgumentError.
         run_test_error(r#"Process.kill("TERM")"#);
+    }
+
+    /// `Process.getrlimit` accepts Integer / Symbol / String resource
+    /// names, returns `[soft, hard]`. Constants exist and match libc.
+    /// `Process.setrlimit` round-trips the (soft, hard) pair.
+    #[test]
+    fn process_rlimit() {
+        // Symbol shortcut.
+        run_test_once(r#"Process.getrlimit(:NOFILE).is_a?(Array) && Process.getrlimit(:NOFILE).size == 2"#);
+        // String shortcut.
+        run_test_once(r#"Process.getrlimit("CORE").is_a?(Array) && Process.getrlimit("CORE").size == 2"#);
+        // Integer form via the named constant.
+        run_test_once(r#"Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)"#);
+        // Round-trip setrlimit (lowering the soft limit is a no-fail
+        // op on a process with the default ulimit).
+        run_test_once(
+            r#"
+            soft, hard = Process.getrlimit(:NOFILE)
+            Process.setrlimit(:NOFILE, soft, hard)
+            Process.getrlimit(:NOFILE) == [soft, hard]
+            "#,
+        );
+        // Invalid resource name.
+        run_test_error(r#"Process.getrlimit(:NOPE)"#);
     }
 }
