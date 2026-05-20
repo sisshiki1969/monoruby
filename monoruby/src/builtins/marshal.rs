@@ -287,6 +287,11 @@ impl<'a> MarshalReader<'a> {
             }
             b'o' => self.read_user_object(vm, globals),
             b'u' => self.read_user_marshal(vm, globals),
+            // 'U' (TYPE_USRMARSHAL): an object whose class defines
+            // `marshal_load`. Format: symbol(class) + inner value.
+            // On load, allocate a fresh instance of the class and
+            // drive `instance.marshal_load(value)`.
+            b'U' => self.read_usr_marshal(vm, globals),
             // 'C' (TYPE_USERCLASS) wraps a built-in value in a
             // user-defined subclass (e.g. `class S < String; end`'s
             // instance). Format: symbol + inner value.
@@ -552,6 +557,36 @@ impl<'a> MarshalReader<'a> {
         let _class_sym = self.read_symbol()?;
         let val = self.read_value(vm, globals)?;
         Ok(val)
+    }
+
+    /// Read a user-marshal object ('U' tag, TYPE_USRMARSHAL).
+    /// Format: `symbol(class_name) + inner-value`.
+    /// On load CRuby allocates a fresh instance of the class and
+    /// then drives `instance.marshal_load(value)` — `instance` is
+    /// returned (the `marshal_load` return value is ignored).
+    fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let class_sym = self.read_symbol()?;
+        let value = self.read_value(vm, globals)?;
+        let class_name = class_sym.get_name();
+        let class_name_id = IdentId::get_id(&class_name);
+        let class_val = globals
+            .get_constant(OBJECT_CLASS, class_name_id)
+            .and_then(|state| state.loaded_value())
+            .ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+            })?;
+        let module = class_val.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        })?;
+        // Allocate without running initialize (CRuby `allocate`
+        // shape). `call_alloc_func` raises TypeError if the class
+        // never declared an allocator — surface that verbatim.
+        let instance = crate::builtins::class::call_alloc_func(globals, module.id())?;
+        // Drive `instance.marshal_load(value)`. The return value is
+        // discarded; the spec checks the receiver's resulting state.
+        let marshal_load_id = IdentId::get_id("marshal_load");
+        vm.invoke_method_inner(globals, marshal_load_id, instance, &[value], None, None)?;
+        Ok(instance)
     }
 
     /// Read a user-class wrapper ('C' tag).
@@ -1040,6 +1075,28 @@ mod tests {
     /// subclass, and 'e'-tagged bytes when the instance has been
     /// `obj.extend(Module)`'d. monoruby's reader now reconstructs
     /// the inner natively, then swaps class / drives `extend` so the
+    /// `Marshal.load` 'U' (TYPE_USRMARSHAL) reader: allocate an
+    /// instance of the named class and drive its `marshal_load`
+    /// with the inner value. CRuby preserves the call shape
+    /// (the return value of `marshal_load` is ignored — the
+    /// instance itself is the result).
+    #[test]
+    fn marshal_load_usr_marshal() {
+        run_test(
+            r##"
+            class UMS
+              def marshal_dump; "hello-data"; end
+              def marshal_load(d); @loaded = d; end
+            end
+            # CRuby-produced bytes for `UMS.new`'s marshal_dump
+            # ("hello-data" packed as an IVar-wrapped String).
+            bytes = "\x04\x08\x55\x3a\x08\x55\x4d\x53\x49\x22\x0f\x68\x65\x6c\x6c\x6f\x2d\x64\x61\x74\x61\x06\x3a\x06\x45\x46"
+            o = Marshal.load(bytes)
+            [o.class, o.instance_variable_get(:@loaded)]
+            "##,
+        );
+    }
+
     /// loaded object is an instance of the user class / extended
     /// with the named module.
     #[test]
