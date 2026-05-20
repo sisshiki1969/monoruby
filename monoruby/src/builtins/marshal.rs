@@ -548,15 +548,41 @@ impl<'a> MarshalReader<'a> {
         Ok(built_obj)
     }
 
-    /// Read a user-marshal object ('u' tag).
-    /// Format: symbol(class_name) + raw_data
+    /// Read a user-defined object ('u' tag, TYPE_USERDEF).
+    /// Format: `symbol(class_name) + length(varint) + raw-bytes`.
+    /// On load CRuby calls the class's `_load` *class* method with
+    /// the raw bytes as a String and returns the result. (This is
+    /// distinct from `'U'` / `TYPE_USRMARSHAL`, which dispatches to
+    /// the *instance* method `marshal_load`.)
     ///
-    /// Currently, this reads the class name symbol, then reads and returns
-    /// the nested value, effectively ignoring the class information.
+    /// Until this fix, monoruby read the symbol and then ran
+    /// `read_value` to consume the trailing payload — but `'u'`'s
+    /// payload is *not* a nested marshal value; it's a raw byte
+    /// string. The misalignment surfaced as bogus
+    /// "unsupported marshal type tag: 0xNN ('?')" errors on the
+    /// next dispatch because `read_value` reinterpreted the length
+    /// byte as a tag.
     fn read_user_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let _class_sym = self.read_symbol()?;
-        let val = self.read_value(vm, globals)?;
-        Ok(val)
+        let class_sym = self.read_symbol()?;
+        let len = self.read_fixnum()? as usize;
+        let bytes = self.read_bytes(len)?.to_vec();
+        let class_name = class_sym.get_name();
+        let class_name_id = IdentId::get_id(&class_name);
+        let class_val = globals
+            .get_constant(OBJECT_CLASS, class_name_id)
+            .and_then(|state| state.loaded_value())
+            .ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+            })?;
+        let module = class_val.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        })?;
+        // Hand the raw payload as a binary String to `_load` (CRuby
+        // semantics — the payload is whatever `_dump` produced, so
+        // ASCII-8BIT preserves the bytes verbatim).
+        let payload = Value::bytes(bytes);
+        let load_id = IdentId::get_id("_load");
+        vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)
     }
 
     /// Read a user-marshal object ('U' tag, TYPE_USRMARSHAL).
@@ -1074,6 +1100,29 @@ mod tests {
     /// `Array`, `Hash`, …) instance whose actual class is a user
     /// subclass, and 'e'-tagged bytes when the instance has been
     /// `obj.extend(Module)`'d. monoruby's reader now reconstructs
+    /// `Marshal.load` 'u' (TYPE_USERDEF) reader: read the length-
+    /// prefixed payload (a raw byte string, *not* a nested marshal
+    /// value), then call the class's `_load` class method with it.
+    /// The earlier stub mis-decoded the payload as a nested value,
+    /// so the length byte was reinterpreted as a tag and the next
+    /// dispatch raised
+    /// `unsupported marshal type tag: 0xNN ('?')`.
+    #[test]
+    fn marshal_load_user_def() {
+        run_test(
+            r##"
+            class UD
+              def _dump(level); "payload-data"; end
+              def self._load(s); n = new; n.instance_variable_set(:@x, s); n; end
+            end
+            # CRuby-produced bytes for `UD.new`'s _dump value.
+            bytes = "\x04\x08\x49\x75\x3a\x07\x55\x44\x11\x70\x61\x79\x6c\x6f\x61\x64\x2d\x64\x61\x74\x61\x06\x3a\x06\x45\x46"
+            o = Marshal.load(bytes)
+            [o.class, o.instance_variable_get(:@x)]
+            "##,
+        );
+    }
+
     /// the inner natively, then swaps class / drives `extend` so the
     /// `Marshal.load` 'U' (TYPE_USRMARSHAL) reader: allocate an
     /// instance of the named class and drive its `marshal_load`
