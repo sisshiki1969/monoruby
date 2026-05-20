@@ -151,6 +151,65 @@ class Date
   def eql?(other)
     self.class == other.class && self == other
   end
+
+  # Add `n` months. The result's day is clamped to the last valid
+  # day of the resulting month (e.g. Jan 31 >> 1 ⇒ Feb 28/29).
+  # Dispatches through `self.class.civil` so a DateTime receiver
+  # returns a DateTime (CRuby preserves the type).
+  def >>(n)
+    n = n.to_int
+    total = @year * 12 + (@month - 1) + n
+    y = total.div(12)
+    m = total.modulo(12) + 1
+    d = [@day, Date._days_in_month(y, m)].min
+    if self.is_a?(DateTime)
+      self.class.civil(y, m, d, @hour, @min, @sec, @offset)
+    else
+      self.class.civil(y, m, d)
+    end
+  end
+
+  # Subtract `n` months. `Date#<<(n)` is `Date#>>(-n)`.
+  def <<(n)
+    self >> -n.to_int
+  end
+
+  # Next-month / previous-month helpers; both delegate to `>>` so
+  # the end-of-month clamping is identical.
+  def next_month(n = 1) ; self >> n.to_int ; end
+  def prev_month(n = 1) ; self << n.to_int ; end
+
+  # Next-year / previous-year — multiply by 12 and reuse `>>`.
+  def next_year(n = 1)  ; self >> (n.to_int * 12) ; end
+  def prev_year(n = 1)  ; self << (n.to_int * 12) ; end
+
+  # CRuby: `Date#julian?` is true iff the date is interpreted in
+  # the Julian calendar. monoruby's Date is always Gregorian (the
+  # `sg` switchover argument is accepted for compatibility but
+  # never consulted), so this is always false. `gregorian?` is the
+  # mirror.
+  def julian?    ; false ; end
+  def gregorian? ; true  ; end
+
+  # Pattern-matching deconstructor (CRuby 3.2+):
+  # `keys=nil` ⇒ all four keys; otherwise only the matching ones.
+  def deconstruct_keys(keys)
+    all = { year: @year, month: @month, day: @day, yday: yday, wday: wday }
+    return all if keys.nil?
+    keys.each_with_object({}) { |k, h| h[k] = all[k] if all.key?(k) }
+  end
+
+  # Helper for `>>`/`<<`: number of days in the given (y, m) under
+  # the Gregorian calendar with the same leap-year rules as `leap?`.
+  def self._days_in_month(y, m)
+    days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if m == 2
+      leap = (y % 4 == 0) && ((y % 100 != 0) || (y % 400 == 0))
+      leap ? 29 : 28
+    else
+      days[m - 1]
+    end
+  end
 end
 
 class DateTime < Date
