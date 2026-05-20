@@ -1,5 +1,35 @@
 require 'rbconfig'
 
+# The vendored `rbconfig.rb` (snapshotted from the build host's CRuby
+# install) hard-codes the build host's `prefix` (e.g.
+# `/opt/rbenv/versions/ruby-4.0.2-custom`), because its `TOPDIR`
+# detection (`File.dirname(__FILE__).chomp!("/lib/ruby/4.0.0/x86_64-linux")`)
+# does not match monoruby's actual install layout (`~/.monoruby/lib`).
+# Anything that resolves a Ruby binary via RbConfig — most notably
+# mspec's `resolve_ruby_exe`, which requires the path to exist
+# (`File.executable?`) — would then fail on every machine that is
+# not the build host, breaking ruby/spec runs.
+#
+# Override the host-specific keys at process startup so they point at
+# the actually-running monoruby executable (resolved via
+# `/proc/self/exe`; monoruby is x86-64 Linux only). User-set
+# `RUBY_EXE` continues to win because consumers read it before
+# falling back to RbConfig.
+if File.exist?('/proc/self/exe')
+  exe = (File.realpath('/proc/self/exe') rescue '/proc/self/exe')
+  bindir = File.dirname(exe)
+  install_name = File.basename(exe)
+  RbConfig::CONFIG['bindir'] = bindir
+  RbConfig::CONFIG['ruby_install_name'] = install_name
+  RbConfig::CONFIG['RUBY_INSTALL_NAME'] = install_name
+  # `prefix` / `exec_prefix` are the parent of bindir in a standard
+  # `/bin` layout (works for both `/usr/local/bin/monoruby` and
+  # `~/.cargo/bin/monoruby`).
+  prefix = File.dirname(bindir)
+  RbConfig::CONFIG['prefix'] = prefix
+  RbConfig::CONFIG['exec_prefix'] = prefix
+end
+
 class BasicObject
   private
   def singleton_method_added(name)
