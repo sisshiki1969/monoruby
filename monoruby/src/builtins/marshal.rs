@@ -287,6 +287,14 @@ impl<'a> MarshalReader<'a> {
             }
             b'o' => self.read_user_object(vm, globals),
             b'u' => self.read_user_marshal(vm, globals),
+            // 'C' (TYPE_USERCLASS) wraps a built-in value in a
+            // user-defined subclass (e.g. `class S < String; end`'s
+            // instance). Format: symbol + inner value.
+            b'C' => self.read_user_class(vm, globals),
+            // 'e' (TYPE_EXTENDED) wraps a value that's been extended
+            // with a module (`obj.extend(M)`). Format: symbol + inner
+            // value (possibly another 'e' for further extensions).
+            b'e' => self.read_extended(vm, globals),
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unsupported marshal type tag: 0x{:02x} ('{}')",
                 tag,
@@ -540,6 +548,57 @@ impl<'a> MarshalReader<'a> {
         let _class_sym = self.read_symbol()?;
         let val = self.read_value(vm, globals)?;
         Ok(val)
+    }
+
+    /// Read a user-class wrapper ('C' tag).
+    /// Format: symbol(class_name) + inner value.
+    /// The inner is a built-in value (String, Array, Hash, …) that was
+    /// produced by an instance of a subclass; on load we reconstruct
+    /// the inner natively and then swap its class to the named subclass.
+    fn read_user_class(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let class_sym = self.read_symbol()?;
+        let mut inner = self.read_value(vm, globals)?;
+        let class_name = class_sym.get_name();
+        let class_name_id = IdentId::get_id(&class_name);
+        let class_val = globals
+            .get_constant(OBJECT_CLASS, class_name_id)
+            .and_then(|state| state.loaded_value())
+            .ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+            })?;
+        let module = class_val.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        })?;
+        // CRuby's 'C' wraps a built-in (whose RValue layout is fixed),
+        // so it is safe to swap the class on the already-allocated
+        // inner — the storage type does not change, only the
+        // user-visible class.
+        inner.change_class(module.id());
+        Ok(inner)
+    }
+
+    /// Read an extended-object wrapper ('e' tag).
+    /// Format: symbol(module_name) + inner value (possibly another 'e').
+    /// On load, fetch the module by name and drive `inner.extend(module)`
+    /// through the standard dispatch so the module is added to the
+    /// inner's singleton-class ancestor chain.
+    fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let module_sym = self.read_symbol()?;
+        let inner = self.read_value(vm, globals)?;
+        let module_name = module_sym.get_name();
+        let module_name_id = IdentId::get_id(&module_name);
+        let module_val = globals
+            .get_constant(OBJECT_CLASS, module_name_id)
+            .and_then(|state| state.loaded_value())
+            .ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("undefined module {}", module_name))
+            })?;
+        // Drive Kernel#extend so the singleton-class plumbing matches a
+        // hand-coded `inner.extend(Mod)` exactly (Module#extended hook,
+        // ancestor placement, etc.). The return value is the receiver.
+        let extend_id = IdentId::get_id("extend");
+        vm.invoke_method_inner(globals, extend_id, inner, &[module_val], None, None)?;
+        Ok(inner)
     }
 }
 
@@ -932,6 +991,70 @@ fn marshal_dump_value(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `Marshal.load` 'C' (TYPE_USERCLASS) and 'e' (TYPE_EXTENDED)
+    /// tag readers. The dump side is unchanged — only the load
+    /// dispatch is exercised here.
+    ///
+    /// CRuby generates 'C'-tagged bytes for any built-in (`String`,
+    /// `Array`, `Hash`, …) instance whose actual class is a user
+    /// subclass, and 'e'-tagged bytes when the instance has been
+    /// `obj.extend(Module)`'d. monoruby's reader now reconstructs
+    /// the inner natively, then swaps class / drives `extend` so the
+    /// loaded object is an instance of the user class / extended
+    /// with the named module.
+    #[test]
+    fn marshal_load_userclass_and_extended() {
+        run_test(
+            r##"
+            class MarshalUC < String; end
+            # CRuby-produced bytes for `MarshalUC.new("hi")` (the I'/C
+            # wrapper carries the encoding ivar; we only care that the
+            # loaded value is an MS instance with the right content).
+            bytes = "\x04\x08\x49\x43\x3a\x0e\x4d\x61\x72\x73\x68\x61\x6c\x55\x43\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            l = Marshal.load(bytes)
+            [l, l.class]
+            "##,
+        );
+        run_test(
+            r##"
+            module MarshalExt; end
+            # CRuby-produced bytes for `"x".extend(MarshalExt)`.
+            bytes = "\x04\x08\x49\x65\x3a\x0f\x4d\x61\x72\x73\x68\x61\x6c\x45\x78\x74\x22\x06\x78\x06\x3a\x06\x45\x46"
+            l = Marshal.load(bytes)
+            [l, l.singleton_class.ancestors.include?(MarshalExt)]
+            "##,
+        );
+    }
+
+    /// Error arms of `read_user_class` / `read_extended` —
+    /// the constant lookup miss and the "constant exists but is not
+    /// a class/module" branches that 88.88% patch coverage flagged.
+    #[test]
+    fn marshal_load_userclass_and_extended_errors() {
+        // 'C' tag naming a constant that does not exist on Object.
+        run_test_error(
+            r##"
+            bytes = "\x04\x08\x49\x43\x3a\x16\x4d\x61\x72\x73\x68\x61\x6c\x55\x43\x5f\x4d\x69\x73\x73\x69\x6e\x67\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+        // 'e' tag naming a missing module.
+        run_test_error(
+            r##"
+            bytes = "\x04\x08\x49\x65\x3a\x0d\x4d\x5f\x65\x5f\x6d\x69\x73\x73\x22\x06\x78\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+        // 'C' tag pointing at a constant that exists but isn't a class.
+        run_test_error(
+            r##"
+            MARSHAL_NOT_A_CLASS = 42
+            bytes = "\x04\x08\x49\x43\x3a\x18\x4d\x41\x52\x53\x48\x41\x4c\x5f\x4e\x4f\x54\x5f\x41\x5f\x43\x4c\x41\x53\x53\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+    }
 
     /// CRuby's `Marshal.dump(obj, port=nil, level=-1)` accepts 1..3
     /// args, with an Integer second arg being interpreted as the
