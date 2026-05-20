@@ -1027,6 +1027,35 @@ mod tests {
         );
     }
 
+    /// Error arms of `read_user_class` / `read_extended` —
+    /// the constant lookup miss and the "constant exists but is not
+    /// a class/module" branches that 88.88% patch coverage flagged.
+    #[test]
+    fn marshal_load_userclass_and_extended_errors() {
+        // 'C' tag naming a constant that does not exist on Object.
+        run_test_error(
+            r##"
+            bytes = "\x04\x08\x49\x43\x3a\x16\x4d\x61\x72\x73\x68\x61\x6c\x55\x43\x5f\x4d\x69\x73\x73\x69\x6e\x67\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+        // 'e' tag naming a missing module.
+        run_test_error(
+            r##"
+            bytes = "\x04\x08\x49\x65\x3a\x0d\x4d\x5f\x65\x5f\x6d\x69\x73\x73\x22\x06\x78\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+        // 'C' tag pointing at a constant that exists but isn't a class.
+        run_test_error(
+            r##"
+            MARSHAL_NOT_A_CLASS = 42
+            bytes = "\x04\x08\x49\x43\x3a\x18\x4d\x41\x52\x53\x48\x41\x4c\x5f\x4e\x4f\x54\x5f\x41\x5f\x43\x4c\x41\x53\x53\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+    }
+
     /// CRuby's `Marshal.dump(obj, port=nil, level=-1)` accepts 1..3
     /// args, with an Integer second arg being interpreted as the
     /// recursion-depth limit (not a port). `Marshal.load` accepts
