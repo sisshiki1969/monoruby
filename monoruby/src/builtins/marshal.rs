@@ -295,6 +295,10 @@ impl<'a> MarshalReader<'a> {
             // with a module (`obj.extend(M)`). Format: symbol + inner
             // value (possibly another 'e' for further extensions).
             b'e' => self.read_extended(vm, globals),
+            // '/' (TYPE_REGEXP) — `length(varint) + source-bytes +
+            // 1-byte options flag` (CRuby option bits: 1=/i, 2=/x,
+            // 4=/m, 0x10=FIXEDENCODING, 0x20=NOENCODING).
+            b'/' => self.read_regexp(),
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unsupported marshal type tag: 0x{:02x} ('{}')",
                 tag,
@@ -575,6 +579,41 @@ impl<'a> MarshalReader<'a> {
         // user-visible class.
         inner.change_class(module.id());
         Ok(inner)
+    }
+
+    /// Read a Regexp ('/' tag).
+    ///
+    /// Format: `length(varint) + source-bytes + 1-byte options`.
+    /// The options byte uses CRuby's bit layout — `/i` = 0x01,
+    /// `/x` = 0x02, `/m` = 0x04, `FIXEDENCODING` = 0x10,
+    /// `NOENCODING` = 0x20. monoruby's `RegexpInner::*_FLAG` bits
+    /// happen to use the same values for the first three, so the
+    /// CRuby byte can be passed through verbatim.
+    fn read_regexp(&mut self) -> Result<Value> {
+        use crate::value::rvalue::RegexpInner;
+        let len = self.read_fixnum()? as usize;
+        let bytes = self.read_bytes(len)?.to_vec();
+        let opt_byte = self.read_byte()? as u32;
+        // Use the default UTF-8 onigmo encoding; the ivar wrapper
+        // ('I') around `/` sets the right per-string encoding ivar
+        // afterwards if the original regex was non-UTF-8.
+        let src = match String::from_utf8(bytes.clone()) {
+            Ok(s) => s,
+            Err(_) => {
+                // Non-UTF-8 source — re-encode lossily so onigmo gets
+                // a valid `&str`. The 'I' wrapper restores the right
+                // declared encoding for inspection.
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+        };
+        let inner = RegexpInner::with_option_kcode(
+            src,
+            opt_byte,
+            onigmo_regex::OnigmoEncoding::UTF8,
+            None,
+            None,
+        )?;
+        Ok(Value::regexp(inner))
     }
 
     /// Read an extended-object wrapper ('e' tag).
@@ -1003,6 +1042,30 @@ mod tests {
     /// the inner natively, then swaps class / drives `extend` so the
     /// loaded object is an instance of the user class / extended
     /// with the named module.
+    #[test]
+    fn marshal_load_regexp() {
+        // CRuby-produced bytes for `/abc/i`: header / 'I' wrap / '/' tag /
+        // length(3) / "abc" / 0x01 (=/i) / 1 ivar (E => false). The
+        // assertion checks the user-visible state (class / source /
+        // options), not Regexp#== — internal-flag round-tripping is
+        // out of scope for this load-side test.
+        run_test(
+            r##"
+            bytes = "\x04\x08\x49\x2f\x08\x61\x62\x63\x01\x06\x3a\x06\x45\x46"
+            r = Marshal.load(bytes)
+            [r.class, r.source, r.options]
+            "##,
+        );
+        // Multi-flag: `/foo/imx` ⇒ flags byte 0x07.
+        run_test(
+            r##"
+            bytes = "\x04\x08\x49\x2f\x08\x66\x6f\x6f\x07\x06\x3a\x06\x45\x46"
+            r = Marshal.load(bytes)
+            [r.source, r.options]
+            "##,
+        );
+    }
+
     #[test]
     fn marshal_load_userclass_and_extended() {
         run_test(
