@@ -9,6 +9,54 @@ module Zlib
   VERSION = "3.1.0"
   ZLIB_VERSION = "1.3"
 
+  # Compression levels (zlib.h Z_NO_COMPRESSION ... Z_BEST_COMPRESSION).
+  NO_COMPRESSION      = 0
+  BEST_SPEED          = 1
+  DEFAULT_COMPRESSION = -1
+  BEST_COMPRESSION    = 9
+
+  # Compression strategies (zlib.h Z_FILTERED ... Z_DEFAULT_STRATEGY).
+  FILTERED         = 1
+  HUFFMAN_ONLY     = 2
+  RLE              = 3
+  FIXED            = 4
+  DEFAULT_STRATEGY = 0
+
+  # Flush values (zlib.h Z_NO_FLUSH ... Z_FINISH).
+  NO_FLUSH    = 0
+  SYNC_FLUSH  = 2
+  FULL_FLUSH  = 3
+  FINISH      = 4
+
+  # Window bits and memory level (zlib.h MAX_WBITS, DEF_MEM_LEVEL, MAX_MEM_LEVEL).
+  MAX_WBITS     = 15
+  DEF_MEM_LEVEL = 8
+  MAX_MEM_LEVEL = 9
+
+  # Data type hints (zlib.h Z_BINARY ... Z_UNKNOWN).
+  BINARY  = 0
+  TEXT    = 1
+  ASCII   = 1
+  UNKNOWN = 2
+
+  # gzip OS codes (RFC 1952 §2.3.1).
+  OS_MSDOS   = 0
+  OS_AMIGA   = 1
+  OS_VMS     = 2
+  OS_UNIX    = 3
+  OS_VMCMS   = 4
+  OS_ATARI   = 5
+  OS_OS2     = 6
+  OS_MACOS   = 7
+  OS_ZSYSTEM = 8
+  OS_CPM     = 9
+  OS_TOPS20  = 10
+  OS_WIN32   = 11
+  OS_QDOS    = 12
+  OS_RISCOS  = 13
+  OS_UNKNOWN = 255
+  OS_CODE    = OS_UNIX
+
   class Error < StandardError; end
   class StreamError < Error; end
   class DataError < Error; end
@@ -16,6 +64,8 @@ module Zlib
   class VersionError < Error; end
   class MemError < Error; end
   class NeedDict < Error; end
+  class StreamEnd < Error; end
+  class InProgressError < Error; end
 
   # Standard CRC-32 (polynomial 0xEDB88320), computed lazily.
   CRC_TABLE = begin
