@@ -75,6 +75,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(IO_CLASS, "READABLE", Value::integer(1));
     globals.set_constant_by_str(IO_CLASS, "PRIORITY", Value::integer(2));
     globals.set_constant_by_str(IO_CLASS, "WRITABLE", Value::integer(4));
+    // POSIX `open(2)` mode flags (used by File.open / IO#reopen mode
+    // forms and propagated to StringIO#reopen via ruby/spec). Values
+    // come from `libc::O_*`; they must compare with `File::WRONLY`
+    // etc. (File inherits IO so the same constants resolve).
+    globals.set_constant_by_str(IO_CLASS, "RDONLY", Value::integer(libc::O_RDONLY as i64));
+    globals.set_constant_by_str(IO_CLASS, "WRONLY", Value::integer(libc::O_WRONLY as i64));
+    globals.set_constant_by_str(IO_CLASS, "RDWR", Value::integer(libc::O_RDWR as i64));
+    globals.set_constant_by_str(IO_CLASS, "APPEND", Value::integer(libc::O_APPEND as i64));
+    globals.set_constant_by_str(IO_CLASS, "CREAT", Value::integer(libc::O_CREAT as i64));
+    globals.set_constant_by_str(IO_CLASS, "EXCL", Value::integer(libc::O_EXCL as i64));
+    globals.set_constant_by_str(IO_CLASS, "TRUNC", Value::integer(libc::O_TRUNC as i64));
+    globals.set_constant_by_str(IO_CLASS, "NOCTTY", Value::integer(libc::O_NOCTTY as i64));
+    globals.set_constant_by_str(IO_CLASS, "NONBLOCK", Value::integer(libc::O_NONBLOCK as i64));
+    globals.set_constant_by_str(IO_CLASS, "SYNC", Value::integer(libc::O_SYNC as i64));
+    // (IO::SEEK_SET / SEEK_CUR / SEEK_END are already defined elsewhere
+    //  in startup; do not re-define here.)
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
     globals.set_gvar(IdentId::get_id("$stdin"), stdin);
@@ -4555,5 +4571,96 @@ mod tests {
         // is_readable / is_writable Popen arms.
         run_test_error(r#"IO.popen("cat", "w") { |p| p.gets }"#);
         run_test_error(r#"IO.popen("cat", "r") { |p| p.write("x") }"#);
+    }
+
+    #[test]
+    fn io_posix_open_constants() {
+        // POSIX open(2) flags resolve and are integers — File/IO mode
+        // forms (and StringIO#reopen) depend on these being defined.
+        run_test(
+            r##"
+            [IO::RDONLY, IO::WRONLY, IO::RDWR,
+             IO::APPEND, IO::CREAT, IO::EXCL, IO::TRUNC,
+             IO::NOCTTY, IO::NONBLOCK, IO::SYNC].map { |c| c.is_a?(Integer) }.uniq
+            "##,
+        );
+    }
+
+    #[test]
+    fn stringio_open_class_method() {
+        run_test_with_prelude(
+            r##"
+            res = []
+            ret = StringIO.open("hello") { |io| io.read }
+            res << ret
+            # Block-less form: returns a StringIO; caller must close.
+            io = StringIO.open("world", "r")
+            res << io.read
+            io.close
+            # Ensure-close even on raise.
+            begin
+              StringIO.open("x") { |io| raise "stop" }
+            rescue
+            end
+            res
+            "##,
+            r##"require "stringio""##,
+        );
+    }
+
+    #[test]
+    fn stringio_reopen() {
+        run_test_with_prelude(
+            r##"
+            res = []
+            a = StringIO.new("orig")
+            a.read(2)
+            # String form resets the backing string + position.
+            a.reopen("fresh")
+            res << [a.pos, a.read]
+            # StringIO form copies content from another StringIO.
+            b = StringIO.new("other")
+            a.reopen(b)
+            res << [a.pos, a.read]
+            res
+            "##,
+            r##"require "stringio""##,
+        );
+    }
+
+    #[test]
+    fn stringio_sysread_and_nonblock() {
+        run_test_with_prelude(
+            r##"
+            res = []
+            io = StringIO.new("abcdef")
+            res << io.sysread(3)
+            res << io.read_nonblock(2)
+            res << io.write_nonblock("X")
+            # write_nonblock returns the byte count (CRuby).
+            # negative length must raise ArgumentError on both.
+            begin; io.sysread(-1); rescue ArgumentError => e; res << :sys_neg_arg; end
+            begin; io.read_nonblock(-1); rescue ArgumentError => e; res << :rnb_neg_arg; end
+            # EOFError when reading past end of file.
+            r = StringIO.new("")
+            begin; r.sysread(1); rescue EOFError; res << :sys_eof; end
+            begin; r.read_nonblock(1); rescue EOFError; res << :rnb_eof; end
+            # exception: false at EOF -> nil instead of raising.
+            res << r.read_nonblock(1, exception: false)
+            res
+            "##,
+            r##"require "stringio""##,
+        );
+    }
+
+    #[test]
+    fn stringio_external_internal_encoding() {
+        run_test_with_prelude(
+            r##"
+            io = StringIO.new("hi")
+            [io.external_encoding == io.string.encoding, io.internal_encoding]
+            "##,
+            r##"require "stringio""##,
+        );
     }
 }

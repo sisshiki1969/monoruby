@@ -7,6 +7,28 @@
 class StringIO
   include Enumerable
 
+  # ruby/spec asserts `StringIO::VERSION` is a String of digits and
+  # dots (it does not pin the value). Match CRuby's bundled gem
+  # shape; bump if/when monoruby tracks the upstream gem.
+  VERSION = "3.1.7"
+
+  # StringIO.open(string = "", mode = "r+") { |io| ... } -> obj
+  # StringIO.open(string = "", mode = "r+") -> stringio
+  #
+  # With a block, yields a freshly-built StringIO, ensures it is
+  # `close`d after the block returns (raising or not), and returns
+  # the block's value. Without a block, returns a StringIO -- in
+  # which case the caller is responsible for closing it.
+  def self.open(string = "", mode = "r+", &block)
+    io = new(string, mode)
+    return io unless block
+    begin
+      yield io
+    ensure
+      io.close unless io.closed?
+    end
+  end
+
   def initialize(string = "", mode = "r+")
     @string = string.is_a?(String) ? string : string.to_s
     @pos = 0
@@ -88,6 +110,51 @@ class StringIO
     else
       result
     end
+  end
+
+  # sysread(maxlen, outbuf = nil) -> string
+  #
+  # Like `read`, but raises `EOFError` at end-of-stream (CRuby
+  # treats sysread as "must return at least one byte or raise").
+  # StringIO has no real syscall layer; we just delegate to `read`
+  # and surface the EOF case as the exception.
+  def sysread(maxlen, outbuf = nil)
+    _check_readable
+    maxlen = maxlen.to_int if maxlen.respond_to?(:to_int) && !maxlen.is_a?(Integer)
+    raise ArgumentError, "negative length #{maxlen} given" if maxlen.is_a?(Integer) && maxlen < 0
+    raise EOFError, "end of file reached" if @pos >= @string.length && maxlen.to_i != 0
+    result = read(maxlen, outbuf)
+    raise EOFError, "end of file reached" if result.nil?
+    result
+  end
+  alias readpartial sysread
+
+  # read_nonblock(maxlen, outbuf = nil, exception: true) -> string | :wait_readable | nil
+  #
+  # StringIO has no non-blocking layer; the CRuby contract is that
+  # this acts like `sysread` (EOFError on end-of-stream). When
+  # `exception: false` is requested and we're at EOF, CRuby returns
+  # nil instead of raising — preserve that for codepaths that rely
+  # on the keyword form.
+  def read_nonblock(maxlen, outbuf = nil, exception: true)
+    _check_readable
+    maxlen = maxlen.to_int if maxlen.respond_to?(:to_int) && !maxlen.is_a?(Integer)
+    raise ArgumentError, "negative length #{maxlen} given" if maxlen.is_a?(Integer) && maxlen < 0
+    if @pos >= @string.length && maxlen.to_i != 0
+      return nil unless exception
+      raise EOFError, "end of file reached"
+    end
+    read(maxlen, outbuf)
+  end
+
+  # write_nonblock(string, exception: true) -> Integer
+  #
+  # StringIO writes never block; `write_nonblock` is just an alias
+  # for `write` with the same return shape (number of bytes
+  # written). The `exception:` keyword is accepted for API parity
+  # with `IO#write_nonblock` (it has no effect here).
+  def write_nonblock(string, exception: true)
+    write(string)
   end
 
   def getc
@@ -339,6 +406,57 @@ class StringIO
 
   def set_encoding(ext_enc, int_enc = nil, **opts)
     # No-op for now (single encoding)
+    self
+  end
+
+  # external_encoding -> Encoding
+  #
+  # CRuby's StringIO mirrors the encoding of the underlying String
+  # (the only encoding state a StringIO carries). monoruby's String
+  # already tracks an encoding, so just forward to it.
+  def external_encoding
+    @string.encoding
+  end
+
+  # internal_encoding -> nil
+  #
+  # CRuby StringIO has no separate internal encoding; the value is
+  # always nil unless `set_encoding(ext, int)` configured one. The
+  # current no-op `set_encoding` discards the int arg, so return nil.
+  def internal_encoding
+    nil
+  end
+
+  # reopen(other_stringio)             -> stringio
+  # reopen(string = "", mode = "r+")   -> stringio
+  #
+  # Re-attaches the StringIO to either another StringIO's content
+  # (single StringIO arg) or to a new backing string with an
+  # optional mode (CRuby semantics). The position counters are
+  # reset; the mode flags are re-parsed.
+  def reopen(*args)
+    if args.size == 1 && args[0].is_a?(StringIO)
+      other = args[0]
+      @string = other.string
+      @pos = 0
+      @lineno = 0
+      @closed_read = false
+      @closed_write = false
+      # Mirror the source's writability; CRuby's reopen(other)
+      # copies the mode state.
+      _parse_mode(other.closed_write? ? "r" : "r+")
+      return self
+    end
+    string = args[0] || ""
+    mode = args[1] || "r+"
+    raise TypeError, "no implicit conversion of #{string.class} into String" \
+      unless string.is_a?(String)
+    @string = string
+    @pos = 0
+    @lineno = 0
+    @closed_read = false
+    @closed_write = false
+    _parse_mode(mode)
     self
   end
 
