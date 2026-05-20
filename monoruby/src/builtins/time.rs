@@ -27,7 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
         TIME_CLASS, "now", time_now, 0, 7, false, &["in"], false,
     );
     globals.define_builtin_class_func_with_kw(
-        TIME_CLASS, "at", time_at, 1, 2, false, &["in"], false,
+        TIME_CLASS, "at", time_at, 1, 3, false, &["in"], false,
     );
     globals.store[TIME_CLASS].set_alloc_func(time_alloc_func);
 
@@ -1041,17 +1041,44 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let s = secs_val.coerce_to_int_i64(vm, globals)?;
         (s, 0u32)
     };
+    // `Time.at(secs, sub_secs, unit = :microsecond)`. The unit
+    // (positional arg 2) selects the multiplier applied to sub_secs:
+    //   :nanosecond / :nsec    ⇒ × 1
+    //   :microsecond / :usec   ⇒ × 1_000  (CRuby default when omitted)
+    //   :millisecond           ⇒ × 1_000_000   (no `:msec` alias in CRuby)
+    // CRuby rejects non-Symbol units (including String — it does NOT
+    // call `to_sym`) and unknown Symbols with ArgumentError.
+    let unit_multiplier: u64 = if let Some(unit_arg) = lfp.try_arg(2) {
+        let sym = unit_arg.try_symbol().ok_or_else(|| {
+            MonorubyErr::argumenterr("unexpected unit. Time.at(sec, subsec, unit)")
+        })?;
+        match sym.get_name().as_str() {
+            "nanosecond" | "nsec" => 1,
+            "microsecond" | "usec" => 1_000,
+            "millisecond" => 1_000_000,
+            other => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unexpected unit: {}",
+                    other
+                )));
+            }
+        }
+    } else {
+        1_000
+    };
     let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
         let u = arg1.coerce_to_int_i64(vm, globals)?;
-        (u * 1000) as u32
+        ((u as u64) * unit_multiplier) as u32
     } else {
         0
     };
     let total_ns = nsecs + usec_ns;
     let dt = DateTime::from_timestamp(secs, total_ns)
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
-    // `Time.at(t, in: offset)` — keyword UTC offset.
-    let time_info = if let Some(off) = lfp.try_arg(2)
+    // `Time.at(t, ..., in: offset)` — keyword UTC offset.  The
+    // `in:` keyword now sits at positional index 3 (after secs,
+    // sub_secs, unit). Was index 2 when arity was 1..2.
+    let time_info = if let Some(off) = lfp.try_arg(3)
         && !off.is_nil()
     {
         let fixed = parse_utc_offset(vm, globals, off)?;
@@ -2672,6 +2699,28 @@ mod tests {
              Time.at(t).to_i, Time.at(t, 500).usec]
             "#,
         );
+    }
+
+    /// `Time.at(secs, sub_secs, unit)` — the 3rd positional arg
+    /// selects the unit of `sub_secs`. CRuby accepts only Symbols
+    /// (does not call `to_sym` on strings) and only the documented
+    /// set; everything else raises ArgumentError.
+    #[test]
+    fn time_at_unit_arg() {
+        // One Array-returning expression so the harness sees a single
+        // statement when parsing CRuby's response.
+        run_test_once(
+            r#"[Time.at(0, 123456789, :nanosecond).nsec, Time.at(0, 123456789, :nsec).nsec, Time.at(0, 123456, :microsecond).nsec, Time.at(0, 123456, :usec).nsec, Time.at(0, 123, :millisecond).nsec, Time.at(0, 500).nsec]"#,
+        );
+        // Non-Symbol unit ⇒ ArgumentError (no `to_sym`).
+        run_test_error(r#"Time.at(0, 123, "usec")"#);
+        // Unknown Symbol ⇒ ArgumentError.
+        run_test_error(r#"Time.at(0, 123, :bogus)"#);
+        // Integer ⇒ ArgumentError.
+        run_test_error(r#"Time.at(0, 123, 2)"#);
+        // `:msec` is intentionally NOT accepted (CRuby treats it as
+        // unknown — only `:millisecond` works).
+        run_test_error(r#"Time.at(0, 123, :msec)"#);
     }
 
     #[test]
