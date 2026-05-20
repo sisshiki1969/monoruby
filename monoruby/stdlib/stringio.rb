@@ -409,6 +409,57 @@ class StringIO
     self
   end
 
+  # set_encoding_by_bom -> Encoding | nil
+  #
+  # Inspect the bytes at the current position for one of the
+  # documented BOM (byte-order mark) sequences. On a match: slice
+  # the BOM off the backing string, reset `@pos` to 0 (avoids
+  # char-vs-byte position drift after the encoding changes), force
+  # the new encoding, and return the `Encoding`. Otherwise
+  # (incomplete BOM, no BOM, or not opened for reading) leave the
+  # state untouched and return `nil`.
+  #
+  # CRuby checks longest BOM first (UTF-32LE must precede
+  # UTF-16LE because both start with `\xFF\xFE`).
+  def set_encoding_by_bom
+    # CRuby raises FrozenError on a frozen StringIO *before* the
+    # readable-state check (the spec asserts the error class even
+    # when the underlying state would otherwise return nil).
+    raise FrozenError, "can't modify frozen StringIO" if frozen?
+    # CRuby returns `nil` (not IOError) when the StringIO was
+    # opened write-only; probe the close flag directly instead of
+    # going through `_check_readable`.
+    return nil if @closed_read
+    bytes = @string.bytes
+    return nil if bytes.empty?
+    bom_len, enc =
+      if bytes[0] == 0xEF
+        return nil unless bytes.length >= 3 && bytes[1] == 0xBB && bytes[2] == 0xBF
+        [3, Encoding::UTF_8]
+      elsif bytes[0] == 0x00
+        return nil unless bytes.length >= 4 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF
+        [4, Encoding::UTF_32BE]
+      elsif bytes[0] == 0xFF && bytes.length >= 2 && bytes[1] == 0xFE
+        if bytes.length >= 4 && bytes[2] == 0x00 && bytes[3] == 0x00
+          [4, Encoding::UTF_32LE]
+        else
+          [2, Encoding::UTF_16LE]
+        end
+      elsif bytes[0] == 0xFE
+        return nil unless bytes.length >= 2 && bytes[1] == 0xFF
+        [2, Encoding::UTF_16BE]
+      else
+        return nil
+      end
+    # Slice BOM off the backing string and reset @pos. Using a
+    # byte-level slice on an ASCII-8BIT string keeps the bytes
+    # exact; we then force the new encoding on the remaining bytes.
+    @string = bytes[bom_len..].pack("C*")
+    @string.force_encoding(enc)
+    @pos = 0
+    enc
+  end
+
   # external_encoding -> Encoding
   #
   # CRuby's StringIO mirrors the encoding of the underlying String
