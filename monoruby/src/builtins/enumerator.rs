@@ -23,7 +23,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
     globals.define_builtin_func_rest(ENUMERATOR_CLASS, "each", each);
     globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "with_object", with_object, 1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "peek_values", peek_values, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
     globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
 
@@ -255,6 +257,60 @@ fn with_index(
 }
 
 ///
+/// ### Enumerator#with_object
+///
+/// - with_object(memo) {|(*args), memo| ... } -> memo
+/// - with_object(memo) -> Enumerator
+///
+/// Yields each element from the underlying enumeration together with
+/// the same `memo` object. With a block, returns `memo` after all
+/// elements have been yielded. Without a block, returns a fresh
+/// Enumerator that yields `[element, memo]` pairs.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_object.html]
+#[monoruby_builtin]
+fn with_object(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    fn with_object_inner(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        mut internal: Fiber,
+        block_data: &ProcData,
+        memo: Value,
+        self_val: Enumerator,
+    ) -> Result<Value> {
+        let mut res = Value::nil();
+        loop {
+            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
+            if internal.is_terminated() {
+                // CRuby returns the memo (not the underlying each's
+                // return value) when iteration completes.
+                return Ok(memo);
+            }
+            let a = v.as_array();
+            res = vm.invoke_block(globals, block_data, &[a.peel(), memo])?;
+        }
+    }
+    let memo = lfp.arg(0);
+    let self_val = Enumerator::new(lfp.self_val());
+    let id = IdentId::get_id("with_object");
+    let data = if let Some(bh) = lfp.block() {
+        vm.get_block_data(globals, bh)?
+    } else {
+        return vm.generate_enumerator(id, lfp.self_val(), vec![memo], pc);
+    };
+    let internal = Fiber::from(self_val.proc);
+    vm.temp_push(internal.into());
+    let res = with_object_inner(vm, globals, internal, &data, memo, self_val);
+    vm.temp_pop();
+    res
+}
+
+///
 /// ### Enumerator#peek
 ///
 /// - peek -> object
@@ -264,6 +320,27 @@ fn with_index(
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut e = Enumerator::new(lfp.self_val());
     e.peek(vm, globals)
+}
+
+///
+/// ### Enumerator#peek_values
+///
+/// - peek_values -> array
+///
+/// Like `peek`, but always returns the next yield as an Array (a
+/// single-arg yield becomes `[v]`, a multi-arg yield stays
+/// `[a, b, ...]`) and does not advance the position.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek_values.html]
+#[monoruby_builtin]
+fn peek_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut e = Enumerator::new(lfp.self_val());
+    Ok(e.peek_values(vm, globals)?.into())
 }
 
 ///
@@ -382,6 +459,53 @@ mod tests {
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
             "##,
         );
+    }
+
+    #[test]
+    fn enumerator_with_object() {
+        run_tests(&[
+            // block form returns the memo
+            r##"
+            r = [:a, :b, :c].each.with_object("") { |x, m| m << x.to_s }
+            "##,
+            // memo is the same identity across yields
+            r##"
+            seen = []
+            memo = Object.new
+            [1, 2, 3].each.with_object(memo) { |_, m| seen << m.equal?(memo) }
+            seen
+            "##,
+            // block-less returns an Enumerator that yields [elem, memo]
+            r##"
+            [:a, :b].each.with_object("hi").to_a
+            "##,
+            // each_with_object on Array (Enumerable delegation)
+            r##"
+            [1, 2, 3].each_with_object([]) { |x, m| m << x * 10 }
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn enumerator_peek_values() {
+        run_tests(&[
+            // Single-arg yield ⇒ [v]; multi-arg yield ⇒ [a, b, ...].
+            r##"
+            o = Object.new
+            def o.each
+              yield :a
+              yield :b1, :b2
+              yield
+            end
+            e = o.to_enum
+            [e.peek_values, e.next, e.peek_values, e.next, e.peek_values, e.next]
+            "##,
+            // Repeated peek_values without advancing is stable.
+            r##"
+            e = [10, 20].each
+            [e.peek_values, e.peek_values, e.next, e.peek_values]
+            "##,
+        ]);
     }
 
     #[test]
