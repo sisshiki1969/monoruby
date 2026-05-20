@@ -304,6 +304,13 @@ impl<'a> MarshalReader<'a> {
             // 1-byte options flag` (CRuby option bits: 1=/i, 2=/x,
             // 4=/m, 0x10=FIXEDENCODING, 0x20=NOENCODING).
             b'/' => self.read_regexp(),
+            // 'S' (TYPE_STRUCT) — `symbol(class_name) +
+            // member_count(varint) + (member_sym + value)*`.
+            // The class must already exist (created via
+            // `Struct.new("Name", ...)`); CRuby raises TypeError if
+            // the declared members don't match the class's actual
+            // member list.
+            b'S' => self.read_struct(vm, globals),
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unsupported marshal type tag: 0x{:02x} ('{}')",
                 tag,
@@ -700,6 +707,99 @@ impl<'a> MarshalReader<'a> {
         vm.invoke_method_inner(globals, extend_id, inner, &[module_val], None, None)?;
         Ok(inner)
     }
+
+    /// Read a Struct subclass instance ('S' tag, TYPE_STRUCT).
+    ///
+    /// Format: `symbol(class_name) + member_count(varint) +
+    /// (member_sym + value)*`.
+    ///
+    /// The class name is the fully-qualified path (e.g.
+    /// `Struct::Useful`); we resolve it by walking `::` segments
+    /// from `Object`. CRuby raises `TypeError` if the declared
+    /// member symbols don't match the class's actual `/members`,
+    /// so we mirror that.
+    fn read_struct(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let class_sym = self.read_symbol()?;
+        let member_count = self.read_fixnum()? as usize;
+        // Reserve the object slot up front so any backrefs from member
+        // values resolve to the (still-empty) instance.
+        let obj_idx = self.objects.len();
+        self.objects.push(Value::nil());
+
+        let class_name = class_sym.get_name();
+        let class_val = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+        })?;
+        let module = class_val.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        })?;
+
+        // Verify the class is a Struct (or subclass of Struct). The
+        // declared member list lives on the class as the `/members`
+        // ivar — its presence is the signal that this is a Struct
+        // class. Reject everything else with a TypeError.
+        let members = globals
+            .store
+            .get_ivar(module.as_val(), IdentId::get_id("/members"))
+            .and_then(|v| v.try_array_ty())
+            .ok_or_else(|| {
+                MonorubyErr::typeerr(format!("{} is not a Struct", class_name))
+            })?;
+
+        // CRuby's struct loader enforces that the marshalled member
+        // names exactly match the class's declared members (same
+        // order, same symbols). Mismatch → TypeError.
+        if members.len() != member_count {
+            return Err(MonorubyErr::typeerr(format!(
+                "struct {} not compatible (struct size differs)",
+                class_name
+            )));
+        }
+        let class_id = module.id();
+        let mut instance = Value::struct_object(class_id, member_count);
+        for i in 0..member_count {
+            let member_sym = self.read_symbol()?;
+            let val = self.read_value(vm, globals)?;
+            let expected_sym = members
+                .get(i)
+                .copied()
+                .and_then(|v| v.try_symbol())
+                .ok_or_else(|| {
+                    MonorubyErr::typeerr(format!(
+                        "struct {} not compatible (non-symbol member)",
+                        class_name
+                    ))
+                })?;
+            if expected_sym != member_sym {
+                return Err(MonorubyErr::typeerr(format!(
+                    "struct {} not compatible (:{} for :{})",
+                    class_name,
+                    member_sym.get_name(),
+                    expected_sym.get_name(),
+                )));
+            }
+            instance.as_struct_mut().set(i, val);
+        }
+        self.objects[obj_idx] = instance;
+        Ok(instance)
+    }
+}
+
+/// Walk a `::`-separated constant path starting at `Object`.
+/// Returns `None` if any segment is missing or not a class/module.
+fn resolve_class_path(globals: &Globals, path: &str) -> Option<Value> {
+    let mut current_class_id = OBJECT_CLASS;
+    let mut last: Option<Value> = None;
+    for segment in path.split("::") {
+        let name = IdentId::get_id(segment);
+        let val = globals
+            .get_constant(current_class_id, name)
+            .and_then(|s| s.loaded_value())?;
+        // Step into the resolved class for the next segment lookup.
+        current_class_id = val.is_class_or_module()?.id();
+        last = Some(val);
+    }
+    last
 }
 
 // ============================================================
@@ -1066,6 +1166,48 @@ fn marshal_dump_value(
                             marshal_dump_value(buf, val, globals, symbols, in_progress)?;
                         }
                     }
+                    Some(ObjTy::STRUCT) => {
+                        // Struct subclass instance: 'S' tag.
+                        // Format: symbol(class_name) + member_count +
+                        //         (member_sym + value)*
+                        let class_id = obj.class();
+                        let class_name = globals.get_class_name(class_id);
+                        // CRuby raises TypeError on anonymous classes;
+                        // `get_class_name` renders anonymous classes
+                        // as `#<Class:0x...>`, which is not a valid
+                        // constant path.
+                        if class_name.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(
+                                "can't dump anonymous class Struct",
+                            ));
+                        }
+                        let class_name_id = IdentId::get_id(&class_name);
+                        let class_module = globals.store[class_id].get_module();
+                        let members = globals
+                            .store
+                            .get_ivar(class_module.as_val(), IdentId::get_id("/members"))
+                            .and_then(|v| v.try_array_ty())
+                            .ok_or_else(|| {
+                                MonorubyErr::typeerr(format!(
+                                    "{} is not a Struct",
+                                    class_name
+                                ))
+                            })?;
+                        let inner = obj.as_struct();
+                        buf.push(b'S');
+                        marshal_write_symbol(buf, class_name_id, symbols);
+                        marshal_write_fixnum(buf, members.len() as i32);
+                        for (i, m) in members.iter().enumerate() {
+                            let sym = m.try_symbol().ok_or_else(|| {
+                                MonorubyErr::typeerr(
+                                    "non-symbol member in Struct definition",
+                                )
+                            })?;
+                            marshal_write_symbol(buf, sym, symbols);
+                            let val = inner.try_get(i).unwrap_or(Value::nil());
+                            marshal_dump_value(buf, val, globals, symbols, in_progress)?;
+                        }
+                    }
                     _ => {
                         return Err(MonorubyErr::typeerr(format!(
                             "no _dump_data is defined for class {}",
@@ -1220,6 +1362,67 @@ mod tests {
             r##"
             MARSHAL_NOT_A_CLASS = 42
             bytes = "\x04\x08\x49\x43\x3a\x18\x4d\x41\x52\x53\x48\x41\x4c\x5f\x4e\x4f\x54\x5f\x41\x5f\x43\x4c\x41\x53\x53\x22\x07\x68\x69\x06\x3a\x06\x45\x46"
+            Marshal.load(bytes)
+            "##,
+        );
+    }
+
+    /// 'S' (TYPE_STRUCT) round-trip and the CRuby-shaped errors:
+    /// member-count mismatch and member-name mismatch both raise
+    /// `TypeError`. Also exercises the qualified-path lookup
+    /// (`Struct::Useful`) via `Struct.new("Name", ...)`.
+    #[test]
+    fn marshal_struct() {
+        // Round-trip a named struct via `Struct.new("Name", ...)`.
+        // The qualified path `Struct::Useful` round-trips through
+        // the symbol payload and is resolved by the path walker.
+        run_test(
+            r##"
+            Struct.new("MStructA", :a, :b)
+            s = Struct::MStructA.new(1, "two")
+            t = Marshal.load(Marshal.dump(s))
+            [t.class.name, t.a, t.b]
+            "##,
+        );
+        // Round-trip a top-level struct constant. monoruby's
+        // `get_class_name` returns the bare name, which the path
+        // walker resolves directly off Object.
+        run_test(
+            r##"
+            MStructB = Struct.new(:x, :y)
+            s = MStructB.new(:sym, [1, 2, 3])
+            t = Marshal.load(Marshal.dump(s))
+            [t.class.name, t.x, t.y]
+            "##,
+        );
+        // Wrong member count ⇒ TypeError.
+        run_test_error(
+            r##"
+            MStructC = Struct.new(:a, :b)
+            bytes = Marshal.dump(MStructC.new(1, 2))
+            Object.send(:remove_const, :MStructC)
+            MStructC = Struct.new(:a, :b, :c)
+            Marshal.load(bytes)
+            "##,
+        );
+        // Member name mismatch ⇒ TypeError.
+        run_test_error(
+            r##"
+            MStructD = Struct.new(:a, :b)
+            bytes = Marshal.dump(MStructD.new(1, 2))
+            Object.send(:remove_const, :MStructD)
+            MStructD = Struct.new(:a, :z)
+            Marshal.load(bytes)
+            "##,
+        );
+        // Class name in marshal data refers to a constant that
+        // exists but is not a Struct ⇒ TypeError.
+        run_test_error(
+            r##"
+            MStructE = Struct.new(:a)
+            bytes = Marshal.dump(MStructE.new(1))
+            Object.send(:remove_const, :MStructE)
+            MStructE = 42
             Marshal.load(bytes)
             "##,
         );
