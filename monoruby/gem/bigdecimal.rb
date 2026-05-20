@@ -12,6 +12,10 @@
 class BigDecimal < Numeric
   include Comparable
 
+  # ruby/spec asserts shape (digits + dots), not the exact value.
+  # Match the bundled-gem version monoruby vendors with CRuby 4.0.
+  VERSION = "4.0.1"
+
   # Sign constants
   SIGN_NaN                = 0
   SIGN_POSITIVE_ZERO      = 1
@@ -347,8 +351,50 @@ class BigDecimal < Numeric
       [BigDecimal(other.to_s), self]
     when Float
       [BigDecimal(other, 0), self]
+    when Rational
+      # Convert Rational to BigDecimal via division (matches CRuby's
+      # `BigDecimal#+(rational)` which materialises the rational at
+      # the receiver's precision). Default precision falls back to
+      # the receiver's significant digits so the result mirrors
+      # `bd + rat` ≈ `bd + bd_of_rat`.
+      prec = [n_significant_digits, BigDecimal.double_fig].max
+      [other.to_d(prec), self]
     else
       raise TypeError, "#{other.class} can't be coerced into BigDecimal"
+    end
+  end
+
+  # split -> [sign, digits, base, exponent]
+  #
+  # CRuby's BigDecimal#split returns a 4-tuple where:
+  #   sign     : 0 for NaN, 1 for non-negative, -1 for negative
+  #   digits   : String of significant decimal digits (no leading 0)
+  #   base     : always 10
+  #   exponent : Integer such that value = sign * 0.<digits> * 10**exponent
+  #
+  # ([https://docs.ruby-lang.org/ja/latest/method/BigDecimal/i/split.html])
+  def split
+    case @sign
+    when :nan
+      [0, "NaN", 10, 0]
+    when :pos_inf
+      [1, "Infinity", 10, 0]
+    when :neg_inf
+      [-1, "Infinity", 10, 0]
+    when :pos_zero
+      [1, "0", 10, 0]
+    when :neg_zero
+      [-1, "0", 10, 0]
+    else
+      sign = @sign == :pos ? 1 : -1
+      digits = @coeff.to_s
+      # CRuby's "exponent" in split is the count of digits *to the
+      # left of the implicit decimal point* in `0.<digits>` form.
+      # `value = coeff * 10^@exp`, so coeff has `digits.length` digits
+      # before the trailing zero and the leading decimal-point is
+      # `digits.length + @exp`.
+      exponent = digits.length + @exp
+      [sign, digits, 10, exponent]
     end
   end
 
@@ -778,6 +824,11 @@ class BigDecimal < Numeric
     when Integer then parse_value(val)
     when Float then parse_value(val)
     when String then parse_value(val)
+    when Rational
+      # Materialise the Rational at default precision so it can flow
+      # through every BigDecimal arithmetic path (add / sub / mult /
+      # div / **) without raising. CRuby uses `to_d(prec)` here.
+      val.to_d(double_fig)
     else
       raise TypeError, "#{val.class} can't be coerced into BigDecimal"
     end
@@ -785,6 +836,28 @@ class BigDecimal < Numeric
 
   def self._zero(neg)
     neg ? new(:neg_zero, 0, 0) : new(:pos_zero, 0, 0)
+  end
+
+  # interpret_loosely(str) -> BigDecimal
+  #
+  # Like `BigDecimal(str)` but never raises on a malformed string:
+  # parses the longest leading prefix that is a valid BigDecimal
+  # literal and ignores the trailing garbage. An empty match
+  # yields `BigDecimal("0")` instead of `ArgumentError`.
+  # `parse_value` itself silently absorbs trailing non-digit
+  # characters (and miscomputes the exponent), so the safe path
+  # is to truncate the input to the valid prefix *before* calling
+  # the strict parser.
+  #
+  # ([https://docs.ruby-lang.org/ja/latest/method/BigDecimal/s/interpret_loosely.html])
+  def self.interpret_loosely(str)
+    s = str.to_str.strip
+    # Maximal CRuby-style BigDecimal prefix:
+    #   optional sign, then NaN / Infinity / fixed-point digits
+    #   (with optional fractional part and optional e-exponent).
+    m = s.match(/\A[+-]?(NaN|Infinity|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/)
+    return _zero(false) unless m
+    parse_value(m[0])
   end
 
   def **(y)
@@ -909,6 +982,19 @@ end
 class Float
   def to_d(prec = 0)
     BigDecimal(self, prec)
+  end
+end
+
+class Rational
+  # `Rational#to_d(precision)` is defined by the `bigdecimal/util`
+  # part of the bigdecimal gem; CRuby `require "bigdecimal"` pulls
+  # it in transitively, so user code (and `BigDecimal._coerce` for
+  # arithmetic) assumes it exists.  Materialise the rational at
+  # `precision` significant digits via the BigDecimal divider.
+  def to_d(precision = 0)
+    raise ArgumentError, "negative precision" if precision < 0
+    prec = precision == 0 ? BigDecimal.double_fig : precision
+    BigDecimal(numerator).div(BigDecimal(denominator), prec)
   end
 end
 
