@@ -196,6 +196,14 @@ impl Executor {
         }
         // Clear stale $! that may have been set during startup/gem loading.
         globals.set_gvar(IdentId::get_id("$!"), Value::nil());
+        // Same for $~ (and the back-ref family $&/$'/$`/$N derived from
+        // it): certain Hash#[]= calls in startup.rb (notably
+        // `RbConfig::CONFIG['rubylibprefix'] = ...`) currently set $~
+        // as a side effect — a monoruby quirk that does not occur in
+        // CRuby. Clearing the capture state before the user script
+        // runs keeps `defined?($&)` / `defined?($1)` etc. matching
+        // CRuby semantics (covered by `defined_hooked_special_vars`).
+        executor.clear_capture_special_variables();
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().startup_flag = true;
         });
