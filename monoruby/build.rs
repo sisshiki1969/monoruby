@@ -130,6 +130,26 @@ fn main() {
                         load_path.push_str(std::str::from_utf8(&g.stdout).unwrap());
                     }
                     fs::write(dest_path, load_path).unwrap();
+
+                    // Capture host CRuby's `Gem.paths.path` (the gem-root
+                    // directories that contain `specifications/*.gemspec`)
+                    // so the vendored rubygems can resolve host-installed
+                    // gems via `Gem::Specification.find_by_name` — adding
+                    // just the require paths to $LOAD_PATH (above) lets
+                    // `require` succeed but leaves the rubygems metadata
+                    // index empty. Written as a colon-joined string so it
+                    // can be propagated verbatim through the GEM_PATH
+                    // env-var at runtime.
+                    if let Ok(p) = Command::new(&ruby)
+                        .args(["-e", "print Gem.paths.path.join(':')"])
+                        .output()
+                        && p.status.success()
+                    {
+                        let gem_path = std::str::from_utf8(&p.stdout).unwrap().trim();
+                        if !gem_path.is_empty() {
+                            fs::write(lib_path.join("gem_path"), gem_path).unwrap();
+                        }
+                    }
                 }
                 Err(_) => {
                     println!("cargo:warning=failed to read ruby library path from {ruby}");
