@@ -2058,6 +2058,25 @@ fn env_merge_bang(
         let pairs: Vec<(Value, Value)> = other.iter().collect();
         for (k, v) in pairs {
             let key = coerce_env_string(k, vm, globals)?;
+            // CRuby: a `nil` value in the merged hash deletes the
+            // variable instead of coercing-then-setting. yjit-bench's
+            // `harness-common.rb` relies on this exact form:
+            // `ENV.merge!("GEM_HOME" => nil, "GEM_PATH" => nil)`.
+            // Without this branch monoruby raises
+            // `TypeError: no implicit conversion of NilClass into String`
+            // in `coerce_env_string`, breaking every benchmark.
+            if v.is_nil() {
+                let key_v = Value::string(key.clone());
+                lfp.self_val().as_hash().remove(key_v, vm, globals)?;
+                if let Ok(c_key) = std::ffi::CString::new(key.as_bytes()) {
+                    // SAFETY: NUL-terminated C string; `unsetenv` is
+                    // thread-safe on Linux.
+                    unsafe {
+                        libc::unsetenv(c_key.as_ptr());
+                    }
+                }
+                continue;
+            }
             check_env_key_for_set(&key, &globals.store)?;
             let mut value = coerce_env_string(v, vm, globals)?;
 
