@@ -1822,7 +1822,7 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exec.html]
 #[monoruby_builtin]
-fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::ffi::CString;
     let args = lfp.arg(0).as_array();
     // Filter out trailing Hash arguments (keyword args like close_others:)
@@ -1839,11 +1839,23 @@ fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if str_args.len() == 1 {
         // Single string: use shell
         let (program, shell_args) = prepare_command_arg(&str_args[0]);
-        let mut all_args = vec![CString::new(program.clone()).unwrap()];
+        // A NUL byte anywhere in the argv would silently turn this
+        // into an abort via the next `CString::new(...).unwrap()`.
+        // CRuby raises `ArgumentError: string contains null byte` —
+        // mirror that. Same below for the multi-arg execvp form.
+        let mut all_args = vec![
+            CString::new(program.clone()).map_err(|_| {
+                MonorubyErr::argumenterr("string contains null byte")
+            })?,
+        ];
         for a in &shell_args {
-            all_args.push(CString::new(a.as_str()).unwrap());
+            all_args.push(CString::new(a.as_str()).map_err(|_| {
+                MonorubyErr::argumenterr("string contains null byte")
+            })?);
         }
-        let c_program = CString::new(program).unwrap();
+        let c_program = CString::new(program).map_err(|_| {
+            MonorubyErr::argumenterr("string contains null byte")
+        })?;
         // SAFETY: execvp replaces the process. Only fails if the program is not found.
         unsafe {
             libc::execvp(
@@ -1861,12 +1873,20 @@ fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             std::io::Error::last_os_error()
         )))
     } else {
-        // Multiple args: first is program, rest are argv
-        let c_program = CString::new(str_args[0].as_str()).unwrap();
+        // Multiple args: first is program, rest are argv. NUL bytes
+        // in any of them ⇒ `ArgumentError: string contains null byte`
+        // (CRuby behaviour) instead of the prior abort.
+        let c_program = CString::new(str_args[0].as_str()).map_err(|_| {
+            MonorubyErr::argumenterr("string contains null byte")
+        })?;
         let c_args: Vec<CString> = str_args
             .iter()
-            .map(|s| CString::new(s.as_str()).unwrap())
-            .collect();
+            .map(|s| {
+                CString::new(s.as_str()).map_err(|_| {
+                    MonorubyErr::argumenterr("string contains null byte")
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         // SAFETY: execvp replaces the process. Only fails if the program is not found.
         unsafe {
             libc::execvp(
@@ -1975,7 +1995,7 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
-fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
         let s = arg0.coerce_to_str(vm, globals)?;
         // Write to the Ruby `$stderr` (which may be reassigned /
@@ -2008,7 +2028,7 @@ fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
 #[monoruby_builtin]
-fn exit(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn exit(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let status = if let Some(arg0) = lfp.try_arg(0) {
         match arg0.unpack() {
             RV::Bool(true) => 0,

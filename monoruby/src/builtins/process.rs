@@ -52,9 +52,6 @@ pub(super) fn init(globals: &mut Globals) {
     for (name, val) in rlim_consts {
         globals.set_constant_by_str(klass, name, Value::integer(*val));
     }
-    // `RLIM_INFINITY` / `RLIM_SAVED_CUR` / `RLIM_SAVED_MAX` (all
-    // `u64::MAX` on Linux glibc; cast through i64 — the bit pattern
-    // is what specs compare).
     globals.set_constant_by_str(
         klass, "RLIM_INFINITY", Value::integer(libc::RLIM_INFINITY as i64),
     );
@@ -64,6 +61,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(
         klass, "RLIM_SAVED_MAX", Value::integer(libc::RLIM_SAVED_MAX as i64),
     );
+    // POSIX identity / process-group / session wrappers. Thin libc
+    // passthroughs; each one is a single syscall + Integer wrap.
+    // None touches the fork / exec / scheduler machinery.
+    globals.define_builtin_module_func(klass, "ppid", process_ppid, 0);
+    globals.define_builtin_module_func(klass, "uid", process_uid, 0);
+    globals.define_builtin_module_func(klass, "gid", process_gid, 0);
+    globals.define_builtin_module_func(klass, "egid", process_egid, 0);
+    globals.define_builtin_module_func(klass, "getpgrp", process_getpgrp, 0);
+    globals.define_builtin_module_func(klass, "getpgid", process_getpgid, 1);
+    globals.define_builtin_module_func_with(klass, "setpgrp", process_setpgrp, 0, 0, false);
+    globals.define_builtin_module_func(klass, "setpgid", process_setpgid, 2);
+    globals.define_builtin_module_func_with(klass, "getsid", process_getsid, 0, 1, false);
+    globals.define_builtin_module_func(klass, "setsid", process_setsid, 0);
+    // `Process.exit` / `Process.abort` / `Process.exec` share their
+    // Kernel implementations; CRuby exposes both names.
+    globals.define_builtin_module_func_with(klass, "exit", crate::builtins::kernel::exit, 0, 1, false);
+    globals.define_builtin_module_func_with(klass, "abort", crate::builtins::kernel::abort, 0, 1, false);
+    globals.define_builtin_module_func_rest(klass, "exec", crate::builtins::kernel::exec);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -370,6 +385,101 @@ fn euid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
     // SAFETY: geteuid is a POSIX system call that is safe to call.
     let uid = unsafe { libc::geteuid() };
     Ok(Value::integer(uid as i64))
+}
+
+// --- POSIX identity / process-group / session wrappers ---------------
+//
+// Thin libc passthroughs. Each one is a single syscall + Integer wrap;
+// none touches the fork / exec / scheduler machinery.
+
+#[monoruby_builtin]
+fn process_ppid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: getppid never fails.
+    Ok(Value::integer(unsafe { libc::getppid() } as i64))
+}
+
+#[monoruby_builtin]
+fn process_uid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: getuid never fails.
+    Ok(Value::integer(unsafe { libc::getuid() } as i64))
+}
+
+#[monoruby_builtin]
+fn process_gid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: getgid never fails.
+    Ok(Value::integer(unsafe { libc::getgid() } as i64))
+}
+
+#[monoruby_builtin]
+fn process_egid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: getegid never fails.
+    Ok(Value::integer(unsafe { libc::getegid() } as i64))
+}
+
+#[monoruby_builtin]
+fn process_getpgrp(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: getpgrp never fails on Linux.
+    Ok(Value::integer(unsafe { libc::getpgrp() } as i64))
+}
+
+#[monoruby_builtin]
+fn process_getpgid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    // SAFETY: getpgid is a POSIX syscall; only failure mode is ESRCH.
+    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    if pgid < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("getpgid")));
+    }
+    Ok(Value::integer(pgid as i64))
+}
+
+#[monoruby_builtin]
+fn process_setpgrp(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby's `Process.setpgrp` is `setpgid(0, 0)`.
+    let rc = unsafe { libc::setpgid(0, 0) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setpgrp")));
+    }
+    Ok(Value::integer(0))
+}
+
+#[monoruby_builtin]
+fn process_setpgid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let pgid = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    let rc = unsafe { libc::setpgid(pid as libc::pid_t, pgid as libc::pid_t) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setpgid")));
+    }
+    Ok(Value::integer(0))
+}
+
+#[monoruby_builtin]
+fn process_getsid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let pid = if let Some(arg) = lfp.try_arg(0) {
+        arg.coerce_to_int_i64(vm, globals)?
+    } else {
+        0
+    };
+    let sid = unsafe { libc::getsid(pid as libc::pid_t) };
+    if sid < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("getsid")));
+    }
+    Ok(Value::integer(sid as i64))
+}
+
+#[monoruby_builtin]
+fn process_setsid(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sid = unsafe { libc::setsid() };
+    if sid < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setsid")));
+    }
+    Ok(Value::integer(sid as i64))
 }
 
 /// ### Process.wait / Process.waitpid
@@ -998,5 +1108,79 @@ mod tests {
         );
         // Invalid resource name.
         run_test_error(r#"Process.getrlimit(:NOPE)"#);
+    }
+
+    /// POSIX identity / process-group / session wrappers. Single
+    /// syscall each; tests just sanity-check the return shape.
+    #[test]
+    fn process_posix_identity() {
+        run_test_once(r#"[Process.ppid, Process.uid, Process.gid, Process.egid].all? { |v| v.is_a?(Integer) }"#);
+        run_test_once(r#"[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer) }"#);
+        // `Process.getpgid(0)` and `Process.getpgrp` return the same value.
+        run_test_once(r#"Process.getpgid(0) == Process.getpgrp"#);
+    }
+
+    /// `Process.exec("contains\0nul")` must raise ArgumentError, not
+    /// abort the process — the `CString::new(...).unwrap()` in the
+    /// underlying execvp path used to swallow the NUL byte and panic
+    /// across the extern "C" boundary.
+    #[test]
+    fn process_exec_null_byte() {
+        // Single-string form (goes through the shell branch).
+        run_test_error(r#"Process.exec("ls\0")"#);
+        // Multi-arg form (goes through the execvp branch). NUL in
+        // either the program *or* any argv element must surface as
+        // an ArgumentError, not an abort.
+        run_test_error(r#"Process.exec("ls\0", "-la")"#);
+        run_test_error(r#"Process.exec("ls", "-l\0a")"#);
+    }
+
+    /// `Process.exec`/`abort`/`exit` are also reachable as Module
+    /// methods (CRuby exposes them under both `Kernel` and
+    /// `Process` names). Use `respond_to?` so the test doesn't
+    /// actually invoke them.
+    #[test]
+    fn process_dispatches_kernel_aliases() {
+        run_test_once(
+            r#"
+            [Process.respond_to?(:exit),
+             Process.respond_to?(:abort),
+             Process.respond_to?(:exec)]
+            "#,
+        );
+    }
+
+    /// `Process.exit` raises `SystemExit` (it shares
+    /// `Kernel#exit`'s implementation). The Ruby `begin/rescue`
+    /// here verifies the exception class without actually exiting.
+    #[test]
+    fn process_exit_raises_systemexit() {
+        run_test_once(
+            r#"
+            begin
+              Process.exit
+            rescue SystemExit => e
+              [e.class.name, e.success?]
+            end
+            "#,
+        );
+        run_test_once(
+            r#"
+            begin
+              Process.exit(0)
+            rescue SystemExit => e
+              [e.class.name, e.success?, e.status]
+            end
+            "#,
+        );
+    }
+
+    /// `Process.getpgid(<missing>)` should surface ESRCH as the
+    /// matching `Errno::ESRCH` (not abort, not generic
+    /// RuntimeError). 2^31-1 is a portable "definitely-no-such-pid"
+    /// placeholder.
+    #[test]
+    fn process_getpgid_missing_pid_raises_esrch() {
+        run_test_error(r#"Process.getpgid(2_147_483_646)"#);
     }
 }
