@@ -248,4 +248,59 @@ mod tests {
     fn thread_pass() {
         run_test("Thread.pass.nil?");
     }
+
+    /// Fiber-local storage class-method sugar (`Fiber[:k]` /
+    /// `Fiber[:k] = v`) and the Symbol-keyed contract.
+    #[test]
+    fn fiber_storage_class_sugar() {
+        run_test(
+            r##"
+            Fiber[:a] = 1
+            Fiber[:b] = "x"
+            [Fiber.current.storage, Fiber[:a], Fiber[:missing]]
+            "##,
+        );
+        run_test_error(r##"Fiber["str_key"] = 1"##);
+        run_test_error(r##"Fiber["str_key"]"##);
+    }
+
+    /// `Fiber#storage=` replaces / clears; non-Hash raises.
+    #[test]
+    fn fiber_storage_assign() {
+        run_test(
+            r##"
+            f = Fiber.current
+            f.storage = {c: 3}
+            r = f.storage
+            f.storage = nil
+            [r, f.storage]
+            "##,
+        );
+        run_test_error(r##"Fiber.current.storage = 1"##);
+    }
+
+    /// `Fiber.set_scheduler(nil)` / `Fiber.scheduler` round-trip;
+    /// `Fiber.current_scheduler` stays nil because monoruby fibers
+    /// are always blocking; `Fiber.blocking?` / `Fiber#blocking?`
+    /// return `1`.
+    ///
+    /// Only `nil` is round-tripped here because CRuby's
+    /// `set_scheduler` validates the scheduler interface
+    /// (`#block`, `#kernel_sleep`, …), which monoruby's stub does
+    /// not enforce. Interface validation is intentional follow-up.
+    #[test]
+    fn fiber_scheduler_blocking() {
+        run_test_once(
+            r##"
+            res = []
+            res << Fiber.scheduler
+            res << Fiber.set_scheduler(nil)
+            res << Fiber.scheduler
+            res << Fiber.current_scheduler
+            res << Fiber.blocking?
+            res << Fiber.current.blocking?
+            res
+            "##,
+        );
+    }
 }
