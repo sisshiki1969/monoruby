@@ -53,8 +53,25 @@ pub(crate) const LFP_META: i32 = 8;
 pub(crate) const LFP_REGNUM: i32 = LFP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
 pub(crate) const LFP_FUNCID: i32 = LFP_META + META_FUNCID as i32;
-pub(crate) const LFP_BLOCK: i32 = 16;
-pub(crate) const LFP_SELF: i32 = 24;
+/// Special variables (frame-local `$~`, planned `$_`).
+///
+/// CRuby's `vm_svar` lives on the LEP (= the method-introducing
+/// frame's local environment); blocks and `Proc.new`-style closures
+/// share their lexical parent's slot. monoruby mirrors this by
+/// resolving `$~` (and the BACK_REF / NTH_REF family derived from it)
+/// through the outer chain to the LEP's `LFP_SVAR`. Stored as a raw
+/// `u64`: `0` means "no MatchData captured yet" (faster than always
+/// allocating a SpecialVars container); any non-zero value is a
+/// MatchData `Value`.
+pub(crate) const LFP_SVAR: i32 = 16;
+/// Callable Method Entry — reserved for the upcoming CME slot. CRuby
+/// uses `cref_or_me` at the same position in `vm_svar`; monoruby keeps
+/// the slot separate so the SVAR migration above can land without
+/// blocking on the larger CME redesign. Initialised to `0`; no reads
+/// or writes wired up yet.
+pub(crate) const LFP_CME: i32 = 24;
+pub(crate) const LFP_BLOCK: i32 = 32;
+pub(crate) const LFP_SELF: i32 = 40;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;

@@ -408,7 +408,7 @@ impl Lfp {
         unsafe {
             let mut cfp = self.cfp();
             let len = self.frame_bytes();
-            // `frame_bytes` is always a multiple of 8 (LFP_SELF=24 plus
+            // `frame_bytes` is always a multiple of 8 (LFP_SELF plus
             // 8*reg_num), so copy the frame as a `Box<[u64]>` — uniform
             // with `heap_frame`/`dummy_*` so the GC can reclaim every
             // promoted buffer with one `Box::from_raw(*mut [u64])`.
@@ -442,14 +442,19 @@ impl Lfp {
         let local_len = meta.reg_num() as usize - 1;
         meta.set_on_heap();
         let mut v = vec![Value::nil().id(); local_len];
-        // self
-        v.push(self_val.id());
-        // block
-        v.push(0);
-        // meta
-        v.push(meta.get());
-        // outer
-        v.push(0);
+        // The heap-allocated frame must mirror the stack layout
+        // exactly: lfp_addr (= base + len - 8) points at LFP_OUTER,
+        // and each LFP_xxx offset reads memory at lfp_addr - LFP_xxx.
+        // Push slots in **ascending memory order**, finishing with
+        // LFP_OUTER at the highest index = lfp_addr.
+        // Order: locals[0..N], self (LFP_SELF), block (LFP_BLOCK),
+        // cme (LFP_CME), svar (LFP_SVAR), meta (LFP_META), outer (LFP_OUTER).
+        v.push(self_val.id()); // -> LFP_SELF
+        v.push(0); //               -> LFP_BLOCK
+        v.push(0); //               -> LFP_CME (unused; zero sentinel)
+        v.push(0); //               -> LFP_SVAR (unused; zero sentinel)
+        v.push(meta.get()); //      -> LFP_META
+        v.push(0); //               -> LFP_OUTER (no outer)
         let v = v.into_boxed_slice();
         let n = v.len();
         let len = n * 8;
@@ -464,7 +469,22 @@ impl Lfp {
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
-        let v: Box<[u64]> = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
+        // Same slot order as `heap_frame` (locals.., self, block, cme,
+        // svar, meta, outer) with zero locals. Eight u64 slots: 1 self
+        // + 5 zero header slots (block/cme/svar/meta/outer) padded out
+        // to two extra zeros so the LFP layout stays self-consistent
+        // with the new (post-SVAR/CME) header size.
+        let v: Box<[u64]> = vec![
+            0,                  // padding (matches the historical extra slot)
+            0,                  // padding
+            self_val.id(),      // LFP_SELF
+            0,                  // LFP_BLOCK
+            0,                  // LFP_CME
+            0,                  // LFP_SVAR
+            0,                  // LFP_META — set via `set_reg_num` below
+            0,                  // LFP_OUTER
+        ]
+        .into_boxed_slice();
         let n = v.len();
         let len = n * 8;
         unsafe {
