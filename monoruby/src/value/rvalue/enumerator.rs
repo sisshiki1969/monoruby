@@ -95,6 +95,22 @@ impl Enumerator {
     }
 
     ///
+    /// Peek the next yield's values as an Array, without advancing the
+    /// position. Multi-arg yields stay as arrays; a single-value yield
+    /// becomes `[value]` (do NOT peel — that's what distinguishes
+    /// `peek_values` from `peek`).
+    ///
+    pub fn peek_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
+        if let Some(ary) = self.buffer {
+            Ok(ary)
+        } else {
+            let ary = self.yield_next_values(vm, globals)?;
+            self.buffer = Some(ary);
+            Ok(ary)
+        }
+    }
+
+    ///
     /// Get next yield value from the enumerator.
     ///
     pub fn next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
