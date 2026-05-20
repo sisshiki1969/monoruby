@@ -311,6 +311,17 @@ impl<'a> MarshalReader<'a> {
             // the declared members don't match the class's actual
             // member list.
             b'S' => self.read_struct(vm, globals),
+            // 'c' (TYPE_CLASS) — `length(varint) + name-bytes`.
+            // Resolves to the named class. CRuby raises ArgumentError
+            // when the constant is missing and TypeError when it
+            // resolves to a module instead of a class.
+            b'c' => self.read_class_ref(globals),
+            // 'm' (TYPE_MODULE) — same shape as 'c' but the constant
+            // must resolve to a *module*. (Class ⇒ TypeError.)
+            b'm' => self.read_module_ref(globals),
+            // 'M' (TYPE_MODULE_OLD) — legacy tag that accepts either
+            // a class or a module (Ruby 1.8 wrote this for both).
+            b'M' => self.read_class_or_module_ref(globals),
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unsupported marshal type tag: 0x{:02x} ('{}')",
                 tag,
@@ -772,6 +783,61 @@ impl<'a> MarshalReader<'a> {
         self.objects[obj_idx] = instance;
         Ok(instance)
     }
+
+    /// Read a 'c' (TYPE_CLASS) or 'm' (TYPE_MODULE) payload: a
+    /// length-prefixed UTF-8 name string.
+    fn read_class_or_module_name(&mut self) -> Result<String> {
+        let len = self.read_fixnum()? as usize;
+        let bytes = self.read_bytes(len)?;
+        std::str::from_utf8(bytes)
+            .map(|s| s.to_string())
+            .map_err(|_| MonorubyErr::argumenterr("invalid class/module name in marshal data"))
+    }
+
+    /// Read a 'c' (TYPE_CLASS) reference. The payload names a class
+    /// by its qualified path; the constant must exist and must be a
+    /// class (not a module). Mirrors CRuby's `r_object0` TYPE_CLASS
+    /// branch (`ArgumentError` on missing constant, `TypeError` if
+    /// the resolved constant is a Module).
+    fn read_class_ref(&mut self, globals: &mut Globals) -> Result<Value> {
+        let name = self.read_class_or_module_name()?;
+        let module = resolve_class_path(globals, &name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
+        })?;
+        if module.as_val().ty() == Some(ObjTy::MODULE) {
+            return Err(MonorubyErr::typeerr(format!("{} does not refer to class", name)));
+        }
+        let val = module.as_val();
+        self.objects.push(val);
+        Ok(val)
+    }
+
+    /// Read a 'm' (TYPE_MODULE) reference — mirror of `read_class_ref`
+    /// but rejects Class with `TypeError`.
+    fn read_module_ref(&mut self, globals: &mut Globals) -> Result<Value> {
+        let name = self.read_class_or_module_name()?;
+        let module = resolve_class_path(globals, &name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
+        })?;
+        if module.as_val().ty() != Some(ObjTy::MODULE) {
+            return Err(MonorubyErr::typeerr(format!("{} does not refer to module", name)));
+        }
+        let val = module.as_val();
+        self.objects.push(val);
+        Ok(val)
+    }
+
+    /// Read a 'M' (TYPE_MODULE_OLD) reference — legacy CRuby 1.8 tag
+    /// that accepts either a class or a module.
+    fn read_class_or_module_ref(&mut self, globals: &mut Globals) -> Result<Value> {
+        let name = self.read_class_or_module_name()?;
+        let module = resolve_class_path(globals, &name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
+        })?;
+        let val = module.as_val();
+        self.objects.push(val);
+        Ok(val)
+    }
 }
 
 /// Walk a `::`-separated constant path starting at `Object`.
@@ -1138,6 +1204,27 @@ fn marshal_dump_value(
                             marshal_dump_value(buf, *elem, globals, symbols, in_progress)?;
                         }
                     }
+                    Some(ObjTy::CLASS) | Some(ObjTy::MODULE) => {
+                        // Class ⇒ 'c', Module ⇒ 'm', payload is the
+                        // qualified name as a length-prefixed string.
+                        // CRuby raises TypeError on anonymous classes;
+                        // monoruby renders them as `#<Class:0x...>`,
+                        // which is not a constant path.
+                        let is_module = obj.ty() == Some(ObjTy::MODULE);
+                        let class_id = obj.as_class_id();
+                        let class_name = globals.get_class_name(class_id);
+                        if class_name.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous {}",
+                                if is_module { "module" } else { "class" }
+                            )));
+                        }
+                        let tag = if is_module { b'm' } else { b'c' };
+                        let name_bytes = class_name.as_bytes();
+                        buf.push(tag);
+                        marshal_write_fixnum(buf, name_bytes.len() as i32);
+                        buf.extend_from_slice(name_bytes);
+                    }
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
                         // three ivars CRuby uses: @begin, @end, @excl.
@@ -1475,6 +1562,87 @@ mod tests {
             s = MStructInherited.new("a", "b")
             t = Marshal.load(Marshal.dump(s))
             [t.class.name, t.p, t.q]
+            "##,
+        );
+    }
+
+    /// 'c' (TYPE_CLASS), 'm' (TYPE_MODULE) and 'M' (TYPE_MODULE_OLD)
+    /// references: round-trip yields the same object (`.equal?`) and
+    /// the tag/type mismatch arms both raise `TypeError`.
+    #[test]
+    fn marshal_class_and_module() {
+        // Round-trip a class via 'c'.
+        run_test(
+            r##"
+            bytes = Marshal.dump(String)
+            t = Marshal.load(bytes)
+            [t.equal?(String), bytes.bytes[2].chr]
+            "##,
+        );
+        // Round-trip a module via 'm'.
+        run_test(
+            r##"
+            bytes = Marshal.dump(Enumerable)
+            t = Marshal.load(bytes)
+            [t.equal?(Enumerable), bytes.bytes[2].chr]
+            "##,
+        );
+        // 'M' (TYPE_MODULE_OLD) accepts both classes and modules.
+        // Hand-crafted bytes since CRuby no longer emits this tag.
+        run_test(
+            r##"
+            # 'M' + length(6 ⇒ marshal_int 0x0b) + "String"
+            class_bytes  = "\x04\x08M\x0bString"
+            # 'M' + length(10 ⇒ marshal_int 0x0f) + "Enumerable"
+            module_bytes = "\x04\x08M\x0fEnumerable"
+            [Marshal.load(class_bytes).equal?(String),
+             Marshal.load(module_bytes).equal?(Enumerable)]
+            "##,
+        );
+        // 'c' naming a Module ⇒ TypeError.
+        run_test_error(
+            r##"
+            Marshal.load(Marshal.dump(Enumerable).sub("m", "c"))
+            "##,
+        );
+        // 'm' naming a Class ⇒ TypeError.
+        run_test_error(
+            r##"
+            Marshal.load(Marshal.dump(String).sub("c", "m"))
+            "##,
+        );
+        // 'c' naming a constant that does not exist ⇒ ArgumentError.
+        run_test_error(
+            r##"
+            # 'c' + length(13 ⇒ marshal_int 0x12) + "MMissingClass"
+            Marshal.load("\x04\x08c\x12MMissingClass")
+            "##,
+        );
+        // 'm' naming a missing constant ⇒ ArgumentError. Same shape
+        // as the 'c' case, just under the module reader.
+        run_test_error(
+            r##"
+            # 'm' + length(13 ⇒ marshal_int 0x12) + "MMissingModul"
+            Marshal.load("\x04\x08m\x12MMissingModul")
+            "##,
+        );
+        // 'M' (TYPE_MODULE_OLD) naming a missing constant ⇒ ArgumentError.
+        run_test_error(
+            r##"
+            # 'M' + length(13 ⇒ marshal_int 0x12) + "MMissingThing"
+            Marshal.load("\x04\x08M\x12MMissingThing")
+            "##,
+        );
+        // Dump of an anonymous class ⇒ TypeError.
+        run_test_error(
+            r##"
+            Marshal.dump(Class.new)
+            "##,
+        );
+        // Dump of an anonymous module ⇒ TypeError.
+        run_test_error(
+            r##"
+            Marshal.dump(Module.new)
             "##,
         );
     }
