@@ -14,6 +14,7 @@ mod executor;
 mod globals;
 mod id_table;
 pub mod parser;
+mod ruby_probe;
 pub mod tests;
 mod value;
 

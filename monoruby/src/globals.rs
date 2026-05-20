@@ -193,22 +193,44 @@ impl Globals {
         // the host gem roots. Done here, before `init_builtins`, because
         // monoruby's `ENV` hash is materialized from `std::env::vars()`
         // during builtin init and vendored rubygems reads GEM_PATH at
-        // require-time from that snapshot. Only set when the user hasn't
-        // supplied their own value.
-        if std::env::var_os("GEM_PATH").is_none() {
-            let gem_path_file = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("gem_path");
-            if let Ok(s) = std::fs::read_to_string(&gem_path_file) {
-                let s = s.trim();
-                if !s.is_empty() {
-                    // SAFETY: `Globals::new` runs single-threaded on the
-                    // main thread before any worker threads are spawned.
-                    unsafe {
-                        std::env::set_var("GEM_PATH", s);
-                    }
-                }
+        // require-time from that snapshot.
+        //
+        // Resolution chain (first non-empty wins):
+        //   1. MONORUBY_GEM_PATH env var  — explicit override
+        //   2. GEM_PATH env var           — CRuby convention, untouched
+        //   3. ~/.monoruby/gem_path file  — build.rs baked
+        //   4. Runtime probe              — invoke `ruby` once, cache to file
+        let monoruby_dir = dirs::home_dir().unwrap().join(".monoruby");
+        let gem_path_file = monoruby_dir.join("gem_path");
+        let library_path_file = monoruby_dir.join("library_path");
+
+        if let Some(p) = std::env::var_os("MONORUBY_GEM_PATH") {
+            // SAFETY: `Globals::new` runs single-threaded on the main
+            // thread before any worker threads are spawned.
+            unsafe { std::env::set_var("GEM_PATH", p) };
+        } else if std::env::var_os("GEM_PATH").is_none() {
+            let cached = std::fs::read_to_string(&gem_path_file)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let from_probe = if cached.is_some() && !crate::ruby_probe::reprobe_requested() {
+                None
+            } else {
+                crate::ruby_probe::probe().map(|p| {
+                    // Cache both files so subsequent runs skip the
+                    // ~50ms `ruby` spawn. `library_path` may not have
+                    // been baked either (e.g. distributed binary), so
+                    // write it unconditionally when we just probed.
+                    let _ = std::fs::write(&gem_path_file, &p.gem_path);
+                    let _ = std::fs::write(&library_path_file, &p.library_path);
+                    p.gem_path
+                })
+            };
+            if let Some(s) = from_probe.or(cached)
+                && !s.is_empty()
+            {
+                // SAFETY: as above — single-threaded main-thread init.
+                unsafe { std::env::set_var("GEM_PATH", s) };
             }
         }
 
@@ -298,19 +320,23 @@ impl Globals {
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
 
-        // load library path
-        let load_path = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("library_path");
-        let path_list = match std::fs::read_to_string(&load_path) {
-            Ok(s) => s,
-            Err(_) => {
-                eprintln!(
-                    "Warning: failed to read library path file: {:?}. Ruby may not be installed.",
-                    load_path
-                );
-                String::new()
+        // Load library path. Resolution chain mirrors the GEM_PATH
+        // chain above; the runtime probe that may have just populated
+        // `library_path_file` (via the GEM_PATH block) is the same
+        // ruby invocation, so by the time we get here the cache file
+        // is either already populated or unprobeable.
+        let path_list = if let Some(p) = std::env::var_os("MONORUBY_LOAD_PATH") {
+            p.to_string_lossy().into_owned()
+        } else {
+            match std::fs::read_to_string(&library_path_file) {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!(
+                        "Warning: failed to read library path file: {:?}. Ruby may not be installed.",
+                        library_path_file
+                    );
+                    String::new()
+                }
             }
         };
         // prepend monoruby-specific lib directory so it can override CRuby stdlib files.
