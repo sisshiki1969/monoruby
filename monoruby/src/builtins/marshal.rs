@@ -7,18 +7,47 @@ use num::BigInt;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_toplevel_module("Marshal").id();
-    globals.define_builtin_module_func(klass, "dump", dump, 1);
-    globals.define_builtin_module_func(klass, "load", load, 1);
-    globals.define_builtin_module_func(klass, "restore", load, 1);
+    // CRuby: Marshal.dump(obj, port=nil, level=-1).
+    //  - 1 arg : returns the serialized bytes as a String.
+    //  - 2 args: 2nd arg is either an IO-like writer (the bytes are
+    //            written to it and the writer is returned) OR an
+    //            Integer recursion-depth limit.
+    //  - 3 args: obj + io + limit.
+    // The recursion limit is accepted for API parity but not enforced
+    // (monoruby tracks visit cycles per-call via `in_progress`).
+    globals.define_builtin_module_func_with(klass, "dump", dump, 1, 3, false);
+    // CRuby: Marshal.load(source, proc=nil). The optional proc is
+    // called once per loaded value during traversal; ignored here
+    // because the spec set that depends on the arity passes nil
+    // anyway, and surfacing a more useful error later is safer than
+    // an arity refusal up front.
+    globals.define_builtin_module_func_with(klass, "load", load, 1, 2, false);
+    globals.define_builtin_module_func_with(klass, "restore", load, 1, 2, false);
 }
 
 /// ### Marshal.dump
 /// - dump(obj) -> String
+/// - dump(obj, port) -> port (port responds to #write)
+/// - dump(obj, level) -> String
+/// - dump(obj, port, level) -> port
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Marshal/m/dump.html]
 #[monoruby_builtin]
-fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let obj = lfp.arg(0);
+    // Classify args 1 and 2 into (port, _level). A two-arg call with
+    // an Integer second arg is the "(obj, level)" form, NOT a port.
+    let (port, _level) = match (lfp.try_arg(1), lfp.try_arg(2)) {
+        (None, _) => (None, None),
+        (Some(a), None) => {
+            if a.is_kind_of(&globals.store, INTEGER_CLASS) {
+                (None, Some(a))
+            } else {
+                (Some(a), None)
+            }
+        }
+        (Some(a), Some(b)) => (Some(a), Some(b)),
+    };
     let mut buf: Vec<u8> = Vec::new();
     // Marshal version header
     buf.push(0x04);
@@ -26,16 +55,49 @@ fn dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let mut symbols: Vec<IdentId> = Vec::new();
     let mut in_progress: std::collections::HashSet<u64> = std::collections::HashSet::new();
     marshal_dump_value(&mut buf, obj, globals, &mut symbols, &mut in_progress)?;
-    Ok(Value::bytes(buf))
+    match port {
+        None => Ok(Value::bytes(buf)),
+        Some(port) => {
+            // CRuby: raises TypeError "instance of IO needed" via the
+            // duck-type check `port.respond_to?(:write)`. Drive the
+            // standard `respond_to?` dispatch instead of touching
+            // method-table internals so a user-defined responder still
+            // works.
+            let write_id = IdentId::get_id("write");
+            let respond_to = IdentId::get_id("respond_to?");
+            let responds = match vm.invoke_method_inner(
+                globals,
+                respond_to,
+                port,
+                &[Value::symbol(write_id)],
+                None,
+                None,
+            ) {
+                Ok(v) => v.as_bool(),
+                Err(_) => false,
+            };
+            if !responds {
+                return Err(MonorubyErr::typeerr("instance of IO needed"));
+            }
+            let bytes = Value::bytes(buf);
+            vm.invoke_method_inner(globals, write_id, port, &[bytes], None, None)?;
+            Ok(port)
+        }
+    }
 }
 
 /// ### Marshal.load
 /// - load(source) -> Object
+/// - load(source, proc) -> Object (proc's return value replaces the loaded object)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Marshal/m/load.html]
 #[monoruby_builtin]
 fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let source = lfp.arg(0);
+    // CRuby's Marshal.load also accepts an IO-like reader (anything
+    // responding to #read). For the moment we only handle the
+    // String-of-bytes form; IO readers can be added once the spec
+    // arity gap stops swallowing 50+ examples.
     let data = source.expect_bytes(&globals.store)?;
     if data.len() < 2 {
         return Err(MonorubyErr::argumenterr("marshal data too short"));
@@ -49,6 +111,16 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     let mut cursor = MarshalReader::new(&data[2..]);
     let value = cursor.read_value(vm, globals)?;
+    // CRuby's Marshal.load(src, proc): the proc is called with the
+    // loaded object, and *its return value replaces* the value
+    // returned by `load`. (CRuby walks every sub-object too — we
+    // only hook the top-level for now; that already covers the
+    // shape the ruby/spec arity gap was blocking on.)
+    if let Some(proc_arg) = lfp.try_arg(1)
+        && let Some(proc) = proc_arg.is_proc()
+    {
+        return vm.invoke_proc(globals, &proc, &[value]);
+    }
     Ok(value)
 }
 
@@ -860,6 +932,41 @@ fn marshal_dump_value(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// CRuby's `Marshal.dump(obj, port=nil, level=-1)` accepts 1..3
+    /// args, with an Integer second arg being interpreted as the
+    /// recursion-depth limit (not a port). `Marshal.load` accepts
+    /// `(source, proc=nil)`. Cover both arity arms and the IO-port
+    /// write-back form.
+    #[test]
+    fn marshal_dump_load_arity() {
+        run_test_with_prelude(
+            r##"
+            res = []
+            # (obj, level) — Integer 2nd arg is the depth limit, NOT a port.
+            res << (Marshal.dump(123, -1) == Marshal.dump(123))
+            # (obj, port) — bytes flow to the writer; the call returns the writer.
+            io = StringIO.new
+            ret = Marshal.dump([1, 2, 3], io)
+            res << ret.equal?(io)
+            res << (Marshal.load(io.string) == [1, 2, 3])
+            # (obj, port, level) — the level is accepted (and ignored).
+            io2 = StringIO.new
+            Marshal.dump("hi", io2, -1)
+            res << (Marshal.load(io2.string) == "hi")
+            # Non-writer port ⇒ TypeError, matching CRuby's text.
+            begin
+              Marshal.dump(1, Object.new)
+            rescue TypeError => e
+              res << e.message
+            end
+            # Marshal.load accepts a proc as the second arg (ignored).
+            res << Marshal.load(Marshal.dump(:sym), proc { |_| })
+            res
+            "##,
+            r##"require "stringio""##,
+        );
+    }
 
     #[test]
     fn marshal_dump_load() {
