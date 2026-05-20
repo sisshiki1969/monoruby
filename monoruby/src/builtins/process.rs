@@ -1126,6 +1126,61 @@ mod tests {
     /// across the extern "C" boundary.
     #[test]
     fn process_exec_null_byte() {
+        // Single-string form (goes through the shell branch).
         run_test_error(r#"Process.exec("ls\0")"#);
+        // Multi-arg form (goes through the execvp branch). NUL in
+        // either the program *or* any argv element must surface as
+        // an ArgumentError, not an abort.
+        run_test_error(r#"Process.exec("ls\0", "-la")"#);
+        run_test_error(r#"Process.exec("ls", "-l\0a")"#);
+    }
+
+    /// `Process.exec`/`abort`/`exit` are also reachable as Module
+    /// methods (CRuby exposes them under both `Kernel` and
+    /// `Process` names). Use `respond_to?` so the test doesn't
+    /// actually invoke them.
+    #[test]
+    fn process_dispatches_kernel_aliases() {
+        run_test_once(
+            r#"
+            [Process.respond_to?(:exit),
+             Process.respond_to?(:abort),
+             Process.respond_to?(:exec)]
+            "#,
+        );
+    }
+
+    /// `Process.exit` raises `SystemExit` (it shares
+    /// `Kernel#exit`'s implementation). The Ruby `begin/rescue`
+    /// here verifies the exception class without actually exiting.
+    #[test]
+    fn process_exit_raises_systemexit() {
+        run_test_once(
+            r#"
+            begin
+              Process.exit
+            rescue SystemExit => e
+              [e.class.name, e.success?]
+            end
+            "#,
+        );
+        run_test_once(
+            r#"
+            begin
+              Process.exit(0)
+            rescue SystemExit => e
+              [e.class.name, e.success?, e.status]
+            end
+            "#,
+        );
+    }
+
+    /// `Process.getpgid(<missing>)` should surface ESRCH as the
+    /// matching `Errno::ESRCH` (not abort, not generic
+    /// RuntimeError). 2^31-1 is a portable "definitely-no-such-pid"
+    /// placeholder.
+    #[test]
+    fn process_getpgid_missing_pid_raises_esrch() {
+        run_test_error(r#"Process.getpgid(2_147_483_646)"#);
     }
 }
