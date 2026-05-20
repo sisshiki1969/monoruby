@@ -19,13 +19,27 @@ pub(super) fn init(globals: &mut Globals) {
         .define_builtin_class("File", FILE_CLASS, io_class, OBJECT_CLASS, ObjTy::IO)
         .id();
     let file_test = globals.define_toplevel_module("FileTest").id();
-    globals.define_builtin_class_func(file, "write", file_write, 2);
+    // CRuby: `File.write(name, string, offset=nil, **opts)` where
+    // opts ⊃ {mode:, perm:, encoding:, …}. monoruby honours only
+    // arity here — offset is currently ignored (always truncating
+    // from 0) and the keywords are accepted for compatibility but
+    // not enforced. Fixing that is left to follow-up PRs; the
+    // arity opening alone closes a 25-strong cluster in
+    // `core/kernel` (mspec's `before :each` writes a fixture file
+    // with `perm: 0o700`).
+    globals.define_builtin_class_func_with_kw(
+        file, "write", file_write, 2, 3, false,
+        &["mode", "perm", "encoding"], false,
+    );
     globals.define_builtin_class_func_with(file, "binwrite", file_binwrite, 2, 3, false);
     globals.define_builtin_class_func_with(file, "read", file_read, 1, 4, false);
     globals.define_builtin_class_func_with(file, "binread", file_binread, 1, 3, false);
 
     // IO class methods that share semantics with File.* class methods.
-    globals.define_builtin_class_func(IO_CLASS, "write", file_write, 2);
+    globals.define_builtin_class_func_with_kw(
+        IO_CLASS, "write", file_write, 2, 3, false,
+        &["mode", "perm", "encoding"], false,
+    );
     globals.define_builtin_class_func_with(IO_CLASS, "binwrite", file_binwrite, 2, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "binread", file_binread, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "try_convert", io_try_convert, 1);
@@ -3196,6 +3210,37 @@ mod tests {
                 raised = true
               end
               raised
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    /// `File.write(name, string, offset=nil, **opts)` — CRuby's full
+    /// arity. Before this was `(name, string)` (2 args max), so any
+    /// keyword (`mode:`, `perm:`, `encoding:`) raised ArgumentError
+    /// before reaching the I/O. The fix is registration-only: the
+    /// extra args are accepted for compatibility and ignored.
+    #[test]
+    fn file_write_accepts_perm_kwarg() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_filewrite_perm_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello", perm: 0o600)
+              File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_filewrite_kw_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "data", mode: "w", encoding: "UTF-8")
+              File.read(path)
             ensure
               File.unlink(path) rescue nil
             end
