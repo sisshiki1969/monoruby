@@ -727,24 +727,18 @@ impl<'a> MarshalReader<'a> {
         self.objects.push(Value::nil());
 
         let class_name = class_sym.get_name();
-        let class_val = resolve_class_path(globals, &class_name).ok_or_else(|| {
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
             MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
         })?;
-        let module = class_val.is_class_or_module().ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
-        })?;
 
-        // Verify the class is a Struct (or subclass of Struct). The
-        // declared member list lives on the class as the `/members`
-        // ivar — its presence is the signal that this is a Struct
-        // class. Reject everything else with a TypeError.
-        let members = globals
-            .store
-            .get_ivar(module.as_val(), IdentId::get_id("/members"))
-            .and_then(|v| v.try_array_ty())
-            .ok_or_else(|| {
-                MonorubyErr::typeerr(format!("{} is not a Struct", class_name))
-            })?;
+        // The declared member list lives on the class (or an
+        // ancestor — direct `class A < SomeStruct` subclasses
+        // inherit `/members` from their `Struct.new`-produced
+        // superclass). Walking the chain matches the existing
+        // `Struct#get_members` lookup. Absence ⇒ not a Struct.
+        let members = lookup_struct_members(globals, module).ok_or_else(|| {
+            MonorubyErr::typeerr(format!("{} is not a Struct", class_name))
+        })?;
 
         // CRuby's struct loader enforces that the marshalled member
         // names exactly match the class's declared members (same
@@ -760,16 +754,11 @@ impl<'a> MarshalReader<'a> {
         for i in 0..member_count {
             let member_sym = self.read_symbol()?;
             let val = self.read_value(vm, globals)?;
-            let expected_sym = members
-                .get(i)
-                .copied()
-                .and_then(|v| v.try_symbol())
-                .ok_or_else(|| {
-                    MonorubyErr::typeerr(format!(
-                        "struct {} not compatible (non-symbol member)",
-                        class_name
-                    ))
-                })?;
+            // SAFETY: `members` was populated by `Struct.new`, which
+            // validates each entry is a Symbol; CRuby blocks Ruby-
+            // level mutation of `/`-prefixed ivars (`NameError`), so
+            // the slot is guaranteed to be `Value::symbol(...)`.
+            let expected_sym = members.get(i).unwrap().try_symbol().unwrap();
             if expected_sym != member_sym {
                 return Err(MonorubyErr::typeerr(format!(
                     "struct {} not compatible (:{} for :{})",
@@ -787,19 +776,42 @@ impl<'a> MarshalReader<'a> {
 
 /// Walk a `::`-separated constant path starting at `Object`.
 /// Returns `None` if any segment is missing or not a class/module.
-fn resolve_class_path(globals: &Globals, path: &str) -> Option<Value> {
+fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
     let mut current_class_id = OBJECT_CLASS;
-    let mut last: Option<Value> = None;
+    let mut last: Option<Module> = None;
     for segment in path.split("::") {
         let name = IdentId::get_id(segment);
         let val = globals
             .get_constant(current_class_id, name)
             .and_then(|s| s.loaded_value())?;
-        // Step into the resolved class for the next segment lookup.
-        current_class_id = val.is_class_or_module()?.id();
-        last = Some(val);
+        let module = val.is_class_or_module()?;
+        current_class_id = module.id();
+        last = Some(module);
     }
     last
+}
+
+/// Walk a Struct subclass's ancestor chain looking for the
+/// `/members` ivar (an Array of Symbols set by `Struct.new`).
+/// Returns `None` if the class isn't a Struct — i.e. neither it
+/// nor any ancestor below `STRUCT_CLASS` carries `/members`.
+///
+/// Mirrors `super::struct_class::get_members`, which a follow-up
+/// can consolidate once the marshal module gets access to it.
+fn lookup_struct_members(globals: &Globals, mut class: Module) -> Option<Array> {
+    loop {
+        if let Some(v) = globals
+            .store
+            .get_ivar(class.as_val(), IdentId::get_id("/members"))
+            && let Some(arr) = v.try_array_ty()
+        {
+            return Some(arr);
+        }
+        match class.superclass() {
+            Some(s) if s.id() != STRUCT_CLASS => class = s,
+            _ => return None,
+        }
+    }
 }
 
 // ============================================================
@@ -1183,26 +1195,21 @@ fn marshal_dump_value(
                         }
                         let class_name_id = IdentId::get_id(&class_name);
                         let class_module = globals.store[class_id].get_module();
-                        let members = globals
-                            .store
-                            .get_ivar(class_module.as_val(), IdentId::get_id("/members"))
-                            .and_then(|v| v.try_array_ty())
-                            .ok_or_else(|| {
-                                MonorubyErr::typeerr(format!(
-                                    "{} is not a Struct",
-                                    class_name
-                                ))
-                            })?;
+                        // SAFETY: STRUCT-typed values are only produced
+                        // via `Struct.new` (which stores `/members` on
+                        // the class or an ancestor); CRuby blocks
+                        // Ruby-level mutation of `/`-prefixed ivars
+                        // (`NameError`), so some ancestor in the chain
+                        // is guaranteed to carry the members array of
+                        // Symbols.
+                        let members =
+                            lookup_struct_members(globals, class_module).unwrap();
                         let inner = obj.as_struct();
                         buf.push(b'S');
                         marshal_write_symbol(buf, class_name_id, symbols);
                         marshal_write_fixnum(buf, members.len() as i32);
                         for (i, m) in members.iter().enumerate() {
-                            let sym = m.try_symbol().ok_or_else(|| {
-                                MonorubyErr::typeerr(
-                                    "non-symbol member in Struct definition",
-                                )
-                            })?;
+                            let sym = m.try_symbol().unwrap();
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
                             marshal_dump_value(buf, val, globals, symbols, in_progress)?;
@@ -1424,6 +1431,50 @@ mod tests {
             Object.send(:remove_const, :MStructE)
             MStructE = 42
             Marshal.load(bytes)
+            "##,
+        );
+        // Anonymous Struct dump ⇒ TypeError (no constant path to
+        // serialize). Covers the `class_name.starts_with("#<")` arm
+        // on the dump side.
+        run_test_error(
+            r##"
+            anon = Struct.new(:a)
+            Marshal.dump(anon.new(1))
+            "##,
+        );
+        // Class name in marshal data does not resolve to any
+        // constant ⇒ ArgumentError. Hand-crafted 'S' payload naming
+        // an undefined `MStructMissing`.
+        run_test_error(
+            r##"
+            bytes = "\x04\x08S:\x14MStructMissing\x06:\x06ai\x06"
+            Marshal.load(bytes)
+            "##,
+        );
+        // Class resolves to a regular (non-Struct) class without
+        // `/members` ⇒ TypeError "is not a Struct". Covers the
+        // `lookup_struct_members` miss arm. Hand-crafted bytes
+        // (symbol length 17 ⇒ marshal_int 0x16).
+        run_test_error(
+            r##"
+            class MStructNotAStruct; end
+            bytes = "\x04\x08S:\x16MStructNotAStruct\x06:\x06ai\x06"
+            Marshal.load(bytes)
+            "##,
+        );
+        // Round-trip a *direct* subclass of a `Struct.new`-produced
+        // class (`/members` lives on the anonymous superclass).
+        // Regression guard: a non-walking lookup raised `TypeError:
+        // ... is not a Struct` on load and panicked on dump.
+        // The superclass is hoisted to a constant so the JIT
+        // warm-up reruns don't trip `superclass mismatch`.
+        run_test(
+            r##"
+            MStructBase ||= Struct.new(:p, :q)
+            class MStructInherited < MStructBase; end unless defined?(MStructInherited)
+            s = MStructInherited.new("a", "b")
+            t = Marshal.load(Marshal.dump(s))
+            [t.class.name, t.p, t.q]
             "##,
         );
     }
