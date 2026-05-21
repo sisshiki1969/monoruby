@@ -184,6 +184,10 @@ impl Globals {
 
         WARNING.store(warning, std::sync::atomic::Ordering::Relaxed);
 
+        // Arm the optional hang watchdog (no-op unless
+        // MONORUBY_HANG_WATCHDOG_SEC is set). See doc/signal_handling.md B+.
+        crate::watchdog::init();
+
         // Propagate the host CRuby's gem-root directories to the vendored
         // rubygems via GEM_PATH so `Gem::Specification.find_by_name` can
         // discover host-installed gems (e.g. those added by `gem install`).

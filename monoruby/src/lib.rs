@@ -17,6 +17,7 @@ pub mod parser;
 mod ruby_probe;
 pub mod tests;
 mod value;
+mod watchdog;
 
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;

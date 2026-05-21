@@ -151,30 +151,57 @@ the parent shell may leave it open to the tty. Investigation needed:
 
 No code change planned without that diagnosis.
 
-### B3. `core/file`
+### B3. `core/file` — **done**
 
 Caused by a subprocess (`ruby_exe` in mspec) hitting the
-`Thread.pass called too many times` guard in
-[monoruby/builtins/startup.rb:452](../monoruby/builtins/startup.rb#L452).
-The subprocess aborts; the parent waits on its pipe forever.
+`Thread.pass called too many times` guard. The pure-Ruby `Thread.pass`
+counted its calls and raised `ThreadError` after 1000, so the subprocess
+aborted and the parent waited on its pipe forever.
 
-Pick one (or both):
+Resolved via option 1: the artificial guard is gone and `Thread.pass`
+is now a native `sched_yield(2)` wrapper
+([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs),
+`std::thread::yield_now()`). It returns nil and never raises — a cheap,
+legitimate no-op when nothing else is runnable. `Thread` is created in
+Rust (subclass of `Object`) and reopened by the pure-Ruby class in
+`startup.rb`, matching how `Dir` / `File` / `IO` are split.
 
-1. Lower or remove the guard. `Thread.pass` becomes a `sched_yield(2)`
-   wrapper — legitimate even single-threaded.
-2. Audit the call site that loops on `Thread.pass`. If it's busy-waiting
-   for something monoruby can't deliver under single-thread, raise
-   `ThreadError` eagerly instead of looping.
+Option 2 (raising `ThreadError` eagerly at genuinely-blocking call sites)
+is tracked separately as B1 / #3.
 
-### B+. Watchdog (safety net)
+### B+. Watchdog (safety net) — **done**
 
 Optional environment toggle `MONORUBY_HANG_WATCHDOG_SEC=N`. After N
-seconds of no bytecode progress, abort the process with a clear message.
-Default off. Catches unknown hangs in CI and converts them to errors
-instead of opaque timeouts.
+seconds of no interpreter progress, abort the process with a clear
+message. Default off. Catches unknown hangs in CI and converts them to
+errors instead of opaque timeouts.
 
-Implementation sketch: a SIGALRM-driven counter that decrements at every
-poll point; if it reaches zero, abort.
+Implemented in
+[monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs):
+
+- `init` (called once from `Globals::new`) reads the env var; when
+  `N > 0` it installs a `SIGALRM` handler and a 1 Hz `setitimer`. Unset
+  / `<= 0` ⇒ no syscalls installed, fully disabled.
+- A `COUNTDOWN` (seconds) is reset to `N` at the VM poll point
+  (`execute_gc`, via `watchdog::poll`) — i.e. "progress was made".
+- The `SIGALRM` handler decrements `COUNTDOWN` once per second and, on
+  reaching zero, `write(2)`s a message and `_exit(134)`s. The abort
+  decision lives in the handler, *not* the poll point, because a genuine
+  hang never reaches the poll point. The handler touches only an atomic,
+  `write` and `_exit`, all async-signal-safe.
+
+**Limitation:** the only poll point today is the allocation-driven GC
+poll, so the watchdog catches hangs that make *no* heap allocations
+(tight non-allocating loops, `sleep`/`Thread.pass`-until-flag spins —
+the common single-thread hang shapes). A spin loop that keeps
+allocating resets the countdown and is *not* caught. Adding the A5
+backward-branch poll point would close that gap; until then a watchdog
+budget should be set comfortably above the slowest legitimate
+allocating example.
+
+Coverage: [monoruby/tests/watchdog.rs](../monoruby/tests/watchdog.rs)
+(fires on a non-allocating hang; silent when unset; no false-fire when
+the program finishes within budget).
 
 ---
 
@@ -194,7 +221,9 @@ poll point; if it reaches zero, abort.
 
 - [x] #1 Signal generalization infrastructure + `Interrupt` class
   (default install limited to SIGINT — see A3 above)
-- [ ] #2 `Thread.pass` guard
+- [x] #2 `Thread.pass` guard removed; now a native `sched_yield(2)`
+  wrapper ([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs))
 - [ ] #3 Eager `ThreadError`
-- [ ] #4 Watchdog
+- [x] #4 Watchdog — `MONORUBY_HANG_WATCHDOG_SEC=N`, SIGALRM-driven,
+  default off ([monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs))
 - [ ] #5 Stretch items
