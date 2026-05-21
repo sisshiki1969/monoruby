@@ -44,8 +44,29 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         Effect::CAPTURE | Effect::BINDING,
     );
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
-    globals.define_builtin_module_func_with(kernel_class, "raise", raise, 0, 3, false);
-    globals.define_builtin_module_func_with(kernel_class, "fail", raise, 0, 2, false);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "raise",
+        raise,
+        0,
+        3,
+        false,
+        &["cause"],
+        false,
+    );
+    // CRuby aliases `fail` to the same `rb_f_raise` callback (variadic).
+    // Use the identical signature so `cause:` ends up at the same
+    // `lfp.try_arg(3)` slot in the shared trampoline.
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "fail",
+        raise,
+        0,
+        3,
+        false,
+        &["cause"],
+        false,
+    );
     globals.define_builtin_module_inline_func(
         kernel_class,
         "block_given?",
@@ -500,7 +521,17 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
 #[monoruby_builtin]
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `cause:` kwarg is at slot 3 (positional_max=3 for the shared
+    // raise/fail trampoline). CRuby: passing `cause:` with no
+    // positional arguments raises `ArgumentError "only cause is given
+    // with no arguments"`.
+    let has_cause = lfp.try_arg(3).is_some();
     if lfp.try_arg(0).is_none() {
+        if has_cause {
+            return Err(MonorubyErr::argumenterr(
+                "only cause is given with no arguments",
+            ));
+        }
         let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
         if let Some(ex) = ex.is_exception() {
             return Err(MonorubyErr::new_from_exception(ex));
@@ -533,6 +564,27 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
         return Err(MonorubyErr::runtimeerr(message.to_str()?));
+    }
+    // Duck-typed exception. CRuby drives `arg0.exception(msg)` (or
+    // `arg0.exception` if no message was given); the result must be
+    // an Exception instance — anything else is `TypeError "exception
+    // object expected"` (note: distinct from the
+    // "exception class/object expected" emitted when arg0 doesn't
+    // even respond to `#exception`).
+    let exception_id = IdentId::get_id("exception");
+    if globals.check_method(lfp.arg(0), exception_id).is_some() {
+        let mut args = vec![];
+        if let Some(arg1) = lfp.try_arg(1) {
+            if arg1.try_hash_ty().is_none() {
+                args.push(arg1);
+            }
+        }
+        let result =
+            vm.invoke_method_inner(globals, exception_id, lfp.arg(0), &args, None, None)?;
+        match result.is_exception() {
+            Some(ex) => return Err(MonorubyErr::new_from_exception(ex)),
+            None => return Err(MonorubyErr::typeerr("exception object expected")),
+        }
     }
     Err(MonorubyErr::typeerr("exception class/object expected"))
 }
@@ -5464,6 +5516,53 @@ mod tests {
     fn kernel_raise_class() {
         run_test_error("raise ArgumentError");
         run_test_error(r#"raise TypeError, "custom""#);
+    }
+
+    /// `raise(cause:)` with no positional args ⇒ ArgumentError,
+    /// `raise(obj)` where `obj.exception` returns an Exception ⇒
+    /// raise that, and `obj.exception` returning a non-Exception ⇒
+    /// `TypeError "exception object expected"`.
+    #[test]
+    fn kernel_raise_cause_and_duck() {
+        run_test(
+            r##"
+            results = []
+            # cause: only ⇒ ArgumentError "only cause is given with no arguments"
+            begin
+              raise(cause: nil)
+            rescue ArgumentError => e
+              results << [e.class.name, e.message]
+            end
+            # obj.exception(msg) returning an Exception
+            obj = Object.new
+            def obj.exception(msg); StandardError.new(msg); end
+            begin
+              raise obj, "hi"
+            rescue => e
+              results << [e.class.name, e.message]
+            end
+            # obj.exception returning non-Exception ⇒ TypeError "exception object expected"
+            bad = Object.new
+            def bad.exception; Array; end
+            begin
+              raise bad
+            rescue TypeError => e
+              results << [e.class.name, e.message]
+            end
+            # Plain object with no #exception ⇒ TypeError "exception class/object expected"
+            begin
+              raise 42
+            rescue TypeError => e
+              results << [e.class.name, e.message]
+            end
+            results
+            "##,
+        );
+        // `fail` aliases `raise` — the cause-only path applies too.
+        run_test_error(r#"fail(cause: nil)"#);
+        // Bare `raise` with no current exception ⇒ RuntimeError
+        // (the `$!`-reraise fallthrough).
+        run_test_error(r#"raise"#);
     }
 
     #[test]
