@@ -126,7 +126,7 @@ module Enumerable
   end
 
   def each_with_object(obj)
-    return self.to_enum(:each_with_object) unless block_given?
+    return self.to_enum(:each_with_object, obj) unless block_given?
     __gather_each do |x|
       yield x, obj
     end
