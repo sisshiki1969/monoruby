@@ -921,6 +921,14 @@ mod tests {
     }
 
     #[test]
+    fn spawn_argument_errors() {
+        // A redirect value that is neither an IO nor an fd Integer.
+        run_test_error(r#"spawn("true", out: :nope)"#);
+        // No command given at all.
+        run_test_error("spawn()");
+    }
+
+    #[test]
     fn open3_capture_via_spawn() {
         // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
         // drain them — the path bundler uses to run git for git-source gems.
