@@ -151,20 +151,23 @@ the parent shell may leave it open to the tty. Investigation needed:
 
 No code change planned without that diagnosis.
 
-### B3. `core/file`
+### B3. `core/file` — **done**
 
 Caused by a subprocess (`ruby_exe` in mspec) hitting the
-`Thread.pass called too many times` guard in
-[monoruby/builtins/startup.rb:452](../monoruby/builtins/startup.rb#L452).
-The subprocess aborts; the parent waits on its pipe forever.
+`Thread.pass called too many times` guard. The pure-Ruby `Thread.pass`
+counted its calls and raised `ThreadError` after 1000, so the subprocess
+aborted and the parent waited on its pipe forever.
 
-Pick one (or both):
+Resolved via option 1: the artificial guard is gone and `Thread.pass`
+is now a native `sched_yield(2)` wrapper
+([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs),
+`std::thread::yield_now()`). It returns nil and never raises — a cheap,
+legitimate no-op when nothing else is runnable. `Thread` is created in
+Rust (subclass of `Object`) and reopened by the pure-Ruby class in
+`startup.rb`, matching how `Dir` / `File` / `IO` are split.
 
-1. Lower or remove the guard. `Thread.pass` becomes a `sched_yield(2)`
-   wrapper — legitimate even single-threaded.
-2. Audit the call site that loops on `Thread.pass`. If it's busy-waiting
-   for something monoruby can't deliver under single-thread, raise
-   `ThreadError` eagerly instead of looping.
+Option 2 (raising `ThreadError` eagerly at genuinely-blocking call sites)
+is tracked separately as B1 / #3.
 
 ### B+. Watchdog (safety net)
 
@@ -194,7 +197,8 @@ poll point; if it reaches zero, abort.
 
 - [x] #1 Signal generalization infrastructure + `Interrupt` class
   (default install limited to SIGINT — see A3 above)
-- [ ] #2 `Thread.pass` guard
+- [x] #2 `Thread.pass` guard removed; now a native `sched_yield(2)`
+  wrapper ([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs))
 - [ ] #3 Eager `ThreadError`
 - [ ] #4 Watchdog
 - [ ] #5 Stretch items

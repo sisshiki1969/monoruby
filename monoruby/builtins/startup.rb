@@ -595,17 +595,9 @@ class Thread
     @@current
   end
 
-  @@pass_count = 0
-  def self.pass
-    # monoruby is single-threaded. Thread.pass is a no-op, but if called
-    # repeatedly (e.g., `Thread.pass until condition`), the condition will
-    # never change. Raise after a safety limit to prevent infinite loops.
-    @@pass_count += 1
-    if @@pass_count > 1000
-      @@pass_count = 0
-      raise ThreadError, "Thread.pass called too many times (monoruby is single-threaded)"
-    end
-  end
+  # Thread.pass is a native sched_yield(2) wrapper (see builtins/thread.rs).
+  # Genuine single-thread blocking is surfaced at the blocking call sites,
+  # not by an artificial Thread.pass call-count guard.
 
   def initialize(*args, &block)
     @block = block

@@ -41,6 +41,7 @@ mod set;
 mod string;
 pub(crate) mod struct_class;
 mod symbol;
+mod thread;
 mod time;
 mod true_class;
 
@@ -92,6 +93,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     marshal::init(globals);
     math::init(globals);
     process::init(globals);
+    thread::init(globals);
     gc::init(globals);
     random::init(globals);
     symbol::init(globals);
