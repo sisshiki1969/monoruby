@@ -5,6 +5,7 @@ mod array;
 mod binding;
 mod bool_class;
 mod class;
+mod digest;
 mod dir;
 pub(crate) mod encoding;
 pub(crate) mod errno;
@@ -99,6 +100,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     match_data::init(globals);
     set::init(globals);
     json::init(globals);
+    digest::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }

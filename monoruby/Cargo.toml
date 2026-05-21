@@ -79,6 +79,9 @@ unicode-segmentation = "1.13.2"
 signal-hook = "0.4.4"
 divrem = "1.0.0"
 libffi = "5.1.0"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [build-dependencies]
 dirs = "6.0.0"
