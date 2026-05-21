@@ -424,13 +424,34 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut buffer = String::new();
-    match std::io::stdin().read_line(&mut buffer) {
-        Ok(_) => {}
-        Err(_) => return Ok(Value::nil()),
+    let n = match std::io::stdin().read_line(&mut buffer) {
+        Ok(n) => n,
+        Err(_) => {
+            vm.set_last_read_line(Value::nil());
+            return Ok(Value::nil());
+        }
+    };
+    // `read_line` returns `Ok(0)` only at end-of-input. CRuby's
+    // `gets` then returns nil (and `while gets` terminates); returning
+    // the empty buffer string here would loop forever since "" is
+    // truthy.
+    if n == 0 {
+        vm.set_last_read_line(Value::nil());
+        return Ok(Value::nil());
     }
-    Ok(Value::string(buffer))
+    // Bump `$.` (input line number) and set `$_` (frame-local last
+    // read line), matching CRuby.
+    let lineno = globals
+        .get_gvar(IdentId::get_id("$."))
+        .and_then(|v| v.try_fixnum())
+        .unwrap_or(0)
+        + 1;
+    globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+    let s = Value::string(buffer);
+    vm.set_last_read_line(s);
+    Ok(s)
 }
 
 ///
