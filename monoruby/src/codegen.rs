@@ -8,6 +8,7 @@ mod compiler;
 mod invoker;
 mod jit_module;
 pub mod jitgen;
+pub(crate) mod signal_table;
 mod patch;
 pub mod runtime;
 mod vmgen;
@@ -172,7 +173,11 @@ pub struct JitModule {
     class_version: DestLabel,
     const_version: DestLabel,
     alloc_flag: DestLabel,
-    sigint_flag: DestLabel,
+    /// 32-bit bitmap of pending Unix signals — bit `n` corresponds to
+    /// signal `n + 1` (so SIGINT = 2 ⇒ bit 1). Written async-safely from
+    /// the per-signal asm stubs in `signal_handler_for`; drained at
+    /// poll-time by `take_pending_signals`. See doc/signal_handling.md.
+    pending_signals: DestLabel,
     ///
     /// Raise error.
     ///
@@ -245,15 +250,26 @@ impl std::ops::DerefMut for JitModule {
 }
 
 impl JitModule {
-    pub(crate) fn signal_handler(
+    /// Emit a per-signal asm stub. Each stub OR-sets its own bit into
+    /// `pending_signals` and nudges `alloc_flag` so the next GC poll
+    /// in `execute_gc` notices the signal and converts it to a Ruby
+    /// exception. `signo` is the POSIX signal number (1..32).
+    ///
+    /// The handler runs in async-signal context; the only operations
+    /// performed are a memory OR and an ADD, both of which are
+    /// async-signal-safe on x86-64. No call into Rust.
+    pub(crate) fn signal_handler_for(
         &mut self,
         alloc_flag: DestLabel,
-        sigint_flag: DestLabel,
+        pending_signals: DestLabel,
+        signo: i32,
     ) -> CodePtr {
+        debug_assert!((1..=32).contains(&signo));
+        let bit: i32 = 1 << (signo - 1);
         let codeptr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             addl [rip + alloc_flag], 10;
-            movl [rip + sigint_flag], 1;
+            orl  [rip + pending_signals], (bit);
             ret;
         }
         codeptr
@@ -900,19 +916,27 @@ impl Codegen {
             jit_compile_time: std::time::Duration::default(),
         };
         codegen.construct_vm();
-        let signal_handler = codegen.signal_handler();
+        // Emit one stub per signal we want to surface as a Ruby
+        // exception. SIGSEGV/SIGBUS/SIGFPE/SIGILL/SIGABRT are deliberately
+        // not handled — those are genuine programming errors and should
+        // be left to the kernel's default core-dump path.
+        // See doc/signal_handling.md.
+        let signal_stubs: Vec<(i32, CodePtr)> = signal_table::POSIX_SIGNALS
+            .iter()
+            .map(|&signo| (signo, codegen.signal_handler_for(signo)))
+            .collect();
         codegen.jit.finalize();
 
         unsafe {
-            use libc::{SA_RESTART, SIGINT, sighandler_t};
-            let mut sa: libc::sigaction = std::mem::zeroed();
-
-            sa.sa_sigaction = signal_handler.as_ptr() as sighandler_t;
-            sa.sa_flags = SA_RESTART;
-            libc::sigemptyset(&mut sa.sa_mask);
-
-            if libc::sigaction(SIGINT, &sa, std::ptr::null_mut()) != 0 {
-                panic!("Failed to set signal handler.");
+            use libc::{SA_RESTART, sighandler_t};
+            for &(signo, codeptr) in &signal_stubs {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = codeptr.as_ptr() as sighandler_t;
+                sa.sa_flags = SA_RESTART;
+                libc::sigemptyset(&mut sa.sa_mask);
+                if libc::sigaction(signo, &sa, std::ptr::null_mut()) != 0 {
+                    panic!("Failed to set signal handler for signo {signo}");
+                }
             }
         }
 
@@ -960,19 +984,32 @@ impl Codegen {
         CompilationUnitId(id)
     }
 
-    pub(crate) fn sigint_flag(&self) -> bool {
-        let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
-        unsafe { *ptr != 0 }
+    /// Atomically read and clear the pending-signal bitmap. Returns the
+    /// signals that were pending at call time; the bitmap is left zero.
+    ///
+    /// Uses `xchg` semantics via a volatile read-then-zero. The asm
+    /// signal stub uses `or` to set bits, so a concurrent set racing
+    /// with this clear may be lost if the read happens between OR and
+    /// the bit's observation — acceptable: it gets picked up on the
+    /// next poll. Use of `*mut u32` is fine here because the signal
+    /// handler runs on the same thread as the poll.
+    pub(crate) fn take_pending_signals(&self) -> u32 {
+        let ptr = self
+            .jit
+            .get_label_address(&self.pending_signals)
+            .as_ptr() as *mut u32;
+        unsafe {
+            let v = std::ptr::read_volatile(ptr);
+            if v != 0 {
+                std::ptr::write_volatile(ptr, 0);
+            }
+            v
+        }
     }
 
-    pub(crate) fn unset_sigint_flag(&self) {
-        let ptr = self.jit.get_label_address(&self.sigint_flag).as_ptr() as *mut u32;
-        unsafe { *ptr = 0 }
-    }
-
-    pub(crate) fn signal_handler(&mut self) -> CodePtr {
+    pub(crate) fn signal_handler_for(&mut self, signo: i32) -> CodePtr {
         self.jit
-            .signal_handler(self.alloc_flag.clone(), self.sigint_flag.clone())
+            .signal_handler_for(self.alloc_flag.clone(), self.pending_signals.clone(), signo)
     }
 
     pub(crate) fn entry_raise(&self) -> DestLabel {

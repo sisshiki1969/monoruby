@@ -737,6 +737,14 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
     }
 
+    pub(crate) fn signalexception(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Other(SIGNAL_EXCEPTION_CLASS), msg)
+    }
+
+    pub(crate) fn interrupt(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Other(INTERRUPT_CLASS), msg)
+    }
+
     /// Construct a FatalError. Used when a Rust `panic!` is caught at an
     /// `extern "C"` boundary. FatalError propagates up through Ruby's
     /// `rescue` handlers without being caught.

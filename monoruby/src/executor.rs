@@ -2630,9 +2630,15 @@ pub(crate) extern "C" fn execute_gc(
 ) -> Option<Value> {
     CODEGEN.with(|codegen| {
         let codegen = codegen.borrow_mut();
-        if codegen.sigint_flag() {
-            executor.set_error(MonorubyErr::runtimeerr("Interrupt"));
-            codegen.unset_sigint_flag();
+        // Drain the pending-signal bitmap. The lowest-numbered pending
+        // signal is consumed and lowered to a Ruby exception; any
+        // others observed in the same drain are dropped on the floor
+        // (signo collisions in a single poll window are extremely
+        // unlikely in practice and CRuby itself does not guarantee
+        // delivery of every signal). See doc/signal_handling.md.
+        let pending = codegen.take_pending_signals();
+        if let Some(err) = crate::codegen::signal_table::lowest_pending_to_error(pending) {
+            executor.set_error(err);
             None
         } else {
             Some(())
