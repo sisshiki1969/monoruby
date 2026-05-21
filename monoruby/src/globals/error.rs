@@ -10,6 +10,11 @@ pub struct MonorubyErr {
     pub kind: MonorubyErrKind,
     pub message: String,
     pub trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
+    /// When re-raising an existing exception object, the original
+    /// `Value`. `Executor::take_ex_obj` returns this object instead of
+    /// materialising a fresh one, preserving the object's identity and
+    /// its instance variables (CRuby `raise exc` re-raises `exc` itself).
+    pub original: Option<Value>,
 }
 
 impl MonorubyErr {
@@ -18,6 +23,7 @@ impl MonorubyErr {
             kind,
             message: message.to_string(),
             trace: vec![],
+            original: None,
         }
     }
 
@@ -29,7 +35,15 @@ impl MonorubyErr {
             kind,
             message: msg,
             trace,
+            original: None,
         }
+    }
+
+    /// Tag this error with the original exception object so its identity
+    /// and instance variables survive being caught (see `original`).
+    pub(crate) fn with_original(mut self, original: Value) -> Self {
+        self.original = Some(original);
+        self
     }
 
     pub(crate) fn new_with_loc(
@@ -44,6 +58,7 @@ impl MonorubyErr {
             kind,
             message: msg,
             trace: vec![(Some((loc, sourceinfo)), func_id)],
+            original: None,
         }
     }
 
@@ -59,6 +74,9 @@ impl MonorubyErr {
     ///
     pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<crate::value::RValue>) {
         use alloc::GC;
+        if let Some(original) = &self.original {
+            original.mark(alloc);
+        }
         match &self.kind {
             // Packed `Value::id()` of the receiver that triggered the
             // NoMethodError (set by `MonorubyErr::no_method_for_*`).

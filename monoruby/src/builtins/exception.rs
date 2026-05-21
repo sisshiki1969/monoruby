@@ -709,6 +709,75 @@ mod tests {
     }
 
     #[test]
+    fn reraise_preserves_identity() {
+        // `raise exc` re-raises the same object: identity and instance
+        // variables survive being caught.
+        run_test(
+            r#"
+            class MyErr < StandardError
+              attr_accessor :data
+            end
+            e = MyErr.new("boom")
+            e.data = 42
+            begin
+              raise e
+            rescue MyErr => x
+              [x.equal?(e), x.data, x.message]
+            end
+            "#,
+        );
+        // `raise ClassWithCustomState` keeps the freshly-built instance.
+        run_test(
+            r#"
+            class Built < StandardError
+              def initialize(n); super("n=#{n}"); @n = n; end
+              attr_reader :n
+            end
+            begin
+              raise Built.new(7)
+            rescue => e
+              [e.n, e.message]
+            end
+            "#,
+        );
+        // Re-raise does not overwrite an existing backtrace.
+        run_test(
+            r#"
+            first = nil
+            begin; raise "a"; rescue => first; end
+            bt = first.backtrace
+            begin; raise first; rescue => second; end
+            [second.equal?(first), second.backtrace == bt]
+            "#,
+        );
+        // A re-raised object is its successor's implicit cause by identity.
+        run_test(
+            r#"
+            cause = RuntimeError.new("cause")
+            begin
+              raise cause
+            rescue
+              begin
+                1 / 0
+              rescue ZeroDivisionError => z
+                z.cause.equal?(cause)
+              end
+            end
+            "#,
+        );
+        // Re-raising the active exception itself records no self-cause.
+        run_test(
+            r#"
+            begin
+              raise RuntimeError, "x"
+            rescue RuntimeError => e
+              begin; raise e; rescue => f; [f.equal?(e), f.cause.inspect]; end
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn message_calls_to_s() {
         run_tests(&[
             // Default: message == stored string.

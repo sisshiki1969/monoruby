@@ -573,8 +573,8 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             ));
         }
         let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
-        if let Some(ex) = ex.is_exception() {
-            return Err(MonorubyErr::new_from_exception(ex));
+        if let Some(inner) = ex.is_exception() {
+            return Err(MonorubyErr::new_from_exception(inner).with_original(ex));
         } else {
             return Err(MonorubyErr::runtimeerr(""));
         }
@@ -583,10 +583,13 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let mut err = MonorubyErr::new_from_exception(ex);
         if let Some(arg1) = lfp.try_arg(1) {
             if arg1.try_hash_ty().is_none() {
+                // A message override makes CRuby return a *new* exception
+                // (`exc.exception(msg)`), so identity is not preserved.
                 err.set_msg(arg1.coerce_to_str(vm, globals)?);
+                return Err(err);
             }
         }
-        return Err(err);
+        return Err(err.with_original(lfp.arg(0)));
     } else if let Some(klass) = lfp.arg(0).is_class() {
         if klass.id() == STOP_ITERATION_CLASS {
             return Err(MonorubyErr::stopiterationerr("".to_string()));
@@ -599,7 +602,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
             let ex =
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
-            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap()).with_original(ex);
             return Err(err);
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
@@ -622,7 +625,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let result =
             vm.invoke_method_inner(globals, exception_id, lfp.arg(0), &args, None, None)?;
         match result.is_exception() {
-            Some(ex) => return Err(MonorubyErr::new_from_exception(ex)),
+            Some(ex) => return Err(MonorubyErr::new_from_exception(ex).with_original(result)),
             None => return Err(MonorubyErr::typeerr("exception object expected")),
         }
     }
