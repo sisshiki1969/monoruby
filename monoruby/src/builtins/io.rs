@@ -37,6 +37,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
+    globals.define_builtin_func_with(IO_CLASS, "pread", io_pread, 2, 3, false);
+    globals.define_builtin_func(IO_CLASS, "pwrite", io_pwrite, 2);
     globals.define_builtin_func_with(IO_CLASS, "readlines", io_readlines, 0, 2, false);
     globals.define_builtin_func(IO_CLASS, "binmode", io_binmode, 0);
     globals.define_builtin_func(IO_CLASS, "binmode?", io_binmode_, 0);
@@ -2168,6 +2170,109 @@ fn io_syswrite(
     Ok(Value::integer(written as i64))
 }
 
+///
+/// ### IO#pread
+/// - pread(maxlen, offset) -> String
+/// - pread(maxlen, offset, out_buffer) -> out_buffer
+///
+/// Reads `maxlen` bytes starting at `offset` without changing the
+/// stream's file position (pread(2)).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pread.html]
+#[monoruby_builtin]
+fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if maxlen < 0 {
+        return Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        ));
+    }
+    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    // Coerce the optional output buffer to a String up front (via
+    // #to_str) so a non-String buffer raises before any I/O. CRuby
+    // fills and returns the coerced String, not the original arg.
+    let buffer: Option<Value> = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
+        _ => None,
+    };
+    lfp.self_val().as_io_inner().ensure_readable()?;
+
+    // maxlen == 0: return "" (or the buffer unchanged) without
+    // touching the file — the offset is ignored even if out of range.
+    if maxlen == 0 {
+        return Ok(match buffer {
+            Some(v) => v,
+            None => Value::string_from_vec(vec![]),
+        });
+    }
+
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    let mut buf = vec![0u8; maxlen as usize];
+    // SAFETY: fd is valid, buf has `maxlen` bytes of capacity.
+    let n = unsafe {
+        libc::pread(
+            fd,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            maxlen as usize,
+            offset as libc::off_t,
+        )
+    };
+    if n < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pread"));
+    }
+    if n == 0 {
+        return Err(MonorubyErr::eoferr(&globals.store, "end of file reached"));
+    }
+    buf.truncate(n as usize);
+    match buffer {
+        Some(mut v) => {
+            // Preserve the supplied buffer's encoding (CRuby contract).
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&buf, enc);
+            Ok(v)
+        }
+        None => Ok(Value::bytes(buf)),
+    }
+}
+
+///
+/// ### IO#pwrite
+/// - pwrite(string, offset) -> Integer
+///
+/// Writes `string` at `offset` without changing the stream's file
+/// position (pwrite(2)); returns the number of bytes written.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pwrite.html]
+#[monoruby_builtin]
+fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
+        b.to_vec()
+    } else {
+        vm.to_s(globals, lfp.arg(0))?.into_bytes()
+    };
+    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    lfp.self_val().as_io_inner().ensure_writable()?;
+    // Flush any buffered writes so the file offset/content the OS sees
+    // is consistent before the positional write.
+    lfp.self_val().as_io_inner_mut().flush()?;
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: fd is valid, bytes is a valid buffer of `bytes.len()`.
+    let n = unsafe {
+        libc::pwrite(
+            fd,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+            offset as libc::off_t,
+        )
+    };
+    if n < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pwrite"));
+    }
+    Ok(Value::integer(n as i64))
+}
+
 /// Helper: extract raw fd from a Value that is an IO (or responds to to_io).
 fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
     if let Some(rv) = v.try_rvalue() {
@@ -4152,6 +4257,65 @@ mod tests {
               f.close
               [n, File.read(path)]
             ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_pread_pwrite() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_prw_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "1234567890")
+              f = File.open(path, "r+")
+              res = []
+              res << f.pread(4, 0)          # "1234"
+              res << f.pread(3, 4)          # "567"
+              buf = +"foo"
+              res << f.pread(5, 0, buf).equal?(buf)  # true
+              res << buf                    # "12345"
+              res << f.read                 # whole file (pread didn't move pos)
+              res << f.pwrite("XY", 2)      # 2
+              res << f.pread(10, 0)         # "12XY567890"
+              res << (f.pread(0, 400) == "")  # maxlen 0 ignores offset
+              f.close
+              res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_pread_errors() {
+        // EOFError past end-of-file.
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_pread_eof_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abc")
+            f = File.open(path, "r")
+            begin
+              f.pread(1, 100)
+            ensure
+              f.close
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // Negative maxlen ⇒ ArgumentError.
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_pread_neg_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abc")
+            f = File.open(path, "r")
+            begin
+              f.pread(-1, 0)
+            ensure
+              f.close
               File.unlink(path) rescue nil
             end
             "#,
