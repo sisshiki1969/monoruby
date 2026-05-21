@@ -23,7 +23,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
-    globals.define_builtin_func(PROC_CLASS, "parameters", parameters, 0);
+    globals.define_builtin_func_with_kw(
+        PROC_CLASS,
+        "parameters",
+        parameters,
+        0,
+        0,
+        false,
+        &["lambda"],
+        false,
+    );
     // `ruby2_keywords` is a marker method used by CRuby to tag a proc/method
     // so that its rest args can pass a trailing keyword hash through to
     // another method. monoruby does not distinguish keyword args from a
@@ -187,15 +196,23 @@ fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/parameters.html]
 #[monoruby_builtin]
 fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `lambda:` keyword (slot 0, after positional max of 0) overrides
+    // whether required positionals are tagged `:req` (lambda) or
+    // `:opt` (block). Absent — or explicitly `nil` — ⇒ use the proc's
+    // own lambda-ness (CRuby ignores a `nil` override).
+    let lambda_override = lfp
+        .try_arg(0)
+        .filter(|v| !v.is_nil())
+        .map(|v| v.as_bool());
     let proc = Proc::new(lfp.self_val());
     if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
         && let Some(m) = proc.self_val().is_method()
         && m.method_missing_name().is_none()
     {
-        return Ok(build_parameters(globals, m.func_id(), true));
+        return Ok(build_parameters(globals, m.func_id(), lambda_override.unwrap_or(true)));
     }
     let func_id = proc.func_id();
-    let is_lambda = !globals[func_id].is_block_style();
+    let is_lambda = lambda_override.unwrap_or_else(|| !globals[func_id].is_block_style());
     Ok(build_parameters(globals, func_id, is_lambda))
 }
 
@@ -801,6 +818,25 @@ mod tests {
             r#"->(a=0, *r){ [a, r] }.call(k: 1)"#,
         ]);
         run_test(r#"def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }"#);
+    }
+
+    #[test]
+    fn proc_parameters_lambda_kw() {
+        run_tests(&[
+            // lambda: true ⇒ required positionals tagged :req.
+            r#"proc {|x| }.parameters(lambda: true)"#,
+            r#"proc {|y, *x| }.parameters(lambda: true)"#,
+            // lambda: false ⇒ a real lambda's required params become :opt.
+            r#"->(x) { }.parameters(lambda: false)"#,
+            // Truthy non-bool ⇒ :req.
+            r#"proc {|x| }.parameters(lambda: 123).first.first"#,
+            // No keyword ⇒ proc's own lambda-ness (block ⇒ :opt).
+            r#"proc {|x| }.parameters"#,
+            r#"->(x) { }.parameters"#,
+            // nil keyword ⇒ ignored, use the proc's own lambda-ness.
+            r#"proc {|x| }.parameters(lambda: nil).first.first"#,
+            r#"->(x) { }.parameters(lambda: nil).first.first"#,
+        ]);
     }
 
     #[test]
