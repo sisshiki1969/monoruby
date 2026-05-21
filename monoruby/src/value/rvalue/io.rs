@@ -528,12 +528,7 @@ impl IoInner {
         // SAFETY: fd is a valid descriptor for the lifetime of this IO.
         unsafe {
             let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 {
-                return Err(MonorubyErr::ioerr(
-                    std::io::Error::last_os_error().to_string(),
-                ));
-            }
-            if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 return Err(MonorubyErr::ioerr(
                     std::io::Error::last_os_error().to_string(),
                 ));

@@ -4679,6 +4679,116 @@ mod tests {
     }
 
     #[test]
+    fn io_read_write_nonblock_buffer_pushback_full() {
+        // read_nonblock with an output buffer (data + maxlen 0 + EOF arms),
+        // ungetc pushback, write_nonblock to_s coercion, and the
+        // would-block paths on a saturated pipe.
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.write("foobar")
+            buf = +"xxxx"
+            r.read_nonblock(3, buf)                 # fills buf with "foo"
+            raise "buf #{buf.inspect}" unless buf == "foo" && r.read_nonblock(3, buf).equal?(buf) && buf == "bar"
+            # maxlen 0 with buffer returns the buffer untouched.
+            raise "zero" unless r.read_nonblock(0, buf).equal?(buf)
+            # ungetc pushback drained by read_nonblock.
+            w.write("Z")
+            c = r.read_nonblock(1)                   # "Z"
+            r.ungetc(c)
+            raise "pushback" unless r.read_nonblock(5) == "Z"
+            w.close
+            # EOF with a buffer clears it then returns nil (exception: false).
+            raise "eofbuf" unless r.read_nonblock(5, buf, exception: false).nil? && buf.empty?
+            r.close
+            "#,
+        );
+        // write_nonblock #to_s-coerces a non-String, and the saturated
+        // pipe yields :wait_writable / IO::WaitWritable.
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            n = w.write_nonblock(12345)             # to_s ⇒ "12345"
+            raise "to_s #{n}" unless n == 5
+            blocked = false
+            10000.times do
+              break (blocked = true) if w.write_nonblock("a" * 10000, exception: false) == :wait_writable
+            end
+            raise "no block" unless blocked
+            ok = false
+            begin
+              loop { w.write_nonblock("a" * 10000) }
+            rescue IO::WaitWritable => e
+              ok = e.is_a?(Errno::EAGAIN)
+            end
+            raise "no wait-writable raise" unless ok
+            r.close; w.close
+            "#,
+        );
+        // read_nonblock on a regular File exercises the seek-sync path.
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_io_rnb_file_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "abcdef")
+              f = File.open(path, "r")
+              f.read(2)                              # buffered read
+              raise "file rnb" unless f.read_nonblock(2) == "cd"
+              f.close
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // write_nonblock / read_nonblock on closed streams ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close; w.close
+            w.write_nonblock("x")
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_nonblock_error_arms() {
+        // read_nonblock on a closed stream ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close; w.close
+            r.read_nonblock(1)
+            "#,
+        );
+        // read_nonblock on a non-readable stream ($stdout) ⇒ IOError.
+        run_test_error(r#"$stdout.read_nonblock(1)"#);
+        // write_nonblock on a non-writable stream (pipe read end) ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            begin
+              r.write_nonblock("x")
+            ensure
+              r.close; w.close
+            end
+            "#,
+        );
+        // write_nonblock to a pipe whose read end is closed ⇒ Errno::EPIPE
+        // (the hard-error arm; SIGPIPE is ignored by the runtime).
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close
+            begin
+              w.write_nonblock("x")
+            ensure
+              w.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn io_read_nonblock_negative_and_eof() {
         // Negative length ⇒ ArgumentError.
         run_test_error(
