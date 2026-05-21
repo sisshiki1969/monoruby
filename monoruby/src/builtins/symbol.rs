@@ -16,6 +16,18 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "to_proc", sym_to_proc, 0);
+    // Regexp-matching delegations. These are native (not the pure-Ruby
+    // `to_s.=~` forms in builtins/symbol.rb) specifically so that `$~`
+    // and the BACK_REF / NTH_REF family land on the *caller's* LEP.
+    // `$~` is frame-local; a Ruby-level `def =~(o); to_s =~ o; end`
+    // would set it on the Symbol method's own (discarded) frame, so the
+    // caller would never see it (CRuby keeps these as C functions for
+    // the same reason). `current_lep` skips native frames, so delegating
+    // to the `String#…` builtin from here writes `$~` to the caller.
+    globals.define_builtin_func(SYMBOL_CLASS, "=~", sym_match_op, 1);
+    globals.define_builtin_funcs_with(SYMBOL_CLASS, "[]", &["slice"], sym_aref, 1, 2, false);
+    globals.define_builtin_func_with(SYMBOL_CLASS, "match", sym_match, 1, 2, false);
+    globals.define_builtin_func_rest(SYMBOL_CLASS, "start_with?", sym_start_with);
     // Symbol.new is undefined (raises NoMethodError).
     let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
     globals
@@ -132,6 +144,85 @@ fn sym_to_proc(
     let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
     let proc = Proc::from_outer(outer_lfp, body_fid, pc);
     Ok(proc.into())
+}
+
+/// Convert the receiver Symbol to its `String` `Value` by invoking
+/// `to_s` (a frozen-name string), for delegating String-method calls.
+fn sym_self_string(vm: &mut Executor, globals: &mut Globals, self_val: Value) -> Result<Value> {
+    vm.invoke_method_inner(globals, IdentId::get_id("to_s"), self_val, &[], None, None)
+}
+
+///
+/// ### Symbol#=~
+///
+/// - self =~ other -> Integer | nil
+///
+/// Delegates to `to_s =~ other`; native so `$~` is set on the caller.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=3d=7e.html]
+#[monoruby_builtin]
+fn sym_match_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = sym_self_string(vm, globals, lfp.self_val())?;
+    vm.invoke_method_inner(globals, IdentId::_MATCH, s, &[lfp.arg(0)], None, None)
+}
+
+///
+/// ### Symbol#[] / Symbol#slice
+///
+/// - self[*args] -> String | nil
+///
+/// Delegates to `to_s[*args]`; native so a Regexp index sets `$~` on
+/// the caller.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=5b=5d.html]
+#[monoruby_builtin]
+fn sym_aref(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = sym_self_string(vm, globals, lfp.self_val())?;
+    let mut args: Vec<Value> = vec![lfp.arg(0)];
+    if let Some(a1) = lfp.try_arg(1) {
+        args.push(a1);
+    }
+    vm.invoke_method_inner(globals, IdentId::get_id("[]"), s, &args, None, None)
+}
+
+///
+/// ### Symbol#match
+///
+/// - match(pattern, pos = 0) -> MatchData | nil
+/// - match(pattern, pos = 0) { |m| ... } -> object | nil
+///
+/// Delegates to `to_s.match(...)`; native so `$~` is set on the caller.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/match.html]
+#[monoruby_builtin]
+fn sym_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = sym_self_string(vm, globals, lfp.self_val())?;
+    let mut args: Vec<Value> = vec![lfp.arg(0)];
+    if let Some(pos) = lfp.try_arg(1) {
+        args.push(pos);
+    }
+    vm.invoke_method_inner(globals, IdentId::get_id("match"), s, &args, lfp.block(), None)
+}
+
+///
+/// ### Symbol#start_with?
+///
+/// - start_with?(*prefixes) -> bool
+///
+/// Delegates to `to_s.start_with?(*prefixes)`; native so a Regexp
+/// prefix sets `$~` on the caller.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/start_with=3f.html]
+#[monoruby_builtin]
+fn sym_start_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let s = sym_self_string(vm, globals, lfp.self_val())?;
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
+    vm.invoke_method_inner(globals, IdentId::get_id("start_with?"), s, &args, None, None)
 }
 
 ///
