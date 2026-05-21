@@ -73,6 +73,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
+    globals.define_builtin_func(IO_CLASS, "set_encoding_by_bom", set_encoding_by_bom, 0);
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
     globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
     globals.define_builtin_func_rest(IO_CLASS, "wait", io_wait);
@@ -2777,6 +2778,86 @@ fn set_encoding(
     Ok(self_)
 }
 
+///
+/// ### IO#set_encoding_by_bom
+/// - set_encoding_by_bom -> Encoding | nil
+///
+/// Peeks the leading byte-order mark, and if one is present sets the
+/// external encoding accordingly and consumes the BOM bytes (leaving
+/// the rest of the stream readable). Returns the detected `Encoding`,
+/// or `nil` when there is no BOM or the stream isn't readable.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding_by_bom.html]
+#[monoruby_builtin]
+fn set_encoding_by_bom(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    if !self_.as_io_inner().is_readable() {
+        return Ok(Value::nil());
+    }
+    // Preconditions (CRuby `rb_io_set_encoding_by_bom`): the stream
+    // must be in binmode, with no external/internal encoding already
+    // chosen — a BOM determines the external encoding from scratch.
+    let binmode = globals
+        .store
+        .get_ivar(self_, IdentId::get_id(BINMODE_IVAR))
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    if !binmode {
+        return Err(MonorubyErr::argumenterr(
+            "ASCII incompatible encoding needs binmode",
+        ));
+    }
+    if let Some(int) = globals.store.get_ivar(self_, IdentId::get_id(ENC_INT_IVAR))
+        && !int.is_nil()
+    {
+        return Err(MonorubyErr::argumenterr("encoding conversion is set"));
+    }
+    if let Some(ext) = globals.store.get_ivar(self_, IdentId::get_id(ENC_EXT_IVAR))
+        && !ext.is_nil()
+        && ext.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
+        && !enc_is_binary(globals, ext)
+    {
+        let name = super::encoding::encoding_object_name(globals, ext)
+            .unwrap_or_else(|| "UTF-8".to_string());
+        return Err(MonorubyErr::argumenterr(format!(
+            "encoding is set to {name} already"
+        )));
+    }
+    // Read up to 4 bytes — enough to disambiguate every BOM (and to
+    // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
+    let head = self_.as_io_inner_mut().read(Some(4))?;
+    let (consume, enc_name): (usize, &str) = match head.first() {
+        Some(0xEF) if head.len() >= 3 && head[1] == 0xBB && head[2] == 0xBF => (3, "UTF-8"),
+        Some(0x00) if head.len() >= 4 && head[1] == 0x00 && head[2] == 0xFE && head[3] == 0xFF => {
+            (4, "UTF-32BE")
+        }
+        Some(0xFF) if head.len() >= 2 && head[1] == 0xFE => {
+            if head.len() >= 4 && head[2] == 0x00 && head[3] == 0x00 {
+                (4, "UTF-32LE")
+            } else {
+                (2, "UTF-16LE")
+            }
+        }
+        Some(0xFE) if head.len() >= 2 && head[1] == 0xFF => (2, "UTF-16BE"),
+        _ => {
+            // No BOM: push everything back and report nothing.
+            self_.as_io_inner_mut().unget(&head)?;
+            return Ok(Value::nil());
+        }
+    };
+    // Consume the BOM, push the trailing bytes back for later reads.
+    self_.as_io_inner_mut().unget(&head[consume..])?;
+    let enc = enc_by_name(globals, enc_name)
+        .ok_or_else(|| MonorubyErr::runtimeerr(format!("encoding {enc_name} not found")))?;
+    store_io_encodings(globals, self_, ExtSlot::Fixed(enc), None);
+    Ok(enc)
+}
+
 /// An Encoding object -> the internal `Encoding` enum (folding the
 /// names the enum doesn't represent distinctly down to ASCII-8BIT).
 fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
@@ -4577,6 +4658,78 @@ mod tests {
               f.pread(-1, 0)
             ensure
               f.close
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_set_encoding_by_bom_basic() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_bom_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.binwrite(path, "\xEF\xBB\xBFabc")
+              f = File.open(path, "rb")
+              res = []
+              res << f.set_encoding_by_bom.name      # "UTF-8"
+              res << f.external_encoding.name        # "UTF-8"
+              res << f.read                          # "abc" (BOM consumed)
+              f.close
+              # No BOM ⇒ nil, bytes preserved.
+              File.binwrite(path, "plain")
+              g = File.open(path, "rb")
+              res << g.set_encoding_by_bom.inspect   # "nil"
+              res << g.read(5)                       # "plain"
+              g.close
+              res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_set_encoding_by_bom_guards() {
+        // Not in binmode ⇒ ArgumentError.
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_bomg_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.binwrite(path, "\xEF\xBB\xBF")
+              f = File.open(path, "r")          # text mode
+              begin; f.set_encoding_by_bom; ensure; f.close; end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // External encoding already set ⇒ ArgumentError.
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_bomg2_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.binwrite(path, "\xEF\xBB\xBF")
+              f = File.open(path, "rb")
+              f.set_encoding("utf-8")
+              begin; f.set_encoding_by_bom; ensure; f.close; end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // Not readable ⇒ nil (write-only).
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_bomg3_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.open(path, "wb")
+              r = f.set_encoding_by_bom
+              f.close
+              r.inspect
+            ensure
               File.unlink(path) rescue nil
             end
             "#,
