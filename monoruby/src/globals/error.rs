@@ -772,6 +772,19 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::IO, msg)
     }
 
+    /// `EOFError` (a subclass of `IOError` defined in Ruby). Falls
+    /// back to a plain `IOError` if the class can't be resolved.
+    pub(crate) fn eoferr(store: &Store, msg: impl ToString) -> MonorubyErr {
+        let cid = store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EOFError"))
+            .and_then(|v| v.is_class_or_module())
+            .map(|m| m.id());
+        match cid {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg.to_string()),
+            None => MonorubyErr::new(MonorubyErrKind::IO, msg.to_string()),
+        }
+    }
+
     /// Convert a `std::io::Error` into the appropriate Ruby Errno exception.
     ///
     /// Looks up the Errno module and the specific error class (e.g. `Errno::ENOTDIR`)
