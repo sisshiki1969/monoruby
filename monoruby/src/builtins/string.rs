@@ -6703,7 +6703,9 @@ fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize)
     match lfp.try_arg(1) {
         Some(v) => {
             let offset = v.coerce_to_int_i64(vm, globals)?;
-            if offset < 0 || offset as usize > len {
+            if offset < 0 {
+                Err(MonorubyErr::argumenterr("offset can't be negative"))
+            } else if offset as usize > len {
                 Err(MonorubyErr::argumenterr("offset outside of string"))
             } else {
                 Ok(offset as usize)
@@ -8674,6 +8676,12 @@ mod tests {
         ]);
         run_test_error(r#""\x01\x02\x03".unpack1("C", offset: 10)"#);
         run_test_error(r#""\x01\x02\x03".unpack("C", offset: -1)"#);
+        // CRuby distinguishes the negative-offset message from the
+        // out-of-range one.
+        run_tests(&[
+            r#"begin; "a".unpack("C", offset: -1); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; "a".unpack("C", offset: 5); rescue ArgumentError => e; e.message; end"#,
+        ]);
     }
 
     #[test]
