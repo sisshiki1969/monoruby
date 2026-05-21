@@ -1853,5 +1853,15 @@ mod tests {
             [e.bytes, e.encoding.name]
             "##,
         );
+        // A non-String/Symbol arg is coerced via #to_str.
+        run_test(
+            r##"
+            o = Object.new
+            def o.to_str; "a.b"; end
+            Regexp.escape(o)
+            "##,
+        );
+        // An arg that can't be coerced ⇒ TypeError.
+        run_test_error(r#"Regexp.escape(5)"#);
     }
 }
