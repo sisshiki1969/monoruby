@@ -40,6 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "pread", io_pread, 2, 3, false);
     globals.define_builtin_func(IO_CLASS, "pwrite", io_pwrite, 2);
     globals.define_builtin_func_with(IO_CLASS, "sysread", io_sysread, 1, 2, false);
+    globals.define_builtin_func_with(IO_CLASS, "readpartial", io_readpartial, 1, 2, false);
     globals.define_builtin_func_with_kw(
         IO_CLASS, "read_nonblock", io_read_nonblock, 1, 2, false, &["exception"], false,
     );
@@ -2335,6 +2336,63 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 }
 
+///
+/// ### IO#readpartial
+/// - readpartial(maxlen, outbuf = nil) -> String | outbuf
+///
+/// Reads at most `maxlen` bytes, returning as soon as any data is
+/// available (blocking only when nothing is buffered yet). Raises
+/// `EOFError` at end of file. Reads through the buffered reader, so
+/// ungetc pushback and already-buffered bytes are honoured.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readpartial.html]
+#[monoruby_builtin]
+fn io_readpartial(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if maxlen < 0 {
+        return Err(MonorubyErr::argumenterr("negative length"));
+    }
+    let buffer: Option<Value> = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
+        _ => None,
+    };
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    if maxlen == 0 {
+        // CRuby's readpartial(0) clears and returns a supplied buffer.
+        return Ok(match buffer {
+            Some(mut v) => {
+                let enc = v.as_rstring_inner().encoding();
+                *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+                v
+            }
+            None => Value::string_from_vec(vec![]),
+        });
+    }
+    let buf = lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)?;
+    if buf.is_empty() {
+        if let Some(mut v) = buffer {
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+        }
+        return Err(MonorubyErr::eoferr(&globals.store, "end of file reached"));
+    }
+    match buffer {
+        Some(mut v) => {
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&buf, enc);
+            Ok(v)
+        }
+        None => Ok(Value::bytes(buf)),
+    }
+}
+
 /// Resolve a nested `IO::<name>` exception class id (for the
 /// `*WaitReadable` / `*WaitWritable` classes defined in startup.rb).
 fn io_wait_class(globals: &Globals, name: &str) -> Option<ClassId> {
@@ -4523,6 +4581,54 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn io_readpartial_basic() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.write("foobar")
+            # reads at most maxlen, returning available data.
+            raise "1" unless r.read(1) == "f"
+            raise "2" unless r.readpartial(1) == "o"
+            # ungetc pushback combines with buffered data.
+            c = r.getc
+            r.ungetc(c)
+            raise "3" unless r.readpartial(3) == "oba"
+            raise "4" unless r.readpartial(3) == "r"
+            # maxlen 0 clears + returns the buffer.
+            buf = +"existing"
+            raise "5" unless r.readpartial(0, buf).equal?(buf) && buf.empty?
+            # into a buffer, then EOF raises (clearing the buffer).
+            w.write("hi"); w.close
+            out = +""
+            raise "6" unless r.readpartial(10, out).equal?(out) && out == "hi"
+            begin
+              r.readpartial(5, out)
+              raise "no eof"
+            rescue EOFError
+              raise "7" unless out.empty?
+            end
+            r.close
+            "#,
+        );
+        // negative length ⇒ ArgumentError; closed ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            begin; r.readpartial(-1); ensure; r.close; w.close; end
+            "#,
+        );
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close; w.close
+            r.readpartial(1)
+            "#,
+        );
+        // not opened for reading ⇒ IOError.
+        run_test_error(r#"$stdout.readpartial(1)"#);
     }
 
     #[test]
