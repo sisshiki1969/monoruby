@@ -4438,6 +4438,64 @@ mod tests {
     }
 
     #[test]
+    fn io_sysread_popen_pushback_and_errors() {
+        // Popen reader arm: read from a child's stdout (monoruby-only;
+        // the popen harness output isn't comparable via run_test). The
+        // Ruby code asserts the result itself.
+        run_test_no_result_check(
+            r#"
+            io = IO.popen("printf hello")
+            out = io.sysread(5)
+            io.close
+            raise "popen sysread: #{out.inspect}" unless out == "hello"
+            "#,
+        );
+        // ungetc pushback is drained before the underlying read.
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_io_sysread_pb_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "abcdef")
+              f = File.open(path, "r")
+              c = f.getc          # "a"
+              f.ungetc(c)         # push "a" back
+              out = f.sysread(3)  # drains pushback then reads
+              f.close
+              raise "pushback sysread: #{out.inspect}" unless out == "abc"
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // sysread on a write-only stream ⇒ IOError (not opened for reading).
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_sysread_wo_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.open(path, "w")
+              begin
+                f.sysread(1)
+              ensure
+                f.close
+              end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // sysread on $stdout ⇒ IOError (not opened for reading).
+        run_test_error(r#"$stdout.sysread(1)"#);
+        // sysread on a closed stream ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close; w.close
+            r.sysread(1)
+            "#,
+        );
+    }
+
+    #[test]
     fn io_select_immediate_timeout_pipe() {
         // A freshly-created pipe with no data buffered should report no
         // ready descriptors when polled with a zero-second timeout.
