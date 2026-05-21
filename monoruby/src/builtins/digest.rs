@@ -74,4 +74,9 @@ mod tests {
             r#"require 'digest/sha2'; Digest::SHA2.new(512).update("abc").hexdigest"#,
         ]);
     }
+
+    #[test]
+    fn digest_unsupported_algorithm() {
+        run_test_error(r#"String.__digest("bogus", "data")"#);
+    }
 }
