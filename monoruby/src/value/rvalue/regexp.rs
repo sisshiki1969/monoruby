@@ -155,16 +155,32 @@ impl RegexpInner {
     /// but skips whitespace, so we layer the whitespace handling on
     /// top.
     pub fn escape(text: &str) -> String {
-        let pre = regex::escape(text);
-        let mut out = String::with_capacity(pre.len());
-        for ch in pre.chars() {
-            match ch {
-                ' ' => out.push_str("\\ "),
-                '\t' => out.push_str("\\t"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\x0c' => out.push_str("\\f"),
-                '\x0b' => out.push_str("\\v"),
+        // SAFETY: `escape_bytes` only inserts ASCII backslashes
+        // before ASCII metacharacters and passes every other byte
+        // through unchanged, so a valid-UTF-8 input stays valid.
+        String::from_utf8(Self::escape_bytes(text.as_bytes())).unwrap()
+    }
+
+    /// Byte-wise `Regexp.escape` / `Regexp.quote`, mirroring CRuby's
+    /// `rb_reg_quote`. Escapes the regex metacharacters with a
+    /// backslash, rewrites the ASCII whitespace controls to their
+    /// `\n` / `\t` … forms, and passes every other byte through
+    /// verbatim — including bytes that don't form valid UTF-8, so it
+    /// works on "broken" strings.
+    pub fn escape_bytes(bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bytes.len());
+        for &b in bytes {
+            match b {
+                b'[' | b']' | b'{' | b'}' | b'(' | b')' | b'|' | b'-' | b'*' | b'.'
+                | b'\\' | b'?' | b'+' | b'^' | b'$' | b'#' | b' ' => {
+                    out.push(b'\\');
+                    out.push(b);
+                }
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\x0c' => out.extend_from_slice(b"\\f"),
+                b'\x0b' => out.extend_from_slice(b"\\v"),
+                b'\t' => out.extend_from_slice(b"\\t"),
                 other => out.push(other),
             }
         }

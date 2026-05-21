@@ -311,22 +311,23 @@ fn regexp_escape(
 ) -> Result<Value> {
     let arg0 = lfp.arg(0);
     // CRuby accepts both String and Symbol; for a Symbol we use its
-    // textual form. Other types still go through `to_str`.
-    let (string, src_enc) = if let Some(s) = arg0.is_str() {
-        let enc = arg0
-            .is_rstring_inner()
-            .map(|r| r.encoding())
-            .unwrap_or(crate::value::Encoding::Utf8);
-        (s.to_string(), enc)
+    // textual form. Other types still go through `to_str`. Work on
+    // raw bytes so "broken" strings (invalid byte sequences for
+    // their encoding) escape byte-wise instead of raising.
+    let (bytes, src_enc) = if let Some(r) = arg0.is_rstring_inner() {
+        (r.as_bytes().to_vec(), r.encoding())
     } else if let Some(sym) = arg0.try_symbol() {
-        (sym.to_string(), crate::value::Encoding::Utf8)
+        (
+            sym.to_string().into_bytes(),
+            crate::value::Encoding::Utf8,
+        )
     } else {
         (
-            arg0.coerce_to_str(vm, globals)?,
+            arg0.coerce_to_str(vm, globals)?.into_bytes(),
             crate::value::Encoding::Utf8,
         )
     };
-    let escaped = RegexpInner::escape(&string);
+    let escaped = RegexpInner::escape_bytes(&bytes);
     // CRuby tags the result US-ASCII when it contains only ASCII
     // bytes (otherwise it inherits the source's encoding). The
     // escape itself only adds ASCII metacharacters, so the result
@@ -338,7 +339,7 @@ fn regexp_escape(
     };
     Ok(Value::string_from_inner(
         crate::value::rvalue::RStringInner::from_encoding_scanned(
-            escaped.as_bytes(),
+            &escaped,
             result_enc,
         ),
     ))
@@ -1830,5 +1831,27 @@ mod tests {
             // Char class containing parens must not confuse the scan.
             r#"/(?i:[()])/.to_s"#,
         ]);
+    }
+
+    #[test]
+    fn regexp_escape_quote() {
+        run_tests(&[
+            // Metacharacters escaped; whitespace controls rewritten.
+            r#"Regexp.escape("a b.c*[d]{e}(f)|g-h^i$j+k?l#m")"#,
+            r#"Regexp.escape("\n\t\r\f\v")"#,
+            // Symbol argument.
+            r#"Regexp.quote(:"a.b")"#,
+            // ASCII-only result is tagged US-ASCII.
+            r#"Regexp.escape("abc").encoding.name"#,
+        ]);
+        // Broken (invalid-UTF-8) strings escape byte-wise instead of
+        // raising — the invalid byte passes through verbatim.
+        run_test(
+            r##"
+            s = "a\xffb".force_encoding("UTF-8")
+            e = Regexp.escape(s)
+            [e.bytes, e.encoding.name]
+            "##,
+        );
     }
 }
