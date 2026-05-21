@@ -95,40 +95,58 @@ impl Globals {
     }
 
     pub(crate) fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
-        // Priority: ~/.monoruby/lib/<name>.rb overrides both $LOAD_PATH
-        // and native .so extensions. The files installed there by
-        // build.rs (from stdlib/ and gem/) are stubs that replace native
-        // extensions monoruby cannot load. They must take precedence,
-        // otherwise CRuby's stdlib wrappers (which themselves require
-        // more things monoruby cannot handle) would be loaded first and
-        // fail.
-        if file_name.extension().is_none() {
-            let mut fallback = dirs::home_dir().unwrap().join(".monoruby").join(file_name);
-            fallback.set_extension("rb");
-            if fallback.exists() {
-                return Some(fallback);
-            }
-        }
-        for lib in self.load_path.as_array().iter() {
-            let lib = match lib.is_str() {
-                Some(s) => s,
-                None => continue,
-            };
-            let mut lib = std::path::PathBuf::from(lib).join(file_name);
+        // Probe a single directory for `file_name`, applying the usual
+        // extension rules: an explicit extension must match exactly;
+        // otherwise try `.rb` then `.so`.
+        fn probe(dir: &std::path::Path, file_name: &std::path::Path) -> Option<PathBuf> {
+            let mut lib = dir.join(file_name);
             if lib.extension().is_some() {
-                if lib.exists() {
-                    return Some(lib);
-                } else {
-                    continue;
-                }
+                return lib.exists().then_some(lib);
             }
             lib.set_extension("rb");
             if lib.exists() {
                 return Some(lib);
             }
             lib.set_extension("so");
-            if lib.exists() {
-                return Some(lib);
+            lib.exists().then_some(lib)
+        }
+
+        // Pin monoruby's own C-extension replacement stubs ahead of
+        // `$LOAD_PATH`. `~/.monoruby/stub` holds exactly the files
+        // monoruby ships in `stdlib/` and `gem/` (json, psych, strscan,
+        // stringio, zlib, …) — pure-Ruby replacements for libraries
+        // monoruby cannot load as native `.so`. They must win even after
+        // rubygems/bundler `activate`s a host gem and unshifts its lib
+        // dir to the front of `$LOAD_PATH`; checking them here, outside
+        // the (mutable) `$LOAD_PATH` loop, makes the precedence immune to
+        // that reordering. Without this, a host C-extension gem (now
+        // accepted, since `Gem.extension_api_version` no longer appends
+        // `-static`) would shadow the stub and then fail to load its
+        // native `.so`.
+        //
+        // Only this stub root is pinned — NOT the vendored CRuby stdlib
+        // snapshot in `~/.monoruby/lib`. That snapshot includes bundler /
+        // rubygems, whose loaded *code* version must stay in lockstep
+        // with the activated gem *spec* version (bundler raises
+        // `CorruptBundlerInstallError` otherwise). Pinning the vendored
+        // bundler ahead of the host one would force vendored code while
+        // the host spec stays activated, splitting the two. So the
+        // vendored snapshot keeps resolving through `$LOAD_PATH` (where it
+        // is merely first), letting host activation shadow it consistently.
+        let stub_root = dirs::home_dir().unwrap().join(".monoruby").join("stub");
+        for dir in [stub_root.clone(), stub_root.join("x86_64-linux")] {
+            if let Some(p) = probe(&dir, file_name) {
+                return Some(p);
+            }
+        }
+
+        for lib in self.load_path.as_array().iter() {
+            let lib = match lib.is_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            if let Some(p) = probe(std::path::Path::new(lib), file_name) {
+                return Some(p);
             }
         }
         None

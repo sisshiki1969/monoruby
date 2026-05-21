@@ -8,6 +8,12 @@
 require 'strscan'
 
 module JSON
+  VERSION = '2.13.2'
+  VERSION_ARRAY = VERSION.split('.').map { |x| x.to_i }
+  VERSION_MAJOR = VERSION_ARRAY[0]
+  VERSION_MINOR = VERSION_ARRAY[1]
+  VERSION_BUILD = VERSION_ARRAY[2]
+
   class JSONError < StandardError; end
   class ParserError < JSONError; end
   class GeneratorError < JSONError; end
