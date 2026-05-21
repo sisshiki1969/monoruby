@@ -370,24 +370,32 @@ impl Lfp {
         unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = val.id() }
     }
 
+    /// Write a MatchData `Value` directly into **this** frame's
+    /// `LFP_SVAR` slot (no outer-chain walk). The caller
+    /// (`Executor::current_lep`) has already resolved the LEP.
+    pub(crate) fn set_svar_slot_value(self, val: Value) {
+        self.set_svar_slot(val);
+    }
+
+    /// Write the zero "unset" sentinel directly into **this** frame's
+    /// `LFP_SVAR` slot (no outer-chain walk).
+    pub(crate) fn set_svar_slot_zero(self) {
+        unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = 0 }
+    }
+
     ///
     /// Read the **LEP's** `LFP_SVAR` slot — the `$~`/`$_` container
     /// (or `None` if no container has been allocated yet).
     ///
     /// Walks the outer chain to the LEP first; calling on a block
     /// frame transparently returns the enclosing method's slot.
+    ///
+    /// Note: this only follows the *lexical* `outer` chain, so it is
+    /// correct when called on a Ruby (iseq) frame. Native builtin
+    /// frames must first be skipped via the dynamic CFP chain — see
+    /// `Executor::current_lep`, which is the canonical entry point.
     pub(crate) fn svar(self) -> Option<Value> {
         self.lep().svar_slot()
-    }
-
-    ///
-    /// Write `val` into the **LEP's** `LFP_SVAR` slot.
-    ///
-    /// Walks the outer chain to the LEP first, so a `$~ = …`
-    /// assignment from inside a block lands in the enclosing
-    /// method's slot — matching CRuby `vm_svar` semantics.
-    pub(crate) fn set_svar(self, val: Value) {
-        self.lep().set_svar_slot(val)
     }
 
     ///
