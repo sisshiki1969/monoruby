@@ -1173,6 +1173,21 @@ class IO
   SEEK_CUR = 1
   SEEK_END = 2
 
+  # Mix-ins tagging the exceptions raised by `*_nonblock` when the
+  # operation would block. The concrete classes subclass the matching
+  # Errno (on Linux EAGAIN == EWOULDBLOCK) and include these so
+  # `rescue IO::WaitReadable` / `rescue IO::WaitWritable` work.
+  module WaitReadable; end
+  module WaitWritable; end
+  class EAGAINWaitReadable < Errno::EAGAIN
+    include IO::WaitReadable
+  end
+  class EAGAINWaitWritable < Errno::EAGAIN
+    include IO::WaitWritable
+  end
+  EWOULDBLOCKWaitReadable = EAGAINWaitReadable
+  EWOULDBLOCKWaitWritable = EAGAINWaitWritable
+
   def sync
     raise IOError, "closed stream" if closed?
     false

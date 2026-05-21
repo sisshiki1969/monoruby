@@ -40,6 +40,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "pread", io_pread, 2, 3, false);
     globals.define_builtin_func(IO_CLASS, "pwrite", io_pwrite, 2);
     globals.define_builtin_func_with(IO_CLASS, "sysread", io_sysread, 1, 2, false);
+    globals.define_builtin_func_with_kw(
+        IO_CLASS, "read_nonblock", io_read_nonblock, 1, 2, false, &["exception"], false,
+    );
+    globals.define_builtin_func_with_kw(
+        IO_CLASS, "write_nonblock", io_write_nonblock, 1, 1, false, &["exception"], false,
+    );
     globals.define_builtin_func_with(IO_CLASS, "readlines", io_readlines, 0, 2, false);
     globals.define_builtin_func(IO_CLASS, "binmode", io_binmode, 0);
     globals.define_builtin_func(IO_CLASS, "binmode?", io_binmode_, 0);
@@ -734,6 +740,11 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/close.html]
 #[monoruby_builtin]
 fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby's `IO#close` is idempotent — closing an already-closed
+    // stream is a no-op that returns nil (no IOError).
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Ok(Value::nil());
+    }
     let popen_result = lfp.self_val().as_io_inner_mut().close()?;
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
@@ -2321,6 +2332,147 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             Ok(v)
         }
         None => Ok(Value::bytes(buf)),
+    }
+}
+
+/// Resolve a nested `IO::<name>` exception class id (for the
+/// `*WaitReadable` / `*WaitWritable` classes defined in startup.rb).
+fn io_wait_class(globals: &Globals, name: &str) -> Option<ClassId> {
+    let io = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))?
+        .is_class_or_module()?;
+    globals
+        .store
+        .get_constant(io.id(), IdentId::get_id(name))?
+        .loaded_value()?
+        .is_class_or_module()
+        .map(|m| m.id())
+}
+
+///
+/// ### IO#read_nonblock
+/// - read_nonblock(maxlen, outbuf = nil, exception: true) -> String | outbuf | :wait_readable | nil
+///
+/// A single non-blocking read. When the read would block: raises
+/// `IO::EAGAINWaitReadable` (default) or returns `:wait_readable`
+/// (`exception: false`). At end of file: raises `EOFError` (default)
+/// or returns `nil`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read_nonblock.html]
+#[monoruby_builtin]
+fn io_read_nonblock(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if maxlen < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {} given",
+            maxlen
+        )));
+    }
+    let buffer: Option<Value> = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
+        _ => None,
+    };
+    // `exception:` keyword is at slot 2 (positional max 2).
+    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    if maxlen == 0 {
+        return Ok(match buffer {
+            Some(v) => v,
+            None => Value::string_from_vec(vec![]),
+        });
+    }
+    let outcome = lfp
+        .self_val()
+        .as_io_inner_mut()
+        .read_nonblock(maxlen as usize, &globals.store)?;
+    match outcome {
+        NonblockRead::Data(buf) => match buffer {
+            Some(mut v) => {
+                let enc = v.as_rstring_inner().encoding();
+                *v.as_rstring_inner_mut() = RStringInner::from_encoding(&buf, enc);
+                Ok(v)
+            }
+            None => Ok(Value::bytes(buf)),
+        },
+        NonblockRead::Eof => {
+            // CRuby empties a supplied buffer before signalling EOF.
+            if let Some(mut v) = buffer {
+                let enc = v.as_rstring_inner().encoding();
+                *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+            }
+            if exception {
+                Err(MonorubyErr::eoferr(&globals.store, "end of file reached"))
+            } else {
+                Ok(Value::nil())
+            }
+        }
+        NonblockRead::WouldBlock => {
+            if exception {
+                let cid = io_wait_class(globals, "EAGAINWaitReadable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitReadable not defined"))?;
+                Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - read would block".to_string(),
+                ))
+            } else {
+                Ok(Value::symbol(IdentId::get_id("wait_readable")))
+            }
+        }
+    }
+}
+
+///
+/// ### IO#write_nonblock
+/// - write_nonblock(string, exception: true) -> Integer | :wait_writable
+///
+/// A single non-blocking write; returns the number of bytes written.
+/// When the write would block: raises `IO::EAGAINWaitWritable`
+/// (default) or returns `:wait_writable` (`exception: false`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/write_nonblock.html]
+#[monoruby_builtin]
+fn io_write_nonblock(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
+        b.to_vec()
+    } else {
+        vm.to_s(globals, lfp.arg(0))?.into_bytes()
+    };
+    // `exception:` keyword is at slot 1 (positional max 1).
+    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    let outcome = lfp
+        .self_val()
+        .as_io_inner_mut()
+        .write_nonblock(&bytes, &globals.store)?;
+    match outcome {
+        NonblockWrite::Written(n) => Ok(Value::integer(n as i64)),
+        NonblockWrite::WouldBlock => {
+            if exception {
+                let cid = io_wait_class(globals, "EAGAINWaitWritable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitWritable not defined"))?;
+                Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - write would block".to_string(),
+                ))
+            } else {
+                Ok(Value::symbol(IdentId::get_id("wait_writable")))
+            }
+        }
     }
 }
 
@@ -4491,6 +4643,78 @@ mod tests {
             r, w = IO.pipe
             r.close; w.close
             r.sysread(1)
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_read_write_nonblock() {
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            res = []
+            # No data: exception: false ⇒ :wait_readable.
+            res << r.read_nonblock(5, exception: false)
+            # No data: default ⇒ IO::WaitReadable (is_a? Errno::EAGAIN).
+            begin
+              r.read_nonblock(5)
+            rescue IO::WaitReadable => e
+              res << [:rescued, e.is_a?(Errno::EAGAIN)]
+            end
+            # write_nonblock returns bytes written; read sees them.
+            res << w.write_nonblock("hello")
+            res << r.read_nonblock(4)          # "hell"
+            res << r.read_nonblock(10)         # "o"
+            res << r.read_nonblock(0)          # "" immediately
+            w.close
+            begin
+              r.read_nonblock(10)
+            rescue EOFError
+              res << :eof
+            end
+            r.close
+            raise "unexpected: #{res.inspect}" unless res == [:wait_readable, [:rescued, true], 5, "hell", "o", "", :eof]
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_read_nonblock_negative_and_eof() {
+        // Negative length ⇒ ArgumentError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            begin
+              r.read_nonblock(-1)
+            ensure
+              r.close; w.close
+            end
+            "#,
+        );
+        // EOF with exception: false ⇒ nil.
+        run_test_no_result_check(
+            r#"
+            r, w = IO.pipe
+            w.write("ab"); w.close
+            r.read_nonblock(5)                 # "ab"
+            v = r.read_nonblock(5, exception: false)
+            r.close
+            raise "expected nil, got #{v.inspect}" unless v.nil?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_close_is_idempotent() {
+        // CRuby: closing an already-closed stream is a no-op (no IOError).
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.close
+            w.close
+            r.close
+            r.close
+            "ok"
             "#,
         );
     }

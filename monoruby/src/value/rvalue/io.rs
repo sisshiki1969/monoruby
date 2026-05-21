@@ -81,6 +81,19 @@ pub enum IoInner {
     Closed,
 }
 
+/// Outcome of a non-blocking `IO#read_nonblock`.
+pub enum NonblockRead {
+    Data(Vec<u8>),
+    WouldBlock,
+    Eof,
+}
+
+/// Outcome of a non-blocking `IO#write_nonblock`.
+pub enum NonblockWrite {
+    Written(usize),
+    WouldBlock,
+}
+
 impl std::clone::Clone for IoInner {
     fn clone(&self) -> Self {
         match self {
@@ -507,6 +520,91 @@ impl IoInner {
         };
         out.extend(chunk);
         Ok(out)
+    }
+
+    /// Set `O_NONBLOCK` on the underlying fd (idempotent).
+    fn set_nonblock(&self) -> Result<()> {
+        let fd = self.fileno()?;
+        // SAFETY: fd is a valid descriptor for the lifetime of this IO.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags < 0 {
+                return Err(MonorubyErr::ioerr(
+                    std::io::Error::last_os_error().to_string(),
+                ));
+            }
+            if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+                return Err(MonorubyErr::ioerr(
+                    std::io::Error::last_os_error().to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `IO#read_nonblock` core: a single non-blocking read of up to
+    /// `maxlen` bytes. Drains ungetc pushback first; otherwise sets
+    /// `O_NONBLOCK` and issues one raw `read(2)`. Reports `WouldBlock`
+    /// on `EAGAIN`/`EWOULDBLOCK` and `Eof` on a 0-byte read.
+    pub fn read_nonblock(&mut self, maxlen: usize, store: &Store) -> Result<NonblockRead> {
+        if self.pushback_len() > 0 {
+            return Ok(NonblockRead::Data(self.take_pushback(Some(maxlen))));
+        }
+        if !self.is_readable() {
+            return Err(MonorubyErr::ioerr("not opened for reading"));
+        }
+        // Best-effort: sync a seekable File's BufReader to its logical
+        // position (discarding its buffer) so the raw read below is at
+        // the right offset; pipes/sockets aren't seekable and skip it.
+        if let Self::File(file) = self {
+            let reader = &mut *Rc::get_mut(file).unwrap().reader;
+            let _ = reader.seek(SeekFrom::Current(0));
+        }
+        let fd = self.fileno()?;
+        self.set_nonblock()?;
+        let mut buf = vec![0u8; maxlen];
+        // SAFETY: fd is valid; buf has `maxlen` bytes of capacity.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, maxlen) };
+        if n > 0 {
+            buf.truncate(n as usize);
+            Ok(NonblockRead::Data(buf))
+        } else if n == 0 {
+            Ok(NonblockRead::Eof)
+        } else {
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
+                    Ok(NonblockRead::WouldBlock)
+                }
+                _ => Err(MonorubyErr::from_io_err(store, &err, "read_nonblock".to_string())),
+            }
+        }
+    }
+
+    /// `IO#write_nonblock` core: a single non-blocking `write(2)`.
+    /// Reports `WouldBlock` on `EAGAIN`/`EWOULDBLOCK`; a hard error
+    /// (e.g. `EPIPE`) is surfaced as the matching `Errno` exception.
+    pub fn write_nonblock(&mut self, bytes: &[u8], store: &Store) -> Result<NonblockWrite> {
+        if !self.is_writable() {
+            return Err(MonorubyErr::ioerr("not opened for writing"));
+        }
+        let fd = self.fileno()?;
+        self.set_nonblock()?;
+        // SAFETY: fd is valid; bytes is a valid buffer of `bytes.len()`.
+        let n = unsafe {
+            libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len())
+        };
+        if n >= 0 {
+            Ok(NonblockWrite::Written(n as usize))
+        } else {
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
+                    Ok(NonblockWrite::WouldBlock)
+                }
+                _ => Err(MonorubyErr::from_io_err(store, &err, "write_nonblock".to_string())),
+            }
+        }
     }
 
     pub fn read_line(&mut self) -> Result<Option<String>> {

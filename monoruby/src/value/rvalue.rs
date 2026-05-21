@@ -19,7 +19,7 @@ pub use enumerator::*;
 pub use exception::ExceptionInner;
 pub use fiber::*;
 pub use hash::*;
-pub use io::IoInner;
+pub use io::{IoInner, NonblockRead, NonblockWrite};
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
