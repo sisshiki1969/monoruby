@@ -161,6 +161,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "ctime", file_ctime, 1);
     globals.define_builtin_class_func(file, "birthtime", file_birthtime, 1);
 
+    // File::Stat — the class body (accessors / predicates) lives in
+    // `builtins/builtins.rb`; here we own construction. `File.stat`,
+    // `File.lstat`, and `File::Stat.new` all populate the fields from
+    // a real stat(2) / lstat(2), raising the matching Errno on
+    // failure. The instance ivars (@dev, @ino, …) are read by the
+    // Ruby accessors.
+    let object_class = globals.store.object_class();
+    let stat = globals.define_class("Stat", object_class, file).id();
+    globals.define_builtin_class_func(file, "stat", file_stat, 1);
+    globals.define_builtin_class_func(file, "lstat", file_lstat, 1);
+    globals.define_builtin_func(stat, "initialize", stat_initialize, 1);
+    globals.define_builtin_func(file, "stat", file_instance_stat, 0);
+
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
         "resolve_feature_path",
@@ -2233,6 +2246,150 @@ fn file_birthtime(
     file_time_attr(vm, globals, lfp, |m| m.created())
 }
 
+/// Build a `Time` value from a (seconds, nanoseconds) pair via
+/// `Time.at(secs, nsec, :nanosecond)`.
+fn time_from_secs_nsec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    secs: i64,
+    nsec: i64,
+) -> Result<Value> {
+    let time_class = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Time"))
+        .ok_or_else(|| MonorubyErr::runtimeerr("Time class not defined"))?;
+    let at = IdentId::get_id("at");
+    let unit = Value::symbol(IdentId::get_id("nanosecond"));
+    vm.invoke_method_inner(
+        globals,
+        at,
+        time_class,
+        &[Value::integer(secs), Value::integer(nsec), unit],
+        None,
+        None,
+    )
+}
+
+/// Populate a `File::Stat` instance's ivars from a `std::fs::Metadata`
+/// (which wraps a `struct stat`). The Ruby accessors in
+/// `builtins/builtins.rb` read these fields.
+fn fill_stat_ivars(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut obj: Value,
+    metadata: &std::fs::Metadata,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let pairs: &[(&str, i64)] = &[
+        ("@dev", metadata.dev() as i64),
+        ("@ino", metadata.ino() as i64),
+        ("@mode", metadata.mode() as i64),
+        ("@nlink", metadata.nlink() as i64),
+        ("@uid", metadata.uid() as i64),
+        ("@gid", metadata.gid() as i64),
+        ("@rdev", metadata.rdev() as i64),
+        ("@size", metadata.size() as i64),
+        ("@blksize", metadata.blksize() as i64),
+        ("@blocks", metadata.blocks() as i64),
+    ];
+    for (name, val) in pairs {
+        obj.set_instance_var(&mut globals.store, name, Value::integer(*val))?;
+    }
+    let atime = time_from_secs_nsec(vm, globals, metadata.atime(), metadata.atime_nsec())?;
+    let mtime = time_from_secs_nsec(vm, globals, metadata.mtime(), metadata.mtime_nsec())?;
+    let ctime = time_from_secs_nsec(vm, globals, metadata.ctime(), metadata.ctime_nsec())?;
+    obj.set_instance_var(&mut globals.store, "@atime", atime)?;
+    obj.set_instance_var(&mut globals.store, "@mtime", mtime)?;
+    obj.set_instance_var(&mut globals.store, "@ctime", ctime)?;
+    Ok(())
+}
+
+/// Build a fresh `File::Stat` object for `path`. When `follow` is
+/// true, symlinks are dereferenced (stat(2)); otherwise the link
+/// itself is described (lstat(2)).
+fn build_stat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    path_val: Value,
+    follow: bool,
+) -> Result<Value> {
+    let path = to_path(vm, globals, path_val)?;
+    let path_str = path.to_string_lossy().to_string();
+    let metadata = if follow {
+        std::fs::metadata(&path)
+    } else {
+        std::fs::symlink_metadata(&path)
+    }
+    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str))?;
+    let stat_class = vm
+        .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
+        .as_class();
+    let obj = Value::object(stat_class.id());
+    fill_stat_ivars(vm, globals, obj, &metadata)?;
+    Ok(obj)
+}
+
+///
+/// ### File.stat
+/// - stat(path) -> File::Stat
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/stat.html]
+#[monoruby_builtin]
+fn file_stat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    build_stat(vm, globals, lfp.arg(0), true)
+}
+
+///
+/// ### File.lstat
+/// - lstat(path) -> File::Stat
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/lstat.html]
+#[monoruby_builtin]
+fn file_lstat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    build_stat(vm, globals, lfp.arg(0), false)
+}
+
+///
+/// ### File#stat
+/// - stat -> File::Stat
+///
+/// Instance method: stats the path the File was opened with.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/stat.html]
+#[monoruby_builtin]
+fn file_instance_stat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = match lfp.self_val().as_io_inner().path() {
+        Some(p) => Value::string(p),
+        None => return Err(MonorubyErr::runtimeerr("File#stat: no path for this stream")),
+    };
+    build_stat(vm, globals, path, true)
+}
+
+///
+/// ### File::Stat.new
+/// - new(path) -> File::Stat
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File=3a=3aStat/s/new.html]
+#[monoruby_builtin]
+fn stat_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_stat_new", &path_str))?;
+    fill_stat_ivars(vm, globals, lfp.self_val(), &metadata)?;
+    Ok(Value::nil())
+}
+
 ///
 /// ### File.identical?
 /// - identical?(file1, file2) -> bool
@@ -3241,6 +3398,69 @@ mod tests {
             begin
               File.write(path, "data", mode: "w", encoding: "UTF-8")
               File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_stat_fields_and_predicates() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "rubinius")
+              s = File.stat(path)
+              [
+                s.class.name,
+                s.size,
+                s.file?,
+                s.directory?,
+                s.ino.is_a?(Integer),
+                s.mode.is_a?(Integer),
+                s.nlink.is_a?(Integer),
+                s.uid.is_a?(Integer),
+                s.gid.is_a?(Integer),
+                s.ftype,
+                s.zero?,
+                s.size?,
+                s.mtime.is_a?(Time),
+                s.blksize.is_a?(Integer),
+                s.blocks.is_a?(Integer),
+                File::Stat.new(path).file?,
+                File.lstat(path).file?,
+              ]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // Directory ftype / predicate.
+        run_test_once(r#"[File.stat("/tmp").directory?, File.stat("/tmp").ftype]"#);
+    }
+
+    #[test]
+    fn file_stat_missing_raises() {
+        run_test_error(r#"File.stat("/nonexistent_monoruby_stat_path_xyz")"#);
+        run_test_error(r#"File::Stat.new("/nonexistent_monoruby_stat_path_xyz")"#);
+    }
+
+    #[test]
+    fn file_instance_stat_method() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_instat_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "rubinius")
+              f = File.open(path)
+              begin
+                s = f.stat
+                [s.class.name, s.size, s.file?]
+              ensure
+                f.close
+              end
             ensure
               File.unlink(path) rescue nil
             end
