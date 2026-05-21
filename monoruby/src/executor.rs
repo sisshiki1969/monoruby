@@ -809,6 +809,7 @@ impl Executor {
 
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let mut err = self.take_error();
+        let explicit_cause = err.explicit_cause;
         // Re-raise of an existing exception object (`raise exc`): return
         // that object so its identity and instance variables are
         // preserved. CRuby only assigns a backtrace if the exception
@@ -819,7 +820,7 @@ impl Executor {
                     ex.trace = err.take_trace();
                 }
             }
-            return self.chain_cause(globals, orig);
+            return self.chain_cause(globals, orig, explicit_cause);
         }
         let v = match err.kind() {
             MonorubyErrKind::Load(path) => {
@@ -873,16 +874,31 @@ impl Executor {
             }
             _ => Value::new_exception(err),
         };
-        self.chain_cause(globals, v)
+        self.chain_cause(globals, v, explicit_cause)
     }
 
-    /// Implicit cause chaining (CRuby `exc_setup_cause`): if an exception
-    /// is currently being handled (`$!`) and `v` is neither it nor
-    /// already given a cause, record `$!` as `v`'s cause. `take_ex_obj`
-    /// runs *before* the caller sets `$!` to the new exception, so `$!`
-    /// here is the enclosing handler's exception.
-    fn chain_cause(&mut self, globals: &mut Globals, v: Value) -> Value {
+    /// Record `v`'s cause. An explicit `cause:` keyword (`explicit_cause`,
+    /// `Some(nil)` for `cause: nil`) takes precedence and suppresses the
+    /// implicit chain. Otherwise, CRuby `exc_setup_cause`: if an exception
+    /// is currently being handled (`$!`) and `v` is neither it nor already
+    /// given a cause, record `$!` as `v`'s cause. `take_ex_obj` runs
+    /// *before* the caller sets `$!` to the new exception, so `$!` here is
+    /// the enclosing handler's exception.
+    fn chain_cause(
+        &mut self,
+        globals: &mut Globals,
+        v: Value,
+        explicit_cause: Option<Value>,
+    ) -> Value {
         let cause_id = IdentId::get_id("/cause");
+        if let Some(cause) = explicit_cause {
+            // `cause: nil` suppresses implicit chaining but keeps any cause
+            // the exception already has; a non-nil cause overwrites it.
+            if !cause.is_nil() {
+                let _ = globals.store.set_ivar(v, cause_id, cause);
+            }
+            return v;
+        }
         if globals.store.get_ivar(v, cause_id).is_none() {
             let active = globals
                 .get_gvar(IdentId::get_id("$!"))

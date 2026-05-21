@@ -566,9 +566,9 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // raise/fail trampoline). CRuby: passing `cause:` with no
     // positional arguments raises `ArgumentError "only cause is given
     // with no arguments"`.
-    let has_cause = lfp.try_arg(3).is_some();
+    let cause_kwarg = lfp.try_arg(3);
     if lfp.try_arg(0).is_none() {
-        if has_cause {
+        if cause_kwarg.is_some() {
             return Err(MonorubyErr::argumenterr(
                 "only cause is given with no arguments",
             ));
@@ -587,13 +587,15 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 // A message override makes CRuby return a *new* exception
                 // (`exc.exception(msg)`), so identity is not preserved.
                 err.set_msg(arg1.coerce_to_str(vm, globals)?);
-                return Err(err);
+                return Err(apply_cause(globals, err, None, cause_kwarg)?);
             }
         }
-        return Err(err.with_original(lfp.arg(0)));
+        let raised = lfp.arg(0);
+        return Err(apply_cause(globals, err.with_original(raised), Some(raised), cause_kwarg)?);
     } else if let Some(klass) = lfp.arg(0).is_class() {
         if klass.id() == STOP_ITERATION_CLASS {
-            return Err(MonorubyErr::stopiterationerr("".to_string()));
+            let err = MonorubyErr::stopiterationerr("".to_string());
+            return Err(apply_cause(globals, err, None, cause_kwarg)?);
         } else if klass.is_exception() {
             let mut args = vec![];
             if let Some(arg1) = lfp.try_arg(1) {
@@ -604,10 +606,11 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             let ex =
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
             let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap()).with_original(ex);
-            return Err(err);
+            return Err(apply_cause(globals, err, Some(ex), cause_kwarg)?);
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
-        return Err(MonorubyErr::runtimeerr(message.to_str()?));
+        let err = MonorubyErr::runtimeerr(message.to_str()?);
+        return Err(apply_cause(globals, err, None, cause_kwarg)?);
     }
     // Duck-typed exception. CRuby drives `arg0.exception(msg)` (or
     // `arg0.exception` if no message was given); the result must be
@@ -626,11 +629,62 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let result =
             vm.invoke_method_inner(globals, exception_id, lfp.arg(0), &args, None, None)?;
         match result.is_exception() {
-            Some(ex) => return Err(MonorubyErr::new_from_exception(ex).with_original(result)),
+            Some(ex) => {
+                let err = MonorubyErr::new_from_exception(ex).with_original(result);
+                return Err(apply_cause(globals, err, Some(result), cause_kwarg)?);
+            }
             None => return Err(MonorubyErr::typeerr("exception object expected")),
         }
     }
     Err(MonorubyErr::typeerr("exception class/object expected"))
+}
+
+/// Apply an explicit `cause:` keyword to a to-be-raised error. `raised`
+/// is the exception object being raised, when known (for identity and
+/// cycle checks). Returns the error to raise — either the original error
+/// tagged with the cause, or a validation error (`TypeError` for a
+/// non-exception cause, `ArgumentError` for a circular cause).
+fn apply_cause(
+    globals: &Globals,
+    mut err: MonorubyErr,
+    raised: Option<Value>,
+    cause_kwarg: Option<Value>,
+) -> Result<MonorubyErr> {
+    let Some(cause) = cause_kwarg else {
+        return Ok(err);
+    };
+    if !cause.is_nil() && cause.is_exception().is_none() {
+        return Err(MonorubyErr::typeerr("exception object expected"));
+    }
+    let cause = match raised {
+        // A cause equal to the raised exception itself is ignored.
+        Some(raised) if !cause.is_nil() && cause.id() == raised.id() => Value::nil(),
+        // Setting a cause whose chain already reaches the raised exception
+        // would create a cycle.
+        Some(raised)
+            if !cause.is_nil() && cause_chain_contains(globals, cause, raised) =>
+        {
+            return Err(MonorubyErr::argumenterr("circular causes"));
+        }
+        _ => cause,
+    };
+    err.explicit_cause = Some(cause);
+    Ok(err)
+}
+
+/// Whether `target` appears in the `#cause` chain reachable from `start`.
+fn cause_chain_contains(globals: &Globals, start: Value, target: Value) -> bool {
+    let cause_id = IdentId::get_id("/cause");
+    let mut cur = start;
+    loop {
+        if cur.id() == target.id() {
+            return true;
+        }
+        match globals.store.get_ivar(cur, cause_id) {
+            Some(next) if !next.is_nil() => cur = next,
+            _ => return false,
+        }
+    }
 }
 
 ///

@@ -788,6 +788,87 @@ mod tests {
     }
 
     #[test]
+    fn explicit_cause() {
+        run_tests(&[
+            // `cause:` sets the cause explicitly.
+            r#"
+            c = StandardError.new("orig")
+            begin; raise "new", cause: c; rescue => e; e.cause.equal?(c); end
+            "#,
+            // `cause: nil` on a fresh exception ⇒ nil cause.
+            r#"begin; raise "x", cause: nil; rescue => e; e.cause.inspect; end"#,
+            // `cause:` overrides the implicit `$!` cause.
+            r#"
+            custom = StandardError.new("custom")
+            begin
+              raise "first"
+            rescue
+              begin; raise "second", cause: custom; rescue => e; e.cause.equal?(custom); end
+            end
+            "#,
+            // `cause: nil` inside a rescue suppresses implicit chaining.
+            r#"
+            begin
+              raise "first"
+            rescue
+              begin; raise "second", cause: nil; rescue => e; e.cause.inspect; end
+            end
+            "#,
+            // Exception class with message and explicit cause.
+            r#"
+            cm = StandardError.new("cm")
+            begin; raise ArgumentError, "am", cause: cm; rescue => e; [e.class.name, e.message, e.cause.equal?(cm)]; end
+            "#,
+            // A cause equal to the raised exception is ignored.
+            r#"
+            ce = StandardError.new("cause")
+            begin; raise ce, cause: ce; rescue => e; [e.equal?(ce), e.cause.inspect]; end
+            "#,
+            // `cause: nil` does not overwrite an existing cause.
+            r#"
+            e1 = nil; e2 = nil
+            begin
+              begin; raise "1"; rescue => e1; raise "2"; end
+            rescue => e2
+            end
+            begin; raise e2, cause: nil; rescue => e; e.cause.equal?(e1); end
+            "#,
+        ]);
+        // Non-exception cause ⇒ TypeError.
+        run_test(
+            r#"
+            begin; raise "m", cause: Object.new; rescue TypeError => e; e.message; end
+            "#,
+        );
+        // A circular cause ⇒ ArgumentError "circular causes".
+        run_test(
+            r#"
+            begin
+              begin
+                raise "Error 1"
+              rescue => e1
+                begin
+                  raise "Error 2"
+                rescue => e2
+                  begin
+                    raise "Error 3"
+                  rescue => e3
+                    raise(e1, cause: e3)
+                  end
+                end
+              end
+            rescue ArgumentError => e
+              e.message
+            end
+            "#,
+        );
+        // Only `cause:` with no positional argument ⇒ ArgumentError.
+        run_test(
+            r#"begin; raise(cause: nil); rescue ArgumentError => e; e.message; end"#,
+        );
+    }
+
+    #[test]
     fn message_calls_to_s() {
         run_tests(&[
             // Default: message == stored string.

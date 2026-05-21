@@ -15,6 +15,10 @@ pub struct MonorubyErr {
     /// materialising a fresh one, preserving the object's identity and
     /// its instance variables (CRuby `raise exc` re-raises `exc` itself).
     pub original: Option<Value>,
+    /// An explicitly given `cause:` keyword (`Some(nil)` for `cause: nil`).
+    /// When set, `take_ex_obj` records it as the exception's cause and
+    /// suppresses the implicit `$!` chaining.
+    pub explicit_cause: Option<Value>,
 }
 
 impl MonorubyErr {
@@ -24,6 +28,7 @@ impl MonorubyErr {
             message: message.to_string(),
             trace: vec![],
             original: None,
+            explicit_cause: None,
         }
     }
 
@@ -36,6 +41,7 @@ impl MonorubyErr {
             message: msg,
             trace,
             original: None,
+            explicit_cause: None,
         }
     }
 
@@ -59,6 +65,7 @@ impl MonorubyErr {
             message: msg,
             trace: vec![(Some((loc, sourceinfo)), func_id)],
             original: None,
+            explicit_cause: None,
         }
     }
 
@@ -76,6 +83,9 @@ impl MonorubyErr {
         use alloc::GC;
         if let Some(original) = &self.original {
             original.mark(alloc);
+        }
+        if let Some(cause) = &self.explicit_cause {
+            cause.mark(alloc);
         }
         match &self.kind {
             // Packed `Value::id()` of the receiver that triggered the
