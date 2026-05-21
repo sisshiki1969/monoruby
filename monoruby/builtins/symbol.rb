@@ -1,10 +1,9 @@
 class Symbol
   include Comparable
 
-  def [](*args)
-    to_s.[](*args)
-  end
-  alias slice []
+  # `[]` / `slice`, `=~`, `match`, `start_with?` are native (see
+  # builtins/symbol.rs): they must set the frame-local `$~` on the
+  # *caller's* LEP, which a pure-Ruby `to_s`-delegation can't do.
 
   def size
     to_s.size
@@ -34,10 +33,6 @@ class Symbol
     to_s.swapcase.to_sym
   end
 
-  def start_with?(*args)
-    to_s.start_with?(*args)
-  end
-
   def end_with?(*args)
     to_s.end_with?(*args)
   end
@@ -63,10 +58,6 @@ class Symbol
     self
   end
 
-  def =~(other)
-    to_s =~ other
-  end
-
   def casecmp(other)
     return nil unless other.is_a?(Symbol)
     to_s.casecmp(other.to_s)
@@ -75,10 +66,6 @@ class Symbol
   def casecmp?(other)
     return nil unless other.is_a?(Symbol)
     to_s.casecmp?(other.to_s)
-  end
-
-  def match(other, *args, &block)
-    self.to_s.match(other, *args, &block)
   end
 
   def match?(other, pos = 0)
