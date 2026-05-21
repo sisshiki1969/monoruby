@@ -775,6 +775,16 @@ mod tests {
             end
             "#,
         );
+        // Bare `raise` re-raises `$!` by identity, with no self-cause.
+        run_test(
+            r#"
+            begin
+              raise "x"
+            rescue => e
+              begin; raise; rescue => f; [f.equal?(e), f.cause.inspect]; end
+            end
+            "#,
+        );
     }
 
     #[test]
