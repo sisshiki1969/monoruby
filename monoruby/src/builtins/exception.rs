@@ -905,4 +905,27 @@ mod tests {
     fn backtrace_locations_nil_when_unset() {
         run_test(r#"Exception.new.backtrace_locations"#);
     }
+
+    /// `Interrupt < SignalException` (A4 in doc/signal_handling.md): the
+    /// SIGINT path raises a real `Interrupt`, caught by
+    /// `rescue SignalException` and `rescue Exception`, with the
+    /// conventional default message. Only assertions that agree with
+    /// CRuby are checked here (SignalException's own superclass differs).
+    #[test]
+    fn interrupt_class_hierarchy() {
+        run_test(
+            r##"
+            [
+              Interrupt.superclass.name,
+              Interrupt < SignalException,
+              Interrupt < Exception,
+              Interrupt.new("boom").message,
+              Interrupt.new.message,
+              (begin; raise Interrupt, "interrupted"; rescue SignalException => e; "#{e.class}: #{e.message}"; end),
+              (begin; raise Interrupt; rescue SignalException => e; e.class.name; end),
+              (begin; raise Interrupt; rescue Exception => e; e.class.name; end),
+            ]
+            "##,
+        );
+    }
 }
