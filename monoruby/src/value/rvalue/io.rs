@@ -437,6 +437,78 @@ impl IoInner {
         }
     }
 
+    /// Low-level read used by `IO#sysread`: read up to `maxlen` bytes
+    /// with a single underlying read, bypassing the buffered reader.
+    ///
+    /// For a `File`, the `BufReader` is first seeked to its logical
+    /// position — which discards its internal buffer — so the
+    /// subsequent direct read on the underlying file starts at the
+    /// right offset and leaves the `BufReader` consistent for any
+    /// later buffered reads. Any ungetc pushback is drained first.
+    /// Returns an empty `Vec` only at end of file (the caller raises
+    /// `EOFError`).
+    pub fn sysread(&mut self, maxlen: usize) -> Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut out = if self.pushback_len() > 0 {
+            self.take_pushback(Some(maxlen))
+        } else {
+            vec![]
+        };
+        if out.len() >= maxlen {
+            return Ok(out);
+        }
+        let need = maxlen - out.len();
+        let chunk = match self {
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Stdout | Self::Stderr => {
+                return Err(MonorubyErr::ioerr("not opened for reading"));
+            }
+            Self::Stdin => {
+                let mut buf = vec![0u8; need];
+                let n = std::io::stdin()
+                    .read(&mut buf)
+                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                buf.truncate(n);
+                buf
+            }
+            Self::File(file) => {
+                if !file.readable {
+                    return Err(MonorubyErr::ioerr("not opened for reading"));
+                }
+                let reader = &mut *Rc::get_mut(file).unwrap().reader;
+                // Sync the underlying fd to the logical position and
+                // discard the BufReader buffer. Best-effort: pipe /
+                // socket fds (also stored as `File`) are not seekable
+                // (`ESPIPE`), in which case the single direct read
+                // below simply returns whatever is available.
+                let _ = reader.seek(SeekFrom::Current(0));
+                let mut buf = vec![0u8; need];
+                let n = reader
+                    .get_mut()
+                    .read(&mut buf)
+                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                buf.truncate(n);
+                buf
+            }
+            Self::Popen(popen) => {
+                let popen = Rc::get_mut(popen).unwrap();
+                let reader = popen
+                    .reader
+                    .as_mut()
+                    .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
+                let mut buf = vec![0u8; need];
+                let n = reader
+                    .get_mut()
+                    .read(&mut buf)
+                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                buf.truncate(n);
+                buf
+            }
+        };
+        out.extend(chunk);
+        Ok(out)
+    }
+
     pub fn read_line(&mut self) -> Result<Option<String>> {
         if self.pushback_len() > 0 {
             let cell = self.pushback_cell().unwrap();

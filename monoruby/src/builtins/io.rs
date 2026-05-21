@@ -39,6 +39,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
     globals.define_builtin_func_with(IO_CLASS, "pread", io_pread, 2, 3, false);
     globals.define_builtin_func(IO_CLASS, "pwrite", io_pwrite, 2);
+    globals.define_builtin_func_with(IO_CLASS, "sysread", io_sysread, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "readlines", io_readlines, 0, 2, false);
     globals.define_builtin_func(IO_CLASS, "binmode", io_binmode, 0);
     globals.define_builtin_func(IO_CLASS, "binmode?", io_binmode_, 0);
@@ -2273,6 +2274,56 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::integer(n as i64))
 }
 
+///
+/// ### IO#sysread
+/// - sysread(maxlen) -> String
+/// - sysread(maxlen, outbuf) -> outbuf
+///
+/// Low-level read of up to `maxlen` bytes via a single underlying
+/// read. Raises `EOFError` at end of file.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sysread.html]
+#[monoruby_builtin]
+fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if maxlen < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {} given",
+            maxlen
+        )));
+    }
+    let buffer: Option<Value> = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
+        _ => None,
+    };
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    if maxlen == 0 {
+        // CRuby returns "" — and leaves a supplied buffer untouched.
+        return Ok(match buffer {
+            Some(v) => v,
+            None => Value::string_from_vec(vec![]),
+        });
+    }
+    let buf = lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)?;
+    if buf.is_empty() {
+        if let Some(mut v) = buffer {
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+        }
+        return Err(MonorubyErr::eoferr(&globals.store, "end of file reached"));
+    }
+    match buffer {
+        Some(mut v) => {
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&buf, enc);
+            Ok(v)
+        }
+        None => Ok(Value::bytes(buf)),
+    }
+}
+
 /// Helper: extract raw fd from a Value that is an IO (or responds to to_io).
 fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
     if let Some(rv) = v.try_rvalue() {
@@ -4318,6 +4369,128 @@ mod tests {
               f.close
               File.unlink(path) rescue nil
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_sysread_basic() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_sysread_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "012345678901234567890123456789\nabcdef")
+              f = File.open(path, "r+")
+              res = []
+              res << f.sysread(15)            # "012345678901234"
+              res << f.sysread(5)             # "56789" (position advanced)
+              buf = +"ABCDE"
+              res << f.sysread(6, buf).equal?(buf)  # true
+              res << buf                      # bytes 20..25
+              res << f.sysread(0)             # "" immediately
+              f.close
+              res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_sysread_eof_and_pipe() {
+        // Smaller string from a pipe when fewer bytes are available.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.write("ab")
+            out = r.sysread(3)
+            r.close; w.close
+            out
+            "#,
+        );
+        // EOFError past end of file.
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_sysread_eof_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abc")
+            f = File.open(path, "r")
+            begin
+              f.seek(0, IO::SEEK_END)
+              f.sysread(1)
+            ensure
+              f.close
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // Negative length ⇒ ArgumentError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            begin
+              r.sysread(-1)
+            ensure
+              r.close; w.close
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_sysread_popen_pushback_and_errors() {
+        // Popen reader arm: read from a child's stdout (monoruby-only;
+        // the popen harness output isn't comparable via run_test). The
+        // Ruby code asserts the result itself.
+        run_test_no_result_check(
+            r#"
+            io = IO.popen("printf hello")
+            out = io.sysread(5)
+            io.close
+            raise "popen sysread: #{out.inspect}" unless out == "hello"
+            "#,
+        );
+        // ungetc pushback is drained before the underlying read.
+        run_test_no_result_check(
+            r#"
+            path = "/tmp/monoruby_io_sysread_pb_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "abcdef")
+              f = File.open(path, "r")
+              c = f.getc          # "a"
+              f.ungetc(c)         # push "a" back
+              out = f.sysread(3)  # drains pushback then reads
+              f.close
+              raise "pushback sysread: #{out.inspect}" unless out == "abc"
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // sysread on a write-only stream ⇒ IOError (not opened for reading).
+        run_test_error(
+            r#"
+            path = "/tmp/monoruby_io_sysread_wo_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.open(path, "w")
+              begin
+                f.sysread(1)
+              ensure
+                f.close
+              end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+        // sysread on $stdout ⇒ IOError (not opened for reading).
+        run_test_error(r#"$stdout.sysread(1)"#);
+        // sysread on a closed stream ⇒ IOError.
+        run_test_error(
+            r#"
+            r, w = IO.pipe
+            r.close; w.close
+            r.sysread(1)
             "#,
         );
     }
