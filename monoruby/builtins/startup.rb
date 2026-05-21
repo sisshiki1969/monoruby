@@ -916,10 +916,10 @@ module Kernel
     nil
   end
 
-  def print(*args)
-    $stdout.print(*args)
-    nil
-  end
+  # `Kernel#print` is a native builtin (see builtins/kernel.rs): it
+  # delegates to `$stdout.print` but additionally writes `$_` when
+  # called with no arguments, which a pure-Ruby definition can't do
+  # because `$_` is frame-local (it would read print's own nil slot).
 
   def p(*args)
     if args.size == 1

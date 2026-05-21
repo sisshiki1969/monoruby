@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "!~", not_match, 1);
     //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
-    //globals.define_builtin_module_func_rest(kernel_class, "print", print);
+    globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func_with_effect(
         kernel_class,
         "proc",
@@ -461,9 +461,28 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    for v in lfp.arg(0).as_array().iter().cloned() {
-        globals.print_value(v)?;
+fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    // Delegate to `$stdout.print` so output-stream reassignment is
+    // honoured (and so the `IO#print` write path stays the single
+    // source of truth), reading `$stdout` dynamically each call.
+    let stdout = globals
+        .get_gvar(IdentId::get_id("$stdout"))
+        .unwrap_or_default();
+    let print_id = IdentId::get_id("print");
+    if args.len() == 0 {
+        // `print` with no arguments writes `$_` (the caller's
+        // frame-local last-read line). A `nil` `$_` prints nothing.
+        // `vm.get_last_read_line` resolves the LEP past this native
+        // frame, so it sees the Ruby caller's `$_`, not print's own.
+        let lastline = vm.get_last_read_line();
+        if lastline.is_nil() {
+            return Ok(Value::nil());
+        }
+        vm.invoke_method_inner(globals, print_id, stdout, &[lastline], None, None)?;
+    } else {
+        let argvec: Vec<Value> = args.iter().cloned().collect();
+        vm.invoke_method_inner(globals, print_id, stdout, &argvec, None, None)?;
     }
     Ok(Value::nil())
 }
