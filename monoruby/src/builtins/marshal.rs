@@ -1628,6 +1628,13 @@ mod tests {
             Marshal.load("\x04\x08d:\x0cMDataN" + "o" + "i\x06")
             "##,
         );
+        // Class name not resolvable ⇒ ArgumentError "undefined
+        // class/module" (the resolve_class_path miss arm).
+        run_test_error(
+            r##"
+            Marshal.load("\x04\x08d:\x12MDataNeverDef" + "i\x06")
+            "##,
+        );
     }
 
     /// 'c' (TYPE_CLASS), 'm' (TYPE_MODULE) and 'M' (TYPE_MODULE_OLD)
