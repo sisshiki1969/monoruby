@@ -682,7 +682,7 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
 #[monoruby_builtin]
-fn gets(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn gets(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let line = self_.as_io_inner_mut().read_line()?;
     match line {
@@ -698,11 +698,13 @@ fn gets(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(n))?;
             globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
             let s = tagged_read_string(globals, self_, buf.into_bytes(), false);
-            globals.set_gvar(IdentId::get_id("$_"), s);
+            // `$_` is frame-local: set it on the calling Ruby scope's
+            // LEP (the builtin's own native frame is skipped).
+            vm.set_last_read_line(s);
             Ok(s)
         }
         None => {
-            globals.set_gvar(IdentId::get_id("$_"), Value::nil());
+            vm.set_last_read_line(Value::nil());
             Ok(Value::nil())
         }
     }

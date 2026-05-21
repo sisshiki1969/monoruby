@@ -370,17 +370,11 @@ impl Lfp {
         unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = val.id() }
     }
 
-    /// Write a MatchData `Value` directly into **this** frame's
-    /// `LFP_SVAR` slot (no outer-chain walk). The caller
+    /// Write the svar container `Value` directly into **this**
+    /// frame's `LFP_SVAR` slot (no outer-chain walk). The caller
     /// (`Executor::current_lep`) has already resolved the LEP.
     pub(crate) fn set_svar_slot_value(self, val: Value) {
         self.set_svar_slot(val);
-    }
-
-    /// Write the zero "unset" sentinel directly into **this** frame's
-    /// `LFP_SVAR` slot (no outer-chain walk).
-    pub(crate) fn set_svar_slot_zero(self) {
-        unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = 0 }
     }
 
     ///

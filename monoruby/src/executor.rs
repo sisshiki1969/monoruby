@@ -60,9 +60,10 @@ pub(crate) const LFP_FUNCID: i32 = LFP_META + META_FUNCID as i32;
 /// share their lexical parent's slot. monoruby mirrors this by
 /// resolving `$~` (and the BACK_REF / NTH_REF family derived from it)
 /// through the outer chain to the LEP's `LFP_SVAR`. Stored as a raw
-/// `u64`: `0` means "no MatchData captured yet" (faster than always
-/// allocating a SpecialVars container); any non-zero value is a
-/// MatchData `Value`.
+/// `u64`: `0` means "no special variables set in this scope yet"
+/// (the lazy-allocation sentinel); any non-zero value is a 2-element
+/// `Array` `Value` container `[$~, $_]` (see `SVAR_BACKREF` /
+/// `SVAR_LASTLINE`).
 pub(crate) const LFP_SVAR: i32 = 16;
 /// Callable Method Entry — reserved for the upcoming CME slot. CRuby
 /// uses `cref_or_me` at the same position in `vm_svar`; monoruby keeps
@@ -73,6 +74,13 @@ pub(crate) const LFP_CME: i32 = 24;
 pub(crate) const LFP_BLOCK: i32 = 32;
 pub(crate) const LFP_SELF: i32 = 40;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
+
+/// Index of `$~` (the MatchData backref) inside the `LFP_SVAR`
+/// container Array.
+const SVAR_BACKREF: usize = 0;
+/// Index of `$_` (the last line read by `gets` / `readline`) inside
+/// the `LFP_SVAR` container Array.
+const SVAR_LASTLINE: usize = 1;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
@@ -2199,19 +2207,52 @@ impl Executor {
         Some(cfp.lfp().lep())
     }
 
-    /// Read the MatchData `Value` stashed on the current LEP's
-    /// `LFP_SVAR` slot. The slot only ever holds zero (the "unset"
-    /// sentinel) or a valid MatchData `Value`, so callers can safely
-    /// `.as_match_data()` the result.
-    pub(crate) fn current_match_data(&self) -> Option<Value> {
+    /// Read the svar container Array on the current LEP, if one has
+    /// been allocated. The slot starts as the zero sentinel (`None`)
+    /// and is lazily filled with a 2-element Array `[$~, $_]` the
+    /// first time either special variable is written.
+    fn svar_container(&self) -> Option<Value> {
         self.current_lep()?.svar()
     }
 
+    /// Get the svar container on the current LEP, allocating a fresh
+    /// `[nil, nil]` Array (and storing it in `LFP_SVAR`) if absent.
+    /// Returns `None` only outside Ruby execution (no LEP).
+    fn svar_container_create(&mut self) -> Option<Value> {
+        let lep = self.current_lep()?;
+        match lep.svar() {
+            Some(v) => Some(v),
+            None => {
+                let arr = Value::array_from_vec(vec![Value::nil(), Value::nil()]);
+                lep.set_svar_slot_value(arr);
+                Some(arr)
+            }
+        }
+    }
+
+    /// Read the MatchData `Value` (`$~`) from the current LEP's svar
+    /// container, or `None` when unset / nil.
+    pub(crate) fn current_match_data(&self) -> Option<Value> {
+        let c = self.svar_container()?;
+        let v = c.as_array()[SVAR_BACKREF];
+        if v.is_nil() { None } else { Some(v) }
+    }
+
+    /// Write `$~` (a MatchData `Value` or nil) into the current LEP's
+    /// svar container.
+    fn set_backref(&mut self, val: Value) {
+        if let Some(c) = self.svar_container_create() {
+            c.as_array()[SVAR_BACKREF] = val;
+        }
+    }
+
     pub(crate) fn clear_capture_special_variables(&mut self) {
-        // Bootstrap (e.g. `Executor::init` clearing stale state after
-        // startup.rb) runs with no CFP — nothing to clear yet.
-        if let Some(lep) = self.current_lep() {
-            lep.set_svar_slot_zero();
+        // CRuby's `$~ = nil` clears only the backref; `$_` is
+        // untouched. Skip silently before the first CFP exists
+        // (bootstrap), and don't bother allocating a container just
+        // to store nil.
+        if let Some(c) = self.svar_container() {
+            c.as_array()[SVAR_BACKREF] = Value::nil();
         }
         self.sp_match_regex = None;
     }
@@ -2225,7 +2266,7 @@ impl Executor {
     ///
     /// Build a `MatchData` from `captures` + `haystack` (plus the
     /// transient `sp_match_regex` stash) and store it as the current
-    /// scope's `$~` on the LEP's `LFP_SVAR` slot.
+    /// scope's `$~` on the LEP's svar container.
     ///
     pub(crate) fn save_capture_special_variables<'h>(
         &mut self,
@@ -2243,10 +2284,24 @@ impl Executor {
             md = md.with_regex(regex);
         }
         let md_val = RValue::new_match_data_from_inner(md).pack();
-        if let Some(lep) = self.current_lep() {
-            lep.set_svar_slot_value(md_val);
-        }
+        self.set_backref(md_val);
         self.sp_match_regex = None;
+    }
+
+    /// `$_` reader — the last line read by `gets` / `readline` in the
+    /// current scope (frame-local, like `$~`). `nil` when unset.
+    pub(crate) fn get_last_read_line(&self) -> Value {
+        match self.svar_container() {
+            Some(c) => c.as_array()[SVAR_LASTLINE],
+            None => Value::nil(),
+        }
+    }
+
+    /// `$_` writer.
+    pub(crate) fn set_last_read_line(&mut self, val: Value) {
+        if let Some(c) = self.svar_container_create() {
+            c.as_array()[SVAR_LASTLINE] = val;
+        }
     }
 
     /// `MatchData#[]` semantics for `$n` access (0 = full match,
