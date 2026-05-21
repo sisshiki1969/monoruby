@@ -289,10 +289,10 @@ fn store_exception_kwargs(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/message.html]
 #[monoruby_builtin]
-fn message(_vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let ex = self_.is_exception().unwrap();
-    Ok(Value::string(ex.message().to_string()))
+fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby's `Exception#message` is `self.to_s`, so a subclass that
+    // overrides `#to_s` changes the reported message too.
+    vm.invoke_method_inner(globals, IdentId::TO_S, lfp.self_val(), &[], None, None)
 }
 
 ///
@@ -706,6 +706,24 @@ mod tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn message_calls_to_s() {
+        run_tests(&[
+            // Default: message == stored string.
+            r#"RuntimeError.new("hi").message"#,
+            // No-arg: message == class name.
+            r#"RuntimeError.new.message"#,
+            // A subclass overriding #to_s changes #message (CRuby:
+            // `Exception#message` is `self.to_s`).
+            r#"
+            class MsgToS < StandardError
+              def to_s; "from to_s"; end
+            end
+            MsgToS.new("orig").message
+            "#,
+        ]);
     }
 
     #[test]
