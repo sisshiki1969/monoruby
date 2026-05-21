@@ -808,7 +808,19 @@ impl Executor {
     }
 
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
-        let err = self.take_error();
+        let mut err = self.take_error();
+        // Re-raise of an existing exception object (`raise exc`): return
+        // that object so its identity and instance variables are
+        // preserved. CRuby only assigns a backtrace if the exception
+        // doesn't have one yet, so fill the trace in only when empty.
+        if let Some(mut orig) = err.original {
+            if let Some(ex) = orig.is_exception_mut() {
+                if ex.trace.is_empty() {
+                    ex.trace = err.take_trace();
+                }
+            }
+            return self.chain_cause(globals, orig);
+        }
         let v = match err.kind() {
             MonorubyErrKind::Load(path) => {
                 let path = Value::string_from_str(&path.as_os_str().to_string_lossy());
@@ -861,12 +873,15 @@ impl Executor {
             }
             _ => Value::new_exception(err),
         };
-        // Implicit cause chaining (CRuby `exc_setup_cause`): if an
-        // exception is currently being handled (`$!`) and the freshly
-        // materialised one is neither it nor already given a cause,
-        // record `$!` as the cause. `take_ex_obj` runs *before* the
-        // caller sets `$!` to the new exception, so `$!` here is the
-        // enclosing handler's exception.
+        self.chain_cause(globals, v)
+    }
+
+    /// Implicit cause chaining (CRuby `exc_setup_cause`): if an exception
+    /// is currently being handled (`$!`) and `v` is neither it nor
+    /// already given a cause, record `$!` as `v`'s cause. `take_ex_obj`
+    /// runs *before* the caller sets `$!` to the new exception, so `$!`
+    /// here is the enclosing handler's exception.
+    fn chain_cause(&mut self, globals: &mut Globals, v: Value) -> Value {
         let cause_id = IdentId::get_id("/cause");
         if globals.store.get_ivar(v, cause_id).is_none() {
             let active = globals
