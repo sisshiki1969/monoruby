@@ -74,6 +74,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "setpgid", process_setpgid, 2);
     globals.define_builtin_module_func_with(klass, "getsid", process_getsid, 0, 1, false);
     globals.define_builtin_module_func(klass, "setsid", process_setsid, 0);
+    // Scheduling priority (getpriority(2) / setpriority(2)) and the
+    // PRIO_* "which" selectors. Pure libc passthroughs.
+    globals.define_builtin_module_func(klass, "getpriority", process_getpriority, 2);
+    globals.define_builtin_module_func(klass, "setpriority", process_setpriority, 3);
+    globals.set_constant_by_str(klass, "PRIO_PROCESS", Value::integer(libc::PRIO_PROCESS as i64));
+    globals.set_constant_by_str(klass, "PRIO_PGRP", Value::integer(libc::PRIO_PGRP as i64));
+    globals.set_constant_by_str(klass, "PRIO_USER", Value::integer(libc::PRIO_USER as i64));
+    // Supplemental group access list (getgroups(2)). `maxgroups`
+    // mirrors CRuby's historical fixed cap (65536).
+    globals.define_builtin_module_func(klass, "groups", process_groups, 0);
+    globals.define_builtin_module_func(klass, "maxgroups", process_maxgroups, 0);
     // `Process.exit` / `Process.abort` / `Process.exec` share their
     // Kernel implementations; CRuby exposes both names.
     globals.define_builtin_module_func_with(klass, "exit", crate::builtins::kernel::exit, 0, 1, false);
@@ -480,6 +491,101 @@ fn process_setsid(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: Bytec
         return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setsid")));
     }
     Ok(Value::integer(sid as i64))
+}
+
+///
+/// ### Process.getpriority
+///
+/// - getpriority(which, who) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/getpriority.html]
+#[monoruby_builtin]
+fn process_getpriority(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
+    // getpriority may legitimately return -1, so errno must be
+    // cleared first and re-checked to distinguish that from an error.
+    unsafe {
+        *libc::__errno_location() = 0;
+        let prio = libc::getpriority(which as libc::__priority_which_t, who);
+        let errno = *libc::__errno_location();
+        if prio == -1 && errno != 0 {
+            let err = std::io::Error::from_raw_os_error(errno);
+            return Err(MonorubyErr::from_io_err(&globals.store, &err, "getpriority".to_string()));
+        }
+        Ok(Value::integer(prio as i64))
+    }
+}
+
+///
+/// ### Process.setpriority
+///
+/// - setpriority(which, who, prio) -> 0
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/setpriority.html]
+#[monoruby_builtin]
+fn process_setpriority(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
+    let prio = lfp.arg(2).coerce_to_int_i64(vm, globals)? as i32;
+    let res = unsafe { libc::setpriority(which as libc::__priority_which_t, who, prio) };
+    if res < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, "setpriority".to_string()));
+    }
+    Ok(Value::integer(0))
+}
+
+///
+/// ### Process.groups
+///
+/// - groups -> [Integer]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/groups.html]
+#[monoruby_builtin]
+fn process_groups(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // First call with size 0 returns the number of supplementary
+    // groups; then read them into a sized buffer.
+    let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, "getgroups".to_string()));
+    }
+    let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
+    let n = unsafe { libc::getgroups(count, buf.as_mut_ptr()) };
+    if n < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, "getgroups".to_string()));
+    }
+    let elems: Vec<Value> = buf[..n as usize]
+        .iter()
+        .map(|g| Value::integer(*g as i64))
+        .collect();
+    Ok(Value::array_from_vec(elems))
+}
+
+///
+/// ### Process.maxgroups
+///
+/// - maxgroups -> Integer
+///
+/// CRuby reports a fixed historical cap (65536); the value is only
+/// advisory and not enforced.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/maxgroups.html]
+#[monoruby_builtin]
+fn process_maxgroups(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::integer(65536))
 }
 
 /// ### Process.wait / Process.waitpid
@@ -1182,5 +1288,33 @@ mod tests {
     #[test]
     fn process_getpgid_missing_pid_raises_esrch() {
         run_test_error(r#"Process.getpgid(2_147_483_646)"#);
+    }
+
+    #[test]
+    fn process_priority_and_groups() {
+        // PRIO_* selectors are defined and getpriority returns an Integer.
+        run_test_once(r#"Process.getpriority(Process::PRIO_PROCESS, 0).is_a?(Integer)"#);
+        run_test_once(r#"Process.getpriority(Process::PRIO_PGRP, 0).is_a?(Integer)"#);
+        run_test_once(r#"Process.getpriority(Process::PRIO_USER, 0).is_a?(Integer)"#);
+        // setpriority back to the current value is a no-op that returns 0.
+        run_test_once(
+            r#"Process.setpriority(Process::PRIO_PROCESS, 0, Process.getpriority(Process::PRIO_PROCESS, 0))"#,
+        );
+        // groups is an Array of Integers; maxgroups is an Integer.
+        run_test_once(r#"Process.groups.all? { |g| g.is_a?(Integer) }"#);
+        run_test_once(r#"Process.maxgroups.is_a?(Integer)"#);
+    }
+
+    #[test]
+    fn process_getpriority_invalid_which_raises() {
+        // EINVAL: an out-of-range `which` selector.
+        run_test_error(r#"Process.getpriority(99, 0)"#);
+    }
+
+    #[test]
+    fn process_setpriority_invalid_which_raises() {
+        // EINVAL: an out-of-range `which` selector hits the
+        // setpriority failure arm.
+        run_test_error(r#"Process.setpriority(99, 0, 0)"#);
     }
 }
