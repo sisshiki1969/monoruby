@@ -1310,4 +1310,11 @@ mod tests {
         // EINVAL: an out-of-range `which` selector.
         run_test_error(r#"Process.getpriority(99, 0)"#);
     }
+
+    #[test]
+    fn process_setpriority_invalid_which_raises() {
+        // EINVAL: an out-of-range `which` selector hits the
+        // setpriority failure arm.
+        run_test_error(r#"Process.setpriority(99, 0, 0)"#);
+    }
 }
