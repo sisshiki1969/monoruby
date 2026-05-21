@@ -3446,4 +3446,25 @@ mod tests {
         run_test_error(r#"File.stat("/nonexistent_monoruby_stat_path_xyz")"#);
         run_test_error(r#"File::Stat.new("/nonexistent_monoruby_stat_path_xyz")"#);
     }
+
+    #[test]
+    fn file_instance_stat_method() {
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_instat_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "rubinius")
+              f = File.open(path)
+              begin
+                s = f.stat
+                [s.class.name, s.size, s.file?]
+              ensure
+                f.close
+              end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
 }
