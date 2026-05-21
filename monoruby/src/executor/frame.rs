@@ -251,6 +251,15 @@ impl alloc::GC<RValue> for Lfp {
         if let Some(v) = self.block() {
             v.0.mark(alloc)
         };
+        // Mark the LFP_SVAR slot if this frame owns one (LEP-style
+        // frames lazily allocate a container `Value` here on first
+        // `$~ = ...`; zero is the "unset" sentinel). Block-style
+        // frames keep zero — they read/write `$~` through their
+        // outer-chain LEP, which the recursive `outer.mark` below
+        // reaches separately.
+        if let Some(v) = self.svar_slot() {
+            v.mark(alloc);
+        }
         if let Some(outer) = self.outer() {
             outer.mark(alloc);
         }
@@ -305,6 +314,82 @@ impl Lfp {
     ///
     pub fn outer(self) -> Option<Lfp> {
         unsafe { *(self.0.as_ptr() as *mut Option<Lfp>) }
+    }
+
+    ///
+    /// Walk the outer chain up to the *Local Environment Pointer* —
+    /// the nearest method-introducing frame.
+    ///
+    /// CRuby's `vm_svar` lives on the LEP, and every frame-local
+    /// global (`$~`, `$_`, and the BACK_REF / NTH_REF family derived
+    /// from `$~`) reads/writes through it. The walking rule:
+    ///
+    /// * **Block-style** frames (block literal `{ }` / `do … end`
+    ///   and `Proc.new`) `share` their lexical parent's LEP — follow
+    ///   `outer` upward.
+    /// * **Method-style** frames (`def`, lambda, class/module body,
+    ///   toplevel script, `define_method`-installed Proc tagged
+    ///   `is_proc_method`) own their LEP — stop.
+    ///
+    /// The chain is guaranteed to terminate at a method-style frame
+    /// (the toplevel script body is method-style with no outer), so
+    /// this loop always returns a real LEP.
+    pub(crate) fn lep(self) -> Lfp {
+        let mut lfp = self;
+        loop {
+            let meta = lfp.meta();
+            if !meta.is_block_style() || meta.is_proc_method() {
+                return lfp;
+            }
+            match lfp.outer() {
+                Some(outer) => lfp = outer,
+                None => return lfp,
+            }
+        }
+    }
+
+    ///
+    /// Read this frame's `LFP_SVAR` slot **without** walking the
+    /// outer chain. Returns `None` when the slot still carries the
+    /// zero sentinel (no container allocated yet).
+    ///
+    /// Only the LEP's slot ever holds a meaningful value — block-
+    /// style frames keep zero here and resolve `$~` through
+    /// `Lfp::svar` / `Lfp::set_svar`. Use this raw accessor only for
+    /// the GC mark walker and for the LEP itself.
+    fn svar_slot(self) -> Option<Value> {
+        let raw = unsafe { *(self.sub(LFP_SVAR as _) as *const u64) };
+        if raw == 0 {
+            None
+        } else {
+            Some(Value::from_u64(raw))
+        }
+    }
+
+    fn set_svar_slot(self, val: Value) {
+        unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = val.id() }
+    }
+
+    /// Write the svar container `Value` directly into **this**
+    /// frame's `LFP_SVAR` slot (no outer-chain walk). The caller
+    /// (`Executor::current_lep`) has already resolved the LEP.
+    pub(crate) fn set_svar_slot_value(self, val: Value) {
+        self.set_svar_slot(val);
+    }
+
+    ///
+    /// Read the **LEP's** `LFP_SVAR` slot — the `$~`/`$_` container
+    /// (or `None` if no container has been allocated yet).
+    ///
+    /// Walks the outer chain to the LEP first; calling on a block
+    /// frame transparently returns the enclosing method's slot.
+    ///
+    /// Note: this only follows the *lexical* `outer` chain, so it is
+    /// correct when called on a Ruby (iseq) frame. Native builtin
+    /// frames must first be skipped via the dynamic CFP chain — see
+    /// `Executor::current_lep`, which is the canonical entry point.
+    pub(crate) fn svar(self) -> Option<Value> {
+        self.lep().svar_slot()
     }
 
     ///
@@ -408,7 +493,7 @@ impl Lfp {
         unsafe {
             let mut cfp = self.cfp();
             let len = self.frame_bytes();
-            // `frame_bytes` is always a multiple of 8 (LFP_SELF=24 plus
+            // `frame_bytes` is always a multiple of 8 (LFP_SELF plus
             // 8*reg_num), so copy the frame as a `Box<[u64]>` — uniform
             // with `heap_frame`/`dummy_*` so the GC can reclaim every
             // promoted buffer with one `Box::from_raw(*mut [u64])`.
@@ -442,14 +527,19 @@ impl Lfp {
         let local_len = meta.reg_num() as usize - 1;
         meta.set_on_heap();
         let mut v = vec![Value::nil().id(); local_len];
-        // self
-        v.push(self_val.id());
-        // block
-        v.push(0);
-        // meta
-        v.push(meta.get());
-        // outer
-        v.push(0);
+        // The heap-allocated frame must mirror the stack layout
+        // exactly: lfp_addr (= base + len - 8) points at LFP_OUTER,
+        // and each LFP_xxx offset reads memory at lfp_addr - LFP_xxx.
+        // Push slots in **ascending memory order**, finishing with
+        // LFP_OUTER at the highest index = lfp_addr.
+        // Order: locals[0..N], self (LFP_SELF), block (LFP_BLOCK),
+        // cme (LFP_CME), svar (LFP_SVAR), meta (LFP_META), outer (LFP_OUTER).
+        v.push(self_val.id()); // -> LFP_SELF
+        v.push(0); //               -> LFP_BLOCK
+        v.push(0); //               -> LFP_CME (unused; zero sentinel)
+        v.push(0); //               -> LFP_SVAR (unused; zero sentinel)
+        v.push(meta.get()); //      -> LFP_META
+        v.push(0); //               -> LFP_OUTER (no outer)
         let v = v.into_boxed_slice();
         let n = v.len();
         let len = n * 8;
@@ -464,7 +554,22 @@ impl Lfp {
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
-        let v: Box<[u64]> = vec![0, 0, self_val.id(), 0, 0, 0].into_boxed_slice();
+        // Same slot order as `heap_frame` (locals.., self, block, cme,
+        // svar, meta, outer) with zero locals. Eight u64 slots: 1 self
+        // + 5 zero header slots (block/cme/svar/meta/outer) padded out
+        // to two extra zeros so the LFP layout stays self-consistent
+        // with the new (post-SVAR/CME) header size.
+        let v: Box<[u64]> = vec![
+            0,                  // padding (matches the historical extra slot)
+            0,                  // padding
+            self_val.id(),      // LFP_SELF
+            0,                  // LFP_BLOCK
+            0,                  // LFP_CME
+            0,                  // LFP_SVAR
+            0,                  // LFP_META — set via `set_reg_num` below
+            0,                  // LFP_OUTER
+        ]
+        .into_boxed_slice();
         let n = v.len();
         let len = n * 8;
         unsafe {

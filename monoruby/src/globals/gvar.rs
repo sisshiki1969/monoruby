@@ -355,6 +355,35 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     globals.define_hooked_variable(IdentId::get_id("$'"), get_post_match, None);
     globals.define_hooked_variable(IdentId::get_id("$`"), get_pre_match, None);
 
+    // `$_` (last line read by `gets` / `readline`) is frame-local in
+    // CRuby — it lives in `vm_svar.lastline` alongside `$~`. monoruby
+    // stores it in slot `SVAR_LASTLINE` of the LEP's container, so it
+    // routes through the same hooked-variable machinery rather than the
+    // process-global gvar table.
+    fn get_last_read_line(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        Some(vm.get_last_read_line())
+    }
+
+    fn set_last_read_line(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        vm.set_last_read_line(val);
+        Ok(())
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$_"),
+        get_last_read_line,
+        Some(set_last_read_line),
+    );
+
     // $1 through $9 are the common case; higher-numbered matches are also
     // allowed by name — they all share the same getter which parses the
     // numeric suffix out of `name`.

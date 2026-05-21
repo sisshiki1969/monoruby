@@ -437,6 +437,12 @@ impl JitModule {
         monoasm! { &mut self.jit,
             // set outer
             movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
+            // SVAR / CME are unused by block frames (they walk the
+            // outer chain to the LEP for `$~`); zero them so any stray
+            // reader sees a clean "absent" sentinel and so the GC
+            // doesn't follow uninitialised stack memory.
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         };
     }
 
@@ -444,6 +450,11 @@ impl JitModule {
     fn set_method_outer(&mut self) {
         monoasm! { &mut self.jit,
             movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
+            // Method-introducing frame: own SVAR slot starts unset
+            // (zero = "no MatchData captured"). CME also zero for
+            // now — reserved for a future migration.
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         };
     }
 

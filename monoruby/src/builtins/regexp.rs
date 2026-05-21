@@ -1082,11 +1082,13 @@ fn regexp_timeout_set(
 #[monoruby_builtin]
 fn regexp_tilde(
     vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let target = globals.get_gvar(IdentId::get_id("$_")).unwrap_or_default();
+    // `$_` is frame-local; read it from the calling scope's LEP
+    // (the `~` builtin's own native frame is skipped).
+    let target = vm.get_last_read_line();
     if target.is_nil() {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());

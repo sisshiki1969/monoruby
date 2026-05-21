@@ -53,9 +53,34 @@ pub(crate) const LFP_META: i32 = 8;
 pub(crate) const LFP_REGNUM: i32 = LFP_META - META_REGNUM as i32;
 /// Meta::FuncId 4bytes
 pub(crate) const LFP_FUNCID: i32 = LFP_META + META_FUNCID as i32;
-pub(crate) const LFP_BLOCK: i32 = 16;
-pub(crate) const LFP_SELF: i32 = 24;
+/// Special variables (frame-local `$~`, planned `$_`).
+///
+/// CRuby's `vm_svar` lives on the LEP (= the method-introducing
+/// frame's local environment); blocks and `Proc.new`-style closures
+/// share their lexical parent's slot. monoruby mirrors this by
+/// resolving `$~` (and the BACK_REF / NTH_REF family derived from it)
+/// through the outer chain to the LEP's `LFP_SVAR`. Stored as a raw
+/// `u64`: `0` means "no special variables set in this scope yet"
+/// (the lazy-allocation sentinel); any non-zero value is a 2-element
+/// `Array` `Value` container `[$~, $_]` (see `SVAR_BACKREF` /
+/// `SVAR_LASTLINE`).
+pub(crate) const LFP_SVAR: i32 = 16;
+/// Callable Method Entry — reserved for the upcoming CME slot. CRuby
+/// uses `cref_or_me` at the same position in `vm_svar`; monoruby keeps
+/// the slot separate so the SVAR migration above can land without
+/// blocking on the larger CME redesign. Initialised to `0`; no reads
+/// or writes wired up yet.
+pub(crate) const LFP_CME: i32 = 24;
+pub(crate) const LFP_BLOCK: i32 = 32;
+pub(crate) const LFP_SELF: i32 = 40;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
+
+/// Index of `$~` (the MatchData backref) inside the `LFP_SVAR`
+/// container Array.
+const SVAR_BACKREF: usize = 0;
+/// Index of `$_` (the last line read by `gets` / `readline`) inside
+/// the `LFP_SVAR` container Array.
+const SVAR_LASTLINE: usize = 1;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
@@ -85,16 +110,14 @@ pub struct Executor {
     /// bare `private` / `public` / `protected`. CRuby's top-level
     /// default is `private`.
     toplevel_visibility: Visibility,
-    sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
-    sp_pre_match: Option<String>,    // $`        : Regexp.pre_match
-    sp_post_match: Option<String>,   // $'        : Regexp.post_match
-    sp_matches: Vec<Option<String>>, // $&, $1 ... $n : Regexp.last_match(n)
-    sp_match_positions: Vec<Option<(usize, usize)>>, // byte positions for MatchData
-    sp_match_haystack: Option<String>, // haystack for MatchData
-    /// The Regexp Value the most recent successful match was
-    /// performed against. Stashed here so `Regexp.last_match`
-    /// constructs a `MatchData` with `regex` populated, which the
-    /// `MatchData#[]` named-capture path needs.
+    /// In-flight Regexp stash: every `RegexpInner::captures_*` /
+    /// `find_*` entry point sets this to the Regexp `Value` it is
+    /// about to match, so the subsequent
+    /// `save_capture_special_variables` knows which Regexp to attach
+    /// to the constructed `MatchData` (named-capture lookup needs
+    /// it). Cleared once the MatchData is built and stored in the
+    /// LEP's `LFP_SVAR`. All other per-match state (`$~`, `$&`, `$'`,
+    /// `$\``, `$1`..`$N`) now lives frame-locally on the LEP.
     sp_match_regex: Option<Value>,
     temp_stack: Vec<Value>,
     require_level: usize,
@@ -121,12 +144,6 @@ impl std::default::Default for Executor {
             stack_limit: 0,
             lexical_class: vec![vec![]],
             toplevel_visibility: Visibility::Private,
-            sp_last_match: None,
-            sp_pre_match: None,
-            sp_post_match: None,
-            sp_matches: vec![],
-            sp_match_positions: vec![],
-            sp_match_haystack: None,
             sp_match_regex: None,
             temp_stack: vec![],
             require_level: 0,
@@ -354,22 +371,31 @@ impl Executor {
         self.parent_fiber
     }
 
+    /// `$&` — the last successful match (derived from the current
+    /// LEP's MatchData).
     pub fn sp_last_match(&self) -> Option<Value> {
-        self.sp_last_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
+        let v = self.current_match_data()?;
+        let md = v.as_match_data();
+        let bytes = md.at(0)?;
+        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
     }
 
+    /// `$\`` — the substring before the last match.
     pub fn sp_pre_match(&self) -> Option<Value> {
-        self.sp_pre_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
+        let v = self.current_match_data()?;
+        let md = v.as_match_data();
+        let (start, _) = md.pos(0)?;
+        let bytes = &md.string().as_bytes()[..start];
+        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
     }
 
+    /// `$'` — the substring after the last match.
     pub fn sp_post_match(&self) -> Option<Value> {
-        self.sp_post_match
-            .as_ref()
-            .map(|s| Value::string_from_str(s))
+        let v = self.current_match_data()?;
+        let md = v.as_match_data();
+        let (_, end) = md.pos(0)?;
+        let bytes = &md.string().as_bytes()[end..];
+        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
     }
 }
 
@@ -2164,111 +2190,151 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
+    /// The LEP for the current `$~` / `$_` scope.
+    ///
+    /// Native (`#[monoruby_builtin]`) frames don't introduce an svar
+    /// scope — they mirror CRuby C-functions, whose `vm_push_frame`
+    /// reuses the caller's EP. Walk the dynamic CFP chain back past
+    /// any native frames to the Ruby caller, then `Lfp::lep` walks
+    /// that frame's lexical `outer` chain to the method frame (so a
+    /// match performed inside a block updates the enclosing method's
+    /// `$~`). Returns `None` outside Ruby execution (no CFP set).
+    fn current_lep(&self) -> Option<Lfp> {
+        let mut cfp = self.cfp?;
+        while cfp.lfp().meta().is_native() {
+            cfp = cfp.prev()?;
+        }
+        Some(cfp.lfp().lep())
+    }
+
+    /// Read the svar container Array on the current LEP, if one has
+    /// been allocated. The slot starts as the zero sentinel (`None`)
+    /// and is lazily filled with a 2-element Array `[$~, $_]` the
+    /// first time either special variable is written.
+    fn svar_container(&self) -> Option<Value> {
+        self.current_lep()?.svar()
+    }
+
+    /// Get the svar container on the current LEP, allocating a fresh
+    /// `[nil, nil]` Array (and storing it in `LFP_SVAR`) if absent.
+    /// Returns `None` only outside Ruby execution (no LEP).
+    fn svar_container_create(&mut self) -> Option<Value> {
+        let lep = self.current_lep()?;
+        match lep.svar() {
+            Some(v) => Some(v),
+            None => {
+                let arr = Value::array_from_vec(vec![Value::nil(), Value::nil()]);
+                lep.set_svar_slot_value(arr);
+                Some(arr)
+            }
+        }
+    }
+
+    /// Read the MatchData `Value` (`$~`) from the current LEP's svar
+    /// container, or `None` when unset / nil.
+    pub(crate) fn current_match_data(&self) -> Option<Value> {
+        let c = self.svar_container()?;
+        let v = c.as_array()[SVAR_BACKREF];
+        if v.is_nil() { None } else { Some(v) }
+    }
+
+    /// Write `$~` (a MatchData `Value` or nil) into the current LEP's
+    /// svar container.
+    fn set_backref(&mut self, val: Value) {
+        if let Some(c) = self.svar_container_create() {
+            c.as_array()[SVAR_BACKREF] = val;
+        }
+    }
+
     pub(crate) fn clear_capture_special_variables(&mut self) {
-        self.sp_last_match = None;
-        self.sp_pre_match = None;
-        self.sp_post_match = None;
-        self.sp_matches.clear();
-        self.sp_match_positions.clear();
-        self.sp_match_haystack = None;
+        // CRuby's `$~ = nil` clears only the backref; `$_` is
+        // untouched. Skip silently before the first CFP exists
+        // (bootstrap), and don't bother allocating a container just
+        // to store nil.
+        if let Some(c) = self.svar_container() {
+            c.as_array()[SVAR_BACKREF] = Value::nil();
+        }
         self.sp_match_regex = None;
     }
 
     /// Stash the Regexp the next `save_capture_special_variables`
-    /// call should associate with the captures. Set by every
-    /// `RegexpInner::captures_*` / `find_*` entry point so
-    /// `Regexp.last_match` can later return a `MatchData` whose
-    /// `regexp` slot is populated (named-capture lookup needs it).
+    /// call should associate with the captures.
     pub(crate) fn set_match_regex(&mut self, regex: Value) {
         self.sp_match_regex = Some(regex);
     }
+
     ///
-    /// Save captured strings to special variables.
-    ///
-    /// - $n (n:0,1,2,3...) <- The string which matched with nth parenthesis in the last successful match.
-    ///
-    /// - $& <- The string which matched successfully at last.
-    ///
-    /// - $` <- The string before $&.
-    ///
-    /// - $' <- The string after $&.
+    /// Build a `MatchData` from `captures` + `haystack` (plus the
+    /// transient `sp_match_regex` stash) and store it as the current
+    /// scope's `$~` on the LEP's svar container.
     ///
     pub(crate) fn save_capture_special_variables<'h>(
         &mut self,
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
     ) {
-        // Onigmo's `Match::{as_str, post, to_string}` slice the
-        // haystack as `&str`, which panics (`panic_nounwind` ⇒
-        // extern "C" boundary abort) when a `/n` (binary) regexp
-        // returns byte offsets that land mid-UTF-8 of the source
-        // string. Slice on bytes and lossy-decode for the `String`
-        // fields, which preserves valid UTF-8 unchanged and avoids
-        // the abort for binary subjects.
-        let bytes = haystack.as_bytes();
-        match captures.get(0) {
-            Some(m) => {
-                let (s, e) = (m.start(), m.end());
-                self.sp_last_match =
-                    Some(String::from_utf8_lossy(&bytes[s..e]).into_owned());
-                self.sp_pre_match =
-                    Some(String::from_utf8_lossy(&bytes[..s]).into_owned());
-                self.sp_post_match =
-                    Some(String::from_utf8_lossy(&bytes[e..]).into_owned());
-            }
-            None => {
-                self.sp_last_match = None;
-                self.sp_pre_match = None;
-                self.sp_post_match = None;
-            }
-        };
-
-        self.sp_matches.clear();
-        self.sp_match_positions.clear();
-        self.sp_match_haystack = Some(haystack.to_string());
-        for m in captures.iter() {
-            self.sp_match_positions
-                .push(m.as_ref().map(|m| (m.start(), m.end())));
-            self.sp_matches.push(
-                m.map(|m| String::from_utf8_lossy(&bytes[m.start()..m.end()]).into_owned()),
-            );
-        }
-    }
-
-    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
-        // `MatchData#[]` (and therefore `Regexp.last_match(n)`)
-        // negative-indexes within `captures` only — `sp_matches[0]`
-        // (the full match) is *not* reachable through a negative
-        // index. For `(\w)(\w)(\w)` matched against "abc",
-        // `last_match(-3)` is "a" but `last_match(-4)` is nil even
-        // though `to_a` has 4 entries.
-        if nth < 0 {
-            let captures_len = self.sp_matches.len() as i64 - 1;
-            if -nth > captures_len {
-                return None;
-            }
-            nth += self.sp_matches.len() as i64;
-        }
-        if nth >= 0
-            && let Some(Some(s)) = self.sp_matches.get(nth as usize)
-        {
-            return Some(Value::string_from_str(s));
-        }
-        None
-    }
-
-    pub(crate) fn get_last_matchdata(&self) -> Value {
-        if self.sp_match_positions.is_empty() {
-            return Value::nil();
-        }
-        let haystack = self.sp_match_haystack.as_deref().unwrap_or("");
-        let mut md = MatchDataInner::new(haystack.to_string(), self.sp_match_positions.clone());
+        let positions: Vec<Option<(usize, usize)>> = captures
+            .iter()
+            .map(|m| m.as_ref().map(|m| (m.start(), m.end())))
+            .collect();
+        let mut md = MatchDataInner::new(haystack.to_string(), positions);
         if let Some(regex_val) = self.sp_match_regex
             && let Some(regex) = regex_val.is_regex()
         {
             md = md.with_regex(regex);
         }
-        RValue::new_match_data_from_inner(md).pack()
+        let md_val = RValue::new_match_data_from_inner(md).pack();
+        self.set_backref(md_val);
+        self.sp_match_regex = None;
+    }
+
+    /// `$_` reader — the last line read by `gets` / `readline` in the
+    /// current scope (frame-local, like `$~`). `nil` when unset.
+    pub(crate) fn get_last_read_line(&self) -> Value {
+        match self.svar_container() {
+            Some(c) => c.as_array()[SVAR_LASTLINE],
+            None => Value::nil(),
+        }
+    }
+
+    /// `$_` writer.
+    pub(crate) fn set_last_read_line(&mut self, val: Value) {
+        if let Some(c) = self.svar_container_create() {
+            c.as_array()[SVAR_LASTLINE] = val;
+        }
+    }
+
+    /// `MatchData#[]` semantics for `$n` access (0 = full match,
+    /// 1..N = captures, negative = from the end of *captures only*).
+    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Option<Value> {
+        let v = self.current_match_data()?;
+        let md = v.as_match_data();
+        let len = md.len();
+        if nth < 0 {
+            // Negative indices count back through captures (excluding
+            // $0). For `(\w)(\w)(\w)` matched against "abc",
+            // `last_match(-3)` is "a" but `last_match(-4)` is nil
+            // even though `to_a` has 4 entries.
+            let captures_len = len as i64 - 1;
+            if -nth > captures_len {
+                return None;
+            }
+            nth += len as i64;
+        }
+        if nth >= 0 {
+            let idx = nth as usize;
+            if idx < len {
+                let bytes = md.at(idx)?;
+                return Some(Value::string_from_str(&String::from_utf8_lossy(bytes)));
+            }
+        }
+        None
+    }
+
+    /// `$~` reader — returns the MatchData `Value` from the current
+    /// LEP, or `nil` if no match has been recorded in this scope.
+    pub(crate) fn get_last_matchdata(&self) -> Value {
+        self.current_match_data().unwrap_or_else(Value::nil)
     }
 }
 
