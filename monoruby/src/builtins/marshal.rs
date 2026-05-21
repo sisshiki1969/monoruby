@@ -292,6 +292,11 @@ impl<'a> MarshalReader<'a> {
             // On load, allocate a fresh instance of the class and
             // drive `instance.marshal_load(value)`.
             b'U' => self.read_usr_marshal(vm, globals),
+            // 'd' (TYPE_DATA): a wrapped C-data object whose class
+            // defines `_load_data`. Format: symbol(class) + inner
+            // value. On load, allocate an instance and drive
+            // `instance._load_data(value)`.
+            b'd' => self.read_data(vm, globals),
             // 'C' (TYPE_USERCLASS) wraps a built-in value in a
             // user-defined subclass (e.g. `class S < String; end`'s
             // instance). Format: symbol + inner value.
@@ -630,6 +635,35 @@ impl<'a> MarshalReader<'a> {
         // discarded; the spec checks the receiver's resulting state.
         let marshal_load_id = IdentId::get_id("marshal_load");
         vm.invoke_method_inner(globals, marshal_load_id, instance, &[value], None, None)?;
+        Ok(instance)
+    }
+
+    /// Read a wrapped C-data object ('d' tag, TYPE_DATA).
+    /// Format: `symbol(class_name) + inner-value`.
+    /// On load CRuby allocates a fresh instance of the class and
+    /// drives `instance._load_data(value)`. The class must define
+    /// `_load_data`; otherwise CRuby raises `TypeError`.
+    fn read_data(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let class_sym = self.read_symbol()?;
+        let value = self.read_value(vm, globals)?;
+        let class_name = class_sym.get_name();
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+        })?;
+        // `_load_data` must be defined (CRuby raises TypeError with
+        // this exact message when it is missing).
+        let load_data_id = IdentId::get_id("_load_data");
+        if globals
+            .check_method_for_class(module.id(), load_data_id)
+            .is_none()
+        {
+            return Err(MonorubyErr::typeerr(format!(
+                "class {} needs to have instance method `_load_data'",
+                class_name
+            )));
+        }
+        let instance = crate::builtins::class::call_alloc_func(globals, module.id())?;
+        vm.invoke_method_inner(globals, load_data_id, instance, &[value], None, None)?;
         Ok(instance)
     }
 
@@ -1562,6 +1596,43 @@ mod tests {
             s = MStructInherited.new("a", "b")
             t = Marshal.load(Marshal.dump(s))
             [t.class.name, t.p, t.q]
+            "##,
+        );
+    }
+
+    /// 'd' (TYPE_DATA): allocate the named class and drive
+    /// `instance._load_data(value)`. The class must define
+    /// `_load_data` (else `TypeError`). CRuby only emits this tag
+    /// for `T_DATA` objects, so the load path is exercised with
+    /// hand-crafted bytes (monoruby-only assertions).
+    #[test]
+    fn marshal_load_data() {
+        // 'd' + symbol("MDataOk") (len 7 ⇒ 0x0c) + Fixnum 1.
+        let v = run_test_no_result_check(
+            r##"
+            class MDataOk
+              def _load_data(v); @v = v; end
+            end
+            obj = Marshal.load("\x04\x08d:\x0cMDataO" + "k" + "i\x06")
+            raise "bad class" unless obj.class.name == "MDataOk"
+            raise "bad value" unless obj.instance_variable_get(:@v) == 1
+            obj.instance_variable_get(:@v)
+            "##,
+        );
+        // _load_data received Fixnum 1.
+        assert_eq!(v.try_fixnum(), Some(1));
+        // Missing `_load_data` ⇒ TypeError.
+        run_test_error(
+            r##"
+            class MDataNo; end
+            Marshal.load("\x04\x08d:\x0cMDataN" + "o" + "i\x06")
+            "##,
+        );
+        // Class name not resolvable ⇒ ArgumentError "undefined
+        // class/module" (the resolve_class_path miss arm).
+        run_test_error(
+            r##"
+            Marshal.load("\x04\x08d:\x12MDataNeverDef" + "i\x06")
             "##,
         );
     }
