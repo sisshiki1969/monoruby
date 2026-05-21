@@ -579,14 +579,8 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 args.push(arg1);
             }
         }
-        let result = vm.invoke_method_inner(
-            globals,
-            exception_id,
-            lfp.arg(0),
-            &args,
-            None,
-            None,
-        )?;
+        let result =
+            vm.invoke_method_inner(globals, exception_id, lfp.arg(0), &args, None, None)?;
         match result.is_exception() {
             Some(ex) => return Err(MonorubyErr::new_from_exception(ex)),
             None => return Err(MonorubyErr::typeerr("exception object expected")),
@@ -5566,6 +5560,9 @@ mod tests {
         );
         // `fail` aliases `raise` — the cause-only path applies too.
         run_test_error(r#"fail(cause: nil)"#);
+        // Bare `raise` with no current exception ⇒ RuntimeError
+        // (the `$!`-reraise fallthrough).
+        run_test_error(r#"raise"#);
     }
 
     #[test]
