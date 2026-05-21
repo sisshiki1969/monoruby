@@ -90,6 +90,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "exit", crate::builtins::kernel::exit, 0, 1, false);
     globals.define_builtin_module_func_with(klass, "abort", crate::builtins::kernel::abort, 0, 1, false);
     globals.define_builtin_module_func_rest(klass, "exec", crate::builtins::kernel::exec);
+    globals.define_builtin_module_func_rest(klass, "spawn", crate::builtins::kernel::spawn);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -909,6 +910,23 @@ mod tests {
     #[test]
     fn process_euid() {
         run_test("Process.euid");
+    }
+
+    #[test]
+    fn process_spawn_detach() {
+        // spawn returns a pid; detach(pid).value yields the Process::Status.
+        run_test("Process.detach(spawn(\"true\")).value.success?");
+        run_test("Process.detach(spawn(\"false\")).value.exitstatus");
+        run_test("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+    }
+
+    #[test]
+    fn open3_capture_via_spawn() {
+        // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
+        // drain them — the path bundler uses to run git for git-source gems.
+        run_test(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
+        run_test(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
+        run_test(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
     }
 
     #[test]
