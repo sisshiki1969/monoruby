@@ -54,6 +54,17 @@ if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby
   RbConfig::CONFIG['vendordir']      = "#{host_rubylibprefix}/vendor_ruby"
   # libdir is one level above rubylibprefix (rubylibprefix == libdir/ruby).
   RbConfig::CONFIG['libdir']         = File.dirname(host_rubylibprefix)
+  # The vendored rbconfig.rb hard-codes ENABLE_SHARED="no" (monoruby is a
+  # static binary), which makes Gem.extension_api_version append "-static".
+  # That mismatches the host's gem extension layout
+  # (".../extensions/<plat>/<api>/" without "-static"), so rubygems/bundler
+  # judge every host C-extension gem as having unbuilt extensions and skip
+  # it — a Gemfile.lock pinning json/cgi/… then fails with GemNotFound.
+  # When we are resolving against a host CRuby's gems, report "yes" so the
+  # api version matches and those gems resolve. monoruby still can't run
+  # their native .so, but require.rs pins its own pure-Ruby stubs ahead of
+  # $LOAD_PATH for the libraries it replaces, so they load the stub.
+  RbConfig::CONFIG['ENABLE_SHARED']  = 'yes'
 end
 
 class BasicObject

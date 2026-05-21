@@ -58,17 +58,29 @@ fn main() {
 
     let lib_dir = lib_path.join("lib");
     let builtins_dir = lib_path.join("builtins");
+    // `stub` holds *only* monoruby's own C-extension replacement stubs
+    // (the `stdlib/` and `gem/` trees). The require resolver
+    // (`search_lib`) pins this directory ahead of `$LOAD_PATH` so those
+    // stubs win even after rubygems/bundler activates a host gem and
+    // unshifts its lib dir to the front of `$LOAD_PATH`. It deliberately
+    // excludes the vendored CRuby snapshot (bundler / rubygems), whose
+    // code version must stay in lockstep with the activated gem spec.
+    let stub_dir = lib_path.join("stub");
     // Order matters: the checked-in CRuby stdlib snapshot is laid down
     // first, then monoruby's own builtins/stdlib/gem stubs overwrite any
     // name clash so monoruby's host-independent implementations of
     // C-extension-backed libraries stay authoritative. No `ruby` is
     // invoked here — the snapshot is produced offline by
-    // bin/vendor-ruby-stdlib, so the build works without CRuby.
+    // bin/vendor-ruby-stdlib, so the build works without CRuby. The
+    // `stdlib/` and `gem/` trees are additionally laid down into `stub`
+    // (the pinned resolution root; see `search_lib`).
     let sources = [
         (PathBuf::from("vendor/ruby-stdlib"), lib_dir.clone()),
         (PathBuf::from("builtins"), builtins_dir.clone()),
         (PathBuf::from("stdlib"), lib_dir.clone()),
         (PathBuf::from("gem"), lib_dir.clone()),
+        (PathBuf::from("stdlib"), stub_dir.clone()),
+        (PathBuf::from("gem"), stub_dir.clone()),
     ];
 
     // Re-run when the installed sources change so edits to the vendored
@@ -87,7 +99,7 @@ fn main() {
     if !lib_path.exists() {
         fs::create_dir(&lib_path).unwrap();
     }
-    for p in [&lib_dir, &builtins_dir] {
+    for p in [&lib_dir, &builtins_dir, &stub_dir] {
         if p.exists() {
             fs::remove_dir_all(p).unwrap();
         }

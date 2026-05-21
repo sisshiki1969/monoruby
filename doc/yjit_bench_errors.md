@@ -34,9 +34,32 @@ setivar_young, splay, str_concat, structaref, structaset, sudoku, throw
 
 ## 失敗カテゴリと原因
 
-### Category A: bundler / gem 解決エラー (環境依存・monoruby 本体のバグではない)
+### Category A: bundler / gem 解決エラー
 
-**症状:** `bundler/definition.rb:702: ... GemNotFound: Could not find <gem> ...`
+> **2026-05-21 更新 — 解決済み。** ホストに Ruby 4.0+ を入れた後も残った
+> 本質的原因は、ベンダリング rbconfig.rb が `ENABLE_SHARED="no"` を持ち
+> `Gem.extension_api_version` が `<api>-static` を返すこと。これがホストの
+> gem 拡張ディレクトリ (`.../extensions/<plat>/<api>/`、`-static` 無し) と
+> 食い違い、rubygems/bundler が **全 C 拡張 gem を「拡張が未ビルド」と判定
+> してスキップ**するため、`Gemfile.lock` が json/cgi 等の C 拡張 gem を
+> pin していると `materialize` が `GemNotFound` で落ちていた。
+> 修正 (この PR):
+> 1. `search_lib` が monoruby 自前スタブ専用ルート `~/.monoruby/stub`
+>    (`stdlib/` + `gem/`) を `$LOAD_PATH` より前に固定 → gem activation の
+>    `$LOAD_PATH.unshift` による並べ替えに免疫化 (json/psych 等のスタブが
+>    確実に勝つ)。vendored bundler/rubygems は固定しない (コード版と spec 版
+>    の連動を壊し `CorruptBundlerInstallError` を招くため)。
+> 2. ホスト gem 解決時は `RbConfig::CONFIG['ENABLE_SHARED']='yes'` に上書き
+>    し `-static` を外す → bundler がホスト C 拡張 gem を受理。
+> 3. json スタブに `JSON::VERSION` を追加。
+>
+> 結果、gem/bundler 解決でブロックされるベンチは無くなった (psych-load 等が
+> 完走)。残る失敗は個別ライブラリ未実装 (digest=rack/graphql/mail/hexapdf,
+> openssl cipher=erubi-rails, unicode-display_width=rubocop) や、Ractor 専用
+> harness を default loader で直接起動した際の引数不整合 (json_parse_*; CRuby
+> でも同一行で落ちる) で、いずれも gem 解決とは別問題。
+
+**当初の症状 (ホスト 3.3.6 時点):** `bundler/definition.rb:702: ... GemNotFound: Could not find <gem> ...`
 
 **根本原因:** monoruby の `build.rs` は CRuby **4.0 以上** が `PATH` に
 無いと以下の 3 ファイルを生成しない (Warning: failed to read library
