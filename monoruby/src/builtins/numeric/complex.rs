@@ -52,6 +52,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(COMPLEX_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "to_r", to_r, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "-@", neg_op, 0);
+    globals.define_builtin_func(COMPLEX_CLASS, "to_s", complex_to_s, 0);
+    globals.define_builtin_func(COMPLEX_CLASS, "inspect", complex_inspect, 0);
     globals.store[COMPLEX_CLASS].clear_alloc_func();
     globals.define_builtin_func(COMPLEX_CLASS, "eql?", eql_, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "coerce", coerce, 1);
@@ -609,6 +611,80 @@ fn neg_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::complex(re_r, im_r))
 }
 
+/// Format a Complex following CRuby's `nucomp_to_s` / `nucomp_inspect`.
+/// `to_s`/`inspect` are dispatched to the (possibly user-defined) real
+/// and imaginary parts; the imaginary sign uses signbit semantics (so
+/// `-0.0` renders as `-`); and a `*` is inserted before the trailing
+/// `i` when the rendered imaginary part does not end in a digit
+/// (matching CRuby's `nucomp_to_s`).
+fn format_complex(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    inspect: bool,
+) -> Result<Value> {
+    let c = self_val.as_complex();
+    let re = c.re().get();
+    let im = c.im().get();
+    let method = if inspect {
+        IdentId::INSPECT
+    } else {
+        IdentId::TO_S
+    };
+    let dispatch = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<String> {
+        let s = vm.invoke_method_inner(globals, method, v, &[], None, None)?;
+        Ok(s.expect_string(&globals.store)?)
+    };
+
+    let re_str = dispatch(vm, globals, re)?;
+
+    // Sign: signbit for Float (catches -0.0), else `im < 0`.
+    let negative = match im.unpack() {
+        RV::Float(f) => f.is_sign_negative() && !f.is_nan(),
+        _ => {
+            let lt = IdentId::get_id("<");
+            match vm.invoke_method_inner(globals, lt, im, &[Value::integer(0)], None, None) {
+                Ok(v) => v.as_bool(),
+                Err(_) => false,
+            }
+        }
+    };
+
+    // For the negative case CRuby renders `-imag` after emitting the
+    // `-` sign, so the magnitude is printed without its own sign.
+    let (sign, im_for_fmt) = if negative {
+        let neg = vm.invoke_method_inner(globals, IdentId::_UMINUS, im, &[], None, None)?;
+        ("-", neg)
+    } else {
+        ("+", im)
+    };
+    let im_str = dispatch(vm, globals, im_for_fmt)?;
+
+    let star = match im_str.chars().last() {
+        Some(ch) if ch.is_ascii_digit() => "",
+        _ => "*",
+    };
+
+    let body = format!("{}{}{}{}i", re_str, sign, im_str, star);
+    let out = if inspect { format!("({})", body) } else { body };
+    Ok(Value::string_from_str(&out))
+}
+
+#[monoruby_builtin]
+fn complex_to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    format_complex(vm, globals, lfp.self_val(), false)
+}
+
+#[monoruby_builtin]
+fn complex_inspect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    format_complex(vm, globals, lfp.self_val(), true)
+}
+
 ///
 /// ### Complex#polar (instance)
 ///
@@ -979,5 +1055,38 @@ mod tests {
             "(o = Object.new; def o.==(x); true; end; Complex(3, 0) == o)",
             "(o = Object.new; def o.==(x); 42; end; (Complex(3, 0) == o) == true)",
         ]);
+    }
+
+    #[test]
+    fn complex_to_s_inspect() {
+        run_tests(&[
+            r#"Complex(1, 2).to_s"#,
+            r#"Complex(1, -5).to_s"#,
+            r#"Complex(-2.5, -1.5).to_s"#,
+            r#"Complex(1, 0.0).to_s"#,
+            r#"Complex(1, -0.0).to_s"#,
+            r#"Complex(1, Rational(1, 2)).to_s"#,
+            r#"Complex(1, Rational(1, 2)).inspect"#,
+            r#"Complex(Rational(1, 2), Rational(3, 4)).to_s"#,
+            r#"Complex(1, Float::INFINITY).to_s"#,
+            r#"Complex(1, -Float::INFINITY).to_s"#,
+            r#"Complex(1, Float::NAN).to_s"#,
+            r#"Complex(2, 3).inspect"#,
+            r#"Complex(0, 5).to_s"#,
+        ]);
+        // to_s / inspect dispatch to the parts' own #to_s / #inspect,
+        // and the `*` separator appears when the rendered imaginary
+        // part ends in a non-digit.
+        run_test(
+            r#"
+            class CplxSub < Numeric
+              def to_s; "X"; end
+              def inspect; "(Y)"; end
+              def <(o); false; end
+            end
+            c = Complex(CplxSub.new, CplxSub.new)
+            [c.to_s, c.inspect]
+            "#,
+        );
     }
 }
