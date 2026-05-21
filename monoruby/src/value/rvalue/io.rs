@@ -17,6 +17,26 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
     status.into_raw()
 }
 
+/// Pull up to `need` bytes from a buffered reader for `readpartial`.
+/// When `no_block` is set (ungetc pushback already produced data),
+/// only the bytes already sitting in the internal buffer are taken;
+/// otherwise `fill_buf` may block once to fetch more.
+fn read_partial_chunk<T: Read>(
+    reader: &mut std::io::BufReader<T>,
+    need: usize,
+    no_block: bool,
+) -> Result<Vec<u8>> {
+    let avail: &[u8] = if no_block {
+        reader.buffer()
+    } else {
+        reader.fill_buf().map_err(|e| MonorubyErr::ioerr(e.to_string()))?
+    };
+    let n = avail.len().min(need);
+    let chunk = avail[..n].to_vec();
+    reader.consume(n);
+    Ok(chunk)
+}
+
 #[derive(Debug)]
 pub struct FileDescriptor {
     reader: ManuallyDrop<std::io::BufReader<std::fs::File>>,
@@ -600,6 +620,61 @@ impl IoInner {
                 _ => Err(MonorubyErr::from_io_err(store, &err, "write_nonblock".to_string())),
             }
         }
+    }
+
+    /// `IO#readpartial` core: return up to `maxlen` bytes, blocking
+    /// only when no data is buffered or available yet. Unlike
+    /// `sysread` this reads *through* the `BufReader` (so already-
+    /// buffered bytes are returned) and unlike `read` it never blocks
+    /// to fill the whole `maxlen`. An empty result signals EOF.
+    pub fn readpartial(&mut self, maxlen: usize) -> Result<Vec<u8>> {
+        // Drain ungetc pushback first. When pushback supplied any
+        // bytes, we must not block for more — only append bytes that
+        // are *already* buffered (CRuby returns the available data).
+        let had_pushback = self.pushback_len() > 0;
+        let mut out = if had_pushback {
+            self.take_pushback(Some(maxlen))
+        } else {
+            vec![]
+        };
+        if out.len() >= maxlen {
+            return Ok(out);
+        }
+        let need = maxlen - out.len();
+        match self {
+            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Stdout | Self::Stderr => {
+                return Err(MonorubyErr::ioerr("not opened for reading"));
+            }
+            Self::Stdin => {
+                if !had_pushback {
+                    let mut buf = vec![0u8; need];
+                    let n = std::io::stdin()
+                        .read(&mut buf)
+                        .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                    buf.truncate(n);
+                    out.extend(buf);
+                }
+            }
+            Self::File(file) => {
+                if !file.readable {
+                    return Err(MonorubyErr::ioerr("not opened for reading"));
+                }
+                let reader = &mut *Rc::get_mut(file).unwrap().reader;
+                let chunk = read_partial_chunk(reader, need, had_pushback)?;
+                out.extend(chunk);
+            }
+            Self::Popen(popen) => {
+                let popen = Rc::get_mut(popen).unwrap();
+                let reader = popen
+                    .reader
+                    .as_mut()
+                    .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
+                let chunk = read_partial_chunk(reader, need, had_pushback)?;
+                out.extend(chunk);
+            }
+        }
+        Ok(out)
     }
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
