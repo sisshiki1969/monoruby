@@ -809,7 +809,7 @@ impl Executor {
 
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let err = self.take_error();
-        match err.kind() {
+        let v = match err.kind() {
             MonorubyErrKind::Load(path) => {
                 let path = Value::string_from_str(&path.as_os_str().to_string_lossy());
                 let v = Value::new_exception(err);
@@ -860,7 +860,23 @@ impl Executor {
                 v
             }
             _ => Value::new_exception(err),
+        };
+        // Implicit cause chaining (CRuby `exc_setup_cause`): if an
+        // exception is currently being handled (`$!`) and the freshly
+        // materialised one is neither it nor already given a cause,
+        // record `$!` as the cause. `take_ex_obj` runs *before* the
+        // caller sets `$!` to the new exception, so `$!` here is the
+        // enclosing handler's exception.
+        let cause_id = IdentId::get_id("/cause");
+        if globals.store.get_ivar(v, cause_id).is_none() {
+            let active = globals
+                .get_gvar(IdentId::get_id("$!"))
+                .unwrap_or_default();
+            if !active.is_nil() && active.id() != v.id() {
+                let _ = globals.store.set_ivar(v, cause_id, active);
+            }
         }
+        v
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {

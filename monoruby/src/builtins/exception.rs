@@ -727,6 +727,46 @@ mod tests {
     }
 
     #[test]
+    fn implicit_cause_chaining() {
+        // An exception raised while handling another records that
+        // exception as its #cause.
+        run_test(
+            r#"
+            begin
+              begin
+                raise "the cause"
+              rescue
+                raise "the consequence"
+              end
+            rescue => e
+              [e.message, e.cause&.message]
+            end
+            "#,
+        );
+        // VM-raised error (1/0) during a rescue is chained too.
+        run_test(
+            r#"
+            begin
+              raise "user"
+            rescue
+              begin
+                1 / 0
+              rescue ZeroDivisionError => z
+                [z.class.name, z.cause&.message]
+              end
+            end
+            "#,
+        );
+        // No spurious chaining once a rescue has completed.
+        run_test(
+            r#"
+            begin; raise "a"; rescue; end
+            begin; raise "b"; rescue => e; e.cause.inspect; end
+            "#,
+        );
+    }
+
+    #[test]
     fn nomethoderror_receiver() {
         run_test(
             r#"
