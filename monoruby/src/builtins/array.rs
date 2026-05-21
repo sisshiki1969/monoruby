@@ -118,7 +118,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
-    globals.define_builtin_funcs(ARRAY_CLASS, "detect", &["find"], detect, 0);
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -3004,8 +3004,8 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// #### Enumerable#detect
 ///
-/// - find([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
-/// - detect([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
+/// - find(ifnone = nil) {|item| ... } -> object
+/// - detect(ifnone = nil) {|item| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
@@ -3020,6 +3020,15 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             return Ok(elem);
         };
         i += 1;
+    }
+    // No element matched. CRuby: if an `ifnone` callable was given (and
+    // is non-nil), call it with no arguments and return its value;
+    // otherwise return nil.
+    if let Some(ifnone) = lfp.try_arg(0)
+        && !ifnone.is_nil()
+    {
+        let call = IdentId::get_id("call");
+        return vm.invoke_method_inner(globals, call, ifnone, &[], None, None);
     }
     Ok(Value::nil())
 }
@@ -4938,6 +4947,35 @@ mod tests {
             r#"[1, 2, 3, 4, 5].grep(Integer) {|n| n * 2 }"#,
             r#"[1, 'a', 2, 'b'].grep(String)"#,
         ]);
+    }
+
+    #[test]
+    fn detect_find_ifnone() {
+        run_tests(&[
+            // ifnone proc is called (with no args) when nothing matches.
+            r#"[].find(-> { "yay" }) { |e| true }"#,
+            r#"[1, 2, 3].detect(-> { 99 }) { |e| e > 5 }"#,
+            // A matching element short-circuits before ifnone.
+            r#"[1, 2, 3].find(-> { 99 }) { |e| e == 2 }"#,
+            // nil ifnone behaves like the no-arg form (returns nil).
+            r#"[1, 2, 3].find(nil) { |e| e > 5 }.inspect"#,
+            r#"[].find { |e| true }.inspect"#,
+        ]);
+    }
+
+    #[test]
+    fn each_with_object_enumerator_forwards_memo() {
+        // Without a block, `each_with_object(memo)` returns an
+        // Enumerator that still threads `memo` through `.each`.
+        run_test(
+            r#"
+            acc = []
+            initial = []
+            e = [1, 2, 3].each_with_object(initial)
+            r = e.each { |elem, obj| acc << elem }
+            [r.equal?(initial), acc]
+            "#,
+        );
     }
 
     #[test]
