@@ -642,11 +642,11 @@ fn format_complex(
     let negative = match im.unpack() {
         RV::Float(f) => f.is_sign_negative() && !f.is_nan(),
         _ => {
+            // CRuby's `f_negative_p` drives `imag < 0` and propagates
+            // any error the comparison raises.
             let lt = IdentId::get_id("<");
-            match vm.invoke_method_inner(globals, lt, im, &[Value::integer(0)], None, None) {
-                Ok(v) => v.as_bool(),
-                Err(_) => false,
-            }
+            vm.invoke_method_inner(globals, lt, im, &[Value::integer(0)], None, None)?
+                .as_bool()
         }
     };
 
