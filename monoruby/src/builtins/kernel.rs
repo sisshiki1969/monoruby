@@ -2150,6 +2150,16 @@ pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     if pid == 0 {
         // ===== child =====
         unsafe {
+            // Restore default signal dispositions before exec. monoruby
+            // ignores SIGPIPE (and installs other handlers); a freshly
+            // exec'd program expects the defaults, e.g. so a command in a
+            // pipeline dies on SIGPIPE instead of seeing EPIPE and printing
+            // a "Broken pipe" error. Mirrors CRuby's spawn.
+            for sig in 1..32 {
+                if sig != libc::SIGKILL && sig != libc::SIGSTOP {
+                    libc::signal(sig, libc::SIG_DFL);
+                }
+            }
             for &(child_fd, src_fd) in &redirects {
                 if src_fd != child_fd {
                     libc::dup2(src_fd, child_fd);

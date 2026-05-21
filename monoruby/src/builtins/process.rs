@@ -927,6 +927,28 @@ mod tests {
         run_test(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
         run_test(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
         run_test(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
+        run_test(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
+        // capture2e merges stdout+stderr onto one pipe.
+        run_test(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
+    }
+
+    #[test]
+    fn open3_no_deadlock_on_large_output() {
+        // The reason Open3 is reimplemented thread-free (IO.select) in
+        // monoruby: a child writing more than a pipe buffer (~64KB) on BOTH
+        // stdout and stderr would deadlock the cooperative-Thread approach.
+        run_test(
+            r#"require "open3"
+            out, err, st = Open3.capture3("sh", "-c", "yes A | head -c 200000; yes B | head -c 200000 1>&2")
+            [out.bytesize, err.bytesize, st.success?]"#,
+        );
+        // Large stdin streamed while large stdout is read back concurrently.
+        run_test(
+            r#"require "open3"
+            data = "x" * 300000
+            out, _, st = Open3.capture3("cat", stdin_data: data)
+            [out.bytesize, out == data, st.success?]"#,
+        );
     }
 
     #[test]
