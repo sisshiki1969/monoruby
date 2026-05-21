@@ -169,15 +169,39 @@ Rust (subclass of `Object`) and reopened by the pure-Ruby class in
 Option 2 (raising `ThreadError` eagerly at genuinely-blocking call sites)
 is tracked separately as B1 / #3.
 
-### B+. Watchdog (safety net)
+### B+. Watchdog (safety net) — **done**
 
 Optional environment toggle `MONORUBY_HANG_WATCHDOG_SEC=N`. After N
-seconds of no bytecode progress, abort the process with a clear message.
-Default off. Catches unknown hangs in CI and converts them to errors
-instead of opaque timeouts.
+seconds of no interpreter progress, abort the process with a clear
+message. Default off. Catches unknown hangs in CI and converts them to
+errors instead of opaque timeouts.
 
-Implementation sketch: a SIGALRM-driven counter that decrements at every
-poll point; if it reaches zero, abort.
+Implemented in
+[monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs):
+
+- `init` (called once from `Globals::new`) reads the env var; when
+  `N > 0` it installs a `SIGALRM` handler and a 1 Hz `setitimer`. Unset
+  / `<= 0` ⇒ no syscalls installed, fully disabled.
+- A `COUNTDOWN` (seconds) is reset to `N` at the VM poll point
+  (`execute_gc`, via `watchdog::poll`) — i.e. "progress was made".
+- The `SIGALRM` handler decrements `COUNTDOWN` once per second and, on
+  reaching zero, `write(2)`s a message and `_exit(134)`s. The abort
+  decision lives in the handler, *not* the poll point, because a genuine
+  hang never reaches the poll point. The handler touches only an atomic,
+  `write` and `_exit`, all async-signal-safe.
+
+**Limitation:** the only poll point today is the allocation-driven GC
+poll, so the watchdog catches hangs that make *no* heap allocations
+(tight non-allocating loops, `sleep`/`Thread.pass`-until-flag spins —
+the common single-thread hang shapes). A spin loop that keeps
+allocating resets the countdown and is *not* caught. Adding the A5
+backward-branch poll point would close that gap; until then a watchdog
+budget should be set comfortably above the slowest legitimate
+allocating example.
+
+Coverage: [monoruby/tests/watchdog.rs](../monoruby/tests/watchdog.rs)
+(fires on a non-allocating hang; silent when unset; no false-fire when
+the program finishes within budget).
 
 ---
 
@@ -200,5 +224,6 @@ poll point; if it reaches zero, abort.
 - [x] #2 `Thread.pass` guard removed; now a native `sched_yield(2)`
   wrapper ([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs))
 - [ ] #3 Eager `ThreadError`
-- [ ] #4 Watchdog
+- [x] #4 Watchdog — `MONORUBY_HANG_WATCHDOG_SEC=N`, SIGALRM-driven,
+  default off ([monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs))
 - [ ] #5 Stretch items

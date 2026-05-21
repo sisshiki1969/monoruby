@@ -2644,6 +2644,10 @@ pub(crate) extern "C" fn execute_gc(
     mut executor: &mut Executor,
     globals: &mut Globals,
 ) -> Option<Value> {
+    // Reaching the poll point counts as interpreter progress: reset the
+    // hang watchdog's countdown (no-op unless armed). See
+    // doc/signal_handling.md B+.
+    crate::watchdog::poll();
     CODEGEN.with(|codegen| {
         let codegen = codegen.borrow_mut();
         // Drain the pending-signal bitmap. The lowest-numbered pending
