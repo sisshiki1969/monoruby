@@ -367,6 +367,15 @@ class Process
   CLOCK_BOOTTIME = 7
   CLOCK_REALTIME_ALARM = 8
   CLOCK_BOOTTIME_ALARM = 9
+
+  # Reap child `pid` and return a thread whose #value waits for it and yields
+  # the resulting Process::Status. monoruby's Thread is cooperative (the block
+  # runs at #value/#join time), which matches Open3's "drain the pipes first,
+  # then read the exit status" ordering.
+  def self.detach(pid)
+    Thread.new { Process.wait2(pid)[1] }
+  end
+
   class Tms
     attr_accessor :utime, :stime, :cutime, :cstime
   end

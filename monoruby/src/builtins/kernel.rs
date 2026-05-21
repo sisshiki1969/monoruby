@@ -134,6 +134,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
     globals.define_builtin_module_func_rest(kernel_class, "exec", exec);
+    globals.define_builtin_module_func_rest(kernel_class, "spawn", spawn);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
     globals.define_builtin_module_func(kernel_class, "fork", fork, 0);
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
@@ -2062,6 +2063,123 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // Parent process
         Ok(Value::integer(pid as i64))
     }
+}
+
+///
+/// ### Kernel.#spawn
+///
+/// - spawn(command... [, options]) -> Integer
+///
+/// Launches an external command in a new child process and returns its PID
+/// immediately (unlike `system`, it does not wait). Honours the `:in` /
+/// `:out` / `:err` redirect options (each an IO or fd Integer) — the form
+/// `Open3` uses to wire up pipes, which is what lets bundler fetch git-source
+/// gems via `Open3.capture3("git", ...)`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/spawn.html]
+#[monoruby_builtin]
+pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::ffi::CString;
+    let null_byte = || MonorubyErr::argumenterr("string contains null byte");
+
+    let mut items: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+
+    // Trailing options Hash: honour :in / :out / :err fd redirections,
+    // recorded as (child_fd, source_fd) pairs.
+    let mut redirects: Vec<(i32, i32)> = vec![];
+    if let Some(last) = items.last() {
+        if let Some(h) = last.try_hash_ty() {
+            for (name, child_fd) in [("in", 0i32), ("out", 1), ("err", 2)] {
+                if let Some(v) = h.get(Value::symbol(IdentId::get_id(name)), vm, globals)? {
+                    let src = if let Some(i) = v.try_fixnum() {
+                        i as i32
+                    } else if v.ty() == Some(ObjTy::IO) {
+                        v.as_io_inner().fileno()?
+                    } else {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "spawn: unsupported redirect value for :{name}"
+                        )));
+                    };
+                    redirects.push((child_fd, src));
+                }
+            }
+            items.pop();
+        }
+    }
+
+    let str_args: Vec<String> = items
+        .iter()
+        .map(|v| v.coerce_to_string(vm, globals))
+        .collect::<Result<Vec<_>>>()?;
+    if str_args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+
+    // Build argv as CStrings up front so the child needs no allocation.
+    let argv: Vec<CString> = if str_args.len() == 1 {
+        // Single string ⇒ shell-style split (mirrors `system` / `exec`).
+        let (program, sh_args) = prepare_command_arg(&str_args[0]);
+        let mut v = vec![CString::new(program).map_err(|_| null_byte())?];
+        for a in sh_args {
+            v.push(CString::new(a).map_err(|_| null_byte())?);
+        }
+        v
+    } else {
+        str_args
+            .iter()
+            .map(|s| CString::new(s.as_str()).map_err(|_| null_byte()))
+            .collect::<Result<Vec<_>>>()?
+    };
+    let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
+    argv_ptrs.push(std::ptr::null());
+    let max_fd = match unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } {
+        n if n > 0 => n as i32,
+        _ => 1024,
+    };
+
+    // SAFETY: monoruby has no real OS threads (Thread is cooperative), so
+    // fork() leaves the child single-threaded and consistent. The child only
+    // performs async-signal-safe libc calls (dup2/close/execvp) before
+    // replacing itself; every allocation above happened in the parent.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(MonorubyErr::runtimeerr(format!(
+            "spawn failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    if pid == 0 {
+        // ===== child =====
+        unsafe {
+            // Restore default signal dispositions before exec. monoruby
+            // ignores SIGPIPE (and installs other handlers); a freshly
+            // exec'd program expects the defaults, e.g. so a command in a
+            // pipeline dies on SIGPIPE instead of seeing EPIPE and printing
+            // a "Broken pipe" error. Mirrors CRuby's spawn.
+            for sig in 1..32 {
+                if sig != libc::SIGKILL && sig != libc::SIGSTOP {
+                    libc::signal(sig, libc::SIG_DFL);
+                }
+            }
+            for &(child_fd, src_fd) in &redirects {
+                if src_fd != child_fd {
+                    libc::dup2(src_fd, child_fd);
+                }
+            }
+            // IO.pipe fds are not close-on-exec, so close every other
+            // descriptor (>= 3); otherwise a leaked write end keeps the pipe
+            // open and the reader never sees EOF when the child exits.
+            for fd in 3..max_fd {
+                libc::close(fd);
+            }
+            libc::execvp(argv[0].as_ptr(), argv_ptrs.as_ptr());
+            libc::_exit(127);
+        }
+    }
+    // ===== parent =====
+    Ok(Value::integer(pid as i64))
 }
 
 ///

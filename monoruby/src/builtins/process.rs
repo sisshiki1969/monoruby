@@ -90,6 +90,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "exit", crate::builtins::kernel::exit, 0, 1, false);
     globals.define_builtin_module_func_with(klass, "abort", crate::builtins::kernel::abort, 0, 1, false);
     globals.define_builtin_module_func_rest(klass, "exec", crate::builtins::kernel::exec);
+    globals.define_builtin_module_func_rest(klass, "spawn", crate::builtins::kernel::spawn);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
     globals.define_class("Status", object_class, klass);
@@ -909,6 +910,53 @@ mod tests {
     #[test]
     fn process_euid() {
         run_test("Process.euid");
+    }
+
+    #[test]
+    fn process_spawn_detach() {
+        // spawn returns a pid; detach(pid).value yields the Process::Status.
+        run_test("Process.detach(spawn(\"true\")).value.success?");
+        run_test("Process.detach(spawn(\"false\")).value.exitstatus");
+        run_test("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+    }
+
+    #[test]
+    fn spawn_argument_errors() {
+        // A redirect value that is neither an IO nor an fd Integer.
+        run_test_error(r#"spawn("true", out: :nope)"#);
+        // No command given at all.
+        run_test_error("spawn()");
+    }
+
+    #[test]
+    fn open3_capture_via_spawn() {
+        // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
+        // drain them — the path bundler uses to run git for git-source gems.
+        run_test(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
+        run_test(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
+        run_test(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
+        run_test(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
+        // capture2e merges stdout+stderr onto one pipe.
+        run_test(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
+    }
+
+    #[test]
+    fn open3_no_deadlock_on_large_output() {
+        // The reason Open3 is reimplemented thread-free (IO.select) in
+        // monoruby: a child writing more than a pipe buffer (~64KB) on BOTH
+        // stdout and stderr would deadlock the cooperative-Thread approach.
+        run_test(
+            r#"require "open3"
+            out, err, st = Open3.capture3("sh", "-c", "yes A | head -c 200000; yes B | head -c 200000 1>&2")
+            [out.bytesize, err.bytesize, st.success?]"#,
+        );
+        // Large stdin streamed while large stdout is read back concurrently.
+        run_test(
+            r#"require "open3"
+            data = "x" * 300000
+            out, _, st = Open3.capture3("cat", stdin_data: data)
+            [out.bytesize, out == data, st.success?]"#,
+        );
     }
 
     #[test]
