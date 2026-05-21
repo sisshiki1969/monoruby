@@ -649,6 +649,12 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         self_
             .as_rstring_inner_mut()
             .extend(&other, &globals.store)?;
+    } else if lfp.arg(0).try_fixnum().is_none() && lfp.arg(0).is_integer() {
+        // `String#<<` / `#concat` treat any Integer as a codepoint; a
+        // Bignum can never be a valid codepoint, so it is always out
+        // of char range (CRuby: `RangeError "bignum out of char
+        // range"`).
+        return Err(MonorubyErr::rangeerr("bignum out of char range"));
     } else if let Some(i) = lfp.arg(0).try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
@@ -7341,6 +7347,14 @@ mod tests {
             [s, s.encoding == Encoding::UTF_8]
         "##,
         ]);
+        // Integer codepoint out of range ⇒ RangeError. Both the
+        // negative fixnum and the (always-out-of-range) Bignum forms,
+        // for `<<` and the `concat`/`append` aliases that delegate to it.
+        run_test_error(r##""a" << -1"##);
+        run_test_error(r##""".concat(-200)"##);
+        run_test_error(r##""".concat(-(2 ** 64))"##);
+        run_test_error(r##""" << (2 ** 70)"##);
+        run_test_error(r##""".append(2 ** 80)"##);
     }
 
     #[test]
