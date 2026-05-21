@@ -2190,47 +2190,47 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
-    /// The LEP for the current `$~` / `$_` scope.
+    /// The MFP for the current `$~` / `$_` scope.
     ///
     /// Native (`#[monoruby_builtin]`) frames don't introduce an svar
     /// scope — they mirror CRuby C-functions, whose `vm_push_frame`
     /// reuses the caller's EP. Walk the dynamic CFP chain back past
-    /// any native frames to the Ruby caller, then `Lfp::lep` walks
+    /// any native frames to the Ruby caller, then `Lfp::mfp` walks
     /// that frame's lexical `outer` chain to the method frame (so a
     /// match performed inside a block updates the enclosing method's
     /// `$~`). Returns `None` outside Ruby execution (no CFP set).
-    fn current_lep(&self) -> Option<Lfp> {
+    fn current_mfp(&self) -> Option<Lfp> {
         let mut cfp = self.cfp?;
         while cfp.lfp().meta().is_native() {
             cfp = cfp.prev()?;
         }
-        Some(cfp.lfp().lep())
+        Some(cfp.lfp().mfp())
     }
 
-    /// Read the svar container Array on the current LEP, if one has
+    /// Read the svar container Array on the current MFP, if one has
     /// been allocated. The slot starts as the zero sentinel (`None`)
     /// and is lazily filled with a 2-element Array `[$~, $_]` the
     /// first time either special variable is written.
     fn svar_container(&self) -> Option<Value> {
-        self.current_lep()?.svar()
+        self.current_mfp()?.svar()
     }
 
-    /// Get the svar container on the current LEP, allocating a fresh
+    /// Get the svar container on the current MFP, allocating a fresh
     /// `[nil, nil]` Array (and storing it in `LFP_SVAR`) if absent.
-    /// Returns `None` only outside Ruby execution (no LEP).
+    /// Returns `None` only outside Ruby execution (no MFP).
     fn svar_container_create(&mut self) -> Option<Value> {
-        let lep = self.current_lep()?;
-        match lep.svar() {
+        let mfp = self.current_mfp()?;
+        match mfp.svar() {
             Some(v) => Some(v),
             None => {
-                let arr = Value::array_from_vec(vec![Value::nil(), Value::nil()]);
-                lep.set_svar_slot_value(arr);
+                let arr = Value::array2(Value::nil(), Value::nil());
+                mfp.set_svar_slot_value(arr);
                 Some(arr)
             }
         }
     }
 
-    /// Read the MatchData `Value` (`$~`) from the current LEP's svar
+    /// Read the MatchData `Value` (`$~`) from the current MFP's svar
     /// container, or `None` when unset / nil.
     pub(crate) fn current_match_data(&self) -> Option<Value> {
         let c = self.svar_container()?;
@@ -2238,7 +2238,7 @@ impl Executor {
         if v.is_nil() { None } else { Some(v) }
     }
 
-    /// Write `$~` (a MatchData `Value` or nil) into the current LEP's
+    /// Write `$~` (a MatchData `Value` or nil) into the current MFP's
     /// svar container.
     fn set_backref(&mut self, val: Value) {
         if let Some(c) = self.svar_container_create() {

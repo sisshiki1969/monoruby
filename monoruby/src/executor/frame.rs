@@ -317,24 +317,24 @@ impl Lfp {
     }
 
     ///
-    /// Walk the outer chain up to the *Local Environment Pointer* —
+    /// Walk the outer chain up to the *Method Frame Pointer* —
     /// the nearest method-introducing frame.
     ///
-    /// CRuby's `vm_svar` lives on the LEP, and every frame-local
+    /// CRuby's `vm_svar` lives on the MFP, and every frame-local
     /// global (`$~`, `$_`, and the BACK_REF / NTH_REF family derived
     /// from `$~`) reads/writes through it. The walking rule:
     ///
     /// * **Block-style** frames (block literal `{ }` / `do … end`
-    ///   and `Proc.new`) `share` their lexical parent's LEP — follow
+    ///   and `Proc.new`) `share` their lexical parent's MFP — follow
     ///   `outer` upward.
     /// * **Method-style** frames (`def`, lambda, class/module body,
     ///   toplevel script, `define_method`-installed Proc tagged
-    ///   `is_proc_method`) own their LEP — stop.
+    ///   `is_proc_method`) own their MFP — stop.
     ///
     /// The chain is guaranteed to terminate at a method-style frame
     /// (the toplevel script body is method-style with no outer), so
-    /// this loop always returns a real LEP.
-    pub(crate) fn lep(self) -> Lfp {
+    /// this loop always returns a real Mfp.
+    pub(crate) fn mfp(self) -> Lfp {
         let mut lfp = self;
         loop {
             let meta = lfp.meta();
@@ -389,7 +389,7 @@ impl Lfp {
     /// frames must first be skipped via the dynamic CFP chain — see
     /// `Executor::current_lep`, which is the canonical entry point.
     pub(crate) fn svar(self) -> Option<Value> {
-        self.lep().svar_slot()
+        self.mfp().svar_slot()
     }
 
     ///
@@ -438,13 +438,6 @@ impl Lfp {
 
     fn frame_bytes(self) -> usize {
         LFP_SELF as usize + 8 * self.meta().reg_num() as usize
-    }
-
-    fn frame_ref(&self) -> &[u8] {
-        let len = self.frame_bytes();
-        unsafe {
-            std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
-        }
     }
 
     ///
