@@ -118,7 +118,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
-    // detect/find: use Enumerable#find (supports ifnone argument)
+    globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -2999,6 +2999,38 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     all_any_inner(vm, globals, lfp, false)
+}
+
+///
+/// #### Enumerable#detect
+///
+/// - find(ifnone = nil) {|item| ... } -> object
+/// - detect(ifnone = nil) {|item| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
+#[monoruby_builtin]
+fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let bh = lfp.expect_block()?;
+    let data = vm.get_block_data(globals, bh)?;
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
+        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+            return Ok(elem);
+        };
+        i += 1;
+    }
+    // No element matched. CRuby: if an `ifnone` callable was given (and
+    // is non-nil), call it with no arguments and return its value;
+    // otherwise return nil.
+    if let Some(ifnone) = lfp.try_arg(0)
+        && !ifnone.is_nil()
+    {
+        let call = IdentId::get_id("call");
+        return vm.invoke_method_inner(globals, call, ifnone, &[], None, None);
+    }
+    Ok(Value::nil())
 }
 
 ///
