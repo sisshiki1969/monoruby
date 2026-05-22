@@ -20,7 +20,7 @@ module Enumerable
   private def __gather_each
     return self.to_enum(:__gather_each) unless block_given?
     self.each do |*__ys|
-      yield(__ys.size == 1 ? __ys[0] : __ys)
+      yield(__ys.empty? ? nil : __ys.size == 1 ? __ys[0] : __ys)
     end
     self
   end
