@@ -28,7 +28,6 @@
   .empty { color: #888; padding: 1em 0; }
   .controls { display: flex; flex-wrap: wrap; gap: 1.5em; align-items: center; margin: 0.5em 0 1em; font-size: 0.9em; }
   .controls select { font-size: 1em; padding: 0.2em 0.4em; }
-  .control-yratio { color: #555; }
 </style>
 </head>
 <body>
@@ -63,15 +62,11 @@
 <section>
   <h2>Per-benchmark history</h2>
   <p class="meta">
-    monoruby and YJIT time (ms) per master commit. Lower is better.
+    YJIT / monoruby ratio per master commit. Higher = monoruby faster.
     Successful rows only — failure entries are skipped on this chart.
   </p>
   <div class="controls">
     <label>Benchmark: <select id="historySelect"></select></label>
-    <label class="control-yratio">
-      <input type="checkbox" id="historyYRatio">
-      show YJIT / monoruby ratio instead of raw ms
-    </label>
   </div>
   <div id="historyWrap" style="position: relative; height: 360px;"><canvas id="historyChart"></canvas></div>
   <div id="historyEmpty" class="empty" hidden>No history yet for this benchmark.</div>
@@ -178,11 +173,35 @@ async function loadJson(path) {
             align: "center",
           },
           grid: {
-            color: ctx => ctx.tick.value === 1 ? "#1a1a1a" : "rgba(0,0,0,0.08)",
-            lineWidth: ctx => ctx.tick.value === 1 ? 2 : 1,
+            color: ctx => ctx.tick.value === 1 ? "#c62828" : "rgba(0,0,0,0.08)",
+            lineWidth: ctx => ctx.tick.value === 1 ? 3 : 1,
           },
         },
-        y: { ticks: { autoSkip: false, font: { size: 11 } } },
+        y: { ticks: { autoSkip: false, font: { size: 13 }, color: "#1565c0" } },
+      },
+      onClick: (event, _elements, chart) => {
+        const { x, y } = event;
+        if (x >= chart.chartArea.left) return;
+        const yAxis = chart.scales.y;
+        for (let i = 0; i < benches.length; i++) {
+          if (Math.abs(y - yAxis.getPixelForValue(i)) < 13) {
+            window.open(
+              "https://github.com/Shopify/yjit-bench/tree/main/benchmarks/" + benches[i].name,
+              "_blank"
+            );
+            return;
+          }
+        }
+      },
+      onHover: (event, _elements, chart) => {
+        const { x, y } = event;
+        if (x >= chart.chartArea.left || x < 0) {
+          chart.canvas.style.cursor = "default";
+          return;
+        }
+        const yAxis = chart.scales.y;
+        const over = benches.some((_, i) => Math.abs(y - yAxis.getPixelForValue(i)) < 13);
+        chart.canvas.style.cursor = over ? "pointer" : "default";
       },
       plugins: {
         legend: { display: true, position: "top", align: "end" },
@@ -231,7 +250,11 @@ async function loadJson(path) {
   for (const b of benches) {
     const tr = document.createElement("tr");
     const nameTd = document.createElement("td");
-    nameTd.textContent = b.name;
+    const nameLink = document.createElement("a");
+    nameLink.href = "https://github.com/Shopify/yjit-bench/tree/main/benchmarks/" + b.name;
+    nameLink.textContent = b.name;
+    nameLink.target = "_blank";
+    nameTd.appendChild(nameLink);
     tr.appendChild(nameTd);
     tr.appendChild(numCell(b.monoruby_ms != null ? b.monoruby_ms.toFixed(3) : "", b.monoruby_failed));
     tr.appendChild(numCell(b.yjit_ms != null ? b.yjit_ms.toFixed(3) : "", b.yjit_failed));
@@ -309,13 +332,11 @@ function parseCsv(text) {
   if (benchNames.includes(initial)) sel.value = initial;
   else sel.value = benchNames[0];
 
-  const yRatioCheckbox = document.getElementById("historyYRatio");
   const empty = document.getElementById("historyEmpty");
 
   let chart;
   function draw() {
     const name = sel.value;
-    const showRatio = yRatioCheckbox.checked;
     const points = rows
       .filter(r => r.benchmark === name && r.monoruby_ms != null && r.yjit_ms != null)
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -325,40 +346,17 @@ function parseCsv(text) {
     const labels = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
 
-    const datasets = showRatio
-      ? [{
-          label: "YJIT / monoruby",
-          data: points.map(p => p.ratio),
-          borderColor: "#2e7d32",
-          backgroundColor: "rgba(46,125,50,0.15)",
-          tension: 0.15,
-          fill: true,
-          pointRadius: 3,
-        }]
-      : [
-          {
-            label: "monoruby (ms)",
-            data: points.map(p => p.monoruby_ms),
-            borderColor: "#1565c0",
-            backgroundColor: "rgba(21,101,192,0.10)",
-            tension: 0.15,
-            fill: false,
-            pointRadius: 3,
-          },
-          {
-            label: "YJIT (ms)",
-            data: points.map(p => p.yjit_ms),
-            borderColor: "#ef6c00",
-            backgroundColor: "rgba(239,108,0,0.10)",
-            tension: 0.15,
-            fill: false,
-            pointRadius: 3,
-          },
-        ];
+    const datasets = [{
+      label: "YJIT / monoruby",
+      data: points.map(p => p.ratio),
+      borderColor: "#2e7d32",
+      backgroundColor: "rgba(46,125,50,0.15)",
+      tension: 0.15,
+      fill: true,
+      pointRadius: 3,
+    }];
 
-    const yTitle = showRatio
-      ? "relative speed (× YJIT, higher = monoruby faster)"
-      : "time (ms, lower is better)";
+    const yTitle = "relative speed (× YJIT, higher = monoruby faster)";
 
     const cfg = {
       type: "line",
@@ -391,7 +389,6 @@ function parseCsv(text) {
     history.replaceState(null, "", "#bench=" + encodeURIComponent(sel.value));
     draw();
   });
-  yRatioCheckbox.addEventListener("change", draw);
 
   draw();
 })();
