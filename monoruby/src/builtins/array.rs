@@ -118,7 +118,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
-    globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
+    // detect/find: use Enumerable#find (supports ifnone argument)
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -3002,35 +3002,36 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
-/// #### Enumerable#detect
-///
-/// - find(ifnone = nil) {|item| ... } -> object
-/// - detect(ifnone = nil) {|item| ... } -> object
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
-#[monoruby_builtin]
-fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh)?;
-    let mut i = 0;
-    while i < self_val.as_array().len() {
-        let elem = self_val.as_array()[i];
-        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-            return Ok(elem);
+/// Match value `v` against `pattern` for `Array#grep`. For Regexp patterns,
+/// uses `match?` semantics (`RegexpInner::match_pred`) so `$~` /
+/// `Regexp.last_match` are NOT modified (matches CRuby's grep). For other
+/// patterns, falls back to `===` via `cmp_teq_values_bool`.
+fn grep_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pattern: Value,
+    v: Value,
+) -> Result<bool> {
+    if let Some(re) = pattern.is_regex() {
+        let s: Option<String> = if let Some(rs) = v.is_rstring_inner() {
+            rs.check_utf8().ok().map(|s| s.to_string())
+        } else if let Some(sym) = v.try_symbol() {
+            Some(sym.get_name())
+        } else if let Some(conv) =
+            vm.invoke_method_if_exists(globals, IdentId::get_id("to_str"), v, &[], None, None)?
+        {
+            conv.is_rstring_inner()
+                .and_then(|rs| rs.check_utf8().ok().map(|s| s.to_string()))
+        } else {
+            None
         };
-        i += 1;
+        match s {
+            Some(s) => Ok(RegexpInner::match_pred(&re, &s, 0)?),
+            None => Ok(false),
+        }
+    } else {
+        cmp_teq_values_bool(vm, globals, pattern, v)
     }
-    // No element matched. CRuby: if an `ifnone` callable was given (and
-    // is non-nil), call it with no arguments and return its value;
-    // otherwise return nil.
-    if let Some(ifnone) = lfp.try_arg(0)
-        && !ifnone.is_nil()
-    {
-        let call = IdentId::get_id("call");
-        return vm.invoke_method_inner(globals, call, ifnone, &[], None, None);
-    }
-    Ok(Value::nil())
 }
 
 ///
@@ -3043,6 +3044,7 @@ fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
+    let pattern = lfp.arg(0);
     if let Some(bh) = lfp.block() {
         return vm.with_temp_scope(|vm| {
             let bh = vm.get_block_data(globals, bh)?;
@@ -3052,7 +3054,8 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let mut i = 0;
             while i < self_val.as_array().len() {
                 let v = self_val.as_array()[i];
-                if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+                // With a block, use `===` so `$~` is set for the block to read.
+                if cmp_teq_values_bool(vm, globals, pattern, v)? {
                     let mapped = vm.invoke_block(globals, &bh, &[v])?;
                     vm.temp_array_push(mapped);
                 }
@@ -3067,7 +3070,7 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let mut i = 0;
     while i < self_val.as_array().len() {
         let v = self_val.as_array()[i];
-        if cmp_teq_values_bool(vm, globals, lfp.arg(0), v)? {
+        if grep_match(vm, globals, pattern, v)? {
             res.push(v)
         }
         i += 1;
