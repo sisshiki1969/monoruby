@@ -30,7 +30,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
-    globals.define_builtin_funcs(HASH_CLASS, "collect", &["map"], map, 0);
+    // collect/map: implemented in Ruby (builtins.rb) for arity adaptation and subclass support
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
@@ -922,32 +922,6 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
-/// ### Enumerable#collect
-///
-/// - collect {|key, value| ... } -> self
-/// - map {|key, value| ... } -> self
-/// - collect -> Enumerator
-/// - map -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
-#[monoruby_builtin]
-fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("collect");
-            return hash_to_sized_enum(vm, id, lfp, pc);
-        }
-        Some(block) => block,
-    };
-    let hash = lfp.self_val().as_hash();
-    vm.invoke_block_map1(
-        globals,
-        bh,
-        hash.iter().map(|(k, v)| Value::array2(k, v)),
-        hash.len(),
-    )
-}
-
 ///
 /// ### Hash#each
 ///

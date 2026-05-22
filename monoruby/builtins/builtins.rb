@@ -170,11 +170,13 @@ class Hash
   end
 
   def any?(*pattern)
-    if block_given?
-      each { |k, v| return true if yield([k, v]) }
-    elsif pattern.size == 1
+    if !pattern.empty?
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)" if pattern.size != 1
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       each { |k, v| return true if pat === [k, v] }
+    elsif block_given?
+      each { |k, v| return true if yield([k, v]) }
     else
       return !empty?
     end
@@ -182,13 +184,15 @@ class Hash
   end
 
   def all?(*pattern)
-    if block_given?
-      each { |k, v| return false unless yield([k, v]) }
-    elsif pattern.size == 1
+    if !pattern.empty?
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)" if pattern.size != 1
+      warn "warning: given block not used" if block_given?
       pat = pattern[0]
       each { |k, v| return false unless pat === [k, v] }
+    elsif block_given?
+      each { |k, v| return false unless yield([k, v]) }
     else
-      each { |k, v| return false unless v }
+      each { |k, v| return false unless [k, v] }
     end
     true
   end
@@ -207,6 +211,18 @@ class Hash
       n
     end
   end
+
+  def map(&blk)
+    return to_enum(:map) { size } unless blk
+    result = []
+    if blk.arity == 1
+      each { |pair| result << blk.call(pair) }
+    else
+      each { |pair| result << blk.call(*pair) }
+    end
+    result
+  end
+  alias collect map
 
   def flat_map
     return to_enum(:flat_map) unless block_given?
