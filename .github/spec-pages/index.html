@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>monoruby ruby/spec core history</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2em; max-width: 1100px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2em; max-width: 1100px; color: #1a1a1a; }
   h1 { margin-bottom: 0.2em; }
   .meta { color: #666; font-size: 0.9em; margin-bottom: 2em; }
   section { margin-bottom: 3em; }
@@ -15,6 +16,12 @@
   th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
   thead th { border-bottom: 2px solid #888; }
+  a { color: #1565c0; }
+  td a { text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .range-control { margin-top: 1em; padding: 0.8em 0; border-top: 1px solid #eee; }
+  .range-control .dates { font-size: 0.85em; color: #555; margin-bottom: 0.4em; }
+  .range-control input[type=range] { width: 100%; }
 </style>
 </head>
 <body>
@@ -29,17 +36,24 @@
 <section>
   <h2>Total pass rate over time</h2>
   <canvas id="totalChart" height="120"></canvas>
-</section>
 
-<section>
-  <h2>Per-category pass rate over time</h2>
+  <h2 style="margin-top:1.5em">Per-category pass rate over time</h2>
   <label>Category: <select id="catSelect"></select></label>
   <canvas id="catChart" height="120"></canvas>
+
+  <div class="range-control" id="rangeControl" hidden>
+    <div class="dates">
+      Showing <strong id="rangeFromLabel"></strong> &ndash; <strong id="rangeToLabel"></strong>
+    </div>
+    <input type="range" id="rangeFrom" min="0" max="0" value="0">
+    <input type="range" id="rangeTo"   min="0" max="0" value="0">
+  </div>
 </section>
 
 <section>
   <h2>Latest snapshot</h2>
   <div id="latestMeta" class="meta"></div>
+  <p class="meta">Click a benchmark name to open its <a href="https://github.com/ruby/spec/tree/master/core">ruby/spec</a> source directory.</p>
   <div id="latestBarWrap" style="position: relative;"><canvas id="latestBar"></canvas></div>
   <table id="latestTable">
     <thead>
@@ -50,6 +64,9 @@
 </section>
 
 <script>
+const SPEC_BASE = "https://github.com/ruby/spec/tree/master/core/";
+const specUrl = cat => SPEC_BASE + encodeURIComponent(cat);
+
 async function loadCsv(path) {
   const res = await fetch(path + '?t=' + Date.now());
   if (!res.ok) return [];
@@ -69,14 +86,32 @@ async function loadCsv(path) {
   const total = await loadCsv('data/history_total.csv');
   const hist = await loadCsv('data/history.csv');
 
-  if (total.length) {
-    new Chart(document.getElementById('totalChart'), {
+  // ------- shared date range over the run timestamps -------
+  const allStamps = [...new Set(total.map(r => r.timestamp))].sort();
+  let fromIdx = 0;
+  let toIdx = Math.max(0, allStamps.length - 1);
+  const inRange = ts => {
+    if (!allStamps.length) return true;
+    return ts >= allStamps[fromIdx] && ts <= allStamps[toIdx];
+  };
+
+  // Tooltip title that appends the commit hash for a row set.
+  const titleWithCommit = rowsRef => items => {
+    const r = rowsRef[items[0].dataIndex];
+    return r ? (r.timestamp + (r.commit ? '  @  ' + r.commit : '')) : '';
+  };
+
+  // ------- Total pass rate over time -------
+  let totalChart, totalRows = [];
+  function drawTotal() {
+    totalRows = total.filter(r => inRange(r.timestamp));
+    const cfg = {
       type: 'line',
       data: {
-        labels: total.map(r => r.timestamp),
+        labels: totalRows.map(r => r.timestamp),
         datasets: [{
           label: 'Total pass rate (%)',
-          data: total.map(r => parseFloat(r.pass_rate)),
+          data: totalRows.map(r => parseFloat(r.pass_rate)),
           borderColor: '#2e7d32',
           backgroundColor: 'rgba(46,125,50,0.15)',
           tension: 0.15,
@@ -85,11 +120,15 @@ async function loadCsv(path) {
         }]
       },
       options: {
-        scales: { y: { suggestedMin: 0, suggestedMax: 100 } }
+        scales: { y: { suggestedMin: 0, suggestedMax: 100 } },
+        plugins: { tooltip: { callbacks: { title: titleWithCommit(totalRows) } } }
       }
-    });
+    };
+    if (totalChart) totalChart.destroy();
+    totalChart = new Chart(document.getElementById('totalChart'), cfg);
   }
 
+  // ------- Per-category pass rate over time -------
   const categories = [...new Set(hist.map(r => r.category))].sort();
   const sel = document.getElementById('catSelect');
   for (const c of categories) {
@@ -98,16 +137,16 @@ async function loadCsv(path) {
     sel.appendChild(opt);
   }
 
-  let catChart;
+  let catChart, catRows = [];
   function drawCat(cat) {
-    const rows = hist.filter(r => r.category === cat);
+    catRows = hist.filter(r => r.category === cat && inRange(r.timestamp));
     const cfg = {
       type: 'line',
       data: {
-        labels: rows.map(r => r.timestamp),
+        labels: catRows.map(r => r.timestamp),
         datasets: [{
           label: cat + ' pass rate (%)',
-          data: rows.map(r => Math.max(0, parseFloat(r.pass_rate))),
+          data: catRows.map(r => Math.max(0, parseFloat(r.pass_rate))),
           borderColor: '#1565c0',
           backgroundColor: 'rgba(21,101,192,0.15)',
           tension: 0.15,
@@ -115,17 +154,57 @@ async function loadCsv(path) {
           pointRadius: 2
         }]
       },
-      options: { scales: { y: { suggestedMin: 0, suggestedMax: 100 } } }
+      options: {
+        scales: { y: { suggestedMin: 0, suggestedMax: 100 } },
+        plugins: { tooltip: { callbacks: { title: titleWithCommit(catRows) } } }
+      }
     };
-    if (catChart) { catChart.destroy(); }
+    if (catChart) catChart.destroy();
     catChart = new Chart(document.getElementById('catChart'), cfg);
   }
+
   if (categories.length) {
     sel.value = categories[0];
-    drawCat(categories[0]);
     sel.addEventListener('change', e => drawCat(e.target.value));
   }
 
+  // ------- date range slider (controls both over-time charts) -------
+  if (allStamps.length > 1) {
+    const ctrl = document.getElementById('rangeControl');
+    const fromEl = document.getElementById('rangeFrom');
+    const toEl = document.getElementById('rangeTo');
+    const fromLbl = document.getElementById('rangeFromLabel');
+    const toLbl = document.getElementById('rangeToLabel');
+    ctrl.hidden = false;
+    const lastIdx = allStamps.length - 1;
+    fromEl.max = String(lastIdx);
+    toEl.max = String(lastIdx);
+    toEl.value = String(lastIdx);
+
+    const syncLabels = () => {
+      fromLbl.textContent = allStamps[fromIdx];
+      toLbl.textContent = allStamps[toIdx];
+    };
+    const onInput = () => {
+      fromIdx = parseInt(fromEl.value, 10);
+      toIdx = parseInt(toEl.value, 10);
+      if (fromIdx > toIdx) {            // keep handles ordered
+        if (document.activeElement === fromEl) { toIdx = fromIdx; toEl.value = String(toIdx); }
+        else { fromIdx = toIdx; fromEl.value = String(fromIdx); }
+      }
+      syncLabels();
+      drawTotal();
+      drawCat(sel.value);
+    };
+    fromEl.addEventListener('input', onInput);
+    toEl.addEventListener('input', onInput);
+    syncLabels();
+  }
+
+  if (total.length) drawTotal();
+  if (categories.length) drawCat(sel.value);
+
+  // ------- Latest snapshot -------
   if (hist.length) {
     const latestTs = hist[hist.length - 1].timestamp;
     const latestSha = hist[hist.length - 1].commit;
@@ -141,9 +220,9 @@ async function loadCsv(path) {
       return '#c62828';
     };
     document.getElementById('latestBarWrap').style.height =
-      Math.max(320, latest.length * 22) + 'px';
+      Math.max(320, latest.length * 24) + 'px';
 
-    new Chart(document.getElementById('latestBar'), {
+    const latestBar = new Chart(document.getElementById('latestBar'), {
       type: 'bar',
       data: {
         labels: latest.map(r => r.category),
@@ -158,9 +237,21 @@ async function loadCsv(path) {
         maintainAspectRatio: false,
         scales: {
           x: { suggestedMin: 0, suggestedMax: 100 },
-          y: { ticks: { autoSkip: false, font: { size: 11 } } }
+          y: { ticks: { autoSkip: false, font: { size: 13 }, color: '#1565c0' } }
         },
-        plugins: { legend: { display: false } }
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { afterLabel: () => 'click to open ruby/spec source' } }
+        },
+        onClick: (evt) => {
+          const idx = latestBar.scales.y.getValueForPixel(evt.y);
+          if (idx != null && idx >= 0 && idx < latest.length) {
+            window.open(specUrl(latest[idx].category), '_blank', 'noopener');
+          }
+        },
+        onHover: (evt) => {
+          evt.native.target.style.cursor = 'pointer';
+        }
       }
     });
 
@@ -169,7 +260,16 @@ async function loadCsv(path) {
       const tr = document.createElement('tr');
       for (const k of ['category','files','examples','pass','failures','errors','pass_rate']) {
         const td = document.createElement('td');
-        td.textContent = k === 'pass_rate' ? r[k] + '%' : r[k];
+        if (k === 'category') {
+          const a = document.createElement('a');
+          a.href = specUrl(r.category);
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = r.category;
+          td.appendChild(a);
+        } else {
+          td.textContent = k === 'pass_rate' ? r[k] + '%' : r[k];
+        }
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
