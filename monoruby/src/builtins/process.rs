@@ -1,6 +1,7 @@
 use num::ToPrimitive;
 
 use super::*;
+use crate::codegen::signal_table;
 
 use self::clock_gettime::TimeSpec;
 
@@ -99,6 +100,7 @@ pub(super) fn init(globals: &mut Globals) {
     let signal = globals.define_toplevel_module("Signal").id();
     globals.define_builtin_module_func(signal, "list", signal_list, 0);
     globals.define_builtin_module_func(signal, "signame", signal_signame, 1);
+    globals.define_builtin_module_func_with(signal, "trap", signal_trap, 1, 2, false);
 }
 
 ///
@@ -881,6 +883,149 @@ fn signal_signame(
     })
 }
 
+/// Parse a `Signal.trap` signal argument into a signo. Mirrors CRuby:
+/// an Integer must be a valid signal number; a String or `#to_str`-able
+/// object names a signal (with/without "SIG"); a Symbol names a signal;
+/// anything else is `ArgumentError: bad signal type <Class>`. `#to_int`
+/// is deliberately never called.
+fn trap_signo(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<i32> {
+    if let Some(i) = arg.try_fixnum() {
+        let signo = i as i32;
+        if signal_number_to_name(i).is_none() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid signal number ({i})"
+            )));
+        }
+        return Ok(signo);
+    }
+    let name = if let Some(sym) = arg.try_symbol() {
+        sym.get_name().to_string()
+    } else if let Some(s) = arg.is_str() {
+        s.to_string()
+    } else if globals.store.check_method(arg, IdentId::TO_STR).is_some() {
+        arg.coerce_to_str(vm, globals)?
+    } else {
+        return Err(MonorubyErr::argumenterr(format!(
+            "bad signal type {}",
+            arg.get_real_class_name(&globals.store)
+        )));
+    };
+    signal_name_to_number(&name).ok_or_else(|| {
+        MonorubyErr::argumenterr(format!(
+            "unsupported signal 'SIG{}'",
+            name.trim_start_matches("SIG")
+        ))
+    })
+}
+
+/// Map a `command` argument to a trap disposition. Mirrors CRuby's
+/// `trap_handler`: `nil` and "IGNORE"/"SIG_IGN"/"" set `SIG_IGN`;
+/// "DEFAULT"/"SIG_DFL" restore monoruby's default; "SYSTEM_DEFAULT"
+/// forces the OS default; any other object is taken as a callable handler
+/// (its `#call` is invoked at delivery — non-callables raise then).
+fn command_disposition(cmd: Value) -> Result<signal_table::SignalDisposition> {
+    use signal_table::SignalDisposition;
+    if cmd.is_nil() {
+        return Ok(SignalDisposition::Ignore { from_nil: true });
+    }
+    let name = if let Some(s) = cmd.is_str() {
+        Some(s.to_string())
+    } else {
+        cmd.try_symbol().map(|sym| sym.get_name().to_string())
+    };
+    match name.as_deref() {
+        Some("" | "SIG_IGN" | "IGNORE") => Ok(SignalDisposition::Ignore { from_nil: false }),
+        Some("SIG_DFL" | "DEFAULT") => Ok(SignalDisposition::Default),
+        Some("SYSTEM_DEFAULT") => Ok(SignalDisposition::SystemDefault),
+        Some(other) => Err(MonorubyErr::argumenterr(format!("unsupported command `{other}'"))),
+        // Not a String/Symbol command: treat as a callable handler.
+        None => Ok(SignalDisposition::Handler(cmd)),
+    }
+}
+
+/// The Ruby-visible value `Signal.trap` returns for the *previous*
+/// disposition.
+fn disposition_to_value(disp: signal_table::SignalDisposition) -> Value {
+    use signal_table::SignalDisposition;
+    match disp {
+        SignalDisposition::Default => Value::string_from_str("DEFAULT"),
+        SignalDisposition::SystemDefault => Value::string_from_str("SYSTEM_DEFAULT"),
+        SignalDisposition::Ignore { from_nil: true } => Value::nil(),
+        SignalDisposition::Ignore { from_nil: false } => Value::string_from_str("IGNORE"),
+        SignalDisposition::Handler(v) => v,
+    }
+}
+
+///
+/// ### Signal.trap
+///
+/// - trap(signal, command) -> object
+/// - trap(signal) { ... } -> object
+///
+/// Install a handler for `signal` (Integer, Symbol or String). `command`
+/// may be any callable (`Proc`, `Method`, …), or one of "DEFAULT"/
+/// "SIG_DFL", "IGNORE"/"SIG_IGN"/"" (or nil), or "SYSTEM_DEFAULT". A
+/// block, if given, is the handler. Returns the previous handler.
+///
+/// The handler does not run in async-signal context: the asm stub only
+/// records the pending signal, and `#call` is invoked at the next
+/// interpreter poll point. See doc/signal_handling.md A7.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Signal/m/trap.html]
+#[monoruby_builtin]
+pub(super) fn signal_trap(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let signo = trap_signo(vm, globals, lfp.arg(0))?;
+    if signal_table::is_uncatchable(signo) {
+        // KILL / STOP: the kernel forbids catching these.
+        return Err(MonorubyErr::argumenterr("Signal already used by VM or OS"));
+    }
+    if !signal_table::is_trappable(signo) {
+        // Ruby-reserved (SEGV/BUS/ILL/FPE/VTALRM, …) and the EXIT
+        // pseudo-signal land here.
+        let name = signal_number_to_name(signo as i64).unwrap_or("");
+        return Err(MonorubyErr::argumenterr(format!(
+            "can't trap reserved signal: SIG{name}"
+        )));
+    }
+
+    use signal_table::SignalDisposition;
+    // An explicit command argument takes precedence over a block.
+    let new_disp = if let Some(cmd) = lfp.try_arg(1) {
+        command_disposition(cmd)?
+    } else if let Some(bh) = lfp.block() {
+        SignalDisposition::Handler(vm.generate_proc(globals, bh, pc)?.into())
+    } else {
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
+    };
+
+    // Apply the OS-level disposition before recording it; if the syscall
+    // fails the table is left untouched. The stub for `signo` was
+    // pre-generated at Codegen::new, so this is just a sigaction(2).
+    let installed = crate::codegen::CODEGEN.with(|codegen| {
+        let codegen = codegen.borrow();
+        match new_disp {
+            SignalDisposition::Handler(_) => codegen.install_signal_stub(signo),
+            SignalDisposition::Ignore { .. } => codegen.install_signal_ignore(signo),
+            SignalDisposition::Default => codegen.install_signal_default(signo),
+            SignalDisposition::SystemDefault => codegen.install_signal_system_default(signo),
+        }
+    });
+    if !installed {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "sigaction"));
+    }
+
+    let prev = globals.set_signal_disposition(signo, new_disp);
+    Ok(disposition_to_value(prev))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -967,6 +1112,57 @@ mod tests {
             [h.is_a?(Hash), h["INT"], h["KILL"], h["EXIT"]]
             "#,
         );
+    }
+
+    #[test]
+    fn signal_trap_return_values() {
+        // First trap returns the previous handler "DEFAULT"; re-trapping
+        // returns the previously installed Proc; setting then reading a
+        // string command round-trips ("IGNORE"). USR2 is reset to
+        // DEFAULT first so each warm-up iteration starts identically.
+        run_test(
+            r#"
+            Signal.trap("USR2", "DEFAULT")
+            a = Signal.trap("USR2") { }
+            b = Signal.trap("USR2", "IGNORE")
+            c = Signal.trap("USR2", "DEFAULT")
+            [a, b.is_a?(Proc), c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_trap_return_values_commands() {
+        // nil command reports the previous handler as nil; an explicit
+        // callable is returned by identity; "SYSTEM_DEFAULT" round-trips
+        // distinctly from "DEFAULT".
+        run_test(
+            r#"
+            Signal.trap("USR2", "DEFAULT")
+            h = ->{}
+            a = Signal.trap("USR2", h)
+            b = Signal.trap("USR2", nil)
+            c = Signal.trap("USR2", "SYSTEM_DEFAULT")
+            d = Signal.trap("USR2", "DEFAULT")
+            [a, b.equal?(h), c, d]
+            "#,
+        );
+    }
+
+    // Signal *delivery* (self-kill → handler runs) is covered by the
+    // subprocess-isolated integration tests in tests/signal_trap.rs:
+    // sending a process-wide signal is unsafe under cargo's parallel
+    // in-process test threads.
+
+    #[test]
+    fn signal_trap_unsupported_signal() {
+        run_test_error(r#"Signal.trap("NO_SUCH_SIGNAL") { }"#);
+    }
+
+    #[test]
+    fn signal_trap_reserved_signal() {
+        // SIGKILL / SIGSTOP cannot be trapped.
+        run_test_error("Signal.trap(:KILL) { }");
     }
 
     #[test]
