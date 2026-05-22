@@ -853,28 +853,34 @@ impl<'a> JitContext<'a> {
     }
 
     fn caller_pos(&self) -> Option<usize> {
-        let len = self.stack_frame.len();
-        if len < 2 {
-            return None;
-        }
-        Some(len - 2)
+        self.stack_frame.len().checked_sub(2)
     }
 
     fn method_caller_pos(&self) -> Option<usize> {
         let offset = self.current_method_frame()?.1 + 1;
         let len = self.stack_frame.len();
-        if len - 1 < offset {
-            return None;
-        }
-        Some(len - 1 - offset)
+        len.checked_sub(1)?.checked_sub(offset)
     }
 
     fn iter_caller_pos(&self) -> Option<usize> {
+        // `break` exits the method the current block was *passed to* (the
+        // "iter method"); the iter caller is that method's caller, which is
+        // exactly the block's immediate lexical-outer frame. Derive it from
+        // the frame's `outer` link (the stack-frame distance to the lexical
+        // parent) instead of assuming a single intervening frame.
+        //
+        // For a block yielded directly by the method it was passed to
+        // (e.g. `Array#each { break }`) the parent sits at `len - 3`, which
+        // the old hard-coded `len - 3` happened to match. But blocks reached
+        // through nested iterator frames (e.g. `Enumerable#find` ->
+        // `__gather_each` -> `Array#each` -> block) have their lexical parent
+        // much deeper, so `len - 3` pointed at an unrelated intermediate
+        // frame — corrupting both the specialized break rbp offset and the
+        // break return context, which dropped the break value (returned
+        // `nil`).
         let len = self.stack_frame.len();
-        if len < 3 {
-            return None;
-        }
-        Some(len - 3)
+        let outer = self.current_frame().outer?;
+        len.checked_sub(1)?.checked_sub(outer)
     }
 
     fn outer_pos(&self, outer: usize) -> Option<usize> {

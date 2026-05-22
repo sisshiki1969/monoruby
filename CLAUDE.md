@@ -7,7 +7,7 @@ A comprehensive guide for AI assistants working on this repository.
 **monoruby** is a Ruby implementation written from scratch in Rust, featuring a hand-written parser, a register-based bytecode VM, and a just-in-time (JIT) compiler targeting x86-64 Linux. It is performance-focused and is comparable to ruby 3.4+YJIT on the optcarrot benchmark.
 
 - **Platform**: x86-64 Linux **only** (assembly-level VM and JIT)
-- **Rust channel**: Nightly (`nightly-2025-10-15`, pinned in `rust-toolchain.toml`)
+- **Rust channel**: Nightly (`nightly-2026-05-18`, pinned in `rust-toolchain.toml`)
 - **No dependency on CRuby** or any other Ruby runtime
 
 ---
