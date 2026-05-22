@@ -2679,22 +2679,43 @@ pub(crate) extern "C" fn execute_gc(
     // hang watchdog's countdown (no-op unless armed). See
     // doc/signal_handling.md B+.
     crate::watchdog::poll();
-    CODEGEN.with(|codegen| {
-        let codegen = codegen.borrow_mut();
-        // Drain the pending-signal bitmap. The lowest-numbered pending
-        // signal is consumed and lowered to a Ruby exception; any
-        // others observed in the same drain are dropped on the floor
-        // (signo collisions in a single poll window are extremely
-        // unlikely in practice and CRuby itself does not guarantee
-        // delivery of every signal). See doc/signal_handling.md.
-        let pending = codegen.take_pending_signals();
-        if let Some(err) = crate::codegen::signal_table::lowest_pending_to_error(pending) {
-            executor.set_error(err);
-            None
-        } else {
-            Some(())
+    // Drain the pending-signal bitmap. The lowest-numbered pending signal
+    // is consumed; any others observed in the same drain are dropped on
+    // the floor (signo collisions in a single poll window are extremely
+    // unlikely, and CRuby itself does not guarantee delivery of every
+    // coalesced signal). The CODEGEN borrow is released before
+    // dispatching so a trap handler (which JIT-compiles, GCs, …) can
+    // re-enter freely. See doc/signal_handling.md A6/A7.
+    let pending = CODEGEN.with(|codegen| codegen.borrow().take_pending_signals());
+    if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
+        use crate::codegen::signal_table::{self, SignalDisposition};
+        match globals.signal_disposition(signo) {
+            // A user `Signal.trap` handler: invoke its `#call` at this
+            // safepoint, passing the signo. The handler (Proc / Method /
+            // any callable) stays a GC root via the trap table; a
+            // non-callable raises NoMethodError here, matching CRuby.
+            SignalDisposition::Handler(handler) => {
+                let arg = Value::integer(signo as i64);
+                let call = IdentId::get_id("call");
+                if let Err(err) =
+                    executor.invoke_method_inner(globals, call, handler, &[arg], None, None)
+                {
+                    executor.set_error(err);
+                    return None;
+                }
+            }
+            // Defensive: a SIG_IGN'd signal normally never sets its bit.
+            SignalDisposition::Ignore { .. } => {}
+            // No user handler: lower to the default exception (e.g.
+            // SIGINT ⇒ Interrupt). Unmapped signals drain to nothing.
+            SignalDisposition::Default | SignalDisposition::SystemDefault => {
+                if let Some(err) = signal_table::signo_to_error(signo) {
+                    executor.set_error(err);
+                    return None;
+                }
+            }
         }
-    })?;
+    }
     // Get root Executor.
     while let Some(mut parent) = executor.parent_fiber {
         // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor

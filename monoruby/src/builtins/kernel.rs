@@ -137,6 +137,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "spawn", spawn);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
     globals.define_builtin_module_func(kernel_class, "fork", fork, 0);
+    globals.define_builtin_module_func_with(
+        kernel_class,
+        "trap",
+        crate::builtins::process::signal_trap,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_module_func_with(kernel_class, "sleep", sleep, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);

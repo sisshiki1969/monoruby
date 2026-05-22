@@ -1,229 +1,176 @@
 # Signal handling and hang prevention
 
-Plan for extending monoruby's runtime so that:
+monoruby runs on a single OS thread with a register-based VM and an
+x86-64 JIT. Two consequences shaped this subsystem:
 
-1. Signals beyond SIGINT are caught and surfaced as Ruby exceptions.
-2. Common single-threaded-runtime hangs (mutex / sizedqueue, argf, file)
-   no longer terminate the test process.
+1. POSIX signals must be turned into Ruby-level behaviour (exceptions or
+   `Signal.trap` handlers) **without** running Ruby code in
+   async-signal context.
+2. Several single-threaded-runtime situations would otherwise hang the
+   process — and, in CI, the test runner — instead of failing.
 
-Tracked in this document; updated as items land.
+This document describes **what is implemented today** and **what is
+planned next**.
 
 ---
 
-## Current architecture (baseline)
+## Current implementation
 
-- A single AOT-generated asm stub is registered for `SIGINT` only in
-  [monoruby/src/codegen.rs:892](../monoruby/src/codegen.rs#L892).
-  The stub does:
+### Signal capture pipeline
+
+Signals are never serviced inside the OS handler. A tiny
+async-signal-safe asm stub only *records* the signal; the real work
+happens at the next interpreter *poll point*.
+
+- **Pending-signal bitmap.** `JitModule` holds a 32-bit
+  `pending_signals` label — bit `n` corresponds to signal `n + 1` (so
+  `SIGINT` = 2 ⇒ bit 1). Writes are an async-safe `OR`; the poll point
+  reads-and-clears.
+  ([monoruby/src/codegen.rs](../monoruby/src/codegen.rs))
+- **Per-signal asm stubs.** `JitModule::signal_handler_for(signo)` emits,
+  for each signal:
 
   ```asm
-  addl [rip + alloc_flag], 10   ; nudge GC poll
-  movl [rip + sigint_flag], 1   ; mark SIGINT pending
+  addl [rip + alloc_flag], 10        ; force the next allocation to hit the GC poll
+  orl  [rip + pending_signals], bit  ; mark this signal pending (async-safe OR)
   ret
   ```
 
-- Polling happens only inside `execute_gc`
-  ([monoruby/src/executor.rs:2557](../monoruby/src/executor.rs#L2557)).
-  If the flag is set, the executor's error slot is filled with
-  `MonorubyErr::runtimeerr("Interrupt")` — a plain RuntimeError, **not**
-  a real `Interrupt`. `Interrupt` as a class does not exist yet
-  (`SignalException` does, in
-  [monoruby/src/builtins/exception.rs:42](../monoruby/src/builtins/exception.rs#L42)).
-- There is no `Signal.trap` / `Kernel#trap`. Only `Signal.list` and
-  `Signal.signame` exist.
+  A stub is pre-generated at `Codegen::new` for **every** signal in
+  `signal_table::TRAPPABLE_SIGNALS`, but only the default-install set
+  (`POSIX_SIGNALS`, currently just `SIGINT`) is `sigaction(2)`'d at
+  startup. The rest are armed on demand by `Signal.trap`, so trapping
+  never has to JIT-emit code into a live buffer.
+- **Poll point.** `execute_gc` (the allocation-driven GC poll) drains the
+  bitmap via `signal_table::lowest_pending_signo` and dispatches the
+  lowest-numbered pending signal. This is currently the **only** poll
+  point. ([monoruby/src/executor.rs](../monoruby/src/executor.rs))
 
-## A. Signal handling generalization
+### Signal → exception mapping
 
-### A1. Pending-signal bitmap
+When no user handler is installed, `signal_table::signo_to_error` maps a
+signo to the Ruby error raised at the poll point:
 
-Replace the single-purpose `sigint_flag: i32` with a 32-bit
-`pending_signals: i32` bitmap. Bit `n` corresponds to signal `n + 1`.
-Reads/writes use `OR` / `XCHG`, both async-signal-safe.
+| Signal                                            | Mapped class                  |
+|---------------------------------------------------|-------------------------------|
+| `SIGINT`                                          | `Interrupt` (real class)      |
+| `SIGTERM`/`SIGHUP`/`SIGUSR1`/`SIGUSR2`/`SIGQUIT`/`SIGPIPE` | `SignalException` ("SIG…")     |
 
-### A2. Per-signal asm stubs
+`Interrupt < SignalException` is a real class
+([monoruby/src/builtins/exception.rs](../monoruby/src/builtins/exception.rs)),
+so `rescue Interrupt` works. Only `SIGINT` is installed by default:
+CRuby's default action for the others is *terminate the process*, and
+unconditionally catching them would break
+`Process.kill("TERM", child); $?.signaled?` patterns that fork tests
+rely on.
 
-Generalize `signal_handler` in
-[monoruby/src/codegen.rs:248](../monoruby/src/codegen.rs#L248) to a
-factory: for each supported signal, emit a tiny stub that sets its own
-bit and nudges `alloc_flag`. `Codegen::new` iterates the supported list
-and `sigaction`s each.
+### `Signal.trap` / `Kernel#trap`
 
-### A3. Registered set
+`Signal.trap(sig, command = nil, &block)` and the private `Kernel#trap`
+([monoruby/src/builtins/process.rs](../monoruby/src/builtins/process.rs),
+`signal_trap`).
 
-The runtime *infrastructure* (bitmap, mapping table, async-safe stub
-emitter) supports any of the catchable POSIX signals. What is
-unconditionally installed at startup is a smaller set, because the
-CRuby default for most signals is "terminate the process", not "raise":
+- **Per-signo disposition table.** `Globals::signal_handlers:
+  Vec<SignalDisposition>`, with `Handler` objects marked as GC roots in
+  `Globals::mark`. `SignalDisposition`
+  ([monoruby/src/codegen/signal_table.rs](../monoruby/src/codegen/signal_table.rs))
+  is one of:
 
-| Signal                                                    | Default install | Mapped class                       |
-|-----------------------------------------------------------|-----------------|------------------------------------|
-| SIGINT                                                    | **yes**         | `Interrupt`                         |
-| SIGTERM, SIGHUP, SIGUSR1, SIGUSR2, SIGQUIT, SIGPIPE       | only via A7     | `SignalException` ("SIG…")          |
-| **Not catchable**: SIGKILL, SIGSTOP                       | —               | —                                   |
-| **Left to kernel**: SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT | —            | (core-dump on genuine bugs)         |
+  | variant                 | OS disposition                       | reported back as              |
+  |-------------------------|--------------------------------------|-------------------------------|
+  | `Default`               | re-arm stub (if default-installed) else `SIG_DFL` | `"DEFAULT"`        |
+  | `SystemDefault`         | `SIG_DFL`                            | `"SYSTEM_DEFAULT"`            |
+  | `Ignore { from_nil }`   | `SIG_IGN`                            | `nil` (set via `nil`) / `"IGNORE"` |
+  | `Handler(Value)`        | the pre-generated stub               | the callable (by identity)    |
 
-Unconditionally catching SIGTERM/HUP/etc would break process-status
-tests that rely on `Process.kill("TERM", child); $?.signaled? == true`
-(CRuby's default is "kernel terminates the child", and `wait` reports
-the signal — not an exception). Once A7 (`Signal.trap`) is implemented,
-the runtime can `sigaction` the additional signals on first trap and
-deinstall on `:DEFAULT`. The mapping table is already pre-wired so A7
-only needs to flip the install bit.
+  The initial state is `Default` for the default-installed set (`SIGINT`)
+  and `SystemDefault` for every other signal — matching CRuby's initial
+  `"DEFAULT"` vs `"SYSTEM_DEFAULT"` reports.
+- **Install.** `trap` only `sigaction(2)`s the pre-generated stub:
+  `install_signal_stub` / `_ignore` / `_default` / `_system_default`
+  flip the OS disposition to stub / `SIG_IGN` / re-arm-or-`SIG_DFL` /
+  `SIG_DFL`.
+- **Dispatch.** At the poll point a `Handler` is invoked via
+  `#call(signo)`, so a `Proc`, `Method`, or any callable works; a
+  non-callable raises `NoMethodError` at delivery, per CRuby. `Ignore`
+  drops; `Default` / `SystemDefault` fall back to the exception mapping.
+- **CRuby-compatible parsing & errors:**
+  - **Signal arg:** Integer (validated; `#to_int` is never called),
+    String / `#to_str`-able, or Symbol — otherwise
+    `ArgumentError: bad signal type <Class>`. Out-of-range Integer ⇒
+    `invalid signal number (N)`; unknown name ⇒
+    `unsupported signal 'SIG…'`.
+  - **Reserved:** `SIGKILL` / `SIGSTOP` ⇒
+    `ArgumentError: Signal already used by VM or OS` (CRuby may raise
+    `Errno::EINVAL`; the spec accepts either);
+    `SIGSEGV` / `SIGBUS` / `SIGILL` / `SIGFPE` / `SIGVTALRM` ⇒
+    `can't trap reserved signal: SIG…`. The fault signals are left to the
+    kernel's core-dump path on purpose.
+  - **Command:** `"DEFAULT"`/`"SIG_DFL"`, `"SYSTEM_DEFAULT"`,
+    `"IGNORE"`/`"SIG_IGN"`/`""`/`nil`, or any callable.
 
-### A4. `Interrupt` class
+**ruby/spec `core/signal`: 47 / 52** (`list` 4/4, `signame` 6/6,
+`trap` 37/42).
 
-Add `Interrupt < SignalException` so the existing SIGINT path raises the
-right class. Currently it raises `RuntimeError` with the message
-`"Interrupt"`, which silently passes most user code but breaks
-`rescue Interrupt` and ruby/spec checks.
+Coverage: registration / return-value / error semantics as `process.rs`
+unit tests; signal *delivery* (Proc/Method/callable handlers,
+non-callable `NoMethodError`, signo argument, IGNORE swallows, DEFAULT
+re-terminates, SIGINT ⇒ Interrupt) as subprocess-isolated tests in
+[monoruby/tests/signal_trap.rs](../monoruby/tests/signal_trap.rs).
+Delivery cannot be tested in-process: sending a process-wide signal is
+unsafe under cargo's parallel test threads.
 
-### A5. Polling frequency
+### Hang prevention
 
-Today only `execute_gc` polls. A tight CPU loop with no allocations
-never sees the flag. Candidates for additional poll sites:
-
-- Backward branch (loop iteration) in the VM dispatch table.
-- Method entry, sampled (e.g. once every 64 calls).
-
-Defer until measurements show the GC-only poll is insufficient.
-
-### A6. Signal → exception mapping table
-
-A small Rust const table drives the conversion at poll time:
-
-```rust
-static SIGNAL_TABLE: &[(c_int, &str, fn() -> MonorubyErr)] = &[
-    (SIGINT,  "INT",  || MonorubyErr::interrupt("Interrupt")),
-    (SIGTERM, "TERM", || MonorubyErr::signalexception("SIGTERM")),
-    // …
-];
-```
-
-The poller walks the bitmap, clears the bit, looks up the mapping, sets
-the error on the executor. Priority is bit order — lowest signo first.
-
-### A7. `Signal.trap` (deferred)
-
-Out of scope for the first cut. Sketch:
-
-- `Globals` carries `Vec<Option<Value>>` of length 32, indexed by signo.
-- Poll-time conversion checks the slot first; if a Proc is present,
-  invoke it; otherwise fall back to A6's default mapping.
-- `Signal.trap("INT") { ... }` writes the slot. `Signal.trap("INT", "DEFAULT")`
-  clears it. `Signal.trap("INT", "IGNORE")` installs a sentinel that swallows.
-
----
-
-## B. Hang prevention
-
-### B1. `core/mutex`, `core/sizedqueue` (single-thread-incompatible)
-
-Root cause: `Thread.new` returns a Thread that never gets scheduled
-because monoruby is single-threaded, so `join` / `value` / mutex+CV
-patterns block forever.
-
-Two approaches, pick one:
-
-- **Run-block-synchronously**: `Thread.new { … }` runs the block on the
-  caller's stack to completion before returning the Thread. `join` /
-  `value` then return immediately. Closely matches what most tests
-  expect under cooperative concurrency. Risk: tests that depend on
-  *concurrent* visibility of mutated state will still fail, but at
-  least they won't hang.
-- **Eager ThreadError**: any blocking thread op (`Thread#join`,
-  `ConditionVariable#wait`, `Queue#pop` empty, …) raises
-  `ThreadError("can't block — monoruby is single-threaded")` immediately.
-  Safer, more honest; converts hangs to failures.
-
-Recommendation: start with eager ThreadError (cheaper, no semantic
-surprises). Revisit run-synchronously if too many tests would benefit.
-
-### B2. `core/argf`
-
-ARGF reads stdin when ARGV is empty. mspec may not redirect stdin;
-the parent shell may leave it open to the tty. Investigation needed:
-
-- Identify the spec file that hangs (the survey output stops at a
-  specific dotted position).
-- Determine whether the underlying issue is monoruby-specific
-  (`Kernel#gets` not returning nil at EOF when stdin is the terminal)
-  or a missing `<` redirect in the mspec invocation.
-
-No code change planned without that diagnosis.
-
-### B3. `core/file` — **done**
-
-Caused by a subprocess (`ruby_exe` in mspec) hitting the
-`Thread.pass called too many times` guard. The pure-Ruby `Thread.pass`
-counted its calls and raised `ThreadError` after 1000, so the subprocess
-aborted and the parent waited on its pipe forever.
-
-Resolved via option 1: the artificial guard is gone and `Thread.pass`
-is now a native `sched_yield(2)` wrapper
-([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs),
-`std::thread::yield_now()`). It returns nil and never raises — a cheap,
-legitimate no-op when nothing else is runnable. `Thread` is created in
-Rust (subclass of `Object`) and reopened by the pure-Ruby class in
-`startup.rb`, matching how `Dir` / `File` / `IO` are split.
-
-Option 2 (raising `ThreadError` eagerly at genuinely-blocking call sites)
-is tracked separately as B1 / #3.
-
-### B+. Watchdog (safety net) — **done**
-
-Optional environment toggle `MONORUBY_HANG_WATCHDOG_SEC=N`. After N
-seconds of no interpreter progress, abort the process with a clear
-message. Default off. Catches unknown hangs in CI and converts them to
-errors instead of opaque timeouts.
-
-Implemented in
-[monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs):
-
-- `init` (called once from `Globals::new`) reads the env var; when
-  `N > 0` it installs a `SIGALRM` handler and a 1 Hz `setitimer`. Unset
-  / `<= 0` ⇒ no syscalls installed, fully disabled.
-- A `COUNTDOWN` (seconds) is reset to `N` at the VM poll point
-  (`execute_gc`, via `watchdog::poll`) — i.e. "progress was made".
-- The `SIGALRM` handler decrements `COUNTDOWN` once per second and, on
-  reaching zero, `write(2)`s a message and `_exit(134)`s. The abort
-  decision lives in the handler, *not* the poll point, because a genuine
-  hang never reaches the poll point. The handler touches only an atomic,
-  `write` and `_exit`, all async-signal-safe.
-
-**Limitation:** the only poll point today is the allocation-driven GC
-poll, so the watchdog catches hangs that make *no* heap allocations
-(tight non-allocating loops, `sleep`/`Thread.pass`-until-flag spins —
-the common single-thread hang shapes). A spin loop that keeps
-allocating resets the countdown and is *not* caught. Adding the A5
-backward-branch poll point would close that gap; until then a watchdog
-budget should be set comfortably above the slowest legitimate
-allocating example.
-
-Coverage: [monoruby/tests/watchdog.rs](../monoruby/tests/watchdog.rs)
-(fires on a non-allocating hang; silent when unset; no false-fire when
-the program finishes within budget).
+- **`Thread.pass` is a native `sched_yield(2)`**
+  ([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs),
+  `std::thread::yield_now()`) — returns `nil`, never raises. It replaced
+  an artificial "called too many times" guard that aborted `ruby_exe`
+  subprocesses and hung `core/file`. `Thread` is a Rust class reopened by
+  the pure-Ruby class in `startup.rb` (like `Dir` / `File` / `IO`).
+- **Optional hang watchdog**
+  ([monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs)) —
+  `MONORUBY_HANG_WATCHDOG_SEC=N`, default off. A `SIGALRM` + 1 Hz
+  `setitimer` handler decrements a countdown that the poll point resets
+  ("progress was made"); on reaching zero it `write(2)`s a message and
+  `_exit(134)`s, turning an opaque CI timeout into a fast, labelled
+  failure. The handler touches only an atomic, `write`, and `_exit` (all
+  async-signal-safe). Because the GC poll is the only poll point, it
+  catches hangs that make *no* allocations (the common single-thread
+  shapes); an allocating spin resets the countdown and is not caught.
+  Coverage: [monoruby/tests/watchdog.rs](../monoruby/tests/watchdog.rs).
 
 ---
 
-## Recommended order
+## Future plans
 
-| # | Item                                                          | Size      | Outcome                                                                       |
-|---|---------------------------------------------------------------|-----------|-------------------------------------------------------------------------------|
-| 1 | A1–A4 + A6 (signal generalization + Interrupt class)          | ~150 LoC  | `core/signal` and `core/exception` stop killing the process                   |
-| 2 | B3 (`Thread.pass` guard revisit)                              | small     | `core/file` hang clears                                                       |
-| 3 | B1 (eager `ThreadError` on blocking thread ops)               | medium    | `core/mutex`, `core/sizedqueue` complete (with failures, not hangs)           |
-| 4 | B+ (watchdog)                                                 | small     | Safety net for the long tail                                                  |
-| 5 | A5 (extra poll points), B2 (argf), A7 (`Signal.trap`)         | as needed | Responsiveness, remaining argf hang, full user API                            |
+### Signal handling
 
----
+- **More poll points.** The GC poll is the only one today, so a signal
+  delivered during a tight *non-allocating* loop is seen only once the
+  loop allocates — affecting both `Signal.trap` responsiveness and the
+  watchdog. A backward-branch (loop-iteration) poll in the VM dispatch,
+  and possibly a sampled method-entry poll, would close this gap.
+  Deferred until measurements show the GC-only poll is insufficient.
+- **Remaining `core/signal` examples (5):**
+  - `:EXIT` pseudo-signal — `Signal.trap(:EXIT, …)` must run before
+    `at_exit` handlers; needs at-exit integration.
+  - Creating a new `Thread` from inside a handler — blocked on the
+    single-threaded `Thread` model.
+  - `SIGPIPE` `"SYSTEM_DEFAULT"` — CRuby ignores `SIGPIPE` by default
+    (write errors surface as `Errno::EPIPE`) and reports the initial
+    handler as `nil`; monoruby currently leaves it at `SIG_DFL`.
 
-## Status
+### Hang prevention
 
-- [x] #1 Signal generalization infrastructure + `Interrupt` class
-  (default install limited to SIGINT — see A3 above)
-- [x] #2 `Thread.pass` guard removed; now a native `sched_yield(2)`
-  wrapper ([monoruby/src/builtins/thread.rs](../monoruby/src/builtins/thread.rs))
-- [ ] #3 Eager `ThreadError`
-- [x] #4 Watchdog — `MONORUBY_HANG_WATCHDOG_SEC=N`, SIGALRM-driven,
-  default off ([monoruby/src/watchdog.rs](../monoruby/src/watchdog.rs))
-- [ ] #5 Stretch items
+- **Eager `ThreadError` on blocking thread ops.** `Thread#join` /
+  `value`, `ConditionVariable#wait`, empty `Queue#pop`, etc. cannot make
+  progress on a single thread, so they should raise `ThreadError`
+  immediately rather than block forever — converting the remaining
+  `core/mutex` / `core/sizedqueue` hangs into honest failures. (An
+  alternative, running `Thread.new` synchronously on the caller's stack,
+  is recorded but not chosen.)
+- **`core/argf` hang.** ARGF reads stdin when ARGV is empty; the hang
+  needs diagnosis (monoruby `Kernel#gets` not returning `nil` at tty EOF
+  vs a missing `<` redirect in the mspec invocation) before any code
+  change.

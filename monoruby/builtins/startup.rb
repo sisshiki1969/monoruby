@@ -589,12 +589,6 @@ class Fiber
   end
 end
 
-class Signal
-  def self.trap(signal, command = nil, &block)
-    # No-op for now.
-  end
-end
-
 class Thread
   # monoruby is single-threaded. Thread.new does NOT execute blocks
   # concurrently. Only Thread.current (the main thread) is meaningful.

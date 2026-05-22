@@ -125,6 +125,12 @@ pub struct Globals {
     /// block, so it reads the real arity from here instead. A stack
     /// supports nested enumerators.
     pub(crate) enum_block_arity: Vec<i64>,
+    /// Per-signal trap disposition, indexed by signo (1..=32; index 0 is
+    /// unused). Written by `Signal.trap` / `Kernel#trap` and consulted
+    /// at the poll point (`execute_gc`) to decide whether a pending
+    /// signal runs a Ruby `Proc`, is ignored, or lowers to the default
+    /// exception. See doc/signal_handling.md A7.
+    pub(crate) signal_handlers: Vec<crate::codegen::signal_table::SignalDisposition>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -157,6 +163,13 @@ impl alloc::GC<RValue> for Globals {
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
         self.symbol_names.values().for_each(|v| v.mark(alloc));
+        // Trap handler Procs are GC roots: they are reachable only from
+        // this table, yet may be invoked at any future poll point.
+        for disp in &self.signal_handlers {
+            if let crate::codegen::signal_table::SignalDisposition::Handler(v) = disp {
+                v.mark(alloc);
+            }
+        }
     }
 }
 
@@ -175,6 +188,28 @@ impl Globals {
 
     pub(crate) fn current_enum_block_arity(&self) -> Option<i64> {
         self.enum_block_arity.last().copied()
+    }
+
+    /// The current trap disposition for `signo`. Out-of-range signos
+    /// (defensive) report `Default`.
+    pub(crate) fn signal_disposition(
+        &self,
+        signo: i32,
+    ) -> crate::codegen::signal_table::SignalDisposition {
+        self.signal_handlers
+            .get(signo as usize)
+            .copied()
+            .unwrap_or(crate::codegen::signal_table::SignalDisposition::Default)
+    }
+
+    /// Install a new trap disposition for `signo`, returning the previous
+    /// one. Caller is responsible for the matching `sigaction(2)` change.
+    pub(crate) fn set_signal_disposition(
+        &mut self,
+        signo: i32,
+        disp: crate::codegen::signal_table::SignalDisposition,
+    ) -> crate::codegen::signal_table::SignalDisposition {
+        std::mem::replace(&mut self.signal_handlers[signo as usize], disp)
     }
 }
 
@@ -303,6 +338,18 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             symbol_names: HashMap::default(),
+            // signo runs 1..=32; index by signo directly (slot 0 unused).
+            // Every signal starts at the OS default ("SYSTEM_DEFAULT"),
+            // except the default-installed set (SIGINT), whose runtime
+            // default is "DEFAULT" (raise Interrupt). See A7.
+            signal_handlers: {
+                use crate::codegen::signal_table::{self, SignalDisposition};
+                let mut v = vec![SignalDisposition::SystemDefault; 33];
+                for &signo in signal_table::POSIX_SIGNALS {
+                    v[signo as usize] = SignalDisposition::Default;
+                }
+                v
+            },
             invokers,
             enum_block_arity: Vec::new(),
             #[cfg(feature = "profile")]
