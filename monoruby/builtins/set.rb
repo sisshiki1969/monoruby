@@ -29,6 +29,7 @@ end
 
 module Enumerable
   def to_set(klass = Set, *args, &block)
+    warn "warning: Enumerable#to_set is deprecated. Use Set[] or Set.new directly instead."
     klass.new(self, *args, &block)
   end
 end
