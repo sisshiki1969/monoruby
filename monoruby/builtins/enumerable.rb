@@ -1092,16 +1092,47 @@ module Enumerable
   # `Enumerator::Chain`, but a plain `Enumerator` satisfies every
   # `Enumerable::Chain` assertion except the class check.
   def chain(*enums)
-    parts = [self, *enums]
-    Enumerator.new do |y|
-      parts.each do |part|
-        part.each { |x| y << x }
-      end
-    end
+    Enumerator::Chain.new(self, *enums)
   end
 end
 
 class Enumerator
+  # Enumerator::Chain walks `self` and the provided enumerables in
+  # sequence. Returned by `Enumerable#chain`.
+  class Chain
+    include Enumerable
+
+    def initialize(*enums)
+      @enums = enums
+    end
+
+    def each(&block)
+      return to_enum(:each) { size } unless block
+      @enums.each do |e|
+        e.each { |*x| block.call(*x) }
+      end
+      self
+    end
+
+    def size
+      total = 0
+      @enums.each do |e|
+        s = e.respond_to?(:size) ? e.size : nil
+        return s if s.nil? || (s.respond_to?(:infinite?) && s.infinite?)
+        total += s
+      end
+      total
+    end
+
+    def rewind
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Chain: #{@enums.inspect}>"
+    end
+  end
+
   # Enumerator::Lazy is a minimal placeholder class.
   # Full lazy evaluation is blocked by a known block variable capture
   # limitation (see Issue #228). The class exists so that calling
