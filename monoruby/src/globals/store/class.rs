@@ -2003,6 +2003,46 @@ impl Store {
         }
         None
     }
+
+    ///
+    /// `check_super` variant that takes a single, precise *owner*
+    /// (defined_class) from the call frame's CME rather than consulting
+    /// the function's `owner_class` `Vec`. Walks *self_class*'s ancestor
+    /// chain to the iclass of *owner*, then searches *name* from its
+    /// superclass. Falls back to a plain lookup when *owner* is not in
+    /// the chain (mirrors `check_super`).
+    ///
+    pub(crate) fn check_super_from_owner(
+        &self,
+        self_class: ClassId,
+        owner: ClassId,
+        current_func_id: FuncId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        let mut module = Some(self.get_module(self_class));
+        let mut matched_owner = false;
+        while let Some(m) = module {
+            if !m.has_origin() && m.id() == owner {
+                matched_owner = true;
+                if let Some(super_module) = m.superclass()
+                    && let Some(entry) = self.search_method(super_module, name)
+                    && let Some(super_fid) = entry.func_id()
+                    && super_fid != current_func_id
+                {
+                    return Some(super_fid);
+                }
+            }
+            module = m.superclass();
+        }
+        if !matched_owner
+            && let Some(entry) = self.search_method(self.get_module(self_class), name)
+            && let Some(fid) = entry.func_id()
+            && fid != current_func_id
+        {
+            return Some(fid);
+        }
+        None
+    }
 }
 
 impl Globals {

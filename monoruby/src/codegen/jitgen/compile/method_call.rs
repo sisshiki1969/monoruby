@@ -303,7 +303,11 @@ impl<'a> JitContext<'a> {
             state.unset_no_capture_guard(self);
         }
 
-        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
+        let cme = self
+            .store
+            .resolve_call_cme(recv_class, self.store[callid].name, fid, self.class_version())
+            .map_or(0, |c| c.get());
+        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp, cme);
 
         Ok(CompileResult::Continue)
     }
@@ -612,11 +616,16 @@ impl<'a> JitContext<'a> {
             callid,
         )?;
         let evict = ir.new_evict();
+        let cme = self
+            .store
+            .resolve_call_cme(recv_class, self.store[callid].name, fid, self.class_version())
+            .map_or(0, |c| c.get());
         state.send_specialized(
             ir,
             &self.store,
             callid,
             fid,
+            cme,
             entry,
             patch_point,
             evict,
@@ -797,6 +806,7 @@ impl AbstractState {
         callee_fid: FuncId,
         recv_class: ClassId,
         outer_lfp: Option<Lfp>,
+        cme: u32,
     ) {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
@@ -815,6 +825,7 @@ impl AbstractState {
             meta,
             callid,
             outer_lfp,
+            cme,
         });
         ir.push(AsmInst::Call {
             callee_fid,
@@ -841,6 +852,7 @@ impl AbstractState {
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
+        cme: u32,
         inlined_entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
@@ -866,6 +878,7 @@ impl AbstractState {
             meta,
             callid,
             outer_lfp: None,
+            cme,
         });
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,

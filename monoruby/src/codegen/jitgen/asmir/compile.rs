@@ -489,8 +489,9 @@ impl Codegen {
                 meta,
                 callid,
                 outer_lfp,
+                cme,
             } => {
-                self.setup_method_frame(store, meta, callid, outer_lfp);
+                self.setup_method_frame(store, meta, callid, outer_lfp, cme);
             }
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);

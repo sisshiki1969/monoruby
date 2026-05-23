@@ -84,8 +84,9 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
-    /// interned callable method entries.
-    cme_table: CmeTable,
+    /// interned callable method entries. `RefCell` so the JIT can
+    /// intern precise per-call CMEs through an immutable `&Store`.
+    cme_table: RefCell<CmeTable>,
 }
 
 impl std::ops::Deref for Store {
@@ -199,7 +200,7 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
-            cme_table: CmeTable::default(),
+            cme_table: RefCell::new(CmeTable::default()),
         }
     }
 
@@ -207,21 +208,47 @@ impl Store {
     /// Intern the callable method entry `(func_id, owner, called_id)`,
     /// returning its [`CmeId`]. Identical triples share a `CmeId`.
     ///
-    pub(crate) fn intern_cme(
-        &mut self,
-        func_id: FuncId,
-        owner: ClassId,
-        called_id: IdentId,
-    ) -> CmeId {
-        self.cme_table.intern(Cme::new(func_id, owner, called_id))
+    pub(crate) fn intern_cme(&self, func_id: FuncId, owner: ClassId, called_id: IdentId) -> CmeId {
+        self.cme_table
+            .borrow_mut()
+            .intern(Cme::new(func_id, owner, called_id))
     }
 
     ///
-    /// Resolve a [`CmeId`] back to its [`Cme`].
+    /// Resolve a [`CmeId`] back to its [`Cme`] (a small `Copy` value).
     ///
-    #[allow(dead_code)]
-    pub(crate) fn cme(&self, id: CmeId) -> &Cme {
-        &self.cme_table[id]
+    pub(crate) fn cme(&self, id: CmeId) -> Cme {
+        self.cme_table.borrow()[id]
+    }
+
+    ///
+    /// Resolve the precise CME for a call of *callee_fid* on a receiver
+    /// of *recv_class* via call name *name* (`None` for `super`).
+    ///
+    /// For a named call the owner is the class in `recv_class`'s ancestor
+    /// chain where the method was found; for `super` (or an unresolvable
+    /// lookup) it falls back to the callee's per-`FuncId` default CME.
+    ///
+    /// Takes *class_version* explicitly (rather than reading the global
+    /// version through `CODEGEN`) so it is safe to call from inside JIT
+    /// compilation, which already holds the `CODEGEN` borrow.
+    ///
+    pub(crate) fn resolve_call_cme(
+        &self,
+        recv_class: ClassId,
+        name: Option<IdentId>,
+        callee_fid: FuncId,
+        class_version: u32,
+    ) -> Option<CmeId> {
+        if let Some(name) = name
+            && let Some(entry) =
+                self.check_method_for_class_with_version(recv_class, name, class_version)
+            && entry.func_id() == Some(callee_fid)
+        {
+            Some(self.intern_cme(callee_fid, entry.owner(), name))
+        } else {
+            self[callee_fid].default_cme()
+        }
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {

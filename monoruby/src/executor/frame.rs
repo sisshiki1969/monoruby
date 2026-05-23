@@ -134,6 +134,14 @@ impl Cfp {
     }
 
     ///
+    /// Get the [`CmeId`] of the current method frame (the outermost
+    /// non-block LFP), or `None` if that frame carries no CME.
+    ///
+    pub(crate) fn method_cme(&self) -> Option<CmeId> {
+        self.outermost_lfp().cme_slot()
+    }
+
+    ///
     /// Get *FuncId* of a current position in the source code.
     ///
     pub fn get_source_pos(&self) -> FuncId {
@@ -375,6 +383,21 @@ impl Lfp {
     /// (`Executor::current_lep`) has already resolved the LEP.
     pub(crate) fn set_svar_slot_value(self, val: Value) {
         self.set_svar_slot(val);
+    }
+
+    ///
+    /// Read this frame's `LFP_CME` slot — the interned [`CmeId`] of the
+    /// call that built this frame, or `None` for the zero sentinel
+    /// (block / non-CME frames). The slot holds a `u32` `CmeId` written
+    /// zero-extended into the 8-byte slot at call setup.
+    ///
+    pub(crate) fn cme_slot(self) -> Option<CmeId> {
+        let raw = unsafe { *(self.sub(LFP_CME as _) as *const u32) };
+        if raw == 0 {
+            None
+        } else {
+            Some(CmeId::new(raw))
+        }
     }
 
     ///

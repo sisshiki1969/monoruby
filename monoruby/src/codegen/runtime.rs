@@ -31,7 +31,20 @@ fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
     let self_val = vm.cfp().lfp().self_val();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    match globals.store.check_super(self_class, func_id, func_name) {
+    // Prefer the precise defined_class (owner) recorded in the current
+    // method frame's CME (written by the JIT at call setup). Frames
+    // without a CME (interpreter, etc.) fall back to the FuncInfo
+    // `owner_class` walk, which also handles multi-owner shared bodies.
+    let resolved = match vm.cfp().method_cme() {
+        Some(cme_id) => {
+            let owner = globals.store.cme(cme_id).owner();
+            globals
+                .store
+                .check_super_from_owner(self_class, owner, func_id, func_name)
+        }
+        None => globals.store.check_super(self_class, func_id, func_name),
+    };
+    match resolved {
         Some(func_id) => Ok(func_id),
         None => Err(MonorubyErr::method_not_found(globals, func_name, self_val)),
     }

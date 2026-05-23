@@ -1243,6 +1243,9 @@ pub(super) enum AsmInst {
         meta: Meta,
         callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        /// Precise [`CmeId`] for this call (`0` = none), resolved at
+        /// compile time and baked into `LFP_CME` as an immediate.
+        cme: u32,
     },
     ///
     /// Set up a callee block frame for yield.

@@ -163,11 +163,9 @@ impl Codegen {
         meta: Meta,
         callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        cme: u32,
     ) {
         let callsite = &store[callid];
-        // The callee's per-`FuncId` default CME, baked in as an
-        // immediate at compile time (`0` = none).
-        let cme = store[meta.func_id()].default_cme().map_or(0, |c| c.get());
         if let Some(outer_lfp) = outer_lfp {
             monoasm! { &mut self.jit,
                 movq rax, (outer_lfp.as_ptr());

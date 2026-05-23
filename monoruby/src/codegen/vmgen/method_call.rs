@@ -184,13 +184,13 @@ impl Codegen {
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // SVAR: zero-fill (lazy `$~` allocation writes it on first
-            // MatchData). CME: load the callee's per-`FuncId` default
-            // entry (`0` = none) from the live `FuncData`. Neither slot
-            // holds a GC pointer, so the mark walker stays sound.
+            // SVAR / CME: zero-fill. The interpreter does not yet write a
+            // precise per-call CME (that needs the inline cache to carry
+            // owner/called_id), so `super` / reflection on interpreter
+            // frames fall back to the FuncInfo-based resolution. Neither
+            // slot holds a GC pointer.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movl rax, [r15 + (FUNCDATA_CME)];
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], rax;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         }
         monoasm! { &mut self.jit,
             movzxw r9, [r13 + (POS_NUM)];
