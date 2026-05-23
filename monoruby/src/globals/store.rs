@@ -8,9 +8,11 @@ use super::*;
 use std::{cell::RefCell, pin::Pin};
 
 mod class;
+mod cme;
 mod function;
 mod iseq;
 pub use class::*;
+pub(crate) use cme::*;
 pub use function::*;
 pub(crate) use iseq::*;
 
@@ -82,6 +84,9 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+    /// interned callable method entries.
+    #[allow(dead_code)]
+    cme_table: CmeTable,
 }
 
 impl std::ops::Deref for Store {
@@ -175,6 +180,7 @@ impl std::ops::Index<OptCaseId> for Store {
     }
 }
 
+
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -194,7 +200,30 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
+            cme_table: CmeTable::default(),
         }
+    }
+
+    ///
+    /// Intern the callable method entry `(func_id, owner, called_id)`,
+    /// returning its [`CmeId`]. Identical triples share a `CmeId`.
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn intern_cme(
+        &mut self,
+        func_id: FuncId,
+        owner: ClassId,
+        called_id: IdentId,
+    ) -> CmeId {
+        self.cme_table.intern(Cme::new(func_id, owner, called_id))
+    }
+
+    ///
+    /// Resolve a [`CmeId`] back to its [`Cme`].
+    ///
+    #[allow(dead_code)]
+    pub(crate) fn cme(&self, id: CmeId) -> &Cme {
+        &self.cme_table[id]
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
