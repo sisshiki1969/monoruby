@@ -165,6 +165,9 @@ impl Codegen {
         outer_lfp: Option<Lfp>,
     ) {
         let callsite = &store[callid];
+        // The callee's per-`FuncId` default CME, baked in as an
+        // immediate at compile time (`0` = none).
+        let cme = store[meta.func_id()].default_cme().map_or(0, |c| c.get());
         if let Some(outer_lfp) = outer_lfp {
             monoasm! { &mut self.jit,
                 movq rax, (outer_lfp.as_ptr());
@@ -178,12 +181,12 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rax, (meta.get());
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // SVAR / CME slots — zero-fill so the GC mark walker
-            // never dereferences uninitialised stack memory. Lazy
-            // `$~` allocation rewrites SVAR on first MatchData; CME
-            // stays zero pending its own migration.
+            // SVAR: zero-fill (lazy `$~` rewrites it on first
+            // MatchData). CME: bake the default entry immediate.
+            // Neither slot holds a GC pointer.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
+            movq rax, (cme as u64);
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], rax;
         }
         self.set_block(callsite.block_fid, callsite.block_arg);
         monoasm! { &mut self.jit,
