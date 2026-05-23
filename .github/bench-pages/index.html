@@ -28,6 +28,7 @@
   .empty { color: #888; padding: 1em 0; }
   .controls { display: flex; flex-wrap: wrap; gap: 1.5em; align-items: center; margin: 0.5em 0 1em; font-size: 0.9em; }
   .controls select { font-size: 1em; padding: 0.2em 0.4em; }
+  .control-yratio { color: #555; }
 </style>
 </head>
 <body>
@@ -62,11 +63,14 @@
 <section>
   <h2>Per-benchmark history</h2>
   <p class="meta">
-    YJIT / monoruby ratio per master commit. Higher = monoruby faster.
-    Successful rows only — failure entries are skipped on this chart.
+    monoruby and YJIT per-commit history. Successful rows only — failures are skipped.
   </p>
   <div class="controls">
     <label>Benchmark: <select id="historySelect"></select></label>
+    <label class="control-yratio">
+      <input type="checkbox" id="historyYRatio" checked>
+      show YJIT / monoruby ratio instead of raw ms
+    </label>
   </div>
   <div id="historyWrap" style="position: relative; height: 360px;"><canvas id="historyChart"></canvas></div>
   <div id="historyEmpty" class="empty" hidden>No history yet for this benchmark.</div>
@@ -127,6 +131,25 @@ async function loadJson(path) {
   document.getElementById("latestBarWrap").style.height =
     Math.max(280, benches.length * 26) + "px";
 
+  // Always draws a bold red vertical line at x=1 (YJIT/monoruby parity),
+  // regardless of whether 1 happens to fall on a tick position.
+  const refLinePlugin = {
+    id: "refLine",
+    afterDraw(chart) {
+      const { ctx, scales: { x: xs }, chartArea } = chart;
+      const xPos = xs.getPixelForValue(1);
+      if (xPos < chartArea.left || xPos > chartArea.right) return;
+      ctx.save();
+      ctx.strokeStyle = "#c62828";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(xPos, chartArea.top);
+      ctx.lineTo(xPos, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
+
   // Plugin draws the failure reason as text inside the chart area for
   // benchmarks where either implementation didn't produce a result.
   // No bar is drawn for those rows (data is 0).
@@ -172,10 +195,7 @@ async function loadJson(path) {
             text: "relative speed (× YJIT, higher = monoruby faster)",
             align: "center",
           },
-          grid: {
-            color: ctx => ctx.tick.value === 1 ? "#c62828" : "rgba(0,0,0,0.08)",
-            lineWidth: ctx => ctx.tick.value === 1 ? 3 : 1,
-          },
+          grid: { color: "rgba(0,0,0,0.08)" },
         },
         y: { ticks: { autoSkip: false, font: { size: 13 }, color: "#1565c0" } },
       },
@@ -227,7 +247,7 @@ async function loadJson(path) {
         },
       },
     },
-    plugins: [failureTextPlugin],
+    plugins: [failureTextPlugin, refLinePlugin],
   });
 
   const tbody = document.querySelector("#latestTable tbody");
@@ -332,31 +352,65 @@ function parseCsv(text) {
   if (benchNames.includes(initial)) sel.value = initial;
   else sel.value = benchNames[0];
 
-  const empty = document.getElementById("historyEmpty");
+  const historyEmpty = document.getElementById("historyEmpty");
+  const yRatioCheckbox = document.getElementById("historyYRatio");
 
   let chart;
   function draw() {
     const name = sel.value;
+    const showRatio = yRatioCheckbox.checked;
+
+    // Filter depends on what we're plotting: ratio needs ratio != null,
+    // raw ms needs both ms values non-null.
     const points = rows
-      .filter(r => r.benchmark === name && r.monoruby_ms != null && r.yjit_ms != null)
+      .filter(r => {
+        if (r.benchmark !== name) return false;
+        return showRatio
+          ? r.ratio != null
+          : r.monoruby_ms != null && r.yjit_ms != null;
+      })
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-    empty.hidden = points.length > 0;
+    historyEmpty.hidden = points.length > 0;
+    if (!points.length) { if (chart) { chart.destroy(); chart = null; } return; }
 
-    const labels = points.map(p => p.timestamp);
+    const labels  = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
 
-    const datasets = [{
-      label: "YJIT / monoruby",
-      data: points.map(p => p.ratio),
-      borderColor: "#2e7d32",
-      backgroundColor: "rgba(46,125,50,0.15)",
-      tension: 0.15,
-      fill: true,
-      pointRadius: 3,
-    }];
+    const datasets = showRatio
+      ? [{
+          label: "YJIT / monoruby",
+          data: points.map(p => p.ratio),
+          borderColor: "#2e7d32",
+          backgroundColor: "rgba(46,125,50,0.15)",
+          tension: 0.15,
+          fill: true,
+          pointRadius: 3,
+        }]
+      : [
+          {
+            label: "monoruby (ms)",
+            data: points.map(p => p.monoruby_ms),
+            borderColor: "#1565c0",
+            backgroundColor: "rgba(21,101,192,0.10)",
+            tension: 0.15,
+            fill: false,
+            pointRadius: 3,
+          },
+          {
+            label: "YJIT (ms)",
+            data: points.map(p => p.yjit_ms),
+            borderColor: "#ef6c00",
+            backgroundColor: "rgba(239,108,0,0.10)",
+            tension: 0.15,
+            fill: false,
+            pointRadius: 3,
+          },
+        ];
 
-    const yTitle = "relative speed (× YJIT, higher = monoruby faster)";
+    const yTitle = showRatio
+      ? "relative speed (× YJIT, higher = monoruby faster)"
+      : "time (ms, lower is better)";
 
     const cfg = {
       type: "line",
@@ -365,7 +419,7 @@ function parseCsv(text) {
         maintainAspectRatio: false,
         scales: {
           x: { ticks: { autoSkip: true, maxTicksLimit: 12 } },
-          y: { beginAtZero: true, title: { display: true, text: yTitle } },
+          y: { beginAtZero: false, title: { display: true, text: yTitle } },
         },
         plugins: {
           legend: { display: true, position: "top", align: "end" },
@@ -389,6 +443,7 @@ function parseCsv(text) {
     history.replaceState(null, "", "#bench=" + encodeURIComponent(sel.value));
     draw();
   });
+  yRatioCheckbox.addEventListener("change", draw);
 
   draw();
 })();
