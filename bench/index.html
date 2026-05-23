@@ -366,8 +366,9 @@ function parseCsv(text) {
       .filter(r => {
         if (r.benchmark !== name) return false;
         return showRatio
-          ? r.ratio != null
-          : r.monoruby_ms != null && r.yjit_ms != null;
+          ? r.ratio != null && isFinite(r.ratio)
+          : r.monoruby_ms != null && isFinite(r.monoruby_ms) &&
+            r.yjit_ms    != null && isFinite(r.yjit_ms);
       })
       .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
@@ -376,6 +377,25 @@ function parseCsv(text) {
 
     const labels  = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
+
+    let yAxisOpts;
+    if (showRatio) {
+      yAxisOpts = {
+        beginAtZero: false,
+        title: { display: true, text: "relative speed (× YJIT, higher = monoruby faster)" },
+      };
+    } else {
+      // Compute explicit bounds so the axis always has a valid, readable range.
+      const allMs = points.flatMap(p => [p.monoruby_ms, p.yjit_ms]);
+      const minMs = Math.min(...allMs);
+      const maxMs = Math.max(...allMs);
+      const pad = Math.max((maxMs - minMs) * 0.15, 1);
+      yAxisOpts = {
+        min: Math.max(0, minMs - pad),
+        max: maxMs + pad,
+        title: { display: true, text: "time (ms, lower is better)" },
+      };
+    }
 
     const datasets = showRatio
       ? [{
@@ -408,10 +428,6 @@ function parseCsv(text) {
           },
         ];
 
-    const yTitle = showRatio
-      ? "relative speed (× YJIT, higher = monoruby faster)"
-      : "time (ms, lower is better)";
-
     const cfg = {
       type: "line",
       data: { labels, datasets },
@@ -419,7 +435,7 @@ function parseCsv(text) {
         maintainAspectRatio: false,
         scales: {
           x: { ticks: { autoSkip: true, maxTicksLimit: 12 } },
-          y: { beginAtZero: false, title: { display: true, text: yTitle } },
+          y: yAxisOpts,
         },
         plugins: {
           legend: { display: true, position: "top", align: "end" },
