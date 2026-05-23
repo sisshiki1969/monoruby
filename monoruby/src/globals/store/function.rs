@@ -717,6 +717,11 @@ struct FuncExt {
     ty: FuncType,
     /// class id which this function belongs to.
     owner: Vec<ClassId>,
+    /// Default callable method entry for this function, interned the
+    /// first time the method is installed in a class method table:
+    /// `(func_id, owner, definition name)`. Used as the per-`FuncId`
+    /// fallback CME when a precise per-call entry is unavailable.
+    default_cme: Option<CmeId>,
     /// `DestLabel` of entry site.
     entry: Option<DestLabel>,
     /// parameter information of this function.
@@ -782,6 +787,7 @@ impl FuncInfo {
                 name,
                 ty,
                 owner: vec![],
+                default_cme: None,
                 entry: None,
                 params,
                 effect,
@@ -1008,6 +1014,16 @@ impl FuncInfo {
 
     pub(crate) fn set_owner_class(&mut self, class: ClassId) {
         self.ext.owner.push(class);
+    }
+
+    // Read side wired up with the CmeId-in-frame migration.
+    #[allow(dead_code)]
+    pub(crate) fn default_cme(&self) -> Option<CmeId> {
+        self.ext.default_cme
+    }
+
+    pub(crate) fn set_default_cme(&mut self, cme: CmeId) {
+        self.ext.default_cme = Some(cme);
     }
 
     pub(super) fn entry_label(&self) -> DestLabel {

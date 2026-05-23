@@ -1639,6 +1639,8 @@ impl Store {
         original_name: IdentId,
     ) {
         self[func_id].set_owner_class(owner);
+        let cme = self.intern_cme(func_id, owner, original_name);
+        self[func_id].set_default_cme(cme);
         self.insert_method(
             owner,
             name,

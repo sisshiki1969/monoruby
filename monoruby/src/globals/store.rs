@@ -85,7 +85,6 @@ pub struct Store {
     /// inline info.
     pub(crate) inline_info: InlineTable,
     /// interned callable method entries.
-    #[allow(dead_code)]
     cme_table: CmeTable,
 }
 
@@ -208,7 +207,6 @@ impl Store {
     /// Intern the callable method entry `(func_id, owner, called_id)`,
     /// returning its [`CmeId`]. Identical triples share a `CmeId`.
     ///
-    #[allow(dead_code)]
     pub(crate) fn intern_cme(
         &mut self,
         func_id: FuncId,
