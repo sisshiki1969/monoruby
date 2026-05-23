@@ -20,8 +20,35 @@
   td a { text-decoration: none; }
   td a:hover { text-decoration: underline; }
   .range-control { margin-top: 1em; padding: 0.8em 0; border-top: 1px solid #eee; }
-  .range-control .dates { font-size: 0.85em; color: #555; margin-bottom: 0.4em; }
-  .range-control input[type=range] { width: 100%; }
+  .range-control .dates { font-size: 0.85em; color: #555; margin-bottom: 0.8em; }
+  /* Single slider with two thumbs: two overlaid range inputs whose
+     tracks are transparent, sharing one visible track + fill. */
+  .dual-slider { position: relative; height: 24px; }
+  .dual-slider .track {
+    position: absolute; left: 0; right: 0; top: 10px; height: 4px;
+    background: #ddd; border-radius: 2px;
+  }
+  .dual-slider .fill {
+    position: absolute; top: 10px; height: 4px;
+    background: #1565c0; border-radius: 2px;
+  }
+  .dual-slider input[type=range] {
+    position: absolute; left: 0; top: 0; width: 100%; height: 24px;
+    margin: 0; background: none; pointer-events: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  .dual-slider input[type=range]::-webkit-slider-runnable-track { background: none; border: none; }
+  .dual-slider input[type=range]::-moz-range-track { background: none; border: none; }
+  .dual-slider input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; pointer-events: auto;
+    width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+    background: #1565c0; border: 2px solid #fff; cursor: pointer;
+    box-shadow: 0 0 2px rgba(0,0,0,0.4);
+  }
+  .dual-slider input[type=range]::-moz-range-thumb {
+    pointer-events: auto; width: 16px; height: 16px; border-radius: 50%;
+    background: #1565c0; border: 2px solid #fff; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -45,8 +72,12 @@
     <div class="dates">
       Showing <strong id="rangeFromLabel"></strong> &ndash; <strong id="rangeToLabel"></strong>
     </div>
-    <input type="range" id="rangeFrom" min="0" max="0" value="0">
-    <input type="range" id="rangeTo"   min="0" max="0" value="0">
+    <div class="dual-slider">
+      <div class="track"></div>
+      <div class="fill" id="rangeFill"></div>
+      <input type="range" id="rangeFrom" min="0" max="0" value="0">
+      <input type="range" id="rangeTo"   min="0" max="0" value="0">
+    </div>
   </div>
 </section>
 
@@ -168,37 +199,49 @@ async function loadCsv(path) {
     sel.addEventListener('change', e => drawCat(e.target.value));
   }
 
-  // ------- date range slider (controls both over-time charts) -------
+  // ------- date range slider (one slider, two thumbs) -------
   if (allStamps.length > 1) {
     const ctrl = document.getElementById('rangeControl');
     const fromEl = document.getElementById('rangeFrom');
     const toEl = document.getElementById('rangeTo');
     const fromLbl = document.getElementById('rangeFromLabel');
     const toLbl = document.getElementById('rangeToLabel');
+    const fillEl = document.getElementById('rangeFill');
     ctrl.hidden = false;
     const lastIdx = allStamps.length - 1;
     fromEl.max = String(lastIdx);
     toEl.max = String(lastIdx);
     toEl.value = String(lastIdx);
 
-    const syncLabels = () => {
+    const syncUi = () => {
       fromLbl.textContent = allStamps[fromIdx];
       toLbl.textContent = allStamps[toIdx];
+      // position the visible fill between the two thumbs
+      const lo = (fromIdx / lastIdx) * 100;
+      const hi = (toIdx / lastIdx) * 100;
+      fillEl.style.left = lo + '%';
+      fillEl.style.width = (hi - lo) + '%';
+      // keep both thumbs grabbable when they meet: raise the one that
+      // can still move inward.
+      fromEl.style.zIndex = fromIdx >= lastIdx ? 5 : 3;
+      toEl.style.zIndex = 4;
     };
-    const onInput = () => {
-      fromIdx = parseInt(fromEl.value, 10);
-      toIdx = parseInt(toEl.value, 10);
-      if (fromIdx > toIdx) {            // keep handles ordered
-        if (document.activeElement === fromEl) { toIdx = fromIdx; toEl.value = String(toIdx); }
-        else { fromIdx = toIdx; fromEl.value = String(fromIdx); }
+    const onInput = (e) => {
+      let lo = parseInt(fromEl.value, 10);
+      let hi = parseInt(toEl.value, 10);
+      if (lo > hi) {                       // don't let thumbs cross
+        if (e.target === fromEl) { hi = lo; toEl.value = String(hi); }
+        else { lo = hi; fromEl.value = String(lo); }
       }
-      syncLabels();
+      fromIdx = lo;
+      toIdx = hi;
+      syncUi();
       drawTotal();
       drawCat(sel.value);
     };
     fromEl.addEventListener('input', onInput);
     toEl.addEventListener('input', onInput);
-    syncLabels();
+    syncUi();
   }
 
   if (total.length) drawTotal();
