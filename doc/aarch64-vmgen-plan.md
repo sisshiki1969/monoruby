@@ -39,13 +39,18 @@ unpushed) is resolved.
 - `ruruby-parse` reqwest → rustls, removing the `openssl-sys` cross blocker;
   **all deps (incl. C deps) now cross-compile for aarch64** (see findings).
 - Seam predicate committed: `build.rs` emits `cfg(jit)` ⇔ x86-64 && not
-  `no-jit` (see "Seam selector" below). Not yet wired to any `#[cfg(jit)]`
-  site — that is the JIT-excision step.
+  `no-jit` (see "Seam selector" below).
+- **VM-shared helpers relocated out of `jitgen`** (3 commits, each pure /
+  dual-green) so `jitgen` can be cleanly `#[cfg(jit)]`-excluded:
+  1. `basic_block` (BasicBlockInfo/Id) → `crate::basic_block`.
+  2. `icmp_eq..ge` compare helpers → `codegen.rs` (the JIT-only `set_*`
+     flag-to-bool helpers stay in `jitgen`).
+  3. `execute_gc_inner` now takes a `write_back: impl FnOnce(&mut Self)`
+     closure instead of `Option<&jitgen::WriteBack>` (VM passes a no-op).
 
-**Next step (the large refactor):** perform the JIT excision against the
-78-error worklist in "JIT-excision roadmap" below, with `cargo check
---features no-jit` (x86) as the green-gate — no qemu required. Then port the
-VM-tier asm to aarch64. x86 default must stay green throughout.
+**Next step (the remaining gating):** wire `#[cfg(jit)]` per the refined
+worklist below; green-gate is `cargo check --features no-jit` (x86), no qemu.
+Then port the VM-tier asm to aarch64. x86 default must stay green throughout.
 
 ## Map of what must be ported (VM-only)
 
@@ -221,9 +226,48 @@ generators — JIT-tier, gated — and the `builtins/kernel.rs` `conv(...)` call
 are an unrelated local FFI helper. So `conv` stays in `jitgen` and is gated
 with the rest. Only `basic_block` is load-bearing for the VM.)
 
-Do the `basic_block` relocation **first**, as its own commit — it is a pure
-move, keeps x86 default *and* `--features no-jit` green, and shrinks the
-worklist. **(Done: moved to `crate::basic_block`.)**
+**(Done — three VM-shared helpers relocated/decoupled out of `jitgen`:
+`basic_block` → `crate::basic_block`; `icmp_*` → `codegen.rs`;
+`execute_gc_inner` now takes a write-back closure. Each is a pure /
+dual-green commit. With these out of the way the VM tier (`vmgen`,
+`codegen.rs` GC poll) compiles with `jitgen` excluded.)**
+
+### Remaining gating worklist (after relocations: ~79 errors)
+
+Re-gating `#[cfg(jit)] pub mod jitgen;` + `lib.rs` `JitContext` re-export and
+running `cargo check --features no-jit` now leaves ~79 errors, all genuinely
+JIT-tier:
+
+- **~60 in builtins — the inline-method system** (13 files:
+  `object, array, string, kernel, fiddle, class, fiber, math, hash, range,
+  arithmetic_sequence, numeric/float, numeric/integer`). Per file: gate the
+  `use jitgen::…`/`use jitgen::JitContext` import, gate each inline generator
+  fn (signature uses `&mut AsmIr`/`&JitContext`), and make the ~37
+  `define_builtin_inline_func*` call sites conditional —
+  `#[cfg(jit)]` the inline form + `#[cfg(not(jit))]` a plain
+  `define_builtin_func`/`_with` (the VM fn is already registered separately,
+  so this is a faithful fallback). Also gate the `InlineGen` type alias
+  (`globals.rs:~27`) and `builtins.rs`'s `AbstractState`/`asmir::*` imports.
+- **Codegen / driver JIT internals (codegen-side):**
+  - `codegen.rs:44,48` imports `AsmEvict` / `SpecializedCodeInfo` → gate, plus
+    the JIT-only `Codegen` fields they type and their init/uses:
+    `compilation_unit` (4), `asm_return_addr_table` (2), `specialized_info`
+    (7), `specialized_base` (3), `return_addr_table` (5).
+  - `jit_execute_gc` (codegen.rs) and `jit_check_stack` (jit_module.rs:268)
+    call `gen_write_back` → gate the methods `#[cfg(jit)]` (their callers are
+    JIT: `compile.rs:330`, the JIT GC path).
+  - `patch.rs` `guard_class2`, `compiler.rs` `jit_compile` (+ the
+    `jit_compile_patch`/`jit_compile_loop` driver) → gate; the VM's
+    "compile-when-hot" trigger becomes a no-op under `not(jit)`.
+  - `bytecode.rs:357 method_cache()` + `MethodCacheEntry` import → gate
+    (called only from `jitgen/trace_ir.rs`).
+  - `TraceIr::format` dump sites (`codegen.rs` disasm dump, `dump.rs:116`,
+    `store.rs:830`) → gate the `format`/`from_pc` calls.
+
+This is mechanical but cascades (Codegen fields → init → uses; `compiler.rs`
+is largely the JIT driver). It is **not** independently verifiable until
+complete (no-jit only goes green at the end), but x86 **default** stays green
+at every step — check it after each file.
 
 Everything else flagged is genuinely **JIT-tier and gate-able** with
 `#[cfg(jit)]`:
