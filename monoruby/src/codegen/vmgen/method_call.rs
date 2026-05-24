@@ -184,13 +184,21 @@ impl Codegen {
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // SVAR / CME: zero-fill. The interpreter does not yet write a
-            // precise per-call CME (that needs the inline cache to carry
-            // owner/called_id), so `super` / reflection on interpreter
-            // frames fall back to the FuncInfo-based resolution. Neither
-            // slot holds a GC pointer.
+            // SVAR: zero-fill. CME slot: record `callid + 1` in the high
+            // 32 bits (low 32 left zero). The interpreter does not resolve
+            // a precise per-call CME — that would need an owner lookup on
+            // every call — so `super` / reflection still fall back to the
+            // FuncInfo-based resolution. But the raw call site is free
+            // (it sits in the bytecode), and lets `__callee__` recover the
+            // invoked name, which differs from the definition name for
+            // aliased methods. The slot never holds a GC pointer.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
+            movl rax, [r13 + (CALLSITE_ID)];
+            addq rax, 1;
+            shlq rax, 32;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], rax;
+            // Restore rax <- Meta for the simple-call guard below.
+            movq rax, [r15 + (FUNCDATA_META)];
         }
         monoasm! { &mut self.jit,
             movzxw r9, [r13 + (POS_NUM)];

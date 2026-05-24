@@ -138,7 +138,27 @@ impl Cfp {
     /// non-block LFP), or `None` if that frame carries no CME.
     ///
     pub(crate) fn method_cme(&self) -> Option<CmeId> {
-        self.outermost_lfp().cme_slot()
+        match self.outermost_lfp().cme_slot() {
+            Some(FrameCme::Cme(id)) => Some(id),
+            // A raw `CallSiteId` (interpreter frame) carries no owner, so
+            // `super` resolution must fall back to the `FuncInfo` walk.
+            Some(FrameCme::CallSite(_)) | None => None,
+        }
+    }
+
+    ///
+    /// Get the name this method frame was *invoked by* (the call name),
+    /// or `None` when the frame carries no call info (native callers,
+    /// `super`, blocks). Differs from the definition name only for
+    /// methods reached through an alias — this is the source for
+    /// `__callee__`.
+    ///
+    pub(crate) fn call_name(&self, store: &Store) -> Option<IdentId> {
+        match self.outermost_lfp().cme_slot() {
+            Some(FrameCme::Cme(id)) => Some(store.cme(id).called_id()),
+            Some(FrameCme::CallSite(cid)) => store[cid].name,
+            None => None,
+        }
     }
 
     ///
@@ -240,6 +260,28 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
     fn partial_cmp(&self, other: &Cfp) -> Option<std::cmp::Ordering> {
         self.as_ptr().partial_cmp(&(other.as_ptr() as _))
     }
+}
+
+///
+/// Decoded contents of the `LFP_CME` frame slot.
+///
+/// The slot is written by whoever sets up the callee frame, and the two
+/// producers encode different things in the 8-byte slot (GC never scans
+/// it, so non-`Value` bit patterns are safe):
+///
+/// - JIT call setup bakes a precise [`CmeId`] (zero-extended) in the
+///   **low 32 bits**. This carries the owner that `super` needs.
+/// - The interpreter records `callid + 1` in the **high 32 bits** (low
+///   32 left zero). Resolving a full `CmeId` would cost an owner lookup
+///   on every call; the raw [`CallSiteId`] is free (it sits in the
+///   bytecode) and is enough to recover the invoked name for
+///   `__callee__`. `super` on such frames falls back to the
+///   `FuncInfo`-based resolution.
+///
+/// `0` means the slot carries nothing (native callers, blocks, …).
+pub(crate) enum FrameCme {
+    Cme(CmeId),
+    CallSite(CallSiteId),
 }
 
 impl alloc::GC<RValue> for Lfp {
@@ -386,17 +428,23 @@ impl Lfp {
     }
 
     ///
-    /// Read this frame's `LFP_CME` slot — the interned [`CmeId`] of the
-    /// call that built this frame, or `None` for the zero sentinel
-    /// (block / non-CME frames). The slot holds a `u32` `CmeId` written
-    /// zero-extended into the 8-byte slot at call setup.
+    /// Read and decode this frame's `LFP_CME` slot (see [`FrameCme`]),
+    /// or `None` for the zero sentinel (block / native-built frames).
     ///
-    pub(crate) fn cme_slot(self) -> Option<CmeId> {
-        let raw = unsafe { *(self.sub(LFP_CME as _) as *const u32) };
-        if raw == 0 {
-            None
+    pub(crate) fn cme_slot(self) -> Option<FrameCme> {
+        let raw = unsafe { *(self.sub(LFP_CME as _) as *const u64) };
+        let low = raw as u32;
+        if low != 0 {
+            // JIT call setup: precise `CmeId` in the low 32 bits.
+            Some(FrameCme::Cme(CmeId::new(low)))
         } else {
-            Some(CmeId::new(raw))
+            let high = (raw >> 32) as u32;
+            if high != 0 {
+                // Interpreter call setup: `callid + 1` in the high 32 bits.
+                Some(FrameCme::CallSite(CallSiteId::from(high - 1)))
+            } else {
+                None
+            }
         }
     }
 

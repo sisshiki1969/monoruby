@@ -161,10 +161,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
-    // `__callee__` differs from `__method__` only for aliased methods
-    // (it reports the called alias). monoruby does not track the
-    // call-site alias, so it shares `__method__`'s resolution.
-    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
+    // `__callee__` differs from `__method__` only for aliased methods:
+    // it reports the name the method was *called* by, recovered from the
+    // caller's frame (see `callee_`).
+    globals.define_builtin_module_func(kernel_class, "__callee__", callee_, 0);
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
@@ -2455,6 +2455,34 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
+/// Kernel.#__callee__
+///
+/// - __callee__ -> Symbol | nil
+///
+/// Unlike `__method__` (which always reports the name the method was
+/// *defined* under), `__callee__` reports the name it was *called* by —
+/// these differ when the method is reached through an alias. The call
+/// name is recovered from the calling frame's `LFP_CME` slot: JIT
+/// callers bake a precise `CmeId` (whose `called_id` is the alias),
+/// while interpreter callers record the raw `CallSiteId`. When neither
+/// is available (native callers, `super`) it falls back to the
+/// definition name.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__callee__.html]
+#[monoruby_builtin]
+fn callee_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let caller = vm.cfp().prev().unwrap();
+    let fid = caller.method_func_id();
+    if !globals.store[fid].is_method() {
+        return Ok(Value::nil());
+    }
+    caller
+        .call_name(&globals.store)
+        .or_else(|| globals.store[fid].name())
+        .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
+}
+
+///
 /// Kernel.#catch
 ///
 /// - catch(tag = Object.new) { |tag| ... } -> object
@@ -4116,6 +4144,40 @@ mod tests {
             end
         end
         foo
+        $res
+        "##,
+        );
+    }
+
+    #[test]
+    fn kernel_callee__() {
+        // `__callee__` reports the *called* name (alias-aware), unlike
+        // `__method__` which always reports the definition name.
+        run_test(
+            r##"
+        $res = []
+        def foo
+            [__callee__, __method__]
+        end
+        alias :bar :foo
+        $res << foo #=> [:foo, :foo]
+        $res << bar #=> [:bar, :foo]
+        $res << __callee__ #=> nil
+        $res
+        "##,
+        );
+        // Reached through `super`: the callee is the (def) name, matching
+        // CRuby (the call site carries no name).
+        run_test(
+            r##"
+        $res = []
+        class S; def a; __callee__; end; def b; __callee__; end; end
+        class C < S
+            def a; super; end
+            alias :b :a
+        end
+        $res << C.new.a #=> :a
+        $res << C.new.b #=> :a
         $res
         "##,
         );
