@@ -235,11 +235,14 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
+    /// Emit the GC poll. `write_back` emits any register write-back into the
+    /// cold (page-1) path before the GC call; the VM passes a no-op, the JIT
+    /// passes the spill write-back. Taking a closure keeps the JIT-only
+    /// `WriteBack` type out of this VM-tier helper's signature.
     pub(super) fn execute_gc_inner(
         &mut self,
-        wb: Option<&jitgen::WriteBack>,
         error: &DestLabel,
-        base: usize,
+        write_back: impl FnOnce(&mut Self),
     ) {
         let alloc_flag = self.alloc_flag.clone();
         let gc = self.jit.label();
@@ -253,9 +256,7 @@ impl JitModule {
         };
         self.jit.select_page(1);
         self.jit.bind_label(gc);
-        if let Some(wb) = wb {
-            self.gen_write_back(wb, base);
-        }
+        write_back(self);
         monoasm! { &mut self.jit,
             call exec_gc;
             testq rax, rax;

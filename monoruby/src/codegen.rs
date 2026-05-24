@@ -761,7 +761,7 @@ impl JitModule {
     ///
     fn vm_execute_gc(&mut self) {
         let raise = self.entry_raise.clone();
-        self.execute_gc_inner(None, &raise, 0);
+        self.execute_gc_inner(&raise, |_| {});
     }
 
     ///
@@ -792,7 +792,7 @@ impl JitModule {
     /// - stack
     ///
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
-        self.execute_gc_inner(Some(wb), error, base);
+        self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
 }
 
