@@ -6,6 +6,7 @@
 
 mod alloc;
 pub mod ast;
+mod basic_block;
 mod builtins;
 mod bytecode;
 mod bytecodegen;

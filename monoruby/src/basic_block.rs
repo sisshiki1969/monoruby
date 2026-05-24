@@ -1,6 +1,16 @@
+//! Basic-block structure over a function's bytecode.
+//!
+//! Although this feeds the JIT, it is **bytecode-level** infrastructure, not
+//! JIT-tier code: `bytecodegen` builds a `BasicBlockInfo` for every method
+//! (see `bytecodegen::encode`) and stores it in `ISeqInfo.bb_info`, where the
+//! interpreter/runtime reads it. It therefore lives outside `codegen::jitgen`
+//! so it survives when the JIT subsystem is `#[cfg]`-excluded (the aarch64 /
+//! `no-jit` VM-only build).
+
 use std::iter::Step;
 
-use super::*;
+use crate::bytecode::BcIndex;
+use crate::bytecodegen::inst::BytecodeIr;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
 pub(crate) struct BasicBlockId(pub usize);

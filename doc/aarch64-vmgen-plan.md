@@ -215,13 +215,15 @@ Two pieces are load-bearing for the interpreter and must NOT be gated:
   bytecode-level infra. **Relocate** the `basic_block` module out of
   `jitgen` (e.g. into `bytecodegen/` or `globals/store/`) and re-point the
   `crate::jitgen::BasicBlock*` imports.
-- **`conv`** (`jitgen.rs:108`, `pub(crate) fn conv(SlotId)->i32`) — a pure
-  frame-offset helper used by builtins' **runtime** asm
-  (`builtins/fiber.rs:106`, `class.rs:443`). **Relocate** out of `jitgen`
-  (e.g. `codegen.rs` or `executor/frame.rs`).
+(Correction after closer reading: `conv` does **not** need relocating. Its
+`builtins/fiber.rs:106` and `class.rs:443` uses are inside `ir.inline(...)`
+generators — JIT-tier, gated — and the `builtins/kernel.rs` `conv(...)` calls
+are an unrelated local FFI helper. So `conv` stays in `jitgen` and is gated
+with the rest. Only `basic_block` is load-bearing for the VM.)
 
-Do the two relocations **first**, as their own commit — they are pure moves,
-keep x86 default *and* `--features no-jit` green, and shrink the worklist.
+Do the `basic_block` relocation **first**, as its own commit — it is a pure
+move, keeps x86 default *and* `--features no-jit` green, and shrinks the
+worklist. **(Done: moved to `crate::basic_block`.)**
 
 Everything else flagged is genuinely **JIT-tier and gate-able** with
 `#[cfg(jit)]`:
