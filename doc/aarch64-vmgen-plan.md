@@ -8,25 +8,36 @@ JIT (`jitgen`) is explicitly **out of scope** for this phase.
 
 ## Status (updated this session)
 
-Phase-1 foundation **re-verified locally** on top of monoasm `rc` (the
-encoder now lives on the monoasm `aarch` branch):
+**Cross-test environment provisioned and committed** (this is the
+foundation phase 2 builds on):
 
-- the A64 encoder builds cleanly against monoasm `rc` (`6940e51`).
-- `cargo test -p monoasm --test arm64_encoding` → **15 passed** (host).
-- `cargo test -p monoasm --target aarch64-unknown-linux-gnu --test
-  arm64_exec` → **9 passed** under qemu.
-- `cargo test -p monoasm` (x86 host) → **all green, no regression**.
+- `.cargo/config.toml` now wires the aarch64 target to the GNU cross linker
+  and a `qemu-aarch64` runner, so `cargo build/test --target
+  aarch64-unknown-linux-gnu` cross-compiles and runs the resulting binaries
+  (including `cargo test` harnesses) under qemu user-mode emulation.
+- `bin/setup-aarch64-cross` provisions the host tooling idempotently
+  (qemu-user, `gcc-aarch64-linux-gnu`, rust std for the target) and runs a
+  compile+qemu smoke test. Safe to re-run at the start of an ephemeral web
+  session.
+- End-to-end verified: `cargo test -p rubymap --target
+  aarch64-unknown-linux-gnu` → **24 doc-tests passed under qemu** on the x86
+  host (a pure-Rust workspace crate, no monoasm dependency).
 
-Toolchain installed in this container: rust target
-`aarch64-unknown-linux-gnu` (nightly-2026-05-18), `gcc-aarch64-linux-gnu`
-13.3.0, `qemu-aarch64` 8.2.2, `llvm-mc` (for golden encodings).
+Toolchain in this container: rust target `aarch64-unknown-linux-gnu`
+(nightly-2026-05-18), `gcc-aarch64-linux-gnu` 13.3.0, `qemu-aarch64` 8.2.2.
+For golden encodings use `llvm-mc` if available.
 
-**Still blocked for landing:** the monoasm `aarch` branch is not pushed
-(`origin` only has `main`/`master`/`rc`), and monoasm is not in this
-session's GitHub MCP scope. monoruby's `Cargo.toml` therefore still points
-at monoasm `rc`, which has no A64 API. Phase 2 cannot build until monoasm
-`aarch` is published and `Cargo.toml` is repointed (see "Prerequisite to
-land" below).
+Phase-1 foundation (the A64 encoder) lives on the monoasm `aarch` branch,
+which is **now published** at `sisshiki1969/monoasm` (`refs/heads/aarch`,
+`b479de6`) on top of `rc` (`6940e51`). The earlier blocker (aarch branch
+unpushed) is resolved.
+
+**Next step to start phase 2 (M0):** repoint `monoasm` /`monoasm_macro` in
+`monoruby/Cargo.toml` from `branch = "rc"` to `branch = "aarch"` (or a
+pinned rev), so the A64 builder API is available; then build monoruby for
+the target behind `cfg(target_arch = "aarch64")`. Note this repoint also
+moves the **x86** build onto the `aarch` branch, so confirm `aarch` is a
+strict superset of `rc` (it is, per phase 1) before landing it.
 
 ## Map of what must be ported (VM-only)
 
@@ -182,22 +193,26 @@ byte-for-byte unchanged.
    signing constraint).
 2. In monoruby `Cargo.toml`, repoint both `monoasm` and `monoasm_macro` to
    `branch = "aarch"` (or a pinned rev) for the duration of phase 2.
-3. Add `monoruby/.cargo/config.toml` cross runner (see below). Note this
-   container's repo ignores `/.*`, so it is not committed; recreate it.
+3. Cross runner is **already committed**: `.cargo/config.toml` carries the
+   `[target.aarch64-unknown-linux-gnu]` linker+runner, and
+   `bin/setup-aarch64-cross` installs the host tooling. No manual recreation
+   needed — just run the script once per fresh container.
 
 ## Dev/verify commands (this container)
 
 ```sh
-# monoasm foundation (already passing)
+# one-time per container: install qemu + cross gcc + rust std, smoke-test
+bin/setup-aarch64-cross
+
+# sanity check the cross-test pipeline on a pure-Rust workspace crate
+cargo test -p rubymap --target aarch64-unknown-linux-gnu        # runs under qemu
+
+# monoasm foundation (requires monoasm checked out as a path/workspace dep)
 cargo +nightly-2026-05-18 test -p monoasm --test arm64_encoding
 cargo +nightly-2026-05-18 test -p monoasm --target aarch64-unknown-linux-gnu --test arm64_exec
 cargo +nightly-2026-05-18 test -p monoasm                      # x86 regression
 
-# monoruby aarch64 build (after Cargo.toml repoint), under qemu:
-#   monoruby/.cargo/config.toml:
-#     [target.aarch64-unknown-linux-gnu]
-#     linker = "aarch64-linux-gnu-gcc"
-#     runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
+# monoruby aarch64 build (after Cargo.toml repoint to monoasm `aarch`):
 cargo +nightly-2026-05-18 build --target aarch64-unknown-linux-gnu --features no-jit
 ```
 
