@@ -123,28 +123,60 @@ monoruby's global registers (from `CLAUDE.md`) → callee-saved A64 regs:
 prologue, like the x86 `pushq rbp`). FP `xmm0/xmm1` scratch → `d0/d1`.
 Frame offsets (`LFP_OUTER +0 … LFP_ARG0 +32`) are unchanged.
 
-## The core problem: no aarch64 `monoasm!{}` DSL
+## The aarch64 DSL now exists (resolved)
 
-Phase 1 added **builder methods** (`jit.add(X0,X1,X2)`), not a
-`monoasm!{}`-style macro. Every handler today is written in the x86 macro
-DSL. Two ways forward:
+The earlier blocker ("no aarch64 `monoasm!{}` DSL") is **gone**. The monoasm
+`aarch` branch ships a full `monoasm_arm64!` proc-macro (a proc-macro can't
+see `target_arch`, so it's a separate entry point from `monoasm!`). It
+covers everything M0 needs — `ldr/str/ldrb/ldp/stp`, `mov/movz/movk`,
+`add/sub/cmp/and/orr/eor/mul/sdiv/udiv`, `b/bl/blr/br/ret/cbz/cbnz/tbz`,
+`b.<cond>`, `csel/cset`, and the FP ops — and is exercised by the branch's
+`tests/arm64/dsl.rs`. So each handler can be a **near line-for-line port**
+of its `monoasm!{}` source into `monoasm_arm64!{}` (option A is effectively
+free; the builder-method rewrite of option B is unnecessary).
 
-- **(A) aarch64 DSL macro** in `monoasm_macro` — large up-front cost, lives
-  in the (out-of-scope) monoasm repo, but makes each handler a near
-  line-for-line port. Best long-term ergonomics.
-- **(B) builder-method rewrite** behind `cfg(target_arch)` — no macro work;
-  verbose but mechanical; can start immediately once monoasm `aarch` is a
-  dependency.
+## Empirical build findings (this session)
 
-**Recommendation:** start with **(B)** for the dispatch core + the first
-opcode family (proves the whole pipeline end-to-end under qemu fastest),
-then decide whether the DSL (A) pays for itself before grinding through the
-~150 remaining handlers. Either way, introduce an **arch-abstraction
-seam** so handler bodies select x86 vs aarch64 via `cfg(target_arch)` at a
-single, well-defined layer (the `Codegen` impl), keeping the x86 path
-byte-for-byte unchanged.
+Cross-compiling `cargo check -p monoruby --target aarch64-unknown-linux-gnu
+--features no-jit` got all the way to the `monoruby` crate:
 
-## Recommended architecture seam
+- **Every non-monoruby dependency cross-compiles cleanly**, including the C
+  deps (`onigmo-regex`, `libffi-sys`, `ruby-prism{,-sys}`) and the rustls
+  stack. The only cross-compile dep blocker was `openssl-sys` (via
+  `ruruby-parse`'s `reqwest`), now fixed by switching to rustls.
+- **monoruby fails only inside `monoasm!{}`** — `no method named enc_mr …`,
+  `cannot find type Imm/Reg/Scale …`. These are x64-encoder internals that
+  `monoasm`'s `lib.rs` gates behind `#[cfg(target_arch = "x86_64")]`. So the
+  compiler *forces* the seam: the x86 `monoasm!` bodies simply do not exist
+  on an aarch64 target and must be `cfg`-excluded there.
+
+`monoasm!{}` block inventory (the work to port/exclude):
+
+| Area | `monoasm!` blocks | Tier |
+|------|------:|------|
+| `codegen/jitgen/**` | ~347 | JIT — **out of scope**, exclude on aarch64 |
+| `vmgen + invoker + wrapper + jit_module + patch + codegen.rs` | ~213 | VM — port to `monoasm_arm64!` |
+
+Note `no-jit` is a **runtime** toggle (`if !cfg!(feature="no-jit")` inside
+functions), **not** a module gate — so `jitgen` is compiled even with
+`--features no-jit`. To build for aarch64 the entire `jitgen` subsystem must
+be `cfg`-excluded (it has 347 x86-only blocks and is JIT-tier only).
+`jitgen` is referenced from ~19 files / ~23 sites outside `codegen/jitgen/`
+(executor JIT triggers + builtins' inline-JIT registrations); those sites
+must be `cfg`-gated to fall back to the VM tier on aarch64.
+
+### Open decision — seam selector: `target_arch` vs a `vm-only` feature
+
+The plan above assumes `#[cfg(target_arch = "aarch64")]`. A cargo feature
+(e.g. `vm-only`) that excises `jitgen` is worth considering **instead/also**
+because it would let the VM-only configuration build and run **on x86 too**
+— enabling incremental testing of the port without qemu and a cheap CI
+guard against accidental JIT-coupling. Recommended: gate the JIT subsystem
+on `any(target_arch = "aarch64", feature = "vm-only")` so x86 can opt in,
+while aarch64 always gets the VM-only build. (Needs sign-off before the
+~213-block port + JIT excision lands.)
+
+## Architecture seam (sibling modules)
 
 1. Keep `Codegen`/`JitMemory` shared. Add `#[cfg(target_arch =
    "aarch64")]` sibling modules: `codegen/vmgen_a64.rs`, etc., OR
