@@ -167,11 +167,13 @@ Cross-compiling `cargo check -p monoruby --target aarch64-unknown-linux-gnu
 
 Note `no-jit` is a **runtime** toggle (`if !cfg!(feature="no-jit")` inside
 functions), **not** a module gate — so `jitgen` is compiled even with
-`--features no-jit`. To build for aarch64 the entire `jitgen` subsystem must
-be `cfg`-excluded (it has 347 x86-only blocks and is JIT-tier only).
-`jitgen` is referenced from ~19 files / ~23 sites outside `codegen/jitgen/`
-(executor JIT triggers + builtins' inline-JIT registrations); those sites
-must be `cfg`-gated to fall back to the VM tier on aarch64.
+`--features no-jit`. The JIT-tier code must be `cfg`-excluded for aarch64,
+**but `jitgen` is not purely JIT** (see the review finding below): it also
+houses VM/bytecode infrastructure (`basic_block`, `conv`) that the
+interpreter and `bytecodegen` use unconditionally. So the module cannot be
+excised wholesale — the infra must be relocated first, then the genuinely
+JIT-tier remainder gated. `jitgen` is referenced from ~19 files / ~23 sites
+outside `codegen/jitgen/`.
 
 ### Seam selector — decided: the existing `no-jit` feature + arch
 
@@ -200,46 +202,61 @@ green first; aarch64 then only adds the VM-tier asm port on top.
 ### JIT-excision roadmap (verify with `cargo check --features no-jit` on x86)
 
 Gating `#[cfg(jit)] pub mod jitgen;` and checking `--features no-jit`
-surfaced exactly **78 errors** — a precise, bounded worklist:
+surfaced **78 first-wave errors**. **Reviewing** them (rather than fixing
+blindly) revealed that the naive "excise the whole `jitgen` module" plan is
+**wrong** — `jitgen` mixes JIT-tier code with VM/bytecode infrastructure.
+Two pieces are load-bearing for the interpreter and must NOT be gated:
 
-- **44 × `cannot find type AsmIr`** — builtins' **inline-method
-  generators**. The inline-JIT system is the dominant coupling: many
-  builtins call `define_builtin_inline_func(.., Box::new(gen), ..)` whose
-  generator fns take `&JitContext` / `&mut AsmIr` and call `ir.inline(|gen|
-  { monoasm!{…} })`. Those closure bodies are x86 asm (JIT-tier).
-  → Gate each inline generator fn + its registration under `#[cfg(jit)]`,
-    and give `define_builtin_inline_func` a `#[cfg(not(jit))]` arm that
-    registers **only** the VM/runtime function (drops the inline arg).
-    Files: `builtins/{object,array,string,kernel,fiddle,class,fiber}.rs`,
-    `builtins/numeric/{float,integer}.rs`, plus `builtins.rs`
-    (`use codegen::jitgen::{AbstractState, asmir::*}`).
-- **~15 × JIT-tier `Codegen`/`JitModule` methods** called from kept code:
-  `icmp_eq/ne/lt/le/gt/ge`, `guard_class2`, `jit_compile`,
-  `gen_write_back`, `jit_execute_gc` (codegen.rs:768),
-  `jit_check_stack`/`execute_gc_inner` (jit_module.rs:240/268),
-  `immediate_eviction`. → Gate the methods (they live in jitgen or use
-  `WriteBack`) and their call sites with `#[cfg(jit)]`.
-- **~19 misc `jitgen::` paths** — imports/type-uses:
-  `codegen.rs:17,21` (`AsmEvict`, `SpecializedCodeInfo` struct fields →
-  gate the fields + their init + uses), `bytecode.rs:1`
-  (`MethodCacheEntry`), `lib.rs:25` (`JitContext` re-export),
-  `bytecodegen/encode.rs:1` + `globals/store/iseq.rs:6`
-  (`BasicBlockInfo`/`BasicBlockId`), `globals.rs:28-30` (an inline-fn type
-  alias using `AbstractState`/`AsmIr`/`JitContext`), and the
-  `trace_ir::TraceIr::format` **dump** sites (`codegen.rs:1361`,
-  `globals/dump.rs:116,190`, `globals/store.rs:830`) — gate the dump calls
-  (TraceIR formatting is JIT-front-end and JIT-tier only).
-- **`jitgen::conv`** (`jitgen.rs:108`, `pub(crate) fn conv(SlotId)->i32`) is
-  a **pure frame-offset helper**, not JIT-specific, but used in builtins'
-  *runtime* asm (`builtins/fiber.rs:106`, `class.rs:443`). **Relocate** it
-  out of `jitgen` (e.g. to `codegen.rs` or `executor/frame.rs`) so it
-  survives JIT exclusion. (On x86 `--features no-jit` those builtin
-  `monoasm!` blocks still compile — only `conv`'s path must resolve; on
-  aarch64 those same `monoasm!` blocks are part of the VM-tier port below.)
+- **`basic_block` (`BasicBlockId` / `BasicBlockInfo` /
+  `BasicBlockInfoEntry`)** — built **unconditionally** by `bytecodegen`
+  (`encode.rs:115`, for every method) and stored in `ISeqInfo.bb_info`;
+  read by the VM/runtime in `globals/store/iseq.rs` (`get_bb_pc`, `get_bb`),
+  `store.rs:826`, `function.rs:1370`. Despite living in `jitgen`, it is
+  bytecode-level infra. **Relocate** the `basic_block` module out of
+  `jitgen` (e.g. into `bytecodegen/` or `globals/store/`) and re-point the
+  `crate::jitgen::BasicBlock*` imports.
+- **`conv`** (`jitgen.rs:108`, `pub(crate) fn conv(SlotId)->i32`) — a pure
+  frame-offset helper used by builtins' **runtime** asm
+  (`builtins/fiber.rs:106`, `class.rs:443`). **Relocate** out of `jitgen`
+  (e.g. `codegen.rs` or `executor/frame.rs`).
 
-When `cargo check --features no-jit` (x86) is green, the JIT-excision is
-complete and correct. Commit that as one unit (x86 default must stay green
-throughout).
+Do the two relocations **first**, as their own commit — they are pure moves,
+keep x86 default *and* `--features no-jit` green, and shrink the worklist.
+
+Everything else flagged is genuinely **JIT-tier and gate-able** with
+`#[cfg(jit)]`:
+
+- **44 × `AsmIr` — builtins' inline-method generators** (the dominant
+  coupling). `define_builtin_inline_funcs_with_kw` already registers the VM
+  function via `new_builtin_fn(address,…)` *and* the inline generator
+  separately, so **every inline builtin already has a VM fallback**. Give
+  `define_builtin_inline_func*` a `#[cfg(not(jit))]` arm that ignores
+  `inline_gen` (VM function only), gate each generator fn + the `ir.inline`
+  closures under `#[cfg(jit)]`. Files:
+  `builtins/{object,array,string,kernel,fiddle,class,fiber}.rs`,
+  `builtins/numeric/{float,integer}.rs`, `builtins.rs`.
+- **~15 × JIT-tier `Codegen`/`JitModule` methods**: `icmp_{eq,ne,lt,le,gt,
+  ge}`, `guard_class2`, `jit_compile`, `gen_write_back`, `jit_execute_gc`
+  (codegen.rs:768), `jit_check_stack` / `execute_gc_inner` (jit_module.rs:
+  240/268), `immediate_eviction` — gate methods + call sites.
+- **`MethodCacheEntry`** (`trace_ir.rs:50`) + `bytecode.rs:357
+  method_cache()` — JIT-only (`method_cache()` is called *only* from
+  `jitgen/trace_ir.rs:418`). Gate both.
+- **`TraceIr` dump sites** (`codegen.rs:1355` disasm dump,
+  `globals/dump.rs:116`, `store.rs:830`; `dump.rs:194` is already under
+  `cfg(deopt/profile)`) — gate the `TraceIr::format`/`from_pc` calls under
+  `#[cfg(jit)]` (the `bb_info.is_bb_head` part next to them stays — it's
+  basic_block, relocated/kept).
+- **Misc type re-exports/aliases**: `codegen.rs:17,21` (`AsmEvict`,
+  `SpecializedCodeInfo` → the JIT-only `Codegen` fields
+  `asm_return_addr_table`/`specialized_info`/`specialized_base`/
+  `compilation_unit` and their init/uses), `lib.rs:25` (`JitContext`
+  re-export), `globals.rs:28-30` (the `InlineGen` fn-type alias using
+  `AbstractState`/`AsmIr`/`JitContext`), `builtins.rs:48-49`.
+
+Green-gate: when `cargo check --features no-jit` (x86) passes, the excision
+is complete and correct. x86 default must stay green at every commit (it
+keeps `jit` on, so all `#[cfg(jit)]` code remains).
 
 ### Then: VM-tier asm port (aarch64)
 
