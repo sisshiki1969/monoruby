@@ -1,17 +1,17 @@
 # Plan: porting monoruby's VM (`vmgen`) to aarch64
 
 This is the continuation plan after **phase 1** (the monoasm A64 instruction
-encoder, see `HANDOFF-aarch64.md` and `aarch64-monoasm.patch`). It covers
+encoder, now on the `aarch` branch of `sisshiki1969/monoasm`). It covers
 **phase 2**: making the bytecode VM dispatch loop run on aarch64
 (macOS/Apple-Silicon target, validated under qemu-user on this x86 host).
 JIT (`jitgen`) is explicitly **out of scope** for this phase.
 
 ## Status (updated this session)
 
-Phase-1 foundation **re-verified locally** on top of monoasm `rc`:
+Phase-1 foundation **re-verified locally** on top of monoasm `rc` (the
+encoder now lives on the monoasm `aarch` branch):
 
-- `aarch64-monoasm.patch` applies cleanly to a fresh clone of
-  `sisshiki1969/monoasm` at branch `rc` (`6940e51`).
+- the A64 encoder builds cleanly against monoasm `rc` (`6940e51`).
 - `cargo test -p monoasm --test arm64_encoding` → **15 passed** (host).
 - `cargo test -p monoasm --target aarch64-unknown-linux-gnu --test
   arm64_exec` → **9 passed** under qemu.
@@ -173,11 +173,13 @@ byte-for-byte unchanged.
 
 ## Prerequisite to land (do this first in a monoasm-scoped session)
 
-1. Clone `sisshiki1969/monoasm`, `git checkout -b aarch origin/rc`,
-   `git apply aarch64-monoasm.patch`, verify (commands below), then push
-   `aarch` via the GitHub **MCP** `push_files`/`create_branch` tools
-   (server-side commit avoids the local signing constraint noted in the
-   handoff). Plain `git push` has no credentials here.
+1. Ensure the monoasm `aarch` branch carries the A64 encoder on top of
+   `rc`, and verify it (commands below). Note: from a monoruby-scoped
+   session monoasm cannot be pushed (the git proxy and GitHub MCP scope
+   both allow monoruby only, and plain `git push` has no credentials);
+   land monoasm changes from a monoasm-scoped session via the GitHub MCP
+   `push_files`/`create_branch` tools (server-side commit avoids the local
+   signing constraint).
 2. In monoruby `Cargo.toml`, repoint both `monoasm` and `monoasm_macro` to
    `branch = "aarch"` (or a pinned rev) for the duration of phase 2.
 3. Add `monoruby/.cargo/config.toml` cross runner (see below). Note this
