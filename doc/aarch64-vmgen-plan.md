@@ -32,12 +32,20 @@ which is **now published** at `sisshiki1969/monoasm` (`refs/heads/aarch`,
 `b479de6`) on top of `rc` (`6940e51`). The earlier blocker (aarch branch
 unpushed) is resolved.
 
-**Next step to start phase 2 (M0):** repoint `monoasm` /`monoasm_macro` in
-`monoruby/Cargo.toml` from `branch = "rc"` to `branch = "aarch"` (or a
-pinned rev), so the A64 builder API is available; then build monoruby for
-the target behind `cfg(target_arch = "aarch64")`. Note this repoint also
-moves the **x86** build onto the `aarch` branch, so confirm `aarch` is a
-strict superset of `rc` (it is, per phase 1) before landing it.
+**Done this session toward M0:**
+
+- `monoasm`/`monoasm_macro` repointed to `branch = "aarch"`; x86 build
+  re-verified clean (the `aarch` branch is a strict superset of `rc`).
+- `ruruby-parse` reqwest → rustls, removing the `openssl-sys` cross blocker;
+  **all deps (incl. C deps) now cross-compile for aarch64** (see findings).
+- Seam predicate committed: `build.rs` emits `cfg(jit)` ⇔ x86-64 && not
+  `no-jit` (see "Seam selector" below). Not yet wired to any `#[cfg(jit)]`
+  site — that is the JIT-excision step.
+
+**Next step (the large refactor):** perform the JIT excision against the
+78-error worklist in "JIT-excision roadmap" below, with `cargo check
+--features no-jit` (x86) as the green-gate — no qemu required. Then port the
+VM-tier asm to aarch64. x86 default must stay green throughout.
 
 ## Map of what must be ported (VM-only)
 
@@ -165,16 +173,80 @@ be `cfg`-excluded (it has 347 x86-only blocks and is JIT-tier only).
 (executor JIT triggers + builtins' inline-JIT registrations); those sites
 must be `cfg`-gated to fall back to the VM tier on aarch64.
 
-### Open decision — seam selector: `target_arch` vs a `vm-only` feature
+### Seam selector — decided: the existing `no-jit` feature + arch
 
-The plan above assumes `#[cfg(target_arch = "aarch64")]`. A cargo feature
-(e.g. `vm-only`) that excises `jitgen` is worth considering **instead/also**
-because it would let the VM-only configuration build and run **on x86 too**
-— enabling incremental testing of the port without qemu and a cheap CI
-guard against accidental JIT-coupling. Recommended: gate the JIT subsystem
-on `any(target_arch = "aarch64", feature = "vm-only")` so x86 can opt in,
-while aarch64 always gets the VM-only build. (Needs sign-off before the
-~213-block port + JIT excision lands.)
+Decision (owner): reuse the existing **`no-jit`** cargo feature rather than
+inventing a new one. `build.rs` now emits a single source-of-truth cfg:
+
+```rust
+// monoruby/build.rs
+println!("cargo::rustc-check-cfg=cfg(jit)");
+let x86 = env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64");
+let no_jit = env::var_os("CARGO_FEATURE_NO_JIT").is_some();
+if x86 && !no_jit { println!("cargo::rustc-cfg=jit"); }
+```
+
+So **`jit` ⇔ x86-64 AND not `no-jit`**. Consequences:
+
+- x86 default → `jit` on → JIT compiled (today's behaviour, unchanged).
+- x86 `--features no-jit` → `jit` **off** → JIT *compile-excluded* (VM only).
+- any aarch64 → `jit` off → JIT compile-excluded (VM only), always.
+
+The big win: `cargo check --features no-jit` on **x86** is a faithful proxy
+for the aarch64 JIT-excision — it exercises the exact same `#[cfg(not(jit))]`
+paths **without qemu and without needing the A64 asm port done**. Make that
+green first; aarch64 then only adds the VM-tier asm port on top.
+
+### JIT-excision roadmap (verify with `cargo check --features no-jit` on x86)
+
+Gating `#[cfg(jit)] pub mod jitgen;` and checking `--features no-jit`
+surfaced exactly **78 errors** — a precise, bounded worklist:
+
+- **44 × `cannot find type AsmIr`** — builtins' **inline-method
+  generators**. The inline-JIT system is the dominant coupling: many
+  builtins call `define_builtin_inline_func(.., Box::new(gen), ..)` whose
+  generator fns take `&JitContext` / `&mut AsmIr` and call `ir.inline(|gen|
+  { monoasm!{…} })`. Those closure bodies are x86 asm (JIT-tier).
+  → Gate each inline generator fn + its registration under `#[cfg(jit)]`,
+    and give `define_builtin_inline_func` a `#[cfg(not(jit))]` arm that
+    registers **only** the VM/runtime function (drops the inline arg).
+    Files: `builtins/{object,array,string,kernel,fiddle,class,fiber}.rs`,
+    `builtins/numeric/{float,integer}.rs`, plus `builtins.rs`
+    (`use codegen::jitgen::{AbstractState, asmir::*}`).
+- **~15 × JIT-tier `Codegen`/`JitModule` methods** called from kept code:
+  `icmp_eq/ne/lt/le/gt/ge`, `guard_class2`, `jit_compile`,
+  `gen_write_back`, `jit_execute_gc` (codegen.rs:768),
+  `jit_check_stack`/`execute_gc_inner` (jit_module.rs:240/268),
+  `immediate_eviction`. → Gate the methods (they live in jitgen or use
+  `WriteBack`) and their call sites with `#[cfg(jit)]`.
+- **~19 misc `jitgen::` paths** — imports/type-uses:
+  `codegen.rs:17,21` (`AsmEvict`, `SpecializedCodeInfo` struct fields →
+  gate the fields + their init + uses), `bytecode.rs:1`
+  (`MethodCacheEntry`), `lib.rs:25` (`JitContext` re-export),
+  `bytecodegen/encode.rs:1` + `globals/store/iseq.rs:6`
+  (`BasicBlockInfo`/`BasicBlockId`), `globals.rs:28-30` (an inline-fn type
+  alias using `AbstractState`/`AsmIr`/`JitContext`), and the
+  `trace_ir::TraceIr::format` **dump** sites (`codegen.rs:1361`,
+  `globals/dump.rs:116,190`, `globals/store.rs:830`) — gate the dump calls
+  (TraceIR formatting is JIT-front-end and JIT-tier only).
+- **`jitgen::conv`** (`jitgen.rs:108`, `pub(crate) fn conv(SlotId)->i32`) is
+  a **pure frame-offset helper**, not JIT-specific, but used in builtins'
+  *runtime* asm (`builtins/fiber.rs:106`, `class.rs:443`). **Relocate** it
+  out of `jitgen` (e.g. to `codegen.rs` or `executor/frame.rs`) so it
+  survives JIT exclusion. (On x86 `--features no-jit` those builtin
+  `monoasm!` blocks still compile — only `conv`'s path must resolve; on
+  aarch64 those same `monoasm!` blocks are part of the VM-tier port below.)
+
+When `cargo check --features no-jit` (x86) is green, the JIT-excision is
+complete and correct. Commit that as one unit (x86 default must stay green
+throughout).
+
+### Then: VM-tier asm port (aarch64)
+
+Only after excision: port the ~213 VM-tier `monoasm!` blocks (+ the ~50
+builtin runtime `monoasm!` blocks) to `monoasm_arm64!` behind
+`#[cfg(not(jit))]` / sibling modules, per the milestones below, until
+`cargo build --target aarch64-unknown-linux-gnu` links and runs under qemu.
 
 ## Architecture seam (sibling modules)
 
