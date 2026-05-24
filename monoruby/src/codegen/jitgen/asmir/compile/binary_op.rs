@@ -417,16 +417,9 @@ impl Codegen {
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(in crate::codegen) fn [<icmp_ $op>](&mut self) {
-                monoasm! { &mut self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                };
-            }
-
+            // `icmp_$op` lives in `codegen.rs` (VM-tier shared); only the
+            // flag-to-bool `set_$op` (JIT-only, used by `flag_to_bool`)
+            // is generated here.
             pub(in crate::codegen) fn [<set_ $op>](&mut self) {
                 monoasm! { &mut self.jit,
                     [<set $op>] rax;
