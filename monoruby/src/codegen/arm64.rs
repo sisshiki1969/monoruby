@@ -126,6 +126,16 @@ impl JitModule {
         self.jit.brk(0);
     }
 
+    /// Like `a64_brk_stub` but reports a diagnostic id before trapping.
+    fn a64_brk_stub_diag(&mut self, label: &DestLabel, id: u64) {
+        self.jit.bind_label(label.clone());
+        self.jit.mov_imm(X0, id);
+        self.jit
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+        self.jit.blr(X9);
+        self.jit.brk(0);
+    }
+
     /// Emit a `brk` trampoline and return its address as a typed fn pointer.
     /// TODO(aarch64): replace each caller with the real invoker.
     fn a64_stub_fn<T>(&mut self) -> T {
@@ -180,11 +190,13 @@ impl JitModule {
         let gc = j.exec_gc.clone();
         let f64v = j.f64_to_val.clone();
         let ovf = j.vm_stack_overflow.clone();
-        j.a64_brk_stub(&raise);
-        j.a64_brk_stub(&panic);
-        j.a64_brk_stub(&gc);
-        j.a64_brk_stub(&f64v);
-        j.a64_brk_stub(&ovf);
+        // entry_raise is emitted later in construct_vm (it needs
+        // fetch_and_dispatch); the rest stay stubs for now.
+        let _ = &raise;
+        j.a64_brk_stub_diag(&panic, 0xffff02); // entry_panic
+        j.a64_brk_stub_diag(&gc, 0xffff03); // exec_gc
+        j.a64_brk_stub_diag(&f64v, 0xffff04); // f64_to_val
+        j.a64_brk_stub_diag(&ovf, 0xffff05); // vm_stack_overflow
         j.jit.finalize();
         j
     }
@@ -435,6 +447,10 @@ impl JitModule {
         self.jit.cmp_imm(X1, TRUE_VALUE as u32, 0);
         self.jit.bcond_label(Cond::Eq, &bool_);
         self.jit.bind_label(err);
+        self.jit.mov_imm(X0, 0xc1a5); // DIAG: illegal_classid (get_class)
+        self.jit
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+        self.jit.blr(X9);
         self.jit.brk(0); // TODO(aarch64): illegal_classid
         self.jit.bind_label(fixnum);
         self.jit.mov_imm(X0, INTEGER_CLASS.u32() as u64);
@@ -471,7 +487,35 @@ impl Codegen {
     /// (op 6, integer/immediate literal → slot) and `ret` (op 80). All other
     /// opcodes fall through to the `entry_unimpl` trap until ported. Uses the
     /// qemu-validated patterns from `aarch64-proto`.
+    /// entry_raise: error/exception dispatch. Calls `handle_error`, which
+    /// returns (value, dest): if `dest` is Some, resume execution there (a
+    /// rescue/ensure/retry target); otherwise unwind this VM frame and
+    /// return the error (None) to the caller (x86 `init`'s `raise:` block).
+    fn a64_gen_entry_raise(&mut self) {
+        let raise = self.entry_raise.clone();
+        let goto = self.jit.label();
+        self.jit.bind_label(raise);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.sub_imm(X2, LFP, LFP_META as u32, 0);
+        self.jit.ldr(X2, X2, 0); // meta = [LFP - LFP_META]
+        self.jit.mov(X3, PC); // pc = current instruction
+        self.jit
+            .mov_imm(X9, crate::codegen::jit_module::handle_error as u64);
+        self.jit.blr(X9);
+        // x0 = value (Option<Value>), x1 = dest (Option<BytecodePtr>)
+        self.jit.cbnz_label(X1, &goto);
+        // no handler: unwind this frame and return the error (x0 = None)
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+        self.jit.bind_label(goto);
+        self.jit.mov(PC, X1); // resume at the handler pc
+        self.a64_fetch_and_dispatch();
+    }
+
     pub(super) fn construct_vm(&mut self) {
+        self.a64_gen_entry_raise();
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
@@ -541,10 +585,11 @@ impl Codegen {
         // 150-156: same comparisons, emitted when the result feeds a branch.
         let method_def = self.a64_op_method_def();
         self.dispatch[2] = method_def;
-        let send = self.a64_op_send();
-        self.dispatch[30] = send;
+        let send_simple = self.a64_op_send(true);
+        let send = self.a64_op_send(false);
+        self.dispatch[30] = send_simple;
         self.dispatch[31] = send;
-        self.dispatch[32] = send;
+        self.dispatch[32] = send_simple;
         self.dispatch[33] = send;
 
         self.dispatch[150] = eq;
@@ -645,6 +690,9 @@ impl Codegen {
         let block_arg_proxy = self.a64_op_block_arg_proxy();
         self.dispatch[21] = block_arg_proxy;
 
+        let to_a = self.a64_op_to_a();
+        self.dispatch[177] = to_a;
+
         // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
         // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
         let bitor = self.a64_op_binop(bitor_values);
@@ -723,6 +771,20 @@ impl Codegen {
         self.jit.mov(X2, LFP);
         self.jit.mov(X3, PC); // BytecodePtr (instruction start)
         self.jit.mov_imm(X9, runtime::block_arg as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 177 `ToA`: dst `[pc+4]` <- `to_a(src `[pc+2]`)` (splat coercion).
+    fn a64_op_to_a(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_value(X2); // src
+        self.jit.mov_imm(X9, runtime::to_a as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1459,7 +1521,7 @@ impl Codegen {
     /// cache; `find_method` does the lookup every time). Handles the simple
     /// case (no kw/block/splat). Bytecode (32 bytes): `+0` callid, `+4` ret
     /// slot, `+8` pos_num, `+10` arg slot, `+12` recv slot.
-    fn a64_op_send(&mut self) -> CodePtr {
+    fn a64_op_send(&mut self, is_simple: bool) -> CodePtr {
         let p = self.jit.get_current_address();
         let mm = self.jit.label();
         let argloop = self.jit.label();
@@ -1467,6 +1529,7 @@ impl Codegen {
         let generic = self.jit.label();
         let docall = self.jit.label();
         let skip = self.jit.label();
+        let after_call = self.jit.label();
         let raise = self.entry_raise.clone();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
         self.jit.sub_imm(SP, SP, 16, 0);
@@ -1503,14 +1566,20 @@ impl Codegen {
         self.jit.ldr(X14, X15, FUNCDATA_META as u32);
         self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
         self.jit.str(X14, X11, 0);
-        // is_simple? kind byte (meta >> 56) bit 4 set AND pos_num == min.
-        // Otherwise fall back to the runtime arg massager.
+        // Simple-send opcodes (no block/splat/kw at the call site) may take
+        // the fast positional-copy path when the callee is also simple and
+        // arity matches. The full-send opcodes always go generic so that
+        // set_frame_block / splat / keyword handling runs.
         self.jit.ldrh(X9, PC, 8); // pos_num
-        self.jit.lsr_imm(X16, X14, 56); // kind byte
-        self.jit.tbz_label(X16, 4, &generic);
-        self.jit.ldrh(X16, X15, FUNCDATA_MIN as u32);
-        self.jit.cmp(X9, X16);
-        self.jit.bcond_label(Cond::Ne, &generic);
+        if is_simple {
+            self.jit.lsr_imm(X16, X14, 56); // kind byte
+            self.jit.tbz_label(X16, 4, &generic);
+            self.jit.ldrh(X16, X15, FUNCDATA_MIN as u32);
+            self.jit.cmp(X9, X16);
+            self.jit.bcond_label(Cond::Ne, &generic);
+        } else {
+            self.jit.b_label(&generic);
+        }
         // --- simple path: zero block + copy positional args directly ---
         self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
         self.jit.str(X12, X11, 0); // block = 0
@@ -1580,6 +1649,7 @@ impl Codegen {
         self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
         self.jit.ldr(LFP, X10, 0);
         // pop_cont_frame: restore PC, advance past the 32-byte send
+        self.jit.bind_label(after_call.clone());
         self.jit.ldr(PC, SP, 0);
         self.jit.add_imm(SP, SP, 16, 0);
         self.jit.cbz_label(X0, &raise); // result 0 => error
@@ -1592,8 +1662,23 @@ impl Codegen {
         self.jit.str(X0, X11, 0);
         self.jit.bind_label(skip);
         self.a64_fetch_and_dispatch();
+        // method_missing: invoke_method_missing(vm, globals, recv, lfp,
+        // callid) -> Option, then join the result path. The receiver register
+        // was clobbered by find_method, so reload it from the recv slot.
+        // invoke_method_missing manages its own frames and preserves PC/LFP
+        // (callee-saved), so no cfp/LFP restore is needed here.
         self.jit.bind_label(mm);
-        self.jit.brk(0); // TODO(aarch64): method_missing
+        self.jit.ldrh(X10, PC, 12); // recv slot
+        self.a64_slot_value(X10);
+        self.jit.mov(X2, X10); // receiver
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov(X3, LFP);
+        self.jit.ldr32(X4, PC, 0); // callid
+        self.jit
+            .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as u64);
+        self.jit.blr(X9);
+        self.jit.b_label(&after_call);
         p
     }
 

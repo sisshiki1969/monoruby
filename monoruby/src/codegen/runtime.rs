@@ -508,6 +508,22 @@ pub extern "C" fn report_unimpl_op(op: u64) {
 /// Like `vm_get_constant`, but returns `nil` instead of raising when the
 /// constant is undefined (the `CheckConst` op, used for conditional const
 /// definition such as `X ||= ...`).
+pub(crate) extern "C" fn invoke_method_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    lfp: Lfp,
+    callsite: CallSiteId,
+) -> Option<Value> {
+    if globals[callsite].name.is_none() {
+        // A super call: CRuby never falls through to method_missing when no
+        // superclass method is found. The error is already set; return None.
+        return None;
+    }
+    vm.discard_error();
+    vm.invoke_method_missing(globals, receiver, lfp, callsite)
+}
+
 pub(crate) extern "C" fn vm_check_constant(
     vm: &mut Executor,
     globals: &mut Globals,
