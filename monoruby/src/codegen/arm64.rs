@@ -521,6 +521,116 @@ impl Codegen {
         self.dispatch[67] = defined_gvar;
         self.dispatch[68] = defined_ivar;
         self.dispatch[69] = defined_super;
+
+        // literal constructors / aggregate ops
+        let array = self.a64_op_array();
+        let hash = self.a64_op_hash();
+        let concat = self.a64_op_concat();
+        let range_incl = self.a64_op_range(false);
+        let range_excl = self.a64_op_range(true);
+        let expand_array = self.a64_op_expand_array();
+        self.dispatch[39] = array;
+        self.dispatch[176] = hash;
+        self.dispatch[181] = concat;
+        self.dispatch[179] = range_incl;
+        self.dispatch[180] = range_excl;
+        self.dispatch[173] = expand_array;
+    }
+
+    /// Store the Option<Value> result in X0 to the dst slot `[pc+4]`: branch
+    /// to `raise` if it is 0 (error), else store, advance PC, and dispatch.
+    fn a64_checked_store_next(&mut self, raise: &DestLabel) {
+        let skip = self.jit.label();
+        self.jit.cbz_label(X0, raise);
+        self.jit.ldrh(X10, PC, 4);
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+    }
+
+    /// op 39 `Array`: gen_array(vm, globals, callid `[pc+0]`, &self).
+    fn a64_op_array(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // callid
+        self.jit.sub_imm(X3, LFP, LFP_SELF as u32, 0); // &self
+        self.jit.mov_imm(X9, runtime::gen_array as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 176 `Hash`: gen_hash(vm, globals, src `[pc+2]`, len `[pc+0]`).
+    fn a64_op_hash(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_addr(X2); // src
+        self.jit.ldrh(X3, PC, 0); // len
+        self.jit.mov_imm(X9, runtime::gen_hash as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 181 `ConcatStr`: concatenate_string(vm, globals, args `[pc+2]`,
+    /// len `[pc+0]`).
+    fn a64_op_concat(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_addr(X2); // args
+        self.jit.ldrh(X3, PC, 0); // len
+        self.jit.mov_imm(X9, runtime::concatenate_string as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 179/180 `Range`: gen_range(start `[pc+2]`, end `[pc+0]`, vm,
+    /// globals, exclude_end).
+    fn a64_op_range(&mut self, exclude_end: bool) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.ldrh(X0, PC, 2);
+        self.a64_slot_value(X0); // start
+        self.jit.ldrh(X1, PC, 0);
+        self.a64_slot_value(X1); // end
+        self.jit.mov(X2, EXEC);
+        self.jit.mov(X3, GLOBALS);
+        self.jit.mov_imm(X4, if exclude_end { 1 } else { 0 });
+        self.jit.mov_imm(X9, runtime::gen_range as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 173 `ExpandArray`: expand_array(src `[pc+4]`, &dst `[pc+2]`,
+    /// len `[pc+0]`, rest `[pc+8]`). No result.
+    fn a64_op_expand_array(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrh(X0, PC, 4);
+        self.a64_slot_value(X0); // src (an Array Value)
+        self.jit.ldrh(X1, PC, 2);
+        self.a64_slot_addr(X1); // &dst
+        self.jit.ldrh(X2, PC, 0); // len
+        self.jit.ldrh(X3, PC, 8); // rest
+        self.jit.mov_imm(X9, runtime::expand_array as u64);
+        self.jit.blr(X9);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// Store `X0` (a Value) into the dst slot at `[pc+4]`, advance PC, dispatch.
