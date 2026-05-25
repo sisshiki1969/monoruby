@@ -188,6 +188,130 @@ fn program(insts: &[(u8, u64)]) -> Vec<u8> {
     prog
 }
 
+// ---------------------------------------------------------------------------
+// Method-call / frame model.
+//
+// Validates the monoruby VM calling convention essence on aarch64: an
+// invoker-style entry that builds the bottom frame, a `call` that pushes a
+// native-stack frame (saving the caller's lfp + resume pc, passing an argument,
+// switching lfp — like `push_frame` + `set_lfp`), nested dispatch into the
+// callee, and a `ret` that tears the frame down and resumes the caller (or
+// returns to Rust at the bottom frame — like `epilogue`'s `leave; ret`).
+//
+// Frame (64 bytes, `lfp = sp + 64`): `[lfp-64]` = caller lfp, `[lfp-56]` =
+// resume pc (0 = bottom frame → return to Rust), `[lfp-40]` = slot 0 (the
+// argument; matches `LFP_SELF`).
+// ---------------------------------------------------------------------------
+
+const C_LOAD: u8 = 0; // acc <- operand
+const C_LOADSLOT: u8 = 1; // acc <- slot[operand]  (arg via the frame)
+const C_ADD: u8 = 2; // acc <- acc + operand
+const C_CALL: u8 = 3; // call callee (operand = callee program ptr), arg = acc
+const C_RET: u8 = 4; // return acc to caller (or to Rust at the bottom frame)
+
+const FRAME: u32 = 64;
+
+fn build_with_calls() -> (extern "C" fn(*const u8) -> u64, Box<[u64; 256]>) {
+    let mut jit = JitMemory::new();
+    let mut table: Box<[u64; 256]> = vec![0u64; 256].into_boxed_slice().try_into().unwrap();
+    let table_ptr = table.as_ptr() as u64;
+
+    const ADDR: GReg = X13;
+    const CLFP: GReg = X14; // caller lfp
+    const RPC: GReg = X15; // resume pc
+
+    let entry = jit.label();
+    let dispatch = jit.label();
+    let h_load = jit.label();
+    let h_loadslot = jit.label();
+    let h_add = jit.label();
+    let h_call = jit.label();
+    let h_ret = jit.label();
+    let top_ret = jit.label();
+
+    // ---- invoker-style entry: save globals, build the bottom frame ----
+    jit.bind_label(entry.clone());
+    jit.stp_pre(X29, X30, SP, -16);
+    jit.stp_pre(PC, LFP, SP, -16);
+    jit.stp_pre(ACC, X19, SP, -16);
+    jit.sub_imm(SP, SP, FRAME, 0); // bottom frame
+    jit.mov_imm(TMP, 0);
+    jit.str(TMP, SP, 0); // caller lfp = 0
+    jit.str(TMP, SP, 8); // resume pc  = 0 (sentinel: return to Rust)
+    jit.add_imm(LFP, SP, FRAME, 0); // lfp = sp + 64
+    jit.mov(PC, X0); // pc <- main program
+    jit.mov_imm(ACC, 0);
+    jit.b_label(&dispatch);
+
+    jit.bind_label(dispatch.clone());
+    jit.mov_imm(TBL, table_ptr);
+    jit.ldrb(OP, PC, OPECODE);
+    jit.ldr_reg(TGT, TBL, OP, true);
+    jit.br(TGT);
+
+    jit.bind_label(h_load.clone());
+    jit.ldr(ACC, PC, OPERAND);
+    jit.add_imm(PC, PC, INST_LEN, 0);
+    jit.b_label(&dispatch);
+
+    jit.bind_label(h_loadslot.clone());
+    jit.ldr(TMP, PC, OPERAND); // slot index
+    jit.neg(TMP, TMP);
+    jit.add_lsl(ADDR, LFP, TMP, 3);
+    jit.sub_imm(ADDR, ADDR, LFP_SELF, 0);
+    jit.ldr(ACC, ADDR, 0);
+    jit.add_imm(PC, PC, INST_LEN, 0);
+    jit.b_label(&dispatch);
+
+    jit.bind_label(h_add.clone());
+    jit.ldr(TMP, PC, OPERAND);
+    jit.add(ACC, ACC, TMP);
+    jit.add_imm(PC, PC, INST_LEN, 0);
+    jit.b_label(&dispatch);
+
+    // call: push frame, save caller lfp + resume pc, pass arg (acc), switch lfp
+    jit.bind_label(h_call.clone());
+    jit.ldr(TGT, PC, OPERAND); // callee program ptr
+    jit.add_imm(RPC, PC, INST_LEN, 0); // resume pc = pc + 16
+    jit.sub_imm(SP, SP, FRAME, 0);
+    jit.str(LFP, SP, 0); // save caller lfp
+    jit.str(RPC, SP, 8); // save resume pc
+    jit.str(ACC, SP, 24); // arg0 -> slot 0  ([new_lfp-40] = [sp+24])
+    jit.add_imm(LFP, SP, FRAME, 0); // new lfp
+    jit.mov(PC, TGT); // jump to callee
+    jit.b_label(&dispatch);
+
+    // ret: tear down the frame, resume caller (or return to Rust)
+    jit.bind_label(h_ret.clone());
+    jit.sub_imm(ADDR, LFP, FRAME, 0); // addr = lfp - 64 = sp
+    jit.ldr(CLFP, ADDR, 0); // caller lfp
+    jit.ldr(RPC, ADDR, 8); // resume pc
+    jit.add_imm(SP, SP, FRAME, 0); // pop frame
+    jit.mov(LFP, CLFP); // restore caller lfp
+    jit.cbz_label(RPC, &top_ret); // bottom frame -> return to Rust
+    jit.mov(PC, RPC); // resume caller
+    jit.b_label(&dispatch);
+
+    jit.bind_label(top_ret.clone());
+    jit.mov(X0, ACC);
+    jit.ldp_post(ACC, X19, SP, 16);
+    jit.ldp_post(PC, LFP, SP, 16);
+    jit.ldp_post(X29, X30, SP, 16);
+    jit.ret();
+
+    jit.finalize();
+    table[C_LOAD as usize] = jit.get_label_address(&h_load).as_ptr() as u64;
+    table[C_LOADSLOT as usize] = jit.get_label_address(&h_loadslot).as_ptr() as u64;
+    table[C_ADD as usize] = jit.get_label_address(&h_add).as_ptr() as u64;
+    table[C_CALL as usize] = jit.get_label_address(&h_call).as_ptr() as u64;
+    table[C_RET as usize] = jit.get_label_address(&h_ret).as_ptr() as u64;
+
+    let f: extern "C" fn(*const u8) -> u64 =
+        unsafe { std::mem::transmute(jit.get_label_u64(&entry)) };
+    (f, table)
+}
+
+
 #[test]
 fn dispatch_load_add_ret() {
     let (f, _table) = build();
@@ -262,4 +386,40 @@ fn tagged_fixnum_add_with_guard() {
     let result = f(prog.as_ptr(), std::ptr::null());
     assert_eq!(result, tag(42));
     assert_eq!(untag(result), 42);
+}
+
+#[test]
+fn method_call_with_frame() {
+    let (f, _table) = build_with_calls();
+    // callee(arg) = arg + 21 ; reads its argument from slot 0 of its frame.
+    let callee = program(&[(C_LOADSLOT, 0), (C_ADD, 21), (C_RET, 0)]);
+    // main: acc = 21; acc = callee(acc); return acc  => 42
+    let main = program(&[
+        (C_LOAD, 21),
+        (C_CALL, callee.as_ptr() as u64),
+        (C_RET, 0),
+    ]);
+    assert_eq!(f(main.as_ptr()), 42);
+}
+
+#[test]
+fn nested_method_calls() {
+    let (f, _table) = build_with_calls();
+    // inner(arg) = arg + 1
+    let inner = program(&[(C_LOADSLOT, 0), (C_ADD, 1), (C_RET, 0)]);
+    // outer(arg) = inner(arg) + inner(arg-from-slot)  -> exercises 2-deep frames
+    // outer computes: a = arg; a = inner(a); a = a + inner via second call.
+    let outer = program(&[
+        (C_LOADSLOT, 0),                  // acc = arg
+        (C_CALL, inner.as_ptr() as u64),  // acc = inner(arg)        (frame depth 2)
+        (C_CALL, inner.as_ptr() as u64),  // acc = inner(prev)       (frame depth 2)
+        (C_RET, 0),
+    ]);
+    // main: acc = 40; acc = outer(acc); return  => 40 +1 +1 = 42
+    let main = program(&[
+        (C_LOAD, 40),
+        (C_CALL, outer.as_ptr() as u64),
+        (C_RET, 0),
+    ]);
+    assert_eq!(f(main.as_ptr()), 42);
 }
