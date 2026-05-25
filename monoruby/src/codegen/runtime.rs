@@ -505,6 +505,36 @@ pub extern "C" fn report_unimpl_op(op: u64) {
     eprintln!("[aarch64 VM] unimplemented opcode: {}", op);
 }
 
+pub(crate) extern "C" fn vm_get_constant(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+    const_version: usize,
+) -> Option<Value> {
+    if let Some(cache) = &globals.store[site_id].cache {
+        let base_class = globals.store[site_id]
+            .base
+            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+        if cache.version == const_version && cache.base_class == base_class {
+            return Some(cache.value);
+        };
+    }
+    match vm.find_constant(globals, site_id) {
+        Ok((value, base_class)) => {
+            globals.store[site_id].cache = Some(ConstCache {
+                version: const_version,
+                base_class,
+                value,
+            });
+            Some(value)
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,

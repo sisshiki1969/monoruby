@@ -490,6 +490,176 @@ impl Codegen {
         self.dispatch[154] = gt;
         self.dispatch[155] = ge;
         self.dispatch[156] = eq; // teq
+
+        let class_def = self.a64_op_class_def(false);
+        let module_def = self.a64_op_class_def(true);
+        self.dispatch[70] = class_def;
+        self.dispatch[71] = module_def;
+
+        let load_const = self.a64_op_load_const();
+        let store_const = self.a64_op_store_const();
+        self.dispatch[10] = load_const;
+        self.dispatch[11] = store_const;
+    }
+
+    /// op 10 `LoadConst`: slot[`[pc+4]`] <- constant at ConstSiteId `[pc+0]`.
+    /// (x86 `vm_load_const`; the JIT inline-cache slot at `[pc+8]` is not
+    /// written — the VM relies on the ConstSite cache + const_version.)
+    fn a64_op_load_const(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let skip = self.jit.label();
+        let cv_addr = self.jit.get_label_address(&self.const_version_label()).as_ptr() as u64;
+        self.jit.ldr32(X2, PC, 0); // ConstSiteId
+        self.jit.mov_imm(X11, cv_addr);
+        self.jit.ldr(X3, X11, 0); // const_version
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::vm_get_constant as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.ldrh(X10, PC, 4); // dst slot
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 11 `StoreConst`: define constant ConstSiteId `[pc+0]` <- slot
+    /// `[pc+4]`, bumping const_version. (x86 `vm_store_const`.)
+    fn a64_op_store_const(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let cv_addr = self.jit.get_label_address(&self.const_version_label()).as_ptr() as u64;
+        self.jit.ldr32(X2, PC, 0); // ConstSiteId
+        self.jit.ldrh(X10, PC, 4); // src slot
+        self.a64_slot_value(X10);
+        self.jit.mov(X3, X10); // val
+        // const_version += 1
+        self.jit.mov_imm(X11, cv_addr);
+        self.jit.ldr(X12, X11, 0);
+        self.jit.add_imm(X12, X12, 1, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::set_constant as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 70 `ClassDef` / op 71 `ModuleDef`: define the class/module, then
+    /// run its body as a method with the class as `self`. Bytecode (16B):
+    /// `+0` superclass slot (0 = none), `+2` base slot (0 = none),
+    /// `+4` dst, `+8` name (IdentId), `+12` func_id (class body).
+    fn a64_op_class_def(&mut self, is_module: bool) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let sup_zero = self.jit.label();
+        let sup_done = self.jit.label();
+        let base_zero = self.jit.label();
+        let base_done = self.jit.label();
+        let skip = self.jit.label();
+        // define_class(vm, globals, name, superclass, is_module, base)
+        // superclass (x3): slot[+0] value, or 0 (None) if slot index is 0.
+        self.jit.ldrh(X10, PC, 0);
+        self.jit.cbz_label(X10, &sup_zero);
+        self.a64_slot_value(X10);
+        self.jit.mov(X3, X10);
+        self.jit.b_label(&sup_done);
+        self.jit.bind_label(sup_zero);
+        self.jit.mov_imm(X3, 0);
+        self.jit.bind_label(sup_done);
+        // base (x5): slot[+2] value, or 0 (None).
+        self.jit.ldrh(X10, PC, 2);
+        self.jit.cbz_label(X10, &base_zero);
+        self.a64_slot_value(X10);
+        self.jit.mov(X5, X10);
+        self.jit.b_label(&base_done);
+        self.jit.bind_label(base_zero);
+        self.jit.mov_imm(X5, 0);
+        self.jit.bind_label(base_done);
+        self.jit.ldr32(X2, PC, 8); // name
+        self.jit.mov_imm(X4, if is_module { 1 } else { 0 });
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::define_class as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.mov(X25, X0); // X25 = self (the class), callee-saved
+        // enter_classdef(vm, globals, func_id, self) -> &FuncData
+        self.jit.ldr32(X2, PC, 12); // func_id
+        self.jit.mov(X3, X25);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::enter_classdef as u64);
+        self.jit.blr(X9);
+        self.jit.mov(X26, X0); // X26 = &FuncData, callee-saved
+        // cont frame: save caller PC + ACC (the body clobbers them).
+        self.jit.sub_imm(SP, SP, 16, 0);
+        self.jit.str(PC, SP, 0);
+        self.jit.str(ACC, SP, 8);
+        // frame setup: zero outer/svar/cme/block; self = class; meta.
+        self.jit.mov_imm(X12, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.str(X25, X11, 0); // self = class
+        self.jit.ldr(X10, X26, FUNCDATA_META as u32);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
+        self.jit.str(X10, X11, 0);
+        // call_funcdata: push frame, set lfp, pc, blr codeptr, restore cfp
+        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
+        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
+        self.jit.str(LFP, X10, 0);
+        self.jit.ldr(PC, X26, FUNCDATA_PC as u32);
+        self.jit.ldr(X10, X26, FUNCDATA_CODEPTR as u32);
+        self.jit.blr(X10); // x0 = class body result
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.ldr(X10, X11, 0);
+        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        // restore caller LFP from its own frame (x29-relative)
+        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
+        self.jit.ldr(LFP, X10, 0);
+        self.jit.mov(X25, X0); // save result across exit_classdef
+        // exit_classdef(vm, globals)
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::exit_classdef as u64);
+        self.jit.blr(X9);
+        self.jit.mov(X0, X25); // restore result
+        // pop cont frame: restore PC + ACC
+        self.jit.ldr(PC, SP, 0);
+        self.jit.ldr(ACC, SP, 8);
+        self.jit.add_imm(SP, SP, 16, 0);
+        // store result to dst [PC+4]
+        self.jit.ldrh(X10, PC, 4);
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 2 `method_def`: `define_method(vm, globals, name, func_id)`.
