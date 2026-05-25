@@ -82,6 +82,31 @@ and `--features no-jit` remain green. (Also fixed an arch portability bug:
 `monoruby -e 'puts 42'` (then fib, then the test suite) under qemu. x86
 default stays green throughout.
 
+**Progress + findings (this session):**
+
+- Real VM dispatch + first handlers landed in `codegen/arm64.rs`:
+  `construct_vm` (vm_entry + `a64_fetch_and_dispatch`), op 6 `immediate`
+  (integer literal → slot), op 80 `ret`. Correct-by-construction from the x86
+  reference + validated patterns. Other opcodes still trap.
+- **Key finding — no minimal "42":** `Executor::init` `require`s
+  `~/.monoruby/builtins/startup.rb` (a large Ruby file) *before* any user
+  code, so the first runnable program needs a big VM subset (def/class/send/
+  const/blocks/…). Added a bring-up aid: env var **`MONORUBY_SKIP_STARTUP`**
+  skips startup+gems so a trivial program can exercise the VM core under qemu
+  (no effect unless set). Also relies on `--no-gc` to avoid the GC stub.
+- **The hard remaining piece — the invoker/frame-ABI interlock.** The
+  `RSP_LOCAL_FRAME`/`RSP_CFP`/`CFP_LFP` frame offsets assume x86's stack
+  layout (`call` pushes the return address, `vm_entry` does `push rbp`).
+  aarch64 uses `blr`/`lr` (no pushed return address) + `stp fp,lr`, so
+  `method_invoker` + `call_invoker` + `vm_entry`/epilogue must replicate the
+  *same* relative stack layout the offset constants expect (or define
+  aarch64-specific offsets). This needs careful design + qemu-debugging — it
+  is the trickiest interlock of the port and the gate to a running `42`.
+  Plan: implement `method_invoker` (prologue/get_func_data/frame-setup/
+  call_invoker/epilogue), `gen_wrapper` (vm_stub = `b vm_entry`), and
+  `init_method` (op 172: stack-alloc + nil-fill + captured guard), then
+  `MONORUBY_SKIP_STARTUP=1 qemu-aarch64 … monoruby --no-gc -e '42'`.
+
 - **M0/M1 codegen patterns validated under qemu** (`aarch64-proto/`, a
   standalone monoasm-only crate detached from the workspace). Since the
   in-crate VM port can't be qemu-tested until it links, validate the core

@@ -202,14 +202,20 @@ impl Executor {
         globals.alias_global_variable(IdentId::get_id("$-v"), IdentId::get_id("$VERBOSE"));
         globals.alias_global_variable(IdentId::get_id("$-w"), IdentId::get_id("$VERBOSE"));
         let mut executor = Self::default();
-        let path = dirs::home_dir()
-            .unwrap()
-            .join(".monoruby")
-            .join("builtins")
-            .join("startup.rb");
-        executor.require(globals, &path, false)?;
-        if !globals.no_gems {
-            executor.load_gems(globals);
+        // Bring-up/testing aid (used by the in-progress aarch64 VM port): skip
+        // loading startup.rb + gems so a trivial program can exercise the VM
+        // core without the full stdlib. No effect unless MONORUBY_SKIP_STARTUP
+        // is set in the environment.
+        if std::env::var_os("MONORUBY_SKIP_STARTUP").is_none() {
+            let path = dirs::home_dir()
+                .unwrap()
+                .join(".monoruby")
+                .join("builtins")
+                .join("startup.rb");
+            executor.require(globals, &path, false)?;
+            if !globals.no_gems {
+                executor.load_gems(globals);
+            }
         }
         // Clear stale $! that may have been set during startup/gem loading.
         globals.set_gvar(IdentId::get_id("$!"), Value::nil());
