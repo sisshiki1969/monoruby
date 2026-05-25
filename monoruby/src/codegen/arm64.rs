@@ -496,9 +496,11 @@ impl Codegen {
         self.dispatch[70] = class_def;
         self.dispatch[71] = module_def;
 
-        let load_const = self.a64_op_load_const();
+        let load_const = self.a64_op_load_const(runtime::vm_get_constant as u64);
+        let check_const = self.a64_op_load_const(runtime::vm_check_constant as u64);
         let store_const = self.a64_op_store_const();
         self.dispatch[10] = load_const;
+        self.dispatch[18] = check_const;
         self.dispatch[11] = store_const;
 
         let load_ivar = self.a64_op_load_ivar();
@@ -535,6 +537,51 @@ impl Codegen {
         self.dispatch[179] = range_incl;
         self.dispatch[180] = range_excl;
         self.dispatch[173] = expand_array;
+
+        let index = self.a64_op_index();
+        let index_assign = self.a64_op_index_assign();
+        self.dispatch[132] = index;
+        self.dispatch[133] = index_assign;
+    }
+
+    /// op 132 `Index`: dst[`[pc+4]`] <- base[`[pc+2]`][idx[`[pc+0]`]], with an
+    /// inline ClassId cache at `[pc+8]`.
+    fn a64_op_index(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_value(X2); // base
+        self.jit.ldrh(X3, PC, 0);
+        self.a64_slot_value(X3); // idx
+        self.jit.add_imm(X4, PC, 8, 0); // &cache
+        self.jit.mov_imm(X9, runtime::get_index as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 133 `IndexAssign`: base[`[pc+2]`][idx[`[pc+0]`]] <- src[`[pc+4]`],
+    /// with an inline ClassId cache at `[pc+8]`.
+    fn a64_op_index_assign(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_value(X2); // base
+        self.jit.ldrh(X3, PC, 0);
+        self.a64_slot_value(X3); // idx
+        self.jit.ldrh(X4, PC, 4);
+        self.a64_slot_value(X4); // src
+        self.jit.add_imm(X5, PC, 8, 0); // &cache
+        self.jit.mov_imm(X9, runtime::set_index as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// Store the Option<Value> result in X0 to the dst slot `[pc+4]`: branch
@@ -771,7 +818,7 @@ impl Codegen {
     /// op 10 `LoadConst`: slot[`[pc+4]`] <- constant at ConstSiteId `[pc+0]`.
     /// (x86 `vm_load_const`; the JIT inline-cache slot at `[pc+8]` is not
     /// written — the VM relies on the ConstSite cache + const_version.)
-    fn a64_op_load_const(&mut self) -> CodePtr {
+    fn a64_op_load_const(&mut self, get_fn: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
@@ -781,7 +828,7 @@ impl Codegen {
         self.jit.ldr(X3, X11, 0); // const_version
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::vm_get_constant as u64);
+        self.jit.mov_imm(X9, get_fn);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.ldrh(X10, PC, 4); // dst slot

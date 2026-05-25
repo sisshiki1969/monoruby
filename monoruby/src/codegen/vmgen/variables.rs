@@ -1,32 +1,6 @@
 use super::*;
-use crate::codegen::runtime::vm_get_constant;
+use crate::codegen::runtime::{vm_check_constant, vm_get_constant};
 
-extern "C" fn vm_check_constant(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    site_id: ConstSiteId,
-    const_version: usize,
-) -> Option<Value> {
-    if let Some(cache) = &globals.store[site_id].cache {
-        let base_class = globals.store[site_id]
-            .base
-            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-        if cache.version == const_version && cache.base_class == base_class {
-            return Some(cache.value);
-        };
-    }
-    match vm.find_constant(globals, site_id) {
-        Ok((value, base_class)) => {
-            globals.store[site_id].cache = Some(ConstCache {
-                version: const_version,
-                base_class,
-                value,
-            });
-            Some(value)
-        }
-        Err(_) => Some(Value::nil()),
-    }
-}
 
 impl Codegen {
     //
