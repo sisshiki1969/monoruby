@@ -459,6 +459,8 @@ impl Codegen {
         self.dispatch[5] = condnotbr;
         self.dispatch[12] = condbr;
         self.dispatch[13] = condnotbr;
+        let check_local = self.a64_op_check_local(&branch);
+        self.dispatch[20] = check_local;
 
         // integer comparisons (fixnum fast path)
         let eq = self.a64_op_cmp(Cond::Eq);
@@ -561,6 +563,51 @@ impl Codegen {
         self.dispatch[27] = load_cvar;
         self.dispatch[28] = alias_gvar;
         self.dispatch[29] = store_cvar;
+
+        let block_arg = self.a64_op_block_arg();
+        let check_cvar = self.a64_op_check_cvar();
+        self.dispatch[23] = block_arg;
+        self.dispatch[24] = check_cvar;
+    }
+
+    /// op 20 `CheckLocal`: branch by disp `[pc+0]` if local `[pc+4]` is set
+    /// (non-zero); otherwise fall through (used for optional-param defaults).
+    fn a64_op_check_local(&mut self, branch: &DestLabel) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrsw(X10, PC, 0); // disp (for the shared branch target)
+        self.jit.ldrh(X12, PC, 4); // local slot
+        self.a64_slot_value(X12);
+        self.jit.cbnz_label(X12, branch);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 23 `BlockArg`: block_arg(vm, globals, lfp, pc) -> dst `[pc+4]`.
+    fn a64_op_block_arg(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov(X2, LFP);
+        self.jit.mov(X3, PC); // BytecodePtr (instruction start)
+        self.jit.mov_imm(X9, runtime::block_arg as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 24 `CheckCvar`: check_class_var(vm, globals, name `[pc+0]`) -> dst.
+    fn a64_op_check_cvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // name
+        self.jit.mov_imm(X9, runtime::check_class_var as u64);
+        self.jit.blr(X9);
+        self.a64_store_dst_and_next(&skip);
+        p
     }
 
     /// op 25 `LoadGvar`: get_global_var(vm, globals, name `[pc+0]`) -> Value.
