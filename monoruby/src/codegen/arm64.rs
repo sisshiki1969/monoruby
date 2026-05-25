@@ -1921,22 +1921,16 @@ impl Codegen {
 
     fn a64_generic_binop(&mut self, func: BinaryOpFn) {
         let raise = self.entry_raise.clone();
-        let skip = self.jit.label();
         self.jit.mov(X2, X13); // lhs
         self.jit.mov(X3, X14); // rhs
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.mov_imm(X9, func as u64);
         self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.cbz_label(X12, &skip);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X10, LFP, X12, 3);
-        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
-        self.jit.str(X0, X10, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
-        self.a64_fetch_and_dispatch();
+        // The dst slot is re-read from PC (callee-saved): `func` may re-enter
+        // the VM (e.g. string `+` dispatches a method), clobbering the
+        // caller-saved dst register held before the call.
+        self.a64_checked_store_next(&raise);
     }
 
     /// op 162/163 `mul_rr`/`div_rr`: no fixnum fast path — straight to the
