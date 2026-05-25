@@ -508,6 +508,15 @@ pub extern "C" fn report_unimpl_op(op: u64) {
 /// Like `vm_get_constant`, but returns `nil` instead of raising when the
 /// constant is undefined (the `CheckConst` op, used for conditional const
 /// definition such as `X ||= ...`).
+pub(crate) extern "C" fn opt_case(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    callid: OptCaseId,
+    idx: Value,
+) -> u32 {
+    globals.store[callid].find(idx)
+}
+
 pub(crate) extern "C" fn invoke_method_missing(
     vm: &mut Executor,
     globals: &mut Globals,

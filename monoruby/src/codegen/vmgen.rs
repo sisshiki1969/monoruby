@@ -1354,7 +1354,7 @@ impl Codegen {
             movq rcx, [r15];
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (opt_case);
+            movq rax, (runtime::opt_case);
             call rax;
             movl rdi, rax;
             jmp branch;
@@ -1363,11 +1363,3 @@ impl Codegen {
     }
 }
 
-extern "C" fn opt_case(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    callid: OptCaseId,
-    idx: Value,
-) -> u32 {
-    globals.store[callid].find(idx)
-}

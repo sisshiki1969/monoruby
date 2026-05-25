@@ -595,6 +595,8 @@ impl Codegen {
         self.dispatch[20] = check_local;
         let nilbr = self.a64_op_nilbr(&branch);
         self.dispatch[37] = nilbr;
+        let optcase = self.a64_op_optcase(&branch);
+        self.dispatch[36] = optcase;
 
         // integer comparisons (fixnum fast path; generic runtime fallback)
         let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as u64);
@@ -793,6 +795,25 @@ impl Codegen {
         self.jit.cbnz_label(X12, branch);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 36 `OptCase`: dense `case`/`when` jump table. opt_case returns the
+    /// branch displacement for cond slot `[pc+4]` against OptCaseId `[pc+0]`,
+    /// which feeds the shared branch target.
+    fn a64_op_optcase(&mut self, branch: &DestLabel) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldr32(X2, PC, 0); // OptCaseId
+        self.jit.ldrh(X10, PC, 4); // cond slot
+        self.a64_slot_value(X10);
+        self.jit.mov(X3, X10); // cond value
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::opt_case as u64);
+        self.jit.blr(X9);
+        self.jit.lsl_imm(X10, X0, 32); // zero-extend u32 disp into X10
+        self.jit.lsr_imm(X10, X10, 32);
+        self.jit.b_label(branch);
         p
     }
 
