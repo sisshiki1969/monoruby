@@ -505,6 +505,109 @@ impl Codegen {
         let store_ivar = self.a64_op_store_ivar();
         self.dispatch[16] = load_ivar;
         self.dispatch[17] = store_ivar;
+
+        // `defined?` family (ops 64-69): each computes a truthy/nil result.
+        // const/method/ivar write through a *mut Value (dst address);
+        // yield/super return the Value and we store it.
+        let defined_yield = self.a64_op_defined_to_dst(runtime::defined_yield as u64);
+        let defined_super = self.a64_op_defined_to_dst(runtime::defined_super as u64);
+        let defined_const = self.a64_op_defined_const();
+        let defined_method = self.a64_op_defined_method();
+        let defined_gvar = self.a64_op_defined_gvar();
+        let defined_ivar = self.a64_op_defined_ivar();
+        self.dispatch[64] = defined_yield;
+        self.dispatch[65] = defined_const;
+        self.dispatch[66] = defined_method;
+        self.dispatch[67] = defined_gvar;
+        self.dispatch[68] = defined_ivar;
+        self.dispatch[69] = defined_super;
+    }
+
+    /// Store `X0` (a Value) into the dst slot at `[pc+4]`, advance PC, dispatch.
+    fn a64_store_dst_and_next(&mut self, skip: &DestLabel) {
+        self.jit.ldrh(X10, PC, 4);
+        self.jit.cbz_label(X10, skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip.clone());
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+    }
+
+    /// `defined?` ops 64/69 (yield/super): fn(vm, globals) -> Value, stored to
+    /// the dst slot `[pc+4]`.
+    fn a64_op_defined_to_dst(&mut self, abs: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, abs);
+        self.jit.blr(X9);
+        self.a64_store_dst_and_next(&skip);
+        p
+    }
+
+    /// op 65 `DefinedConst`: defined_const(vm, globals, &dst, site_id `[pc+8]`).
+    fn a64_op_defined_const(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 4);
+        self.a64_slot_addr(X2); // &dst
+        self.jit.ldr32(X3, PC, 8); // site_id
+        self.jit.mov_imm(X9, runtime::defined_const as u64);
+        self.jit.blr(X9);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 66 `DefinedMethod`: defined_method(vm, globals, &dst, recv `[pc+2]`,
+    /// name `[pc+8]`).
+    fn a64_op_defined_method(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 4);
+        self.a64_slot_addr(X2); // &dst
+        self.jit.ldrh(X3, PC, 2);
+        self.a64_slot_value(X3); // recv
+        self.jit.ldr32(X4, PC, 8); // name
+        self.jit.mov_imm(X9, runtime::defined_method as u64);
+        self.jit.blr(X9);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 67 `DefinedGvar`: defined_gvar(vm, globals, name `[pc+8]`) -> Value.
+    fn a64_op_defined_gvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 8); // name
+        self.jit.mov_imm(X9, runtime::defined_gvar as u64);
+        self.jit.blr(X9);
+        self.a64_store_dst_and_next(&skip);
+        p
+    }
+
+    /// op 68 `DefinedIvar`: defined_ivar(vm, globals, &dst, name `[pc+8]`).
+    fn a64_op_defined_ivar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 4);
+        self.a64_slot_addr(X2); // &dst
+        self.jit.ldr32(X3, PC, 8); // name
+        self.jit.mov_imm(X9, runtime::defined_ivar as u64);
+        self.jit.blr(X9);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 16 `LoadIvar`: slot[`[pc+4]`] <- `self.@name` (name `[pc+0]`),
