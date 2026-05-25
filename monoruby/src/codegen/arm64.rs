@@ -592,6 +592,10 @@ impl Codegen {
         self.dispatch[32] = send_simple;
         self.dispatch[33] = send;
 
+        let yield_op = self.a64_op_yield();
+        self.dispatch[34] = yield_op;
+        self.dispatch[35] = yield_op;
+
         self.dispatch[150] = eq;
         self.dispatch[151] = ne;
         self.dispatch[152] = lt;
@@ -1679,6 +1683,104 @@ impl Codegen {
             .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as u64);
         self.jit.blr(X9);
         self.jit.b_label(&after_call);
+        p
+    }
+
+    /// op 34/35 `Yield`: invoke the current block. Bytecode (32 bytes):
+    /// `+0` callid, `+4` ret slot. The block's func/outer come from
+    /// `get_yield_data`; self is the block's captured self. Args are set up
+    /// via the runtime arg massager (callsite-driven).
+    fn a64_op_yield(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let skip = self.jit.label();
+        // push_cont_frame: save caller PC
+        self.jit.sub_imm(SP, SP, 16, 0);
+        self.jit.str(PC, SP, 0);
+        // get_yield_data(vm, globals) -> x0 = outer (Lfp), x1 = func_id
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit
+            .mov_imm(X9, runtime::get_yield_data as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X1, &raise); // no block -> error set
+        self.jit.mov(X25, X0); // X25 = outer (callee-saved across later calls)
+        // get_func_data from func_id (X1) -> X15
+        self.jit.lsl_imm(X10, X1, 32);
+        self.jit.lsr_imm(X10, X10, 32);
+        self.jit.lsl_imm(X10, X10, 6);
+        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
+        self.jit.add(X11, GLOBALS, X11);
+        self.jit.ldr(X11, X11, 0);
+        self.jit.add(X10, X10, X11);
+        self.jit.add_imm(X15, X10, FUNCINFO_DATA as u32, 0);
+        // block frame setup: outer = X25, self = outer.self, svar/cme/block 0.
+        self.jit.mov_imm(X12, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
+        self.jit.str(X25, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X10, X25, LFP_SELF as u32, 0);
+        self.jit.ldr(X10, X10, 0); // self = outer.self
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.ldr(X14, X15, FUNCDATA_META as u32);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
+        self.jit.str(X14, X11, 0);
+        // generic arg setup: vm_handle_arguments(vm, globals, caller_lfp,
+        // callee_lfp, callid). Reserve scratch; preserve SP/funcdata.
+        self.jit.sub_imm(X3, SP, RSP_LOCAL_FRAME as u32, 0); // callee_lfp
+        self.jit.mov_sp(X25, SP);
+        self.jit.mov(X26, X15);
+        self.jit.ldrh(X10, X15, FUNCDATA_OFS as u32);
+        self.jit.lsl_imm(X10, X10, 4);
+        self.jit.add_imm(X10, X10, 16, 0);
+        self.jit.sub(X11, X25, X10);
+        self.jit.mov_sp(SP, X11);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov(X2, LFP); // caller lfp
+        self.jit.ldr32(X4, PC, 0); // callid
+        self.jit
+            .mov_imm(X9, runtime::vm_handle_arguments as u64);
+        self.jit.blr(X9);
+        self.jit.mov(X15, X26);
+        self.jit.mov_sp(SP, X25);
+        self.jit.cbz_label(X0, &raise);
+        // call_funcdata
+        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
+        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
+        self.jit.str(LFP, X10, 0);
+        self.jit.mov(X3, PC); // call-site pc for with-pc builtins
+        self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
+        self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
+        self.jit.blr(X10);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.ldr(X10, X11, 0);
+        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
+        self.jit.ldr(LFP, X10, 0); // restore caller LFP
+        // pop_cont_frame + store result to ret slot [pc+4]
+        self.jit.ldr(PC, SP, 0);
+        self.jit.add_imm(SP, SP, 16, 0);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.ldrh(X10, PC, 4); // ret slot
+        self.jit.add_imm(PC, PC, 32, 0);
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.a64_fetch_and_dispatch();
         p
     }
 
