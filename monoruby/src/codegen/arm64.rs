@@ -138,9 +138,9 @@ impl JitModule {
 
     /// Emit a `brk` trampoline and return its address as a typed fn pointer.
     /// TODO(aarch64): replace each caller with the real invoker.
-    fn a64_stub_fn<T>(&mut self) -> T {
+    fn a64_stub_fn<T>(&mut self, id: u64) -> T {
         let p = self.jit.get_current_address();
-        self.jit.mov_imm(X0, 0x5141); // DIAG: stub invoker hit
+        self.jit.mov_imm(X0, 0x51410000 + id); // DIAG: stub invoker hit
         self.jit
             .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
         self.jit.blr(X9);
@@ -341,7 +341,7 @@ impl JitModule {
     }
 
     pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
-        self.a64_stub_fn()
+        self.a64_stub_fn(0x2)
     }
 
     /// Block invoker. AAPCS64 in: x0 exec, x1 globals, x2 &ProcData,
@@ -388,22 +388,51 @@ impl JitModule {
     pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
         self.a64_block_invoker(true)
     }
+    /// Binding invoker: run a func body reusing a captured frame as its LFP
+    /// (no new local frame, no args). AAPCS64 in: x0 exec, x1 globals, x2 lfp.
     pub(super) fn binding_invoker(&mut self) -> BindingInvoker {
-        self.a64_stub_fn()
+        let codeptr = self.jit.get_current_address();
+        self.a64_invoker_prologue();
+        self.jit.mov(LFP, X2); // reuse the binding's frame as LFP
+        self.jit.sub_imm(X2, LFP, LFP_FUNCID as u32, 0);
+        self.jit.ldr32(X2, X2, 0); // funcid = [lfp - LFP_FUNCID]
+        self.a64_get_func_data_x2(); // X9 = fdata
+        // push_frame; cfp.lfp = LFP (the captured frame)
+        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
+        self.jit.str(LFP, X10, 0);
+        self.jit.ldr(PC, X9, FUNCDATA_PC as u32);
+        self.jit.ldr(X10, X9, FUNCDATA_CODEPTR as u32);
+        self.jit.blr(X10);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.ldr(X10, X11, 0);
+        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        // epilogue
+        self.jit.ldp_post(X25, X26, SP, 16);
+        self.jit.ldp_post(ACC, X24, SP, 16);
+        self.jit.ldp_post(PC, LFP, SP, 16);
+        self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+        // SAFETY: codeptr is an extern "C" fn with the BindingInvoker ABI.
+        unsafe { std::mem::transmute_copy::<*mut u8, BindingInvoker>(&codeptr.as_ptr()) }
     }
     pub(super) fn fiber_invoker(&mut self) -> FiberInvoker {
-        self.a64_stub_fn()
+        self.a64_stub_fn(0x6)
     }
     pub(super) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
-        self.a64_stub_fn()
+        self.a64_stub_fn(0x7)
     }
     pub(super) fn resume_fiber(
         &mut self,
     ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
-        self.a64_stub_fn()
+        self.a64_stub_fn(0x8)
     }
     pub(super) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
-        self.a64_stub_fn()
+        self.a64_stub_fn(0x9)
     }
     pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
         // executor.stack_limit = sp - MAX_STACK_SIZE (= 65536 = 16 << 12).
