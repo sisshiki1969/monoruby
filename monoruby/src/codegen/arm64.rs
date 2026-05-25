@@ -520,6 +520,8 @@ impl Codegen {
         self.dispatch[13] = condnotbr;
         let check_local = self.a64_op_check_local(&branch);
         self.dispatch[20] = check_local;
+        let nilbr = self.a64_op_nilbr(&branch);
+        self.dispatch[37] = nilbr;
 
         // integer comparisons (fixnum fast path; generic runtime fallback)
         let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as u64);
@@ -694,6 +696,19 @@ impl Codegen {
         self.jit.ldrh(X12, PC, 4); // local slot
         self.a64_slot_value(X12);
         self.jit.cbnz_label(X12, branch);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 37 `NilBr`: branch by disp `[pc+0]` if cond slot `[pc+4]` is nil.
+    fn a64_op_nilbr(&mut self, branch: &DestLabel) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrsw(X10, PC, 0); // disp (for shared branch target)
+        self.jit.ldrh(X11, PC, 4); // cond slot
+        self.a64_slot_value(X11);
+        self.jit.cmp_imm(X11, NIL_VALUE as u32, 0);
+        self.jit.bcond_label(Cond::Eq, branch);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
         p
