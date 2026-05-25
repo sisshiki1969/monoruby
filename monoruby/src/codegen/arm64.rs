@@ -234,15 +234,60 @@ impl JitModule {
 }
 
 impl Codegen {
-    /// TODO(aarch64): port the real VM dispatch loop + opcode handlers
-    /// (see vmgen.rs). For now bind `vm_entry`/`vm_fetch` to a trap.
+    /// VM dispatch loop + opcode handlers. Real handlers so far: `immediate`
+    /// (op 6, integer/immediate literal → slot) and `ret` (op 80). All other
+    /// opcodes fall through to the `entry_unimpl` trap until ported. Uses the
+    /// qemu-validated patterns from `aarch64-proto`.
     pub(super) fn construct_vm(&mut self) {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
-        self.a64_brk_stub(&vm_entry);
-        self.a64_brk_stub(&entry_fetch);
+        // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
+        self.jit.bind_label(vm_entry.clone());
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        self.jit.bind_label(entry_fetch.clone());
+        self.a64_fetch_and_dispatch();
         self.vm_fetch = entry_fetch;
         self.vm_entry = vm_entry;
+
+        let immediate = self.a64_op_immediate();
+        let ret = self.a64_op_ret();
+        self.dispatch[6] = immediate;
+        self.dispatch[80] = ret;
+    }
+
+    /// op 6 `immediate`: slot[`[pc+4]`] <- the immediate Value at `[pc+8]`.
+    /// (x86 `vm_immediate`: `fetch_r15; movq rax,[r13-8]; vm_store_r15`.)
+    fn a64_op_immediate(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.ldrh(X10, PC, 4); // dst slot index
+        self.jit.ldr(X11, PC, 8); // immediate value
+        self.jit.cbz_label(X10, &skip); // slot 0 => discard
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X12, LFP, X10, 3);
+        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
+        self.jit.str(X11, X12, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 80 `ret`: return slot[`[pc+4]`]'s value (x86 `fetch_addr_r15;
+    /// movq rax,[r15]; epilogue`).
+    fn a64_op_ret(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrh(X10, PC, 4); // slot index
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.ldr(X0, X11, 0); // return value
+        // epilogue (x86 `leave; ret`): restore the frame pointer and return.
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+        p
     }
 
     /// TODO(aarch64): port the real per-method wrapper (see wrapper.rs).
