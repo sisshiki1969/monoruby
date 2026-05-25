@@ -423,12 +423,16 @@ impl Codegen {
 
         let init_method = self.a64_op_init_method();
         let immediate = self.a64_op_immediate();
+        let literal = self.a64_op_literal();
+        let mov = self.a64_op_mov();
         let ret = self.a64_op_ret();
         let add_rr = self.a64_op_iadd(false);
         let sub_rr = self.a64_op_iadd(true);
         let mul_rr = self.a64_op_muldiv(mul_values);
         let div_rr = self.a64_op_muldiv(div_values);
         self.dispatch[6] = immediate;
+        self.dispatch[7] = literal;
+        self.dispatch[178] = mov;
         self.dispatch[80] = ret;
         self.dispatch[172] = init_method;
         self.dispatch[160] = add_rr;
@@ -848,6 +852,46 @@ impl Codegen {
         self.jit.add_lsl(X12, LFP, X10, 3);
         self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
         self.jit.str(X11, X12, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 7 `literal`: slot[`[pc+4]`] <- a deep copy of the literal Value at
+    /// `[pc+8]`. Each evaluation yields a fresh object (mutable literals like
+    /// strings/arrays). x86 `vm_literal`: `movq rdi,[r13-8]; value_deep_copy`.
+    fn a64_op_literal(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.ldr(X0, PC, 8); // literal Value
+        self.jit.mov_imm(X9, Value::value_deep_copy as u64);
+        self.jit.blr(X9); // x0 = deep copy (PC/LFP are callee-saved)
+        self.jit.ldrh(X10, PC, 4); // dst slot index
+        self.jit.cbz_label(X10, &skip); // slot 0 => discard
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X12, LFP, X10, 3);
+        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
+        self.jit.str(X0, X12, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 178 `Mov`: slot[`[pc+4]`] <- slot[`[pc+2]`]. (x86 `fetch3` +
+    /// slot copy.)
+    fn a64_op_mov(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.ldrh(X10, PC, 2); // src slot
+        self.a64_slot_value(X10); // X10 = slot[src]
+        self.jit.ldrh(X11, PC, 4); // dst slot
+        self.jit.cbz_label(X11, &skip);
+        self.jit.neg(X11, X11);
+        self.jit.add_lsl(X12, LFP, X11, 3);
+        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
+        self.jit.str(X10, X12, 0);
         self.jit.bind_label(skip);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
