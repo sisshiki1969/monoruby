@@ -694,6 +694,8 @@ impl Codegen {
         self.dispatch[37] = nilbr;
         let optcase = self.a64_op_optcase(&branch);
         self.dispatch[36] = optcase;
+        let lambda = self.a64_op_lambda();
+        self.dispatch[38] = lambda;
 
         // integer comparisons (fixnum fast path; generic runtime fallback)
         let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as u64);
@@ -913,6 +915,32 @@ impl Codegen {
         self.jit.lsl_imm(X10, X0, 32); // zero-extend u32 disp into X10
         self.jit.lsr_imm(X10, X10, 32);
         self.jit.b_label(branch);
+        p
+    }
+
+    /// op 38 `Lambda`: dst `[pc+4]` <- a lambda Proc for func_id `[pc+0]`.
+    /// gen_lambda may promote the current frame to the heap, so LFP is
+    /// reloaded from the cfp afterward.
+    fn a64_op_lambda(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // func_id
+        self.jit.mov(X3, PC); // call-site pc
+        self.jit.mov_imm(X9, runtime::gen_lambda as u64);
+        self.jit.blr(X9);
+        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
+        self.jit.ldr(LFP, X10, 0); // restore (possibly heap-promoted) LFP
+        self.jit.ldrh(X10, PC, 4); // dst slot
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
