@@ -329,6 +329,118 @@ impl Codegen {
         self.dispatch[172] = init_method;
         self.dispatch[160] = add_rr;
         self.dispatch[161] = sub_rr;
+
+        // loop_start (14) / loop_end (15): in the VM-only build these just
+        // advance to the next instruction. TODO(aarch64): the GC poll in
+        // loop_start (vm_execute_gc) — currently skipped (works with --no-gc).
+        let loop_op = self.a64_op_loop();
+        self.dispatch[14] = loop_op;
+        self.dispatch[15] = loop_op;
+
+        // branches (the shared `branch` target lives inside `br_inst`).
+        let (br_inst, branch) = self.a64_op_br();
+        let condbr = self.a64_op_condbr(&branch, false);
+        let condnotbr = self.a64_op_condbr(&branch, true);
+        self.dispatch[3] = br_inst;
+        self.dispatch[4] = condbr;
+        self.dispatch[5] = condnotbr;
+        self.dispatch[12] = condbr;
+        self.dispatch[13] = condnotbr;
+
+        // integer comparisons (fixnum fast path)
+        let eq = self.a64_op_cmp(Cond::Eq);
+        let ne = self.a64_op_cmp(Cond::Ne);
+        let lt = self.a64_op_cmp(Cond::Lt);
+        let le = self.a64_op_cmp(Cond::Le);
+        let gt = self.a64_op_cmp(Cond::Gt);
+        let ge = self.a64_op_cmp(Cond::Ge);
+        self.dispatch[140] = eq;
+        self.dispatch[141] = ne;
+        self.dispatch[142] = lt;
+        self.dispatch[143] = le;
+        self.dispatch[144] = gt;
+        self.dispatch[145] = ge;
+        self.dispatch[146] = eq; // teq
+        // 150-156: same comparisons, emitted when the result feeds a branch.
+        self.dispatch[150] = eq;
+        self.dispatch[151] = ne;
+        self.dispatch[152] = lt;
+        self.dispatch[153] = le;
+        self.dispatch[154] = gt;
+        self.dispatch[155] = ge;
+        self.dispatch[156] = eq; // teq
+    }
+
+    /// loop_start / loop_end (ops 14/15): advance + dispatch (VM-only).
+    fn a64_op_loop(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// Unconditional branch (op 3) + the shared `branch` target used by the
+    /// conditional branches. `pc += disp*16 + 16` (x86 `br_inst`/`branch:`).
+    fn a64_op_br(&mut self) -> (CodePtr, DestLabel) {
+        let p = self.jit.get_current_address();
+        let branch = self.jit.label();
+        self.jit.ldrsw(X10, PC, 0); // disp (signed, instruction-relative)
+        self.jit.bind_label(branch.clone());
+        self.jit.lsl_imm(X10, X10, 4);
+        self.jit.add(PC, PC, X10);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        (p, branch)
+    }
+
+    /// Conditional branch (op 4/12 `condbr`, op 5/13 `condnotbr`). Bytecode:
+    /// `+0` disp (i32), `+4` cond slot. Truthiness: `(v | 0x10) != FALSE_VALUE`
+    /// (both nil and false collapse to FALSE_VALUE). `not` = branch-if-falsy.
+    fn a64_op_condbr(&mut self, branch: &DestLabel, not: bool) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrsw(X10, PC, 0); // disp (kept in X10 for `branch`)
+        self.jit.ldrh(X11, PC, 4); // cond slot
+        self.a64_load_slot(X11, X12, X13); // cond value
+        self.jit.mov_imm(X13, 0x10);
+        self.jit.orr(X12, X12, X13);
+        self.jit.cmp_imm(X12, FALSE_VALUE as u32, 0);
+        let cond = if not { Cond::Eq } else { Cond::Ne };
+        self.jit.bcond_label(cond, branch);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// Integer comparison (ops 140-146): `%dst = (%lhs <cond> %rhs)` as a Ruby
+    /// boolean. Bytecode: `+0` rhs, `+2` lhs, `+4` dst. Non-fixnum traps
+    /// (generic runtime fallback TODO).
+    fn a64_op_cmp(&mut self, cond: Cond) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let generic = self.jit.label();
+        let skip = self.jit.label();
+        self.jit.ldrh(X10, PC, 0); // rhs slot
+        self.jit.ldrh(X11, PC, 2); // lhs slot
+        self.jit.ldrh(X12, PC, 4); // dst slot
+        self.a64_load_slot(X11, X13, X14); // lhs
+        self.a64_load_slot(X10, X14, X15); // rhs
+        self.jit.tbz_label(X13, 0, &generic);
+        self.jit.tbz_label(X14, 0, &generic);
+        self.jit.cmp(X13, X14);
+        self.jit.cset(X13, cond);
+        self.jit.lsl_imm(X13, X13, 3);
+        self.jit.mov_imm(X14, FALSE_VALUE);
+        self.jit.orr(X13, X13, X14); // FALSE_VALUE | (result << 3)
+        self.jit.cbz_label(X12, &skip);
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X10, LFP, X12, 3);
+        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
+        self.jit.str(X13, X10, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        self.jit.bind_label(generic);
+        self.jit.brk(0); // TODO(aarch64): generic comparison runtime fallback
+        p
     }
 
     /// Load the value of the slot whose (positive) index is in `idx`, into
