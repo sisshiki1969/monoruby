@@ -62,11 +62,25 @@ unpushed) is resolved.
   `value/rvalue/string/pack.rs` and `globals/store/class.rs`). That is
   exactly the phase-3 surface.
 
-**Next step (phase 3 — VM-tier asm port):** port those VM-tier `monoasm!{}`
-blocks to `monoasm_arm64!` behind `cfg(not(jit))`/sibling modules, per the
-milestones below, until `cargo build --target aarch64-unknown-linux-gnu
---features no-jit` links and runs "42" under qemu. x86 default stays green
-throughout.
+**aarch64 VM-only build now LINKS and runs under qemu (stub VM).** The
+`target_arch` seam is in place: the x86 VM tier (`vmgen`/`invoker`/`wrapper`
++ the asm methods in `jit_module.rs`/`codegen.rs`, ~45 gated) is
+`cfg(target_arch = "x86_64")`, and `codegen/arm64.rs` provides the aarch64
+counterparts. `cargo build --target aarch64-unknown-linux-gnu --features
+no-jit` produces a working ELF that runs under qemu (`--version` →
+`monoruby 0.3.0`). The VM itself is **stub-to-link** scaffolding
+(`JitModule::new`, `construct_vm`, the invokers, `gen_wrapper`, etc. emit
+`brk` traps), so executing Ruby traps — but the build links, so the
+remaining port is now **incrementally qemu-testable** in-crate. x86 default
+and `--features no-jit` remain green. (Also fixed an arch portability bug:
+`pack.rs` used `*const i8` for `CStr::from_ptr`; `c_char` is `u8` on aarch64.)
+
+**Next step (fill in the stubs, qemu-testable):** replace the `brk` stubs in
+`codegen/arm64.rs` with the real aarch64 codegen — `JitModule::new`/`init`,
+`construct_vm` + the opcode handlers (transcribing the validated
+`aarch64-proto` patterns), the invokers, and `gen_wrapper` — driving
+`monoruby -e 'puts 42'` (then fib, then the test suite) under qemu. x86
+default stays green throughout.
 
 - **M0/M1 codegen patterns validated under qemu** (`aarch64-proto/`, a
   standalone monoasm-only crate detached from the workspace). Since the
