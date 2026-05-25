@@ -497,6 +497,14 @@ pub(super) extern "C" fn correct_rest_kw(mut ptr: *const RestKwData, lfp: Lfp) -
     Value::hash(map)
 }
 
+/// Diagnostic for the aarch64 VM bring-up: the unimplemented-opcode
+/// dispatch slot calls this (with the opcode in x0) before trapping, so a
+/// missing handler reports *which* opcode rather than a bare `brk`.
+#[cfg(target_arch = "aarch64")]
+pub extern "C" fn report_unimpl_op(op: u64) {
+    eprintln!("[aarch64 VM] unimplemented opcode: {}", op);
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,

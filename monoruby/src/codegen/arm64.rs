@@ -152,6 +152,9 @@ impl JitModule {
         // TODO(aarch64): emit the real entry stubs (raise/fetch_and_dispatch/
         // panic/f64_to_val/gc). For now trap so the module links + constructs.
         let entry_unimpl = jit.get_current_address();
+        jit.mov(X0, OP); // OP (X10) holds the opcode at dispatch time
+        jit.mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+        jit.blr(X9);
         jit.brk(0);
         let dispatch = vec![entry_unimpl; 256];
         let mut j = Self {
