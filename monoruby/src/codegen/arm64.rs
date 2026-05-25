@@ -635,6 +635,11 @@ impl Codegen {
         self.dispatch[24] = check_cvar;
         self.dispatch[19] = check_kw_rest;
 
+        let load_dvar = self.a64_op_load_dvar();
+        let store_dvar = self.a64_op_store_dvar();
+        self.dispatch[148] = load_dvar;
+        self.dispatch[149] = store_dvar;
+
         // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
         // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
         let bitor = self.a64_op_binop(bitor_values);
@@ -702,6 +707,72 @@ impl Codegen {
         self.jit.mov_imm(X9, runtime::block_arg as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 148 `LoadDynVar`: dst `[pc+4]` <- the slot `[pc+2]` of the outer
+    /// frame `[pc+0]` levels up the captured outer chain.
+    fn a64_op_load_dvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let loop_ = self.jit.label();
+        let exit = self.jit.label();
+        let skip = self.jit.label();
+        self.jit.ldr(X10, LFP, 0); // X10 = level-1 outer ([LFP] = LFP_OUTER)
+        self.jit.ldrh(X11, PC, 0); // outer level
+        self.jit.bind_label(loop_.clone());
+        self.jit.subs_imm(X11, X11, 1, 0);
+        self.jit.bcond_label(Cond::Eq, &exit);
+        self.jit.ldr(X10, X10, 0); // walk up
+        self.jit.b_label(&loop_);
+        self.jit.bind_label(exit);
+        self.jit.cbz_label(X10, &raise);
+        self.jit.ldrh(X12, PC, 2); // src slot in outer frame
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X13, X10, X12, 3);
+        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
+        self.jit.ldr(X14, X13, 0); // value
+        // store to dst [pc+4]
+        self.jit.ldrh(X12, PC, 4);
+        self.jit.cbz_label(X12, &skip);
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X13, LFP, X12, 3);
+        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
+        self.jit.str(X14, X13, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 149 `StoreDynVar`: the slot `[pc+4]` of the outer frame `[pc+2]`
+    /// levels up <- src slot `[pc+0]` of the current frame.
+    fn a64_op_store_dvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let exit = self.jit.label();
+        self.jit.ldr(X10, LFP, 0); // level-1 outer
+        self.jit.ldrh(X11, PC, 2); // outer level
+        self.jit.bind_label(loop_.clone());
+        self.jit.subs_imm(X11, X11, 1, 0);
+        self.jit.bcond_label(Cond::Eq, &exit);
+        self.jit.ldr(X10, X10, 0);
+        self.jit.b_label(&loop_);
+        self.jit.bind_label(exit);
+        // src value from the current frame (slot [pc+0])
+        self.jit.ldrh(X12, PC, 0);
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X13, LFP, X12, 3);
+        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
+        self.jit.ldr(X14, X13, 0);
+        // store to dst slot [pc+4] in the outer frame
+        self.jit.ldrh(X12, PC, 4);
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X13, X10, X12, 3);
+        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
+        self.jit.str(X14, X13, 0);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
