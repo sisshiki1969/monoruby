@@ -307,14 +307,41 @@ impl JitModule {
         self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
         self.jit.ldr(X10, X11, 0);
         self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
-        // epilogue (result Value in x0; error path enters here with x0 = 0)
+        // Converge with the result (or 0 on error) in x0; the caller emits
+        // its own epilogue (standard restore for method/block invokers, or a
+        // fiber stack-switch-back for the fiber invoker).
         self.jit.bind_label(error_exit);
+    }
+
+    /// Standard invoker epilogue: restore the callee-saved registers saved by
+    /// a64_invoker_prologue and return (result in x0).
+    fn a64_invoker_epilogue(&mut self) {
         self.jit.ldp_post(X25, X26, SP, 16);
         self.jit.ldp_post(ACC, X24, SP, 16);
         self.jit.ldp_post(PC, LFP, SP, 16);
         self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
         self.jit.ldp_post(X29, X30, SP, 16);
         self.jit.ret();
+    }
+
+    /// Save all callee-saved GPRs (x19-x28) + fp/lr for a fiber context switch.
+    fn a64_push_callee_save(&mut self) {
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.stp_pre(X27, X28, SP, -16);
+        self.jit.stp_pre(X25, X26, SP, -16);
+        self.jit.stp_pre(X23, X24, SP, -16);
+        self.jit.stp_pre(X21, X22, SP, -16);
+        self.jit.stp_pre(X19, X20, SP, -16);
+    }
+
+    /// Restore what a64_push_callee_save saved (reverse order).
+    fn a64_pop_callee_save(&mut self) {
+        self.jit.ldp_post(X19, X20, SP, 16);
+        self.jit.ldp_post(X21, X22, SP, 16);
+        self.jit.ldp_post(X23, X24, SP, 16);
+        self.jit.ldp_post(X25, X26, SP, 16);
+        self.jit.ldp_post(X27, X28, SP, 16);
+        self.jit.ldp_post(X29, X30, SP, 16);
     }
 
     pub(super) fn method_invoker(&mut self) -> MethodInvoker {
@@ -336,6 +363,7 @@ impl JitModule {
         self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
         self.jit.str(X13, fb, 40); // LFP_OUTER = 0
         self.a64_invoker_args_and_call();
+        self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }
     }
@@ -348,10 +376,13 @@ impl JitModule {
     /// x3 self (dummy unless `with_self`), x4 args, x5 len, x6 kw.
     /// `self` for a plain block comes from the captured outer frame.
     /// TODO(aarch64): resolve_invalidated_outer (heap-promoted outer frames).
-    fn a64_block_invoker(&mut self, with_self: bool) -> BlockInvoker {
-        let codeptr = self.jit.get_current_address();
+    /// Set up the callee block frame from a `&ProcData` in x2 (self in x3 when
+    /// `with_self`). Produces fdata in X9 and meta in X14, and writes self /
+    /// outer / block / cme / svar / meta into the new frame. Shared by the
+    /// block and fiber invokers.
+    /// TODO(aarch64): resolve_invalidated_outer (heap-promoted outer frames).
+    fn a64_block_frame_setup(&mut self, with_self: bool) {
         let fdata = X9;
-        self.a64_invoker_prologue();
         if with_self {
             // store the provided self now (frame slot survives get_func_data)
             self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
@@ -376,8 +407,15 @@ impl JitModule {
         self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
         self.jit.str(X14, fb, 32); // LFP_META
         self.jit.str(X3, fb, 40); // LFP_OUTER = outer
+    }
+
+    fn a64_block_invoker(&mut self, with_self: bool) -> BlockInvoker {
+        let codeptr = self.jit.get_current_address();
+        self.a64_invoker_prologue();
+        self.a64_block_frame_setup(with_self);
         self.jit.mov(X7, X6); // shared arg setup expects kw in x7
         self.a64_invoker_args_and_call();
+        self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the BlockInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, BlockInvoker>(&codeptr.as_ptr()) }
     }
@@ -387,6 +425,36 @@ impl JitModule {
     }
     pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
         self.a64_block_invoker(true)
+    }
+
+    /// Fiber invoker (first resume). AAPCS64 in: x0 vm, x1 globals,
+    /// x2 &ProcData, x3 self, x4 args, x5 len, x6 child_vm (&mut Executor).
+    /// Switch onto the fiber's pre-allocated stack, run its block body, then
+    /// switch back to the parent on completion. (Mirrors x86 fiber_invoker.)
+    fn a64_fiber_invoker(&mut self, with_self: bool) -> FiberInvoker {
+        let codeptr = self.jit.get_current_address();
+        // switch in: save parent regs + SP, jump to the fiber's stack.
+        self.a64_push_callee_save();
+        self.jit.mov_sp(X10, SP);
+        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // parent.rsp_save = SP
+        self.jit.ldr(X10, X6, EXECUTOR_RSP_SAVE as u32);
+        self.jit.mov_sp(SP, X10); // SP = child.rsp_save (fresh stack top)
+        self.jit.str(X0, X6, EXECUTOR_PARENT_FIBER as u32); // child.parent_fiber = parent
+        self.jit.mov(EXEC, X6); // EXEC = child_vm
+        self.jit.mov(GLOBALS, X1);
+        self.a64_block_frame_setup(with_self);
+        self.jit.mov_imm(X7, 0); // fibers carry no keyword args
+        self.a64_invoker_args_and_call();
+        // body completed: mark this fiber terminated, switch back to parent.
+        self.jit.mov_imm(X10, u64::MAX); // -1 = terminated
+        self.jit.str(X10, EXEC, EXECUTOR_RSP_SAVE as u32);
+        self.jit.ldr(EXEC, EXEC, EXECUTOR_PARENT_FIBER as u32);
+        self.jit.ldr(X10, EXEC, EXECUTOR_RSP_SAVE as u32);
+        self.jit.mov_sp(SP, X10);
+        self.a64_pop_callee_save();
+        self.jit.ret();
+        // SAFETY: codeptr is an extern "C" fn with the FiberInvoker ABI.
+        unsafe { std::mem::transmute_copy::<*mut u8, FiberInvoker>(&codeptr.as_ptr()) }
     }
     /// Binding invoker: run a func body reusing a captured frame as its LFP
     /// (no new local frame, no args). AAPCS64 in: x0 exec, x1 globals, x2 lfp.
@@ -421,18 +489,47 @@ impl JitModule {
         unsafe { std::mem::transmute_copy::<*mut u8, BindingInvoker>(&codeptr.as_ptr()) }
     }
     pub(super) fn fiber_invoker(&mut self) -> FiberInvoker {
-        self.a64_stub_fn(0x6)
+        self.a64_fiber_invoker(false)
     }
     pub(super) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
-        self.a64_stub_fn(0x7)
+        self.a64_fiber_invoker(true)
     }
+
+    /// Resume a suspended fiber. In: x0 parent_vm, x1 child_vm, x2 value.
+    /// Save the parent context, switch onto the child's saved stack, and
+    /// return (the child resumes where it last yielded). x86 resume_fiber.
     pub(super) fn resume_fiber(
         &mut self,
     ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
-        self.a64_stub_fn(0x8)
+        let codeptr = self.jit.get_current_address();
+        self.a64_push_callee_save();
+        self.jit.mov_sp(X10, SP);
+        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // parent.rsp_save = SP
+        self.jit.ldr(X10, X1, EXECUTOR_RSP_SAVE as u32);
+        self.jit.mov_sp(SP, X10); // SP = child.rsp_save
+        self.jit.str(X0, X1, EXECUTOR_PARENT_FIBER as u32); // child.parent_fiber = parent
+        self.a64_pop_callee_save();
+        self.jit.mov(X0, X2); // resume value
+        self.jit.ret();
+        // SAFETY: codeptr matches the resume_fiber ABI.
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
+
+    /// Yield from a fiber. In: x0 vm (child), x1 value. Save the child
+    /// context and switch back to the parent. x86 yield_fiber.
     pub(super) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
-        self.a64_stub_fn(0x9)
+        let codeptr = self.jit.get_current_address();
+        self.a64_push_callee_save();
+        self.jit.mov_sp(X10, SP);
+        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // child.rsp_save = SP
+        self.jit.ldr(X0, X0, EXECUTOR_PARENT_FIBER as u32); // vm = parent
+        self.jit.ldr(X10, X0, EXECUTOR_RSP_SAVE as u32);
+        self.jit.mov_sp(SP, X10); // SP = parent.rsp_save
+        self.a64_pop_callee_save();
+        self.jit.mov(X0, X1); // yielded value
+        self.jit.ret();
+        // SAFETY: codeptr matches the yield_fiber ABI.
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
     pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
         // executor.stack_limit = sp - MAX_STACK_SIZE (= 65536 = 16 << 12).
