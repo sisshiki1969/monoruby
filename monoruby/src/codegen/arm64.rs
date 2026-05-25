@@ -542,6 +542,67 @@ impl Codegen {
         let index_assign = self.a64_op_index_assign();
         self.dispatch[132] = index;
         self.dispatch[133] = index_assign;
+
+        let singleton_method_def = self.a64_op_singleton_method_def();
+        self.dispatch[1] = singleton_method_def;
+
+        let alias_method = self.a64_op_alias_method();
+        let undef_method = self.a64_op_undef_method();
+        self.dispatch[175] = alias_method;
+        self.dispatch[174] = undef_method;
+    }
+
+    /// op 175 `AliasMethod`: alias_method(vm, globals, old `[pc+2]`,
+    /// new `[pc+4]`).
+    fn a64_op_alias_method(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_value(X2); // old
+        self.jit.ldrh(X3, PC, 4);
+        self.a64_slot_value(X3); // new
+        self.jit.mov_imm(X9, runtime::alias_method as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 174 `UndefMethod`: undef_method(vm, globals, name `[pc+0]`).
+    fn a64_op_undef_method(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // name
+        self.jit.mov_imm(X9, runtime::undef_method as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 1 `SingletonMethodDef`: `def obj.name` -- singleton_define_method(
+    /// vm, globals, name `[pc+8]`, func_id `[pc+12]`, obj slot `[pc+4]`).
+    fn a64_op_singleton_method_def(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 8); // name
+        self.jit.ldr32(X3, PC, 12); // func_id
+        self.jit.ldrh(X4, PC, 4); // obj slot
+        self.a64_slot_value(X4); // obj
+        self.jit.mov_imm(X9, runtime::singleton_define_method as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 132 `Index`: dst[`[pc+4]`] <- base[`[pc+2]`][idx[`[pc+0]`]], with an
