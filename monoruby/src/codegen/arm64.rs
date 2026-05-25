@@ -182,10 +182,71 @@ impl JitModule {
         j
     }
 
-    // --- invokers / entry points (stubs) ---
+    // --- invokers / entry points ---
+    /// Real `method_invoker` for the simple case (0 args, no kw): set up the
+    /// Ruby frame and call into `vm_entry`, then return the result to Rust.
+    /// AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args, x5 len,
+    /// x6 block, x7 hashmap. The frame offsets match x86 because aarch64's
+    /// `stp fp,lr` (16B at vm_entry) equals x86's `call`(8B)+`push rbp`(8B).
+    /// TODO(aarch64): argument copying (assumes 0 args) + stack-overflow check.
     pub(super) fn method_invoker(&mut self) -> MethodInvoker {
-        self.a64_stub_fn()
+        let codeptr = self.jit.get_current_address();
+        let fdata = X9;
+        // prologue: save callee-saved globals + fp/lr, set globals
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.stp_pre(EXEC, GLOBALS, SP, -16);
+        self.jit.stp_pre(PC, LFP, SP, -16);
+        self.jit.stp_pre(ACC, X24, SP, -16);
+        self.jit.mov(EXEC, X0);
+        self.jit.mov(GLOBALS, X1);
+        // get_func_data: fdata = funcinfo_base + funcid*64 + FUNCINFO_DATA
+        self.jit.lsl_imm(X10, X2, 32); // zero-extend funcid
+        self.jit.lsr_imm(X10, X10, 32);
+        self.jit.lsl_imm(X10, X10, 6); // * size_of::<FuncInfo>() (64)
+        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
+        self.jit.add(X11, GLOBALS, X11);
+        self.jit.ldr(X11, X11, 0); // funcinfo base ptr
+        self.jit.add(X10, X10, X11);
+        self.jit.add_imm(fdata, X10, FUNCINFO_DATA as u32, 0);
+        // frame setup (not block): FB = sp - (RSP_LOCAL_FRAME + LFP_SELF);
+        // slot at lfp-LFP_X sits at FB + (LFP_SELF - LFP_X).
+        let fb = X12;
+        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.mov_imm(X13, 0);
+        self.jit.str(X3, fb, 0); // LFP_SELF  = self
+        self.jit.str(X6, fb, 8); // LFP_BLOCK = block
+        self.jit.str(X13, fb, 16); // LFP_CME   = 0
+        self.jit.str(X13, fb, 24); // LFP_SVAR  = 0
+        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
+        self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
+        self.jit.str(X13, fb, 40); // LFP_OUTER = 0
+        // call_invoker: push_frame
+        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.str(X10, X11, 0); // [new_cfp] = prev cfp
+        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32); // exec.cfp = new cfp
+        // set_lfp
+        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
+        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
+        self.jit.str(LFP, X10, 0);
+        // pc = funcdata.pc; call funcdata.codeptr
+        self.jit.ldr(PC, fdata, FUNCDATA_PC as u32);
+        self.jit.ldr(X10, fdata, FUNCDATA_CODEPTR as u32);
+        self.jit.blr(X10);
+        // restore exec.cfp = [sp - RSP_CFP] (the prev cfp saved above)
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.ldr(X10, X11, 0);
+        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        // epilogue (result Value in x0)
+        self.jit.ldp_post(ACC, X24, SP, 16);
+        self.jit.ldp_post(PC, LFP, SP, 16);
+        self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+        // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
+        unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }
     }
+
     pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
         self.a64_stub_fn()
     }
@@ -213,7 +274,15 @@ impl JitModule {
         self.a64_stub_fn()
     }
     pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
-        self.a64_stub_fn()
+        // executor.stack_limit = sp - MAX_STACK_SIZE (= 65536 = 16 << 12).
+        // x0 = &mut Executor (AAPCS64 arg0).
+        let codeptr = self.jit.get_current_address();
+        self.jit.mov_sp(X10, SP);
+        self.jit.sub_imm(X10, X10, 16, 1); // 16 << 12 = 65536
+        self.jit.str(X10, X0, EXECUTOR_STACK_LIMIT as u32);
+        self.jit.ret();
+        // SAFETY: codeptr is an `extern "C" fn(&mut Executor) -> *const u8`.
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
     pub(super) fn get_class(&mut self) -> DestLabel {
         let l = self.jit.label();
@@ -250,10 +319,48 @@ impl Codegen {
         self.vm_fetch = entry_fetch;
         self.vm_entry = vm_entry;
 
+        let init_method = self.a64_op_init_method();
         let immediate = self.a64_op_immediate();
         let ret = self.a64_op_ret();
         self.dispatch[6] = immediate;
         self.dispatch[80] = ret;
+        self.dispatch[172] = init_method;
+    }
+
+    /// op 172 `init_method`: allocate the method's stack frame and nil-fill the
+    /// uninitialized local slots. Bytecode (relative to instruction start):
+    /// `+0` stack-offset, `+2` arg_num, `+4` reg_num. (x86 `vm_init`.)
+    /// TODO(aarch64): the captured-frame guard (`branch_if_captured`) — not
+    /// needed for non-block top-level methods.
+    fn a64_op_init_method(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        let loop_ = self.jit.label();
+        // allocate stack: sp -= stack_offset * 16
+        self.jit.ldrh(X10, PC, 0);
+        self.jit.lsl_imm(X10, X10, 4);
+        self.jit.mov_sp(X13, SP); // sp -= X10 (A64 sub can't take SP as a
+        self.jit.sub(X13, X13, X10); // shifted-reg operand, so via a GPR)
+        self.jit.mov_sp(SP, X13);
+        // count = reg_num - arg_num
+        self.jit.ldrh(X15, PC, 4); // reg_num
+        self.jit.ldrh(X11, PC, 2); // arg_num
+        self.jit.sub(X12, X15, X11);
+        self.jit.cbz_label(X12, &skip);
+        // base = lfp - reg_num*8 - LFP_ARG0 ; fill [base + count*8] downward
+        self.jit.neg(X15, X15);
+        self.jit.add_lsl(X15, LFP, X15, 3);
+        self.jit.sub_imm(X15, X15, LFP_ARG0 as u32, 0);
+        self.jit.mov_imm(X14, NIL_VALUE);
+        self.jit.bind_label(loop_.clone());
+        self.jit.add_lsl(X10, X15, X12, 3);
+        self.jit.str(X14, X10, 0);
+        self.jit.sub_imm(X12, X12, 1, 0);
+        self.jit.cbnz_label(X12, &loop_);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 6 `immediate`: slot[`[pc+4]`] <- the immediate Value at `[pc+8]`.
@@ -290,10 +397,22 @@ impl Codegen {
         p
     }
 
-    /// TODO(aarch64): port the real per-method wrapper (see wrapper.rs).
-    pub(crate) fn gen_wrapper(&mut self, _globals: &Globals, _fid: FuncId) -> DestLabel {
+    /// Per-method entry wrapper. For ISeq methods (VM-only build) this is the
+    /// vm-stub `b vm_entry` (x86 `gen_vm_stub`). TODO(aarch64): other
+    /// FuncKinds (Builtin/AttrReader/ConstReturn/…).
+    pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
         let entry = self.jit.label();
-        self.a64_brk_stub(&entry);
+        self.jit.bind_label(entry.clone());
+        match &globals.store[fid].kind {
+            FuncKind::ISeq(_) => {
+                let vm_entry = self.vm_entry();
+                self.jit.b_label(&vm_entry);
+            }
+            _ => {
+                self.jit.brk(0);
+            }
+        }
+        self.jit.finalize();
         entry
     }
 
