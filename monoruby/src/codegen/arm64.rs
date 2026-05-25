@@ -568,6 +568,31 @@ impl Codegen {
         let check_cvar = self.a64_op_check_cvar();
         self.dispatch[23] = block_arg;
         self.dispatch[24] = check_cvar;
+
+        // unary operators (ops 121-124): pos, neg, bitnot, not
+        let pos = self.a64_op_unop(pos_value as u64);
+        let neg = self.a64_op_unop(neg_value as u64);
+        let bitnot = self.a64_op_unop(bitnot_value as u64);
+        let not = self.a64_op_unop(not_value as u64);
+        self.dispatch[121] = pos;
+        self.dispatch[122] = neg;
+        self.dispatch[123] = bitnot;
+        self.dispatch[124] = not;
+    }
+
+    /// ops 121-124 `UnOp` (pos/neg/bitnot/not): fn(vm, globals, src `[pc+2]`)
+    /// -> dst `[pc+4]`.
+    fn a64_op_unop(&mut self, abs: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 2);
+        self.a64_slot_value(X2); // src
+        self.jit.mov_imm(X9, abs);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
     }
 
     /// op 20 `CheckLocal`: branch by disp `[pc+0]` if local `[pc+4]` is set
