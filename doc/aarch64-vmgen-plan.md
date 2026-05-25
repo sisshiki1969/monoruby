@@ -68,15 +68,25 @@ milestones below, until `cargo build --target aarch64-unknown-linux-gnu
 --features no-jit` links and runs "42" under qemu. x86 default stays green
 throughout.
 
-- **Dispatch core validated under qemu** (`aarch64-proto/`, a standalone
-  monoasm-only crate detached from the workspace). Since the in-crate VM
-  port can't be qemu-tested until it links, this validates the core encoding
-  patterns up front (à la phase 1): the global-register mapping
-  (`pc→x21`, `lfp→x22`, `acc→x23`, callee-saved + prologue/epilogue),
-  `fetch_and_dispatch` (`ldrb` + `ldr Xtgt,[Xtbl,Xop,lsl #3]` + `br`), a
-  `blr` runtime call (AAPCS64), and the slot-access idiom
-  `[r14+reg*8-LFP_SELF]` (`neg`/`add_lsl`/`sub`). 4 tests pass under
-  qemu-aarch64; this is the reference for the real port.
+- **M0/M1 codegen patterns validated under qemu** (`aarch64-proto/`, a
+  standalone monoasm-only crate detached from the workspace). Since the
+  in-crate VM port can't be qemu-tested until it links, validate the core
+  encoding patterns up front (à la phase 1). **8 tests pass under
+  qemu-aarch64**, covering everything the VM-tier port needs:
+  - global-register mapping `pc r13→x21`, `lfp r14→x22`, `acc r15→x23`
+    (callee-saved + prologue/epilogue);
+  - `fetch_and_dispatch` (`ldrb` + `ldr Xtgt,[Xtbl,Xop,lsl #3]` + `br`);
+  - `blr` runtime call (AAPCS64);
+  - slot access `[r14+reg*8-LFP_SELF]` (`neg`/`add_lsl`/`sub`);
+  - conditional branch (`cbz` + computed pc target);
+  - guarded tagged-fixnum add (`tbz` tag guard → `brk` slow path, re-tag);
+  - **method call / frame**: invoker-style entry, `push_frame`/`set_lfp`
+    (save caller lfp + resume pc, pass arg, switch lfp), nested dispatch,
+    and `ret` teardown (resume caller, or `leave; ret` to Rust at the bottom
+    frame) — incl. 2-deep nested calls.
+
+  This is the validated reference encoding set for the real in-crate port:
+  the port becomes transcription of known-good shapes, not blind asm.
 
 ## Map of what must be ported (VM-only)
 
