@@ -625,6 +625,20 @@ impl Codegen {
         self.dispatch[34] = yield_op;
         self.dispatch[35] = yield_op;
 
+        // break / raise / retry / redo / ensure-end: set an error and route
+        // through entry_raise, which handle_error turns into the right control
+        // flow (break value / re-raise / retry / redo).
+        let block_break = self.a64_op_err1(runtime::err_block_break as u64, true);
+        let raise_err = self.a64_op_err_raise();
+        let retry_op = self.a64_op_err1(runtime::err_retry as u64, false);
+        let redo_op = self.a64_op_err1(runtime::err_redo as u64, false);
+        let ensure_end = self.a64_op_ensure_end();
+        self.dispatch[82] = block_break;
+        self.dispatch[83] = raise_err;
+        self.dispatch[84] = retry_op;
+        self.dispatch[85] = ensure_end;
+        self.dispatch[87] = redo_op;
+
         self.dispatch[150] = eq;
         self.dispatch[151] = ne;
         self.dispatch[152] = lt;
@@ -1712,6 +1726,51 @@ impl Codegen {
             .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as u64);
         self.jit.blr(X9);
         self.jit.b_label(&after_call);
+        p
+    }
+
+    /// ops 82/84/87 `BlockBreak`/`Retry`/`Redo`: call `f(vm[, globals, val])`
+    /// to set the control-flow error, then enter entry_raise. `with_val`
+    /// passes slot `[pc+4]`'s value as a 3rd argument (BlockBreak).
+    fn a64_op_err1(&mut self, abs: u64, with_val: bool) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        if with_val {
+            self.jit.mov(X1, GLOBALS);
+            self.jit.ldrh(X2, PC, 4);
+            self.a64_slot_value(X2); // val
+        }
+        self.jit.mov_imm(X9, abs);
+        self.jit.blr(X9);
+        self.jit.b_label(&raise);
+        p
+    }
+
+    /// op 83 `Raise`: raise_err(vm, exc `[pc+4]`), then enter entry_raise.
+    fn a64_op_err_raise(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.ldrh(X1, PC, 4);
+        self.a64_slot_value(X1); // exception value
+        self.jit.mov_imm(X9, runtime::raise_err as u64);
+        self.jit.blr(X9);
+        self.jit.b_label(&raise);
+        p
+    }
+
+    /// op 85 `EnsureEnd`: if an error is still pending after an ensure block,
+    /// re-enter entry_raise; otherwise continue.
+    fn a64_op_ensure_end(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov_imm(X9, runtime::check_err as u64);
+        self.jit.blr(X9);
+        self.jit.cbnz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
