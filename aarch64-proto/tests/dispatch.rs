@@ -45,7 +45,17 @@ const OP_LOAD: u8 = 0; // acc <- operand
 const OP_ADD: u8 = 1; // acc <- acc + operand
 const OP_CALL: u8 = 2; // acc <- runtime(acc)   (operand = fn ptr)
 const OP_LOADSLOT: u8 = 3; // acc <- frame slot (operand = slot index)
-const OP_RET: u8 = 4; // return acc
+const OP_JMPZ: u8 = 4; // if acc == 0, pc += operand instructions
+const OP_INTADD: u8 = 5; // guarded tagged-fixnum add (operand = tagged rhs)
+const OP_RET: u8 = 6; // return acc
+
+/// monoruby tags a fixnum as `(n << 1) | 1` (low bit set).
+fn tag(n: i64) -> u64 {
+    ((n << 1) | 1) as u64
+}
+fn untag(v: u64) -> i64 {
+    (v as i64) >> 1
+}
 
 extern "C" fn double_it(x: u64) -> u64 {
     x * 2
@@ -63,7 +73,11 @@ fn build() -> (extern "C" fn(*const u8, *const u64) -> u64, Box<[u64; 256]>) {
     let h_add = jit.label();
     let h_call = jit.label();
     let h_loadslot = jit.label();
+    let h_jmpz = jit.label();
+    let h_intadd = jit.label();
     let h_ret = jit.label();
+    let do_jump = jit.label();
+    let slow = jit.label();
 
     // ---- VM entry prologue: save callee-saved globals + fp/lr ----
     jit.bind_label(entry.clone());
@@ -113,6 +127,32 @@ fn build() -> (extern "C" fn(*const u8, *const u64) -> u64, Box<[u64; 256]>) {
     jit.add_imm(PC, PC, INST_LEN, 0);
     jit.b_label(&dispatch);
 
+    // conditional branch: if acc == 0, pc += operand instructions
+    jit.bind_label(h_jmpz.clone());
+    jit.ldr(TMP, PC, OPERAND); // delta (instruction count)
+    jit.cbz_label(ACC, &do_jump); // taken if acc == 0
+    jit.add_imm(PC, PC, INST_LEN, 0); // not taken: fall through
+    jit.b_label(&dispatch);
+    jit.bind_label(do_jump.clone());
+    jit.lsl_imm(TMP, TMP, 4); // delta * 16 (INST_LEN)
+    jit.add(PC, PC, TMP); // pc <- pc + delta*16
+    jit.b_label(&dispatch);
+
+    // guarded tagged-fixnum add: both operands must be fixnums (low bit set),
+    // result = acc + rhs - 1  (re-tag: (2a+1)+(2b+1)-1 = 2(a+b)+1).
+    jit.bind_label(h_intadd.clone());
+    jit.ldr(TMP, PC, OPERAND); // rhs (tagged)
+    jit.tbz_label(ACC, 0, &slow); // acc not a fixnum -> slow
+    jit.tbz_label(TMP, 0, &slow); // rhs not a fixnum -> slow
+    jit.add(ACC, ACC, TMP);
+    jit.sub_imm(ACC, ACC, 1, 0);
+    jit.add_imm(PC, PC, INST_LEN, 0);
+    jit.b_label(&dispatch);
+
+    // guard-failure slow path (deopt point in the real VM); trap here.
+    jit.bind_label(slow.clone());
+    jit.brk(0);
+
     // ---- VM exit epilogue ----
     jit.bind_label(h_ret.clone());
     jit.mov(X0, ACC); // return acc
@@ -127,6 +167,8 @@ fn build() -> (extern "C" fn(*const u8, *const u64) -> u64, Box<[u64; 256]>) {
     table[OP_ADD as usize] = jit.get_label_address(&h_add).as_ptr() as u64;
     table[OP_CALL as usize] = jit.get_label_address(&h_call).as_ptr() as u64;
     table[OP_LOADSLOT as usize] = jit.get_label_address(&h_loadslot).as_ptr() as u64;
+    table[OP_JMPZ as usize] = jit.get_label_address(&h_jmpz).as_ptr() as u64;
+    table[OP_INTADD as usize] = jit.get_label_address(&h_intadd).as_ptr() as u64;
     table[OP_RET as usize] = jit.get_label_address(&h_ret).as_ptr() as u64;
 
     let f: extern "C" fn(*const u8, *const u64) -> u64 =
@@ -199,4 +241,25 @@ fn slot_access_idiom() {
     // load slot 0 => 1000
     let prog = program(&[(OP_LOADSLOT, 0), (OP_RET, 0)]);
     assert_eq!(f(prog.as_ptr(), lfp), 1000);
+}
+
+#[test]
+fn conditional_branch_taken_and_not() {
+    let (f, _table) = build();
+    // acc = 0; if acc==0 skip the next instr; LOAD 99; RET  => 0 (branch taken)
+    let prog = program(&[(OP_LOAD, 0), (OP_JMPZ, 2), (OP_LOAD, 99), (OP_RET, 0)]);
+    assert_eq!(f(prog.as_ptr(), std::ptr::null()), 0);
+    // acc = 5; branch NOT taken; LOAD 99; RET  => 99
+    let prog = program(&[(OP_LOAD, 5), (OP_JMPZ, 2), (OP_LOAD, 99), (OP_RET, 0)]);
+    assert_eq!(f(prog.as_ptr(), std::ptr::null()), 99);
+}
+
+#[test]
+fn tagged_fixnum_add_with_guard() {
+    let (f, _table) = build();
+    // acc = tag(20); acc = guarded_add(acc, tag(22)); RET  => tag(42)
+    let prog = program(&[(OP_LOAD, tag(20)), (OP_INTADD, tag(22)), (OP_RET, 0)]);
+    let result = f(prog.as_ptr(), std::ptr::null());
+    assert_eq!(result, tag(42));
+    assert_eq!(untag(result), 42);
 }
