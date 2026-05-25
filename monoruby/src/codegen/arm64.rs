@@ -571,8 +571,27 @@ impl Codegen {
 
         let block_arg = self.a64_op_block_arg();
         let check_cvar = self.a64_op_check_cvar();
+        let check_kw_rest = self.a64_op_check_kw_rest();
         self.dispatch[23] = block_arg;
         self.dispatch[24] = check_cvar;
+        self.dispatch[19] = check_kw_rest;
+
+        // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
+        // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
+        let bitor = self.a64_op_binop(bitor_values);
+        let bitand = self.a64_op_binop(bitand_values);
+        let bitxor = self.a64_op_binop(bitxor_values);
+        let rem = self.a64_op_binop(rem_values);
+        let pow = self.a64_op_binop(pow_values);
+        let shl = self.a64_op_binop(shl_values);
+        let shr = self.a64_op_binop(shr_values);
+        self.dispatch[164] = bitor;
+        self.dispatch[165] = bitand;
+        self.dispatch[166] = bitxor;
+        self.dispatch[167] = rem;
+        self.dispatch[168] = pow;
+        self.dispatch[169] = shl;
+        self.dispatch[170] = shr;
 
         // unary operators (ops 121-124): pos, neg, bitnot, not
         let pos = self.a64_op_unop(pos_value as u64);
@@ -624,6 +643,27 @@ impl Codegen {
         self.jit.mov_imm(X9, runtime::block_arg as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 19 `CheckKwRest`: if the kw-rest slot `[pc+4]` is nil, replace it
+    /// with a fresh empty hash.
+    fn a64_op_check_kw_rest(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let exit = self.jit.label();
+        self.jit.ldrh(X10, PC, 4);
+        self.a64_slot_addr(X10); // &slot
+        self.jit.ldr(X11, X10, 0);
+        self.jit.cmp_imm(X11, NIL_VALUE as u32, 0);
+        self.jit.bcond_label(Cond::Ne, &exit);
+        self.jit.mov_imm(X9, runtime::empty_hash as u64);
+        self.jit.blr(X9);
+        self.jit.ldrh(X10, PC, 4);
+        self.a64_slot_addr(X10); // re-compute (clobbered by call)
+        self.jit.str(X0, X10, 0);
+        self.jit.bind_label(exit);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
@@ -1455,6 +1495,19 @@ impl Codegen {
     /// rhs)` and store the result. Expects lhs in X13, rhs in X14, dst slot in
     /// X12 (all intact). VM globals are callee-saved so no register save is
     /// needed. On a Ruby error (result 0) jumps to entry_raise.
+    /// ops 164-170: a binary operator with no fixnum fast path. Loads
+    /// lhs `[pc+2]`, rhs `[pc+0]`, dst `[pc+4]` and calls the runtime op.
+    fn a64_op_binop(&mut self, func: BinaryOpFn) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrh(X10, PC, 0); // rhs slot
+        self.jit.ldrh(X11, PC, 2); // lhs slot
+        self.jit.ldrh(X12, PC, 4); // dst slot
+        self.a64_load_slot(X11, X13, X14); // X13 = lhs
+        self.a64_load_slot(X10, X14, X15); // X14 = rhs
+        self.a64_generic_binop(func);
+        p
+    }
+
     fn a64_generic_binop(&mut self, func: BinaryOpFn) {
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
