@@ -640,6 +640,9 @@ impl Codegen {
         self.dispatch[148] = load_dvar;
         self.dispatch[149] = store_dvar;
 
+        let block_arg_proxy = self.a64_op_block_arg_proxy();
+        self.dispatch[21] = block_arg_proxy;
+
         // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
         // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
         let bitor = self.a64_op_binop(bitor_values);
@@ -707,6 +710,50 @@ impl Codegen {
         self.jit.mov_imm(X9, runtime::block_arg as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 21 `BlockArgProxy`: dst `[pc+4]` <- the block handler of the frame
+    /// `[pc+0]` levels up, re-encoding a proxy handler's depth. (x86
+    /// `vm_block_arg_proxy`.)
+    fn a64_op_block_arg_proxy(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
+        let notzero = self.jit.label();
+        let exit = self.jit.label();
+        let skip = self.jit.label();
+        self.jit.mov(X10, LFP);
+        self.jit.ldr32(X11, PC, 0); // outer level
+        self.jit.cbz_label(X11, &loop_exit);
+        self.jit.bind_label(loop_.clone());
+        self.jit.ldr(X10, X10, 0); // walk outer chain
+        self.jit.subs_imm(X11, X11, 1, 0);
+        self.jit.bcond_label(Cond::Ne, &loop_);
+        self.jit.bind_label(loop_exit);
+        // block handler = [outer - LFP_BLOCK]
+        self.jit.sub_imm(X12, X10, LFP_BLOCK as u32, 0);
+        self.jit.ldr(X10, X12, 0);
+        self.jit.cbnz_label(X10, &notzero);
+        self.jit.mov_imm(X10, NIL_VALUE); // no block -> nil
+        self.jit.bind_label(notzero);
+        // if bit0 == 0 (Proc/nil), keep as-is; else re-encode proxy depth.
+        self.jit.tbz_label(X10, 0, &exit);
+        self.jit.ldrsw(X12, PC, 0); // outer (signed)
+        self.jit.lsl_imm(X12, X12, 2);
+        self.jit.add(X10, X10, X12);
+        self.jit.add_imm(X10, X10, 2, 0);
+        self.jit.bind_label(exit);
+        // store X10 to dst [pc+4]
+        self.jit.ldrh(X11, PC, 4);
+        self.jit.cbz_label(X11, &skip);
+        self.jit.neg(X11, X11);
+        self.jit.add_lsl(X12, LFP, X11, 3);
+        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
+        self.jit.str(X10, X12, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
