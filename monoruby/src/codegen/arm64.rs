@@ -284,10 +284,54 @@ impl JitModule {
         // SAFETY: codeptr is an `extern "C" fn(&mut Executor) -> *const u8`.
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
+    /// `get_class`: x0 = Value in → x0 = ClassId (u32) out. Mirrors the x86
+    /// `get_class` tag dispatch. (Invalid receivers trap rather than calling
+    /// the x86-gated `illegal_classid`.)
     pub(super) fn get_class(&mut self) -> DestLabel {
-        let l = self.jit.label();
-        self.a64_brk_stub(&l);
-        l
+        let label = self.jit.label();
+        let l1 = self.jit.label();
+        let err = self.jit.label();
+        let fixnum = self.jit.label();
+        let flonum = self.jit.label();
+        let symbol = self.jit.label();
+        let nil = self.jit.label();
+        let bool_ = self.jit.label();
+        self.jit.bind_label(label.clone());
+        self.jit.tbnz_label(X0, 0, &fixnum); // bit0: fixnum
+        self.jit.tbnz_label(X0, 1, &flonum); // bit1: flonum
+        self.jit.tbnz_label(X0, 2, &l1); // bit2: other immediate
+        self.jit.cbz_label(X0, &err); // 0 is invalid
+        self.jit.ldr32(X0, X0, RVALUE_OFFSET_CLASS as u32); // heap: RValue.class
+        self.jit.ret();
+        self.jit.bind_label(l1);
+        self.jit.mov_imm(X1, 0xff);
+        self.jit.and_(X2, X0, X1);
+        self.jit.cmp_imm(X2, TAG_SYMBOL as u32, 0);
+        self.jit.bcond_label(Cond::Eq, &symbol);
+        self.jit.cmp_imm(X0, NIL_VALUE as u32, 0);
+        self.jit.bcond_label(Cond::Eq, &nil);
+        self.jit.mov_imm(X1, 8);
+        self.jit.orr(X1, X0, X1);
+        self.jit.cmp_imm(X1, TRUE_VALUE as u32, 0);
+        self.jit.bcond_label(Cond::Eq, &bool_);
+        self.jit.bind_label(err);
+        self.jit.brk(0); // TODO(aarch64): illegal_classid
+        self.jit.bind_label(fixnum);
+        self.jit.mov_imm(X0, INTEGER_CLASS.u32() as u64);
+        self.jit.ret();
+        self.jit.bind_label(flonum);
+        self.jit.mov_imm(X0, FLOAT_CLASS.u32() as u64);
+        self.jit.ret();
+        self.jit.bind_label(symbol);
+        self.jit.mov_imm(X0, SYMBOL_CLASS.u32() as u64);
+        self.jit.ret();
+        self.jit.bind_label(nil);
+        self.jit.mov_imm(X0, NIL_CLASS.u32() as u64);
+        self.jit.ret();
+        self.jit.bind_label(bool_);
+        self.jit.mov_imm(X0, BOOL_CLASS.u32() as u64);
+        self.jit.ret();
+        label
     }
 
     pub(crate) fn signal_handler_for(
@@ -366,6 +410,14 @@ impl Codegen {
         self.dispatch[145] = ge;
         self.dispatch[146] = eq; // teq
         // 150-156: same comparisons, emitted when the result feeds a branch.
+        let method_def = self.a64_op_method_def();
+        self.dispatch[2] = method_def;
+        let send = self.a64_op_send();
+        self.dispatch[30] = send;
+        self.dispatch[31] = send;
+        self.dispatch[32] = send;
+        self.dispatch[33] = send;
+
         self.dispatch[150] = eq;
         self.dispatch[151] = ne;
         self.dispatch[152] = lt;
@@ -373,6 +425,125 @@ impl Codegen {
         self.dispatch[154] = gt;
         self.dispatch[155] = ge;
         self.dispatch[156] = eq; // teq
+    }
+
+    /// op 2 `method_def`: `define_method(vm, globals, name, func_id)`.
+    /// Bytecode: `+8` name, `+12` func_id.
+    fn a64_op_method_def(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.ldr32(X2, PC, 8); // name
+        self.jit.ldr32(X3, PC, 12); // func_id
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::define_method as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 30-33 `send`/`send_simple`: method call (slow-path only — no inline
+    /// cache; `find_method` does the lookup every time). Handles the simple
+    /// case (no kw/block/splat). Bytecode (32 bytes): `+0` callid, `+4` ret
+    /// slot, `+8` pos_num, `+10` arg slot, `+12` recv slot.
+    fn a64_op_send(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let mm = self.jit.label();
+        let argloop = self.jit.label();
+        let argdone = self.jit.label();
+        let skip = self.jit.label();
+        let raise = self.entry_raise.clone();
+        // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
+        self.jit.sub_imm(SP, SP, 16, 0);
+        self.jit.str(PC, SP, 0);
+        // receiver
+        self.jit.ldrh(X10, PC, 12);
+        self.a64_load_slot(X10, X4, X11); // X4 = recv
+        // callee self slot
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.str(X4, X11, 0);
+        // find_method(vm, globals, callid, recv) -> funcid
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // callid
+        self.jit.mov(X3, X4); // recv
+        self.jit.mov_imm(X9, runtime::find_method as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &mm);
+        // get_func_data: X15 = funcinfo_base + funcid*64 + FUNCINFO_DATA
+        self.jit.lsl_imm(X10, X0, 6);
+        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
+        self.jit.add(X11, GLOBALS, X11);
+        self.jit.ldr(X11, X11, 0);
+        self.jit.add(X10, X10, X11);
+        self.jit.add_imm(X15, X10, FUNCINFO_DATA as u32, 0);
+        // set_method_outer: zero outer/svar/cme; set meta; zero block
+        self.jit.mov_imm(X12, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        self.jit.ldr(X10, X15, FUNCDATA_META as u32);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
+        self.jit.str(X12, X11, 0);
+        // copy positional args: pos_num in X9, args base in X10
+        self.jit.ldrh(X9, PC, 8); // pos_num
+        self.jit.ldrh(X10, PC, 10); // arg slot
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X10, LFP, X10, 3);
+        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0); // args base (caller)
+        self.jit.cbz_label(X9, &argdone);
+        self.jit.neg(X9, X9);
+        self.jit.bind_label(argloop.clone());
+        self.jit.add_lsl(X11, X10, X9, 3);
+        self.jit.ldr(X12, X11, 8); // src = [base + i*8 + 8]
+        self.jit.sub_imm(X13, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.add_lsl(X13, X13, X9, 3);
+        self.jit.str(X12, X13, 0); // dst = callee self slot + i*8
+        self.jit.add_imm(X9, X9, 1, 0);
+        self.jit.cbnz_label(X9, &argloop);
+        self.jit.bind_label(argdone);
+        // call_funcdata: push_frame + set_lfp + pc + blr codeptr + restore cfp
+        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.str(X10, X11, 0);
+        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
+        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
+        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
+        self.jit.str(LFP, X10, 0);
+        self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
+        self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
+        self.jit.blr(X10);
+        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
+        self.jit.ldr(X10, X11, 0);
+        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        // restore caller LFP from its own frame (x86 `restore_lfp`):
+        // LFP = [x29 - (BP_CFP + CFP_LFP)]. The callee clobbers LFP, so we
+        // reload it from the caller's stable frame pointer (x29 == x86 rbp).
+        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
+        self.jit.ldr(LFP, X10, 0);
+        // pop_cont_frame: restore PC, advance past the 32-byte send
+        self.jit.ldr(PC, SP, 0);
+        self.jit.add_imm(SP, SP, 16, 0);
+        self.jit.cbz_label(X0, &raise); // result 0 => error
+        self.jit.ldrh(X10, PC, 4); // ret slot
+        self.jit.add_imm(PC, PC, 32, 0);
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.a64_fetch_and_dispatch();
+        self.jit.bind_label(mm);
+        self.jit.brk(0); // TODO(aarch64): method_missing
+        p
     }
 
     /// loop_start / loop_end (ops 14/15): advance + dispatch (VM-only).
@@ -615,12 +786,44 @@ impl Codegen {
                 let vm_entry = self.vm_entry();
                 self.jit.b_label(&vm_entry);
             }
+            FuncKind::Builtin { abs_address } => {
+                let abs = *abs_address;
+                self.a64_gen_native_func_wrapper(abs);
+            }
             _ => {
-                self.jit.brk(0);
+                self.jit.brk(0); // TODO(aarch64): AttrReader/Writer/Struct/Proc
             }
         }
         self.jit.finalize();
         entry
+    }
+
+    /// Native (builtin) method wrapper: allocate the arg stack region and call
+    /// the Rust builtin `fn(vm, globals, lfp)`. Mirrors x86
+    /// `gen_native_func_wrapper`.
+    fn a64_gen_native_func_wrapper(&mut self, abs_address: u64) {
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        // stack offset = ((reg_num + (RSP_LOCAL_FRAME+LFP_ARG0)/8 + 1) & !1) * 8
+        self.jit.sub_imm(X10, LFP, LFP_REGNUM as u32, 0);
+        self.jit.ldrh(X10, X10, 0); // reg_num
+        self.jit
+            .add_imm(X10, X10, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) as u32, 0);
+        self.jit.mov_imm(X11, !1u64);
+        self.jit.and_(X10, X10, X11);
+        self.jit.lsl_imm(X10, X10, 3);
+        self.jit.mov_sp(X11, SP);
+        self.jit.sub(X11, X11, X10);
+        self.jit.mov_sp(SP, X11);
+        // builtin(vm, globals, lfp)
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov(X2, LFP);
+        self.jit.mov_imm(X9, abs_address);
+        self.jit.blr(X9);
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
     }
 
     /// TODO(aarch64): the VM BOP fast-path optimization is not emitted yet, so
