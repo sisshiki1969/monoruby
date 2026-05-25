@@ -130,6 +130,10 @@ impl JitModule {
     /// TODO(aarch64): replace each caller with the real invoker.
     fn a64_stub_fn<T>(&mut self) -> T {
         let p = self.jit.get_current_address();
+        self.jit.mov_imm(X0, 0x5141); // DIAG: stub invoker hit
+        self.jit
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+        self.jit.blr(X9);
         self.jit.brk(0);
         // SAFETY: T is always a pointer-sized `extern "C"` fn pointer; the
         // trampoline traps if ever called (M0 in progress).
@@ -1373,6 +1377,9 @@ impl Codegen {
         self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
         self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
         self.jit.str(LFP, X10, 0);
+        // 4th arg (X3) = call-site BytecodePtr, for with-pc builtins (x86
+        // sets `rcx = r13 - 16`); aarch64 PC is already the call site.
+        self.jit.mov(X3, PC);
         self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
         self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
         self.jit.blr(X10);
