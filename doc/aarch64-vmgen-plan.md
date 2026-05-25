@@ -48,9 +48,25 @@ unpushed) is resolved.
   3. `execute_gc_inner` now takes a `write_back: impl FnOnce(&mut Self)`
      closure instead of `Option<&jitgen::WriteBack>` (VM passes a no-op).
 
-**Next step (the remaining gating):** wire `#[cfg(jit)]` per the refined
-worklist below; green-gate is `cargo check --features no-jit` (x86), no qemu.
-Then port the VM-tier asm to aarch64. x86 default must stay green throughout.
+- **JIT excision complete** (`cfg(jit)` wired through the codebase). Both
+  `cargo check` (x86 JIT) and `cargo check --features no-jit` (x86 VM-only)
+  compile **warning-clean**, and both **run correctly** (identical output for
+  loop-JIT sum, `fib(30)`, `Array#sort`). The inline-method system uses an
+  `inline_gen!` macro + `not(jit)` registrar twins; the JIT driver
+  (`jitgen`/`compiler`/`patch`), Codegen JIT fields, and VM→JIT triggers are
+  all `#[cfg(jit)]`-gated.
+- **aarch64 now advances past the JIT**: `cargo check --target
+  aarch64-unknown-linux-gnu --features no-jit` produces **zero jitgen
+  errors** — it fails only on the VM-tier `monoasm!{}` (vmgen ~245, codegen
+  ~107, invoker ~91, vmgen/* ~159, jit_module ~42, wrapper ~37; +2 stray in
+  `value/rvalue/string/pack.rs` and `globals/store/class.rs`). That is
+  exactly the phase-3 surface.
+
+**Next step (phase 3 — VM-tier asm port):** port those VM-tier `monoasm!{}`
+blocks to `monoasm_arm64!` behind `cfg(not(jit))`/sibling modules, per the
+milestones below, until `cargo build --target aarch64-unknown-linux-gnu
+--features no-jit` links and runs "42" under qemu. x86 default stays green
+throughout.
 
 ## Map of what must be ported (VM-only)
 
