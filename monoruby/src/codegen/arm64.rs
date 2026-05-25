@@ -192,11 +192,19 @@ impl JitModule {
     pub(super) fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
         let fdata = X9;
-        // prologue: save callee-saved globals + fp/lr, set globals
+        let generic = self.jit.label();
+        let simple_done = self.jit.label();
+        let argloop = self.jit.label();
+        let aftargs = self.jit.label();
+        let error_exit = self.jit.label();
+        // AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args,
+        // x5 len, x6 block, x7 kw (Option<Hashmap>).
+        // prologue: save callee-saved globals + fp/lr + X25/X26, set globals
         self.jit.stp_pre(X29, X30, SP, -16);
         self.jit.stp_pre(EXEC, GLOBALS, SP, -16);
         self.jit.stp_pre(PC, LFP, SP, -16);
         self.jit.stp_pre(ACC, X24, SP, -16);
+        self.jit.stp_pre(X25, X26, SP, -16);
         self.jit.mov(EXEC, X0);
         self.jit.mov(GLOBALS, X1);
         // get_func_data: fdata = funcinfo_base + funcid*64 + FUNCINFO_DATA
@@ -220,6 +228,54 @@ impl JitModule {
         self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
         self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
         self.jit.str(X13, fb, 40); // LFP_OUTER = 0
+        // --- argument setup ---
+        // Simple iff callee is simple (Meta kind bit 4) AND len == min AND
+        // no keyword args; otherwise fall back to the runtime arg massager.
+        self.jit.lsr_imm(X10, X14, 56); // kind byte
+        self.jit.tbz_label(X10, 4, &generic);
+        self.jit.ldrh(X10, fdata, FUNCDATA_MIN as u32);
+        self.jit.cmp(X5, X10);
+        self.jit.bcond_label(Cond::Ne, &generic);
+        self.jit.cbnz_label(X7, &generic); // kw present
+        // simple copy (upward): args[0..len] -> callee slots 1..=len
+        self.jit.cbz_label(X5, &simple_done);
+        self.jit.mov(X10, X5); // down counter = len
+        self.jit.neg(X11, X5); // up counter = -len
+        self.jit.sub_imm(X12, X4, 8, 0); // args - 8
+        self.jit.bind_label(argloop.clone());
+        self.jit.add_lsl(X13, X12, X10, 3); // &args[down-1]
+        self.jit.ldr(X14, X13, 0);
+        self.jit.sub_imm(X15, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.add_lsl(X15, X15, X11, 3);
+        self.jit.str(X14, X15, 0);
+        self.jit.sub_imm(X10, X10, 1, 0);
+        self.jit.add_imm(X11, X11, 1, 0);
+        self.jit.cbnz_label(X11, &argloop);
+        self.jit.bind_label(simple_done);
+        self.jit.b_label(&aftargs);
+        // generic: handle_invoker_arguments(exec, globals, callee_lfp,
+        // arg_num, args, kw). Reserve scratch below the callee frame and
+        // preserve SP (X25) + funcdata (X26, caller-saved) across the call.
+        self.jit.bind_label(generic);
+        self.jit.mov_sp(X25, SP);
+        self.jit.mov(X26, fdata);
+        self.jit.ldrh(X10, fdata, FUNCDATA_OFS as u32);
+        self.jit.lsl_imm(X10, X10, 4);
+        self.jit.add_imm(X10, X10, 16, 0);
+        self.jit.sub(X11, X25, X10);
+        self.jit.mov_sp(SP, X11);
+        self.jit.sub_imm(X2, X25, RSP_LOCAL_FRAME as u32, 0); // callee_lfp
+        self.jit.mov(X3, X5); // arg_num = len
+        self.jit.mov(X5, X7); // kw
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        // x4 = args (unchanged); upward path => handle_invoker_arguments
+        self.jit.mov_imm(X9, runtime::handle_invoker_arguments as u64);
+        self.jit.blr(X9);
+        self.jit.mov(X9, X26); // restore fdata
+        self.jit.mov_sp(SP, X25); // restore SP
+        self.jit.cbz_label(X0, &error_exit);
+        self.jit.bind_label(aftargs);
         // call_invoker: push_frame
         self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
         self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
@@ -237,7 +293,9 @@ impl JitModule {
         self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
         self.jit.ldr(X10, X11, 0);
         self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
-        // epilogue (result Value in x0)
+        // epilogue (result Value in x0; error path enters here with x0 = 0)
+        self.jit.bind_label(error_exit);
+        self.jit.ldp_post(X25, X26, SP, 16);
         self.jit.ldp_post(ACC, X24, SP, 16);
         self.jit.ldp_post(PC, LFP, SP, 16);
         self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
