@@ -68,6 +68,16 @@ milestones below, until `cargo build --target aarch64-unknown-linux-gnu
 --features no-jit` links and runs "42" under qemu. x86 default stays green
 throughout.
 
+- **Dispatch core validated under qemu** (`aarch64-proto/`, a standalone
+  monoasm-only crate detached from the workspace). Since the in-crate VM
+  port can't be qemu-tested until it links, this validates the core encoding
+  patterns up front (à la phase 1): the global-register mapping
+  (`pc→x21`, `lfp→x22`, `acc→x23`, callee-saved + prologue/epilogue),
+  `fetch_and_dispatch` (`ldrb` + `ldr Xtgt,[Xtbl,Xop,lsl #3]` + `br`), a
+  `blr` runtime call (AAPCS64), and the slot-access idiom
+  `[r14+reg*8-LFP_SELF]` (`neg`/`add_lsl`/`sub`). 4 tests pass under
+  qemu-aarch64; this is the reference for the real port.
+
 ## Map of what must be ported (VM-only)
 
 The whole monoruby engine emits x86-64 machine code; there is **no**
