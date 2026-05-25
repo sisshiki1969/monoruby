@@ -2,6 +2,7 @@ use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 use crate::executor::Visibility;
+#[cfg(jit)]
 use jitgen::JitContext;
 
 //
@@ -31,7 +32,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         "to_i",
         &["to_int"],
         toi,
-        Box::new(float_toi),
+        inline_gen!(float_toi),
         0,
     );
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
@@ -188,6 +189,8 @@ extern "C" fn div_ff_f(lhs: f64, rhs: f64) -> f64 {
 extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
 }
+
+#[cfg(jit)]
 
 fn float_toi(
     state: &mut AbstractState,

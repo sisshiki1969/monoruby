@@ -2,12 +2,14 @@ use super::*;
 
 #[allow(non_camel_case_types)]
 pub(crate) enum InlineFuncInfo {
+    #[cfg(jit)]
     InlineGen(Box<InlineGen>),
     CFunc_F_F(unsafe extern "C" fn(f64) -> f64),
     CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
 
 impl InlineFuncInfo {
+    #[cfg(jit)]
     pub(crate) fn new_inline_gen(f: Box<InlineGen>) -> Self {
         InlineFuncInfo::InlineGen(f)
     }

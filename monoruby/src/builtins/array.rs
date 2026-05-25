@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(jit)]
 use jitgen::JitContext;
 use rubymap::RubyEql;
 use smallvec::smallvec;
@@ -17,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     //    ARRAY_CLASS,
     //    "new",
     //    new,
-    //    Box::new(super::class::gen_class_new(allocate_array)),
+    //    inline_gen!(super::class::gen_class_new(allocate_array)),
     //    0,
     //    0,
     //    true,
@@ -29,21 +30,21 @@ pub(super) fn init(globals: &mut Globals) {
         "size",
         &["length"],
         size,
-        Box::new(array_size),
+        inline_gen!(array_size),
         0,
     );
     globals.define_builtin_inline_func(
         ARRAY_CLASS,
         "clone",
         clone,
-        Box::new(array_clone),
+        inline_gen!(array_clone),
         0,
     );
     globals.define_builtin_inline_func(
         ARRAY_CLASS,
         "dup",
         dup,
-        Box::new(array_dup_inline),
+        inline_gen!(array_dup_inline),
         0,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
@@ -60,7 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "shift", shift, 0, 1, false);
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
-    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, Box::new(array_shl), 1);
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, inline_gen!(array_shl), 1);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
@@ -71,7 +72,7 @@ pub(super) fn init(globals: &mut Globals) {
         "[]",
         &["slice"],
         index,
-        Box::new(array_index),
+        inline_gen!(array_index),
         1,
         2,
         false,
@@ -80,7 +81,7 @@ pub(super) fn init(globals: &mut Globals) {
         ARRAY_CLASS,
         "[]=",
         index_assign,
-        Box::new(array_index_assign),
+        inline_gen!(array_index_assign),
         2,
         3,
         false,
@@ -329,6 +330,8 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::integer(len as i64))
 }
 
+#[cfg(jit)]
+
 fn array_size(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -372,6 +375,8 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     }
     Ok(cloned)
 }
+
+#[cfg(jit)]
 
 fn array_clone(
     state: &mut AbstractState,
@@ -418,6 +423,8 @@ fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         real_class_id,
     ))
 }
+
+#[cfg(jit)]
 
 fn array_dup_inline(
     state: &mut AbstractState,
@@ -917,6 +924,8 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
     ary.into()
 }
 
+#[cfg(jit)]
+
 fn array_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1181,6 +1190,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
+#[cfg(jit)]
+
 fn array_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1276,6 +1287,8 @@ fn index_assign(
         ary.set_index2(i as usize, l as usize, val)
     }
 }
+
+#[cfg(jit)]
 
 fn array_index_assign(
     state: &mut AbstractState,

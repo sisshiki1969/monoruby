@@ -266,6 +266,7 @@ impl JitModule {
         self.jit.select_page(0);
     }
 
+    #[cfg(jit)]
     pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());

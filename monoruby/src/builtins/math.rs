@@ -86,7 +86,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.set_constant_by_str(klass, "E", Value::float(std::f64::consts::E));
-    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, inline_gen!(math_sqrt), 1);
 
     globals.define_builtin_module_cfunc_f_f(klass, "cos", cos, extern_cos, 1);
     globals.define_builtin_module_cfunc_f_f(klass, "sin", sin, extern_sin, 1);
@@ -674,6 +674,8 @@ fn log1p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     Ok(Value::float(f.ln_1p()))
 }
+
+#[cfg(jit)]
 
 fn math_sqrt(
     state: &mut AbstractState,

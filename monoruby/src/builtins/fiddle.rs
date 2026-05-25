@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use super::*;
+#[cfg(jit)]
 use jitgen::JitContext;
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 
@@ -421,6 +422,8 @@ enum ReadKind {
     F64,
 }
 
+#[cfg(jit)]
+
 fn fiddle_read_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -506,6 +509,8 @@ enum WriteKind {
     Int32,
     F64,
 }
+
+#[cfg(jit)]
 
 fn fiddle_write_inline(
     state: &mut AbstractState,
@@ -670,14 +675,14 @@ pub(super) fn init(globals: &mut Globals) {
         fiddle,
         "___read",
         fiddle_read,
-        Box::new(fiddle_read_inline),
+        inline_gen!(fiddle_read_inline),
         2,
     );
     globals.define_builtin_module_inline_func(
         fiddle,
         "___write",
         fiddle_write,
-        Box::new(fiddle_write_inline),
+        inline_gen!(fiddle_write_inline),
         3,
     );
     globals.define_builtin_module_func(fiddle, "___read_string", fiddle_read_string, 1);

@@ -18,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
         FIBER_CLASS,
         "yield",
         fiber_yield,
-        Box::new(fiber_yield_inline),
+        inline_gen!(fiber_yield_inline),
     );
     globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
 }
@@ -69,6 +69,8 @@ fn fiber_yield(
     };
     vm.yield_fiber(val)
 }
+
+#[cfg(jit)]
 
 fn fiber_yield_inline(
     state: &mut AbstractState,

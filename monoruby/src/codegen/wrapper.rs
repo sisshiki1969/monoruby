@@ -2,6 +2,7 @@ use super::*;
 
 impl Codegen {
     pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
+        #[cfg(jit)]
         let no_jit = globals.no_jit;
         let entry = self.jit.label();
         self.jit.bind_label(entry.clone());
@@ -24,11 +25,14 @@ impl Codegen {
                         );
                     }
                     ISeqHint::Normal => {
-                        if !no_jit && !cfg!(feature = "no-jit") {
+                        #[cfg(jit)]
+                        if !no_jit {
                             self.gen_jit_stub();
                         } else {
                             self.gen_vm_stub()
                         }
+                        #[cfg(not(jit))]
+                        self.gen_vm_stub();
                     }
                 }
             }
@@ -79,6 +83,7 @@ impl Codegen {
     ///
     /// Set jit compilation stub code for an entry point of each Ruby methods.
     ///
+    #[cfg(jit)]
     fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry();
         let entry = self.jit.label();

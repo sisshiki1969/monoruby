@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(jit)]
 use jitgen::JitContext;
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -11,24 +12,24 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.store[INTEGER_CLASS].clear_alloc_func();
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
-    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
+    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, inline_gen!(integer_succ), 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, Box::new(integer_tof), 0);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen!(integer_tof), 0);
     globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, Box::new(integer_rem), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, Box::new(integer_pow), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, Box::new(integer_bitand), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, Box::new(integer_bitor), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, Box::new(integer_bitxor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, inline_gen!(integer_rem), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen!(integer_pow), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen!(integer_bitand), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen!(integer_bitor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen!(integer_bitxor), 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, Box::new(integer_shr), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, Box::new(integer_shl), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen!(integer_shr), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen!(integer_shl), 1);
     globals.define_builtin_func(INTEGER_CLASS, "==", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, "===", eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);
@@ -517,6 +518,8 @@ fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })
 }
 
+#[cfg(jit)]
+
 fn integer_succ(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -562,6 +565,8 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     Ok(Value::float(f))
 }
+
+#[cfg(jit)]
 
 fn integer_tof(
     state: &mut AbstractState,
@@ -854,6 +859,8 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
     }
 }
 
+#[cfg(jit)]
+
 fn integer_shr(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -929,6 +936,8 @@ fn integer_shr(
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
+
+#[cfg(jit)]
 
 fn integer_shl(
     state: &mut AbstractState,
@@ -1006,6 +1015,8 @@ fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
+#[cfg(jit)]
+
 fn integer_rem(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1029,6 +1040,8 @@ fn integer_rem(
         _ => false,
     }
 }
+
+#[cfg(jit)]
 
 fn integer_rem_int_rhs(
     state: &mut AbstractState,
@@ -1085,6 +1098,8 @@ fn integer_rem_int_rhs(
     true
 }
 
+#[cfg(jit)]
+
 fn integer_rem_float_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1128,6 +1143,8 @@ fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
+#[cfg(jit)]
+
 fn integer_pow(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1151,6 +1168,8 @@ fn integer_pow(
         _ => false,
     }
 }
+
+#[cfg(jit)]
 
 fn integer_pow_int_rhs(
     state: &mut AbstractState,
@@ -1180,6 +1199,8 @@ fn integer_pow_int_rhs(
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
+
+#[cfg(jit)]
 
 fn integer_pow_float_rhs(
     state: &mut AbstractState,
@@ -1224,6 +1245,7 @@ fn integer_pow_float_rhs(
 /// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
 /// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
+#[cfg(jit)]
 fn integer_bitop_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1280,6 +1302,7 @@ fn integer_bitop_inline(
 /// representation fits in `i32`, emit the immediate form directly via
 /// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
 /// emit the register form via `emit_rr`.
+#[cfg(jit)]
 fn emit_bitop_imm(
     ir: &mut AsmIr,
     imm: Fixnum,
@@ -1298,6 +1321,8 @@ fn emit_bitop_imm(
         });
     }
 }
+
+#[cfg(jit)]
 
 fn integer_bitor(
     state: &mut AbstractState,
@@ -1328,6 +1353,8 @@ fn integer_bitor(
     )
 }
 
+#[cfg(jit)]
+
 fn integer_bitand(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1356,6 +1383,8 @@ fn integer_bitand(
         },
     )
 }
+
+#[cfg(jit)]
 
 fn integer_bitxor(
     state: &mut AbstractState,

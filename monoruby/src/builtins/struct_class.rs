@@ -185,7 +185,7 @@ fn struct_initialize(
         "new",
         &["[]"],
         new,
-        Box::new(super::class::gen_class_new_object()),
+        inline_gen!(super::class::gen_class_new_object()),
     );
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
     // `keyword_init?` is defined per Struct subclass (matching CRuby —

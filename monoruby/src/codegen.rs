@@ -3,6 +3,7 @@ use std::hash::Hash;
 use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
+#[cfg(jit)]
 use std::time::Duration;
 
 /// Integer comparison helpers (`icmp_eq` … `icmp_ge`): set `rax` to the Ruby
@@ -30,20 +31,26 @@ macro_rules! icmp_main {
     };
 }
 
+#[cfg(jit)]
 mod compiler;
 mod invoker;
 mod jit_module;
+#[cfg(jit)]
 pub mod jitgen;
 pub(crate) mod signal_table;
+#[cfg(jit)]
 mod patch;
 pub mod runtime;
 mod vmgen;
 mod wrapper;
 
+#[cfg(jit)]
 use self::jitgen::asmir::AsmEvict;
 
 use super::*;
+#[cfg(jit)]
 use crate::bytecodegen::inst::*;
+#[cfg(jit)]
 use crate::codegen::jitgen::SpecializedCodeInfo;
 use crate::executor::*;
 
@@ -791,14 +798,17 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
+    #[cfg(jit)]
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
 }
 
+#[cfg(jit)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct CompilationUnitId(usize);
 
+#[cfg(jit)]
 #[allow(dead_code)]
 struct CompilationUnitInfo {
     /// `ISeqId``.
@@ -830,12 +840,17 @@ pub struct Codegen {
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
 
+    #[cfg(jit)]
     compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
+    #[cfg(jit)]
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
+    #[cfg(jit)]
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    #[cfg(jit)]
     pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
+    #[cfg(jit)]
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
@@ -922,10 +937,15 @@ impl Codegen {
             signal_stubs: HashMap::default(),
             class_version_addr,
             const_version_addr,
+            #[cfg(jit)]
             compilation_unit: Vec::new(),
+            #[cfg(jit)]
             return_addr_table: HashMap::default(),
+            #[cfg(jit)]
             asm_return_addr_table: HashMap::default(),
+            #[cfg(jit)]
             specialized_info: Vec::new(),
+            #[cfg(jit)]
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
@@ -991,6 +1011,7 @@ impl Codegen {
         self.const_version.clone()
     }
 
+    #[cfg(jit)]
     fn add_compilation_unit(
         &mut self,
         iseq_id: ISeqId,
@@ -1405,7 +1426,12 @@ impl Codegen {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if codegen.bop_redefine_flags() != 0 {
+                // Eviction only applies to JIT-compiled code; the VM-only
+                // build has none, so `cfp` goes unused there.
+                #[cfg(jit)]
                 codegen.immediate_eviction(cfp);
+                #[cfg(not(jit))]
+                let _ = cfp;
             }
         });
     }
@@ -1418,6 +1444,7 @@ impl Codegen {
         unsafe { *addr }
     }
 
+    #[cfg(jit)]
     fn immediate_eviction(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
@@ -1434,6 +1461,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(jit)]
     fn get_deopt_with_return_addr(
         &self,
         return_addr: CodePtr,

@@ -749,10 +749,12 @@ impl Codegen {
 
     fn vm_loop_start(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        #[cfg(jit)]
         let compile = self.jit.label();
         let cont = self.jit.label();
         self.vm_execute_gc();
-        if !cfg!(feature = "no-jit") {
+        #[cfg(jit)]
+        {
             let count = self.jit.label();
             self.jit.branch_if_captured(&cont);
             monoasm! { &mut self.jit,
@@ -768,9 +770,8 @@ impl Codegen {
         };
         self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
-        if !cfg!(feature = "no-jit") {
-            self.gen_compile_loop(&compile, &cont);
-        }
+        #[cfg(jit)]
+        self.gen_compile_loop(&compile, &cont);
         label
     }
 
