@@ -500,6 +500,59 @@ impl Codegen {
         let store_const = self.a64_op_store_const();
         self.dispatch[10] = load_const;
         self.dispatch[11] = store_const;
+
+        let load_ivar = self.a64_op_load_ivar();
+        let store_ivar = self.a64_op_store_ivar();
+        self.dispatch[16] = load_ivar;
+        self.dispatch[17] = store_ivar;
+    }
+
+    /// op 16 `LoadIvar`: slot[`[pc+4]`] <- `self.@name` (name `[pc+0]`),
+    /// with an inline (ClassId, IvarId) cache at `[pc+8]`.
+    fn a64_op_load_ivar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.sub_imm(X0, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X0, X0, 0); // base = self
+        self.jit.ldr32(X1, PC, 0); // name
+        self.jit.mov(X2, GLOBALS);
+        self.jit.add_imm(X3, PC, 8, 0); // &cache
+        self.jit
+            .mov_imm(X9, get_instance_var_with_cache as u64);
+        self.jit.blr(X9);
+        self.jit.ldrh(X10, PC, 4); // dst slot
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 17 `StoreIvar`: `self.@name` (name `[pc+0]`) <- slot[`[pc+4]`],
+    /// with an inline (ClassId, IvarId) cache at `[pc+8]`.
+    fn a64_op_store_ivar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.sub_imm(X2, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X2, X2, 0); // base = self
+        self.jit.ldr32(X3, PC, 0); // name
+        self.jit.ldrh(X10, PC, 4); // src slot
+        self.a64_slot_value(X10);
+        self.jit.mov(X4, X10); // val
+        self.jit.add_imm(X5, PC, 8, 0); // &cache
+        self.jit
+            .mov_imm(X9, set_instance_var_with_cache as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 10 `LoadConst`: slot[`[pc+4]`] <- constant at ConstSiteId `[pc+0]`.
