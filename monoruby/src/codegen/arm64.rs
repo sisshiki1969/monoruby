@@ -727,11 +727,13 @@ impl Codegen {
         // break / raise / retry / redo / ensure-end: set an error and route
         // through entry_raise, which handle_error turns into the right control
         // flow (break value / re-raise / retry / redo).
+        let method_ret = self.a64_op_err1(runtime::err_method_return as u64, true);
         let block_break = self.a64_op_err1(runtime::err_block_break as u64, true);
         let raise_err = self.a64_op_err_raise();
         let retry_op = self.a64_op_err1(runtime::err_retry as u64, false);
         let redo_op = self.a64_op_err1(runtime::err_redo as u64, false);
         let ensure_end = self.a64_op_ensure_end();
+        self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
         self.dispatch[83] = raise_err;
         self.dispatch[84] = retry_op;
