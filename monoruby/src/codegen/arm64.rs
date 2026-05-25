@@ -324,11 +324,15 @@ impl Codegen {
         let ret = self.a64_op_ret();
         let add_rr = self.a64_op_iadd(false);
         let sub_rr = self.a64_op_iadd(true);
+        let mul_rr = self.a64_op_muldiv(mul_values);
+        let div_rr = self.a64_op_muldiv(div_values);
         self.dispatch[6] = immediate;
         self.dispatch[80] = ret;
         self.dispatch[172] = init_method;
         self.dispatch[160] = add_rr;
         self.dispatch[161] = sub_rr;
+        self.dispatch[162] = mul_rr;
+        self.dispatch[163] = div_rr;
 
         // loop_start (14) / loop_end (15): in the VM-only build these just
         // advance to the next instruction. TODO(aarch64): the GC poll in
@@ -452,10 +456,47 @@ impl Codegen {
         self.jit.ldr(dst, scratch, 0);
     }
 
-    /// op 160/161 `add_rr`/`sub_rr`: fixnum fast path (`%dst = %lhs ± %rhs`).
-    /// Bytecode: `+0` rhs slot, `+2` lhs slot, `+4` dst slot. Non-fixnum or
-    /// overflow falls to `generic` (a trap for now — TODO: runtime fallback to
-    /// add_values/sub_values).
+    /// Generic binary-op fallback: call the runtime `func(vm, globals, lhs,
+    /// rhs)` and store the result. Expects lhs in X13, rhs in X14, dst slot in
+    /// X12 (all intact). VM globals are callee-saved so no register save is
+    /// needed. On a Ruby error (result 0) jumps to entry_raise.
+    fn a64_generic_binop(&mut self, func: BinaryOpFn) {
+        let raise = self.entry_raise.clone();
+        let skip = self.jit.label();
+        self.jit.mov(X2, X13); // lhs
+        self.jit.mov(X3, X14); // rhs
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, func as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.cbz_label(X12, &skip);
+        self.jit.neg(X12, X12);
+        self.jit.add_lsl(X10, LFP, X12, 3);
+        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
+        self.jit.str(X0, X10, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+    }
+
+    /// op 162/163 `mul_rr`/`div_rr`: no fixnum fast path — straight to the
+    /// runtime fallback (matches x86 `vm_binops`). Bytecode: `+0` rhs, `+2`
+    /// lhs, `+4` dst.
+    fn a64_op_muldiv(&mut self, func: BinaryOpFn) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.ldrh(X10, PC, 0);
+        self.jit.ldrh(X11, PC, 2);
+        self.jit.ldrh(X12, PC, 4);
+        self.a64_load_slot(X11, X13, X14); // lhs
+        self.a64_load_slot(X10, X14, X15); // rhs
+        self.a64_generic_binop(func);
+        p
+    }
+
+    /// op 160/161 `add_rr`/`sub_rr`: fixnum fast path (`%dst = %lhs ± %rhs`)
+    /// with a runtime fallback on non-fixnum/overflow. Operands are kept in
+    /// X13/X14 so the fallback can use them; the result is computed in X9.
     fn a64_op_iadd(&mut self, is_sub: bool) -> CodePtr {
         let p = self.jit.get_current_address();
         let generic = self.jit.label();
@@ -465,28 +506,31 @@ impl Codegen {
         self.jit.ldrh(X12, PC, 4); // dst slot
         self.a64_load_slot(X11, X13, X14); // X13 = lhs
         self.a64_load_slot(X10, X14, X15); // X14 = rhs
-        self.jit.tbz_label(X13, 0, &generic); // lhs not fixnum
-        self.jit.tbz_label(X14, 0, &generic); // rhs not fixnum
+        self.jit.tbz_label(X13, 0, &generic);
+        self.jit.tbz_label(X14, 0, &generic);
         if is_sub {
-            self.jit.subs(X13, X13, X14);
+            self.jit.subs(X9, X13, X14);
             self.jit.bcond_label(Cond::Vs, &generic);
-            self.jit.add_imm(X13, X13, 1, 0); // re-tag
+            self.jit.add_imm(X9, X9, 1, 0); // re-tag
         } else {
-            self.jit.sub_imm(X13, X13, 1, 0); // untag one
-            self.jit.adds(X13, X13, X14);
+            self.jit.sub_imm(X9, X13, 1, 0); // untag one
+            self.jit.adds(X9, X9, X14);
             self.jit.bcond_label(Cond::Vs, &generic);
         }
-        // store result (X13) to slot[dst] (X12), skip if dst == 0
         self.jit.cbz_label(X12, &skip);
         self.jit.neg(X12, X12);
         self.jit.add_lsl(X10, LFP, X12, 3);
         self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
-        self.jit.str(X13, X10, 0);
+        self.jit.str(X9, X10, 0);
         self.jit.bind_label(skip);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
         self.jit.bind_label(generic);
-        self.jit.brk(0); // TODO(aarch64): generic binop runtime fallback
+        self.a64_generic_binop(if is_sub {
+            sub_values
+        } else {
+            add_values
+        });
         p
     }
 
