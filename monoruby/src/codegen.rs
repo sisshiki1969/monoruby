@@ -1,7 +1,9 @@
 use std::hash::Hash;
 
 use monoasm::*;
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
+#[cfg(target_arch = "x86_64")]
 use paste::paste;
 #[cfg(jit)]
 use std::time::Duration;
@@ -11,6 +13,7 @@ use std::time::Duration;
 /// bytecode handlers (`vmgen`'s `vm_*_opt_rr`) as well as the JIT — so they
 /// live here rather than in `codegen::jitgen` (which is JIT-only and gets
 /// `#[cfg]`-excluded from the aarch64 / no-jit VM build).
+#[cfg(target_arch = "x86_64")]
 macro_rules! icmp_main {
     ($op:ident) => {
         paste! {

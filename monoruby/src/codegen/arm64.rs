@@ -30,7 +30,6 @@
 #![allow(dead_code)]
 
 use super::*;
-use monoasm::*;
 
 // ---- Global registers (mirror the x86 assignment) ----
 pub(super) const EXEC: GReg = X19; // &mut Executor   (x86 rbx)
@@ -108,3 +107,152 @@ impl JitModule {
 // A scratch register used only as 16-byte-alignment padding in the prologue
 // pair stores (x24 is callee-saved but unused by the VM globals).
 const X19_PAD: GReg = X24;
+
+// ===========================================================================
+// Stub-to-link scaffolding.
+//
+// To make the aarch64 VM-only build *link*, every VM-tier method the shared
+// code calls must exist. The methods below are placeholders that emit a `brk`
+// trap (or are no-ops) so the crate compiles and `Codegen::new` constructs;
+// executing Ruby will trap until the real handlers/invokers/wrappers are
+// ported. Each is marked TODO(aarch64). The encoding patterns to fill them in
+// are validated in the `aarch64-proto` crate. See doc/aarch64-vmgen-plan.md.
+// ===========================================================================
+
+impl JitModule {
+    /// Bind `label` at the current position and emit a trap.
+    fn a64_brk_stub(&mut self, label: &DestLabel) {
+        self.jit.bind_label(label.clone());
+        self.jit.brk(0);
+    }
+
+    /// Emit a `brk` trampoline and return its address as a typed fn pointer.
+    /// TODO(aarch64): replace each caller with the real invoker.
+    fn a64_stub_fn<T>(&mut self) -> T {
+        let p = self.jit.get_current_address();
+        self.jit.brk(0);
+        // SAFETY: T is always a pointer-sized `extern "C"` fn pointer; the
+        // trampoline traps if ever called (M0 in progress).
+        unsafe { std::mem::transmute_copy::<*mut u8, T>(&p.as_ptr()) }
+    }
+
+    pub(super) fn new() -> Self {
+        let mut jit = JitMemory::new();
+        let class_version = jit.data_i32(1);
+        let bop_redefined_flags = jit.data_i32(0);
+        let const_version = jit.data_i64(1);
+        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
+        let pending_signals = jit.data_i32(0);
+        let entry_raise = jit.label();
+        let entry_panic = jit.label();
+        let exec_gc = jit.label();
+        let f64_to_val = jit.label();
+        let stack_overflow = jit.label();
+
+        // TODO(aarch64): emit the real entry stubs (raise/fetch_and_dispatch/
+        // panic/f64_to_val/gc). For now trap so the module links + constructs.
+        let entry_unimpl = jit.get_current_address();
+        jit.brk(0);
+        let dispatch = vec![entry_unimpl; 256];
+        let mut j = Self {
+            jit,
+            class_version,
+            const_version,
+            alloc_flag,
+            pending_signals,
+            entry_raise,
+            exec_gc,
+            f64_to_val,
+            vm_stack_overflow: stack_overflow,
+            entry_panic,
+            dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
+            bop_redefined_flags,
+        };
+        let raise = j.entry_raise.clone();
+        let panic = j.entry_panic.clone();
+        let gc = j.exec_gc.clone();
+        let f64v = j.f64_to_val.clone();
+        let ovf = j.vm_stack_overflow.clone();
+        j.a64_brk_stub(&raise);
+        j.a64_brk_stub(&panic);
+        j.a64_brk_stub(&gc);
+        j.a64_brk_stub(&f64v);
+        j.a64_brk_stub(&ovf);
+        j.jit.finalize();
+        j
+    }
+
+    // --- invokers / entry points (stubs) ---
+    pub(super) fn method_invoker(&mut self) -> MethodInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
+        self.a64_stub_fn()
+    }
+    pub(super) fn block_invoker(&mut self) -> BlockInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn binding_invoker(&mut self) -> BindingInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn fiber_invoker(&mut self) -> FiberInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
+        self.a64_stub_fn()
+    }
+    pub(super) fn resume_fiber(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
+        self.a64_stub_fn()
+    }
+    pub(super) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+        self.a64_stub_fn()
+    }
+    pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
+        self.a64_stub_fn()
+    }
+    pub(super) fn get_class(&mut self) -> DestLabel {
+        let l = self.jit.label();
+        self.a64_brk_stub(&l);
+        l
+    }
+
+    pub(crate) fn signal_handler_for(
+        &mut self,
+        _alloc_flag: DestLabel,
+        _pending_signals: DestLabel,
+        _signo: i32,
+    ) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.brk(0);
+        p
+    }
+}
+
+impl Codegen {
+    /// TODO(aarch64): port the real VM dispatch loop + opcode handlers
+    /// (see vmgen.rs). For now bind `vm_entry`/`vm_fetch` to a trap.
+    pub(super) fn construct_vm(&mut self) {
+        let vm_entry = self.jit.label();
+        let entry_fetch = self.jit.label();
+        self.a64_brk_stub(&vm_entry);
+        self.a64_brk_stub(&entry_fetch);
+        self.vm_fetch = entry_fetch;
+        self.vm_entry = vm_entry;
+    }
+
+    /// TODO(aarch64): port the real per-method wrapper (see wrapper.rs).
+    pub(crate) fn gen_wrapper(&mut self, _globals: &Globals, _fid: FuncId) -> DestLabel {
+        let entry = self.jit.label();
+        self.a64_brk_stub(&entry);
+        entry
+    }
+
+    /// TODO(aarch64): the VM BOP fast-path optimization is not emitted yet, so
+    /// there is nothing to remove.
+    pub(super) fn remove_vm_bop_optimization(&mut self) {}
+}
