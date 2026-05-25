@@ -196,17 +196,9 @@ impl JitModule {
     /// x6 block, x7 hashmap. The frame offsets match x86 because aarch64's
     /// `stp fp,lr` (16B at vm_entry) equals x86's `call`(8B)+`push rbp`(8B).
     /// TODO(aarch64): argument copying (assumes 0 args) + stack-overflow check.
-    pub(super) fn method_invoker(&mut self) -> MethodInvoker {
-        let codeptr = self.jit.get_current_address();
-        let fdata = X9;
-        let generic = self.jit.label();
-        let simple_done = self.jit.label();
-        let argloop = self.jit.label();
-        let aftargs = self.jit.label();
-        let error_exit = self.jit.label();
-        // AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args,
-        // x5 len, x6 block, x7 kw (Option<Hashmap>).
-        // prologue: save callee-saved globals + fp/lr + X25/X26, set globals
+    /// Invoker prologue: save callee-saved globals + fp/lr + X25/X26, then set
+    /// EXEC=x0, GLOBALS=x1.
+    fn a64_invoker_prologue(&mut self) {
         self.jit.stp_pre(X29, X30, SP, -16);
         self.jit.stp_pre(EXEC, GLOBALS, SP, -16);
         self.jit.stp_pre(PC, LFP, SP, -16);
@@ -214,28 +206,31 @@ impl JitModule {
         self.jit.stp_pre(X25, X26, SP, -16);
         self.jit.mov(EXEC, X0);
         self.jit.mov(GLOBALS, X1);
-        // get_func_data: fdata = funcinfo_base + funcid*64 + FUNCINFO_DATA
+    }
+
+    /// fdata(X9) = funcinfo_base + (X2 = funcid)*64 + FUNCINFO_DATA.
+    fn a64_get_func_data_x2(&mut self) {
         self.jit.lsl_imm(X10, X2, 32); // zero-extend funcid
         self.jit.lsr_imm(X10, X10, 32);
         self.jit.lsl_imm(X10, X10, 6); // * size_of::<FuncInfo>() (64)
         self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
         self.jit.add(X11, GLOBALS, X11);
-        self.jit.ldr(X11, X11, 0); // funcinfo base ptr
+        self.jit.ldr(X11, X11, 0);
         self.jit.add(X10, X10, X11);
-        self.jit.add_imm(fdata, X10, FUNCINFO_DATA as u32, 0);
-        // frame setup (not block): FB = sp - (RSP_LOCAL_FRAME + LFP_SELF);
-        // slot at lfp-LFP_X sits at FB + (LFP_SELF - LFP_X).
-        let fb = X12;
-        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.mov_imm(X13, 0);
-        self.jit.str(X3, fb, 0); // LFP_SELF  = self
-        self.jit.str(X6, fb, 8); // LFP_BLOCK = block
-        self.jit.str(X13, fb, 16); // LFP_CME   = 0
-        self.jit.str(X13, fb, 24); // LFP_SVAR  = 0
-        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
-        self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
-        self.jit.str(X13, fb, 40); // LFP_OUTER = 0
-        // --- argument setup ---
+        self.jit.add_imm(X9, X10, FUNCINFO_DATA as u32, 0);
+    }
+
+    /// Shared invoker tail (after the frame self/block/outer/meta are set):
+    /// argument setup (simple copy or runtime arg massager), call into the
+    /// callee, then the epilogue. Assumes fdata in X9, meta in X14, x4 = args
+    /// ptr, x5 = len, x7 = kw (Option<Hashmap>).
+    fn a64_invoker_args_and_call(&mut self) {
+        let fdata = X9;
+        let generic = self.jit.label();
+        let simple_done = self.jit.label();
+        let argloop = self.jit.label();
+        let aftargs = self.jit.label();
+        let error_exit = self.jit.label();
         // Simple iff callee is simple (Meta kind bit 4) AND len == min AND
         // no keyword args; otherwise fall back to the runtime arg massager.
         self.jit.lsr_imm(X10, X14, 56); // kind byte
@@ -308,6 +303,27 @@ impl JitModule {
         self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
         self.jit.ldp_post(X29, X30, SP, 16);
         self.jit.ret();
+    }
+
+    pub(super) fn method_invoker(&mut self) -> MethodInvoker {
+        let codeptr = self.jit.get_current_address();
+        let fdata = X9;
+        // AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args,
+        // x5 len, x6 block, x7 kw (Option<Hashmap>).
+        self.a64_invoker_prologue();
+        self.a64_get_func_data_x2();
+        // frame setup (method): FB = sp - (RSP_LOCAL_FRAME + LFP_SELF).
+        let fb = X12;
+        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.mov_imm(X13, 0);
+        self.jit.str(X3, fb, 0); // LFP_SELF  = self
+        self.jit.str(X6, fb, 8); // LFP_BLOCK = block
+        self.jit.str(X13, fb, 16); // LFP_CME   = 0
+        self.jit.str(X13, fb, 24); // LFP_SVAR  = 0
+        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
+        self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
+        self.jit.str(X13, fb, 40); // LFP_OUTER = 0
+        self.a64_invoker_args_and_call();
         // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }
     }
@@ -315,11 +331,50 @@ impl JitModule {
     pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
         self.a64_stub_fn()
     }
+
+    /// Block invoker. AAPCS64 in: x0 exec, x1 globals, x2 &ProcData,
+    /// x3 self (dummy unless `with_self`), x4 args, x5 len, x6 kw.
+    /// `self` for a plain block comes from the captured outer frame.
+    /// TODO(aarch64): resolve_invalidated_outer (heap-promoted outer frames).
+    fn a64_block_invoker(&mut self, with_self: bool) -> BlockInvoker {
+        let codeptr = self.jit.get_current_address();
+        let fdata = X9;
+        self.a64_invoker_prologue();
+        if with_self {
+            // store the provided self now (frame slot survives get_func_data)
+            self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+            self.jit.str(X3, X10, 0);
+        }
+        // outer = [&ProcData + PROCDATA_OUTER]; func_id = [+ PROCDATA_FUNCID]
+        self.jit.ldr(X3, X2, runtime::PROCDATA_OUTER as u32); // X3 = outer lfp
+        self.jit.ldr32(X2, X2, runtime::PROCDATA_FUNCID as u32); // X2 = func_id
+        self.a64_get_func_data_x2(); // fdata = X9 (clobbers X10, X11)
+        let fb = X12;
+        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+        self.jit.mov_imm(X13, 0);
+        if !with_self {
+            // self = outer.self = [outer - LFP_SELF]
+            self.jit.sub_imm(X10, X3, LFP_SELF as u32, 0);
+            self.jit.ldr(X10, X10, 0);
+            self.jit.str(X10, fb, 0); // LFP_SELF
+        }
+        self.jit.str(X13, fb, 8); // LFP_BLOCK = 0
+        self.jit.str(X13, fb, 16); // LFP_CME = 0
+        self.jit.str(X13, fb, 24); // LFP_SVAR = 0
+        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
+        self.jit.str(X14, fb, 32); // LFP_META
+        self.jit.str(X3, fb, 40); // LFP_OUTER = outer
+        self.jit.mov(X7, X6); // shared arg setup expects kw in x7
+        self.a64_invoker_args_and_call();
+        // SAFETY: codeptr points at an extern "C" fn with the BlockInvoker ABI.
+        unsafe { std::mem::transmute_copy::<*mut u8, BlockInvoker>(&codeptr.as_ptr()) }
+    }
+
     pub(super) fn block_invoker(&mut self) -> BlockInvoker {
-        self.a64_stub_fn()
+        self.a64_block_invoker(false)
     }
     pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
-        self.a64_stub_fn()
+        self.a64_block_invoker(true)
     }
     pub(super) fn binding_invoker(&mut self) -> BindingInvoker {
         self.a64_stub_fn()
