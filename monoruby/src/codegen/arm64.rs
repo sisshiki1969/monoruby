@@ -550,6 +550,74 @@ impl Codegen {
         let undef_method = self.a64_op_undef_method();
         self.dispatch[175] = alias_method;
         self.dispatch[174] = undef_method;
+
+        let load_gvar = self.a64_op_load_gvar();
+        let store_gvar = self.a64_op_store_var(runtime::set_global_var as u64);
+        let load_cvar = self.a64_op_load_cvar();
+        let store_cvar = self.a64_op_store_var(runtime::set_class_var as u64);
+        let alias_gvar = self.a64_op_alias_gvar();
+        self.dispatch[25] = load_gvar;
+        self.dispatch[26] = store_gvar;
+        self.dispatch[27] = load_cvar;
+        self.dispatch[28] = alias_gvar;
+        self.dispatch[29] = store_cvar;
+    }
+
+    /// op 25 `LoadGvar`: get_global_var(vm, globals, name `[pc+0]`) -> Value.
+    fn a64_op_load_gvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // name
+        self.jit.mov_imm(X9, runtime::get_global_var as u64);
+        self.jit.blr(X9);
+        self.a64_store_dst_and_next(&skip);
+        p
+    }
+
+    /// op 27 `LoadCvar`: get_class_var(vm, globals, name `[pc+0]`) -> Option.
+    fn a64_op_load_cvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // name
+        self.jit.mov_imm(X9, runtime::get_class_var as u64);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// ops 26/29 `StoreGvar`/`StoreCvar`: set_*_var(vm, globals, name `[pc+0]`,
+    /// val `[pc+4]`) -> Option (error-only; no result slot).
+    fn a64_op_store_var(&mut self, set_fn: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 0); // name
+        self.jit.ldrh(X3, PC, 4);
+        self.a64_slot_value(X3); // val
+        self.jit.mov_imm(X9, set_fn);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 28 `AliasGvar`: alias_global_var(globals, new `[pc+0]`, old `[pc+8]`).
+    fn a64_op_alias_gvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        self.jit.mov(X0, GLOBALS);
+        self.jit.ldr32(X1, PC, 0); // new
+        self.jit.ldr32(X2, PC, 8); // old
+        self.jit.mov_imm(X9, runtime::alias_global_var as u64);
+        self.jit.blr(X9);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
+        p
     }
 
     /// op 175 `AliasMethod`: alias_method(vm, globals, old `[pc+2]`,
