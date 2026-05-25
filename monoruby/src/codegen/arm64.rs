@@ -462,20 +462,21 @@ impl Codegen {
         let check_local = self.a64_op_check_local(&branch);
         self.dispatch[20] = check_local;
 
-        // integer comparisons (fixnum fast path)
-        let eq = self.a64_op_cmp(Cond::Eq);
-        let ne = self.a64_op_cmp(Cond::Ne);
-        let lt = self.a64_op_cmp(Cond::Lt);
-        let le = self.a64_op_cmp(Cond::Le);
-        let gt = self.a64_op_cmp(Cond::Gt);
-        let ge = self.a64_op_cmp(Cond::Ge);
+        // integer comparisons (fixnum fast path; generic runtime fallback)
+        let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as u64);
+        let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as u64);
+        let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as u64);
+        let le = self.a64_op_cmp(Cond::Le, cmp_le_values as u64);
+        let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as u64);
+        let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as u64);
+        let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as u64);
         self.dispatch[140] = eq;
         self.dispatch[141] = ne;
         self.dispatch[142] = lt;
         self.dispatch[143] = le;
         self.dispatch[144] = gt;
         self.dispatch[145] = ge;
-        self.dispatch[146] = eq; // teq
+        self.dispatch[146] = teq; // teq
         // 150-156: same comparisons, emitted when the result feeds a branch.
         let method_def = self.a64_op_method_def();
         self.dispatch[2] = method_def;
@@ -491,7 +492,7 @@ impl Codegen {
         self.dispatch[153] = le;
         self.dispatch[154] = gt;
         self.dispatch[155] = ge;
-        self.dispatch[156] = eq; // teq
+        self.dispatch[156] = teq; // teq
 
         let class_def = self.a64_op_class_def(false);
         let module_def = self.a64_op_class_def(true);
@@ -531,13 +532,15 @@ impl Codegen {
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
         let hash = self.a64_op_hash();
-        let concat = self.a64_op_concat();
+        let concat = self.a64_op_concat(runtime::concatenate_string as u64);
+        let concat_regexp = self.a64_op_concat(runtime::concatenate_regexp as u64);
         let range_incl = self.a64_op_range(false);
         let range_excl = self.a64_op_range(true);
         let expand_array = self.a64_op_expand_array();
         self.dispatch[39] = array;
         self.dispatch[176] = hash;
         self.dispatch[181] = concat;
+        self.dispatch[86] = concat_regexp;
         self.dispatch[179] = range_incl;
         self.dispatch[180] = range_excl;
         self.dispatch[173] = expand_array;
@@ -832,9 +835,9 @@ impl Codegen {
         p
     }
 
-    /// op 181 `ConcatStr`: concatenate_string(vm, globals, args `[pc+2]`,
-    /// len `[pc+0]`).
-    fn a64_op_concat(&mut self) -> CodePtr {
+    /// op 181 `ConcatStr` / op 86 `ConcatRegexp`: fn(vm, globals,
+    /// args `[pc+2]`, len `[pc+0]`).
+    fn a64_op_concat(&mut self, abs: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         self.jit.mov(X0, EXEC);
@@ -842,7 +845,7 @@ impl Codegen {
         self.jit.ldrh(X2, PC, 2);
         self.a64_slot_addr(X2); // args
         self.jit.ldrh(X3, PC, 0); // len
-        self.jit.mov_imm(X9, runtime::concatenate_string as u64);
+        self.jit.mov_imm(X9, abs);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1402,10 +1405,11 @@ impl Codegen {
     /// Integer comparison (ops 140-146): `%dst = (%lhs <cond> %rhs)` as a Ruby
     /// boolean. Bytecode: `+0` rhs, `+2` lhs, `+4` dst. Non-fixnum traps
     /// (generic runtime fallback TODO).
-    fn a64_op_cmp(&mut self, cond: Cond) -> CodePtr {
+    fn a64_op_cmp(&mut self, cond: Cond, cmp_fn: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let generic = self.jit.label();
         let skip = self.jit.label();
+        let raise = self.entry_raise.clone();
         self.jit.ldrh(X10, PC, 0); // rhs slot
         self.jit.ldrh(X11, PC, 2); // lhs slot
         self.jit.ldrh(X12, PC, 4); // dst slot
@@ -1427,7 +1431,14 @@ impl Codegen {
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
         self.jit.bind_label(generic);
-        self.jit.brk(0); // TODO(aarch64): generic comparison runtime fallback
+        // cmp_*_values(vm, globals, lhs=X13, rhs=X14) -> Option<Value>
+        self.jit.mov(X2, X13); // lhs
+        self.jit.mov(X3, X14); // rhs
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, cmp_fn);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
         p
     }
 
@@ -1643,12 +1654,110 @@ impl Codegen {
                 let abs = *abs_address;
                 self.a64_gen_native_func_wrapper(abs);
             }
+            FuncKind::AttrReader { ivar_name } => {
+                let name = *ivar_name;
+                self.a64_gen_attr_reader(name);
+            }
+            FuncKind::AttrWriter { ivar_name } => {
+                let name = *ivar_name;
+                self.a64_gen_attr_writer(name);
+            }
+            FuncKind::StructReader { slot_index, inline } => {
+                let (slot_index, inline) = (*slot_index, *inline);
+                self.a64_gen_struct_reader(slot_index, inline);
+            }
+            FuncKind::StructWriter { slot_index, .. } => {
+                let slot_index = *slot_index;
+                self.a64_gen_struct_writer(slot_index);
+            }
             _ => {
-                self.jit.brk(0); // TODO(aarch64): AttrReader/Writer/Struct/Proc
+                // TODO(aarch64): Proc wrapper.
+                self.jit.mov_imm(X0, 0xbad0);
+                self.jit
+                    .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+                self.jit.blr(X9);
+                self.jit.brk(0);
             }
         }
         self.jit.finalize();
         entry
+    }
+
+    /// attr_reader: return `self.@ivar_name` via the cached ivar accessor.
+    fn a64_gen_attr_reader(&mut self, ivar_name: IdentId) {
+        // Per-method inline cache (InstanceVarCache, 8 bytes, init -1 = miss).
+        // Leaked on the heap so its address is known at emit time; aarch64 ADR
+        // can't reach a JIT data label from the lazily-generated wrapper.
+        let cache_addr = Box::into_raw(Box::new(-1i64)) as u64;
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        self.jit.sub_imm(X0, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X0, X0, 0); // self
+        self.jit.mov_imm(X1, ivar_name.get() as u64); // name
+        self.jit.mov(X2, GLOBALS);
+        self.jit.mov_imm(X3, cache_addr); // &cache
+        self.jit
+            .mov_imm(X9, get_instance_var_with_cache as u64);
+        self.jit.blr(X9);
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+    }
+
+    /// attr_writer: `self.@ivar_name = arg0` via the cached ivar setter.
+    fn a64_gen_attr_writer(&mut self, ivar_name: IdentId) {
+        let cache_addr = Box::into_raw(Box::new(-1i64)) as u64;
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.sub_imm(X2, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X2, X2, 0); // self
+        self.jit.mov_imm(X3, ivar_name.get() as u64); // name
+        self.jit.sub_imm(X4, LFP, LFP_ARG0 as u32, 0);
+        self.jit.ldr(X4, X4, 0); // val
+        self.jit.mov_imm(X5, cache_addr); // &cache
+        self.jit
+            .mov_imm(X9, set_instance_var_with_cache as u64);
+        self.jit.blr(X9);
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
+    }
+
+    /// Struct member reader: read inline slot or heap slot directly (no call).
+    fn a64_gen_struct_reader(&mut self, slot_index: u16, inline: bool) {
+        self.jit.sub_imm(X0, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X0, X0, 0); // self
+        if inline {
+            self.jit
+                .ldr(X0, X0, (slot_index as u32) * 8 + RVALUE_OFFSET_INLINE as u32);
+        } else {
+            self.jit.ldr(X0, X0, RVALUE_OFFSET_HEAP_PTR as u32);
+            self.jit.ldr(X0, X0, (slot_index as u32) * 8);
+        }
+        self.jit.ret();
+    }
+
+    /// Struct member writer: route through set_struct_slot_with_check.
+    fn a64_gen_struct_writer(&mut self, slot_index: u16) {
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.sub_imm(X2, LFP, LFP_SELF as u32, 0);
+        self.jit.ldr(X2, X2, 0); // self
+        self.jit.sub_imm(X3, LFP, LFP_ARG0 as u32, 0);
+        self.jit.ldr(X3, X3, 0); // val
+        self.jit.mov_imm(X4, slot_index as u64);
+        self.jit.mov_imm(
+            X9,
+            crate::builtins::struct_class::set_struct_slot_with_check as u64,
+        );
+        self.jit.blr(X9);
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        self.jit.ret();
     }
 
     /// Native (builtin) method wrapper: allocate the arg stack region and call
