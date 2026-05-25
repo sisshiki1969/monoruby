@@ -453,6 +453,8 @@ impl Codegen {
         let mm = self.jit.label();
         let argloop = self.jit.label();
         let argdone = self.jit.label();
+        let generic = self.jit.label();
+        let docall = self.jit.label();
         let skip = self.jit.label();
         let raise = self.entry_raise.clone();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
@@ -479,7 +481,7 @@ impl Codegen {
         self.jit.ldr(X11, X11, 0);
         self.jit.add(X10, X10, X11);
         self.jit.add_imm(X15, X10, FUNCINFO_DATA as u32, 0);
-        // set_method_outer: zero outer/svar/cme; set meta; zero block
+        // set_method_outer: zero outer/svar/cme; set meta (kept in X14).
         self.jit.mov_imm(X12, 0);
         self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
         self.jit.str(X12, X11, 0);
@@ -487,13 +489,20 @@ impl Codegen {
         self.jit.str(X12, X11, 0);
         self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
         self.jit.str(X12, X11, 0);
-        self.jit.ldr(X10, X15, FUNCDATA_META as u32);
+        self.jit.ldr(X14, X15, FUNCDATA_META as u32);
         self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        // copy positional args: pos_num in X9, args base in X10
+        self.jit.str(X14, X11, 0);
+        // is_simple? kind byte (meta >> 56) bit 4 set AND pos_num == min.
+        // Otherwise fall back to the runtime arg massager.
         self.jit.ldrh(X9, PC, 8); // pos_num
+        self.jit.lsr_imm(X16, X14, 56); // kind byte
+        self.jit.tbz_label(X16, 4, &generic);
+        self.jit.ldrh(X16, X15, FUNCDATA_MIN as u32);
+        self.jit.cmp(X9, X16);
+        self.jit.bcond_label(Cond::Ne, &generic);
+        // --- simple path: zero block + copy positional args directly ---
+        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
+        self.jit.str(X12, X11, 0); // block = 0
         self.jit.ldrh(X10, PC, 10); // arg slot
         self.jit.neg(X10, X10);
         self.jit.add_lsl(X10, LFP, X10, 3);
@@ -509,6 +518,34 @@ impl Codegen {
         self.jit.add_imm(X9, X9, 1, 0);
         self.jit.cbnz_label(X9, &argloop);
         self.jit.bind_label(argdone);
+        self.jit.b_label(&docall);
+        // --- generic path: vm_handle_arguments(exec, globals, caller_lfp,
+        // callee_lfp, callid). Handles rest/optional/keyword/splat + block. ---
+        self.jit.bind_label(generic);
+        self.jit.sub_imm(X3, SP, RSP_LOCAL_FRAME as u32, 0); // callee lfp
+        // Reserve scratch below the callee frame (= ofs*16 + 16, 16-aligned)
+        // so the C call's frame can't trample the callee frame being built.
+        // Save the pre-reservation SP (X25) and funcdata ptr (X26) in
+        // callee-saved registers (AAPCS64 preserves x19-x28); X15 is
+        // caller-saved so it would otherwise be lost. Restore SP directly
+        // from X25 afterwards.
+        self.jit.mov_sp(X25, SP); // X25 = SP before reservation
+        self.jit.mov(X26, X15);
+        self.jit.ldrh(X10, X15, FUNCDATA_OFS as u32);
+        self.jit.lsl_imm(X10, X10, 4);
+        self.jit.add_imm(X10, X10, 16, 0);
+        self.jit.sub(X11, X25, X10);
+        self.jit.mov_sp(SP, X11);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov(X2, LFP); // caller lfp
+        self.jit.ldr32(X4, PC, 0); // callid
+        self.jit.mov_imm(X9, runtime::vm_handle_arguments as u64);
+        self.jit.blr(X9);
+        self.jit.mov(X15, X26); // restore funcdata ptr
+        self.jit.mov_sp(SP, X25); // restore SP directly
+        self.jit.cbz_label(X0, &raise);
+        self.jit.bind_label(docall);
         // call_funcdata: push_frame + set_lfp + pc + blr codeptr + restore cfp
         self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
         self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
