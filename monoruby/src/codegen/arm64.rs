@@ -495,8 +495,10 @@ impl Codegen {
 
         let class_def = self.a64_op_class_def(false);
         let module_def = self.a64_op_class_def(true);
+        let singleton_class_def = self.a64_op_singleton_class_def();
         self.dispatch[70] = class_def;
         self.dispatch[71] = module_def;
+        self.dispatch[22] = singleton_class_def;
 
         let load_const = self.a64_op_load_const(runtime::vm_get_constant as u64);
         let check_const = self.a64_op_load_const(runtime::vm_check_constant as u64);
@@ -1080,7 +1082,6 @@ impl Codegen {
         let sup_done = self.jit.label();
         let base_zero = self.jit.label();
         let base_done = self.jit.label();
-        let skip = self.jit.label();
         // define_class(vm, globals, name, superclass, is_module, base)
         // superclass (x3): slot[+0] value, or 0 (None) if slot index is 0.
         self.jit.ldrh(X10, PC, 0);
@@ -1108,6 +1109,33 @@ impl Codegen {
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.mov(X25, X0); // X25 = self (the class), callee-saved
+        self.a64_class_def_run();
+        p
+    }
+
+    /// op 22 `SingletonClassDef`: `class << base`. base = slot `[pc+0]`.
+    fn a64_op_singleton_class_def(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        // define_singleton_class(vm, globals, base) -> self
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldrh(X2, PC, 0);
+        self.a64_slot_value(X2); // base
+        self.jit.mov_imm(X9, runtime::define_singleton_class as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        self.jit.mov(X25, X0); // self = singleton class
+        self.a64_class_def_run();
+        p
+    }
+
+    /// Shared tail of class/module/singleton-class definition: with `X25` set
+    /// to the (singleton) class, run the class body (`enter_classdef` ->
+    /// call_funcdata -> `exit_classdef`) and store the result to dst `[pc+4]`.
+    /// func_id is read from `[pc+12]`.
+    fn a64_class_def_run(&mut self) {
+        let skip = self.jit.label();
         // enter_classdef(vm, globals, func_id, self) -> &FuncData
         self.jit.ldr32(X2, PC, 12); // func_id
         self.jit.mov(X3, X25);
@@ -1173,7 +1201,6 @@ impl Codegen {
         self.jit.bind_label(skip);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
-        p
     }
 
     /// op 2 `method_def`: `define_method(vm, globals, name, func_id)`.
