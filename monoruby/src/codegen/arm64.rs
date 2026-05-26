@@ -194,7 +194,9 @@ impl JitModule {
         // fetch_and_dispatch); the rest stay stubs for now.
         let _ = &raise;
         j.a64_brk_stub_diag(&panic, 0xffff02); // entry_panic
-        j.a64_brk_stub_diag(&gc, 0xffff03); // exec_gc
+        // exec_gc is bound by `construct_vm` (real handler defers to
+        // entry_raise on a poll-time error).
+        let _ = gc;
         j.a64_brk_stub_diag(&f64v, 0xffff04); // f64_to_val
         // vm_stack_overflow is bound by `construct_vm` (the real handler
         // needs entry_raise, which isn't emitted until then).
@@ -598,14 +600,41 @@ impl JitModule {
         label
     }
 
+    /// Per-signal async-signal-safe stub. Mirrors the x86 version
+    /// (`addl [alloc_flag], 10; orl [pending_signals], (bit); ret`). The
+    /// handler nudges `alloc_flag` (so the next GC poll notices the signal)
+    /// and OR-sets the signal bit into `pending_signals`. `signo` is folded
+    /// into the immediate bit at codegen time, so the running handler does
+    /// only memory ops and returns.
+    ///
+    /// The RMW isn't atomic (no ldxr/stxr — these would be illegal at this
+    /// level inside async-signal context too), so a nested signal during the
+    /// sequence may lose an increment / a bit. The x86 version has the same
+    /// property (no LOCK prefix); the lossy case is rare and harmless — the
+    /// next allocation poll picks it up.
     pub(crate) fn signal_handler_for(
         &mut self,
-        _alloc_flag: DestLabel,
-        _pending_signals: DestLabel,
-        _signo: i32,
+        alloc_flag: DestLabel,
+        pending_signals: DestLabel,
+        signo: i32,
     ) -> CodePtr {
+        debug_assert!((1..=32).contains(&signo));
+        let bit: u64 = 1u64 << (signo - 1);
+        let af_addr = self.jit.get_label_address(&alloc_flag).as_ptr() as u64;
+        let ps_addr = self.jit.get_label_address(&pending_signals).as_ptr() as u64;
         let p = self.jit.get_current_address();
-        self.jit.brk(0);
+        // alloc_flag += 10  (32-bit RMW)
+        self.jit.mov_imm(X0, af_addr);
+        self.jit.ldr32(X1, X0, 0);
+        self.jit.add_imm(X1, X1, 10, 0);
+        self.jit.str32(X1, X0, 0);
+        // pending_signals |= bit  (32-bit RMW)
+        self.jit.mov_imm(X0, ps_addr);
+        self.jit.ldr32(X1, X0, 0);
+        self.jit.mov_imm(X2, bit);
+        self.jit.orr(X1, X1, X2);
+        self.jit.str32(X1, X0, 0);
+        self.jit.ret();
         p
     }
 }
@@ -666,9 +695,50 @@ impl Codegen {
         self.jit.bcond_label(Cond::Le, &ovf);
     }
 
+    /// Bind `exec_gc`: call `executor::execute_gc(vm, globals)` (which also
+    /// drains pending signals). On error (returns None / X0 == 0) branch to
+    /// `entry_raise`; otherwise return to the caller. VM globals X19-X24 are
+    /// callee-saved across the Rust call so we only need to preserve fp/lr.
+    fn a64_gen_exec_gc(&mut self) {
+        let gc = self.exec_gc.clone();
+        let raise = self.entry_raise.clone();
+        self.jit.bind_label(gc);
+        self.jit.stp_pre(X29, X30, SP, -16);
+        self.jit.mov_sp(X29, SP);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit
+            .mov_imm(X9, crate::executor::execute_gc as *const () as u64);
+        self.jit.blr(X9);
+        self.jit.mov_sp(SP, X29);
+        self.jit.ldp_post(X29, X30, SP, 16);
+        // Option<Value>: None (0) → raise; else continue.
+        let ok = self.jit.label();
+        self.jit.cbnz_label(X0, &ok);
+        self.jit.b_label(&raise);
+        self.jit.bind_label(ok);
+        self.jit.ret();
+    }
+
+    /// VM-side GC/signal poll. If `alloc_flag >= 8` (the signal handler nudges
+    /// it by 10), call `exec_gc` which drains pending signals + runs GC. The
+    /// hot path is two loads, a compare, and a fall-through branch.
+    fn a64_vm_execute_gc(&mut self) {
+        let gc = self.exec_gc.clone();
+        let skip = self.jit.label();
+        let af_addr = self.jit.get_label_address(&self.alloc_flag).as_ptr() as u64;
+        self.jit.mov_imm(X10, af_addr);
+        self.jit.ldr32(X11, X10, 0);
+        self.jit.cmp_imm(X11, 8, 0);
+        self.jit.bcond_label(Cond::Lt, &skip);
+        self.jit.bl_label(&gc);
+        self.jit.bind_label(skip);
+    }
+
     pub(super) fn construct_vm(&mut self) {
         self.a64_gen_entry_raise();
         self.a64_gen_stack_overflow();
+        self.a64_gen_exec_gc();
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
@@ -1805,6 +1875,9 @@ impl Codegen {
         // Raise SystemStackError before pushing the new frame (so the caller's
         // LFP is still intact when entry_raise inspects it for a rescue).
         self.a64_check_stack();
+        // GC + signal poll. The signal handler nudges alloc_flag by 10 so a
+        // pending Signal.trap callback runs at this safepoint.
+        self.a64_vm_execute_gc();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
         self.jit.sub_imm(SP, SP, 16, 0);
         self.jit.str(PC, SP, 0);
