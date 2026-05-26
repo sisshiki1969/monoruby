@@ -196,7 +196,9 @@ impl JitModule {
         j.a64_brk_stub_diag(&panic, 0xffff02); // entry_panic
         j.a64_brk_stub_diag(&gc, 0xffff03); // exec_gc
         j.a64_brk_stub_diag(&f64v, 0xffff04); // f64_to_val
-        j.a64_brk_stub_diag(&ovf, 0xffff05); // vm_stack_overflow
+        // vm_stack_overflow is bound by `construct_vm` (the real handler
+        // needs entry_raise, which isn't emitted until then).
+        let _ = ovf;
         j.jit.finalize();
         j
     }
@@ -640,8 +642,33 @@ impl Codegen {
         self.a64_fetch_and_dispatch();
     }
 
+    /// Bind `vm_stack_overflow`: call `stack_overflow(EXEC)` to set the
+    /// SystemStackError, then branch into `entry_raise` which unwinds the VM
+    /// frame and returns the error to the Rust caller.
+    fn a64_gen_stack_overflow(&mut self) {
+        let ovf = self.vm_stack_overflow.clone();
+        let raise = self.entry_raise.clone();
+        self.jit.bind_label(ovf);
+        self.jit.mov(X0, EXEC);
+        self.jit
+            .mov_imm(X9, super::stack_overflow as *const () as u64);
+        self.jit.blr(X9);
+        self.jit.b_label(&raise);
+    }
+
+    /// Compare SP to `executor.stack_limit`; if SP <= limit, branch to
+    /// `vm_stack_overflow`. Uses X10 and X11 as scratch. EXEC must be valid.
+    fn a64_check_stack(&mut self) {
+        let ovf = self.vm_stack_overflow.clone();
+        self.jit.mov_sp(X10, SP);
+        self.jit.ldr(X11, EXEC, EXECUTOR_STACK_LIMIT as u32);
+        self.jit.cmp(X10, X11);
+        self.jit.bcond_label(Cond::Le, &ovf);
+    }
+
     pub(super) fn construct_vm(&mut self) {
         self.a64_gen_entry_raise();
+        self.a64_gen_stack_overflow();
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
@@ -1775,6 +1802,9 @@ impl Codegen {
         let skip = self.jit.label();
         let after_call = self.jit.label();
         let raise = self.entry_raise.clone();
+        // Raise SystemStackError before pushing the new frame (so the caller's
+        // LFP is still intact when entry_raise inspects it for a rescue).
+        self.a64_check_stack();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
         self.jit.sub_imm(SP, SP, 16, 0);
         self.jit.str(PC, SP, 0);
