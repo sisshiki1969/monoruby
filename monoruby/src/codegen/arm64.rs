@@ -388,8 +388,19 @@ impl JitModule {
     fn a64_block_frame_setup(&mut self, with_self: bool) {
         let fdata = X9;
         if with_self {
-            // store the provided self now (frame slot survives get_func_data)
+            // X3 = self_val (block_invoker_with_self ABI). Store at LFP_SELF.
+            // No caller-supplied block is forwarded in this variant — the
+            // LFP_BLOCK slot is zeroed below.
             self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
+            self.jit.str(X3, X10, 0);
+        } else {
+            // X3 = block_val (block_invoker ABI: 4th AAPCS64 arg). Stash it
+            // into LFP_BLOCK *before* X3 is reused for outer_lfp. Without
+            // this the block passed to `Proc#call` (and through proc
+            // composition's `f.call(*a, &b)`) is silently dropped, so e.g.
+            // `(one >> two).call { |x| ... }` ran with `&arg == nil` in the
+            // inner procs.
+            self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
             self.jit.str(X3, X10, 0);
         }
         // outer = [&ProcData + PROCDATA_OUTER]; func_id = [+ PROCDATA_FUNCID]
@@ -404,8 +415,11 @@ impl JitModule {
             self.jit.sub_imm(X10, X3, LFP_SELF as u32, 0);
             self.jit.ldr(X10, X10, 0);
             self.jit.str(X10, fb, 0); // LFP_SELF
+            // LFP_BLOCK was already populated above with X3 (block_val).
+        } else {
+            // block_invoker_with_self has no block to forward.
+            self.jit.str(X13, fb, 8); // LFP_BLOCK = 0
         }
-        self.jit.str(X13, fb, 8); // LFP_BLOCK = 0
         self.jit.str(X13, fb, 16); // LFP_CME = 0
         self.jit.str(X13, fb, 24); // LFP_SVAR = 0
         self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
