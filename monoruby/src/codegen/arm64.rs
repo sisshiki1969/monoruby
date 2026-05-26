@@ -789,6 +789,7 @@ impl Codegen {
 
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
+        let array_teq = self.a64_op_array_teq();
         let hash = self.a64_op_hash();
         let concat = self.a64_op_concat(runtime::concatenate_string as u64);
         let concat_regexp = self.a64_op_concat(runtime::concatenate_regexp as u64);
@@ -796,6 +797,7 @@ impl Codegen {
         let range_excl = self.a64_op_range(true);
         let expand_array = self.a64_op_expand_array();
         self.dispatch[39] = array;
+        self.dispatch[40] = array_teq;
         self.dispatch[176] = hash;
         self.dispatch[181] = concat;
         self.dispatch[86] = concat_regexp;
@@ -1308,6 +1310,38 @@ impl Codegen {
         self.jit.mov_imm(X9, runtime::gen_array as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 40 `ArrayTEq`: %lhs = (%lhs === %rhs). If %lhs is an Array, returns
+    /// true iff some element matches %rhs (via `===`). The result overwrites
+    /// the lhs slot. Bytecode: `+0` rhs, `+2` lhs (also dst).
+    fn a64_op_array_teq(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        let skip = self.jit.label();
+        self.jit.ldrh(X10, PC, 0); // rhs slot
+        self.jit.ldrh(X11, PC, 2); // lhs slot (also dst)
+        self.a64_load_slot(X11, X3, X12); // X3 = lhs value
+        self.a64_load_slot(X10, X4, X12); // X4 = rhs value
+        // array_teq(vm, globals, lhs, rhs) -> Option<Value>
+        self.jit.mov(X2, X3); // lhs (arg #3)
+        self.jit.mov(X3, X4); // rhs (arg #4)
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, runtime::array_teq as u64);
+        self.jit.blr(X9);
+        self.jit.cbz_label(X0, &raise);
+        // dst slot = lhs slot from [PC+2]
+        self.jit.ldrh(X10, PC, 2);
+        self.jit.cbz_label(X10, &skip);
+        self.jit.neg(X10, X10);
+        self.jit.add_lsl(X11, LFP, X10, 3);
+        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
+        self.jit.str(X0, X11, 0);
+        self.jit.bind_label(skip);
+        self.jit.add_imm(PC, PC, 16, 0);
+        self.a64_fetch_and_dispatch();
         p
     }
 
