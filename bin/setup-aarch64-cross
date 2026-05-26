@@ -46,6 +46,29 @@ else
   say "qemu-aarch64 and aarch64-linux-gnu-gcc already present"
 fi
 
+# 2.5. binfmt_misc registration so aarch64 ELF binaries execute transparently
+# on the x86 host. The cargo `runner =` wiring above covers `cargo test`'s
+# top-level invocations, but a handful of tests (watchdog, signal_trap) spawn
+# the freshly-built monoruby binary directly via
+# `Command::new(env!("CARGO_BIN_EXE_monoruby"))` — those bypass the runner and
+# need the kernel itself to know how to launch an aarch64 ELF. Skip silently
+# if the binfmt_misc fs is unavailable or already has a handler.
+if [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+  # Try to mount the binfmt_misc pseudo-fs if it's compiled in but not mounted.
+  mountpoint -q /proc/sys/fs/binfmt_misc 2>/dev/null \
+    || mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null \
+    || true
+  if [ -w /proc/sys/fs/binfmt_misc/register ] 2>/dev/null; then
+    say "registering binfmt_misc handler for qemu-aarch64-static"
+    echo ':qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xfe\xfe\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:OCF' \
+      > /proc/sys/fs/binfmt_misc/register
+  else
+    say "skip binfmt_misc registration (no write access)"
+  fi
+else
+  say "binfmt_misc handler for qemu-aarch64 already registered"
+fi
+
 # 3. Rust target std.
 if rustup target list --installed | grep -qx "$TARGET"; then
   say "rust target $TARGET already installed"

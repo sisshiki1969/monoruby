@@ -9,3 +9,13 @@ rustflags = ["-Cforce-frame-pointers=yes"]
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
 runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
+
+# QEMU_LD_PREFIX makes plain `./target/.../monoruby` invocations work too —
+# without it, qemu-user can't find /lib/ld-linux-aarch64.so.1. Required by the
+# watchdog/signal_trap tests that spawn the freshly-built monoruby binary
+# directly (via env!("CARGO_BIN_EXE_monoruby")) instead of going through the
+# runner above. Combined with a one-time binfmt_misc registration for
+# qemu-aarch64, the AArch64 binary becomes transparently executable on the x86
+# host.
+[env]
+QEMU_LD_PREFIX = "/usr/aarch64-linux-gnu"
