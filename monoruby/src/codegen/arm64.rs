@@ -1987,8 +1987,14 @@ impl Codegen {
         self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
         self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
         self.jit.blr(X10);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.ldr(X10, X11, 0);
+        // pop_frame: EXEC.cfp = (X29 - BP_CFP). Mirrors x86 `lea r14,[rbp-8]`
+        // — set EXEC.cfp to the *address* of this frame's CFP descriptor (set
+        // up by the caller's push_frame before our vm_entry). We must NOT
+        // reload from `[SP - RSP_CFP]`: AAPCS64 has no red zone, so the inner
+        // BLR's callee may use that slot as a local and clobber it. The
+        // descriptor at `[X29 - BP_CFP]` lives in this frame's "header" area
+        // (above the locals/LFP) and is safe across nested calls.
+        self.jit.sub_imm(X10, X29, BP_CFP as u32, 0);
         self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
         // restore caller LFP from its own frame (x86 `restore_lfp`):
         // LFP = [x29 - (BP_CFP + CFP_LFP)]. The callee clobbers LFP, so we
