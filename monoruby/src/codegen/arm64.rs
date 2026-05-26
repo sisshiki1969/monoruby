@@ -2649,7 +2649,87 @@ impl Codegen {
         self.jit.ret();
     }
 
-    /// TODO(aarch64): the VM BOP fast-path optimization is not emitted yet, so
-    /// there is nothing to remove.
-    pub(super) fn remove_vm_bop_optimization(&mut self) {}
+    /// Generic comparison handler with no fixnum fast path: calls
+    /// `cmp_fn(vm, globals, lhs, rhs) -> Option<Value>` and stores the result.
+    /// Used by `remove_vm_bop_optimization` to swap in the `_no_opt` runtimes
+    /// after a BOP redefinition so the inline `==`/`<`/… fast paths stop being
+    /// taken. Bytecode: `+0` rhs, `+2` lhs, `+4` dst (same as a64_op_cmp).
+    fn a64_op_cmp_no_opt(&mut self, cmp_fn: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        self.jit.ldrh(X10, PC, 0); // rhs slot
+        self.jit.ldrh(X11, PC, 2); // lhs slot
+        self.a64_load_slot(X11, X13, X14); // X13 = lhs
+        self.a64_load_slot(X10, X14, X15); // X14 = rhs
+        self.jit.mov(X2, X13);
+        self.jit.mov(X3, X14);
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.mov_imm(X9, cmp_fn);
+        self.jit.blr(X9);
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// Patch the dispatch table so the fixnum fast paths for arithmetic /
+    /// comparison / unary ops stop firing. Called from `set_bop_redefined`
+    /// when a basic op (e.g. `Integer#*`) is overridden — the new handlers
+    /// call the `_no_opt` runtimes which always invoke the redefined method
+    /// instead of returning the fixnum result inline. Mirrors the x86
+    /// `remove_vm_bop_optimization` in `vmgen.rs`.
+    pub(super) fn remove_vm_bop_optimization(&mut self) {
+        let add = self.a64_op_binop(add_values_no_opt);
+        let sub = self.a64_op_binop(sub_values_no_opt);
+        let mul = self.a64_op_binop(mul_values_no_opt);
+        let div = self.a64_op_binop(div_values_no_opt);
+        let bitor = self.a64_op_binop(bitor_values_no_opt);
+        let bitand = self.a64_op_binop(bitand_values_no_opt);
+        let bitxor = self.a64_op_binop(bitxor_values_no_opt);
+        let rem = self.a64_op_binop(rem_values_no_opt);
+        let pow = self.a64_op_binop(pow_values_no_opt);
+        let shl = self.a64_op_binop(shl_values_no_opt);
+        let shr = self.a64_op_binop(shr_values_no_opt);
+        self.dispatch[160] = add;
+        self.dispatch[161] = sub;
+        self.dispatch[162] = mul;
+        self.dispatch[163] = div;
+        self.dispatch[164] = bitor;
+        self.dispatch[165] = bitand;
+        self.dispatch[166] = bitxor;
+        self.dispatch[167] = rem;
+        self.dispatch[168] = pow;
+        self.dispatch[169] = shl;
+        self.dispatch[170] = shr;
+
+        let eq = self.a64_op_cmp_no_opt(cmp_eq_values_no_opt as u64);
+        let ne = self.a64_op_cmp_no_opt(cmp_ne_values_no_opt as u64);
+        let lt = self.a64_op_cmp_no_opt(cmp_lt_values_no_opt as u64);
+        let le = self.a64_op_cmp_no_opt(cmp_le_values_no_opt as u64);
+        let gt = self.a64_op_cmp_no_opt(cmp_gt_values_no_opt as u64);
+        let ge = self.a64_op_cmp_no_opt(cmp_ge_values_no_opt as u64);
+        let teq = self.a64_op_cmp_no_opt(cmp_teq_values_no_opt as u64);
+        self.dispatch[140] = eq;
+        self.dispatch[141] = ne;
+        self.dispatch[142] = lt;
+        self.dispatch[143] = le;
+        self.dispatch[144] = gt;
+        self.dispatch[145] = ge;
+        self.dispatch[146] = teq;
+        self.dispatch[150] = eq;
+        self.dispatch[151] = ne;
+        self.dispatch[152] = lt;
+        self.dispatch[153] = le;
+        self.dispatch[154] = gt;
+        self.dispatch[155] = ge;
+        self.dispatch[156] = teq;
+
+        let pos = self.a64_op_unop(pos_value_no_opt as u64);
+        let neg = self.a64_op_unop(neg_value_no_opt as u64);
+        let bitnot = self.a64_op_unop(bitnot_value_no_opt as u64);
+        let not = self.a64_op_unop(not_value_no_opt as u64);
+        self.dispatch[121] = pos;
+        self.dispatch[122] = neg;
+        self.dispatch[123] = bitnot;
+        self.dispatch[124] = not;
+    }
 }
