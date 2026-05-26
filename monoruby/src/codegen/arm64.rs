@@ -2384,13 +2384,37 @@ impl Codegen {
                 let slot_index = *slot_index;
                 self.a64_gen_struct_writer(slot_index);
             }
-            _ => {
-                // TODO(aarch64): Proc wrapper.
-                self.jit.mov_imm(X0, 0xbad0);
-                self.jit
-                    .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
-                self.jit.blr(X9);
-                self.jit.brk(0);
+            FuncKind::Proc(proc) => {
+                // Wrapper for a Proc converted into a method (via
+                // `define_method(:m, a_proc)`): patch the caller-set frame so
+                // that the proc's outer LFP is wired up and the meta carries
+                // PROC_METHOD_MASK (so a `return` from inside the proc behaves
+                // as a method-return rather than a non-local block exit), then
+                // tail-call the proc's codeptr.
+                let outer_ptr = match proc.outer_lfp() {
+                    Some(outer) => outer.as_ptr() as u64,
+                    None => 0,
+                };
+                let funcid = proc.func_id().get();
+                // Pre-load the outer pointer into X12 (caller-saved, but we
+                // don't call anything between this and the str below).
+                self.jit.mov_imm(X12, outer_ptr);
+                // X2 = FuncId, then resolve &FuncData into X9 (clobbers X10/X11).
+                self.jit.mov_imm(X2, funcid as u64);
+                self.a64_get_func_data_x2();
+                // [LFP - LFP_OUTER] = outer  (LFP_OUTER == 0)
+                self.jit.str(X12, LFP, 0);
+                // [LFP - LFP_META]  = funcdata.meta | PROC_METHOD_MASK
+                self.jit.ldr(X10, X9, FUNCDATA_META as u32);
+                self.jit.mov_imm(X11, Meta::PROC_METHOD_MASK);
+                self.jit.orr(X10, X10, X11);
+                self.jit.sub_imm(X13, LFP, LFP_META as u32, 0);
+                self.jit.str(X10, X13, 0);
+                // PC = funcdata.pc; tail-call funcdata.codeptr (preserve lr so
+                // the proc body returns to the original caller).
+                self.jit.ldr(PC, X9, FUNCDATA_PC as u32);
+                self.jit.ldr(X10, X9, FUNCDATA_CODEPTR as u32);
+                self.jit.br(X10);
             }
         }
         self.jit.finalize();
