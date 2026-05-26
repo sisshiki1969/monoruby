@@ -778,12 +778,14 @@ impl Codegen {
         let defined_method = self.a64_op_defined_method();
         let defined_gvar = self.a64_op_defined_gvar();
         let defined_ivar = self.a64_op_defined_ivar();
+        let defined_cvar = self.a64_op_defined_cvar();
         self.dispatch[64] = defined_yield;
         self.dispatch[65] = defined_const;
         self.dispatch[66] = defined_method;
         self.dispatch[67] = defined_gvar;
         self.dispatch[68] = defined_ivar;
         self.dispatch[69] = defined_super;
+        self.dispatch[88] = defined_cvar;
 
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
@@ -1442,6 +1444,19 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 8); // name
         self.jit.mov_imm(X9, runtime::defined_gvar as u64);
+        self.jit.blr(X9);
+        self.a64_store_dst_and_next(&skip);
+        p
+    }
+
+    /// op 88 `DefinedCvar`: defined_cvar(vm, globals, name `[pc+8]`) -> Value.
+    fn a64_op_defined_cvar(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        self.jit.mov(X0, EXEC);
+        self.jit.mov(X1, GLOBALS);
+        self.jit.ldr32(X2, PC, 8); // name
+        self.jit.mov_imm(X9, runtime::defined_cvar as u64);
         self.jit.blr(X9);
         self.a64_store_dst_and_next(&skip);
         p
