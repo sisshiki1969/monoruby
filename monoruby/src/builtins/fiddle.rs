@@ -726,14 +726,23 @@ mod tests {
     // (kept in sync with `gem/ffi_c.rb` and `stdlib/fiddle.rb`).
     // CRuby's Fiddle convention: positive=signed, negation=unsigned.
     // SIZE_T is an alias of ULONG (= -LONG = -5) on x86-64.
+    // Library names differ by platform: Linux ships glibc as `libc.so.6`
+    // and libm as `libm.so.6`; macOS folds both into a single
+    // `libSystem.B.dylib` (since 10.4) and has no separate libm. Pick
+    // the right names at runtime via `RUBY_PLATFORM` so the same Ruby
+    // fixture works on either OS.
     const TYPE_PRELUDE: &str = r#"
         TY_VOIDP  = 1
         TY_INT    = 4
         TY_LLONG  = 6
         TY_DOUBLE = 8
         TY_SIZE_T = -5
-        LIBC = FFI.___dlopen("libc.so.6")
-        LIBM = FFI.___dlopen("libm.so.6") || FFI.___dlopen("libc.so.6")
+        __libc, __libm = case RUBY_PLATFORM
+          when /darwin/ then ["/usr/lib/libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
+          else               ["libc.so.6", "libm.so.6"]
+        end
+        LIBC = FFI.___dlopen(__libc)
+        LIBM = FFI.___dlopen(__libm) || FFI.___dlopen(__libc)
     "#;
 
     // Regression for https://github.com/sisshiki1969/monoruby/pull/337:

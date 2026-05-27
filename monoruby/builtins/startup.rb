@@ -67,6 +67,32 @@ if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby
   RbConfig::CONFIG['ENABLE_SHARED']  = 'yes'
 end
 
+# The vendored rbconfig.rb hard-codes `target_os` / `target_cpu` to
+# `linux` / `x86_64` (it is a snapshot of an x86_64-linux CRuby build).
+# Platform-aware gems — most notably the `ffi` gem's
+# `FFI::Platform::OS` / `LIBSUFFIX` / `mac?` and its `map_library_name`
+# — read these keys to pick library naming (`libfoo.so` vs
+# `libfoo.dylib`) and search paths (`/opt/homebrew/lib` etc.). Without
+# this override, `dlopen` on macOS tries `libfoo.so` and fails for
+# every shared library. Derive the values from `RUBY_PLATFORM`, which
+# `Globals::new` already set to the actually-running host
+# (`arm64-darwin`, `x86_64-darwin`, `aarch64-linux`, or
+# `x86_64-linux`).
+case RUBY_PLATFORM
+when 'arm64-darwin'      then __host_cpu, __host_os = 'arm64',   'darwin'
+when 'x86_64-darwin'     then __host_cpu, __host_os = 'x86_64',  'darwin'
+when 'aarch64-linux'     then __host_cpu, __host_os = 'aarch64', 'linux'
+else                          __host_cpu, __host_os = 'x86_64',  'linux'
+end
+RbConfig::CONFIG['host_os']    = __host_os
+RbConfig::CONFIG['host_cpu']   = __host_cpu
+RbConfig::CONFIG['target_os']  = __host_os
+RbConfig::CONFIG['target_cpu'] = __host_cpu
+RbConfig::CONFIG['arch']       = "#{__host_cpu}-#{__host_os}"
+RbConfig::CONFIG['sitearch']   = "#{__host_cpu}-#{__host_os}"
+RbConfig::CONFIG['target']     = "#{__host_cpu}-pc-#{__host_os}"
+RbConfig::CONFIG['host']       = "#{__host_cpu}-pc-#{__host_os}"
+
 class BasicObject
   private
   def singleton_method_added(name)

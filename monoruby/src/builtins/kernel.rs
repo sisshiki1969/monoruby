@@ -2553,22 +2553,20 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         )
     };
     if handle.is_null() {
-        let err = unsafe { libc::dlerror() };
-        if err.is_null() {
-            return Err(MonorubyErr::argumenterr(format!(
-                "both of dlopen() and dlerror() returned NULL. {:?}",
-                lib
-            )));
-        }
-        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() } };
-        let path = match lib {
-            Some(lib) => lib.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
-        return Err(MonorubyErr::loaderr(
-            message,
-            std::path::PathBuf::from(path),
-        ));
+        // Drain dlerror() so subsequent dlopen() calls see a fresh
+        // error state. The Ruby wrappers
+        // (`Fiddle::Handle#initialize`, `FFI::DynamicLibrary#initialize`)
+        // check for a nil return and raise their own
+        // `Fiddle::DLError` / `LoadError` with a message they
+        // construct themselves, so returning nil is what they expect.
+        // Raising directly from here breaks the ffi gem's
+        // per-candidate fallback loop in
+        // `FFI::DynamicLibrary.try_load`: each rescued LoadError
+        // would leave `Executor::exception` populated and trip the
+        // `assert_eq!(self.exception, None)` double-set guard in
+        // `Executor::set_error` on the next dlopen attempt.
+        unsafe { libc::dlerror() };
+        return Ok(Value::nil());
     }
     Ok(Value::integer(handle as usize as i64))
 }

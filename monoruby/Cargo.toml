@@ -79,6 +79,14 @@ unicode-segmentation = "1.13.2"
 signal-hook = "0.4.4"
 divrem = "1.0.0"
 libffi = "5.1.0"
+
+# macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
+# link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build
+# into the static archive), so fall back to Homebrew's system libffi via
+# pkg-config. Linux / x86_64 darwin keep the bundled build, matching the
+# CI configuration. Install with `brew install libffi pkg-config`.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+libffi = { version = "5.1.0", features = ["system"] }
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"

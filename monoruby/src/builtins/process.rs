@@ -32,36 +32,42 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "setrlimit", process_setrlimit, 2, 3, false);
 
     // Process::RLIMIT_* constants for getrlimit / setrlimit (POSIX
-    // `<sys/resource.h>` values).
-    let rlim_consts: &[(&str, i64)] = &[
-        ("RLIMIT_AS",         libc::RLIMIT_AS         as i64),
-        ("RLIMIT_CORE",       libc::RLIMIT_CORE       as i64),
-        ("RLIMIT_CPU",        libc::RLIMIT_CPU        as i64),
-        ("RLIMIT_DATA",       libc::RLIMIT_DATA       as i64),
-        ("RLIMIT_FSIZE",      libc::RLIMIT_FSIZE      as i64),
-        ("RLIMIT_MEMLOCK",    libc::RLIMIT_MEMLOCK    as i64),
-        ("RLIMIT_MSGQUEUE",   libc::RLIMIT_MSGQUEUE   as i64),
-        ("RLIMIT_NICE",       libc::RLIMIT_NICE       as i64),
-        ("RLIMIT_NOFILE",     libc::RLIMIT_NOFILE     as i64),
-        ("RLIMIT_NPROC",      libc::RLIMIT_NPROC      as i64),
-        ("RLIMIT_RSS",        libc::RLIMIT_RSS        as i64),
-        ("RLIMIT_RTPRIO",     libc::RLIMIT_RTPRIO     as i64),
-        ("RLIMIT_RTTIME",     libc::RLIMIT_RTTIME     as i64),
-        ("RLIMIT_SIGPENDING", libc::RLIMIT_SIGPENDING as i64),
-        ("RLIMIT_STACK",      libc::RLIMIT_STACK      as i64),
-    ];
-    for (name, val) in rlim_consts {
-        globals.set_constant_by_str(klass, name, Value::integer(*val));
+    // `<sys/resource.h>` values). MSGQUEUE / NICE / RTPRIO / RTTIME /
+    // SIGPENDING and RLIM_SAVED_{CUR,MAX} are Linux extensions and the
+    // libc crate only exposes them on Linux targets; they're cfg-gated
+    // so the file builds on macOS / BSDs (intended Ruby behaviour stays
+    // Linux-only, but the rest of the interpreter compiles for parser /
+    // bytecodegen work on non-Linux hosts).
+    macro_rules! set_rlim_const {
+        ($name:literal, $val:expr) => {
+            globals.set_constant_by_str(klass, $name, Value::integer($val as i64));
+        };
     }
-    globals.set_constant_by_str(
-        klass, "RLIM_INFINITY", Value::integer(libc::RLIM_INFINITY as i64),
-    );
-    globals.set_constant_by_str(
-        klass, "RLIM_SAVED_CUR", Value::integer(libc::RLIM_SAVED_CUR as i64),
-    );
-    globals.set_constant_by_str(
-        klass, "RLIM_SAVED_MAX", Value::integer(libc::RLIM_SAVED_MAX as i64),
-    );
+    set_rlim_const!("RLIMIT_AS", libc::RLIMIT_AS);
+    set_rlim_const!("RLIMIT_CORE", libc::RLIMIT_CORE);
+    set_rlim_const!("RLIMIT_CPU", libc::RLIMIT_CPU);
+    set_rlim_const!("RLIMIT_DATA", libc::RLIMIT_DATA);
+    set_rlim_const!("RLIMIT_FSIZE", libc::RLIMIT_FSIZE);
+    set_rlim_const!("RLIMIT_MEMLOCK", libc::RLIMIT_MEMLOCK);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_MSGQUEUE", libc::RLIMIT_MSGQUEUE);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_NICE", libc::RLIMIT_NICE);
+    set_rlim_const!("RLIMIT_NOFILE", libc::RLIMIT_NOFILE);
+    set_rlim_const!("RLIMIT_NPROC", libc::RLIMIT_NPROC);
+    set_rlim_const!("RLIMIT_RSS", libc::RLIMIT_RSS);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_RTPRIO", libc::RLIMIT_RTPRIO);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_RTTIME", libc::RLIMIT_RTTIME);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_SIGPENDING", libc::RLIMIT_SIGPENDING);
+    set_rlim_const!("RLIMIT_STACK", libc::RLIMIT_STACK);
+    set_rlim_const!("RLIM_INFINITY", libc::RLIM_INFINITY);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIM_SAVED_CUR", libc::RLIM_SAVED_CUR);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIM_SAVED_MAX", libc::RLIM_SAVED_MAX);
     // POSIX identity / process-group / session wrappers. Thin libc
     // passthroughs; each one is a single syscall + Integer wrap.
     // None touches the fork / exec / scheduler machinery.
@@ -186,6 +192,10 @@ fn coerce_rlimit_resource(
 }
 
 fn rlim_resource_from_name(name: &str) -> Result<i64> {
+    // RLIMIT_MSGQUEUE / NICE / RTPRIO / RTTIME / SIGPENDING are Linux
+    // extensions; on macOS / BSDs the resource id doesn't exist, so the
+    // arms are cfg-gated. The build target stays "Linux x86_64 only" but
+    // this lets the file compile on macOS for parser/lexer work.
     let n = match name {
         "AS" => libc::RLIMIT_AS,
         "CORE" => libc::RLIMIT_CORE,
@@ -193,13 +203,18 @@ fn rlim_resource_from_name(name: &str) -> Result<i64> {
         "DATA" => libc::RLIMIT_DATA,
         "FSIZE" => libc::RLIMIT_FSIZE,
         "MEMLOCK" => libc::RLIMIT_MEMLOCK,
+        #[cfg(target_os = "linux")]
         "MSGQUEUE" => libc::RLIMIT_MSGQUEUE,
+        #[cfg(target_os = "linux")]
         "NICE" => libc::RLIMIT_NICE,
         "NOFILE" => libc::RLIMIT_NOFILE,
         "NPROC" => libc::RLIMIT_NPROC,
         "RSS" => libc::RLIMIT_RSS,
+        #[cfg(target_os = "linux")]
         "RTPRIO" => libc::RLIMIT_RTPRIO,
+        #[cfg(target_os = "linux")]
         "RTTIME" => libc::RLIMIT_RTTIME,
+        #[cfg(target_os = "linux")]
         "SIGPENDING" => libc::RLIMIT_SIGPENDING,
         "STACK" => libc::RLIMIT_STACK,
         other => {
@@ -221,7 +236,10 @@ fn process_getrlimit(
 ) -> Result<Value> {
     let resource = coerce_rlimit_resource(lfp.arg(0), vm, globals)?;
     let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::getrlimit(resource as u32, &mut rlim) };
+    // `getrlimit`'s resource argument type differs by libc target:
+    // glibc uses `__rlimit_resource_t` (u32), macOS uses `c_int`. `as _`
+    // defers to the function signature so both targets compile.
+    let rc = unsafe { libc::getrlimit(resource as _, &mut rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(
@@ -260,7 +278,7 @@ fn process_setrlimit(
         cur
     };
     let rlim = libc::rlimit { rlim_cur: cur, rlim_max: max };
-    let rc = unsafe { libc::setrlimit(resource as u32, &rlim) };
+    let rc = unsafe { libc::setrlimit(resource as _, &rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(
@@ -511,17 +529,40 @@ fn process_getpriority(
 ) -> Result<Value> {
     let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
-    // getpriority may legitimately return -1, so errno must be
-    // cleared first and re-checked to distinguish that from an error.
+    // getpriority may legitimately return -1, so we must clear errno
+    // first and re-read it to distinguish that from an error. `as _` for
+    // the `which` arg defers to the libc signature (`__priority_which_t`
+    // on glibc, `c_int` on macOS). errno is cleared portably by writing
+    // back through `set_errno` (libc::set_errno is unstable, so we go via
+    // a direct write to the per-platform location).
     unsafe {
-        *libc::__errno_location() = 0;
-        let prio = libc::getpriority(which as libc::__priority_which_t, who);
-        let errno = *libc::__errno_location();
+        clear_errno();
+        let prio = libc::getpriority(which as _, who);
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if prio == -1 && errno != 0 {
             let err = std::io::Error::from_raw_os_error(errno);
             return Err(MonorubyErr::from_io_err(&globals.store, &err, "getpriority".to_string()));
         }
         Ok(Value::integer(prio as i64))
+    }
+}
+
+/// Reset the calling thread's `errno` to 0. Needed before functions like
+/// `getpriority(2)` that overload `-1` as both a legitimate return value
+/// and an error indicator: callers must observe `errno` to disambiguate.
+///
+/// glibc exposes `__errno_location()`; macOS / BSDs use `__error()`. The
+/// `libc` crate exposes both as `extern "C"` shims under those names, so
+/// we cfg-gate the call.
+#[inline]
+unsafe fn clear_errno() {
+    #[cfg(target_os = "linux")]
+    {
+        unsafe { *libc::__errno_location() = 0 };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        unsafe { *libc::__error() = 0 };
     }
 }
 
@@ -541,7 +582,7 @@ fn process_setpriority(
     let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
     let prio = lfp.arg(2).coerce_to_int_i64(vm, globals)? as i32;
-    let res = unsafe { libc::setpriority(which as libc::__priority_which_t, who, prio) };
+    let res = unsafe { libc::setpriority(which as _, who, prio) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(&globals.store, &err, "setpriority".to_string()));

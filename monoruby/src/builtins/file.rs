@@ -1915,7 +1915,9 @@ fn value_to_timeval(
             let usec = ((f - f.floor()) * 1_000_000.0) as i64;
             return Ok(libc::timeval {
                 tv_sec: secs,
-                tv_usec: usec,
+                // `timeval.tv_usec` is `i64` on glibc but `i32` on macOS;
+                // cast through the platform's `suseconds_t` alias.
+                tv_usec: usec as libc::suseconds_t,
             });
         }
     }
@@ -1924,7 +1926,7 @@ fn value_to_timeval(
         let usec = ((f - f.floor()) * 1_000_000.0) as i64;
         return Ok(libc::timeval {
             tv_sec: secs,
-            tv_usec: usec,
+            tv_usec: usec as libc::suseconds_t,
         });
     }
     let secs = val.coerce_to_int_i64(vm, globals)?;

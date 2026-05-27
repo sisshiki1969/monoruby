@@ -194,6 +194,15 @@ fn main() {
                     let ver = ver.trim();
                     if !ver.is_empty() {
                         println!("cargo:rustc-env=MONORUBY_RUBY_VERSION={ver}");
+                        // Older monoruby builds wrote `~/.monoruby/ruby_version`
+                        // and read it back at runtime. The runtime now uses
+                        // the baked-in env var instead, but the file lingers
+                        // and confuses anyone inspecting it (e.g. `cat
+                        // ~/.monoruby/ruby_version` showing stale 3.4.0 long
+                        // after upgrading to 4.0). Keep it as a human-
+                        // facing breadcrumb of what host Ruby this build
+                        // was paired with, refreshed every cargo build.
+                        let _ = fs::write(lib_path.join("ruby_version"), ver);
                     }
                 }
                 _ => {

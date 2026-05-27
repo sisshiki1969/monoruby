@@ -164,7 +164,17 @@ impl Globals {
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
-        let canonicalized_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        // CRuby stores the path as passed to `require`, not its
+        // symlink-resolved form. `Path::canonicalize` resolves every
+        // symlink (e.g. on macOS where `/tmp` is a symlink to
+        // `/private/tmp`), which causes `$LOADED_FEATURES.replace($"
+        // - ['/tmp/foo.rb'])` to fail to remove the entry and the
+        // subsequent re-require to silently no-op. Use `path::absolute`
+        // instead — it expands `..` / `.` without touching symlinks, so
+        // the stored path matches what the user (and Ruby code
+        // manipulating `$LOADED_FEATURES`) sees.
+        let canonicalized_path =
+            std::path::absolute(&path).unwrap_or_else(|_| path.clone());
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(None);
         }
