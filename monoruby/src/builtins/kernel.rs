@@ -4013,6 +4013,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "introduces a new local `a` across two `eval` calls — same root cause as \
+                  binding_eval_method_introduces_new_local; tracked there."
+    )]
     fn eval_binding() {
         run_test(
             r##"

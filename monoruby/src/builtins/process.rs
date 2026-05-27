@@ -1287,6 +1287,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "Signal numbers diverge: macOS has BUS=10/SYS=12 vs Linux USR1=10/USR2=12"
+    )]
     fn signal_signame_all_valid_numbers() {
         // Cover every signal number 0..=31. The result is compared against
         // CRuby, so each canonical name (ABRT not IOT for 6, CHLD not CLD

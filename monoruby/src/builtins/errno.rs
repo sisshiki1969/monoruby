@@ -234,7 +234,16 @@ pub(crate) fn strerror(errno: i32) -> String {
 mod tests {
     use crate::tests::*;
 
+    // macOS uses different errno numbers than Linux (e.g. ENETDOWN is 50 vs 100).
+    // monoruby intentionally exposes the Linux numbers (see ERRNO_TABLE comment),
+    // so the system-CRuby comparison in `run_test` doesn't agree on macOS. Skip
+    // on macOS; the production behaviour (Linux numbers everywhere) is still
+    // covered on Linux CI.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "Linux-mirrored errno numbers diverge from CRuby on macOS"
+    )]
     fn errno_classes_dynamically_registered() {
         // bundler 4's `fetcher/downloader.rb` references `Errno::ENETDOWN`
         // (and friends). They must resolve and carry the right `Errno`
@@ -253,6 +262,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "Linux EAGAIN/EWOULDBLOCK aliasing differs from macOS's distinct numbers"
+    )]
     fn errno_aliases_share_class() {
         // CRuby exposes `EWOULDBLOCK == EAGAIN` etc. as the same class
         // object; they must be `equal?`, not just `==`, so existence-of-
