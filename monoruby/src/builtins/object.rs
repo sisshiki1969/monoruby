@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(jit)]
 use jitgen::JitContext;
 
 //
@@ -13,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
         BASIC_OBJECT_CLASS,
         "__id__",
         object_id,
-        Box::new(object_object_id),
+        inline_gen!(object_object_id),
         0,
     );
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
@@ -23,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
     // `method_missing`, breaking the `actual.should === expected` idiom.
     globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
-    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
+    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen!(object_not), 0);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
@@ -51,7 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
         "__send__",
         &[],
         crate::builtins::send,
-        Box::new(crate::builtins::object_send),
+        inline_gen!(crate::builtins::object_send),
         0,
         0,
         true,
@@ -160,6 +161,8 @@ fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::bool(!lfp.self_val().as_bool()))
 }
 
+#[cfg(jit)]
+
 fn object_not(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -235,6 +238,8 @@ pub(super) fn object_id(
 ) -> Result<Value> {
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
+
+#[cfg(jit)]
 
 pub(super) fn object_object_id(
     state: &mut AbstractState,

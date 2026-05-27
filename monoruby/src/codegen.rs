@@ -1,23 +1,71 @@
 use std::hash::Hash;
 
 use monoasm::*;
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
+#[cfg(target_arch = "x86_64")]
+use paste::paste;
+#[cfg(jit)]
 use std::time::Duration;
 
+/// Integer comparison helpers (`icmp_eq` … `icmp_ge`): set `rax` to the Ruby
+/// boolean `Value` for `rdi <cond> rsi`. These are VM-tier — emitted by the
+/// bytecode handlers (`vmgen`'s `vm_*_opt_rr`) as well as the JIT — so they
+/// live here rather than in `codegen::jitgen` (which is JIT-only and gets
+/// `#[cfg]`-excluded from the aarch64 / no-jit VM build).
+#[cfg(target_arch = "x86_64")]
+macro_rules! icmp_main {
+    ($op:ident) => {
+        paste! {
+            pub(in crate::codegen) fn [<icmp_ $op>](&mut self) {
+                monoasm! { &mut self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                };
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        icmp_main!($op1);
+        icmp_main!($($op2),+);
+    };
+}
+
+#[cfg(jit)]
 mod compiler;
+#[cfg(target_arch = "x86_64")]
 mod invoker;
 mod jit_module;
+#[cfg(jit)]
 pub mod jitgen;
 pub(crate) mod signal_table;
+#[cfg(jit)]
 mod patch;
 pub mod runtime;
+#[cfg(target_arch = "x86_64")]
 mod vmgen;
+#[cfg(target_arch = "x86_64")]
 mod wrapper;
 
+// aarch64 VM backend (in progress). The x86-64 VM tier above
+// (`vmgen`/`invoker`/`wrapper` + the asm methods in `jit_module` and this
+// file) is gated to x86-64; the aarch64 counterparts live here. The encoding
+// patterns are validated under qemu in the `aarch64-proto` crate; this is the
+// in-crate transcription. NOTE: not yet complete — the aarch64 build does not
+// link until the full VM-tier port lands.
+#[cfg(target_arch = "aarch64")]
+mod arm64;
+
+#[cfg(jit)]
 use self::jitgen::asmir::AsmEvict;
 
 use super::*;
+#[cfg(jit)]
 use crate::bytecodegen::inst::*;
+#[cfg(jit)]
 use crate::codegen::jitgen::SpecializedCodeInfo;
 use crate::executor::*;
 
@@ -258,6 +306,7 @@ impl JitModule {
     /// The handler runs in async-signal context; the only operations
     /// performed are a memory OR and an ADD, both of which are
     /// async-signal-safe on x86-64. No call into Rust.
+    #[cfg(target_arch = "x86_64")]
     pub(crate) fn signal_handler_for(
         &mut self,
         alloc_flag: DestLabel,
@@ -323,6 +372,7 @@ impl JitModule {
     ///
     /// Save caller-save registers (except rax) in stack.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn save_registers(&mut self) {
         monoasm! { &mut self.jit,
             subq rsp, 192;
@@ -355,6 +405,7 @@ impl JitModule {
     ///
     /// Restore caller-save registers (except rax) from stack.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn restore_registers(&mut self) {
         monoasm! { &mut self.jit,
             movq xmm2, [rsp + 0];
@@ -401,6 +452,7 @@ impl JitModule {
     ///
     /// if the frame is captured, jump to *label*.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn branch_if_captured(&mut self, label: &DestLabel) {
         monoasm! { &mut self.jit,
             testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
@@ -419,6 +471,7 @@ impl JitModule {
     /// ### destroy
     /// - rax, r15
     ///
+    #[cfg(target_arch = "x86_64")]
     fn fetch_and_dispatch(&mut self) {
         monoasm! { &mut self.jit,
             movq r15, (self.dispatch.as_ptr());
@@ -435,6 +488,7 @@ impl JitModule {
     /// ### destroy
     /// - rsi
     ///
+    #[cfg(target_arch = "x86_64")]
     fn set_block_self_outer(&mut self) {
         self.set_block_outer();
         monoasm! { &mut self.jit,
@@ -449,6 +503,7 @@ impl JitModule {
     /// ### in
     /// - rax: outer_lfp
     ///
+    #[cfg(target_arch = "x86_64")]
     fn set_block_outer(&mut self) {
         monoasm! { &mut self.jit,
             // set outer
@@ -463,6 +518,7 @@ impl JitModule {
     }
 
     /// Set outer.
+    #[cfg(target_arch = "x86_64")]
     fn set_method_outer(&mut self) {
         monoasm! { &mut self.jit,
             movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
@@ -478,6 +534,7 @@ impl JitModule {
     /// Set lfp(r14) for callee.
     ///
     /// the local frame MUST BE on the stack.
+    #[cfg(target_arch = "x86_64")]
     fn set_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // set lfp
@@ -491,6 +548,7 @@ impl JitModule {
     /// ### destroy
     /// - rdi, rsi
     ///
+    #[cfg(target_arch = "x86_64")]
     fn push_frame(&mut self) {
         monoasm!( &mut self.jit,
             // push cfp
@@ -501,6 +559,7 @@ impl JitModule {
         );
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn restore_lfp(&mut self) {
         monoasm!( &mut self.jit,
             // restore lfp
@@ -509,6 +568,7 @@ impl JitModule {
     }
 
     /// Pop control frame
+    #[cfg(target_arch = "x86_64")]
     fn pop_frame(&mut self) {
         monoasm!( &mut self.jit,
             // pop cfp
@@ -528,6 +588,7 @@ impl JitModule {
     /// ### out
     /// - r15: &FuncData
     ///
+    #[cfg(target_arch = "x86_64")]
     fn get_func_data(&mut self) {
         monoasm! { &mut self.jit,
             movl rdx, rdx;
@@ -552,6 +613,7 @@ impl JitModule {
     /// ### destroy
     /// - caller save registers
     ///
+    #[cfg(target_arch = "x86_64")]
     fn get_proc_data(&mut self) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
@@ -576,6 +638,7 @@ impl JitModule {
     ///
     /// Emits 3 instructions + 1 conditional branch on the happy
     /// (not-invalidated) path.
+    #[cfg(target_arch = "x86_64")]
     fn resolve_invalidated_outer(&mut self, reg: GP) {
         let skip = self.jit.label();
         monoasm! { &mut self.jit,
@@ -596,6 +659,7 @@ impl JitModule {
     /// ### in
     /// - r15: &FuncData
     ///
+    #[cfg(target_arch = "x86_64")]
     fn call_funcdata(&mut self) -> CodePtr {
         self.push_frame();
         self.set_lfp();
@@ -623,6 +687,7 @@ impl JitModule {
     /// ### destroy
     /// - caller save registers
     ///
+    #[cfg(target_arch = "x86_64")]
     fn call_invoker(&mut self) {
         self.push_frame();
         self.set_lfp();
@@ -649,6 +714,7 @@ impl JitModule {
     /// ### destroy
     /// - caller save registers
     ///
+    #[cfg(target_arch = "x86_64")]
     fn call_invoker_with_binding(&mut self) {
         self.push_frame();
         monoasm! { &mut self.jit,
@@ -663,6 +729,7 @@ impl JitModule {
         };
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn push_callee_save(&mut self) {
         monoasm! { &mut self.jit,
             pushq r15;
@@ -674,6 +741,7 @@ impl JitModule {
         };
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn pop_callee_save(&mut self) {
         monoasm! { &mut self.jit,
             popq rbp;
@@ -694,6 +762,7 @@ impl JitModule {
     /// ### destoroy
     /// - rdi
     ///
+    #[cfg(target_arch = "x86_64")]
     fn push_stack_offset(&mut self) {
         monoasm! { &mut self.jit,
             movzxw rdi, [r15 + (FUNCDATA_OFS)];
@@ -710,6 +779,7 @@ impl JitModule {
     /// ### destoroy
     /// - rdi
     ///
+    #[cfg(target_arch = "x86_64")]
     fn pop_stack_offset(&mut self) {
         monoasm! { &mut self.jit,
             popq rdi;
@@ -733,9 +803,10 @@ impl JitModule {
     /// - rax
     /// - stack
     ///
+    #[cfg(target_arch = "x86_64")]
     fn vm_execute_gc(&mut self) {
         let raise = self.entry_raise.clone();
-        self.execute_gc_inner(None, &raise, 0);
+        self.execute_gc_inner(&raise, |_| {});
     }
 
     ///
@@ -743,6 +814,7 @@ impl JitModule {
     ///
     /// raise StackOverFlow error if the stack pointer is below the stack limit.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn vm_check_stack(&mut self) {
         let overflow = self.vm_stack_overflow.clone();
         monoasm! { &mut self.jit,
@@ -765,14 +837,17 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
+    #[cfg(jit)]
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
-        self.execute_gc_inner(Some(wb), error, base);
+        self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
 }
 
+#[cfg(jit)]
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct CompilationUnitId(usize);
 
+#[cfg(jit)]
 #[allow(dead_code)]
 struct CompilationUnitInfo {
     /// `ISeqId``.
@@ -804,12 +879,17 @@ pub struct Codegen {
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
 
+    #[cfg(jit)]
     compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
+    #[cfg(jit)]
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
+    #[cfg(jit)]
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    #[cfg(jit)]
     pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
+    #[cfg(jit)]
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
@@ -896,10 +976,15 @@ impl Codegen {
             signal_stubs: HashMap::default(),
             class_version_addr,
             const_version_addr,
+            #[cfg(jit)]
             compilation_unit: Vec::new(),
+            #[cfg(jit)]
             return_addr_table: HashMap::default(),
+            #[cfg(jit)]
             asm_return_addr_table: HashMap::default(),
+            #[cfg(jit)]
             specialized_info: Vec::new(),
+            #[cfg(jit)]
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
@@ -965,6 +1050,7 @@ impl Codegen {
         self.const_version.clone()
     }
 
+    #[cfg(jit)]
     fn add_compilation_unit(
         &mut self,
         iseq_id: ISeqId,
@@ -1122,6 +1208,10 @@ impl Codegen {
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
     }
 
+    #[cfg(target_arch = "x86_64")]
+    icmp_main!(eq, ne, lt, le, gt, ge);
+
+    #[cfg(target_arch = "x86_64")]
     fn icmp_teq(&mut self) {
         self.icmp_eq()
     }
@@ -1139,6 +1229,7 @@ impl Codegen {
     /// ### destroy
     /// - rdx
     ///
+    #[cfg(target_arch = "x86_64")]
     fn icmp_cmp(&mut self) {
         monoasm! { &mut self.jit,
             movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());
@@ -1153,6 +1244,7 @@ impl Codegen {
     ///
     /// check whether lhs and rhs are fixnum.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn guard_rdi_rsi_fixnum(&mut self, generic: &DestLabel) {
         self.guard_rdi_fixnum(generic);
         self.guard_rsi_fixnum(generic);
@@ -1161,6 +1253,7 @@ impl Codegen {
     ///
     /// check whether lhs is fixnum.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn guard_rdi_fixnum(&mut self, generic: &DestLabel) {
         monoasm!( &mut self.jit,
             testq rdi, 0x1;
@@ -1171,6 +1264,7 @@ impl Codegen {
     ///
     /// check whether rhs is fixnum.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn guard_rsi_fixnum(&mut self, generic: &DestLabel) {
         monoasm!( &mut self.jit,
             testq rsi, 0x1;
@@ -1187,6 +1281,7 @@ impl Codegen {
     /// ### out
     /// - rax: result
     ///
+    #[cfg(target_arch = "x86_64")]
     fn call_unop(&mut self, func: UnaryOpFn) {
         monoasm!( &mut self.jit,
             movq rdx, rdi;
@@ -1197,6 +1292,7 @@ impl Codegen {
         );
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn call_binop(&mut self, func: BinaryOpFn) {
         monoasm!( &mut self.jit,
             movq rdx, rdi;
@@ -1208,6 +1304,7 @@ impl Codegen {
         );
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn epilogue(&mut self) {
         monoasm!( &mut self.jit,
             leave;
@@ -1220,6 +1317,7 @@ impl Codegen {
     ///
     /// rbp <- bp for a context of the outer of the block.
     ///
+    #[cfg(target_arch = "x86_64")]
     fn block_break(&mut self) {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
@@ -1239,6 +1337,7 @@ impl Codegen {
     /// - rax: return value
     /// - r13: pc + 1
     ///
+    #[cfg(target_arch = "x86_64")]
     fn method_return(&mut self) {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
@@ -1251,6 +1350,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn method_return_specialized(&mut self, rbp_offset: usize) {
         monoasm! { &mut self.jit,
             lea  rbp, [rbp + (rbp_offset)];
@@ -1271,6 +1371,7 @@ impl Codegen {
     /// ### destroy
     /// - R(*reg*)
     ///
+    #[cfg(target_arch = "x86_64")]
     fn integer_val_to_f64(&mut self, reg: GP, dst: u64) {
         monoasm!(&mut self.jit,
             sarq R(reg as _), 1;
@@ -1286,6 +1387,7 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
+    #[cfg(target_arch = "x86_64")]
     fn generic_handle_arguments(
         &mut self,
         f: extern "C" fn(&mut Executor, &mut Globals, Lfp, Lfp, CallSiteId) -> Option<Value>,
@@ -1377,7 +1479,12 @@ impl Codegen {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if codegen.bop_redefine_flags() != 0 {
+                // Eviction only applies to JIT-compiled code; the VM-only
+                // build has none, so `cfp` goes unused there.
+                #[cfg(jit)]
                 codegen.immediate_eviction(cfp);
+                #[cfg(not(jit))]
+                let _ = cfp;
             }
         });
     }
@@ -1390,6 +1497,7 @@ impl Codegen {
         unsafe { *addr }
     }
 
+    #[cfg(jit)]
     fn immediate_eviction(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
@@ -1406,6 +1514,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(jit)]
     fn get_deopt_with_return_addr(
         &self,
         return_addr: CodePtr,

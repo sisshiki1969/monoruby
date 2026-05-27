@@ -452,7 +452,8 @@ pub(crate) fn unpack(
                         } else {
                             // SAFETY: We trust that the pointer was produced by a prior pack("p")
                             // call in this process, pointing to a valid null-terminated string.
-                            let cstr = unsafe { std::ffi::CStr::from_ptr(ptr as *const i8) };
+                            let cstr =
+                                unsafe { std::ffi::CStr::from_ptr(ptr as *const std::ffi::c_char) };
                             ary.push(Value::bytes(cstr.to_bytes().to_vec()));
                         }
                     } else {

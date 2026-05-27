@@ -44,8 +44,8 @@ dump-require = []
 clap = { version = "4.6.1", features = ["derive"] }
 rustyline = "18.0.0"
 paste = "1.0.15"
-monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
-monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
+monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
+monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
 ruruby-parse = { path = "../ruruby-parse" }
 ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", branch = "monoruby-vendored" }

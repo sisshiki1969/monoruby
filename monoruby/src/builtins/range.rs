@@ -8,15 +8,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
     globals.store[RANGE_CLASS].set_alloc_func(range_alloc_func);
-    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, Box::new(range_begin), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, inline_gen!(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
-    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, Box::new(range_end), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, inline_gen!(range_end), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_inline_func(
         RANGE_CLASS,
         "exclude_end?",
         exclude_end,
-        Box::new(range_exclude_end),
+        inline_gen!(range_exclude_end),
         0,
     );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
@@ -82,6 +82,8 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_range().start())
 }
 
+#[cfg(jit)]
+
 fn range_begin(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -123,6 +125,8 @@ fn range_begin(
 fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_range().end())
 }
+
+#[cfg(jit)]
 
 fn range_end(
     state: &mut AbstractState,
@@ -236,6 +240,8 @@ fn exclude_end(
 ) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
+
+#[cfg(jit)]
 
 fn range_exclude_end(
     state: &mut AbstractState,

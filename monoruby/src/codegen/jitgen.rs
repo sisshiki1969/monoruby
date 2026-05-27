@@ -10,7 +10,7 @@ use crate::{
     codegen::jitgen::context::{AsmInfo, JitStackFrame},
 };
 
-pub(crate) use self::basic_block::{BasicBlockId, BasicBlockInfo, BasicBlockInfoEntry};
+pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 use state::{LinkMode, ReturnState};
@@ -22,7 +22,6 @@ use state::{Liveness, SlotState};
 use trace_ir::*;
 
 pub mod asmir;
-mod basic_block;
 mod compile;
 mod context;
 mod definition;

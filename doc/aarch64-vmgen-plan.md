@@ -8,25 +8,124 @@ JIT (`jitgen`) is explicitly **out of scope** for this phase.
 
 ## Status (updated this session)
 
-Phase-1 foundation **re-verified locally** on top of monoasm `rc` (the
-encoder now lives on the monoasm `aarch` branch):
+**Cross-test environment provisioned and committed** (this is the
+foundation phase 2 builds on):
 
-- the A64 encoder builds cleanly against monoasm `rc` (`6940e51`).
-- `cargo test -p monoasm --test arm64_encoding` → **15 passed** (host).
-- `cargo test -p monoasm --target aarch64-unknown-linux-gnu --test
-  arm64_exec` → **9 passed** under qemu.
-- `cargo test -p monoasm` (x86 host) → **all green, no regression**.
+- `.cargo/config.toml` now wires the aarch64 target to the GNU cross linker
+  and a `qemu-aarch64` runner, so `cargo build/test --target
+  aarch64-unknown-linux-gnu` cross-compiles and runs the resulting binaries
+  (including `cargo test` harnesses) under qemu user-mode emulation.
+- `bin/setup-aarch64-cross` provisions the host tooling idempotently
+  (qemu-user, `gcc-aarch64-linux-gnu`, rust std for the target) and runs a
+  compile+qemu smoke test. Safe to re-run at the start of an ephemeral web
+  session.
+- End-to-end verified: `cargo test -p rubymap --target
+  aarch64-unknown-linux-gnu` → **24 doc-tests passed under qemu** on the x86
+  host (a pure-Rust workspace crate, no monoasm dependency).
 
-Toolchain installed in this container: rust target
-`aarch64-unknown-linux-gnu` (nightly-2026-05-18), `gcc-aarch64-linux-gnu`
-13.3.0, `qemu-aarch64` 8.2.2, `llvm-mc` (for golden encodings).
+Toolchain in this container: rust target `aarch64-unknown-linux-gnu`
+(nightly-2026-05-18), `gcc-aarch64-linux-gnu` 13.3.0, `qemu-aarch64` 8.2.2.
+For golden encodings use `llvm-mc` if available.
 
-**Still blocked for landing:** the monoasm `aarch` branch is not pushed
-(`origin` only has `main`/`master`/`rc`), and monoasm is not in this
-session's GitHub MCP scope. monoruby's `Cargo.toml` therefore still points
-at monoasm `rc`, which has no A64 API. Phase 2 cannot build until monoasm
-`aarch` is published and `Cargo.toml` is repointed (see "Prerequisite to
-land" below).
+Phase-1 foundation (the A64 encoder) lives on the monoasm `aarch` branch,
+which is **now published** at `sisshiki1969/monoasm` (`refs/heads/aarch`,
+`b479de6`) on top of `rc` (`6940e51`). The earlier blocker (aarch branch
+unpushed) is resolved.
+
+**Done this session toward M0:**
+
+- `monoasm`/`monoasm_macro` repointed to `branch = "aarch"`; x86 build
+  re-verified clean (the `aarch` branch is a strict superset of `rc`).
+- `ruruby-parse` reqwest → rustls, removing the `openssl-sys` cross blocker;
+  **all deps (incl. C deps) now cross-compile for aarch64** (see findings).
+- Seam predicate committed: `build.rs` emits `cfg(jit)` ⇔ x86-64 && not
+  `no-jit` (see "Seam selector" below).
+- **VM-shared helpers relocated out of `jitgen`** (3 commits, each pure /
+  dual-green) so `jitgen` can be cleanly `#[cfg(jit)]`-excluded:
+  1. `basic_block` (BasicBlockInfo/Id) → `crate::basic_block`.
+  2. `icmp_eq..ge` compare helpers → `codegen.rs` (the JIT-only `set_*`
+     flag-to-bool helpers stay in `jitgen`).
+  3. `execute_gc_inner` now takes a `write_back: impl FnOnce(&mut Self)`
+     closure instead of `Option<&jitgen::WriteBack>` (VM passes a no-op).
+
+- **JIT excision complete** (`cfg(jit)` wired through the codebase). Both
+  `cargo check` (x86 JIT) and `cargo check --features no-jit` (x86 VM-only)
+  compile **warning-clean**, and both **run correctly** (identical output for
+  loop-JIT sum, `fib(30)`, `Array#sort`). The inline-method system uses an
+  `inline_gen!` macro + `not(jit)` registrar twins; the JIT driver
+  (`jitgen`/`compiler`/`patch`), Codegen JIT fields, and VM→JIT triggers are
+  all `#[cfg(jit)]`-gated.
+- **aarch64 now advances past the JIT**: `cargo check --target
+  aarch64-unknown-linux-gnu --features no-jit` produces **zero jitgen
+  errors** — it fails only on the VM-tier `monoasm!{}` (vmgen ~245, codegen
+  ~107, invoker ~91, vmgen/* ~159, jit_module ~42, wrapper ~37; +2 stray in
+  `value/rvalue/string/pack.rs` and `globals/store/class.rs`). That is
+  exactly the phase-3 surface.
+
+**aarch64 VM-only build now LINKS and runs under qemu (stub VM).** The
+`target_arch` seam is in place: the x86 VM tier (`vmgen`/`invoker`/`wrapper`
++ the asm methods in `jit_module.rs`/`codegen.rs`, ~45 gated) is
+`cfg(target_arch = "x86_64")`, and `codegen/arm64.rs` provides the aarch64
+counterparts. `cargo build --target aarch64-unknown-linux-gnu --features
+no-jit` produces a working ELF that runs under qemu (`--version` →
+`monoruby 0.3.0`). The VM itself is **stub-to-link** scaffolding
+(`JitModule::new`, `construct_vm`, the invokers, `gen_wrapper`, etc. emit
+`brk` traps), so executing Ruby traps — but the build links, so the
+remaining port is now **incrementally qemu-testable** in-crate. x86 default
+and `--features no-jit` remain green. (Also fixed an arch portability bug:
+`pack.rs` used `*const i8` for `CStr::from_ptr`; `c_char` is `u8` on aarch64.)
+
+**Next step (fill in the stubs, qemu-testable):** replace the `brk` stubs in
+`codegen/arm64.rs` with the real aarch64 codegen — `JitModule::new`/`init`,
+`construct_vm` + the opcode handlers (transcribing the validated
+`aarch64-proto` patterns), the invokers, and `gen_wrapper` — driving
+`monoruby -e 'puts 42'` (then fib, then the test suite) under qemu. x86
+default stays green throughout.
+
+**Progress + findings (this session):**
+
+- Real VM dispatch + first handlers landed in `codegen/arm64.rs`:
+  `construct_vm` (vm_entry + `a64_fetch_and_dispatch`), op 6 `immediate`
+  (integer literal → slot), op 80 `ret`. Correct-by-construction from the x86
+  reference + validated patterns. Other opcodes still trap.
+- **Key finding — no minimal "42":** `Executor::init` `require`s
+  `~/.monoruby/builtins/startup.rb` (a large Ruby file) *before* any user
+  code, so the first runnable program needs a big VM subset (def/class/send/
+  const/blocks/…). Added a bring-up aid: env var **`MONORUBY_SKIP_STARTUP`**
+  skips startup+gems so a trivial program can exercise the VM core under qemu
+  (no effect unless set). Also relies on `--no-gc` to avoid the GC stub.
+- **The hard remaining piece — the invoker/frame-ABI interlock.** The
+  `RSP_LOCAL_FRAME`/`RSP_CFP`/`CFP_LFP` frame offsets assume x86's stack
+  layout (`call` pushes the return address, `vm_entry` does `push rbp`).
+  aarch64 uses `blr`/`lr` (no pushed return address) + `stp fp,lr`, so
+  `method_invoker` + `call_invoker` + `vm_entry`/epilogue must replicate the
+  *same* relative stack layout the offset constants expect (or define
+  aarch64-specific offsets). This needs careful design + qemu-debugging — it
+  is the trickiest interlock of the port and the gate to a running `42`.
+  Plan: implement `method_invoker` (prologue/get_func_data/frame-setup/
+  call_invoker/epilogue), `gen_wrapper` (vm_stub = `b vm_entry`), and
+  `init_method` (op 172: stack-alloc + nil-fill + captured guard), then
+  `MONORUBY_SKIP_STARTUP=1 qemu-aarch64 … monoruby --no-gc -e '42'`.
+
+- **M0/M1 codegen patterns validated under qemu** (`aarch64-proto/`, a
+  standalone monoasm-only crate detached from the workspace). Since the
+  in-crate VM port can't be qemu-tested until it links, validate the core
+  encoding patterns up front (à la phase 1). **8 tests pass under
+  qemu-aarch64**, covering everything the VM-tier port needs:
+  - global-register mapping `pc r13→x21`, `lfp r14→x22`, `acc r15→x23`
+    (callee-saved + prologue/epilogue);
+  - `fetch_and_dispatch` (`ldrb` + `ldr Xtgt,[Xtbl,Xop,lsl #3]` + `br`);
+  - `blr` runtime call (AAPCS64);
+  - slot access `[r14+reg*8-LFP_SELF]` (`neg`/`add_lsl`/`sub`);
+  - conditional branch (`cbz` + computed pc target);
+  - guarded tagged-fixnum add (`tbz` tag guard → `brk` slow path, re-tag);
+  - **method call / frame**: invoker-style entry, `push_frame`/`set_lfp`
+    (save caller lfp + resume pc, pass arg, switch lfp), nested dispatch,
+    and `ret` teardown (resume caller, or `leave; ret` to Rust at the bottom
+    frame) — incl. 2-deep nested calls.
+
+  This is the validated reference encoding set for the real in-crate port:
+  the port becomes transcription of known-good shapes, not blind asm.
 
 ## Map of what must be ported (VM-only)
 
@@ -112,28 +211,182 @@ monoruby's global registers (from `CLAUDE.md`) → callee-saved A64 regs:
 prologue, like the x86 `pushq rbp`). FP `xmm0/xmm1` scratch → `d0/d1`.
 Frame offsets (`LFP_OUTER +0 … LFP_ARG0 +32`) are unchanged.
 
-## The core problem: no aarch64 `monoasm!{}` DSL
+## The aarch64 DSL now exists (resolved)
 
-Phase 1 added **builder methods** (`jit.add(X0,X1,X2)`), not a
-`monoasm!{}`-style macro. Every handler today is written in the x86 macro
-DSL. Two ways forward:
+The earlier blocker ("no aarch64 `monoasm!{}` DSL") is **gone**. The monoasm
+`aarch` branch ships a full `monoasm_arm64!` proc-macro (a proc-macro can't
+see `target_arch`, so it's a separate entry point from `monoasm!`). It
+covers everything M0 needs — `ldr/str/ldrb/ldp/stp`, `mov/movz/movk`,
+`add/sub/cmp/and/orr/eor/mul/sdiv/udiv`, `b/bl/blr/br/ret/cbz/cbnz/tbz`,
+`b.<cond>`, `csel/cset`, and the FP ops — and is exercised by the branch's
+`tests/arm64/dsl.rs`. So each handler can be a **near line-for-line port**
+of its `monoasm!{}` source into `monoasm_arm64!{}` (option A is effectively
+free; the builder-method rewrite of option B is unnecessary).
 
-- **(A) aarch64 DSL macro** in `monoasm_macro` — large up-front cost, lives
-  in the (out-of-scope) monoasm repo, but makes each handler a near
-  line-for-line port. Best long-term ergonomics.
-- **(B) builder-method rewrite** behind `cfg(target_arch)` — no macro work;
-  verbose but mechanical; can start immediately once monoasm `aarch` is a
-  dependency.
+## Empirical build findings (this session)
 
-**Recommendation:** start with **(B)** for the dispatch core + the first
-opcode family (proves the whole pipeline end-to-end under qemu fastest),
-then decide whether the DSL (A) pays for itself before grinding through the
-~150 remaining handlers. Either way, introduce an **arch-abstraction
-seam** so handler bodies select x86 vs aarch64 via `cfg(target_arch)` at a
-single, well-defined layer (the `Codegen` impl), keeping the x86 path
-byte-for-byte unchanged.
+Cross-compiling `cargo check -p monoruby --target aarch64-unknown-linux-gnu
+--features no-jit` got all the way to the `monoruby` crate:
 
-## Recommended architecture seam
+- **Every non-monoruby dependency cross-compiles cleanly**, including the C
+  deps (`onigmo-regex`, `libffi-sys`, `ruby-prism{,-sys}`) and the rustls
+  stack. The only cross-compile dep blocker was `openssl-sys` (via
+  `ruruby-parse`'s `reqwest`), now fixed by switching to rustls.
+- **monoruby fails only inside `monoasm!{}`** — `no method named enc_mr …`,
+  `cannot find type Imm/Reg/Scale …`. These are x64-encoder internals that
+  `monoasm`'s `lib.rs` gates behind `#[cfg(target_arch = "x86_64")]`. So the
+  compiler *forces* the seam: the x86 `monoasm!` bodies simply do not exist
+  on an aarch64 target and must be `cfg`-excluded there.
+
+`monoasm!{}` block inventory (the work to port/exclude):
+
+| Area | `monoasm!` blocks | Tier |
+|------|------:|------|
+| `codegen/jitgen/**` | ~347 | JIT — **out of scope**, exclude on aarch64 |
+| `vmgen + invoker + wrapper + jit_module + patch + codegen.rs` | ~213 | VM — port to `monoasm_arm64!` |
+
+Note `no-jit` is a **runtime** toggle (`if !cfg!(feature="no-jit")` inside
+functions), **not** a module gate — so `jitgen` is compiled even with
+`--features no-jit`. The JIT-tier code must be `cfg`-excluded for aarch64,
+**but `jitgen` is not purely JIT** (see the review finding below): it also
+houses VM/bytecode infrastructure (`basic_block`, `conv`) that the
+interpreter and `bytecodegen` use unconditionally. So the module cannot be
+excised wholesale — the infra must be relocated first, then the genuinely
+JIT-tier remainder gated. `jitgen` is referenced from ~19 files / ~23 sites
+outside `codegen/jitgen/`.
+
+### Seam selector — decided: the existing `no-jit` feature + arch
+
+Decision (owner): reuse the existing **`no-jit`** cargo feature rather than
+inventing a new one. `build.rs` now emits a single source-of-truth cfg:
+
+```rust
+// monoruby/build.rs
+println!("cargo::rustc-check-cfg=cfg(jit)");
+let x86 = env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64");
+let no_jit = env::var_os("CARGO_FEATURE_NO_JIT").is_some();
+if x86 && !no_jit { println!("cargo::rustc-cfg=jit"); }
+```
+
+So **`jit` ⇔ x86-64 AND not `no-jit`**. Consequences:
+
+- x86 default → `jit` on → JIT compiled (today's behaviour, unchanged).
+- x86 `--features no-jit` → `jit` **off** → JIT *compile-excluded* (VM only).
+- any aarch64 → `jit` off → JIT compile-excluded (VM only), always.
+
+The big win: `cargo check --features no-jit` on **x86** is a faithful proxy
+for the aarch64 JIT-excision — it exercises the exact same `#[cfg(not(jit))]`
+paths **without qemu and without needing the A64 asm port done**. Make that
+green first; aarch64 then only adds the VM-tier asm port on top.
+
+### JIT-excision roadmap (verify with `cargo check --features no-jit` on x86)
+
+Gating `#[cfg(jit)] pub mod jitgen;` and checking `--features no-jit`
+surfaced **78 first-wave errors**. **Reviewing** them (rather than fixing
+blindly) revealed that the naive "excise the whole `jitgen` module" plan is
+**wrong** — `jitgen` mixes JIT-tier code with VM/bytecode infrastructure.
+Two pieces are load-bearing for the interpreter and must NOT be gated:
+
+- **`basic_block` (`BasicBlockId` / `BasicBlockInfo` /
+  `BasicBlockInfoEntry`)** — built **unconditionally** by `bytecodegen`
+  (`encode.rs:115`, for every method) and stored in `ISeqInfo.bb_info`;
+  read by the VM/runtime in `globals/store/iseq.rs` (`get_bb_pc`, `get_bb`),
+  `store.rs:826`, `function.rs:1370`. Despite living in `jitgen`, it is
+  bytecode-level infra. **Relocate** the `basic_block` module out of
+  `jitgen` (e.g. into `bytecodegen/` or `globals/store/`) and re-point the
+  `crate::jitgen::BasicBlock*` imports.
+(Correction after closer reading: `conv` does **not** need relocating. Its
+`builtins/fiber.rs:106` and `class.rs:443` uses are inside `ir.inline(...)`
+generators — JIT-tier, gated — and the `builtins/kernel.rs` `conv(...)` calls
+are an unrelated local FFI helper. So `conv` stays in `jitgen` and is gated
+with the rest. Only `basic_block` is load-bearing for the VM.)
+
+**(Done — three VM-shared helpers relocated/decoupled out of `jitgen`:
+`basic_block` → `crate::basic_block`; `icmp_*` → `codegen.rs`;
+`execute_gc_inner` now takes a write-back closure. Each is a pure /
+dual-green commit. With these out of the way the VM tier (`vmgen`,
+`codegen.rs` GC poll) compiles with `jitgen` excluded.)**
+
+### Remaining gating worklist (after relocations: ~79 errors)
+
+Re-gating `#[cfg(jit)] pub mod jitgen;` + `lib.rs` `JitContext` re-export and
+running `cargo check --features no-jit` now leaves ~79 errors, all genuinely
+JIT-tier:
+
+- **~60 in builtins — the inline-method system** (13 files:
+  `object, array, string, kernel, fiddle, class, fiber, math, hash, range,
+  arithmetic_sequence, numeric/float, numeric/integer`). Per file: gate the
+  `use jitgen::…`/`use jitgen::JitContext` import, gate each inline generator
+  fn (signature uses `&mut AsmIr`/`&JitContext`), and make the ~37
+  `define_builtin_inline_func*` call sites conditional —
+  `#[cfg(jit)]` the inline form + `#[cfg(not(jit))]` a plain
+  `define_builtin_func`/`_with` (the VM fn is already registered separately,
+  so this is a faithful fallback). Also gate the `InlineGen` type alias
+  (`globals.rs:~27`) and `builtins.rs`'s `AbstractState`/`asmir::*` imports.
+- **Codegen / driver JIT internals (codegen-side):**
+  - `codegen.rs:44,48` imports `AsmEvict` / `SpecializedCodeInfo` → gate, plus
+    the JIT-only `Codegen` fields they type and their init/uses:
+    `compilation_unit` (4), `asm_return_addr_table` (2), `specialized_info`
+    (7), `specialized_base` (3), `return_addr_table` (5).
+  - `jit_execute_gc` (codegen.rs) and `jit_check_stack` (jit_module.rs:268)
+    call `gen_write_back` → gate the methods `#[cfg(jit)]` (their callers are
+    JIT: `compile.rs:330`, the JIT GC path).
+  - `patch.rs` `guard_class2`, `compiler.rs` `jit_compile` (+ the
+    `jit_compile_patch`/`jit_compile_loop` driver) → gate; the VM's
+    "compile-when-hot" trigger becomes a no-op under `not(jit)`.
+  - `bytecode.rs:357 method_cache()` + `MethodCacheEntry` import → gate
+    (called only from `jitgen/trace_ir.rs`).
+  - `TraceIr::format` dump sites (`codegen.rs` disasm dump, `dump.rs:116`,
+    `store.rs:830`) → gate the `format`/`from_pc` calls.
+
+This is mechanical but cascades (Codegen fields → init → uses; `compiler.rs`
+is largely the JIT driver). It is **not** independently verifiable until
+complete (no-jit only goes green at the end), but x86 **default** stays green
+at every step — check it after each file.
+
+Everything else flagged is genuinely **JIT-tier and gate-able** with
+`#[cfg(jit)]`:
+
+- **44 × `AsmIr` — builtins' inline-method generators** (the dominant
+  coupling). `define_builtin_inline_funcs_with_kw` already registers the VM
+  function via `new_builtin_fn(address,…)` *and* the inline generator
+  separately, so **every inline builtin already has a VM fallback**. Give
+  `define_builtin_inline_func*` a `#[cfg(not(jit))]` arm that ignores
+  `inline_gen` (VM function only), gate each generator fn + the `ir.inline`
+  closures under `#[cfg(jit)]`. Files:
+  `builtins/{object,array,string,kernel,fiddle,class,fiber}.rs`,
+  `builtins/numeric/{float,integer}.rs`, `builtins.rs`.
+- **~15 × JIT-tier `Codegen`/`JitModule` methods**: `icmp_{eq,ne,lt,le,gt,
+  ge}`, `guard_class2`, `jit_compile`, `gen_write_back`, `jit_execute_gc`
+  (codegen.rs:768), `jit_check_stack` / `execute_gc_inner` (jit_module.rs:
+  240/268), `immediate_eviction` — gate methods + call sites.
+- **`MethodCacheEntry`** (`trace_ir.rs:50`) + `bytecode.rs:357
+  method_cache()` — JIT-only (`method_cache()` is called *only* from
+  `jitgen/trace_ir.rs:418`). Gate both.
+- **`TraceIr` dump sites** (`codegen.rs:1355` disasm dump,
+  `globals/dump.rs:116`, `store.rs:830`; `dump.rs:194` is already under
+  `cfg(deopt/profile)`) — gate the `TraceIr::format`/`from_pc` calls under
+  `#[cfg(jit)]` (the `bb_info.is_bb_head` part next to them stays — it's
+  basic_block, relocated/kept).
+- **Misc type re-exports/aliases**: `codegen.rs:17,21` (`AsmEvict`,
+  `SpecializedCodeInfo` → the JIT-only `Codegen` fields
+  `asm_return_addr_table`/`specialized_info`/`specialized_base`/
+  `compilation_unit` and their init/uses), `lib.rs:25` (`JitContext`
+  re-export), `globals.rs:28-30` (the `InlineGen` fn-type alias using
+  `AbstractState`/`AsmIr`/`JitContext`), `builtins.rs:48-49`.
+
+Green-gate: when `cargo check --features no-jit` (x86) passes, the excision
+is complete and correct. x86 default must stay green at every commit (it
+keeps `jit` on, so all `#[cfg(jit)]` code remains).
+
+### Then: VM-tier asm port (aarch64)
+
+Only after excision: port the ~213 VM-tier `monoasm!` blocks (+ the ~50
+builtin runtime `monoasm!` blocks) to `monoasm_arm64!` behind
+`#[cfg(not(jit))]` / sibling modules, per the milestones below, until
+`cargo build --target aarch64-unknown-linux-gnu` links and runs under qemu.
+
+## Architecture seam (sibling modules)
 
 1. Keep `Codegen`/`JitMemory` shared. Add `#[cfg(target_arch =
    "aarch64")]` sibling modules: `codegen/vmgen_a64.rs`, etc., OR
@@ -182,22 +435,26 @@ byte-for-byte unchanged.
    signing constraint).
 2. In monoruby `Cargo.toml`, repoint both `monoasm` and `monoasm_macro` to
    `branch = "aarch"` (or a pinned rev) for the duration of phase 2.
-3. Add `monoruby/.cargo/config.toml` cross runner (see below). Note this
-   container's repo ignores `/.*`, so it is not committed; recreate it.
+3. Cross runner is **already committed**: `.cargo/config.toml` carries the
+   `[target.aarch64-unknown-linux-gnu]` linker+runner, and
+   `bin/setup-aarch64-cross` installs the host tooling. No manual recreation
+   needed — just run the script once per fresh container.
 
 ## Dev/verify commands (this container)
 
 ```sh
-# monoasm foundation (already passing)
+# one-time per container: install qemu + cross gcc + rust std, smoke-test
+bin/setup-aarch64-cross
+
+# sanity check the cross-test pipeline on a pure-Rust workspace crate
+cargo test -p rubymap --target aarch64-unknown-linux-gnu        # runs under qemu
+
+# monoasm foundation (requires monoasm checked out as a path/workspace dep)
 cargo +nightly-2026-05-18 test -p monoasm --test arm64_encoding
 cargo +nightly-2026-05-18 test -p monoasm --target aarch64-unknown-linux-gnu --test arm64_exec
 cargo +nightly-2026-05-18 test -p monoasm                      # x86 regression
 
-# monoruby aarch64 build (after Cargo.toml repoint), under qemu:
-#   monoruby/.cargo/config.toml:
-#     [target.aarch64-unknown-linux-gnu]
-#     linker = "aarch64-linux-gnu-gcc"
-#     runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
+# monoruby aarch64 build (after Cargo.toml repoint to monoasm `aarch`):
 cargo +nightly-2026-05-18 build --target aarch64-unknown-linux-gnu --features no-jit
 ```
 

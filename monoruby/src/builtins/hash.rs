@@ -24,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
     globals.define_builtin_func(HASH_CLASS, ">=", ge, 1);
-    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
+    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, inline_gen!(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
@@ -773,6 +773,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         )
     }
 }
+
+#[cfg(jit)]
 
 fn hash_index(
     state: &mut AbstractState,

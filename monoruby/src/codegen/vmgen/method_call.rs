@@ -93,7 +93,7 @@ impl Codegen {
             movq rdx, rcx;
             movq rcx, r14;
             movl r8, [r13 + (CALLSITE_ID)];
-            movq rax, (invoke_method_missing);
+            movq rax, (runtime::invoke_method_missing);
             call rax;
             jmp  done;
         };
@@ -308,20 +308,3 @@ impl Codegen {
     }
 }
 
-extern "C" fn invoke_method_missing(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    receiver: Value,
-    lfp: Lfp,
-    callsite: CallSiteId,
-) -> Option<Value> {
-    if globals[callsite].name.is_none() {
-        // This is a super call. In CRuby, super never falls through to
-        // method_missing when no superclass method is found.
-        // The error was already set by find_super, so just return None
-        // to let vm_handle_error propagate it.
-        return None;
-    }
-    vm.discard_error();
-    vm.invoke_method_missing(globals, receiver, lfp, callsite)
-}

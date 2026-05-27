@@ -16,4 +16,12 @@ num = "0.4"
 num-bigint = "0.4.2"
 console = "0.15.11"
 clap = { version = "4.5.35", features = ["derive", "cargo"] }
-reqwest = { version = "0.12.15", features = ["blocking"] }
+# Use the pure-Rust rustls TLS backend instead of the default native-tls
+# (OpenSSL). reqwest is only used by this crate's own `main.rs` binary, and
+# avoiding the openssl-sys C dependency lets the workspace cross-compile to
+# aarch64 (for the aarch64 backend's qemu test environment) without a target
+# OpenSSL install.
+reqwest = { version = "0.12.15", default-features = false, features = [
+  "blocking",
+  "rustls-tls",
+] }

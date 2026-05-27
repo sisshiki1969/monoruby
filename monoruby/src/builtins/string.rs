@@ -3,6 +3,7 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
+#[cfg(jit)]
 use jitgen::JitContext;
 
 //
@@ -70,7 +71,7 @@ pub(super) fn init(globals: &mut Globals) {
         "bytesize",
         &[],
         bytesize,
-        Box::new(string_bytesize),
+        inline_gen!(string_bytesize),
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
@@ -3378,6 +3379,8 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let length = lfp.self_val().as_rstring_inner().len();
     Ok(Value::integer(length as i64))
 }
+
+#[cfg(jit)]
 
 fn string_bytesize(
     state: &mut AbstractState,

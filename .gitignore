@@ -1,4 +1,5 @@
 /target
+/aarch64-proto/target
 *.bin
 *.profraw
 *.disas

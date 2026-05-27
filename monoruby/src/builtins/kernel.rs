@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(jit)]
 use jitgen::JitContext;
 use num::ToPrimitive;
 use num::Zero;
@@ -11,7 +12,7 @@ use std::{io::Write, mem::transmute};
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(kernel_nil), 0);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen!(kernel_nil), 0);
     globals.define_builtin_func(kernel_class, "!~", not_match, 1);
     //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
@@ -71,7 +72,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "block_given?",
         block_given,
-        Box::new(kernel_block_given),
+        inline_gen!(kernel_block_given),
         0,
     );
     //globals.define_builtin_module_func_rest(kernel_class, "p", p);
@@ -186,8 +187,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
 
-    //globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
-    //globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____max", max, inline_gen!(inline_max), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____min", min, inline_gen!(inline_min), 2);
 
     // Kernel methods (matching CRuby: these are defined on Kernel, not Object)
     globals.define_builtin_func(kernel_class, "class", class, 0);
@@ -204,14 +205,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "object_id",
         super::object::object_id,
-        Box::new(super::object::object_object_id),
+        inline_gen!(super::object::object_object_id),
         0,
     );
     globals.define_builtin_inline_func_with(
         kernel_class,
         "respond_to?",
         respond_to,
-        Box::new(object_respond_to),
+        inline_gen!(object_respond_to),
         1,
         2,
         false,
@@ -230,7 +231,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "is_a?",
         &["kind_of?"],
         is_a,
-        Box::new(kernel_is_a),
+        inline_gen!(kernel_is_a),
         1,
     );
     globals.define_builtin_inline_funcs_with_kw(
@@ -238,7 +239,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "send",
         &["__send__"],
         crate::builtins::send,
-        Box::new(crate::builtins::object_send),
+        inline_gen!(crate::builtins::object_send),
         0,
         0,
         true,
@@ -307,6 +308,8 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
+#[cfg(jit)]
+
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -356,6 +359,8 @@ fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let res = vm.invoke_method_inner(globals, IdentId::_MATCH, lhs, &[rhs], None, None)?;
     Ok(Value::bool(!res.as_bool()))
 }
+
+#[cfg(jit)]
 
 fn kernel_block_given(
     state: &mut AbstractState,
@@ -2877,6 +2882,8 @@ pub(crate) fn send(
     )
 }
 
+#[cfg(jit)]
+
 pub fn object_send(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -2938,6 +2945,8 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         lfp.self_val().is_kind_of(&globals.store, class),
     ))
 }
+
+#[cfg(jit)]
 
 fn kernel_is_a(
     state: &mut AbstractState,
@@ -3227,6 +3236,8 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     Ok(Value::bool(false))
 }
+
+#[cfg(jit)]
 
 fn object_respond_to(
     state: &mut AbstractState,

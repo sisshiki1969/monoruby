@@ -9,10 +9,12 @@ use super::*;
 /// function pointer into the generated code, and calls it directly (ABI:
 /// `extern "C" fn(ClassId, &mut Globals) -> Value`), matching the slow-path
 /// `call_alloc_func` helper.
+#[cfg(jit)]
 pub fn gen_class_new_object() -> Box<InlineGen> {
     Box::new(gen_class_new_inline)
 }
 
+#[cfg(jit)]
 pub fn gen_class_allocate() -> Box<InlineGen> {
     Box::new(gen_class_allocate_inline)
 }
@@ -25,6 +27,7 @@ pub fn gen_class_allocate() -> Box<InlineGen> {
 /// back (returns false ⇒ normal native `allocate`) when the call site
 /// is not simple or the class has no `alloc_func`.
 ///
+#[cfg(jit)]
 pub(super) fn gen_class_allocate_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -99,7 +102,7 @@ pub(super) fn init(globals: &mut Globals) {
         CLASS_CLASS,
         "__builtin_allocate__",
         allocate,
-        gen_class_allocate(),
+        inline_gen!(gen_class_allocate()),
         0,
     );
     globals.add_method(
@@ -113,7 +116,7 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         &[],
         new,
-        gen_class_new_object(),
+        inline_gen!(gen_class_new_object()),
         0,
         0,
         true,
@@ -367,6 +370,7 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
 ///
 /// Bails to the slow path (Rust `new`, which raises `TypeError`) when the
 /// class has no allocator, mirroring `call_alloc_func`.
+#[cfg(jit)]
 pub(super) fn gen_class_new_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,

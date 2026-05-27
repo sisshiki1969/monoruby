@@ -2,8 +2,8 @@ use indexmap::IndexMap;
 
 use super::*;
 use crate::{
+    basic_block::{BasicBlockId, BasicBlockInfo},
     bytecodegen::BcIndex,
-    codegen::jitgen::{BasicBlockId, BasicBlockInfo},
 };
 
 #[derive(Clone, Debug)]

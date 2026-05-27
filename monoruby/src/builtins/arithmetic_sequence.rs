@@ -43,28 +43,28 @@ pub(super) fn init(globals: &mut Globals) {
         ARITHMETIC_SEQUENCE_CLASS,
         "begin",
         begin,
-        Box::new(as_begin_inline),
+        inline_gen!(as_begin_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "end",
         end,
-        Box::new(as_end_inline),
+        inline_gen!(as_end_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "step",
         step,
-        Box::new(as_step_inline),
+        inline_gen!(as_step_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "exclude_end?",
         exclude_end,
-        Box::new(as_exclude_end_inline),
+        inline_gen!(as_exclude_end_inline),
         0,
     );
     // `each` is intentionally NOT registered here — it's defined in
@@ -109,6 +109,8 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_arithmetic_sequence_inner().begin())
 }
 
+#[cfg(jit)]
+
 fn as_begin_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -132,6 +134,8 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(lfp.self_val().as_arithmetic_sequence_inner().end())
 }
 
+#[cfg(jit)]
+
 fn as_end_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -154,6 +158,8 @@ fn as_end_inline(
 fn step(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().as_arithmetic_sequence_inner().step())
 }
+
+#[cfg(jit)]
 
 fn as_step_inline(
     state: &mut AbstractState,
@@ -185,6 +191,8 @@ fn exclude_end(
     ))
 }
 
+#[cfg(jit)]
+
 fn as_exclude_end_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -215,6 +223,7 @@ fn as_exclude_end_inline(
 /// (`begin` / `end` / `step`). Loads a 64-bit `Value` from the given
 /// offset within the receiver's `RValue`. AS has no source-level literal
 /// form, so unlike Range we don't fold against a literal here.
+#[cfg(jit)]
 fn inline_field_load(
     state: &mut AbstractState,
     ir: &mut AsmIr,

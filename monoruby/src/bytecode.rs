@@ -1,3 +1,4 @@
+#[cfg(jit)]
 use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
 
 use super::*;
@@ -354,6 +355,7 @@ impl BytecodePtr {
         self.classid1()
     }
 
+    #[cfg(jit)]
     pub(crate) fn method_cache(self) -> Option<MethodCacheEntry> {
         if let Some(cached_class) = self.cached_class1() {
             Some(MethodCacheEntry {

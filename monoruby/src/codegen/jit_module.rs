@@ -1,6 +1,7 @@
 use super::*;
 
 impl JitModule {
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
@@ -58,6 +59,7 @@ impl JitModule {
     /// ### destroy
     /// - stack
     ///
+    #[cfg(target_arch = "x86_64")]
     fn init(&mut self) {
         let raise = self.entry_raise.clone();
         let overflow = self.vm_stack_overflow.clone();
@@ -122,6 +124,7 @@ impl JitModule {
     /// - rbx: &mut Executor
     /// - r12: &mut Globals
     ///
+    #[cfg(target_arch = "x86_64")]
     fn gen_entry_panic(&mut self, label: DestLabel) {
         monoasm! {&mut self.jit,
         label:
@@ -150,6 +153,7 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
+    #[cfg(target_arch = "x86_64")]
     fn gen_f64_to_val(&mut self, label: DestLabel) {
         let normal = self.label();
         let heap_alloc = self.label();
@@ -235,11 +239,15 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
+    /// Emit the GC poll. `write_back` emits any register write-back into the
+    /// cold (page-1) path before the GC call; the VM passes a no-op, the JIT
+    /// passes the spill write-back. Taking a closure keeps the JIT-only
+    /// `WriteBack` type out of this VM-tier helper's signature.
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn execute_gc_inner(
         &mut self,
-        wb: Option<&jitgen::WriteBack>,
         error: &DestLabel,
-        base: usize,
+        write_back: impl FnOnce(&mut Self),
     ) {
         let alloc_flag = self.alloc_flag.clone();
         let gc = self.jit.label();
@@ -253,9 +261,7 @@ impl JitModule {
         };
         self.jit.select_page(1);
         self.jit.bind_label(gc);
-        if let Some(wb) = wb {
-            self.gen_write_back(wb, base);
-        }
+        write_back(self);
         monoasm! { &mut self.jit,
             call exec_gc;
             testq rax, rax;
@@ -265,6 +271,7 @@ impl JitModule {
         self.jit.select_page(0);
     }
 
+    #[cfg(jit)]
     pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());

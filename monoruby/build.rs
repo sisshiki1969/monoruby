@@ -54,6 +54,18 @@ fn find_ruby() -> Option<String> {
 }
 
 fn main() {
+    // The JIT compiler (`codegen::jitgen`) emits x86-64 machine code and is
+    // only built when targeting x86-64 with the JIT enabled. The `no-jit`
+    // cargo feature compile-time-excludes it (VM tier only), and any
+    // non-x86-64 target (e.g. the aarch64 VM port) always builds VM-only.
+    // Downstream code gates on `#[cfg(jit)]` / `#[cfg(not(jit))]`.
+    println!("cargo::rustc-check-cfg=cfg(jit)");
+    let target_x86 = std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64");
+    let no_jit = std::env::var_os("CARGO_FEATURE_NO_JIT").is_some();
+    if target_x86 && !no_jit {
+        println!("cargo::rustc-cfg=jit");
+    }
+
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 
     let lib_dir = lib_path.join("lib");
