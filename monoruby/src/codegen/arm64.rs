@@ -2731,5 +2731,13 @@ impl Codegen {
         self.dispatch[122] = neg;
         self.dispatch[123] = bitnot;
         self.dispatch[124] = not;
+
+        // Publish the freshly-emitted no-opt replacements: on macOS/aarch64
+        // this flips the MAP_JIT pages back to executable so the dispatch
+        // table entries above can actually be jumped to. Mirrors the
+        // matching `self.jit.finalize()` at the tail of vmgen.rs's x86-64
+        // `remove_vm_bop_optimization`; without it, BOP-redefinition tests
+        // SIGBUS on Apple Silicon.
+        self.jit.finalize();
     }
 }
