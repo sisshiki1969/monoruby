@@ -75,21 +75,34 @@ end
 # `libfoo.dylib`) and search paths (`/opt/homebrew/lib` etc.). Without
 # this override, `dlopen` on macOS tries `libfoo.so` and fails for
 # every shared library. Derive the values from `RUBY_PLATFORM`, which
-# `Globals::new` already set to the actually-running host
-# (`arm64-darwin`, `x86_64-darwin`, `aarch64-linux`, or
-# `x86_64-linux`).
-case RUBY_PLATFORM
-when 'arm64-darwin'      then __host_cpu, __host_os = 'arm64',   'darwin'
-when 'x86_64-darwin'     then __host_cpu, __host_os = 'x86_64',  'darwin'
-when 'aarch64-linux'     then __host_cpu, __host_os = 'aarch64', 'linux'
-else                          __host_cpu, __host_os = 'x86_64',  'linux'
-end
+# `Globals::new` sets to the actually-running host. When a host CRuby
+# was present at build time this is its exact RUBY_PLATFORM, so on
+# macOS it carries the Darwin major version (e.g. `arm64-darwin23`);
+# otherwise it is a cfg-derived default (`arm64-darwin`, `x86_64-darwin`,
+# `aarch64-linux`, or `x86_64-linux`).
+#
+# `arch` / `sitearch` must reproduce the host's value verbatim
+# (including the Darwin version): rubygems keys each gem's built
+# C-extension directory on `Gem::Platform.local` — which parses this
+# `arch` — so a stripped `arm64-darwin` would look in a nonexistent
+# `extensions/arm64-darwin/...` and warn that every C-extension gem is
+# unbuilt. host_os/target_os stay version-stripped (`darwin` / `linux`)
+# for ffi's substring matching. Avoid regex here — a `$~` write at this
+# top-level scope would leak `defined?($&)` truthiness into user code.
+__host_cpu, __host_os_full = RUBY_PLATFORM.split('-', 2)
+__host_cpu = 'x86_64' if __host_cpu.nil? || __host_cpu.empty?
+__host_os_full = 'linux' if __host_os_full.nil? || __host_os_full.empty?
+__host_os =
+  if __host_os_full.start_with?('darwin') then 'darwin'
+  elsif __host_os_full.start_with?('linux') then 'linux'
+  else __host_os_full
+  end
 RbConfig::CONFIG['host_os']    = __host_os
 RbConfig::CONFIG['host_cpu']   = __host_cpu
 RbConfig::CONFIG['target_os']  = __host_os
 RbConfig::CONFIG['target_cpu'] = __host_cpu
-RbConfig::CONFIG['arch']       = "#{__host_cpu}-#{__host_os}"
-RbConfig::CONFIG['sitearch']   = "#{__host_cpu}-#{__host_os}"
+RbConfig::CONFIG['arch']       = RUBY_PLATFORM
+RbConfig::CONFIG['sitearch']   = RUBY_PLATFORM
 RbConfig::CONFIG['target']     = "#{__host_cpu}-pc-#{__host_os}"
 RbConfig::CONFIG['host']       = "#{__host_cpu}-pc-#{__host_os}"
 

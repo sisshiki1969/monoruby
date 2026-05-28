@@ -466,10 +466,15 @@ impl Globals {
         // RUBY_PLATFORM mirrors CRuby's `<arch>-<os>` convention so Ruby
         // code that branches on it (e.g. fiddle test fixtures picking
         // libc.so.6 vs libSystem.B.dylib) sees the right thing on the
-        // host monoruby is actually running on. The default stays
-        // `x86_64-linux` — monoruby's supported target — and macOS adds
-        // a `darwin` flavor for the AArch64 work hosted on Apple Silicon.
-        const PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        // host monoruby is actually running on. When a host CRuby was
+        // present at build time, build.rs bakes its exact RUBY_PLATFORM
+        // into MONORUBY_RUBY_PLATFORM — crucially including the macOS
+        // Darwin major version (e.g. `arm64-darwin23`), which startup.rb
+        // feeds into `RbConfig::CONFIG["arch"]` so rubygems finds each
+        // gem's built C-extension directory. The cfg!-derived default is
+        // only the fallback when no Ruby was available at build time.
+        const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos"))
+        {
             "arm64-darwin"
         } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
             "x86_64-darwin"
@@ -478,12 +483,16 @@ impl Globals {
         } else {
             "x86_64-linux"
         };
+        let platform = option_env!("MONORUBY_RUBY_PLATFORM")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_PLATFORM);
         let mut ruby_description =
-            Value::string(format!("{pcg_name} {pcg_version} [{PLATFORM}]"));
+            Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
         let mut ruby_engine = Value::string_from_str("ruby");
         let mut ruby_version_val = Value::string_from_str(&ruby_version);
         let mut ruby_engine_version = Value::string_from_str(&ruby_version);
-        let mut ruby_platform = Value::string_from_str(PLATFORM);
+        let mut ruby_platform = Value::string_from_str(platform);
         let mut ruby_copyright =
             Value::string_from_str("ruby - Copyright (C) 1993-2025 Yukihiro Matsumoto");
         let mut ruby_release_date = Value::string_from_str("2025-12-25");
