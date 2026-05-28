@@ -178,7 +178,7 @@ impl Globals {
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(None);
         }
-        let res = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
+        let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
             let relative = self
                 .load_path
@@ -197,7 +197,14 @@ impl Globals {
             load_file(&canonicalized_path)?
         };
         self.add_loaded_feature(&canonicalized_path);
-        Ok(Some(res))
+        // Return `canonicalized_path` (the `path::absolute` form we just
+        // registered) rather than `load_file`'s symlink-resolved path:
+        // `Executor::require` uses the returned path to
+        // `remove_loaded_feature` if the require body raises, and it must
+        // match the entry we added or the cleanup silently misses (on
+        // macOS `/var/folders/..`→`/private/var/folders/..` symlinks the
+        // two diverge, leaving a failed require un-retriable).
+        Ok(Some((file_body, canonicalized_path)))
     }
 
     ///
