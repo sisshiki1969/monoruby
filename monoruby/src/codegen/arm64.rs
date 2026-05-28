@@ -1788,6 +1788,7 @@ impl Codegen {
     /// func_id is read from `[pc+12]`.
     fn a64_class_def_run(&mut self) {
         let skip = self.jit.label();
+        let raise = self.entry_raise.clone();
         // enter_classdef(vm, globals, func_id, self) -> &FuncData
         self.jit.ldr32(X2, PC, 12); // func_id
         self.jit.mov(X3, X25);
@@ -1843,6 +1844,14 @@ impl Codegen {
         self.jit.ldr(PC, SP, 0);
         self.jit.ldr(ACC, SP, 8);
         self.jit.add_imm(SP, SP, 16, 0);
+        // If the class/module body raised, X0 is null: propagate the
+        // error now (mirrors the trailing `vm_handle_error` in the x86
+        // `class_def_sub`). Without this the exception is silently
+        // dropped and left pending, tripping the `set_error` guard on the
+        // next error. PC/ACC are already restored so entry_raise sees the
+        // caller's frame, and exit_classdef above has popped the class
+        // context.
+        self.jit.cbz_label(X0, &raise);
         // store result to dst [PC+4]
         self.jit.ldrh(X10, PC, 4);
         self.jit.cbz_label(X10, &skip);
