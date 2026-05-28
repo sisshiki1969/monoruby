@@ -164,11 +164,24 @@ impl Globals {
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
-        let canonicalized_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        // CRuby stores the path as passed to `require`, not its
+        // symlink-resolved form. `Path::canonicalize` resolves every
+        // symlink (e.g. on macOS where `/tmp` is a symlink to
+        // `/private/tmp`), which causes `$LOADED_FEATURES.replace($"
+        // - ['/tmp/foo.rb'])` to fail to remove the entry and the
+        // subsequent re-require to silently no-op. Use `path::absolute`
+        // (no symlink resolution) and then collapse `.` / `..`
+        // lexically via `lexically_normalize` — `path::absolute` alone
+        // keeps `..` on POSIX, so different `..` spellings of the same
+        // file would dedup-miss and double-load. This matches CRuby's
+        // `File.expand_path` keying while leaving symlinks untouched.
+        let canonicalized_path = lexically_normalize(
+            &std::path::absolute(&path).unwrap_or_else(|_| path.clone()),
+        );
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(None);
         }
-        let res = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
+        let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
             let relative = self
                 .load_path
@@ -187,7 +200,14 @@ impl Globals {
             load_file(&canonicalized_path)?
         };
         self.add_loaded_feature(&canonicalized_path);
-        Ok(Some(res))
+        // Return `canonicalized_path` (the `path::absolute` form we just
+        // registered) rather than `load_file`'s symlink-resolved path:
+        // `Executor::require` uses the returned path to
+        // `remove_loaded_feature` if the require body raises, and it must
+        // match the entry we added or the cleanup silently misses (on
+        // macOS `/var/folders/..`→`/private/var/folders/..` symlinks the
+        // two diverge, leaving a failed require un-retriable).
+        Ok(Some((file_body, canonicalized_path)))
     }
 
     ///
@@ -242,6 +262,43 @@ impl Globals {
         }
         load_file(file_name)
     }
+}
+
+///
+/// Lexically collapse `.` and `..` components without touching the
+/// filesystem (no symlink resolution), mirroring CRuby's
+/// `File.expand_path` semantics used to key `$LOADED_FEATURES`.
+///
+/// `std::path::absolute` makes a path absolute but, on POSIX, keeps `..`
+/// to preserve symlink meaning. Two `require_relative` paths that name
+/// the same file via different `..` spellings — e.g. `a/fixtures/x` and
+/// `a/shared/../fixtures/x` — would then get distinct loaded-feature
+/// keys and load the file twice (ruby/spec's `core/struct` fixtures hit
+/// exactly this, retriggering `class Honda < Car` and raising
+/// "superclass mismatch"). Collapsing `..` lexically here dedups them
+/// while still leaving symlinks untouched (so the macOS
+/// `/tmp`→`/private/tmp` `$LOADED_FEATURES` removal stays consistent).
+///
+fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                // Drop a preceding normal segment: `a/b/..` -> `a`.
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // `..` cannot rise above the root; absorb it.
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                // Leading `..` in a relative path: keep it.
+                _ => out.push(comp),
+            },
+            _ => out.push(comp),
+        }
+    }
+    out
 }
 
 pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {

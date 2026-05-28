@@ -43,6 +43,11 @@ pub(crate) const POSIX_SIGNALS: &[i32] = &[libc::SIGINT];
 ///   faults; the kernel core-dump path is the right response. CRuby also
 ///   forbids trapping SEGV/BUS/FPE/ILL (and SIGVTALRM, which it uses
 ///   internally) with `ArgumentError: can't trap reserved signal`.
+// SIGPWR is Linux-only (signal 30); macOS / BSDs do not define it, so we
+// drop it from the trappable set on those hosts. The rest of the table is
+// POSIX-portable. Two cfg-gated definitions keep `TRAPPABLE_SIGNALS` a
+// plain `&[i32]` const so callers in codegen.rs can iterate it as before.
+#[cfg(target_os = "linux")]
 pub(crate) const TRAPPABLE_SIGNALS: &[i32] = &[
     libc::SIGHUP,
     libc::SIGINT,
@@ -64,6 +69,30 @@ pub(crate) const TRAPPABLE_SIGNALS: &[i32] = &[
     libc::SIGWINCH,
     libc::SIGIO,
     libc::SIGPWR,
+    libc::SIGSYS,
+];
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) const TRAPPABLE_SIGNALS: &[i32] = &[
+    libc::SIGHUP,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGUSR1,
+    libc::SIGUSR2,
+    libc::SIGPIPE,
+    libc::SIGALRM,
+    libc::SIGTERM,
+    libc::SIGCHLD,
+    libc::SIGCONT,
+    libc::SIGTSTP,
+    libc::SIGTTIN,
+    libc::SIGTTOU,
+    libc::SIGURG,
+    libc::SIGXCPU,
+    libc::SIGXFSZ,
+    libc::SIGPROF,
+    libc::SIGWINCH,
+    libc::SIGIO,
     libc::SIGSYS,
 ];
 

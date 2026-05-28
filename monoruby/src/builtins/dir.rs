@@ -575,7 +575,17 @@ fn process_glob_pattern(
             "**" => PathComponent::Globstar,
             s => {
                 let normalized = normalize_glob_segment(s);
-                PathComponent::Name(match globset::Glob::new(&normalized) {
+                // macOS's default filesystem (APFS / HFS+) is
+                // case-insensitive but case-preserving. CRuby compiles
+                // with `HAVE_CASEFOLD_FILESYSTEM` and silently adds
+                // FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
+                // also matches `c.rb`. Mirror that on macOS so the
+                // monoruby/CRuby differential tests agree (e.g. the
+                // `Dir.glob("./././C*")` arm of the `glob` test).
+                let mut b = globset::GlobBuilder::new(&normalized);
+                #[cfg(target_os = "macos")]
+                b.case_insensitive(true);
+                PathComponent::Name(match b.build() {
                     Ok(g) => g,
                     Err(e) => {
                         return Err(MonorubyErr::runtimeerr(format!(

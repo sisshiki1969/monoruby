@@ -417,7 +417,7 @@ impl Codegen {
                 let raise = self.entry_raise();
                 monoasm! { &mut self.jit,
                     movq rdi, rbx;
-                    movq rax, (runtime::check_err);
+                    movq rax, (runtime::ensure_end);
                     call rax;
                     testq rax, rax;
                     jne  raise;

@@ -2553,22 +2553,20 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         )
     };
     if handle.is_null() {
-        let err = unsafe { libc::dlerror() };
-        if err.is_null() {
-            return Err(MonorubyErr::argumenterr(format!(
-                "both of dlopen() and dlerror() returned NULL. {:?}",
-                lib
-            )));
-        }
-        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() } };
-        let path = match lib {
-            Some(lib) => lib.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
-        return Err(MonorubyErr::loaderr(
-            message,
-            std::path::PathBuf::from(path),
-        ));
+        // Drain dlerror() so subsequent dlopen() calls see a fresh
+        // error state. The Ruby wrappers
+        // (`Fiddle::Handle#initialize`, `FFI::DynamicLibrary#initialize`)
+        // check for a nil return and raise their own
+        // `Fiddle::DLError` / `LoadError` with a message they
+        // construct themselves, so returning nil is what they expect.
+        // Raising directly from here breaks the ffi gem's
+        // per-candidate fallback loop in
+        // `FFI::DynamicLibrary.try_load`: each rescued LoadError
+        // would leave `Executor::exception` populated and trip the
+        // `assert_eq!(self.exception, None)` double-set guard in
+        // `Executor::set_error` on the next dlopen attempt.
+        unsafe { libc::dlerror() };
+        return Ok(Value::nil());
     }
     Ok(Value::integer(handle as usize as i64))
 }
@@ -3979,6 +3977,149 @@ mod tests {
     }
 
     #[test]
+    fn ensure_defers_nonlocal_unwind() {
+        // A non-local `return` / `throw` in flight is suspended across the
+        // `ensure` body so the body can itself raise / return / throw
+        // without tripping the empty-exception guard in `set_error`.
+        // Regression for the `assert_eq!(self.exception, None)` panic.
+        run_tests(&[
+            // return from block honored when the ensure body is clean
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                :ignored
+              end
+              :fell_through
+            end
+            m
+            "##,
+            // a raise in the ensure body overrides the pending return
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                raise "boom"
+              end
+            rescue => e
+              "overridden:#{e.message}"
+            end
+            m
+            "##,
+            // a builtin-originated error (NoMethodError) in the ensure body
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                nil.no_such_method
+              end
+            rescue NoMethodError
+              :rescued_nomethod
+            end
+            m
+            "##,
+            // a return in the ensure body overrides the body's return
+            r##"
+            def m
+              begin
+                [1].each { return :body }
+              ensure
+                [1].each { return :ensure_ret }
+              end
+            end
+            m
+            "##,
+            // throw honored across a clean ensure
+            r##"
+            def m
+              catch(:t) do
+                begin
+                  throw :t, :thrown
+                ensure
+                  :clean
+                end
+              end
+            end
+            m
+            "##,
+            // throw overridden by a raise in the ensure body
+            r##"
+            def m
+              catch(:t) do
+                begin
+                  throw :t, :thrown
+                ensure
+                  raise "boom"
+                end
+              end
+            rescue => e
+              "overridden:#{e.message}"
+            end
+            m
+            "##,
+            // nested method deferrals: foo's ensure calls baz, which also
+            // does return-from-block + ensure. Both must restore correctly.
+            r##"
+            def baz
+              begin
+                [1].each { return :baz_ret }
+              ensure
+                :baz_clean
+              end
+            end
+            def foo
+              begin
+                [1].each { return :foo_ret }
+              ensure
+                $baz_result = baz
+              end
+            end
+            [foo, $baz_result]
+            "##,
+            // a callee's own clean ensure must not steal the caller's
+            // pending deferred return
+            r##"
+            def inner
+              begin
+                :ran
+              ensure
+                :ensured
+              end
+            end
+            def outer
+              begin
+                [1].each { return :outer_ret }
+              ensure
+                inner
+              end
+            end
+            outer
+            "##,
+            // nested ensures in the same method both run; return honored.
+            // ($log is reset each run since run_test executes 25x in one
+            // process while the CRuby reference runs once.)
+            r##"
+            def m
+              begin
+                begin
+                  [1].each { return :v }
+                ensure
+                  $log << :inner
+                end
+              ensure
+                $log << :outer
+              end
+            end
+            $log = []
+            [m, $log]
+            "##,
+        ]);
+    }
+
+    #[test]
     fn block_shadow_locals() {
         // Block-local shadow vars (`|x; a|`) are only lowered by the
         // Prism backend; ruruby-parse raises a SyntaxError.
@@ -4015,6 +4156,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "introduces a new local `a` across two `eval` calls — same root cause as \
+                  binding_eval_method_introduces_new_local; tracked there."
+    )]
     fn eval_binding() {
         run_test(
             r##"

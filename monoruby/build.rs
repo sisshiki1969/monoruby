@@ -194,10 +194,47 @@ fn main() {
                     let ver = ver.trim();
                     if !ver.is_empty() {
                         println!("cargo:rustc-env=MONORUBY_RUBY_VERSION={ver}");
+                        // Older monoruby builds wrote `~/.monoruby/ruby_version`
+                        // and read it back at runtime. The runtime now uses
+                        // the baked-in env var instead, but the file lingers
+                        // and confuses anyone inspecting it (e.g. `cat
+                        // ~/.monoruby/ruby_version` showing stale 3.4.0 long
+                        // after upgrading to 4.0). Keep it as a human-
+                        // facing breadcrumb of what host Ruby this build
+                        // was paired with, refreshed every cargo build.
+                        let _ = fs::write(lib_path.join("ruby_version"), ver);
                     }
                 }
                 _ => {
                     println!("cargo:warning=failed to read ruby version from {ruby}");
+                }
+            }
+
+            // Bake the build-host Ruby's RUBY_PLATFORM in the same way.
+            // The runtime reports it as `RUBY_PLATFORM`, and startup.rb
+            // derives `RbConfig::CONFIG["arch"]` from it. On macOS that
+            // string carries the Darwin major version (e.g.
+            // `arm64-darwin23`); rubygems keys each gem's built-extension
+            // directory on it (`extensions/<arch>/<api>/<gem>`), so without
+            // the version monoruby looks in the wrong dir and warns that
+            // every C-extension gem is unbuilt.
+            match Command::new(&ruby)
+                .args(["-e", "print(RUBY_PLATFORM)"])
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    let plat = String::from_utf8_lossy(&output.stdout);
+                    let plat = plat.trim();
+                    if !plat.is_empty() {
+                        println!("cargo:rustc-env=MONORUBY_RUBY_PLATFORM={plat}");
+                        // Human-facing breadcrumb, refreshed every build
+                        // (mirrors ruby_version above); the runtime reads
+                        // the baked-in env var, not this file.
+                        let _ = fs::write(lib_path.join("ruby_platform"), plat);
+                    }
+                }
+                _ => {
+                    println!("cargo:warning=failed to read ruby platform from {ruby}");
                 }
             }
         }

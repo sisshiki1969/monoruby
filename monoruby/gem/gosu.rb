@@ -1027,11 +1027,24 @@ module Gosu
     at_exit { SDL2_ttf.ttf_quit }
   end
 
-  # Default font path; falls back to a well-known DejaVu file present
-  # on most Linux distros. Can be overridden with `Gosu::DEFAULT_FONT_PATH`.
+  # Default font path. Honors `GOSU_DEFAULT_FONT`; otherwise picks the
+  # first existing file from a per-OS candidate list (macOS system fonts
+  # plus the DejaVu file shipped by most Linux distros). Falls back to the
+  # Linux DejaVu path so the failure message stays informative if nothing
+  # matches.
   DEFAULT_FONT_PATH =
     (ENV["GOSU_DEFAULT_FONT"].to_s.empty? ?
-       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf" :
+       ([
+          # macOS
+          "/System/Library/Fonts/Supplemental/Arial.ttf",
+          "/System/Library/Fonts/Helvetica.ttc",
+          "/System/Library/Fonts/Geneva.ttf",
+          # Linux
+          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+          "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+          "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ].find { |p| File.file?(p) } ||
+          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") :
        ENV["GOSU_DEFAULT_FONT"]).freeze
 
   class Font

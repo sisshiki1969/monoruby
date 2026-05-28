@@ -1314,6 +1314,18 @@ pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
 }
 
+///
+/// `EnsureEnd` opcode helper: the `ensure` body for the current frame has
+/// just finished. Restore a deferred `MethodReturn` / `Throw` (suspended
+/// in [`Executor::defer_unwind`] while the body ran) unless the body
+/// raised its own error, which takes precedence. Returns non-zero when an
+/// error is pending and the caller must re-enter `entry_raise`.
+///
+pub(super) extern "C" fn ensure_end(vm: &mut Executor) -> usize {
+    let lfp = vm.cfp().lfp();
+    vm.finish_ensure(lfp).into()
+}
+
 pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
     match err_val.is_exception() {
         Some(ex) => vm.set_error(MonorubyErr::new_from_exception(ex).with_original(err_val)),

@@ -236,7 +236,17 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let mut tmpfile = NamedTempFile::new().unwrap();
     tmpfile.write_all(code.as_bytes()).unwrap();
 
+    // Force the reference CRuby's default external encoding to UTF-8 with
+    // `-E UTF-8`. monoruby always treats source/strings as UTF-8, but
+    // CRuby derives `Encoding.default_external` from the locale, and in a
+    // non-UTF-8 / empty-`LANG` environment (which is how `cargo nextest`
+    // spawns these subprocesses) `String#inspect` escapes non-ASCII to
+    // `\uXXXX` — so `"café".inspect` would diff against monoruby's literal
+    // `"café"`. `-E UTF-8` pins the encoding independent of locale, making
+    // the differential comparison reproducible across hosts and runners.
     let res = match std::process::Command::new(&*RUBY)
+        .arg("-E")
+        .arg("UTF-8")
         .arg("--disable-gem")
         .arg(tmpfile.path())
         .output()

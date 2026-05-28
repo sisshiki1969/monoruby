@@ -361,26 +361,40 @@ pub(super) extern "C" fn handle_error(
             let info = &globals.store[*info];
             // check exception table.
             // First, we check method_return.
-            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
+            let method_return = match vm.exception().unwrap().kind() {
+                MonorubyErrKind::MethodReturn(val, target_lfp) => Some((*val, *target_lfp)),
+                _ => None,
+            };
+            if let Some((val, target_lfp)) = method_return {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    // Suspend the non-local return across the ensure body so
+                    // the body can `raise` (set_error) without tripping the
+                    // empty-exception guard; `EnsureEnd` restores it.
+                    vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
-                } else if lfp == *target_lfp || meta.is_proc_method() {
+                } else if lfp == target_lfp || meta.is_proc_method() {
                     // Stop unwinding either at the matching target LFP
                     // or at a `define_method` proc-method boundary, so
                     // that `return` inside a wrapped block exits the
                     // method rather than escaping to the block's
                     // lexical enclosing scope.
-                    let val = *val;
                     vm.take_error();
+                    // This frame returns now; abandon any deferral it owns.
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_normal(val)
                 } else {
+                    // Propagating past this frame; its deferral (if any) can
+                    // no longer reach its `EnsureEnd`.
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_err()
                 };
             }
             if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
                 } else {
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_err()
                 };
             }
@@ -393,6 +407,7 @@ pub(super) extern "C" fn handle_error(
             // since the interpreter/VM state may be inconsistent after a
             // panic. Propagate straight up to the top.
             if vm.exception().unwrap().is_fatal() {
+                vm.discard_deferred_unwind(lfp);
                 return ErrorReturn::return_err();
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
@@ -423,5 +438,9 @@ pub(super) extern "C" fn handle_error(
         }
         _ => unreachable!(),
     }
+    // A normal exception is propagating out of this frame: its `EnsureEnd`
+    // (if any) will not run, so drop a deferral it may still own.
+    let lfp = vm.cfp().lfp();
+    vm.discard_deferred_unwind(lfp);
     ErrorReturn::return_err()
 }

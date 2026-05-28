@@ -3799,9 +3799,17 @@ mod tests {
         run_test_error(r#"IO.new(9999)"#);
     }
 
+    // The `IO.popen` tests below use `run_test_once` rather than `run_test`
+    // because `run_test` wraps the body in `for __i in 0..24` for JIT warmup,
+    // which would spawn 25 subprocesses per test — popen exercises Rust-side
+    // `posix_spawn`/`Command`, not the JIT, so the warmup loop adds no
+    // coverage but multiplies subprocess pressure by 25× and drags whole-
+    // suite wall time past minutes under default 8-thread parallelism on
+    // macOS. CRuby comparison still runs once for output parity.
+
     #[test]
     fn io_popen_read_stdout() {
-        run_test(
+        run_test_once(
             r#"
             io = IO.popen("echo hello")
             s = io.read
@@ -3813,7 +3821,7 @@ mod tests {
 
     #[test]
     fn io_popen_with_block_returns_block_result() {
-        run_test(
+        run_test_once(
             r#"
             IO.popen("echo world") { |io| io.read.chomp }
             "#,
@@ -3822,13 +3830,13 @@ mod tests {
 
     #[test]
     fn io_popen_block_sets_last_status() {
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["true"]) { |io| io.read }
             [$?.class.to_s, $?.exitstatus]
             "#,
         );
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["false"]) { |io| io.read }
             $?.exitstatus
@@ -3850,7 +3858,7 @@ mod tests {
     #[test]
     fn io_popen_array_command_avoids_shell() {
         // Array form should pass args directly without going through sh -c.
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["echo", "a b"]) { |io| io.read }
             "#,
@@ -3859,7 +3867,7 @@ mod tests {
 
     #[test]
     fn io_popen_stderr_to_stdout() {
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["sh", "-c", "echo out; echo err 1>&2"], err: [:child, :out]) { |io| io.read }
             "#,
@@ -3868,7 +3876,7 @@ mod tests {
 
     #[test]
     fn io_popen_pid_is_integer() {
-        run_test(
+        run_test_once(
             r#"
             io = IO.popen("true")
             pid = io.pid

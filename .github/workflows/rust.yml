@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [master, darwin]
+    branches: [master, "darwin*"]
   pull_request:
-    branches: [master, darwin]
+    branches: [master, "darwin*"]
 
 jobs:
   coverage:
@@ -44,3 +44,34 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
           fail_ci_if_error: true
+
+  darwin:
+    # Native Apple Silicon (arm64-apple-darwin) runner. monoruby has no JIT on
+    # aarch64 — build.rs only sets the `jit` cfg for x86-64 — so this exercises
+    # the VM tier plus the macOS/aarch64 platform layer. Coverage is not
+    # collected here; the Linux `coverage` job owns the Codecov upload.
+    runs-on: macos-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
+        run: gem install bigdecimal --no-document
+      - name: Install libffi + pkg-config
+        # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
+        # with the `system` feature; libffi is keg-only so pkg-config needs its
+        # prefix on PKG_CONFIG_PATH to find it.
+        run: |
+          brew install libffi pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@nextest
+
+      - name: Test (VM tier, arm64-apple-darwin)
+        run: bin/test-darwin
