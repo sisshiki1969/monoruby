@@ -2086,7 +2086,7 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         self.jit.mov(X0, EXEC);
-        self.jit.mov_imm(X9, runtime::check_err as u64);
+        self.jit.mov_imm(X9, runtime::ensure_end as u64);
         self.jit.blr(X9);
         self.jit.cbnz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);

@@ -133,6 +133,18 @@ pub struct Executor {
     catch_tags: Vec<u64>,
     /// error information.
     exception: Option<MonorubyErr>,
+    /// Non-local control-flow errors (`MethodReturn` / `Throw`) that were
+    /// temporarily moved out of `exception` so an `ensure` body can run
+    /// with an empty error slot, keyed by the LFP of the frame whose
+    /// `ensure` deferred them. `EnsureEnd` (`runtime::ensure_end`)
+    /// re-raises the entry for its frame if the body finished without
+    /// raising a new error. Without this, the in-flight `MethodReturn` /
+    /// `Throw` would sit in `exception` across the ensure body and trip
+    /// the `assert_eq!(self.exception, None)` guard in `set_error` the
+    /// moment the body raised anything. At most one entry exists per
+    /// frame (a fresh deferral for a frame that already has one means the
+    /// previous inner-ensure unwind was bypassed and is abandoned).
+    deferred_unwind: Vec<(Lfp, MonorubyErr)>,
 }
 
 impl std::default::Default for Executor {
@@ -150,6 +162,7 @@ impl std::default::Default for Executor {
             loading_paths: vec![],
             catch_tags: vec![],
             exception: None,
+            deferred_unwind: vec![],
         }
     }
 }
@@ -179,6 +192,13 @@ impl alloc::GC<RValue> for Executor {
         // (`NotMethod`, `Key`) or full `(Value, Lfp)` for non-local
         // returns. See `MonorubyErr::mark`.
         if let Some(err) = &self.exception {
+            err.mark(alloc);
+        }
+        // Deferred `MethodReturn` / `Throw` carry packed Values (return
+        // value, throw tag/value) and an `Lfp`; keep them alive across
+        // the ensure body that suspended them.
+        for (lfp, err) in &self.deferred_unwind {
+            lfp.mark(alloc);
             err.mark(alloc);
         }
     }
@@ -803,6 +823,65 @@ impl Executor {
 
     pub(crate) fn discard_error(&mut self) {
         self.exception = None
+    }
+
+    ///
+    /// Move the current in-flight error out of `exception` and stash it as
+    /// the deferred unwind for frame *lfp*, so the frame's `ensure` body
+    /// can run with an empty error slot. Restored by [`Self::finish_ensure`]
+    /// at `EnsureEnd`.
+    ///
+    pub(crate) fn defer_unwind(&mut self, lfp: Lfp) {
+        let err = self.take_error();
+        // At most one deferred unwind per frame: replacing an existing
+        // entry for the same frame means the previous (inner) `ensure`'s
+        // `EnsureEnd` was bypassed by this new unwind and is abandoned.
+        if let Some((top_lfp, slot)) = self.deferred_unwind.last_mut() {
+            if *top_lfp == lfp {
+                *slot = err;
+                return;
+            }
+        }
+        self.deferred_unwind.push((lfp, err));
+    }
+
+    ///
+    /// `EnsureEnd` hook for frame *lfp*. If the just-finished `ensure` body
+    /// raised a new error, that error supersedes any deferred unwind for
+    /// this frame (CRuby: a `raise`/`return`/`throw` in an `ensure`
+    /// overrides the original). Otherwise the deferred unwind (if any) is
+    /// re-raised. Returns `true` when an error is pending afterwards (the
+    /// caller must re-enter `entry_raise`).
+    ///
+    pub(crate) fn finish_ensure(&mut self, lfp: Lfp) -> bool {
+        let top_is_mine = matches!(self.deferred_unwind.last(), Some((l, _)) if *l == lfp);
+        if self.exception.is_some() {
+            if top_is_mine {
+                self.deferred_unwind.pop();
+            }
+            return true;
+        }
+        if top_is_mine {
+            let (_, err) = self.deferred_unwind.pop().unwrap();
+            // `exception` is `None` here, so the `set_error` guard holds.
+            self.set_error(err);
+            return true;
+        }
+        false
+    }
+
+    ///
+    /// Drop a deferred unwind belonging to frame *lfp* when the frame is
+    /// being left by a different control-flow path (its `EnsureEnd` will
+    /// not run to consume it). No-op when the top entry is for another
+    /// frame, so unrelated callers' deferrals are preserved.
+    ///
+    pub(crate) fn discard_deferred_unwind(&mut self, lfp: Lfp) {
+        if let Some((top_lfp, _)) = self.deferred_unwind.last() {
+            if *top_lfp == lfp {
+                self.deferred_unwind.pop();
+            }
+        }
     }
 
     pub(crate) fn pop_error_trace(&mut self) {
