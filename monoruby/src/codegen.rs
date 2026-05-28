@@ -1629,6 +1629,12 @@ mod tests {
         }
     }
 
+    // `f64_to_val` is a JIT-tier helper emitted only by the x86-64
+    // `gen_f64_to_val` (`#[cfg(target_arch = "x86_64")]`); the aarch64
+    // VM-only backend installs a `brk` trap stub for the label and never
+    // calls it at runtime. Invoking the stub from this test would fault,
+    // so the test is x86-64-only, matching the code it exercises.
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_f64_to_val() {
         let mut r#gen = Codegen::new();
