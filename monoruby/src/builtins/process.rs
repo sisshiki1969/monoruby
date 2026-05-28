@@ -1083,9 +1083,18 @@ mod tests {
         run_test_error("Process.clock_gettime(-1)");
     }
 
+    // The fork/spawn/Open3/kill tests below use `run_test_once` rather than
+    // `run_test` because `run_test`'s `for __i in 0..24` JIT-warmup wrapper
+    // would spawn 25× as many child processes per test. The body exercises
+    // Rust-side `libc::fork` / `posix_spawn` / Open3 plumbing, not the JIT,
+    // so the iteration adds no coverage but pushes the suite's wall time
+    // past minutes when default 8-thread parallelism oversubscribes the
+    // process table (`io_popen_*` in io.rs is converted for the same reason).
+    // CRuby comparison still runs once.
+
     #[test]
     fn process_fork() {
-        run_test(
+        run_test_once(
             r#"
             pid = Process.fork { exit 0 }
             pid.is_a?(Integer)
@@ -1095,15 +1104,15 @@ mod tests {
 
     #[test]
     fn process_euid() {
-        run_test("Process.euid");
+        run_test_once("Process.euid");
     }
 
     #[test]
     fn process_spawn_detach() {
         // spawn returns a pid; detach(pid).value yields the Process::Status.
-        run_test("Process.detach(spawn(\"true\")).value.success?");
-        run_test("Process.detach(spawn(\"false\")).value.exitstatus");
-        run_test("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+        run_test_once("Process.detach(spawn(\"true\")).value.success?");
+        run_test_once("Process.detach(spawn(\"false\")).value.exitstatus");
+        run_test_once("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
     }
 
     #[test]
@@ -1118,12 +1127,12 @@ mod tests {
     fn open3_capture_via_spawn() {
         // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
         // drain them — the path bundler uses to run git for git-source gems.
-        run_test(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
-        run_test(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
-        run_test(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
-        run_test(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
+        run_test_once(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
+        run_test_once(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
+        run_test_once(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
+        run_test_once(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
         // capture2e merges stdout+stderr onto one pipe.
-        run_test(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
+        run_test_once(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
     }
 
     #[test]
@@ -1131,13 +1140,13 @@ mod tests {
         // The reason Open3 is reimplemented thread-free (IO.select) in
         // monoruby: a child writing more than a pipe buffer (~64KB) on BOTH
         // stdout and stderr would deadlock the cooperative-Thread approach.
-        run_test(
+        run_test_once(
             r#"require "open3"
             out, err, st = Open3.capture3("sh", "-c", "yes A | head -c 200000; yes B | head -c 200000 1>&2")
             [out.bytesize, err.bytesize, st.success?]"#,
         );
         // Large stdin streamed while large stdout is read back concurrently.
-        run_test(
+        run_test_once(
             r#"require "open3"
             data = "x" * 300000
             out, _, st = Open3.capture3("cat", stdin_data: data)
@@ -1208,19 +1217,19 @@ mod tests {
 
     #[test]
     fn process_exit_bang() {
-        run_test("Process.respond_to?(:exit!)");
+        run_test_once("Process.respond_to?(:exit!)");
     }
 
     #[test]
     fn process_wait() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             ret = Process.wait(pid)
             [ret == pid, $?.exitstatus]
             "#,
         );
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             ret, status = Process.wait2(pid)
@@ -1231,7 +1240,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_string() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             count = Process.kill("TERM", pid)
@@ -1243,7 +1252,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_sig_prefix() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill("SIGKILL", pid)
@@ -1255,7 +1264,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_integer() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill(9, pid)
@@ -1267,7 +1276,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_symbol() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill(:KILL, pid)
@@ -1365,7 +1374,7 @@ mod tests {
     fn process_status_exit_cases() {
         // Bundle all non-fork-heavy exit-path checks into one fork so the
         // test process doesn't spawn 25*N children under parallel cargo test.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 5 }
             Process.wait(pid)
@@ -1395,7 +1404,7 @@ mod tests {
 
     #[test]
     fn process_status_success_case() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             Process.wait(pid)
@@ -1408,7 +1417,7 @@ mod tests {
     #[test]
     fn process_status_signaled_case() {
         // One fork + kill covers the signaled branch end-to-end.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill("TERM", pid)
@@ -1430,7 +1439,7 @@ mod tests {
     fn process_status_after_popen_block() {
         // popen path is exercised here rather than under fork to avoid doubling
         // up with the fork-heavy tests above.
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["true"]) { |io| io.read }
             a = [$?.exited?, $?.exitstatus, $?.signaled?]
@@ -1443,7 +1452,7 @@ mod tests {
     #[test]
     fn process_kill_signal_zero_checks_existence() {
         // Signal 0 does not deliver but returns success if pid exists.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             count = Process.kill(0, pid)
@@ -1456,7 +1465,7 @@ mod tests {
 
     #[test]
     fn process_kill_multiple_pids_returns_count() {
-        run_test(
+        run_test_once(
             r#"
             pids = [fork { sleep 5 }, fork { sleep 5 }, fork { sleep 5 }]
             count = Process.kill("KILL", *pids)
