@@ -806,10 +806,17 @@ fn autoload_resolution_candidates(
             vec![rb, so]
         }
     };
+    // Normalise candidates with `path::absolute` (expand `.`/`..`, no
+    // symlink resolution) — NOT `canonicalize`. `require_lib_file`
+    // registers `$LOADED_FEATURES` entries and `Executor::loading_paths`
+    // in the `path::absolute` form, so the already-loaded / currently-
+    // loading probes below must use the same representation or they miss
+    // on macOS where `/tmp`→`/private/tmp` (and `/var/folders`→
+    // `/private/var/folders`) symlinks make the two diverge.
+    let norm = |p: PathBuf| std::path::absolute(&p).unwrap_or(p);
     if feature.starts_with('/') {
         for c in with_ext(&raw) {
-            let canon = c.canonicalize().unwrap_or(c);
-            push(&mut out, canon);
+            push(&mut out, norm(c));
         }
         return out;
     }
@@ -817,8 +824,7 @@ fn autoload_resolution_candidates(
         if let Ok(cwd) = std::env::current_dir() {
             let resolved = cwd.join(&raw);
             for c in with_ext(&resolved) {
-                let canon = c.canonicalize().unwrap_or(c);
-                push(&mut out, canon);
+                push(&mut out, norm(c));
             }
         }
         return out;
@@ -831,8 +837,7 @@ fn autoload_resolution_candidates(
         };
         let joined = PathBuf::from(lib).join(&raw);
         for c in with_ext(&joined) {
-            let canon = c.canonicalize().unwrap_or(c);
-            push(&mut out, canon);
+            push(&mut out, norm(c));
         }
     }
     out
