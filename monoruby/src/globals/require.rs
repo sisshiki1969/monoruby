@@ -170,11 +170,14 @@ impl Globals {
         // `/private/tmp`), which causes `$LOADED_FEATURES.replace($"
         // - ['/tmp/foo.rb'])` to fail to remove the entry and the
         // subsequent re-require to silently no-op. Use `path::absolute`
-        // instead — it expands `..` / `.` without touching symlinks, so
-        // the stored path matches what the user (and Ruby code
-        // manipulating `$LOADED_FEATURES`) sees.
-        let canonicalized_path =
-            std::path::absolute(&path).unwrap_or_else(|_| path.clone());
+        // (no symlink resolution) and then collapse `.` / `..`
+        // lexically via `lexically_normalize` — `path::absolute` alone
+        // keeps `..` on POSIX, so different `..` spellings of the same
+        // file would dedup-miss and double-load. This matches CRuby's
+        // `File.expand_path` keying while leaving symlinks untouched.
+        let canonicalized_path = lexically_normalize(
+            &std::path::absolute(&path).unwrap_or_else(|_| path.clone()),
+        );
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(None);
         }
@@ -259,6 +262,43 @@ impl Globals {
         }
         load_file(file_name)
     }
+}
+
+///
+/// Lexically collapse `.` and `..` components without touching the
+/// filesystem (no symlink resolution), mirroring CRuby's
+/// `File.expand_path` semantics used to key `$LOADED_FEATURES`.
+///
+/// `std::path::absolute` makes a path absolute but, on POSIX, keeps `..`
+/// to preserve symlink meaning. Two `require_relative` paths that name
+/// the same file via different `..` spellings — e.g. `a/fixtures/x` and
+/// `a/shared/../fixtures/x` — would then get distinct loaded-feature
+/// keys and load the file twice (ruby/spec's `core/struct` fixtures hit
+/// exactly this, retriggering `class Honda < Car` and raising
+/// "superclass mismatch"). Collapsing `..` lexically here dedups them
+/// while still leaving symlinks untouched (so the macOS
+/// `/tmp`→`/private/tmp` `$LOADED_FEATURES` removal stays consistent).
+///
+fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                // Drop a preceding normal segment: `a/b/..` -> `a`.
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // `..` cannot rise above the root; absorb it.
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                // Leading `..` in a relative path: keep it.
+                _ => out.push(comp),
+            },
+            _ => out.push(comp),
+        }
+    }
+    out
 }
 
 pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
