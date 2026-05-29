@@ -748,14 +748,6 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "second sub-block uses `b.local_variable_set(:y, ..)` then \
-                  `b.eval(\"x + y\")`, which hits the aarch64 binding-local \
-                  propagation bug (y reads back nil) — same root cause as \
-                  binding_eval_method_introduces_new_local. Linux CI still \
-                  exercises the frame-reclaim path."
-    )]
     fn heap_frame_reclaim_correctness() {
         // Exercise the promote → register → mark → sweep → free path.
         // `run_test_once` keeps it cheap under the instrumented CI

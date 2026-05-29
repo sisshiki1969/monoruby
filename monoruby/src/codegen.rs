@@ -50,12 +50,9 @@ mod vmgen;
 #[cfg(target_arch = "x86_64")]
 mod wrapper;
 
-// aarch64 VM backend (in progress). The x86-64 VM tier above
+// aarch64 VM backend. The x86-64 VM tier above
 // (`vmgen`/`invoker`/`wrapper` + the asm methods in `jit_module` and this
-// file) is gated to x86-64; the aarch64 counterparts live here. The encoding
-// patterns are validated under qemu in the `aarch64-proto` crate; this is the
-// in-crate transcription. NOTE: not yet complete — the aarch64 build does not
-// link until the full VM-tier port lands.
+// file) is gated to x86-64; the aarch64 counterparts live here.
 #[cfg(target_arch = "aarch64")]
 mod arm64;
 

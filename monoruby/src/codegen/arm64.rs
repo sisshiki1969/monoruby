@@ -2,12 +2,10 @@
 //!
 //! This is the in-crate counterpart of the x86-64 VM tier
 //! (`vmgen`/`invoker`/`wrapper` + the asm methods in `jit_module.rs` and
-//! `codegen.rs`), which is gated to `target_arch = "x86_64"`. The encoding
-//! patterns used here are validated under qemu by the standalone
-//! `aarch64-proto` crate (dispatch core, slot access, runtime calls,
+//! `codegen.rs`), which is gated to `target_arch = "x86_64"`. It transcribes
+//! the x86 VM-tier shapes (dispatch core, slot access, runtime calls,
 //! conditional branches, guarded tagged-fixnum arithmetic, and the
-//! method-call frame model); this module transcribes those known-good shapes
-//! into monoruby's `JitModule`/`Codegen` structure.
+//! method-call frame model) into monoruby's `JitModule`/`Codegen` structure.
 //!
 //! Global-register mapping (x86-64 → aarch64), mirroring `CLAUDE.md`:
 //!
@@ -22,11 +20,7 @@
 //! `x19..x23` are callee-saved under AAPCS64 and are saved/restored in the VM
 //! entry prologue/epilogue (like the x86 `pushq rbp` / `leave`).
 //!
-//! Status: foundational helpers are transcribed below. The remaining VM-tier
-//! surface — `JitModule::new`/`init`, `construct_vm` + the ~150 opcode
-//! handlers, the method/block/fiber invokers, and `gen_wrapper` — is still to
-//! be ported, so the aarch64 build does not yet link. See
-//! `doc/aarch64-vmgen-plan.md`.
+//! See `doc/aarch64-vmgen-plan.md` for the porting plan and milestones.
 #![allow(dead_code)]
 
 use super::*;
@@ -51,8 +45,7 @@ impl JitModule {
     /// jmp [r15+rax*8]`. On aarch64 the pc is *not* pre-advanced (A64 has no
     /// LDUR-style negative-displacement scaled load in the builder yet), so
     /// handlers read operands at positive offsets and advance the pc
-    /// themselves before re-dispatching. Validated as `dispatch_*` in
-    /// `aarch64-proto`.
+    /// themselves before re-dispatching.
     ///
     /// ### in
     /// - x21 (PC): bytecode pointer
@@ -68,8 +61,7 @@ impl JitModule {
 
     /// Address of the local slot whose index is in `reg`:
     /// `[r14 + reg*8 - LFP_SELF]`. x86: `negq R(r); lea R(r),[r14+R(r)*8-SELF]`.
-    /// aarch64: `neg; add Xr,x_lfp,Xr,lsl #3; sub #LFP_SELF`. Validated as
-    /// `slot_access_idiom` in `aarch64-proto`.
+    /// aarch64: `neg; add Xr,x_lfp,Xr,lsl #3; sub #LFP_SELF`.
     ///
     /// ### in / out
     /// - `dst`: slot index in → slot *address* out
@@ -111,12 +103,11 @@ const X19_PAD: GReg = X24;
 // ===========================================================================
 // Stub-to-link scaffolding.
 //
-// To make the aarch64 VM-only build *link*, every VM-tier method the shared
-// code calls must exist. The methods below are placeholders that emit a `brk`
-// trap (or are no-ops) so the crate compiles and `Codegen::new` constructs;
-// executing Ruby will trap until the real handlers/invokers/wrappers are
-// ported. Each is marked TODO(aarch64). The encoding patterns to fill them in
-// are validated in the `aarch64-proto` crate. See doc/aarch64-vmgen-plan.md.
+// Every VM-tier method the shared code calls must exist for the aarch64
+// build to link. The methods below are placeholders that emit a `brk` trap
+// (or are no-ops) for the not-yet-ported JIT-tier surface (e.g. `f64_to_val`,
+// JIT recompile hooks); each is marked TODO(aarch64). The VM tier proper is
+// fully ported. See doc/aarch64-vmgen-plan.md.
 // ===========================================================================
 
 impl JitModule {
@@ -131,7 +122,7 @@ impl JitModule {
         self.jit.bind_label(label.clone());
         self.jit.mov_imm(X0, id);
         self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
         self.jit.blr(X9);
         self.jit.brk(0);
     }
@@ -142,7 +133,7 @@ impl JitModule {
         let p = self.jit.get_current_address();
         self.jit.mov_imm(X0, 0x51410000 + id); // DIAG: stub invoker hit
         self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
         self.jit.blr(X9);
         self.jit.brk(0);
         // SAFETY: T is always a pointer-sized `extern "C"` fn pointer; the
@@ -167,7 +158,7 @@ impl JitModule {
         // panic/f64_to_val/gc). For now trap so the module links + constructs.
         let entry_unimpl = jit.get_current_address();
         jit.mov(X0, OP); // OP (X10) holds the opcode at dispatch time
-        jit.mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+        jit.mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
         jit.blr(X9);
         jit.brk(0);
         let dispatch = vec![entry_unimpl; 256];
@@ -288,7 +279,7 @@ impl JitModule {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         // x4 = args (unchanged); upward path => handle_invoker_arguments
-        self.jit.mov_imm(X9, runtime::handle_invoker_arguments as u64);
+        self.jit.mov_imm(X9, runtime::handle_invoker_arguments as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov(X9, X26); // restore fdata
         self.jit.mov_sp(SP, X25); // restore SP
@@ -593,7 +584,7 @@ impl JitModule {
         self.jit.bind_label(err);
         self.jit.mov_imm(X0, 0xc1a5); // DIAG: illegal_classid (get_class)
         self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as u64);
+            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
         self.jit.blr(X9);
         self.jit.brk(0); // TODO(aarch64): illegal_classid
         self.jit.bind_label(fixnum);
@@ -654,10 +645,6 @@ impl JitModule {
 }
 
 impl Codegen {
-    /// VM dispatch loop + opcode handlers. Real handlers so far: `immediate`
-    /// (op 6, integer/immediate literal → slot) and `ret` (op 80). All other
-    /// opcodes fall through to the `entry_unimpl` trap until ported. Uses the
-    /// qemu-validated patterns from `aarch64-proto`.
     /// entry_raise: error/exception dispatch. Calls `handle_error`, which
     /// returns (value, dest): if `dest` is Some, resume execution there (a
     /// rescue/ensure/retry target); otherwise unwind this VM frame and
@@ -672,7 +659,7 @@ impl Codegen {
         self.jit.ldr(X2, X2, 0); // meta = [LFP - LFP_META]
         self.jit.mov(X3, PC); // pc = current instruction
         self.jit
-            .mov_imm(X9, crate::codegen::jit_module::handle_error as u64);
+            .mov_imm(X9, crate::codegen::jit_module::handle_error as *const () as u64);
         self.jit.blr(X9);
         // x0 = value (Option<Value>), x1 = dest (Option<BytecodePtr>)
         self.jit.cbnz_label(X1, &goto);
@@ -809,13 +796,13 @@ impl Codegen {
         self.dispatch[38] = lambda;
 
         // integer comparisons (fixnum fast path; generic runtime fallback)
-        let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as u64);
-        let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as u64);
-        let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as u64);
-        let le = self.a64_op_cmp(Cond::Le, cmp_le_values as u64);
-        let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as u64);
-        let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as u64);
-        let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as u64);
+        let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as *const () as u64);
+        let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as *const () as u64);
+        let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as *const () as u64);
+        let le = self.a64_op_cmp(Cond::Le, cmp_le_values as *const () as u64);
+        let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as *const () as u64);
+        let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as *const () as u64);
+        let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as *const () as u64);
         self.dispatch[140] = eq;
         self.dispatch[141] = ne;
         self.dispatch[142] = lt;
@@ -840,11 +827,11 @@ impl Codegen {
         // break / raise / retry / redo / ensure-end: set an error and route
         // through entry_raise, which handle_error turns into the right control
         // flow (break value / re-raise / retry / redo).
-        let method_ret = self.a64_op_err1(runtime::err_method_return as u64, true);
-        let block_break = self.a64_op_err1(runtime::err_block_break as u64, true);
+        let method_ret = self.a64_op_err1(runtime::err_method_return as *const () as u64, true);
+        let block_break = self.a64_op_err1(runtime::err_block_break as *const () as u64, true);
         let raise_err = self.a64_op_err_raise();
-        let retry_op = self.a64_op_err1(runtime::err_retry as u64, false);
-        let redo_op = self.a64_op_err1(runtime::err_redo as u64, false);
+        let retry_op = self.a64_op_err1(runtime::err_retry as *const () as u64, false);
+        let redo_op = self.a64_op_err1(runtime::err_redo as *const () as u64, false);
         let ensure_end = self.a64_op_ensure_end();
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
@@ -868,8 +855,8 @@ impl Codegen {
         self.dispatch[71] = module_def;
         self.dispatch[22] = singleton_class_def;
 
-        let load_const = self.a64_op_load_const(runtime::vm_get_constant as u64);
-        let check_const = self.a64_op_load_const(runtime::vm_check_constant as u64);
+        let load_const = self.a64_op_load_const(runtime::vm_get_constant as *const () as u64);
+        let check_const = self.a64_op_load_const(runtime::vm_check_constant as *const () as u64);
         let store_const = self.a64_op_store_const();
         self.dispatch[10] = load_const;
         self.dispatch[18] = check_const;
@@ -883,8 +870,8 @@ impl Codegen {
         // `defined?` family (ops 64-69): each computes a truthy/nil result.
         // const/method/ivar write through a *mut Value (dst address);
         // yield/super return the Value and we store it.
-        let defined_yield = self.a64_op_defined_to_dst(runtime::defined_yield as u64);
-        let defined_super = self.a64_op_defined_to_dst(runtime::defined_super as u64);
+        let defined_yield = self.a64_op_defined_to_dst(runtime::defined_yield as *const () as u64);
+        let defined_super = self.a64_op_defined_to_dst(runtime::defined_super as *const () as u64);
         let defined_const = self.a64_op_defined_const();
         let defined_method = self.a64_op_defined_method();
         let defined_gvar = self.a64_op_defined_gvar();
@@ -902,8 +889,8 @@ impl Codegen {
         let array = self.a64_op_array();
         let array_teq = self.a64_op_array_teq();
         let hash = self.a64_op_hash();
-        let concat = self.a64_op_concat(runtime::concatenate_string as u64);
-        let concat_regexp = self.a64_op_concat(runtime::concatenate_regexp as u64);
+        let concat = self.a64_op_concat(runtime::concatenate_string as *const () as u64);
+        let concat_regexp = self.a64_op_concat(runtime::concatenate_regexp as *const () as u64);
         let range_incl = self.a64_op_range(false);
         let range_excl = self.a64_op_range(true);
         let expand_array = self.a64_op_expand_array();
@@ -930,9 +917,9 @@ impl Codegen {
         self.dispatch[174] = undef_method;
 
         let load_gvar = self.a64_op_load_gvar();
-        let store_gvar = self.a64_op_store_var(runtime::set_global_var as u64);
+        let store_gvar = self.a64_op_store_var(runtime::set_global_var as *const () as u64);
         let load_cvar = self.a64_op_load_cvar();
-        let store_cvar = self.a64_op_store_var(runtime::set_class_var as u64);
+        let store_cvar = self.a64_op_store_var(runtime::set_class_var as *const () as u64);
         let alias_gvar = self.a64_op_alias_gvar();
         self.dispatch[25] = load_gvar;
         self.dispatch[26] = store_gvar;
@@ -976,10 +963,10 @@ impl Codegen {
         self.dispatch[170] = shr;
 
         // unary operators (ops 121-124): pos, neg, bitnot, not
-        let pos = self.a64_op_unop(pos_value as u64);
-        let neg = self.a64_op_unop(neg_value as u64);
-        let bitnot = self.a64_op_unop(bitnot_value as u64);
-        let not = self.a64_op_unop(not_value as u64);
+        let pos = self.a64_op_unop(pos_value as *const () as u64);
+        let neg = self.a64_op_unop(neg_value as *const () as u64);
+        let bitnot = self.a64_op_unop(bitnot_value as *const () as u64);
+        let not = self.a64_op_unop(not_value as *const () as u64);
         self.dispatch[121] = pos;
         self.dispatch[122] = neg;
         self.dispatch[123] = bitnot;
@@ -1025,7 +1012,7 @@ impl Codegen {
         self.jit.mov(X3, X10); // cond value
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::opt_case as u64);
+        self.jit.mov_imm(X9, runtime::opt_case as *const () as u64);
         self.jit.blr(X9);
         self.jit.lsl_imm(X10, X0, 32); // zero-extend u32 disp into X10
         self.jit.lsr_imm(X10, X10, 32);
@@ -1043,7 +1030,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // func_id
         self.jit.mov(X3, PC); // call-site pc
-        self.jit.mov_imm(X9, runtime::gen_lambda as u64);
+        self.jit.mov_imm(X9, runtime::gen_lambda as *const () as u64);
         self.jit.blr(X9);
         self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
         self.jit.ldr(LFP, X10, 0); // restore (possibly heap-promoted) LFP
@@ -1080,7 +1067,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.mov(X2, LFP);
         self.jit.mov(X3, PC); // BytecodePtr (instruction start)
-        self.jit.mov_imm(X9, runtime::block_arg as u64);
+        self.jit.mov_imm(X9, runtime::block_arg as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1094,7 +1081,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldrh(X2, PC, 2);
         self.a64_slot_value(X2); // src
-        self.jit.mov_imm(X9, runtime::to_a as u64);
+        self.jit.mov_imm(X9, runtime::to_a as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1220,7 +1207,7 @@ impl Codegen {
         self.jit.ldr(X11, X10, 0);
         self.jit.cmp_imm(X11, NIL_VALUE as u32, 0);
         self.jit.bcond_label(Cond::Ne, &exit);
-        self.jit.mov_imm(X9, runtime::empty_hash as u64);
+        self.jit.mov_imm(X9, runtime::empty_hash as *const () as u64);
         self.jit.blr(X9);
         self.jit.ldrh(X10, PC, 4);
         self.a64_slot_addr(X10); // re-compute (clobbered by call)
@@ -1238,7 +1225,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::check_class_var as u64);
+        self.jit.mov_imm(X9, runtime::check_class_var as *const () as u64);
         self.jit.blr(X9);
         self.a64_store_dst_and_next(&skip);
         p
@@ -1251,7 +1238,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::get_global_var as u64);
+        self.jit.mov_imm(X9, runtime::get_global_var as *const () as u64);
         self.jit.blr(X9);
         self.a64_store_dst_and_next(&skip);
         p
@@ -1264,7 +1251,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::get_class_var as u64);
+        self.jit.mov_imm(X9, runtime::get_class_var as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1294,7 +1281,7 @@ impl Codegen {
         self.jit.mov(X0, GLOBALS);
         self.jit.ldr32(X1, PC, 0); // new
         self.jit.ldr32(X2, PC, 8); // old
-        self.jit.mov_imm(X9, runtime::alias_global_var as u64);
+        self.jit.mov_imm(X9, runtime::alias_global_var as *const () as u64);
         self.jit.blr(X9);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
@@ -1312,7 +1299,7 @@ impl Codegen {
         self.a64_slot_value(X2); // old
         self.jit.ldrh(X3, PC, 4);
         self.a64_slot_value(X3); // new
-        self.jit.mov_imm(X9, runtime::alias_method as u64);
+        self.jit.mov_imm(X9, runtime::alias_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1327,7 +1314,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::undef_method as u64);
+        self.jit.mov_imm(X9, runtime::undef_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1346,7 +1333,7 @@ impl Codegen {
         self.jit.ldr32(X3, PC, 12); // func_id
         self.jit.ldrh(X4, PC, 4); // obj slot
         self.a64_slot_value(X4); // obj
-        self.jit.mov_imm(X9, runtime::singleton_define_method as u64);
+        self.jit.mov_imm(X9, runtime::singleton_define_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1366,7 +1353,7 @@ impl Codegen {
         self.jit.ldrh(X3, PC, 0);
         self.a64_slot_value(X3); // idx
         self.jit.add_imm(X4, PC, 8, 0); // &cache
-        self.jit.mov_imm(X9, runtime::get_index as u64);
+        self.jit.mov_imm(X9, runtime::get_index as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1386,7 +1373,7 @@ impl Codegen {
         self.jit.ldrh(X4, PC, 4);
         self.a64_slot_value(X4); // src
         self.jit.add_imm(X5, PC, 8, 0); // &cache
-        self.jit.mov_imm(X9, runtime::set_index as u64);
+        self.jit.mov_imm(X9, runtime::set_index as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1418,7 +1405,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // callid
         self.jit.sub_imm(X3, LFP, LFP_SELF as u32, 0); // &self
-        self.jit.mov_imm(X9, runtime::gen_array as u64);
+        self.jit.mov_imm(X9, runtime::gen_array as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1440,7 +1427,7 @@ impl Codegen {
         self.jit.mov(X3, X4); // rhs (arg #4)
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::array_teq as u64);
+        self.jit.mov_imm(X9, runtime::array_teq as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         // dst slot = lhs slot from [PC+2]
@@ -1465,7 +1452,7 @@ impl Codegen {
         self.jit.ldrh(X2, PC, 2);
         self.a64_slot_addr(X2); // src
         self.jit.ldrh(X3, PC, 0); // len
-        self.jit.mov_imm(X9, runtime::gen_hash as u64);
+        self.jit.mov_imm(X9, runtime::gen_hash as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1499,7 +1486,7 @@ impl Codegen {
         self.jit.mov(X2, EXEC);
         self.jit.mov(X3, GLOBALS);
         self.jit.mov_imm(X4, if exclude_end { 1 } else { 0 });
-        self.jit.mov_imm(X9, runtime::gen_range as u64);
+        self.jit.mov_imm(X9, runtime::gen_range as *const () as u64);
         self.jit.blr(X9);
         self.a64_checked_store_next(&raise);
         p
@@ -1515,7 +1502,7 @@ impl Codegen {
         self.a64_slot_addr(X1); // &dst
         self.jit.ldrh(X2, PC, 0); // len
         self.jit.ldrh(X3, PC, 8); // rest
-        self.jit.mov_imm(X9, runtime::expand_array as u64);
+        self.jit.mov_imm(X9, runtime::expand_array as *const () as u64);
         self.jit.blr(X9);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
@@ -1556,7 +1543,7 @@ impl Codegen {
         self.jit.ldrh(X2, PC, 4);
         self.a64_slot_addr(X2); // &dst
         self.jit.ldr32(X3, PC, 8); // site_id
-        self.jit.mov_imm(X9, runtime::defined_const as u64);
+        self.jit.mov_imm(X9, runtime::defined_const as *const () as u64);
         self.jit.blr(X9);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
@@ -1574,7 +1561,7 @@ impl Codegen {
         self.jit.ldrh(X3, PC, 2);
         self.a64_slot_value(X3); // recv
         self.jit.ldr32(X4, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_method as u64);
+        self.jit.mov_imm(X9, runtime::defined_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
@@ -1588,7 +1575,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_gvar as u64);
+        self.jit.mov_imm(X9, runtime::defined_gvar as *const () as u64);
         self.jit.blr(X9);
         self.a64_store_dst_and_next(&skip);
         p
@@ -1601,7 +1588,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_cvar as u64);
+        self.jit.mov_imm(X9, runtime::defined_cvar as *const () as u64);
         self.jit.blr(X9);
         self.a64_store_dst_and_next(&skip);
         p
@@ -1615,7 +1602,7 @@ impl Codegen {
         self.jit.ldrh(X2, PC, 4);
         self.a64_slot_addr(X2); // &dst
         self.jit.ldr32(X3, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_ivar as u64);
+        self.jit.mov_imm(X9, runtime::defined_ivar as *const () as u64);
         self.jit.blr(X9);
         self.jit.add_imm(PC, PC, 16, 0);
         self.a64_fetch_and_dispatch();
@@ -1633,7 +1620,7 @@ impl Codegen {
         self.jit.mov(X2, GLOBALS);
         self.jit.add_imm(X3, PC, 8, 0); // &cache
         self.jit
-            .mov_imm(X9, get_instance_var_with_cache as u64);
+            .mov_imm(X9, get_instance_var_with_cache as *const () as u64);
         self.jit.blr(X9);
         self.jit.ldrh(X10, PC, 4); // dst slot
         self.jit.cbz_label(X10, &skip);
@@ -1662,7 +1649,7 @@ impl Codegen {
         self.jit.mov(X4, X10); // val
         self.jit.add_imm(X5, PC, 8, 0); // &cache
         self.jit
-            .mov_imm(X9, set_instance_var_with_cache as u64);
+            .mov_imm(X9, set_instance_var_with_cache as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1715,7 +1702,7 @@ impl Codegen {
         self.jit.str(X12, X11, 0);
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::set_constant as u64);
+        self.jit.mov_imm(X9, runtime::set_constant as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1757,7 +1744,7 @@ impl Codegen {
         self.jit.mov_imm(X4, if is_module { 1 } else { 0 });
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::define_class as u64);
+        self.jit.mov_imm(X9, runtime::define_class as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.mov(X25, X0); // X25 = self (the class), callee-saved
@@ -1774,7 +1761,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldrh(X2, PC, 0);
         self.a64_slot_value(X2); // base
-        self.jit.mov_imm(X9, runtime::define_singleton_class as u64);
+        self.jit.mov_imm(X9, runtime::define_singleton_class as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.mov(X25, X0); // self = singleton class
@@ -1794,7 +1781,7 @@ impl Codegen {
         self.jit.mov(X3, X25);
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::enter_classdef as u64);
+        self.jit.mov_imm(X9, runtime::enter_classdef as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov(X26, X0); // X26 = &FuncData, callee-saved
         // cont frame: save caller PC + ACC (the body clobbers them).
@@ -1837,7 +1824,7 @@ impl Codegen {
         // exit_classdef(vm, globals)
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::exit_classdef as u64);
+        self.jit.mov_imm(X9, runtime::exit_classdef as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov(X0, X25); // restore result
         // pop cont frame: restore PC + ACC
@@ -1873,7 +1860,7 @@ impl Codegen {
         self.jit.ldr32(X3, PC, 12); // func_id
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::define_method as u64);
+        self.jit.mov_imm(X9, runtime::define_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -1915,7 +1902,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.ldr32(X2, PC, 0); // callid
         self.jit.mov(X3, X4); // recv
-        self.jit.mov_imm(X9, runtime::find_method as u64);
+        self.jit.mov_imm(X9, runtime::find_method as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X0, &mm);
         // get_func_data: X15 = funcinfo_base + funcid*64 + FUNCINFO_DATA
@@ -1990,7 +1977,7 @@ impl Codegen {
         self.jit.mov(X1, GLOBALS);
         self.jit.mov(X2, LFP); // caller lfp
         self.jit.ldr32(X4, PC, 0); // callid
-        self.jit.mov_imm(X9, runtime::vm_handle_arguments as u64);
+        self.jit.mov_imm(X9, runtime::vm_handle_arguments as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov(X15, X26); // restore funcdata ptr
         self.jit.mov_sp(SP, X25); // restore SP directly
@@ -2052,7 +2039,7 @@ impl Codegen {
         self.jit.mov(X3, LFP);
         self.jit.ldr32(X4, PC, 0); // callid
         self.jit
-            .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as u64);
+            .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as *const () as u64);
         self.jit.blr(X9);
         self.jit.b_label(&after_call);
         p
@@ -2083,7 +2070,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.ldrh(X1, PC, 4);
         self.a64_slot_value(X1); // exception value
-        self.jit.mov_imm(X9, runtime::raise_err as u64);
+        self.jit.mov_imm(X9, runtime::raise_err as *const () as u64);
         self.jit.blr(X9);
         self.jit.b_label(&raise);
         p
@@ -2095,7 +2082,7 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         self.jit.mov(X0, EXEC);
-        self.jit.mov_imm(X9, runtime::ensure_end as u64);
+        self.jit.mov_imm(X9, runtime::ensure_end as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbnz_label(X0, &raise);
         self.jit.add_imm(PC, PC, 16, 0);
@@ -2118,7 +2105,7 @@ impl Codegen {
         self.jit.mov(X0, EXEC);
         self.jit.mov(X1, GLOBALS);
         self.jit
-            .mov_imm(X9, runtime::get_yield_data as u64);
+            .mov_imm(X9, runtime::get_yield_data as *const () as u64);
         self.jit.blr(X9);
         self.jit.cbz_label(X1, &raise); // no block -> error set
         self.jit.mov(X25, X0); // X25 = outer (callee-saved across later calls)
@@ -2163,7 +2150,7 @@ impl Codegen {
         self.jit.mov(X2, LFP); // caller lfp
         self.jit.ldr32(X4, PC, 0); // callid
         self.jit
-            .mov_imm(X9, runtime::vm_handle_arguments as u64);
+            .mov_imm(X9, runtime::vm_handle_arguments as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov(X15, X26);
         self.jit.mov_sp(SP, X25);
@@ -2378,8 +2365,6 @@ impl Codegen {
     /// op 172 `init_method`: allocate the method's stack frame and nil-fill the
     /// uninitialized local slots. Bytecode (relative to instruction start):
     /// `+0` stack-offset, `+2` arg_num, `+4` reg_num. (x86 `vm_init`.)
-    /// TODO(aarch64): the captured-frame guard (`branch_if_captured`) — not
-    /// needed for non-block top-level methods.
     fn a64_op_init_method(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
@@ -2390,6 +2375,18 @@ impl Codegen {
         self.jit.mov_sp(X13, SP); // sp -= X10 (A64 sub can't take SP as a
         self.jit.sub(X13, X13, X10); // shifted-reg operand, so via a GPR)
         self.jit.mov_sp(SP, X13);
+        // Skip the nil-fill for a captured (on-heap / invalidated) frame.
+        // Its locals live on the heap and may already hold values written in
+        // by `new_binding_frame` — e.g. a binding-eval frame that introduced a
+        // brand-new local in a previous eval; nil-filling would wipe it.
+        // Mirrors x86 `fill_nil`'s leading `branch_if_captured`. The `kind`
+        // byte sits at `[LFP - (LFP_META - META_KIND)]`; bit 7 = on_heap,
+        // bit 3 = invalidated.
+        self.jit
+            .sub_imm(X10, LFP, (LFP_META - META_KIND as i32) as u32, 0);
+        self.jit.ldrb(X13, X10, 0);
+        self.jit.tbnz_label(X13, 7, &skip); // on_heap
+        self.jit.tbnz_label(X13, 3, &skip); // invalidated
         // count = reg_num - arg_num
         self.jit.ldrh(X15, PC, 4); // reg_num
         self.jit.ldrh(X11, PC, 2); // arg_num
@@ -2436,7 +2433,7 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
         self.jit.ldr(X0, PC, 8); // literal Value
-        self.jit.mov_imm(X9, Value::value_deep_copy as u64);
+        self.jit.mov_imm(X9, Value::value_deep_copy as *const () as u64);
         self.jit.blr(X9); // x0 = deep copy (PC/LFP are callee-saved)
         self.jit.ldrh(X10, PC, 4); // dst slot index
         self.jit.cbz_label(X10, &skip); // slot 0 => discard
@@ -2567,7 +2564,7 @@ impl Codegen {
         self.jit.mov(X2, GLOBALS);
         self.jit.mov_imm(X3, cache_addr); // &cache
         self.jit
-            .mov_imm(X9, get_instance_var_with_cache as u64);
+            .mov_imm(X9, get_instance_var_with_cache as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov_sp(SP, X29);
         self.jit.ldp_post(X29, X30, SP, 16);
@@ -2588,7 +2585,7 @@ impl Codegen {
         self.jit.ldr(X4, X4, 0); // val
         self.jit.mov_imm(X5, cache_addr); // &cache
         self.jit
-            .mov_imm(X9, set_instance_var_with_cache as u64);
+            .mov_imm(X9, set_instance_var_with_cache as *const () as u64);
         self.jit.blr(X9);
         self.jit.mov_sp(SP, X29);
         self.jit.ldp_post(X29, X30, SP, 16);
@@ -2622,7 +2619,7 @@ impl Codegen {
         self.jit.mov_imm(X4, slot_index as u64);
         self.jit.mov_imm(
             X9,
-            crate::builtins::struct_class::set_struct_slot_with_check as u64,
+            crate::builtins::struct_class::set_struct_slot_with_check as *const () as u64,
         );
         self.jit.blr(X9);
         self.jit.mov_sp(SP, X29);
@@ -2710,13 +2707,13 @@ impl Codegen {
         self.dispatch[169] = shl;
         self.dispatch[170] = shr;
 
-        let eq = self.a64_op_cmp_no_opt(cmp_eq_values_no_opt as u64);
-        let ne = self.a64_op_cmp_no_opt(cmp_ne_values_no_opt as u64);
-        let lt = self.a64_op_cmp_no_opt(cmp_lt_values_no_opt as u64);
-        let le = self.a64_op_cmp_no_opt(cmp_le_values_no_opt as u64);
-        let gt = self.a64_op_cmp_no_opt(cmp_gt_values_no_opt as u64);
-        let ge = self.a64_op_cmp_no_opt(cmp_ge_values_no_opt as u64);
-        let teq = self.a64_op_cmp_no_opt(cmp_teq_values_no_opt as u64);
+        let eq = self.a64_op_cmp_no_opt(cmp_eq_values_no_opt as *const () as u64);
+        let ne = self.a64_op_cmp_no_opt(cmp_ne_values_no_opt as *const () as u64);
+        let lt = self.a64_op_cmp_no_opt(cmp_lt_values_no_opt as *const () as u64);
+        let le = self.a64_op_cmp_no_opt(cmp_le_values_no_opt as *const () as u64);
+        let gt = self.a64_op_cmp_no_opt(cmp_gt_values_no_opt as *const () as u64);
+        let ge = self.a64_op_cmp_no_opt(cmp_ge_values_no_opt as *const () as u64);
+        let teq = self.a64_op_cmp_no_opt(cmp_teq_values_no_opt as *const () as u64);
         self.dispatch[140] = eq;
         self.dispatch[141] = ne;
         self.dispatch[142] = lt;
@@ -2732,10 +2729,10 @@ impl Codegen {
         self.dispatch[155] = ge;
         self.dispatch[156] = teq;
 
-        let pos = self.a64_op_unop(pos_value_no_opt as u64);
-        let neg = self.a64_op_unop(neg_value_no_opt as u64);
-        let bitnot = self.a64_op_unop(bitnot_value_no_opt as u64);
-        let not = self.a64_op_unop(not_value_no_opt as u64);
+        let pos = self.a64_op_unop(pos_value_no_opt as *const () as u64);
+        let neg = self.a64_op_unop(neg_value_no_opt as *const () as u64);
+        let bitnot = self.a64_op_unop(bitnot_value_no_opt as *const () as u64);
+        let not = self.a64_op_unop(not_value_no_opt as *const () as u64);
         self.dispatch[121] = pos;
         self.dispatch[122] = neg;
         self.dispatch[123] = bitnot;
