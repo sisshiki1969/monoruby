@@ -63,7 +63,7 @@ impl Codegen {
     ///
     /// Generate interpreter.
     ///
-    pub(super) fn construct_vm(&mut self) {
+    pub(in crate::codegen) fn construct_vm(&mut self) {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
 
@@ -349,7 +349,7 @@ impl Codegen {
     ///
     /// Replace VM instruction routines with non-basic-op-optimized routines.
     ///
-    pub(super) fn remove_vm_bop_optimization(&mut self) {
+    pub(in crate::codegen) fn remove_vm_bop_optimization(&mut self) {
         self.dispatch[14] = self.vm_loop_start_no_opt();
 
         self.dispatch[121] = self.vm_pos_no_opt();

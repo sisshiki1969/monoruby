@@ -1,8 +1,9 @@
 use super::*;
 use crate::codegen::runtime::{PROCDATA_FUNCID, PROCDATA_OUTER};
+use monoasm_macro::monoasm;
 
 impl JitModule {
-    pub(super) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
+    pub(in crate::codegen) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
         let codeptr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             movq rax, rsp;
@@ -13,7 +14,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn method_invoker(&mut self) -> MethodInvoker {
+    pub(in crate::codegen) fn method_invoker(&mut self) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -44,7 +45,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn method_invoker2(&mut self) -> MethodInvoker2 {
+    pub(in crate::codegen) fn method_invoker2(&mut self) -> MethodInvoker2 {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -75,7 +76,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn block_invoker(&mut self) -> BlockInvoker {
+    pub(in crate::codegen) fn block_invoker(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -104,7 +105,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn block_invoker_with_self(&mut self) -> BlockInvoker {
+    pub(in crate::codegen) fn block_invoker_with_self(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -133,7 +134,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn binding_invoker(&mut self) -> BindingInvoker {
+    pub(in crate::codegen) fn binding_invoker(&mut self) -> BindingInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -160,7 +161,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn fiber_invoker(&mut self) -> FiberInvoker {
+    pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -206,7 +207,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
+    pub(in crate::codegen) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -252,7 +253,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn resume_fiber(
+    pub(in crate::codegen) fn resume_fiber(
         &mut self,
     ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
@@ -278,7 +279,7 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(super) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+    pub(in crate::codegen) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -313,7 +314,7 @@ impl JitModule {
     /// #### out
     /// - rax: ClassId
     ///
-    pub(super) fn get_class(&mut self) -> DestLabel {
+    pub(in crate::codegen) fn get_class(&mut self) -> DestLabel {
         let label = self.label();
         let l1 = self.label();
         let err = self.label();

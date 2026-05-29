@@ -1,4 +1,5 @@
 use super::*;
+use monoasm_macro::monoasm;
 
 impl Codegen {
     pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
