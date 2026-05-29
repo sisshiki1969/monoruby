@@ -715,44 +715,68 @@ fn last_status(
     Ok(val.unwrap_or_default())
 }
 
-/// - list -> Hash
-/// Map a signal name (with optional "SIG" prefix) to its numeric value.
+/// Canonical signal name ↔ host signo table, built from the running
+/// platform's `libc` constants so the numbers match the OS — and therefore
+/// CRuby on the same OS. `Signal.list`, `Signal.signame`, `Signal.trap`, and
+/// `Process.kill` all derive from this single source of truth, so a name like
+/// "USR1" resolves to 10 on Linux and 30 on macOS, exactly what the kernel's
+/// `sigaction`/`kill` (and the host-keyed `signal_table`) expect.
+///
+/// Aliases (IOT=ABRT, CLD=CHLD, POLL=IO) and platform-specific names
+/// (Linux-only PWR; macOS/BSD-only EMT/INFO) are cfg-gated to mirror each
+/// platform's CRuby `Signal.list`. Canonical names precede their aliases so
+/// `signal_number_to_name` reports the name CRuby uses. SIGSTKFLT is
+/// deliberately omitted (CRuby 4.0 does not expose it; see
+/// `signal_list_no_stkflt`).
+const SIGNAL_TABLE: &[(&str, i32)] = &[
+    ("EXIT", 0),
+    ("HUP", libc::SIGHUP),
+    ("INT", libc::SIGINT),
+    ("QUIT", libc::SIGQUIT),
+    ("ILL", libc::SIGILL),
+    ("TRAP", libc::SIGTRAP),
+    ("ABRT", libc::SIGABRT),
+    ("IOT", libc::SIGABRT),
+    ("FPE", libc::SIGFPE),
+    ("KILL", libc::SIGKILL),
+    ("BUS", libc::SIGBUS),
+    ("SEGV", libc::SIGSEGV),
+    ("SYS", libc::SIGSYS),
+    ("PIPE", libc::SIGPIPE),
+    ("ALRM", libc::SIGALRM),
+    ("TERM", libc::SIGTERM),
+    ("URG", libc::SIGURG),
+    ("STOP", libc::SIGSTOP),
+    ("TSTP", libc::SIGTSTP),
+    ("CONT", libc::SIGCONT),
+    ("CHLD", libc::SIGCHLD),
+    ("CLD", libc::SIGCHLD),
+    ("TTIN", libc::SIGTTIN),
+    ("TTOU", libc::SIGTTOU),
+    ("XCPU", libc::SIGXCPU),
+    ("XFSZ", libc::SIGXFSZ),
+    ("VTALRM", libc::SIGVTALRM),
+    ("PROF", libc::SIGPROF),
+    ("WINCH", libc::SIGWINCH),
+    ("USR1", libc::SIGUSR1),
+    ("USR2", libc::SIGUSR2),
+    ("IO", libc::SIGIO),
+    #[cfg(target_os = "linux")]
+    ("POLL", libc::SIGIO),
+    #[cfg(target_os = "linux")]
+    ("PWR", libc::SIGPWR),
+    #[cfg(not(target_os = "linux"))]
+    ("EMT", libc::SIGEMT),
+    #[cfg(not(target_os = "linux"))]
+    ("INFO", libc::SIGINFO),
+];
+
+/// Map a signal name (with optional "SIG" prefix) to its host signo.
 fn signal_name_to_number(name: &str) -> Option<i32> {
     let n = name.strip_prefix("SIG").unwrap_or(name);
-    Some(match n {
-        "EXIT" => 0,
-        "HUP" => 1,
-        "INT" => 2,
-        "QUIT" => 3,
-        "ILL" => 4,
-        "TRAP" => 5,
-        "ABRT" | "IOT" => 6,
-        "BUS" => 7,
-        "FPE" => 8,
-        "KILL" => 9,
-        "USR1" => 10,
-        "SEGV" => 11,
-        "USR2" => 12,
-        "PIPE" => 13,
-        "ALRM" => 14,
-        "TERM" => 15,
-        "CLD" | "CHLD" => 17,
-        "CONT" => 18,
-        "STOP" => 19,
-        "TSTP" => 20,
-        "TTIN" => 21,
-        "TTOU" => 22,
-        "URG" => 23,
-        "XCPU" => 24,
-        "XFSZ" => 25,
-        "VTALRM" => 26,
-        "PROF" => 27,
-        "WINCH" => 28,
-        "IO" | "POLL" => 29,
-        "PWR" => 30,
-        "SYS" => 31,
-        _ => return None,
-    })
+    SIGNAL_TABLE
+        .iter()
+        .find_map(|(sig, num)| (*sig == n).then_some(*num))
 }
 
 ///
@@ -815,47 +839,11 @@ fn signal_list(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let signals: &[(&str, i64)] = &[
-        ("EXIT", 0),
-        ("HUP", 1),
-        ("INT", 2),
-        ("QUIT", 3),
-        ("ILL", 4),
-        ("TRAP", 5),
-        ("ABRT", 6),
-        ("IOT", 6),
-        ("BUS", 7),
-        ("FPE", 8),
-        ("KILL", 9),
-        ("USR1", 10),
-        ("SEGV", 11),
-        ("USR2", 12),
-        ("PIPE", 13),
-        ("ALRM", 14),
-        ("TERM", 15),
-        ("CLD", 17),
-        ("CHLD", 17),
-        ("CONT", 18),
-        ("STOP", 19),
-        ("TSTP", 20),
-        ("TTIN", 21),
-        ("TTOU", 22),
-        ("URG", 23),
-        ("XCPU", 24),
-        ("XFSZ", 25),
-        ("VTALRM", 26),
-        ("PROF", 27),
-        ("WINCH", 28),
-        ("IO", 29),
-        ("POLL", 29),
-        ("PWR", 30),
-        ("SYS", 31),
-    ];
     let mut map = RubyMap::default();
-    for (name, num) in signals {
+    for (name, num) in SIGNAL_TABLE {
         map.insert(
             Value::string_from_str(name),
-            Value::integer(*num),
+            Value::integer(*num as i64),
             vm,
             globals,
         )?;
@@ -868,40 +856,13 @@ fn signal_list(
 /// multiple aliases share a number, the value returned is what CRuby uses
 /// (e.g. 6 -> "ABRT", 17 -> "CHLD", 29 -> "IO").
 fn signal_number_to_name(num: i64) -> Option<&'static str> {
-    Some(match num {
-        0 => "EXIT",
-        1 => "HUP",
-        2 => "INT",
-        3 => "QUIT",
-        4 => "ILL",
-        5 => "TRAP",
-        6 => "ABRT",
-        7 => "BUS",
-        8 => "FPE",
-        9 => "KILL",
-        10 => "USR1",
-        11 => "SEGV",
-        12 => "USR2",
-        13 => "PIPE",
-        14 => "ALRM",
-        15 => "TERM",
-        17 => "CHLD",
-        18 => "CONT",
-        19 => "STOP",
-        20 => "TSTP",
-        21 => "TTIN",
-        22 => "TTOU",
-        23 => "URG",
-        24 => "XCPU",
-        25 => "XFSZ",
-        26 => "VTALRM",
-        27 => "PROF",
-        28 => "WINCH",
-        29 => "IO",
-        30 => "PWR",
-        31 => "SYS",
-        _ => return None,
-    })
+    if num < 0 || num > i32::MAX as i64 {
+        return None;
+    }
+    let num = num as i32;
+    SIGNAL_TABLE
+        .iter()
+        .find_map(|(sig, n)| (*n == num).then_some(*sig))
 }
 
 ///
@@ -1287,10 +1248,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "Signal numbers diverge: macOS has BUS=10/SYS=12 vs Linux USR1=10/USR2=12"
-    )]
     fn signal_signame_all_valid_numbers() {
         // Cover every signal number 0..=31. The result is compared against
         // CRuby, so each canonical name (ABRT not IOT for 6, CHLD not CLD
