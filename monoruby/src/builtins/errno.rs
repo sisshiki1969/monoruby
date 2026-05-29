@@ -5,12 +5,15 @@ use super::*;
 //
 // CRuby builds the `Errno` module dynamically at boot from the system's
 // `<errno.h>`, so any errno present on the host (`Errno::ENETDOWN`,
-// `Errno::EPROTOTYPE`, …) is reachable. monoruby is x86_64 Linux only, so
-// we mirror that by walking `libc::E*` at startup and creating
-// `Errno::E* < SystemCallError` for each, with the matching `Errno = N`
-// constant. Aliases that share an errno number (`EWOULDBLOCK == EAGAIN`,
-// `EDEADLOCK == EDEADLK`, `EOPNOTSUPP == ENOTSUP` on Linux) are exposed as
-// constant aliases so `Errno::EWOULDBLOCK == Errno::EAGAIN` holds.
+// `Errno::EPROTOTYPE`, …) is reachable, with the host's numbers. monoruby
+// mirrors that per-OS via a cfg-gated `ERRNO_TABLE`: the Linux table carries
+// the Linux x86_64 numbers, the macOS table the Darwin numbers. So
+// `Errno::ENETDOWN::Errno` is 100 on Linux and 50 on macOS — matching CRuby
+// on the same OS and the errno the kernel actually reports. Aliases that
+// share a number (`EWOULDBLOCK == EAGAIN`, …) are exposed via `ERRNO_ALIASES`
+// so the names resolve to the same class object; the alias set is itself
+// host-specific (e.g. on macOS `EOPNOTSUPP` and `ENOTSUP` are distinct
+// numbers, not aliases).
 //
 // The hand-rolled `monoruby/builtins/error.rb` previously listed only a
 // subset of these and triggered `NameError` for anything unlisted; bundler
@@ -19,15 +22,9 @@ use super::*;
 
 /// Linux x86_64 errno → exception class name table.
 ///
-/// Numbers are hard-coded to the Linux x86_64 values from
-/// `<asm-generic/errno{,-base}.h>`, *not* looked up through `libc::E*`.
-/// The table's contract is to mirror CRuby-on-Linux exactly so that Ruby
-/// code (e.g. bundler's `Errno::ENETDOWN == 100`) sees the canonical
-/// numbers regardless of the host. This lets the file compile on macOS /
-/// other Unixes — needed for the AArch64 backend work where development
-/// happens on non-Linux hosts — while still producing the Linux-shaped
-/// `Errno` module at runtime. Linux's libc values are ABI-stable kernel
-/// constants, so hard-coding does not drift from `libc::E*` on Linux.
+/// Numbers are the ABI-stable Linux x86_64 values from
+/// `<asm-generic/errno{,-base}.h>` (hard-coded, matching CRuby-on-Linux).
+#[cfg(target_os = "linux")]
 const ERRNO_TABLE: &[(&str, i32)] = &[
     ("EPERM", 1),
     ("ENOENT", 2),
@@ -163,12 +160,193 @@ const ERRNO_TABLE: &[(&str, i32)] = &[
     ("EHWPOISON", 133),
 ];
 
-/// Constant aliases (alias_name → canonical_name): on Linux these errno
-/// numbers collide, and CRuby exposes both names as the same class object.
+/// macOS / Darwin errno → exception class name table.
+///
+/// The first block carries the kernel's real errno (1..=106, ABI-stable
+/// Darwin numbers). The trailing `_ , 0)` block are names CRuby's `Errno`
+/// module still registers on macOS even though the OS does not define them
+/// (Linux/BSD errno) — it exposes them as 0-valued placeholder classes, so
+/// e.g. `Errno::EDEADLOCK` exists and is distinct from `Errno::EDEADLK`.
+/// Mirroring that keeps monoruby's `Errno` byte-identical to CRuby-on-macOS.
+/// `EWOULDBLOCK` (== EAGAIN) and `ELAST` (== EQFULL) share a number and are
+/// exposed via `ERRNO_ALIASES`.
+#[cfg(not(target_os = "linux"))]
+const ERRNO_TABLE: &[(&str, i32)] = &[
+    ("EPERM", 1),
+    ("ENOENT", 2),
+    ("ESRCH", 3),
+    ("EINTR", 4),
+    ("EIO", 5),
+    ("ENXIO", 6),
+    ("E2BIG", 7),
+    ("ENOEXEC", 8),
+    ("EBADF", 9),
+    ("ECHILD", 10),
+    ("EDEADLK", 11),
+    ("ENOMEM", 12),
+    ("EACCES", 13),
+    ("EFAULT", 14),
+    ("ENOTBLK", 15),
+    ("EBUSY", 16),
+    ("EEXIST", 17),
+    ("EXDEV", 18),
+    ("ENODEV", 19),
+    ("ENOTDIR", 20),
+    ("EISDIR", 21),
+    ("EINVAL", 22),
+    ("ENFILE", 23),
+    ("EMFILE", 24),
+    ("ENOTTY", 25),
+    ("ETXTBSY", 26),
+    ("EFBIG", 27),
+    ("ENOSPC", 28),
+    ("ESPIPE", 29),
+    ("EROFS", 30),
+    ("EMLINK", 31),
+    ("EPIPE", 32),
+    ("EDOM", 33),
+    ("ERANGE", 34),
+    ("EAGAIN", 35),
+    ("EINPROGRESS", 36),
+    ("EALREADY", 37),
+    ("ENOTSOCK", 38),
+    ("EDESTADDRREQ", 39),
+    ("EMSGSIZE", 40),
+    ("EPROTOTYPE", 41),
+    ("ENOPROTOOPT", 42),
+    ("EPROTONOSUPPORT", 43),
+    ("ESOCKTNOSUPPORT", 44),
+    ("ENOTSUP", 45),
+    ("EPFNOSUPPORT", 46),
+    ("EAFNOSUPPORT", 47),
+    ("EADDRINUSE", 48),
+    ("EADDRNOTAVAIL", 49),
+    ("ENETDOWN", 50),
+    ("ENETUNREACH", 51),
+    ("ENETRESET", 52),
+    ("ECONNABORTED", 53),
+    ("ECONNRESET", 54),
+    ("ENOBUFS", 55),
+    ("EISCONN", 56),
+    ("ENOTCONN", 57),
+    ("ESHUTDOWN", 58),
+    ("ETOOMANYREFS", 59),
+    ("ETIMEDOUT", 60),
+    ("ECONNREFUSED", 61),
+    ("ELOOP", 62),
+    ("ENAMETOOLONG", 63),
+    ("EHOSTDOWN", 64),
+    ("EHOSTUNREACH", 65),
+    ("ENOTEMPTY", 66),
+    ("EPROCLIM", 67),
+    ("EUSERS", 68),
+    ("EDQUOT", 69),
+    ("ESTALE", 70),
+    ("EREMOTE", 71),
+    ("EBADRPC", 72),
+    ("ERPCMISMATCH", 73),
+    ("EPROGUNAVAIL", 74),
+    ("EPROGMISMATCH", 75),
+    ("EPROCUNAVAIL", 76),
+    ("ENOLCK", 77),
+    ("ENOSYS", 78),
+    ("EFTYPE", 79),
+    ("EAUTH", 80),
+    ("ENEEDAUTH", 81),
+    ("EPWROFF", 82),
+    ("EDEVERR", 83),
+    ("EOVERFLOW", 84),
+    ("EBADEXEC", 85),
+    ("EBADARCH", 86),
+    ("ESHLIBVERS", 87),
+    ("EBADMACHO", 88),
+    ("ECANCELED", 89),
+    ("EIDRM", 90),
+    ("ENOMSG", 91),
+    ("EILSEQ", 92),
+    ("ENOATTR", 93),
+    ("EBADMSG", 94),
+    ("EMULTIHOP", 95),
+    ("ENODATA", 96),
+    ("ENOLINK", 97),
+    ("ENOSR", 98),
+    ("ENOSTR", 99),
+    ("EPROTO", 100),
+    ("ETIME", 101),
+    ("EOPNOTSUPP", 102),
+    ("ENOPOLICY", 103),
+    ("ENOTRECOVERABLE", 104),
+    ("EOWNERDEAD", 105),
+    ("EQFULL", 106),
+    // Names CRuby registers as 0-valued placeholders on macOS (errno the OS
+    // itself does not define). Kept to mirror CRuby's `Errno` constant set.
+    ("EADV", 0),
+    ("EBADE", 0),
+    ("EBADFD", 0),
+    ("EBADR", 0),
+    ("EBADRQC", 0),
+    ("EBADSLT", 0),
+    ("EBFONT", 0),
+    ("ECAPMODE", 0),
+    ("ECHRNG", 0),
+    ("ECOMM", 0),
+    ("EDEADLOCK", 0),
+    ("EDOOFUS", 0),
+    ("EDOTDOT", 0),
+    ("EHWPOISON", 0),
+    ("EIPSEC", 0),
+    ("EISNAM", 0),
+    ("EKEYEXPIRED", 0),
+    ("EKEYREJECTED", 0),
+    ("EKEYREVOKED", 0),
+    ("EL2HLT", 0),
+    ("EL2NSYNC", 0),
+    ("EL3HLT", 0),
+    ("EL3RST", 0),
+    ("ELIBACC", 0),
+    ("ELIBBAD", 0),
+    ("ELIBEXEC", 0),
+    ("ELIBMAX", 0),
+    ("ELIBSCN", 0),
+    ("ELNRNG", 0),
+    ("EMEDIUMTYPE", 0),
+    ("ENAVAIL", 0),
+    ("ENOANO", 0),
+    ("ENOCSI", 0),
+    ("ENOKEY", 0),
+    ("ENOMEDIUM", 0),
+    ("ENONET", 0),
+    ("ENOPKG", 0),
+    ("ENOTCAPABLE", 0),
+    ("ENOTNAM", 0),
+    ("ENOTUNIQ", 0),
+    ("EREMCHG", 0),
+    ("EREMOTEIO", 0),
+    ("ERESTART", 0),
+    ("ERFKILL", 0),
+    ("ESRMNT", 0),
+    ("ESTRPIPE", 0),
+    ("EUCLEAN", 0),
+    ("EUNATCH", 0),
+    ("EXFULL", 0),
+    ("NOERROR", 0),
+];
+
+/// Constant aliases (alias_name → canonical_name): these errno numbers
+/// collide on the host, and CRuby exposes both names as the same class
+/// object. The set is host-specific (e.g. on macOS `EOPNOTSUPP`/`ENOTSUP`
+/// and `EDEADLOCK`/`EDEADLK` are *distinct* numbers, not aliases).
+#[cfg(target_os = "linux")]
 const ERRNO_ALIASES: &[(&str, &str)] = &[
     ("EWOULDBLOCK", "EAGAIN"),
     ("EDEADLOCK", "EDEADLK"),
     ("EOPNOTSUPP", "ENOTSUP"),
+];
+
+#[cfg(not(target_os = "linux"))]
+const ERRNO_ALIASES: &[(&str, &str)] = &[
+    ("EWOULDBLOCK", "EAGAIN"),
+    ("ELAST", "EQFULL"),
 ];
 
 pub(super) fn init(globals: &mut Globals) {
@@ -202,6 +380,12 @@ pub(super) fn init(globals: &mut Globals) {
 /// Look up the canonical Ruby `Errno` class name (e.g. `"ENETDOWN"`) for a
 /// raw OS errno number. Returns `None` for unknown values.
 pub(crate) fn errno_to_name(errno: i32) -> Option<&'static str> {
+    // 0 is "no error" — never a real syscall failure. The macOS table maps
+    // several host-absent placeholder names to 0, so guard against returning
+    // one of those for a 0 query.
+    if errno == 0 {
+        return None;
+    }
     ERRNO_TABLE
         .iter()
         .find_map(|(name, n)| if *n == errno { Some(*name) } else { None })
@@ -234,42 +418,37 @@ pub(crate) fn strerror(errno: i32) -> String {
 mod tests {
     use crate::tests::*;
 
-    // macOS uses different errno numbers than Linux (e.g. ENETDOWN is 50 vs 100).
-    // monoruby intentionally exposes the Linux numbers (see ERRNO_TABLE comment),
-    // so the system-CRuby comparison in `run_test` doesn't agree on macOS. Skip
-    // on macOS; the production behaviour (Linux numbers everywhere) is still
-    // covered on Linux CI.
+    // ENETDOWN etc. carry host numbers (100 on Linux, 50 on macOS): the
+    // cfg-gated ERRNO_TABLE matches CRuby on each OS, so the `run_test`
+    // comparison agrees on both.
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "Linux-mirrored errno numbers diverge from CRuby on macOS"
-    )]
     fn errno_classes_dynamically_registered() {
         // bundler 4's `fetcher/downloader.rb` references `Errno::ENETDOWN`
-        // (and friends). They must resolve and carry the right `Errno`
-        // constant, with the canonical Linux x86_64 numbers.
+        // (and friends). They must resolve and carry the host `Errno`
+        // constant (e.g. ENETDOWN = 100 on Linux, 50 on macOS), which the
+        // `run_test` comparison against the host CRuby verifies.
         run_test(
             r#"
             [
               Errno::ENETDOWN.ancestors.include?(SystemCallError),
-              Errno::ENETDOWN::Errno,           # 100
-              Errno::EPROTOTYPE::Errno,         # 91
-              Errno::EAFNOSUPPORT::Errno,       # 97
-              Errno::EHOSTDOWN::Errno,          # 112
+              Errno::ENETDOWN::Errno,
+              Errno::EPROTOTYPE::Errno,
+              Errno::EAFNOSUPPORT::Errno,
+              Errno::EHOSTDOWN::Errno,
             ]
             "#,
         );
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "Linux EAGAIN/EWOULDBLOCK aliasing differs from macOS's distinct numbers"
-    )]
     fn errno_aliases_share_class() {
-        // CRuby exposes `EWOULDBLOCK == EAGAIN` etc. as the same class
-        // object; they must be `equal?`, not just `==`, so existence-of-
-        // class checks (`HTTP_RETRYABLE_ERRORS.include?`) work right.
+        // CRuby exposes errno that share a number (`EWOULDBLOCK == EAGAIN`)
+        // as the same class object; they must be `equal?`, not just `==`, so
+        // existence-of-class checks (`HTTP_RETRYABLE_ERRORS.include?`) work.
+        // The `==`-but-not-`equal?` cases differ by host (on macOS
+        // EDEADLOCK/EDEADLK and EOPNOTSUPP/ENOTSUP are *distinct* numbers, so
+        // not the same class); `run_test` compares against the host CRuby, so
+        // monoruby's host-specific alias set must agree on both.
         run_test(
             r#"
             [
