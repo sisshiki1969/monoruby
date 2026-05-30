@@ -399,9 +399,7 @@ impl JitModule {
         let codeptr = self.jit.get_current_address();
         monoasm_arm64!(&mut self.jit,
             mov x10, sp;
-        );
-        self.jit.sub_imm(X10, X10, 16, 1); // 16 << 12 = 65536
-        monoasm_arm64!(&mut self.jit,
+            sub x10, x10, #16, lsl #12; // 16 << 12 = 65536
             str x10, [x0, #(EXECUTOR_STACK_LIMIT as u32)];
             ret;
         // SAFETY: codeptr is an `extern "C" fn(&mut Executor) -> *const u8`.
