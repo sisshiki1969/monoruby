@@ -3,28 +3,33 @@
 //! Counterpart of `arch/x86_64/invoker.rs`.
 
 use super::*;
+use monoasm_macro::monoasm_arm64;
 
 impl JitModule {
     pub(in crate::codegen) fn a64_invoker_prologue(&mut self) {
-        self.jit.stp_pre(X29, X30, SP, -16);
-        self.jit.stp_pre(EXEC, GLOBALS, SP, -16);
-        self.jit.stp_pre(PC, LFP, SP, -16);
-        self.jit.stp_pre(ACC, X24, SP, -16);
-        self.jit.stp_pre(X25, X26, SP, -16);
-        self.jit.mov(EXEC, X0);
-        self.jit.mov(GLOBALS, X1);
+        monoasm_arm64!(&mut self.jit,
+            stp x29, x30, [sp, #(-16)]!;
+            stp x(EXEC.0), x(GLOBALS.0), [sp, #(-16)]!;
+            stp x(PC.0), x(LFP.0), [sp, #(-16)]!;
+            stp x(ACC.0), x24, [sp, #(-16)]!;
+            stp x25, x26, [sp, #(-16)]!;
+            mov x(EXEC.0), x0;
+            mov x(GLOBALS.0), x1;
+        );
     }
 
     /// fdata(X9) = funcinfo_base + (X2 = funcid)*64 + FUNCINFO_DATA.
     pub(in crate::codegen) fn a64_get_func_data_x2(&mut self) {
-        self.jit.lsl_imm(X10, X2, 32); // zero-extend funcid
-        self.jit.lsr_imm(X10, X10, 32);
-        self.jit.lsl_imm(X10, X10, 6); // * size_of::<FuncInfo>() (64)
-        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
-        self.jit.add(X11, GLOBALS, X11);
-        self.jit.ldr(X11, X11, 0);
-        self.jit.add(X10, X10, X11);
-        self.jit.add_imm(X9, X10, FUNCINFO_DATA as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            lsl x10, x2, #(32);  // zero-extend funcid
+            lsr x10, x10, #(32);
+            lsl x10, x10, #(6);  // * size_of::<FuncInfo>() (64)
+            mov x11, (GLOBALS_FUNCINFO as u64);
+            add x11, x(GLOBALS.0), x11;
+            ldr x11, [x11];
+            add x10, x10, x11;
+            add x9, x10, #(FUNCINFO_DATA as u32);
+        );
     }
 
     /// Shared invoker tail (after the frame self/block/outer/meta are set):
@@ -40,103 +45,113 @@ impl JitModule {
         let error_exit = self.jit.label();
         // Simple iff callee is simple (Meta kind bit 4) AND len == min AND
         // no keyword args; otherwise fall back to the runtime arg massager.
-        self.jit.lsr_imm(X10, X14, 56); // kind byte
-        self.jit.tbz_label(X10, 4, &generic);
-        self.jit.ldrh(X10, fdata, FUNCDATA_MIN as u32);
-        self.jit.cmp(X5, X10);
+        monoasm_arm64!(&mut self.jit,
+            lsr x10, x14, #(56);  // kind byte
+            tbz x10, #(4), generic;
+            ldrh x10, [x(fdata.0), #(FUNCDATA_MIN as u32)];
+            cmp x5, x10;
+        );
         self.jit.bcond_label(Cond::Ne, &generic);
-        self.jit.cbnz_label(X7, &generic); // kw present
+        monoasm_arm64!(&mut self.jit,
+            cbnz x7, generic;  // kw present
         // simple copy (upward): args[0..len] -> callee slots 1..=len
-        self.jit.cbz_label(X5, &simple_done);
-        self.jit.mov(X10, X5); // down counter = len
-        self.jit.neg(X11, X5); // up counter = -len
-        self.jit.sub_imm(X12, X4, 8, 0); // args - 8
-        self.jit.bind_label(argloop.clone());
-        self.jit.add_lsl(X13, X12, X10, 3); // &args[down-1]
-        self.jit.ldr(X14, X13, 0);
-        self.jit.sub_imm(X15, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.add_lsl(X15, X15, X11, 3);
-        self.jit.str(X14, X15, 0);
-        self.jit.sub_imm(X10, X10, 1, 0);
-        self.jit.add_imm(X11, X11, 1, 0);
-        self.jit.cbnz_label(X11, &argloop);
-        self.jit.bind_label(simple_done);
-        self.jit.b_label(&aftargs);
+            cbz x5, simple_done;
+            mov x10, x5;  // down counter = len
+            neg x11, x5;  // up counter = -len
+            sub x12, x4, #(8);  // args - 8
+            argloop:
+            add x13, x12, x10, lsl #(3);  // &args[down-1]
+            ldr x14, [x13];
+            sub x15, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            add x15, x15, x11, lsl #(3);
+            str x14, [x15];
+            sub x10, x10, #(1);
+            add x11, x11, #(1);
+            cbnz x11, argloop;
+            simple_done:
+            b aftargs;
         // generic: handle_invoker_arguments(exec, globals, callee_lfp,
         // arg_num, args, kw). Reserve scratch below the callee frame and
         // preserve SP (X25) + funcdata (X26, caller-saved) across the call.
-        self.jit.bind_label(generic);
-        self.jit.mov_sp(X25, SP);
-        self.jit.mov(X26, fdata);
-        self.jit.ldrh(X10, fdata, FUNCDATA_OFS as u32);
-        self.jit.lsl_imm(X10, X10, 4);
-        self.jit.add_imm(X10, X10, 16, 0);
-        self.jit.sub(X11, X25, X10);
-        self.jit.mov_sp(SP, X11);
-        self.jit.sub_imm(X2, X25, RSP_LOCAL_FRAME as u32, 0); // callee_lfp
-        self.jit.mov(X3, X5); // arg_num = len
-        self.jit.mov(X5, X7); // kw
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
+            generic:
+            mov x25, sp;
+            mov x26, x(fdata.0);
+            ldrh x10, [x(fdata.0), #(FUNCDATA_OFS as u32)];
+            lsl x10, x10, #(4);
+            add x10, x10, #(16);
+            sub x11, x25, x10;
+            mov sp, x11;
+            sub x2, x25, #(RSP_LOCAL_FRAME as u32);  // callee_lfp
+            mov x3, x5;  // arg_num = len
+            mov x5, x7;  // kw
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
         // x4 = args (unchanged); upward path => handle_invoker_arguments
-        self.jit.mov_imm(X9, runtime::handle_invoker_arguments as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.mov(X9, X26); // restore fdata
-        self.jit.mov_sp(SP, X25); // restore SP
-        self.jit.cbz_label(X0, &error_exit);
-        self.jit.bind_label(aftargs);
+            mov x9, (runtime::handle_invoker_arguments as *const () as u64);
+            blr x9;
+            mov x9, x26;  // restore fdata
+            mov sp, x25;  // restore SP
+            cbz x0, error_exit;
+            aftargs:
         // call_invoker: push_frame
-        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.str(X10, X11, 0); // [new_cfp] = prev cfp
-        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32); // exec.cfp = new cfp
+            ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];  // [new_cfp] = prev cfp
+            str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
         // set_lfp
-        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
-        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
-        self.jit.str(LFP, X10, 0);
+            sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x(LFP.0), [x10];
         // pc = funcdata.pc; call funcdata.codeptr
-        self.jit.ldr(PC, fdata, FUNCDATA_PC as u32);
-        self.jit.ldr(X10, fdata, FUNCDATA_CODEPTR as u32);
-        self.jit.blr(X10);
+            ldr x(PC.0), [x(fdata.0), #(FUNCDATA_PC as u32)];
+            ldr x10, [x(fdata.0), #(FUNCDATA_CODEPTR as u32)];
+            blr x10;
         // restore exec.cfp = [sp - RSP_CFP] (the prev cfp saved above)
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.ldr(X10, X11, 0);
-        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // Converge with the result (or 0 on error) in x0; the caller emits
         // its own epilogue (standard restore for method/block invokers, or a
         // fiber stack-switch-back for the fiber invoker).
-        self.jit.bind_label(error_exit);
+            error_exit:
+        );
     }
 
     /// Standard invoker epilogue: restore the callee-saved registers saved by
     /// a64_invoker_prologue and return (result in x0).
     pub(in crate::codegen) fn a64_invoker_epilogue(&mut self) {
-        self.jit.ldp_post(X25, X26, SP, 16);
-        self.jit.ldp_post(ACC, X24, SP, 16);
-        self.jit.ldp_post(PC, LFP, SP, 16);
-        self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
-        self.jit.ldp_post(X29, X30, SP, 16);
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            ldp x25, x26, [sp], #(16);
+            ldp x(ACC.0), x24, [sp], #(16);
+            ldp x(PC.0), x(LFP.0), [sp], #(16);
+            ldp x(EXEC.0), x(GLOBALS.0), [sp], #(16);
+            ldp x29, x30, [sp], #(16);
+            ret;
+        );
     }
 
     /// Save all callee-saved GPRs (x19-x28) + fp/lr for a fiber context switch.
     pub(in crate::codegen) fn a64_push_callee_save(&mut self) {
-        self.jit.stp_pre(X29, X30, SP, -16);
-        self.jit.stp_pre(X27, X28, SP, -16);
-        self.jit.stp_pre(X25, X26, SP, -16);
-        self.jit.stp_pre(X23, X24, SP, -16);
-        self.jit.stp_pre(X21, X22, SP, -16);
-        self.jit.stp_pre(X19, X20, SP, -16);
+        monoasm_arm64!(&mut self.jit,
+            stp x29, x30, [sp, #(-16)]!;
+            stp x27, x28, [sp, #(-16)]!;
+            stp x25, x26, [sp, #(-16)]!;
+            stp x23, x24, [sp, #(-16)]!;
+            stp x21, x22, [sp, #(-16)]!;
+            stp x19, x20, [sp, #(-16)]!;
+        );
     }
 
     /// Restore what a64_push_callee_save saved (reverse order).
     pub(in crate::codegen) fn a64_pop_callee_save(&mut self) {
-        self.jit.ldp_post(X19, X20, SP, 16);
-        self.jit.ldp_post(X21, X22, SP, 16);
-        self.jit.ldp_post(X23, X24, SP, 16);
-        self.jit.ldp_post(X25, X26, SP, 16);
-        self.jit.ldp_post(X27, X28, SP, 16);
-        self.jit.ldp_post(X29, X30, SP, 16);
+        monoasm_arm64!(&mut self.jit,
+            ldp x19, x20, [sp], #(16);
+            ldp x21, x22, [sp], #(16);
+            ldp x23, x24, [sp], #(16);
+            ldp x25, x26, [sp], #(16);
+            ldp x27, x28, [sp], #(16);
+            ldp x29, x30, [sp], #(16);
+        );
     }
 
     pub(in crate::codegen) fn method_invoker(&mut self) -> MethodInvoker {
@@ -148,15 +163,17 @@ impl JitModule {
         self.a64_get_func_data_x2();
         // frame setup (method): FB = sp - (RSP_LOCAL_FRAME + LFP_SELF).
         let fb = X12;
-        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.mov_imm(X13, 0);
-        self.jit.str(X3, fb, 0); // LFP_SELF  = self
-        self.jit.str(X6, fb, 8); // LFP_BLOCK = block
-        self.jit.str(X13, fb, 16); // LFP_CME   = 0
-        self.jit.str(X13, fb, 24); // LFP_SVAR  = 0
-        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
-        self.jit.str(X14, fb, 32); // LFP_META  = funcdata.meta
-        self.jit.str(X13, fb, 40); // LFP_OUTER = 0
+        monoasm_arm64!(&mut self.jit,
+            sub x(fb.0), sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            mov x13, (0);
+            str x3, [x(fb.0)];  // LFP_SELF  = self
+            str x6, [x(fb.0), #(8)];  // LFP_BLOCK = block
+            str x13, [x(fb.0), #(16)];  // LFP_CME   = 0
+            str x13, [x(fb.0), #(24)];  // LFP_SVAR  = 0
+            ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
+            str x14, [x(fb.0), #(32)];  // LFP_META  = funcdata.meta
+            str x13, [x(fb.0), #(40)];  // LFP_OUTER = 0
+        );
         self.a64_invoker_args_and_call();
         self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
@@ -182,8 +199,10 @@ impl JitModule {
             // X3 = self_val (block_invoker_with_self ABI). Store at LFP_SELF.
             // No caller-supplied block is forwarded in this variant — the
             // LFP_BLOCK slot is zeroed below.
-            self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-            self.jit.str(X3, X10, 0);
+            monoasm_arm64!(&mut self.jit,
+                sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+                str x3, [x10];
+            );
         } else {
             // X3 = block_val (block_invoker ABI: 4th AAPCS64 arg). Stash it
             // into LFP_BLOCK *before* X3 is reused for outer_lfp. Without
@@ -191,38 +210,52 @@ impl JitModule {
             // composition's `f.call(*a, &b)`) is silently dropped, so e.g.
             // `(one >> two).call { |x| ... }` ran with `&arg == nil` in the
             // inner procs.
-            self.jit.sub_imm(X10, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
-            self.jit.str(X3, X10, 0);
+            monoasm_arm64!(&mut self.jit,
+                sub x10, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+                str x3, [x10];
+            );
         }
         // outer = [&ProcData + PROCDATA_OUTER]; func_id = [+ PROCDATA_FUNCID]
-        self.jit.ldr(X3, X2, runtime::PROCDATA_OUTER as u32); // X3 = outer lfp
-        self.jit.ldr32(X2, X2, runtime::PROCDATA_FUNCID as u32); // X2 = func_id
+        monoasm_arm64!(&mut self.jit,
+            ldr x3, [x2, #(runtime::PROCDATA_OUTER as u32)];  // X3 = outer lfp
+            ldr w2, [x2, #(runtime::PROCDATA_FUNCID as u32)];  // X2 = func_id
+        );
         self.a64_get_func_data_x2(); // fdata = X9 (clobbers X10, X11)
         let fb = X12;
-        self.jit.sub_imm(fb, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.mov_imm(X13, 0);
+        monoasm_arm64!(&mut self.jit,
+            sub x(fb.0), sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            mov x13, (0);
+        );
         if !with_self {
             // self = outer.self = [outer - LFP_SELF]
-            self.jit.sub_imm(X10, X3, LFP_SELF as u32, 0);
-            self.jit.ldr(X10, X10, 0);
-            self.jit.str(X10, fb, 0); // LFP_SELF
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x3, #(LFP_SELF as u32);
+                ldr x10, [x10];
+                str x10, [x(fb.0)];  // LFP_SELF
             // LFP_BLOCK was already populated above with X3 (block_val).
+            );
         } else {
             // block_invoker_with_self has no block to forward.
-            self.jit.str(X13, fb, 8); // LFP_BLOCK = 0
+            monoasm_arm64!(&mut self.jit,
+                str x13, [x(fb.0), #(8)];  // LFP_BLOCK = 0
+            );
         }
-        self.jit.str(X13, fb, 16); // LFP_CME = 0
-        self.jit.str(X13, fb, 24); // LFP_SVAR = 0
-        self.jit.ldr(X14, fdata, FUNCDATA_META as u32);
-        self.jit.str(X14, fb, 32); // LFP_META
-        self.jit.str(X3, fb, 40); // LFP_OUTER = outer
+        monoasm_arm64!(&mut self.jit,
+            str x13, [x(fb.0), #(16)];  // LFP_CME = 0
+            str x13, [x(fb.0), #(24)];  // LFP_SVAR = 0
+            ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
+            str x14, [x(fb.0), #(32)];  // LFP_META
+            str x3, [x(fb.0), #(40)];  // LFP_OUTER = outer
+        );
     }
 
     pub(in crate::codegen) fn a64_block_invoker(&mut self, with_self: bool) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
         self.a64_invoker_prologue();
         self.a64_block_frame_setup(with_self);
-        self.jit.mov(X7, X6); // shared arg setup expects kw in x7
+        monoasm_arm64!(&mut self.jit,
+            mov x7, x6;  // shared arg setup expects kw in x7
+        );
         self.a64_invoker_args_and_call();
         self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the BlockInvoker ABI.
@@ -244,25 +277,33 @@ impl JitModule {
         let codeptr = self.jit.get_current_address();
         // switch in: save parent regs + SP, jump to the fiber's stack.
         self.a64_push_callee_save();
-        self.jit.mov_sp(X10, SP);
-        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // parent.rsp_save = SP
-        self.jit.ldr(X10, X6, EXECUTOR_RSP_SAVE as u32);
-        self.jit.mov_sp(SP, X10); // SP = child.rsp_save (fresh stack top)
-        self.jit.str(X0, X6, EXECUTOR_PARENT_FIBER as u32); // child.parent_fiber = parent
-        self.jit.mov(EXEC, X6); // EXEC = child_vm
-        self.jit.mov(GLOBALS, X1);
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // parent.rsp_save = SP
+            ldr x10, [x6, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = child.rsp_save (fresh stack top)
+            str x0, [x6, #(EXECUTOR_PARENT_FIBER as u32)];  // child.parent_fiber = parent
+            mov x(EXEC.0), x6;  // EXEC = child_vm
+            mov x(GLOBALS.0), x1;
+        );
         self.a64_block_frame_setup(with_self);
-        self.jit.mov_imm(X7, 0); // fibers carry no keyword args
+        monoasm_arm64!(&mut self.jit,
+            mov x7, (0);  // fibers carry no keyword args
+        );
         self.a64_invoker_args_and_call();
         // body completed: mark this fiber terminated, switch back to parent.
-        self.jit.mov_imm(X10, u64::MAX); // -1 = terminated
-        self.jit.str(X10, EXEC, EXECUTOR_RSP_SAVE as u32);
-        self.jit.ldr(EXEC, EXEC, EXECUTOR_PARENT_FIBER as u32);
-        self.jit.ldr(X10, EXEC, EXECUTOR_RSP_SAVE as u32);
-        self.jit.mov_sp(SP, X10);
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (u64::MAX);  // -1 = terminated
+            str x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
+            ldr x(EXEC.0), [x(EXEC.0), #(EXECUTOR_PARENT_FIBER as u32)];
+            ldr x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;
+        );
         self.a64_pop_callee_save();
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            ret;
         // SAFETY: codeptr is an extern "C" fn with the FiberInvoker ABI.
+        );
         unsafe { std::mem::transmute_copy::<*mut u8, FiberInvoker>(&codeptr.as_ptr()) }
     }
     /// Binding invoker: run a func body reusing a captured frame as its LFP
@@ -270,31 +311,35 @@ impl JitModule {
     pub(in crate::codegen) fn binding_invoker(&mut self) -> BindingInvoker {
         let codeptr = self.jit.get_current_address();
         self.a64_invoker_prologue();
-        self.jit.mov(LFP, X2); // reuse the binding's frame as LFP
-        self.jit.sub_imm(X2, LFP, LFP_FUNCID as u32, 0);
-        self.jit.ldr32(X2, X2, 0); // funcid = [lfp - LFP_FUNCID]
+        monoasm_arm64!(&mut self.jit,
+            mov x(LFP.0), x2;  // reuse the binding's frame as LFP
+            sub x2, x(LFP.0), #(LFP_FUNCID as u32);
+            ldr w2, [x2];  // funcid = [lfp - LFP_FUNCID]
+        );
         self.a64_get_func_data_x2(); // X9 = fdata
         // push_frame; cfp.lfp = LFP (the captured frame)
-        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
-        self.jit.str(LFP, X10, 0);
-        self.jit.ldr(PC, X9, FUNCDATA_PC as u32);
-        self.jit.ldr(X10, X9, FUNCDATA_CODEPTR as u32);
-        self.jit.blr(X10);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.ldr(X10, X11, 0);
-        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x(LFP.0), [x10];
+            ldr x(PC.0), [x9, #(FUNCDATA_PC as u32)];
+            ldr x10, [x9, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // epilogue
-        self.jit.ldp_post(X25, X26, SP, 16);
-        self.jit.ldp_post(ACC, X24, SP, 16);
-        self.jit.ldp_post(PC, LFP, SP, 16);
-        self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
-        self.jit.ldp_post(X29, X30, SP, 16);
-        self.jit.ret();
+            ldp x25, x26, [sp], #(16);
+            ldp x(ACC.0), x24, [sp], #(16);
+            ldp x(PC.0), x(LFP.0), [sp], #(16);
+            ldp x(EXEC.0), x(GLOBALS.0), [sp], #(16);
+            ldp x29, x30, [sp], #(16);
+            ret;
         // SAFETY: codeptr is an extern "C" fn with the BindingInvoker ABI.
+        );
         unsafe { std::mem::transmute_copy::<*mut u8, BindingInvoker>(&codeptr.as_ptr()) }
     }
     pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
@@ -312,15 +357,19 @@ impl JitModule {
     ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
         self.a64_push_callee_save();
-        self.jit.mov_sp(X10, SP);
-        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // parent.rsp_save = SP
-        self.jit.ldr(X10, X1, EXECUTOR_RSP_SAVE as u32);
-        self.jit.mov_sp(SP, X10); // SP = child.rsp_save
-        self.jit.str(X0, X1, EXECUTOR_PARENT_FIBER as u32); // child.parent_fiber = parent
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // parent.rsp_save = SP
+            ldr x10, [x1, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = child.rsp_save
+            str x0, [x1, #(EXECUTOR_PARENT_FIBER as u32)];  // child.parent_fiber = parent
+        );
         self.a64_pop_callee_save();
-        self.jit.mov(X0, X2); // resume value
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x2;  // resume value
+            ret;
         // SAFETY: codeptr matches the resume_fiber ABI.
+        );
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
 
@@ -329,26 +378,34 @@ impl JitModule {
     pub(in crate::codegen) fn yield_fiber(&mut self) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
         self.a64_push_callee_save();
-        self.jit.mov_sp(X10, SP);
-        self.jit.str(X10, X0, EXECUTOR_RSP_SAVE as u32); // child.rsp_save = SP
-        self.jit.ldr(X0, X0, EXECUTOR_PARENT_FIBER as u32); // vm = parent
-        self.jit.ldr(X10, X0, EXECUTOR_RSP_SAVE as u32);
-        self.jit.mov_sp(SP, X10); // SP = parent.rsp_save
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // child.rsp_save = SP
+            ldr x0, [x0, #(EXECUTOR_PARENT_FIBER as u32)];  // vm = parent
+            ldr x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = parent.rsp_save
+        );
         self.a64_pop_callee_save();
-        self.jit.mov(X0, X1); // yielded value
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x1;  // yielded value
+            ret;
         // SAFETY: codeptr matches the yield_fiber ABI.
+        );
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
     pub(in crate::codegen) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
         // executor.stack_limit = sp - MAX_STACK_SIZE (= 65536 = 16 << 12).
         // x0 = &mut Executor (AAPCS64 arg0).
         let codeptr = self.jit.get_current_address();
-        self.jit.mov_sp(X10, SP);
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+        );
         self.jit.sub_imm(X10, X10, 16, 1); // 16 << 12 = 65536
-        self.jit.str(X10, X0, EXECUTOR_STACK_LIMIT as u32);
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            str x10, [x0, #(EXECUTOR_STACK_LIMIT as u32)];
+            ret;
         // SAFETY: codeptr is an `extern "C" fn(&mut Executor) -> *const u8`.
+        );
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
     /// `get_class`: x0 = Value in → x0 = ClassId (u32) out. Mirrors the x86
@@ -363,45 +420,52 @@ impl JitModule {
         let symbol = self.jit.label();
         let nil = self.jit.label();
         let bool_ = self.jit.label();
-        self.jit.bind_label(label.clone());
-        self.jit.tbnz_label(X0, 0, &fixnum); // bit0: fixnum
-        self.jit.tbnz_label(X0, 1, &flonum); // bit1: flonum
-        self.jit.tbnz_label(X0, 2, &l1); // bit2: other immediate
-        self.jit.cbz_label(X0, &err); // 0 is invalid
-        self.jit.ldr32(X0, X0, RVALUE_OFFSET_CLASS as u32); // heap: RValue.class
-        self.jit.ret();
-        self.jit.bind_label(l1);
-        self.jit.mov_imm(X1, 0xff);
-        self.jit.and_(X2, X0, X1);
-        self.jit.cmp_imm(X2, TAG_SYMBOL as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            label:
+            tbnz x0, #(0), fixnum;  // bit0: fixnum
+            tbnz x0, #(1), flonum;  // bit1: flonum
+            tbnz x0, #(2), l1;  // bit2: other immediate
+            cbz x0, err;  // 0 is invalid
+            ldr w0, [x0, #(RVALUE_OFFSET_CLASS as u32)];  // heap: RValue.class
+            ret;
+            l1:
+            mov x1, (0xff);
+            and x2, x0, x1;
+            cmp x2, #(TAG_SYMBOL as u32);
+        );
         self.jit.bcond_label(Cond::Eq, &symbol);
-        self.jit.cmp_imm(X0, NIL_VALUE as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            cmp x0, #(NIL_VALUE as u32);
+        );
         self.jit.bcond_label(Cond::Eq, &nil);
-        self.jit.mov_imm(X1, 8);
-        self.jit.orr(X1, X0, X1);
-        self.jit.cmp_imm(X1, TRUE_VALUE as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x1, (8);
+            orr x1, x0, x1;
+            cmp x1, #(TRUE_VALUE as u32);
+        );
         self.jit.bcond_label(Cond::Eq, &bool_);
-        self.jit.bind_label(err);
-        self.jit.mov_imm(X0, 0xc1a5); // DIAG: illegal_classid (get_class)
-        self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.brk(0); // TODO(aarch64): illegal_classid
-        self.jit.bind_label(fixnum);
-        self.jit.mov_imm(X0, INTEGER_CLASS.u32() as u64);
-        self.jit.ret();
-        self.jit.bind_label(flonum);
-        self.jit.mov_imm(X0, FLOAT_CLASS.u32() as u64);
-        self.jit.ret();
-        self.jit.bind_label(symbol);
-        self.jit.mov_imm(X0, SYMBOL_CLASS.u32() as u64);
-        self.jit.ret();
-        self.jit.bind_label(nil);
-        self.jit.mov_imm(X0, NIL_CLASS.u32() as u64);
-        self.jit.ret();
-        self.jit.bind_label(bool_);
-        self.jit.mov_imm(X0, BOOL_CLASS.u32() as u64);
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            err:
+            mov x0, (0xc1a5);  // DIAG: illegal_classid (get_class)
+            mov x9, (crate::codegen::runtime::report_unimpl_op as *const () as u64);
+            blr x9;
+            brk #(0);  // TODO(aarch64): illegal_classid
+            fixnum:
+            mov x0, (INTEGER_CLASS.u32() as u64);
+            ret;
+            flonum:
+            mov x0, (FLOAT_CLASS.u32() as u64);
+            ret;
+            symbol:
+            mov x0, (SYMBOL_CLASS.u32() as u64);
+            ret;
+            nil:
+            mov x0, (NIL_CLASS.u32() as u64);
+            ret;
+            bool_:
+            mov x0, (BOOL_CLASS.u32() as u64);
+            ret;
+        );
         label
     }
 }

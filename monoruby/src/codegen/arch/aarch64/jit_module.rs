@@ -1,9 +1,16 @@
 //! aarch64 `JitModule` asm methods: bytecode dispatch + frame
 //! primitives, `brk` stubs, `JitModule::new`, and the per-signal stub.
 //!
-//! Counterpart of `arch/x86_64/jit_module.rs`.
+//! Counterpart of `arch/x86_64/jit_module.rs`. Instruction sequences are
+//! written with the `monoasm_arm64!` A64 assembly DSL (the aarch64 analogue
+//! of x86's `monoasm!`); the role registers (`EXEC`/`PC`/`TBL`/…) stay
+//! `GReg` constants and are spelled `x(NAME.0)` in the DSL. Non-instruction
+//! builder calls (label allocation/binding, `get_current_address`,
+//! `finalize`, …) remain plain method calls and interleave with the macro,
+//! exactly as in the x86 backend.
 
 use super::*;
+use monoasm_macro::monoasm_arm64;
 
 impl JitModule {
     /// Fetch the opcode and dispatch through the 256-entry table.
@@ -20,10 +27,12 @@ impl JitModule {
     /// - x9 (TBL), x10 (OP), x11 (TGT)
     pub(in crate::codegen) fn a64_fetch_and_dispatch(&mut self) {
         let table = self.dispatch.as_ptr() as u64;
-        self.jit.mov_imm(TBL, table); // table base
-        self.jit.ldrb(OP, PC, OPECODE as u32); // opcode <- [pc + OPECODE]
-        self.jit.ldr_reg(TGT, TBL, OP, true); // handler <- table[opcode] (lsl #3)
-        self.jit.br(TGT);
+        monoasm_arm64!(&mut self.jit,
+            mov  x(TBL.0), (table);                       // table base
+            ldrb x(OP.0), [x(PC.0), #(OPECODE)];          // opcode <- [pc + OPECODE]
+            ldr  x(TGT.0), [x(TBL.0), x(OP.0), lsl #3];   // handler <- table[opcode]
+            br   x(TGT.0);
+        );
     }
 
     /// Address of the local slot whose index is in `reg`:
@@ -33,59 +42,71 @@ impl JitModule {
     /// ### in / out
     /// - `dst`: slot index in → slot *address* out
     pub(in crate::codegen) fn a64_slot_addr(&mut self, dst: GReg) {
-        self.jit.neg(dst, dst);
-        self.jit.add_lsl(dst, LFP, dst, 3);
-        self.jit.sub_imm(dst, dst, LFP_SELF as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            neg x(dst.0), x(dst.0);
+            add x(dst.0), x(LFP.0), x(dst.0), lsl #3;
+            sub x(dst.0), x(dst.0), #(LFP_SELF);
+        );
     }
 
     /// Value of the local slot whose index is in `reg` (slot index → value).
     pub(in crate::codegen) fn a64_slot_value(&mut self, dst: GReg) {
         self.a64_slot_addr(dst);
-        self.jit.ldr(dst, dst, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(dst.0), [x(dst.0)];
+        );
     }
 
     /// VM entry prologue: save the callee-saved global registers + fp/lr.
     /// x86 analogue: `pushq rbp; movq rbp, rsp`.
     pub(in crate::codegen) fn a64_prologue(&mut self) {
-        self.jit.stp_pre(X29, X30, SP, -16); // fp, lr
-        self.jit.stp_pre(EXEC, GLOBALS, SP, -16);
-        self.jit.stp_pre(PC, LFP, SP, -16);
-        self.jit.stp_pre(ACC, X19_PAD, SP, -16); // ACC + 8-byte pad (16-align)
+        monoasm_arm64!(&mut self.jit,
+            stp x29, x30, [sp, #-16]!;                  // fp, lr
+            stp x(EXEC.0), x(GLOBALS.0), [sp, #-16]!;
+            stp x(PC.0), x(LFP.0), [sp, #-16]!;
+            stp x(ACC.0), x(X19_PAD.0), [sp, #-16]!;    // ACC + 8-byte pad (16-align)
+        );
     }
 
     /// VM exit epilogue: restore the callee-saved registers. x86: `leave; ret`.
     pub(in crate::codegen) fn a64_epilogue(&mut self) {
-        self.jit.ldp_post(ACC, X19_PAD, SP, 16);
-        self.jit.ldp_post(PC, LFP, SP, 16);
-        self.jit.ldp_post(EXEC, GLOBALS, SP, 16);
-        self.jit.ldp_post(X29, X30, SP, 16);
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            ldp x(ACC.0), x(X19_PAD.0), [sp], #16;
+            ldp x(PC.0), x(LFP.0), [sp], #16;
+            ldp x(EXEC.0), x(GLOBALS.0), [sp], #16;
+            ldp x29, x30, [sp], #16;
+            ret;
+        );
     }
     /// Bind `label` at the current position and emit a trap.
     pub(in crate::codegen) fn a64_brk_stub(&mut self, label: &DestLabel) {
-        self.jit.bind_label(label.clone());
-        self.jit.brk(0);
+        monoasm_arm64!(&mut self.jit,
+        label:
+            brk #0;
+        );
     }
 
     /// Like `a64_brk_stub` but reports a diagnostic id before trapping.
     pub(in crate::codegen) fn a64_brk_stub_diag(&mut self, label: &DestLabel, id: u64) {
-        self.jit.bind_label(label.clone());
-        self.jit.mov_imm(X0, id);
-        self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.brk(0);
+        monoasm_arm64!(&mut self.jit,
+        label:
+            mov x0, (id);
+            mov x9, (crate::codegen::runtime::report_unimpl_op as *const () as u64);
+            blr x9;
+            brk #0;
+        );
     }
 
     /// Emit a `brk` trampoline and return its address as a typed fn pointer.
     /// TODO(aarch64): replace each caller with the real invoker.
     pub(in crate::codegen) fn a64_stub_fn<T>(&mut self, id: u64) -> T {
         let p = self.jit.get_current_address();
-        self.jit.mov_imm(X0, 0x51410000 + id); // DIAG: stub invoker hit
-        self.jit
-            .mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.brk(0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (0x51410000 + id);                   // DIAG: stub invoker hit
+            mov x9, (crate::codegen::runtime::report_unimpl_op as *const () as u64);
+            blr x9;
+            brk #0;
+        );
         // SAFETY: T is always a pointer-sized `extern "C"` fn pointer; the
         // trampoline traps if ever called (M0 in progress).
         unsafe { std::mem::transmute_copy::<*mut u8, T>(&p.as_ptr()) }
@@ -107,10 +128,12 @@ impl JitModule {
         // TODO(aarch64): emit the real entry stubs (raise/fetch_and_dispatch/
         // panic/f64_to_val/gc). For now trap so the module links + constructs.
         let entry_unimpl = jit.get_current_address();
-        jit.mov(X0, OP); // OP (X10) holds the opcode at dispatch time
-        jit.mov_imm(X9, crate::codegen::runtime::report_unimpl_op as *const () as u64);
-        jit.blr(X9);
-        jit.brk(0);
+        monoasm_arm64!(&mut jit,
+            mov x0, x(OP.0);                             // OP (X10) holds the opcode at dispatch time
+            mov x9, (crate::codegen::runtime::report_unimpl_op as *const () as u64);
+            blr x9;
+            brk #0;
+        );
         let dispatch = vec![entry_unimpl; 256];
         let mut j = Self {
             jit,
@@ -178,18 +201,20 @@ impl JitModule {
         let af_addr = self.jit.get_label_address(&alloc_flag).as_ptr() as u64;
         let ps_addr = self.jit.get_label_address(&pending_signals).as_ptr() as u64;
         let p = self.jit.get_current_address();
-        // alloc_flag += 10  (32-bit RMW)
-        self.jit.mov_imm(X0, af_addr);
-        self.jit.ldr32(X1, X0, 0);
-        self.jit.add_imm(X1, X1, 10, 0);
-        self.jit.str32(X1, X0, 0);
-        // pending_signals |= bit  (32-bit RMW)
-        self.jit.mov_imm(X0, ps_addr);
-        self.jit.ldr32(X1, X0, 0);
-        self.jit.mov_imm(X2, bit);
-        self.jit.orr(X1, X1, X2);
-        self.jit.str32(X1, X0, 0);
-        self.jit.ret();
+        monoasm_arm64!(&mut self.jit,
+            // alloc_flag += 10  (32-bit RMW)
+            mov x0, (af_addr);
+            ldr w1, [x0];
+            add x1, x1, #10;
+            str w1, [x0];
+            // pending_signals |= bit  (32-bit RMW)
+            mov x0, (ps_addr);
+            ldr w1, [x0];
+            mov x2, (bit);
+            orr x1, x1, x2;
+            str w1, [x0];
+            ret;
+        );
         p
     }
 }
