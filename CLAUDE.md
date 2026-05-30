@@ -39,14 +39,16 @@ monoruby/                   # Workspace root
 │   │   │   ├── op/         # Operator dispatch
 │   │   │   ├── inline.rs   # Inline method dispatch table
 │   │   │   └── constants.rs
-│   │   ├── codegen/        # JIT compiler
-│   │   │   ├── codegen.rs  # Thread-local CODEGEN singleton
+│   │   ├── codegen/        # JIT compiler + arch-neutral codegen glue
+│   │   │   ├── codegen.rs  # Thread-local CODEGEN singleton; arch-neutral types
 │   │   │   ├── compiler.rs # JIT compilation entry point
-│   │   │   ├── jit_module.rs
-│   │   │   ├── invoker.rs  # Method/block/fiber invokers
-│   │   │   ├── vmgen/      # x86-64 VM dispatch code generation
+│   │   │   ├── jit_module.rs # Arch-neutral: handle_error, ErrorReturn, …
+│   │   │   ├── arch.rs     # target_arch switch (x86_64 / aarch64)
+│   │   │   ├── arch/       # Per-arch VM-tier backends (mirrored layout)
+│   │   │   │   ├── x86_64/ # {codegen,jit_module,invoker,wrapper,vmgen}(+vmgen/)
+│   │   │   │   └── aarch64/# {codegen,jit_module,invoker,wrapper,vmgen}
 │   │   │   ├── runtime/    # JIT runtime helpers
-│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR → x86-64
+│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR → x86-64 (x86-only, cfg(jit))
 │   │   │       ├── trace_ir.rs
 │   │   │       ├── state/  # Abstract interpreter state
 │   │   │       ├── asmir/  # Assembly IR definitions & lowering
