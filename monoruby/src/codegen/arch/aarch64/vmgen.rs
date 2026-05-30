@@ -4,6 +4,7 @@
 //! Counterpart of `arch/x86_64/vmgen.rs` (+ its `vmgen/` submodules).
 
 use super::*;
+use monoasm_macro::monoasm_arm64;
 
 impl Codegen {
     pub(in crate::codegen) fn construct_vm(&mut self) {
@@ -13,10 +14,12 @@ impl Codegen {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
-        self.jit.bind_label(vm_entry.clone());
-        self.jit.stp_pre(X29, X30, SP, -16);
-        self.jit.mov_sp(X29, SP);
-        self.jit.bind_label(entry_fetch.clone());
+        monoasm_arm64!(&mut self.jit,
+            vm_entry:
+            stp x29, x30, [sp, #(-16)]!;
+            mov x29, sp;
+            entry_fetch:
+        );
         self.a64_fetch_and_dispatch();
         self.vm_fetch = entry_fetch;
         self.vm_entry = vm_entry;
@@ -248,12 +251,16 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_unop(&mut self, abs: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X2); // src
-        self.jit.mov_imm(X9, abs);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (abs);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -262,11 +269,15 @@ impl Codegen {
     /// (non-zero); otherwise fall through (used for optional-param defaults).
     pub(in crate::codegen) fn a64_op_check_local(&mut self, branch: &DestLabel) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrsw(X10, PC, 0); // disp (for the shared branch target)
-        self.jit.ldrh(X12, PC, 4); // local slot
+        monoasm_arm64!(&mut self.jit,
+            ldrsw x10, [x(PC.0)];  // disp (for the shared branch target)
+            ldrh x12, [x(PC.0), #(4)];  // local slot
+        );
         self.a64_slot_value(X12);
-        self.jit.cbnz_label(X12, branch);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            cbnz x12, branch;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -276,17 +287,21 @@ impl Codegen {
     /// which feeds the shared branch target.
     pub(in crate::codegen) fn a64_op_optcase(&mut self, branch: &DestLabel) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldr32(X2, PC, 0); // OptCaseId
-        self.jit.ldrh(X10, PC, 4); // cond slot
+        monoasm_arm64!(&mut self.jit,
+            ldr w2, [x(PC.0)];  // OptCaseId
+            ldrh x10, [x(PC.0), #(4)];  // cond slot
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X3, X10); // cond value
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::opt_case as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.lsl_imm(X10, X0, 32); // zero-extend u32 disp into X10
-        self.jit.lsr_imm(X10, X10, 32);
-        self.jit.b_label(branch);
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x10;  // cond value
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::opt_case as *const () as u64);
+            blr x9;
+            lsl x10, x0, #(32);  // zero-extend u32 disp into X10
+            lsr x10, x10, #(32);
+            b branch;
+        );
         p
     }
 
@@ -296,22 +311,24 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_lambda(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // func_id
-        self.jit.mov(X3, PC); // call-site pc
-        self.jit.mov_imm(X9, runtime::gen_lambda as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
-        self.jit.ldr(LFP, X10, 0); // restore (possibly heap-promoted) LFP
-        self.jit.ldrh(X10, PC, 4); // dst slot
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // func_id
+            mov x3, x(PC.0);  // call-site pc
+            mov x9, (runtime::gen_lambda as *const () as u64);
+            blr x9;
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x(LFP.0), [x10];  // restore (possibly heap-promoted) LFP
+            ldrh x10, [x(PC.0), #(4)];  // dst slot
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -319,12 +336,18 @@ impl Codegen {
     /// op 37 `NilBr`: branch by disp `[pc+0]` if cond slot `[pc+4]` is nil.
     pub(in crate::codegen) fn a64_op_nilbr(&mut self, branch: &DestLabel) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrsw(X10, PC, 0); // disp (for shared branch target)
-        self.jit.ldrh(X11, PC, 4); // cond slot
+        monoasm_arm64!(&mut self.jit,
+            ldrsw x10, [x(PC.0)];  // disp (for shared branch target)
+            ldrh x11, [x(PC.0), #(4)];  // cond slot
+        );
         self.a64_slot_value(X11);
-        self.jit.cmp_imm(X11, NIL_VALUE as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            cmp x11, #(NIL_VALUE as u32);
+        );
         self.jit.bcond_label(Cond::Eq, branch);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -333,12 +356,14 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_block_arg(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov(X2, LFP);
-        self.jit.mov(X3, PC); // BytecodePtr (instruction start)
-        self.jit.mov_imm(X9, runtime::block_arg as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(LFP.0);
+            mov x3, x(PC.0);  // BytecodePtr (instruction start)
+            mov x9, (runtime::block_arg as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -347,12 +372,16 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_to_a(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X2); // src
-        self.jit.mov_imm(X9, runtime::to_a as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::to_a as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -367,36 +396,40 @@ impl Codegen {
         let notzero = self.jit.label();
         let exit = self.jit.label();
         let skip = self.jit.label();
-        self.jit.mov(X10, LFP);
-        self.jit.ldr32(X11, PC, 0); // outer level
-        self.jit.cbz_label(X11, &loop_exit);
-        self.jit.bind_label(loop_.clone());
-        self.jit.ldr(X10, X10, 0); // walk outer chain
-        self.jit.subs_imm(X11, X11, 1, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x10, x(LFP.0);
+            ldr w11, [x(PC.0)];  // outer level
+            cbz x11, loop_exit;
+            loop_:
+            ldr x10, [x10];  // walk outer chain
+            subs x11, x11, #(1);
+        );
         self.jit.bcond_label(Cond::Ne, &loop_);
-        self.jit.bind_label(loop_exit);
+        monoasm_arm64!(&mut self.jit,
+            loop_exit:
         // block handler = [outer - LFP_BLOCK]
-        self.jit.sub_imm(X12, X10, LFP_BLOCK as u32, 0);
-        self.jit.ldr(X10, X12, 0);
-        self.jit.cbnz_label(X10, &notzero);
-        self.jit.mov_imm(X10, NIL_VALUE); // no block -> nil
-        self.jit.bind_label(notzero);
+            sub x12, x10, #(LFP_BLOCK as u32);
+            ldr x10, [x12];
+            cbnz x10, notzero;
+            mov x10, (NIL_VALUE);  // no block -> nil
+            notzero:
         // if bit0 == 0 (Proc/nil), keep as-is; else re-encode proxy depth.
-        self.jit.tbz_label(X10, 0, &exit);
-        self.jit.ldrsw(X12, PC, 0); // outer (signed)
-        self.jit.lsl_imm(X12, X12, 2);
-        self.jit.add(X10, X10, X12);
-        self.jit.add_imm(X10, X10, 2, 0);
-        self.jit.bind_label(exit);
+            tbz x10, #(0), exit;
+            ldrsw x12, [x(PC.0)];  // outer (signed)
+            lsl x12, x12, #(2);
+            add x10, x10, x12;
+            add x10, x10, #(2);
+            exit:
         // store X10 to dst [pc+4]
-        self.jit.ldrh(X11, PC, 4);
-        self.jit.cbz_label(X11, &skip);
-        self.jit.neg(X11, X11);
-        self.jit.add_lsl(X12, LFP, X11, 3);
-        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
-        self.jit.str(X10, X12, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+            ldrh x11, [x(PC.0), #(4)];
+            cbz x11, skip;
+            neg x11, x11;
+            add x12, x(LFP.0), x11, lsl #(3);
+            sub x12, x12, #(LFP_SELF as u32);
+            str x10, [x12];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -409,29 +442,33 @@ impl Codegen {
         let loop_ = self.jit.label();
         let exit = self.jit.label();
         let skip = self.jit.label();
-        self.jit.ldr(X10, LFP, 0); // X10 = level-1 outer ([LFP] = LFP_OUTER)
-        self.jit.ldrh(X11, PC, 0); // outer level
-        self.jit.bind_label(loop_.clone());
-        self.jit.subs_imm(X11, X11, 1, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x(LFP.0)];  // X10 = level-1 outer ([LFP] = LFP_OUTER)
+            ldrh x11, [x(PC.0)];  // outer level
+            loop_:
+            subs x11, x11, #(1);
+        );
         self.jit.bcond_label(Cond::Eq, &exit);
-        self.jit.ldr(X10, X10, 0); // walk up
-        self.jit.b_label(&loop_);
-        self.jit.bind_label(exit);
-        self.jit.cbz_label(X10, &raise);
-        self.jit.ldrh(X12, PC, 2); // src slot in outer frame
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X13, X10, X12, 3);
-        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
-        self.jit.ldr(X14, X13, 0); // value
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x10];  // walk up
+            b loop_;
+            exit:
+            cbz x10, raise;
+            ldrh x12, [x(PC.0), #(2)];  // src slot in outer frame
+            neg x12, x12;
+            add x13, x10, x12, lsl #(3);
+            sub x13, x13, #(LFP_SELF as u32);
+            ldr x14, [x13];  // value
         // store to dst [pc+4]
-        self.jit.ldrh(X12, PC, 4);
-        self.jit.cbz_label(X12, &skip);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X13, LFP, X12, 3);
-        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
-        self.jit.str(X14, X13, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+            ldrh x12, [x(PC.0), #(4)];
+            cbz x12, skip;
+            neg x12, x12;
+            add x13, x(LFP.0), x12, lsl #(3);
+            sub x13, x13, #(LFP_SELF as u32);
+            str x14, [x13];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -442,27 +479,31 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let exit = self.jit.label();
-        self.jit.ldr(X10, LFP, 0); // level-1 outer
-        self.jit.ldrh(X11, PC, 2); // outer level
-        self.jit.bind_label(loop_.clone());
-        self.jit.subs_imm(X11, X11, 1, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x(LFP.0)];  // level-1 outer
+            ldrh x11, [x(PC.0), #(2)];  // outer level
+            loop_:
+            subs x11, x11, #(1);
+        );
         self.jit.bcond_label(Cond::Eq, &exit);
-        self.jit.ldr(X10, X10, 0);
-        self.jit.b_label(&loop_);
-        self.jit.bind_label(exit);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x10];
+            b loop_;
+            exit:
         // src value from the current frame (slot [pc+0])
-        self.jit.ldrh(X12, PC, 0);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X13, LFP, X12, 3);
-        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
-        self.jit.ldr(X14, X13, 0);
+            ldrh x12, [x(PC.0)];
+            neg x12, x12;
+            add x13, x(LFP.0), x12, lsl #(3);
+            sub x13, x13, #(LFP_SELF as u32);
+            ldr x14, [x13];
         // store to dst slot [pc+4] in the outer frame
-        self.jit.ldrh(X12, PC, 4);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X13, X10, X12, 3);
-        self.jit.sub_imm(X13, X13, LFP_SELF as u32, 0);
-        self.jit.str(X14, X13, 0);
-        self.jit.add_imm(PC, PC, 16, 0);
+            ldrh x12, [x(PC.0), #(4)];
+            neg x12, x12;
+            add x13, x10, x12, lsl #(3);
+            sub x13, x13, #(LFP_SELF as u32);
+            str x14, [x13];
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -472,18 +513,26 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_check_kw_rest(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let exit = self.jit.label();
-        self.jit.ldrh(X10, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];
+        );
         self.a64_slot_addr(X10); // &slot
-        self.jit.ldr(X11, X10, 0);
-        self.jit.cmp_imm(X11, NIL_VALUE as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr x11, [x10];
+            cmp x11, #(NIL_VALUE as u32);
+        );
         self.jit.bcond_label(Cond::Ne, &exit);
-        self.jit.mov_imm(X9, runtime::empty_hash as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.ldrh(X10, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::empty_hash as *const () as u64);
+            blr x9;
+            ldrh x10, [x(PC.0), #(4)];
+        );
         self.a64_slot_addr(X10); // re-compute (clobbered by call)
-        self.jit.str(X0, X10, 0);
-        self.jit.bind_label(exit);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            str x0, [x10];
+            exit:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -492,11 +541,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_check_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::check_class_var as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // name
+            mov x9, (runtime::check_class_var as *const () as u64);
+            blr x9;
+        );
         self.a64_store_dst_and_next(&skip);
         p
     }
@@ -505,11 +556,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_load_gvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::get_global_var as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // name
+            mov x9, (runtime::get_global_var as *const () as u64);
+            blr x9;
+        );
         self.a64_store_dst_and_next(&skip);
         p
     }
@@ -518,11 +571,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_load_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::get_class_var as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // name
+            mov x9, (runtime::get_class_var as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -532,15 +587,19 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_store_var(&mut self, set_fn: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // name
-        self.jit.ldrh(X3, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // name
+            ldrh x3, [x(PC.0), #(4)];
+        );
         self.a64_slot_value(X3); // val
-        self.jit.mov_imm(X9, set_fn);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (set_fn);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -548,12 +607,14 @@ impl Codegen {
     /// op 28 `AliasGvar`: alias_global_var(globals, new `[pc+0]`, old `[pc+8]`).
     pub(in crate::codegen) fn a64_op_alias_gvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.mov(X0, GLOBALS);
-        self.jit.ldr32(X1, PC, 0); // new
-        self.jit.ldr32(X2, PC, 8); // old
-        self.jit.mov_imm(X9, runtime::alias_global_var as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(GLOBALS.0);
+            ldr w1, [x(PC.0)];  // new
+            ldr w2, [x(PC.0), #(8)];  // old
+            mov x9, (runtime::alias_global_var as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -563,16 +624,22 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_alias_method(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X2); // old
-        self.jit.ldrh(X3, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0), #(4)];
+        );
         self.a64_slot_value(X3); // new
-        self.jit.mov_imm(X9, runtime::alias_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::alias_method as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -581,13 +648,15 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_undef_method(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // name
-        self.jit.mov_imm(X9, runtime::undef_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // name
+            mov x9, (runtime::undef_method as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -597,16 +666,20 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_singleton_method_def(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 8); // name
-        self.jit.ldr32(X3, PC, 12); // func_id
-        self.jit.ldrh(X4, PC, 4); // obj slot
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0), #(8)];  // name
+            ldr w3, [x(PC.0), #(12)];  // func_id
+            ldrh x4, [x(PC.0), #(4)];  // obj slot
+        );
         self.a64_slot_value(X4); // obj
-        self.jit.mov_imm(X9, runtime::singleton_define_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::singleton_define_method as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -616,15 +689,21 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_index(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X2); // base
-        self.jit.ldrh(X3, PC, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0)];
+        );
         self.a64_slot_value(X3); // idx
-        self.jit.add_imm(X4, PC, 8, 0); // &cache
-        self.jit.mov_imm(X9, runtime::get_index as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            add x4, x(PC.0), #(8);  // &cache
+            mov x9, (runtime::get_index as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -634,19 +713,27 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_index_assign(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X2); // base
-        self.jit.ldrh(X3, PC, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0)];
+        );
         self.a64_slot_value(X3); // idx
-        self.jit.ldrh(X4, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x4, [x(PC.0), #(4)];
+        );
         self.a64_slot_value(X4); // src
-        self.jit.add_imm(X5, PC, 8, 0); // &cache
-        self.jit.mov_imm(X9, runtime::set_index as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            add x5, x(PC.0), #(8);  // &cache
+            mov x9, (runtime::set_index as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -655,15 +742,17 @@ impl Codegen {
     /// to `raise` if it is 0 (error), else store, advance PC, and dispatch.
     pub(in crate::codegen) fn a64_checked_store_next(&mut self, raise: &DestLabel) {
         let skip = self.jit.label();
-        self.jit.cbz_label(X0, raise);
-        self.jit.ldrh(X10, PC, 4);
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, raise;
+            ldrh x10, [x(PC.0), #(4)];
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
     }
 
@@ -671,12 +760,14 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_array(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // callid
-        self.jit.sub_imm(X3, LFP, LFP_SELF as u32, 0); // &self
-        self.jit.mov_imm(X9, runtime::gen_array as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // callid
+            sub x3, x(LFP.0), #(LFP_SELF as u32);  // &self
+            mov x9, (runtime::gen_array as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -688,27 +779,31 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
-        self.jit.ldrh(X10, PC, 0); // rhs slot
-        self.jit.ldrh(X11, PC, 2); // lhs slot (also dst)
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot (also dst)
+        );
         self.a64_load_slot(X11, X3, X12); // X3 = lhs value
         self.a64_load_slot(X10, X4, X12); // X4 = rhs value
         // array_teq(vm, globals, lhs, rhs) -> Option<Value>
-        self.jit.mov(X2, X3); // lhs (arg #3)
-        self.jit.mov(X3, X4); // rhs (arg #4)
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::array_teq as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x3;  // lhs (arg #3)
+            mov x3, x4;  // rhs (arg #4)
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::array_teq as *const () as u64);
+            blr x9;
+            cbz x0, raise;
         // dst slot = lhs slot from [PC+2]
-        self.jit.ldrh(X10, PC, 2);
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+            ldrh x10, [x(PC.0), #(2)];
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -717,13 +812,17 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_hash(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_addr(X2); // src
-        self.jit.ldrh(X3, PC, 0); // len
-        self.jit.mov_imm(X9, runtime::gen_hash as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0)];  // len
+            mov x9, (runtime::gen_hash as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -733,13 +832,17 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_concat(&mut self, abs: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
         self.a64_slot_addr(X2); // args
-        self.jit.ldrh(X3, PC, 0); // len
-        self.jit.mov_imm(X9, abs);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0)];  // len
+            mov x9, (abs);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -749,15 +852,21 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_range(&mut self, exclude_end: bool) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.ldrh(X0, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x0, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X0); // start
-        self.jit.ldrh(X1, PC, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x1, [x(PC.0)];
+        );
         self.a64_slot_value(X1); // end
-        self.jit.mov(X2, EXEC);
-        self.jit.mov(X3, GLOBALS);
-        self.jit.mov_imm(X4, if exclude_end { 1 } else { 0 });
-        self.jit.mov_imm(X9, runtime::gen_range as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x(EXEC.0);
+            mov x3, x(GLOBALS.0);
+            mov x4, (if exclude_end { 1 } else { 0 });
+            mov x9, (runtime::gen_range as *const () as u64);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -766,29 +875,37 @@ impl Codegen {
     /// len `[pc+0]`, rest `[pc+8]`). No result.
     pub(in crate::codegen) fn a64_op_expand_array(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrh(X0, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x0, [x(PC.0), #(4)];
+        );
         self.a64_slot_value(X0); // src (an Array Value)
-        self.jit.ldrh(X1, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x1, [x(PC.0), #(2)];
+        );
         self.a64_slot_addr(X1); // &dst
-        self.jit.ldrh(X2, PC, 0); // len
-        self.jit.ldrh(X3, PC, 8); // rest
-        self.jit.mov_imm(X9, runtime::expand_array as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x2, [x(PC.0)];  // len
+            ldrh x3, [x(PC.0), #(8)];  // rest
+            mov x9, (runtime::expand_array as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
 
     /// Store `X0` (a Value) into the dst slot at `[pc+4]`, advance PC, dispatch.
     pub(in crate::codegen) fn a64_store_dst_and_next(&mut self, skip: &DestLabel) {
-        self.jit.ldrh(X10, PC, 4);
-        self.jit.cbz_label(X10, skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip.clone());
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
     }
 
@@ -797,10 +914,12 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_defined_to_dst(&mut self, abs: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, abs);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (abs);
+            blr x9;
+        );
         self.a64_store_dst_and_next(&skip);
         p
     }
@@ -808,14 +927,18 @@ impl Codegen {
     /// op 65 `DefinedConst`: defined_const(vm, globals, &dst, site_id `[pc+8]`).
     pub(in crate::codegen) fn a64_op_defined_const(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(4)];
+        );
         self.a64_slot_addr(X2); // &dst
-        self.jit.ldr32(X3, PC, 8); // site_id
-        self.jit.mov_imm(X9, runtime::defined_const as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr w3, [x(PC.0), #(8)];  // site_id
+            mov x9, (runtime::defined_const as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -824,16 +947,22 @@ impl Codegen {
     /// name `[pc+8]`).
     pub(in crate::codegen) fn a64_op_defined_method(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(4)];
+        );
         self.a64_slot_addr(X2); // &dst
-        self.jit.ldrh(X3, PC, 2);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0), #(2)];
+        );
         self.a64_slot_value(X3); // recv
-        self.jit.ldr32(X4, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr w4, [x(PC.0), #(8)];  // name
+            mov x9, (runtime::defined_method as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -842,11 +971,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_defined_gvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_gvar as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0), #(8)];  // name
+            mov x9, (runtime::defined_gvar as *const () as u64);
+            blr x9;
+        );
         self.a64_store_dst_and_next(&skip);
         p
     }
@@ -855,11 +986,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_defined_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_cvar as *const () as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0), #(8)];  // name
+            mov x9, (runtime::defined_cvar as *const () as u64);
+            blr x9;
+        );
         self.a64_store_dst_and_next(&skip);
         p
     }
@@ -867,14 +1000,18 @@ impl Codegen {
     /// op 68 `DefinedIvar`: defined_ivar(vm, globals, &dst, name `[pc+8]`).
     pub(in crate::codegen) fn a64_op_defined_ivar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(4)];
+        );
         self.a64_slot_addr(X2); // &dst
-        self.jit.ldr32(X3, PC, 8); // name
-        self.jit.mov_imm(X9, runtime::defined_ivar as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr w3, [x(PC.0), #(8)];  // name
+            mov x9, (runtime::defined_ivar as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -884,22 +1021,23 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_load_ivar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.sub_imm(X0, LFP, LFP_SELF as u32, 0);
-        self.jit.ldr(X0, X0, 0); // base = self
-        self.jit.ldr32(X1, PC, 0); // name
-        self.jit.mov(X2, GLOBALS);
-        self.jit.add_imm(X3, PC, 8, 0); // &cache
-        self.jit
-            .mov_imm(X9, get_instance_var_with_cache as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.ldrh(X10, PC, 4); // dst slot
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            sub x0, x(LFP.0), #(LFP_SELF as u32);
+            ldr x0, [x0];  // base = self
+            ldr w1, [x(PC.0)];  // name
+            mov x2, x(GLOBALS.0);
+            add x3, x(PC.0), #(8);  // &cache
+            mov x9, (get_instance_var_with_cache as *const () as u64);
+            blr x9;
+            ldrh x10, [x(PC.0), #(4)];  // dst slot
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -909,20 +1047,23 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_store_ivar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.sub_imm(X2, LFP, LFP_SELF as u32, 0);
-        self.jit.ldr(X2, X2, 0); // base = self
-        self.jit.ldr32(X3, PC, 0); // name
-        self.jit.ldrh(X10, PC, 4); // src slot
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            sub x2, x(LFP.0), #(LFP_SELF as u32);
+            ldr x2, [x2];  // base = self
+            ldr w3, [x(PC.0)];  // name
+            ldrh x10, [x(PC.0), #(4)];  // src slot
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X4, X10); // val
-        self.jit.add_imm(X5, PC, 8, 0); // &cache
-        self.jit
-            .mov_imm(X9, set_instance_var_with_cache as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, x10;  // val
+            add x5, x(PC.0), #(8);  // &cache
+            mov x9, (set_instance_var_with_cache as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -935,22 +1076,24 @@ impl Codegen {
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
         let cv_addr = self.jit.get_label_address(&self.const_version_label()).as_ptr() as u64;
-        self.jit.ldr32(X2, PC, 0); // ConstSiteId
-        self.jit.mov_imm(X11, cv_addr);
-        self.jit.ldr(X3, X11, 0); // const_version
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, get_fn);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.ldrh(X10, PC, 4); // dst slot
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr w2, [x(PC.0)];  // ConstSiteId
+            mov x11, (cv_addr);
+            ldr x3, [x11];  // const_version
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (get_fn);
+            blr x9;
+            cbz x0, raise;
+            ldrh x10, [x(PC.0), #(4)];  // dst slot
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -961,21 +1104,25 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let cv_addr = self.jit.get_label_address(&self.const_version_label()).as_ptr() as u64;
-        self.jit.ldr32(X2, PC, 0); // ConstSiteId
-        self.jit.ldrh(X10, PC, 4); // src slot
+        monoasm_arm64!(&mut self.jit,
+            ldr w2, [x(PC.0)];  // ConstSiteId
+            ldrh x10, [x(PC.0), #(4)];  // src slot
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X3, X10); // val
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x10;  // val
         // const_version += 1
-        self.jit.mov_imm(X11, cv_addr);
-        self.jit.ldr(X12, X11, 0);
-        self.jit.add_imm(X12, X12, 1, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::set_constant as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+            mov x11, (cv_addr);
+            ldr x12, [x11];
+            add x12, x12, #(1);
+            str x12, [x11];
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::set_constant as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -993,31 +1140,37 @@ impl Codegen {
         let base_done = self.jit.label();
         // define_class(vm, globals, name, superclass, is_module, base)
         // superclass (x3): slot[+0] value, or 0 (None) if slot index is 0.
-        self.jit.ldrh(X10, PC, 0);
-        self.jit.cbz_label(X10, &sup_zero);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];
+            cbz x10, sup_zero;
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X3, X10);
-        self.jit.b_label(&sup_done);
-        self.jit.bind_label(sup_zero);
-        self.jit.mov_imm(X3, 0);
-        self.jit.bind_label(sup_done);
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x10;
+            b sup_done;
+            sup_zero:
+            mov x3, (0);
+            sup_done:
         // base (x5): slot[+2] value, or 0 (None).
-        self.jit.ldrh(X10, PC, 2);
-        self.jit.cbz_label(X10, &base_zero);
+            ldrh x10, [x(PC.0), #(2)];
+            cbz x10, base_zero;
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X5, X10);
-        self.jit.b_label(&base_done);
-        self.jit.bind_label(base_zero);
-        self.jit.mov_imm(X5, 0);
-        self.jit.bind_label(base_done);
-        self.jit.ldr32(X2, PC, 8); // name
-        self.jit.mov_imm(X4, if is_module { 1 } else { 0 });
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::define_class as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.mov(X25, X0); // X25 = self (the class), callee-saved
+        monoasm_arm64!(&mut self.jit,
+            mov x5, x10;
+            b base_done;
+            base_zero:
+            mov x5, (0);
+            base_done:
+            ldr w2, [x(PC.0), #(8)];  // name
+            mov x4, (if is_module { 1 } else { 0 });
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::define_class as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            mov x25, x0;  // X25 = self (the class), callee-saved
+        );
         self.a64_class_def_run();
         p
     }
@@ -1027,14 +1180,18 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         // define_singleton_class(vm, globals, base) -> self
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldrh(X2, PC, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0)];
+        );
         self.a64_slot_value(X2); // base
-        self.jit.mov_imm(X9, runtime::define_singleton_class as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.mov(X25, X0); // self = singleton class
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::define_singleton_class as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            mov x25, x0;  // self = singleton class
+        );
         self.a64_class_def_run();
         p
     }
@@ -1047,60 +1204,61 @@ impl Codegen {
         let skip = self.jit.label();
         let raise = self.entry_raise.clone();
         // enter_classdef(vm, globals, func_id, self) -> &FuncData
-        self.jit.ldr32(X2, PC, 12); // func_id
-        self.jit.mov(X3, X25);
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::enter_classdef as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.mov(X26, X0); // X26 = &FuncData, callee-saved
+        monoasm_arm64!(&mut self.jit,
+            ldr w2, [x(PC.0), #(12)];  // func_id
+            mov x3, x25;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::enter_classdef as *const () as u64);
+            blr x9;
+            mov x26, x0;  // X26 = &FuncData, callee-saved
         // cont frame: save caller PC + ACC (the body clobbers them).
-        self.jit.sub_imm(SP, SP, 16, 0);
-        self.jit.str(PC, SP, 0);
-        self.jit.str(ACC, SP, 8);
+            sub sp, sp, #(16);
+            str x(PC.0), [sp];
+            str x(ACC.0), [sp, #(8)];
         // frame setup: zero outer/svar/cme/block; self = class; meta.
-        self.jit.mov_imm(X12, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.str(X25, X11, 0); // self = class
-        self.jit.ldr(X10, X26, FUNCDATA_META as u32);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
-        self.jit.str(X10, X11, 0);
+            mov x12, (0);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x25, [x11];  // self = class
+            ldr x10, [x26, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x10, [x11];
         // call_funcdata: push frame, set lfp, pc, blr codeptr, restore cfp
-        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
-        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
-        self.jit.str(LFP, X10, 0);
-        self.jit.ldr(PC, X26, FUNCDATA_PC as u32);
-        self.jit.ldr(X10, X26, FUNCDATA_CODEPTR as u32);
-        self.jit.blr(X10); // x0 = class body result
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.ldr(X10, X11, 0);
-        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+            ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x(LFP.0), [x10];
+            ldr x(PC.0), [x26, #(FUNCDATA_PC as u32)];
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;  // x0 = class body result
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // restore caller LFP from its own frame (x29-relative)
-        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
-        self.jit.ldr(LFP, X10, 0);
-        self.jit.mov(X25, X0); // save result across exit_classdef
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x(LFP.0), [x10];
+            mov x25, x0;  // save result across exit_classdef
         // exit_classdef(vm, globals)
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::exit_classdef as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.mov(X0, X25); // restore result
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::exit_classdef as *const () as u64);
+            blr x9;
+            mov x0, x25;  // restore result
         // pop cont frame: restore PC + ACC
-        self.jit.ldr(PC, SP, 0);
-        self.jit.ldr(ACC, SP, 8);
-        self.jit.add_imm(SP, SP, 16, 0);
+            ldr x(PC.0), [sp];
+            ldr x(ACC.0), [sp, #(8)];
+            add sp, sp, #(16);
         // If the class/module body raised, X0 is null: propagate the
         // error now (mirrors the trailing `vm_handle_error` in the x86
         // `class_def_sub`). Without this the exception is silently
@@ -1108,16 +1266,17 @@ impl Codegen {
         // next error. PC/ACC are already restored so entry_raise sees the
         // caller's frame, and exit_classdef above has popped the class
         // context.
-        self.jit.cbz_label(X0, &raise);
+            cbz x0, raise;
         // store result to dst [PC+4]
-        self.jit.ldrh(X10, PC, 4);
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+            ldrh x10, [x(PC.0), #(4)];
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
     }
 
@@ -1126,14 +1285,16 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_method_def(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.ldr32(X2, PC, 8); // name
-        self.jit.ldr32(X3, PC, 12); // func_id
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, runtime::define_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr w2, [x(PC.0), #(8)];  // name
+            ldr w3, [x(PC.0), #(12)];  // func_id
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::define_method as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1159,114 +1320,123 @@ impl Codegen {
         // pending Signal.trap callback runs at this safepoint.
         self.a64_vm_execute_gc();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
-        self.jit.sub_imm(SP, SP, 16, 0);
-        self.jit.str(PC, SP, 0);
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(16);
+            str x(PC.0), [sp];
         // receiver
-        self.jit.ldrh(X10, PC, 12);
+            ldrh x10, [x(PC.0), #(12)];
+        );
         self.a64_load_slot(X10, X4, X11); // X4 = recv
         // callee self slot
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.str(X4, X11, 0);
+        monoasm_arm64!(&mut self.jit,
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x4, [x11];
         // find_method(vm, globals, callid, recv) -> funcid
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.ldr32(X2, PC, 0); // callid
-        self.jit.mov(X3, X4); // recv
-        self.jit.mov_imm(X9, runtime::find_method as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X0, &mm);
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];  // callid
+            mov x3, x4;  // recv
+            mov x9, (runtime::find_method as *const () as u64);
+            blr x9;
+            cbz x0, mm;
         // get_func_data: X15 = funcinfo_base + funcid*64 + FUNCINFO_DATA
-        self.jit.lsl_imm(X10, X0, 6);
-        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
-        self.jit.add(X11, GLOBALS, X11);
-        self.jit.ldr(X11, X11, 0);
-        self.jit.add(X10, X10, X11);
-        self.jit.add_imm(X15, X10, FUNCINFO_DATA as u32, 0);
+            lsl x10, x0, #(6);
+            mov x11, (GLOBALS_FUNCINFO as u64);
+            add x11, x(GLOBALS.0), x11;
+            ldr x11, [x11];
+            add x10, x10, x11;
+            add x15, x10, #(FUNCINFO_DATA as u32);
         // set_method_outer: zero outer/svar/cme; set meta (kept in X14).
-        self.jit.mov_imm(X12, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.ldr(X14, X15, FUNCDATA_META as u32);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
-        self.jit.str(X14, X11, 0);
+            mov x12, (0);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            ldr x14, [x15, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x14, [x11];
         // Simple-send opcodes (no block/splat/kw at the call site) may take
         // the fast positional-copy path when the callee is also simple and
         // arity matches. The full-send opcodes always go generic so that
         // set_frame_block / splat / keyword handling runs.
-        self.jit.ldrh(X9, PC, 8); // pos_num
+            ldrh x9, [x(PC.0), #(8)];  // pos_num
+        );
         if is_simple {
-            self.jit.lsr_imm(X16, X14, 56); // kind byte
-            self.jit.tbz_label(X16, 4, &generic);
-            self.jit.ldrh(X16, X15, FUNCDATA_MIN as u32);
-            self.jit.cmp(X9, X16);
+            monoasm_arm64!(&mut self.jit,
+                lsr x16, x14, #(56);  // kind byte
+                tbz x16, #(4), generic;
+                ldrh x16, [x15, #(FUNCDATA_MIN as u32)];
+                cmp x9, x16;
+            );
             self.jit.bcond_label(Cond::Ne, &generic);
         } else {
-            self.jit.b_label(&generic);
+            monoasm_arm64!(&mut self.jit,
+                b generic;
+            );
         }
         // --- simple path: zero block + copy positional args directly ---
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
-        self.jit.str(X12, X11, 0); // block = 0
-        self.jit.ldrh(X10, PC, 10); // arg slot
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X10, LFP, X10, 3);
-        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0); // args base (caller)
-        self.jit.cbz_label(X9, &argdone);
-        self.jit.neg(X9, X9);
-        self.jit.bind_label(argloop.clone());
-        self.jit.add_lsl(X11, X10, X9, 3);
-        self.jit.ldr(X12, X11, 8); // src = [base + i*8 + 8]
-        self.jit.sub_imm(X13, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.add_lsl(X13, X13, X9, 3);
-        self.jit.str(X12, X13, 0); // dst = callee self slot + i*8
-        self.jit.add_imm(X9, X9, 1, 0);
-        self.jit.cbnz_label(X9, &argloop);
-        self.jit.bind_label(argdone);
-        self.jit.b_label(&docall);
+        monoasm_arm64!(&mut self.jit,
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];  // block = 0
+            ldrh x10, [x(PC.0), #(10)];  // arg slot
+            neg x10, x10;
+            add x10, x(LFP.0), x10, lsl #(3);
+            sub x10, x10, #(LFP_SELF as u32);  // args base (caller)
+            cbz x9, argdone;
+            neg x9, x9;
+            argloop:
+            add x11, x10, x9, lsl #(3);
+            ldr x12, [x11, #(8)];  // src = [base + i*8 + 8]
+            sub x13, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            add x13, x13, x9, lsl #(3);
+            str x12, [x13];  // dst = callee self slot + i*8
+            add x9, x9, #(1);
+            cbnz x9, argloop;
+            argdone:
+            b docall;
         // --- generic path: vm_handle_arguments(exec, globals, caller_lfp,
         // callee_lfp, callid). Handles rest/optional/keyword/splat + block. ---
-        self.jit.bind_label(generic);
-        self.jit.sub_imm(X3, SP, RSP_LOCAL_FRAME as u32, 0); // callee lfp
+            generic:
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32);  // callee lfp
         // Reserve scratch below the callee frame (= ofs*16 + 16, 16-aligned)
         // so the C call's frame can't trample the callee frame being built.
         // Save the pre-reservation SP (X25) and funcdata ptr (X26) in
         // callee-saved registers (AAPCS64 preserves x19-x28); X15 is
         // caller-saved so it would otherwise be lost. Restore SP directly
         // from X25 afterwards.
-        self.jit.mov_sp(X25, SP); // X25 = SP before reservation
-        self.jit.mov(X26, X15);
-        self.jit.ldrh(X10, X15, FUNCDATA_OFS as u32);
-        self.jit.lsl_imm(X10, X10, 4);
-        self.jit.add_imm(X10, X10, 16, 0);
-        self.jit.sub(X11, X25, X10);
-        self.jit.mov_sp(SP, X11);
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov(X2, LFP); // caller lfp
-        self.jit.ldr32(X4, PC, 0); // callid
-        self.jit.mov_imm(X9, runtime::vm_handle_arguments as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.mov(X15, X26); // restore funcdata ptr
-        self.jit.mov_sp(SP, X25); // restore SP directly
-        self.jit.cbz_label(X0, &raise);
-        self.jit.bind_label(docall);
+            mov x25, sp;  // X25 = SP before reservation
+            mov x26, x15;
+            ldrh x10, [x15, #(FUNCDATA_OFS as u32)];
+            lsl x10, x10, #(4);
+            add x10, x10, #(16);
+            sub x11, x25, x10;
+            mov sp, x11;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(LFP.0);  // caller lfp
+            ldr w4, [x(PC.0)];  // callid
+            mov x9, (runtime::vm_handle_arguments as *const () as u64);
+            blr x9;
+            mov x15, x26;  // restore funcdata ptr
+            mov sp, x25;  // restore SP directly
+            cbz x0, raise;
+            docall:
         // call_funcdata: push_frame + set_lfp + pc + blr codeptr + restore cfp
-        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
-        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
-        self.jit.str(LFP, X10, 0);
+            ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x(LFP.0), [x10];
         // 4th arg (X3) = call-site BytecodePtr, for with-pc builtins (x86
         // sets `rcx = r13 - 16`); aarch64 PC is already the call site.
-        self.jit.mov(X3, PC);
-        self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
-        self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
-        self.jit.blr(X10);
+            mov x3, x(PC.0);
+            ldr x(PC.0), [x15, #(FUNCDATA_PC as u32)];
+            ldr x10, [x15, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;
         // pop_frame: EXEC.cfp = (X29 - BP_CFP). Mirrors x86 `lea r14,[rbp-8]`
         // — set EXEC.cfp to the *address* of this frame's CFP descriptor (set
         // up by the caller's push_frame before our vm_entry). We must NOT
@@ -1274,44 +1444,48 @@ impl Codegen {
         // BLR's callee may use that slot as a local and clobber it. The
         // descriptor at `[X29 - BP_CFP]` lives in this frame's "header" area
         // (above the locals/LFP) and is safe across nested calls.
-        self.jit.sub_imm(X10, X29, BP_CFP as u32, 0);
-        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
+            sub x10, x29, #(BP_CFP as u32);
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // restore caller LFP from its own frame (x86 `restore_lfp`):
         // LFP = [x29 - (BP_CFP + CFP_LFP)]. The callee clobbers LFP, so we
         // reload it from the caller's stable frame pointer (x29 == x86 rbp).
-        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
-        self.jit.ldr(LFP, X10, 0);
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x(LFP.0), [x10];
         // pop_cont_frame: restore PC, advance past the 32-byte send
-        self.jit.bind_label(after_call.clone());
-        self.jit.ldr(PC, SP, 0);
-        self.jit.add_imm(SP, SP, 16, 0);
-        self.jit.cbz_label(X0, &raise); // result 0 => error
-        self.jit.ldrh(X10, PC, 4); // ret slot
-        self.jit.add_imm(PC, PC, 32, 0);
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
+            after_call:
+            ldr x(PC.0), [sp];
+            add sp, sp, #(16);
+            cbz x0, raise;  // result 0 => error
+            ldrh x10, [x(PC.0), #(4)];  // ret slot
+            add x(PC.0), x(PC.0), #(32);
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+        );
         self.a64_fetch_and_dispatch();
         // method_missing: invoke_method_missing(vm, globals, recv, lfp,
         // callid) -> Option, then join the result path. The receiver register
         // was clobbered by find_method, so reload it from the recv slot.
         // invoke_method_missing manages its own frames and preserves PC/LFP
         // (callee-saved), so no cfp/LFP restore is needed here.
-        self.jit.bind_label(mm);
-        self.jit.ldrh(X10, PC, 12); // recv slot
+        monoasm_arm64!(&mut self.jit,
+            mm:
+            ldrh x10, [x(PC.0), #(12)];  // recv slot
+        );
         self.a64_slot_value(X10);
-        self.jit.mov(X2, X10); // receiver
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov(X3, LFP);
-        self.jit.ldr32(X4, PC, 0); // callid
-        self.jit
-            .mov_imm(X9, crate::codegen::runtime::invoke_method_missing as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.b_label(&after_call);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x10;  // receiver
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x3, x(LFP.0);
+            ldr w4, [x(PC.0)];  // callid
+            mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
+            blr x9;
+            b after_call;
+        );
         p
     }
 
@@ -1321,15 +1495,21 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_err1(&mut self, abs: u64, with_val: bool) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+        );
         if with_val {
-            self.jit.mov(X1, GLOBALS);
-            self.jit.ldrh(X2, PC, 4);
+            monoasm_arm64!(&mut self.jit,
+                mov x1, x(GLOBALS.0);
+                ldrh x2, [x(PC.0), #(4)];
+            );
             self.a64_slot_value(X2); // val
         }
-        self.jit.mov_imm(X9, abs);
-        self.jit.blr(X9);
-        self.jit.b_label(&raise);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (abs);
+            blr x9;
+            b raise;
+        );
         p
     }
 
@@ -1337,12 +1517,16 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_err_raise(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.ldrh(X1, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            ldrh x1, [x(PC.0), #(4)];
+        );
         self.a64_slot_value(X1); // exception value
-        self.jit.mov_imm(X9, runtime::raise_err as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.b_label(&raise);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::raise_err as *const () as u64);
+            blr x9;
+            b raise;
+        );
         p
     }
 
@@ -1351,11 +1535,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_ensure_end(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.mov(X0, EXEC);
-        self.jit.mov_imm(X9, runtime::ensure_end as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbnz_label(X0, &raise);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x9, (runtime::ensure_end as *const () as u64);
+            blr x9;
+            cbnz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1369,91 +1555,91 @@ impl Codegen {
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
         // push_cont_frame: save caller PC
-        self.jit.sub_imm(SP, SP, 16, 0);
-        self.jit.str(PC, SP, 0);
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(16);
+            str x(PC.0), [sp];
         // get_yield_data(vm, globals) -> x0 = outer (Lfp), x1 = func_id
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit
-            .mov_imm(X9, runtime::get_yield_data as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.cbz_label(X1, &raise); // no block -> error set
-        self.jit.mov(X25, X0); // X25 = outer (callee-saved across later calls)
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::get_yield_data as *const () as u64);
+            blr x9;
+            cbz x1, raise;  // no block -> error set
+            mov x25, x0;  // X25 = outer (callee-saved across later calls)
         // get_func_data from func_id (X1) -> X15
-        self.jit.lsl_imm(X10, X1, 32);
-        self.jit.lsr_imm(X10, X10, 32);
-        self.jit.lsl_imm(X10, X10, 6);
-        self.jit.mov_imm(X11, GLOBALS_FUNCINFO as u64);
-        self.jit.add(X11, GLOBALS, X11);
-        self.jit.ldr(X11, X11, 0);
-        self.jit.add(X10, X10, X11);
-        self.jit.add_imm(X15, X10, FUNCINFO_DATA as u32, 0);
+            lsl x10, x1, #(32);
+            lsr x10, x10, #(32);
+            lsl x10, x10, #(6);
+            mov x11, (GLOBALS_FUNCINFO as u64);
+            add x11, x(GLOBALS.0), x11;
+            ldr x11, [x11];
+            add x10, x10, x11;
+            add x15, x10, #(FUNCINFO_DATA as u32);
         // block frame setup: outer = X25, self = outer.self, svar/cme/block 0.
-        self.jit.mov_imm(X12, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_OUTER) as u32, 0);
-        self.jit.str(X25, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SVAR) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_CME) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_BLOCK) as u32, 0);
-        self.jit.str(X12, X11, 0);
-        self.jit.sub_imm(X10, X25, LFP_SELF as u32, 0);
-        self.jit.ldr(X10, X10, 0); // self = outer.self
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_SELF) as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.ldr(X14, X15, FUNCDATA_META as u32);
-        self.jit.sub_imm(X11, SP, (RSP_LOCAL_FRAME + LFP_META) as u32, 0);
-        self.jit.str(X14, X11, 0);
+            mov x12, (0);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x25, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];
+            sub x10, x25, #(LFP_SELF as u32);
+            ldr x10, [x10];  // self = outer.self
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x10, [x11];
+            ldr x14, [x15, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x14, [x11];
         // generic arg setup: vm_handle_arguments(vm, globals, caller_lfp,
         // callee_lfp, callid). Reserve scratch; preserve SP/funcdata.
-        self.jit.sub_imm(X3, SP, RSP_LOCAL_FRAME as u32, 0); // callee_lfp
-        self.jit.mov_sp(X25, SP);
-        self.jit.mov(X26, X15);
-        self.jit.ldrh(X10, X15, FUNCDATA_OFS as u32);
-        self.jit.lsl_imm(X10, X10, 4);
-        self.jit.add_imm(X10, X10, 16, 0);
-        self.jit.sub(X11, X25, X10);
-        self.jit.mov_sp(SP, X11);
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov(X2, LFP); // caller lfp
-        self.jit.ldr32(X4, PC, 0); // callid
-        self.jit
-            .mov_imm(X9, runtime::vm_handle_arguments as *const () as u64);
-        self.jit.blr(X9);
-        self.jit.mov(X15, X26);
-        self.jit.mov_sp(SP, X25);
-        self.jit.cbz_label(X0, &raise);
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32);  // callee_lfp
+            mov x25, sp;
+            mov x26, x15;
+            ldrh x10, [x15, #(FUNCDATA_OFS as u32)];
+            lsl x10, x10, #(4);
+            add x10, x10, #(16);
+            sub x11, x25, x10;
+            mov sp, x11;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(LFP.0);  // caller lfp
+            ldr w4, [x(PC.0)];  // callid
+            mov x9, (runtime::vm_handle_arguments as *const () as u64);
+            blr x9;
+            mov x15, x26;
+            mov sp, x25;
+            cbz x0, raise;
         // call_funcdata
-        self.jit.ldr(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.str(X10, X11, 0);
-        self.jit.str(X11, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(LFP, SP, RSP_LOCAL_FRAME as u32, 0);
-        self.jit.sub_imm(X10, SP, (RSP_CFP + CFP_LFP) as u32, 0);
-        self.jit.str(LFP, X10, 0);
-        self.jit.mov(X3, PC); // call-site pc for with-pc builtins
-        self.jit.ldr(PC, X15, FUNCDATA_PC as u32);
-        self.jit.ldr(X10, X15, FUNCDATA_CODEPTR as u32);
-        self.jit.blr(X10);
-        self.jit.sub_imm(X11, SP, RSP_CFP as u32, 0);
-        self.jit.ldr(X10, X11, 0);
-        self.jit.str(X10, EXEC, EXECUTOR_CFP as u32);
-        self.jit.sub_imm(X10, X29, (BP_CFP + CFP_LFP) as u32, 0);
-        self.jit.ldr(LFP, X10, 0); // restore caller LFP
+            ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x(LFP.0), [x10];
+            mov x3, x(PC.0);  // call-site pc for with-pc builtins
+            ldr x(PC.0), [x15, #(FUNCDATA_PC as u32)];
+            ldr x10, [x15, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x(LFP.0), [x10];  // restore caller LFP
         // pop_cont_frame + store result to ret slot [pc+4]
-        self.jit.ldr(PC, SP, 0);
-        self.jit.add_imm(SP, SP, 16, 0);
-        self.jit.cbz_label(X0, &raise);
-        self.jit.ldrh(X10, PC, 4); // ret slot
-        self.jit.add_imm(PC, PC, 32, 0);
-        self.jit.cbz_label(X10, &skip);
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.str(X0, X11, 0);
-        self.jit.bind_label(skip);
+            ldr x(PC.0), [sp];
+            add sp, sp, #(16);
+            cbz x0, raise;
+            ldrh x10, [x(PC.0), #(4)];  // ret slot
+            add x(PC.0), x(PC.0), #(32);
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            str x0, [x11];
+            skip:
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1461,7 +1647,9 @@ impl Codegen {
     /// loop_start / loop_end (ops 14/15): advance + dispatch (VM-only).
     pub(in crate::codegen) fn a64_op_loop(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1471,11 +1659,13 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_br(&mut self) -> (CodePtr, DestLabel) {
         let p = self.jit.get_current_address();
         let branch = self.jit.label();
-        self.jit.ldrsw(X10, PC, 0); // disp (signed, instruction-relative)
-        self.jit.bind_label(branch.clone());
-        self.jit.lsl_imm(X10, X10, 4);
-        self.jit.add(PC, PC, X10);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrsw x10, [x(PC.0)];  // disp (signed, instruction-relative)
+            branch:
+            lsl x10, x10, #(4);
+            add x(PC.0), x(PC.0), x10;
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         (p, branch)
     }
@@ -1485,15 +1675,21 @@ impl Codegen {
     /// (both nil and false collapse to FALSE_VALUE). `not` = branch-if-falsy.
     pub(in crate::codegen) fn a64_op_condbr(&mut self, branch: &DestLabel, not: bool) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrsw(X10, PC, 0); // disp (kept in X10 for `branch`)
-        self.jit.ldrh(X11, PC, 4); // cond slot
+        monoasm_arm64!(&mut self.jit,
+            ldrsw x10, [x(PC.0)];  // disp (kept in X10 for `branch`)
+            ldrh x11, [x(PC.0), #(4)];  // cond slot
+        );
         self.a64_load_slot(X11, X12, X13); // cond value
-        self.jit.mov_imm(X13, 0x10);
-        self.jit.orr(X12, X12, X13);
-        self.jit.cmp_imm(X12, FALSE_VALUE as u32, 0);
+        monoasm_arm64!(&mut self.jit,
+            mov x13, (0x10);
+            orr x12, x12, x13;
+            cmp x12, #(FALSE_VALUE as u32);
+        );
         let cond = if not { Cond::Eq } else { Cond::Ne };
         self.jit.bcond_label(cond, branch);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1506,34 +1702,42 @@ impl Codegen {
         let generic = self.jit.label();
         let skip = self.jit.label();
         let raise = self.entry_raise.clone();
-        self.jit.ldrh(X10, PC, 0); // rhs slot
-        self.jit.ldrh(X11, PC, 2); // lhs slot
-        self.jit.ldrh(X12, PC, 4); // dst slot
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+            ldrh x12, [x(PC.0), #(4)];  // dst slot
+        );
         self.a64_load_slot(X11, X13, X14); // lhs
         self.a64_load_slot(X10, X14, X15); // rhs
-        self.jit.tbz_label(X13, 0, &generic);
-        self.jit.tbz_label(X14, 0, &generic);
-        self.jit.cmp(X13, X14);
+        monoasm_arm64!(&mut self.jit,
+            tbz x13, #(0), generic;
+            tbz x14, #(0), generic;
+            cmp x13, x14;
+        );
         self.jit.cset(X13, cond);
-        self.jit.lsl_imm(X13, X13, 3);
-        self.jit.mov_imm(X14, FALSE_VALUE);
-        self.jit.orr(X13, X13, X14); // FALSE_VALUE | (result << 3)
-        self.jit.cbz_label(X12, &skip);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X10, LFP, X12, 3);
-        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
-        self.jit.str(X13, X10, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            lsl x13, x13, #(3);
+            mov x14, (FALSE_VALUE);
+            orr x13, x13, x14;  // FALSE_VALUE | (result << 3)
+            cbz x12, skip;
+            neg x12, x12;
+            add x10, x(LFP.0), x12, lsl #(3);
+            sub x10, x10, #(LFP_SELF as u32);
+            str x13, [x10];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
-        self.jit.bind_label(generic);
+        monoasm_arm64!(&mut self.jit,
+            generic:
         // cmp_*_values(vm, globals, lhs=X13, rhs=X14) -> Option<Value>
-        self.jit.mov(X2, X13); // lhs
-        self.jit.mov(X3, X14); // rhs
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, cmp_fn);
-        self.jit.blr(X9);
+            mov x2, x13;  // lhs
+            mov x3, x14;  // rhs
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (cmp_fn);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
@@ -1541,10 +1745,12 @@ impl Codegen {
     /// Load the value of the slot whose (positive) index is in `idx`, into
     /// `dst`. `idx` is clobbered. (the `[r14+reg*8-LFP_SELF]` idiom.)
     pub(in crate::codegen) fn a64_load_slot(&mut self, idx: GReg, dst: GReg, scratch: GReg) {
-        self.jit.neg(idx, idx);
-        self.jit.add_lsl(scratch, LFP, idx, 3);
-        self.jit.sub_imm(scratch, scratch, LFP_SELF as u32, 0);
-        self.jit.ldr(dst, scratch, 0);
+        monoasm_arm64!(&mut self.jit,
+            neg x(idx.0), x(idx.0);
+            add x(scratch.0), x(LFP.0), x(idx.0), lsl #(3);
+            sub x(scratch.0), x(scratch.0), #(LFP_SELF as u32);
+            ldr x(dst.0), [x(scratch.0)];
+        );
     }
 
     /// Generic binary-op fallback: call the runtime `func(vm, globals, lhs,
@@ -1555,9 +1761,11 @@ impl Codegen {
     /// lhs `[pc+2]`, rhs `[pc+0]`, dst `[pc+4]` and calls the runtime op.
     pub(in crate::codegen) fn a64_op_binop(&mut self, func: BinaryOpFn) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrh(X10, PC, 0); // rhs slot
-        self.jit.ldrh(X11, PC, 2); // lhs slot
-        self.jit.ldrh(X12, PC, 4); // dst slot
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+            ldrh x12, [x(PC.0), #(4)];  // dst slot
+        );
         self.a64_load_slot(X11, X13, X14); // X13 = lhs
         self.a64_load_slot(X10, X14, X15); // X14 = rhs
         self.a64_generic_binop(func);
@@ -1566,15 +1774,17 @@ impl Codegen {
 
     pub(in crate::codegen) fn a64_generic_binop(&mut self, func: BinaryOpFn) {
         let raise = self.entry_raise.clone();
-        self.jit.mov(X2, X13); // lhs
-        self.jit.mov(X3, X14); // rhs
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, func as u64);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;  // lhs
+            mov x3, x14;  // rhs
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (func as u64);
+            blr x9;
         // The dst slot is re-read from PC (callee-saved): `func` may re-enter
         // the VM (e.g. string `+` dispatches a method), clobbering the
         // caller-saved dst register held before the call.
+        );
         self.a64_checked_store_next(&raise);
     }
 
@@ -1583,9 +1793,11 @@ impl Codegen {
     /// lhs, `+4` dst.
     pub(in crate::codegen) fn a64_op_muldiv(&mut self, func: BinaryOpFn) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrh(X10, PC, 0);
-        self.jit.ldrh(X11, PC, 2);
-        self.jit.ldrh(X12, PC, 4);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];
+            ldrh x11, [x(PC.0), #(2)];
+            ldrh x12, [x(PC.0), #(4)];
+        );
         self.a64_load_slot(X11, X13, X14); // lhs
         self.a64_load_slot(X10, X14, X15); // rhs
         self.a64_generic_binop(func);
@@ -1599,31 +1811,45 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let generic = self.jit.label();
         let skip = self.jit.label();
-        self.jit.ldrh(X10, PC, 0); // rhs slot
-        self.jit.ldrh(X11, PC, 2); // lhs slot
-        self.jit.ldrh(X12, PC, 4); // dst slot
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+            ldrh x12, [x(PC.0), #(4)];  // dst slot
+        );
         self.a64_load_slot(X11, X13, X14); // X13 = lhs
         self.a64_load_slot(X10, X14, X15); // X14 = rhs
-        self.jit.tbz_label(X13, 0, &generic);
-        self.jit.tbz_label(X14, 0, &generic);
+        monoasm_arm64!(&mut self.jit,
+            tbz x13, #(0), generic;
+            tbz x14, #(0), generic;
+        );
         if is_sub {
-            self.jit.subs(X9, X13, X14);
+            monoasm_arm64!(&mut self.jit,
+                subs x9, x13, x14;
+            );
             self.jit.bcond_label(Cond::Vs, &generic);
-            self.jit.add_imm(X9, X9, 1, 0); // re-tag
+            monoasm_arm64!(&mut self.jit,
+                add x9, x9, #(1);  // re-tag
+            );
         } else {
-            self.jit.sub_imm(X9, X13, 1, 0); // untag one
-            self.jit.adds(X9, X9, X14);
+            monoasm_arm64!(&mut self.jit,
+                sub x9, x13, #(1);  // untag one
+                adds x9, x9, x14;
+            );
             self.jit.bcond_label(Cond::Vs, &generic);
         }
-        self.jit.cbz_label(X12, &skip);
-        self.jit.neg(X12, X12);
-        self.jit.add_lsl(X10, LFP, X12, 3);
-        self.jit.sub_imm(X10, X10, LFP_SELF as u32, 0);
-        self.jit.str(X9, X10, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            cbz x12, skip;
+            neg x12, x12;
+            add x10, x(LFP.0), x12, lsl #(3);
+            sub x10, x10, #(LFP_SELF as u32);
+            str x9, [x10];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
-        self.jit.bind_label(generic);
+        monoasm_arm64!(&mut self.jit,
+            generic:
+        );
         self.a64_generic_binop(if is_sub {
             sub_values
         } else {
@@ -1640,11 +1866,12 @@ impl Codegen {
         let skip = self.jit.label();
         let loop_ = self.jit.label();
         // allocate stack: sp -= stack_offset * 16
-        self.jit.ldrh(X10, PC, 0);
-        self.jit.lsl_imm(X10, X10, 4);
-        self.jit.mov_sp(X13, SP); // sp -= X10 (A64 sub can't take SP as a
-        self.jit.sub(X13, X13, X10); // shifted-reg operand, so via a GPR)
-        self.jit.mov_sp(SP, X13);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];
+            lsl x10, x10, #(4);
+            mov x13, sp;  // sp -= X10 (A64 sub can't take SP as a
+            sub x13, x13, x10;  // shifted-reg operand, so via a GPR)
+            mov sp, x13;
         // Skip the nil-fill for a captured (on-heap / invalidated) frame.
         // Its locals live on the heap and may already hold values written in
         // by `new_binding_frame` — e.g. a binding-eval frame that introduced a
@@ -1652,28 +1879,28 @@ impl Codegen {
         // Mirrors x86 `fill_nil`'s leading `branch_if_captured`. The `kind`
         // byte sits at `[LFP - (LFP_META - META_KIND)]`; bit 7 = on_heap,
         // bit 3 = invalidated.
-        self.jit
-            .sub_imm(X10, LFP, (LFP_META - META_KIND as i32) as u32, 0);
-        self.jit.ldrb(X13, X10, 0);
-        self.jit.tbnz_label(X13, 7, &skip); // on_heap
-        self.jit.tbnz_label(X13, 3, &skip); // invalidated
+            sub x10, x(LFP.0), #((LFP_META - META_KIND as i32) as u32);
+            ldrb x13, [x10];
+            tbnz x13, #(7), skip;  // on_heap
+            tbnz x13, #(3), skip;  // invalidated
         // count = reg_num - arg_num
-        self.jit.ldrh(X15, PC, 4); // reg_num
-        self.jit.ldrh(X11, PC, 2); // arg_num
-        self.jit.sub(X12, X15, X11);
-        self.jit.cbz_label(X12, &skip);
+            ldrh x15, [x(PC.0), #(4)];  // reg_num
+            ldrh x11, [x(PC.0), #(2)];  // arg_num
+            sub x12, x15, x11;
+            cbz x12, skip;
         // base = lfp - reg_num*8 - LFP_ARG0 ; fill [base + count*8] downward
-        self.jit.neg(X15, X15);
-        self.jit.add_lsl(X15, LFP, X15, 3);
-        self.jit.sub_imm(X15, X15, LFP_ARG0 as u32, 0);
-        self.jit.mov_imm(X14, NIL_VALUE);
-        self.jit.bind_label(loop_.clone());
-        self.jit.add_lsl(X10, X15, X12, 3);
-        self.jit.str(X14, X10, 0);
-        self.jit.sub_imm(X12, X12, 1, 0);
-        self.jit.cbnz_label(X12, &loop_);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+            neg x15, x15;
+            add x15, x(LFP.0), x15, lsl #(3);
+            sub x15, x15, #(LFP_ARG0 as u32);
+            mov x14, (NIL_VALUE);
+            loop_:
+            add x10, x15, x12, lsl #(3);
+            str x14, [x10];
+            sub x12, x12, #(1);
+            cbnz x12, loop_;
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1683,15 +1910,17 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_immediate(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.ldrh(X10, PC, 4); // dst slot index
-        self.jit.ldr(X11, PC, 8); // immediate value
-        self.jit.cbz_label(X10, &skip); // slot 0 => discard
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X12, LFP, X10, 3);
-        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
-        self.jit.str(X11, X12, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];  // dst slot index
+            ldr x11, [x(PC.0), #(8)];  // immediate value
+            cbz x10, skip;  // slot 0 => discard
+            neg x10, x10;
+            add x12, x(LFP.0), x10, lsl #(3);
+            sub x12, x12, #(LFP_SELF as u32);
+            str x11, [x12];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1702,17 +1931,19 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_literal(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.ldr(X0, PC, 8); // literal Value
-        self.jit.mov_imm(X9, Value::value_deep_copy as *const () as u64);
-        self.jit.blr(X9); // x0 = deep copy (PC/LFP are callee-saved)
-        self.jit.ldrh(X10, PC, 4); // dst slot index
-        self.jit.cbz_label(X10, &skip); // slot 0 => discard
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X12, LFP, X10, 3);
-        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
-        self.jit.str(X0, X12, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x(PC.0), #(8)];  // literal Value
+            mov x9, (Value::value_deep_copy as *const () as u64);
+            blr x9;  // x0 = deep copy (PC/LFP are callee-saved)
+            ldrh x10, [x(PC.0), #(4)];  // dst slot index
+            cbz x10, skip;  // slot 0 => discard
+            neg x10, x10;
+            add x12, x(LFP.0), x10, lsl #(3);
+            sub x12, x12, #(LFP_SELF as u32);
+            str x0, [x12];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1722,16 +1953,20 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_mov(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
-        self.jit.ldrh(X10, PC, 2); // src slot
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(2)];  // src slot
+        );
         self.a64_slot_value(X10); // X10 = slot[src]
-        self.jit.ldrh(X11, PC, 4); // dst slot
-        self.jit.cbz_label(X11, &skip);
-        self.jit.neg(X11, X11);
-        self.jit.add_lsl(X12, LFP, X11, 3);
-        self.jit.sub_imm(X12, X12, LFP_SELF as u32, 0);
-        self.jit.str(X10, X12, 0);
-        self.jit.bind_label(skip);
-        self.jit.add_imm(PC, PC, 16, 0);
+        monoasm_arm64!(&mut self.jit,
+            ldrh x11, [x(PC.0), #(4)];  // dst slot
+            cbz x11, skip;
+            neg x11, x11;
+            add x12, x(LFP.0), x11, lsl #(3);
+            sub x12, x12, #(LFP_SELF as u32);
+            str x10, [x12];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
         self.a64_fetch_and_dispatch();
         p
     }
@@ -1740,15 +1975,17 @@ impl Codegen {
     /// movq rax,[r15]; epilogue`).
     pub(in crate::codegen) fn a64_op_ret(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        self.jit.ldrh(X10, PC, 4); // slot index
-        self.jit.neg(X10, X10);
-        self.jit.add_lsl(X11, LFP, X10, 3);
-        self.jit.sub_imm(X11, X11, LFP_SELF as u32, 0);
-        self.jit.ldr(X0, X11, 0); // return value
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];  // slot index
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            sub x11, x11, #(LFP_SELF as u32);
+            ldr x0, [x11];  // return value
         // epilogue (x86 `leave; ret`): restore the frame pointer and return.
-        self.jit.mov_sp(SP, X29);
-        self.jit.ldp_post(X29, X30, SP, 16);
-        self.jit.ret();
+            mov sp, x29;
+            ldp x29, x30, [sp], #(16);
+            ret;
+        );
         p
     }
     /// Generic comparison handler with no fixnum fast path: calls
@@ -1759,16 +1996,20 @@ impl Codegen {
     pub(in crate::codegen) fn a64_op_cmp_no_opt(&mut self, cmp_fn: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
-        self.jit.ldrh(X10, PC, 0); // rhs slot
-        self.jit.ldrh(X11, PC, 2); // lhs slot
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+        );
         self.a64_load_slot(X11, X13, X14); // X13 = lhs
         self.a64_load_slot(X10, X14, X15); // X14 = rhs
-        self.jit.mov(X2, X13);
-        self.jit.mov(X3, X14);
-        self.jit.mov(X0, EXEC);
-        self.jit.mov(X1, GLOBALS);
-        self.jit.mov_imm(X9, cmp_fn);
-        self.jit.blr(X9);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;
+            mov x3, x14;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (cmp_fn);
+            blr x9;
+        );
         self.a64_checked_store_next(&raise);
         p
     }
