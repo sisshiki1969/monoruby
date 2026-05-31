@@ -15,13 +15,13 @@
 /// (`not(jit)`: aarch64 / `--features no-jit`) it expands to `()`, dropping
 /// the (JIT-only, `#[cfg(jit)]`) generator fn/closure so it is never named or
 /// compiled. The matching `#[cfg(not(jit))]` registrar twins take `()`.
-#[cfg(jit)]
+#[cfg(jit_emit)]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new($f)
     };
 }
-#[cfg(not(jit))]
+#[cfg(not(jit_emit))]
 macro_rules! inline_gen {
     ($f:expr) => {
         ()

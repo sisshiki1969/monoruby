@@ -70,7 +70,7 @@ fn fiber_yield(
     vm.yield_fiber(val)
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn fiber_yield_inline(
     state: &mut AbstractState,
