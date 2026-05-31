@@ -240,6 +240,53 @@ impl Codegen {
                 );
                 true
             }
+            // rax <- $gvar via runtime::get_global_var(vm, globals, name).
+            // EXEC (Executor) lives in x19, GLOBALS in x20 (= GP::R12). We have
+            // no FP save/restore yet, so bail if any xmm is live across the call.
+            AsmInst::LoadGVar { name, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let f = runtime::get_global_var as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;                  // vm (Executor)
+                    mov x1, x20;                  // globals
+                    mov x2, (name.get() as u64); // name (IdentId)
+                    str x30, [sp, #-16]!;         // save LR across the call
+                    mov x9, (f);
+                    blr x9;                       // result in x0 (= rax)
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // $gvar <- src via runtime::set_global_var(vm, globals, name, val).
+            // Mirrors x86 store_gvar (the Option<Value> return is discarded).
+            AsmInst::StoreGVar {
+                name,
+                src,
+                using_xmm,
+            } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let off = src.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let f = runtime::set_global_var as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;                  // vm (Executor)
+                    mov x1, x20;                  // globals
+                    mov x2, (name.get() as u64); // name (IdentId)
+                    sub x10, x(lfp), #(off);
+                    ldr x3, [x10];                // val (from slot)
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
