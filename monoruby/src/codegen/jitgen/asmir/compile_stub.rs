@@ -361,7 +361,32 @@ impl Codegen {
                 self.jit.bind_label(ok);
                 monoasm_arm64!(&mut self.jit, add x(l), x9, #(1u32););
             }
-            // Div/Rem/… still bail (need floor-division adjustment / sdiv).
+            // Div: Ruby integer division floors toward negative infinity, but
+            // `sdiv` truncates toward zero, so adjust the quotient down by 1
+            // when the remainder is non-zero and its sign differs from the
+            // divisor's. Both operands are already in registers (the front-end
+            // materializes RI/IR immediates), and the result goes to rax (x0),
+            // matching x86 `integer_binop`'s Div. b==0 deopts (ZeroDivisionError).
+            BinOpK::Div => {
+                let rax = GP::Rax.a64().0;
+                let done = self.jit.label();
+                let deopt = deopt.clone();
+                monoasm_arm64!(&mut self.jit,
+                    asr x(r), x(r), #(1u32);     // b (untagged)
+                    cbz x(r), deopt;             // b==0 -> ZeroDivisionError (deopt)
+                    asr x9, x(l), #(1u32);       // a (untagged)
+                    sdiv x10, x9, x(r);          // q = trunc(a/b)
+                    msub x11, x10, x(r), x9;     // rem = a - q*b
+                    cbz x11, done;               // exact -> no floor adjust
+                    eor x12, x11, x(r);          // rem ^ b
+                    tbz x12, #(63), done;        // same sign -> no adjust
+                    sub x10, x10, #(1u32);       // floor: q -= 1
+                    done:
+                    lsl x(rax), x10, #(1u32);    // 2q
+                    add x(rax), x(rax), #(1u32); // 2q+1 (tagged)
+                );
+            }
+            // Rem/bit-ops are compiled as method calls, never IntegerBinOp.
             _ => return false,
         }
         true
