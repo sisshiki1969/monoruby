@@ -6,16 +6,24 @@ Continuation of the aarch64 backend work after the VM tier
 the **JIT compiler** up on aarch64 (macOS/Apple-Silicon target, validated
 under qemu-user on x86 hosts).
 
-> Status: **Phase 1 (cfg seam + front-end) DONE.** The `jit` / `jit_emit`
-> cfg seam is in place; the arch-neutral JIT front-end now compiles on
-> aarch64 with emission stubbed, and the driver entry `jit_compile` is
-> arch-neutral (front-end runs, x86 emits, aarch64 bails). At runtime
-> aarch64 is still VM-only (the JIT trigger is not wired). **Next: Phase 3a
-> — arch-neutralize the driver chain + emit the A64 trigger** (see
-> "Current state" and the revised phases below).
+> Status: **Phase 1 DONE; Phase 3a driver arch-neutralization DONE; A64
+> trigger lfp bring-up is the one remaining blocker.** The `jit` / `jit_emit`
+> seam is in place, the front-end compiles on aarch64 (emission stubbed), and
+> the full initial-compile **driver chain is now arch-neutral**
+> (`jit_compile` / `compile` / `compile_method` / `jit_compile_patch` +
+> aarch64 `compile_patch` variant; emission + recompile/loop stay `jit_emit`).
+> The A64 wrapper trigger is implemented and *fires* (reaches the driver and
+> runs the front-end), but is left **disabled** (`b vm_entry`) because the
+> `lfp` handed to `jit_compile_patch` is wrong at the wrapper point — `x22`
+> there does not match the just-built callee frame (self/meta read back
+> wrong), so `lfp.func_id()` is garbage. **Next: audit `a64_op_send`'s
+> sp/LFP timing** (likely the generic-path scratch reserve or the
+> simple-vs-generic decision) so the wrapper passes the correct callee `lfp`,
+> then re-enable the trigger.
 >
-> All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches build
-> green at every commit.
+> At runtime aarch64 is VM-only and byte-identical to x86. All work is on
+> branch `claude/wizardly-pasteur-8N2Ub`; both arches build green at every
+> commit.
 
 ## Current state (achieved — committed)
 
