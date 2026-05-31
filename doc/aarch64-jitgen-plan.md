@@ -27,12 +27,19 @@ under qemu-user on x86 hosts).
 > SP — fixed by `sub sp,sp,#4080` before the call (mirrors x86 `subq rsp,4088`).
 > `DUMP=1` logs the AsmInst stream (dev aid).
 >
-> **Next:** integer arithmetic needs **side-exit/deopt lowering** (the fixnum
-> guard's failure path: write back regs + jump back to the VM at the deopt
-> pc). `a64_gen_asm` currently bails when `ir.side_exit` is non-empty. After
-> deopt: integer binops/guards → branches/loops → FP → method-call arg setup
-> → variables/constants → arrays/hashes. Port `gen_deopt_with_label` /
-> `gen_write_back` to A64; verify each method JITs under qemu.
+> **Next:** with `inline_gen` off on aarch64, integer arithmetic does **not**
+> become `IntegerBinOp` — `a + 1` de-inlines to a **method call** to
+> `Integer#+` (the AsmIR shows `SetupMethodFrame` + arg setup, not arithmetic).
+> So the next gateway is one of: (a) **method-call lowering** (`SetupMethodFrame`,
+> arg setup, the call, result), plus **side-exit/deopt** lowering (the call/guard
+> failure path: write back regs via `gen_write_back`, set PC, jump to
+> `vm_fetch`); or (b) re-enable the **AsmIR-only inline generators** on aarch64
+> (those that only push `AsmInst` and don't emit x86) so arithmetic inlines to
+> `IntegerBinOp`, which is a smaller lowering. `a64_gen_asm` currently bails when
+> `ir.side_exit` is non-empty, so deopt is needed either way. After that:
+> branches/loops → FP → variables/constants → arrays/hashes. Port
+> `gen_deopt_with_label`/`gen_write_back` to A64 and verify each method JITs
+> under qemu.
 >
 > All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
 > build green at every commit.
