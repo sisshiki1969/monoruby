@@ -251,6 +251,89 @@ impl Codegen {
         true
     }
 
+    /// Type guard: branch to `fail` if the Value in `reg` is not of `class_id`.
+    /// Mirrors x86 `guard_class` (immediate tag checks + heap class check).
+    /// Returns `false` (bail) for class kinds not yet handled.
+    fn a64_guard_class(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) -> bool {
+        let r = reg.a64().0;
+        let fail = fail.clone();
+        match class_id {
+            INTEGER_CLASS => {
+                // fixnum: bit0 == 1; fail when clear.
+                monoasm_arm64!(&mut self.jit, tbz x(r), #(0), fail;);
+            }
+            NIL_CLASS => {
+                monoasm_arm64!(&mut self.jit, cmp x(r), #(NIL_VALUE as u32););
+                self.jit.bcond_label(monoasm::Cond::Ne, &fail);
+            }
+            TRUE_CLASS => {
+                monoasm_arm64!(&mut self.jit, cmp x(r), #(TRUE_VALUE as u32););
+                self.jit.bcond_label(monoasm::Cond::Ne, &fail);
+            }
+            FALSE_CLASS => {
+                monoasm_arm64!(&mut self.jit, cmp x(r), #(FALSE_VALUE as u32););
+                self.jit.bcond_label(monoasm::Cond::Ne, &fail);
+            }
+            SYMBOL_CLASS => {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (0xff);
+                    and x9, x(r), x9;
+                    cmp x9, #(TAG_SYMBOL as u32);
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &fail);
+            }
+            FLOAT_CLASS => {
+                // flonum (bit1 set, bit0 clear) is ok; fixnum (bit0) fails;
+                // otherwise check the heap Float class.
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    tbnz x(r), #(0), fail;   // fixnum -> fail
+                    tbnz x(r), #(1), exit;   // flonum -> ok
+                );
+                self.a64_guard_rvalue(r, class_id, &fail);
+                self.jit.bind_label(exit);
+            }
+            _ => {
+                self.a64_guard_rvalue(r, class_id, &fail);
+            }
+        }
+        true
+    }
+
+    /// Heap-object class guard: branch to `fail` unless `reg` is a heap pointer
+    /// (low 3 bits zero) whose RValue class equals `class_id`. Mirrors x86
+    /// `guard_rvalue`.
+    fn a64_guard_rvalue(&mut self, r: u32, class_id: ClassId, fail: &DestLabel) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0b111);
+            and x9, x(r), x9;
+            cbnz x9, fail;                                  // immediate -> fail
+            ldr w9, [x(r), #(RVALUE_OFFSET_CLASS as u32)];  // RValue.class (u32)
+            mov x10, (class_id.u32() as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, fail);
+    }
+
+    /// Class-version guard: branch to `fail` if the global class version no
+    /// longer matches the version this method was compiled against. The cached
+    /// version is baked in as an immediate (compilation is atomic at a fixed
+    /// version). Unlike x86 we do not recompile on miss yet — just deopt.
+    fn a64_guard_class_version(&mut self, fail: &DestLabel) {
+        let gv_addr = self
+            .jit
+            .get_label_address(&self.class_version_label())
+            .as_ptr() as u64;
+        let cached = self.class_version();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (gv_addr);
+            ldr w9, [x9];
+            mov x10, (cached as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, fail);
+    }
+
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
     fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -280,7 +363,7 @@ impl Codegen {
         &mut self,
         _store: &Store,
         frame: &mut AsmInfo,
-        _labels: &SideExitLabels,
+        labels: &SideExitLabels,
         inst: AsmInst,
         _class_version: DestLabel,
     ) -> bool {
@@ -554,6 +637,91 @@ impl Codegen {
                     str x30, [sp, #-16]!;
                     mov x9, (f);
                     blr x9;            // result in x0 (= rax)
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // Type guard: deopt if `r` is not of `class`.
+            AsmInst::GuardClass(r, class, deopt) => {
+                let deopt = labels[deopt].clone();
+                self.a64_guard_class(r, class, &deopt)
+            }
+            // Inline-cache class-version guard: deopt if the global class
+            // version changed since compilation.
+            AsmInst::GuardClassVersion { deopt, .. } => {
+                let deopt = labels[deopt].clone();
+                self.a64_guard_class_version(&deopt);
+                true
+            }
+            // Unconditional deopt to the interpreter.
+            AsmInst::Deopt(deopt) => {
+                let deopt = labels[deopt].clone();
+                monoasm_arm64!(&mut self.jit, b deopt;);
+                true
+            }
+            // Error check: a runtime helper returns rax==0 (None) on error;
+            // branch to the error side-exit handler in that case. Mirrors x86
+            // `handle_error` (`testq rax,rax; jeq error`).
+            AsmInst::HandleError(error) => {
+                let error = labels[error].clone();
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit, cbz x(rax), error;);
+                true
+            }
+            // rax <- Array built from the `len` slots starting at `src`.
+            // create_array(ptr=&slot[src], len). No xmm save (matches x86).
+            AsmInst::CreateArray { src, len } => {
+                let off = src.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let f = runtime::create_array as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    sub x0, x(lfp), #(off);   // &slot[src]
+                    mov x1, (len as u64);
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;                   // result in x0
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // rax <- Array literal via gen_array(vm, globals, callid, &self).
+            AsmInst::NewArray { callid, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let f = runtime::gen_array as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;                       // vm
+                    mov x1, x20;                       // globals
+                    mov x2, (callid.get() as u64);     // callid
+                    sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
+            AsmInst::NewHash(args, len, using_xmm) => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let off = args.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let f = runtime::gen_hash as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;              // vm
+                    mov x1, x20;              // globals
+                    sub x2, x(lfp), #(off);   // &slot[args]
+                    mov x3, (len as u64);
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
                     ldr x30, [sp], #16;
                 );
                 true
