@@ -33,8 +33,7 @@ under qemu-user on x86 hosts).
 > `NewHash`, `ConcatStr`, `NewRange`, `ToA`. C calls bail if any xmm is live
 > (no FP save/restore yet). `GP::a64()` maps regs (slots lfp(x22)-relative,
 > matching `a64_op_ret`; acc=`R15`→x23; Executor=x19, Globals=x20=`R12`;
-> result in x0). `smulh` is emitted as a raw word via `emitl` (monoasm's DSL
-> lacks it).
+> result in x0). `smulh` uses monoasm's DSL `smulh` op (added upstream).
 >
 > **Side-exit/deopt machinery (done):** `a64_gen_asm` emits each block's
 > deopt/evict/error handlers (cold, skipped by a `b`; guards branch back).
