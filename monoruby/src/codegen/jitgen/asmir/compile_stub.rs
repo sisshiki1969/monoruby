@@ -898,6 +898,38 @@ impl Codegen {
                 self.jit.bind_label(ok);
                 true
             }
+            // to_a: load slot `src`; if it is already an Array, keep it in rax,
+            // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
+            AsmInst::ToA { src, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let off = src.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let toa = self.jit.label();
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    ldr x0, [x10];          // val (rax)
+                );
+                self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
+                monoasm_arm64!(&mut self.jit, b exit;); // already Array
+                let f = runtime::to_a as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    toa:
+                    mov x2, x0;             // val
+                    mov x0, x19;            // vm
+                    mov x1, x20;            // globals
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;                 // result in x0
+                    ldr x30, [sp], #16;
+                    exit:
+                );
+                true
+            }
             // GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write
             // back live values, run execute_gc(vm, globals), and on error jump
             // to the error handler. The GC path is laid out inline but skipped
