@@ -898,6 +898,39 @@ impl Codegen {
                 self.jit.bind_label(ok);
                 true
             }
+            // GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write
+            // back live values, run execute_gc(vm, globals), and on error jump
+            // to the error handler. The GC path is laid out inline but skipped
+            // on the common (no-GC) path. Mirrors x86 execute_gc_inner.
+            AsmInst::ExecGc { write_back, error } => {
+                let error = labels[error].clone();
+                let skip = self.jit.label();
+                let af_addr = self
+                    .jit
+                    .get_label_address(&self.alloc_flag.clone())
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (af_addr);
+                    ldr w9, [x9];
+                    cmp x9, #(8u32);
+                );
+                self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
+                if !self.a64_gen_write_back_for_deopt(&write_back) {
+                    return false;
+                }
+                let f = crate::executor::execute_gc as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;
+                    mov x1, x20;
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                    cbz x0, error;             // None -> error
+                );
+                self.jit.bind_label(skip);
+                true
+            }
             AsmInst::LoadGVar { name, using_xmm } => {
                 if using_xmm.iter().any(|b| *b) {
                     return false;
