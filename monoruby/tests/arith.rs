@@ -1003,7 +1003,10 @@ fn test_constant_cache_miss() {
 
 #[test]
 fn test_constant_in_method() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+            C.new.f
+        "#,
         r#"
             class C
               CONST = 1
@@ -1014,25 +1017,29 @@ fn test_constant_in_method() {
               end
             end
             CONST = 2
-            C.new.f
         "#,
     );
-    run_test(
+    run_test_with_prelude(
+        r#"
+            [CONST, C::CONST]
+        "#,
         r#"
             class C
                 CONST = 1
             end
             CONST = 2
-            [CONST, C::CONST]
         "#,
     );
-    run_test(
+    run_test_with_prelude(
+        r#"
+            $a
+        "#,
         r#"
             $a = []
             class Foo
                 CONST = 'Foo'
             end
-          
+
             class Bar
                 CONST = 'Bar'
                 class Baz < Foo
@@ -1041,7 +1048,6 @@ fn test_constant_in_method() {
                     $a << Foo::CONST        # => "Foo"
                 end
             end
-            $a
         "#,
     );
     run_test_with_prelude(
@@ -1176,21 +1182,25 @@ fn defined() {
     "#,
     );
     // constants
-    run_test(
+    run_test_with_prelude(
+        r#"
+        [defined?(M::C), defined?(M::D)]
+    "#,
         r#"
         module M
           C = 1
         end
-        [defined?(M::C), defined?(M::D)]
     "#,
     );
-    run_test(
+    run_test_with_prelude(
+        r#"
+        A.new.f
+    "#,
         r#"
         class A
           B = 42
           def f; defined?(B); end
         end
-        A.new.f
     "#,
     );
     // methods

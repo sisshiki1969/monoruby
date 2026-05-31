@@ -470,7 +470,10 @@ mod tests {
         "#,
         );
         // constant lookup in instance_eval with string (caller's lexical scope)
-        run_test(
+        run_test_with_prelude(
+            r#"
+        A.new.test
+        "#,
             r#"
         class A
           X = 100
@@ -478,7 +481,6 @@ mod tests {
             instance_eval("X")
           end
         end
-        A.new.test
         "#,
         );
     }

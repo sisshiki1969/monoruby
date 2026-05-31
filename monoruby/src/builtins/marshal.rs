@@ -1504,23 +1504,27 @@ mod tests {
         // Round-trip a named struct via `Struct.new("Name", ...)`.
         // The qualified path `Struct::Useful` round-trips through
         // the symbol payload and is resolved by the path walker.
-        run_test(
+        run_test_with_prelude(
             r##"
-            Struct.new("MStructA", :a, :b)
             s = Struct::MStructA.new(1, "two")
             t = Marshal.load(Marshal.dump(s))
             [t.class.name, t.a, t.b]
+            "##,
+            r##"
+            Struct.new("MStructA", :a, :b)
             "##,
         );
         // Round-trip a top-level struct constant. monoruby's
         // `get_class_name` returns the bare name, which the path
         // walker resolves directly off Object.
-        run_test(
+        run_test_with_prelude(
             r##"
-            MStructB = Struct.new(:x, :y)
             s = MStructB.new(:sym, [1, 2, 3])
             t = Marshal.load(Marshal.dump(s))
             [t.class.name, t.x, t.y]
+            "##,
+            r##"
+            MStructB = Struct.new(:x, :y)
             "##,
         );
         // Wrong member count ⇒ TypeError.

@@ -1328,8 +1328,8 @@ mod tests {
         res
         "#,
             r#"
-        SEPARATOR_PAT = /#{Regexp.quote File::SEPARATOR}/
-        /\A#{SEPARATOR_PAT}?\z/.match?("")
+        sep_pat = /#{Regexp.quote File::SEPARATOR}/
+        /\A#{sep_pat}?\z/.match?("")
         "#,
             r#"/foo/.match?(nil)"#,
             r#"/foo/.match?(nil, 0)"#,
