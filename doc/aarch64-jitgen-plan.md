@@ -17,18 +17,24 @@ under qemu-user on x86 hosts).
 > VM — so only fully-lowerable methods JIT and big.rb stays byte-identical to
 > x86.
 >
-> **Supported AsmInst (~28):** frame/move/return — `Label`, `BcIndex`, `Init`
+> **Supported AsmInst (~45):** frame/move/return — `Label`, `BcIndex`, `Init`
 > (prologue + nil-fill), `Preparation`, `StackToReg`, `RegToStack`,
 > `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `LitToStack`, `Ret`;
 > control flow — `CondBr` (truthiness), `NilBr`, `CheckLocal`, `Deopt`,
-> `HandleError`; variables — `LoadDynVar`/`StoreDynVar` (via `a64_get_outer`),
-> `LoadGVar`/`StoreGVar`; allocation/runtime C calls — `DeepCopyLit`,
-> `CreateArray`, `NewArray`, `NewHash`, `ConcatStr`, `NewRange`; guards —
-> `GuardClass`, `GuardClassVersion` (foundational: compile-clean but only
-> reached at call sites, which await method-call lowering). C calls bail if
-> any xmm is live (no FP save/restore yet). `GP::a64()` maps regs (slots
-> lfp(x22)-relative, matching `a64_op_ret`; acc=`R15`→x23; Executor=x19,
-> Globals=x20=`R12`; result in x0).
+> `RecompileDeopt` (treated as a plain deopt — see below), `HandleError`,
+> `CheckStack`, `ExecGc`; integer fast paths — `IntegerBinOp` Add/Sub/Mul/Div
+> (tagged `2n+1`; overflow via `b.vs`, Mul via `smulh`, Div floors; Rem/bitops
+> are method calls), `IntegerCmp`, `IntegerCmpBr`; variables/constants —
+> `LoadDynVar`/`StoreDynVar` (via `a64_get_outer`), `LoadGVar`/`StoreGVar`,
+> `LoadCVar`, `GuardConstVersion`/`GuardConstBaseClass`/`StoreConstant`;
+> method calls — `SetupMethodFrame`, `SetArguments`, `Call`, `MethodRet`,
+> `ImmediateEvict` (no-op); guards — `GuardClass`/`GuardClassVersion`;
+> allocation/runtime C calls — `DeepCopyLit`, `CreateArray`, `NewArray`,
+> `NewHash`, `ConcatStr`, `NewRange`, `ToA`. C calls bail if any xmm is live
+> (no FP save/restore yet). `GP::a64()` maps regs (slots lfp(x22)-relative,
+> matching `a64_op_ret`; acc=`R15`→x23; Executor=x19, Globals=x20=`R12`;
+> result in x0). `smulh` is emitted as a raw word via `emitl` (monoasm's DSL
+> lacks it).
 >
 > **Side-exit/deopt machinery (done):** `a64_gen_asm` emits each block's
 > deopt/evict/error handlers (cold, skipped by a `b`; guards branch back).
@@ -59,11 +65,23 @@ under qemu-user on x86 hosts).
 > Verified: user calls, builtin `Integer#+`/`#<`, recursive `fib(30)=832040`
 > and `tarai(12,6,0)=12`, all byte-identical to x86.
 >
-> **Next:** FP (`XmmSave`/`XmmRestore`/`FprMove`/`FloatBinOp`/`FixnumToFpr`/…
-> — needed before float-bearing methods stop bailing on live-xmm C calls),
-> ivars (`LoadIVar*`/`StoreIVar*` + `Preparation` heap path), constants
-> (`StoreConstant`/`GuardConstVersion`), index ops (`GuardArrayTy` + `[]`).
-> `inline_gen` re-enablement stays last.
+> **Integer arithmetic note:** `a + b` etc. are dedicated BinOp bytecode
+> opcodes → `IntegerBinOp`/`IntegerCmp(Br)` when the inline cache says both
+> operands are Integer — **independent of `inline_gen`** (an earlier note here
+> was wrong). These are now lowered, so `fib`/`tarai` JIT their comparisons
+> and arithmetic. One caveat: `fib`'s `+` is `NotCached` at first compile
+> (the recursion descends before any `+` runs), so it emits `RecompileDeopt`;
+> x86 deopts-then-recompiles once warm, but aarch64 has no recompile yet so it
+> just deopts there. A proper **recompile mechanism** (re-run compile_method +
+> overwrite the indirect-dispatch slot) is the way to warm those points.
+>
+> **Next:** (1) **floating point** — the last big.rb blocker (`XmmSave`/
+> `XmmRestore`/`FprMove`/`FloatBinOp`/`FloatCmp`/`FixnumToFpr`/`F64ToFpr`/…);
+> needs an FP register model and also unblocks the live-xmm C-call bails.
+> (2) **instance variables** (`LoadIVar*`/`StoreIVar*` + `Preparation` heap
+> path). (3) the **recompile mechanism** (warms `RecompileDeopt` points like
+> fib's `+`). (4) index ops (`GuardArrayTy` + `[]`). `inline_gen` re-enablement
+> stays last.
 >
 > All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
 > build green at every commit.
