@@ -255,14 +255,44 @@ trigger→compile→bail→VM loop works end-to-end (no method JITs yet). Steps:
    runs the front-end (`traceir_to_asmir`), bails (`Err`→`None`), and keeps
    executing via the VM — output unchanged, no crash.
 
-### Phase 3b — incremental AsmInst lowering
-Implement `compile_asmir` aarch64 variants one category at a time (replacing the
-`compile_stub` `unreachable!`/bail), starting from the minimum needed to JIT a
-trivial method: prologue/epilogue/`Ret` → `Integer` `Mov`/`Add`/`Cmp` + guards
-→ branches/loops → FP → method-call arg setup → variables/constants → deopt.
-Anything not yet handled calls `set_jit_unsupported` (to add) → bail → VM, so
-coverage grows safely. PC-relative data (`adr`/literal pool) and branch patching
-(`apply_jmp_patch` A64 / B-BL imm26) are verified here.
+### Phase 3b — incremental AsmInst lowering (the multi-week core)
+
+This is the bulk of the port: the x86 emission back-end is ~4,300 LoC across
+`asmir/compile/*` (120+ `AsmInst` variants). The aarch64 side is built up
+through a repeated **implement → verify (qemu) → debug** cycle. Groundwork and
+design decisions:
+
+- **Register map (done):** `GP::a64()` (codegen.rs) maps the x86-named abstract
+  JIT registers to A64 — globals `R12/R13/R14/R15`→`x20/x21/x22/x23` (match the
+  VM), scratch `Rax..R11`→`x0..x8`, `x9..x15` free for lowering temps, `Rsp`→`sp`.
+  `FPReg::loc`'s `Xmm(n)` is read as `d{n}` on aarch64.
+- **Call ABI:** x86 (rdi/rsi/rdx/rcx/r8/r9 args, rax ret) ≠ aarch64 (x0..x7 / x0).
+  The `SetArguments` / `Call` / `Yield` lowerings must shuffle into x0..x7
+  explicitly (not a 1:1 `GP::a64` remap), and read returns from x0.
+- **Emission driver:** port `gen_machine_code` + `gen_asm` (the BB/label/
+  side-exit iteration) to drive `compile_asmir` on aarch64. First cut can be a
+  minimal iterate-and-bail (no JIT installed) to exercise the plumbing.
+- **Bail hook:** add `Codegen::set_jit_unsupported()` + a flag; `compile_asmir`
+  sets it for any not-yet-ported `AsmInst`; the driver returns `Err`
+  (→`compile()` `None`) so the method stays VM-interpreted. Coverage grows
+  safely — only fully-lowerable methods JIT.
+- **Install mechanism:** aarch64 monoasm has **no runtime branch patch**
+  (`apply_jmp_patch_address` is x86-only) and `adr` can't reach JIT data from the
+  wrapper. So instead of patching the wrapper entry, install via **indirect
+  dispatch**: store the compiled entry in a per-method heap slot (like the
+  trigger counter); the wrapper loads it and branches if set. (PC-relative data
+  similarly uses heap-leaked absolute addresses, per the trigger/attr_reader.)
+- **Order:** prologue/`Init` + epilogue/`Ret` → `Integer` `Mov`/`LitToReg`/
+  `Add`/`Sub`/`Cmp` + fixnum guards → conditional/uncond branches + loop → FP
+  (`d`-regs) → method-call arg setup + `Call`/`Yield` → variables/constants/
+  definitions → deopt/side-exit. Each step: implement the variant(s), build +
+  run under qemu, confirm the target method JITs and output is unchanged.
+
+**Milestone within 3b:** the first *observable* increment is a single trivial
+method (e.g. `def f(a); a; end`) actually executing as JIT code on aarch64
+(verified via qemu + a deopt/jit-log counter), with everything else deopting to
+the VM. That first slice is itself a large coupled piece (driver + install +
+the handful of `AsmInst` it needs); subsequent variants are smaller increments.
 
 ### Phase 4 — validation
 Run the JIT test suite + optcarrot on aarch64 (qemu + Apple Silicon);

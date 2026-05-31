@@ -131,9 +131,42 @@ pub(crate) enum GP {
     R15 = 15,
 }
 
-/// Number of physical xmm registers in the JIT allocator pool
-/// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
-/// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
+/// aarch64 mapping of the (x86-named) abstract JIT register enum to physical
+/// A64 registers, used by the aarch64 AsmIR→machine-code lowering (Phase 3b).
+///
+/// The **global** roles must match the aarch64 VM's global registers so that
+/// JIT↔VM transitions agree: `R12`(Globals)→x20, `R13`(PC)→x21, `R14`(LFP)→x22,
+/// `R15`(accumulator)→x23 (and the executor `rbx`→x19 is implicit, not in this
+/// enum). The **scratch** set maps to distinct caller-saved `x0..=x8`; `x9..=x15`
+/// are left free for per-`AsmInst` lowering temps. `Rsp`→`sp`.
+///
+/// Note: the x86 and aarch64 C-call ABIs differ (x86 passes args in
+/// rdi/rsi/rdx/rcx/r8/r9 and returns in rax; aarch64 uses x0..x7 / x0), so
+/// call-argument lowering shuffles into x0..x7 explicitly rather than relying
+/// on this 1:1 map.
+#[cfg(target_arch = "aarch64")]
+impl GP {
+    pub(in crate::codegen) fn a64(self) -> monoasm::GReg {
+        let n: u32 = match self {
+            GP::Rax => 0,
+            GP::Rcx => 1,
+            GP::Rdx => 2,
+            GP::Rsi => 3,
+            GP::Rdi => 4,
+            GP::R8 => 5,
+            GP::R9 => 6,
+            GP::R10 => 7,
+            GP::R11 => 8,
+            GP::R12 => 20,
+            GP::R13 => 21,
+            GP::R14 => 22,
+            GP::R15 => 23,
+            GP::Rsp => 31,
+        };
+        monoasm::GReg(n)
+    }
+}
+
 /// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
 ///
 /// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
