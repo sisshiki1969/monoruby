@@ -68,6 +68,7 @@ impl Codegen {
     ) -> bool {
         // lfp (x22) for slot access — same addressing as the VM's a64_op_ret:
         // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
+        if std::env::var("DUMP").is_ok() { eprintln!("[asmir] {inst:?}"); }
         let lfp = GP::R14.a64().0;
         match inst {
             // Source-position record (no code).
@@ -139,6 +140,49 @@ impl Codegen {
                     ldp x29, x30, [sp], #16;
                     ret;
                 );
+                true
+            }
+            // reg <- literal Value (immediate).
+            AsmInst::LitToReg(v, r) => {
+                let dst = r.a64().0;
+                let imm = v.id();
+                monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
+                true
+            }
+            // [lfp - slot*8 - LFP_SELF] <- reg
+            AsmInst::RegToStack(r, slot) => {
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                let src = r.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    str x(src), [x10];
+                );
+                true
+            }
+            // [lfp - slot*8 - LFP_SELF] <- acc (R15 -> x23)
+            AsmInst::AccToStack(slot) => {
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                let acc = GP::R15.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    str x(acc), [x10];
+                );
+                true
+            }
+            // dst <- src
+            AsmInst::RegMove(src, dst) => {
+                let (s, d) = (src.a64().0, dst.a64().0);
+                if s != d {
+                    monoasm_arm64!(&mut self.jit, mov x(d), x(s););
+                }
+                true
+            }
+            // acc (R15 -> x23) <- reg
+            AsmInst::RegToAcc(r) => {
+                if r != GP::R15 {
+                    let (acc, src) = (GP::R15.a64().0, r.a64().0);
+                    monoasm_arm64!(&mut self.jit, mov x(acc), x(src););
+                }
                 true
             }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
