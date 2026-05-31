@@ -46,13 +46,24 @@ under qemu-user on x86 hosts).
 > branches at offset 0 (an infinite `b.eq #0` self-loop). `a64_gen_asm` takes
 > optional `entry`/`exit` to bind a bridge's entry label and append `b <exit>`.
 >
-> **Next:** the big remaining gateway is **method-call lowering**
-> (`SetupMethodFrame`, `SetArguments`, `do_call` + return-address deopt
-> patching, `MethodRet`). With `inline_gen` off, `a + 1` de-inlines to a method
-> call, so this unlocks the bulk of real methods (and finally exercises the
-> class guards at call sites). After that: FP (`XmmSave`/`FloatBinOp`/…),
-> ivars (`LoadIVar*`/`StoreIVar*`), constants, index ops. `inline_gen`
-> re-enablement stays last.
+> **Method-call lowering (done — the central gateway):** `SetupMethodFrame`
+> (callee frame fields at `[sp - (RSP_LOCAL_FRAME + LFP_*)]`), `SetArguments`
+> (one C call to `jit_generic_set_arguments`), `Call` (`a64_do_call`:
+> set-lfp + push-frame + `blr` codeptr + restore cfp/lfp — frame base ==
+> call-site sp − 16, same as x86, so the shared `RSP_*`/`BP_*`/`CFP_*`
+> constants apply), `MethodRet` (explicit `return`). The eviction-on-return
+> mechanism is x86 runtime branch patching and cannot be done on aarch64, so
+> `set_deopt_with_return_addr` is skipped and `ImmediateEvict` is a no-op —
+> `GuardClassVersion` deopts catch class-version staleness instead. This
+> finally exercises `GuardClass`/`GuardClassVersion` at real call sites.
+> Verified: user calls, builtin `Integer#+`/`#<`, recursive `fib(30)=832040`
+> and `tarai(12,6,0)=12`, all byte-identical to x86.
+>
+> **Next:** FP (`XmmSave`/`XmmRestore`/`FprMove`/`FloatBinOp`/`FixnumToFpr`/…
+> — needed before float-bearing methods stop bailing on live-xmm C calls),
+> ivars (`LoadIVar*`/`StoreIVar*` + `Preparation` heap path), constants
+> (`StoreConstant`/`GuardConstVersion`), index ops (`GuardArrayTy` + `[]`).
+> `inline_gen` re-enablement stays last.
 >
 > All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
 > build green at every commit.
