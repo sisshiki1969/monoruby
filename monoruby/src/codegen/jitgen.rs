@@ -30,7 +30,12 @@ mod context;
 mod definition;
 #[cfg(jit_emit)]
 mod deoptimize;
+// Type / class guards, split per arch (mirrors asmir compile/compile_stub):
+// x86 emits via `guard.rs`; the aarch64 lowering uses `guard_stub.rs`.
 #[cfg(jit_emit)]
+mod guard;
+#[cfg(all(jit, not(jit_emit)))]
+#[path = "jitgen/guard_stub.rs"]
 mod guard;
 mod merge;
 mod state;
