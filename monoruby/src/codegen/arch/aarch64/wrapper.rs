@@ -18,31 +18,37 @@ impl Codegen {
         match &globals.store[fid].kind {
             FuncKind::ISeq(_) => {
                 let vm_entry = self.vm_entry();
-                // JIT trigger (Phase 3a). After COUNT_START_COMPILE calls,
-                // invoke `jit_compile_patch`, which runs the arch-neutral
-                // front-end (`traceir_to_asmir`). aarch64 emission isn't
-                // implemented yet, so it bails (`compile() -> None`) and the
-                // method stays VM-interpreted. No entry patching on aarch64 —
-                // the counter falls through to `vm_entry` (it attempts compile
-                // once, when the counter hits 0, then every later call takes
-                // the `cbnz` path). x19..x23 are callee-saved across the
-                // `extern "C"` call; LR is saved across `blr`.
+                // JIT trigger (Phase 3a/3b). Per-method JIT-entry slot + call
+                // counter (both heap-leaked so their absolute addresses are
+                // known at emit time — aarch64 `adr` can't reach a JIT data
+                // label from the lazily-generated wrapper). On each call:
+                //   - if the slot is non-zero, the method was compiled → branch
+                //     to the JIT code (indirect-dispatch install; aarch64 has no
+                //     runtime branch patching);
+                //   - else decrement the counter; when it hits 0 call
+                //     jit_compile_patch, which runs the front-end + aarch64
+                //     lowering and, on success, writes the compiled entry into
+                //     the slot. Unsupported AsmInsts bail → stays VM.
+                // x19..x23 are callee-saved across the `extern "C"` call; LR is
+                // saved across `blr`.
                 #[cfg(jit)]
                 {
-                    // Per-method call counter, heap-leaked so its absolute
-                    // address is known at emit time (aarch64 `adr` can't reach
-                    // a JIT data label from the lazily-generated wrapper).
                     let counter_addr = Box::into_raw(Box::new(COUNT_START_COMPILE)) as u64;
+                    let jit_slot = Box::into_raw(Box::new(0u64)) as u64;
+                    let run_jit = self.jit.label();
                     monoasm_arm64!(&mut self.jit,
+                        mov x9, (jit_slot);
+                        ldr x10, [x9];
+                        cbnz x10, run_jit;       // already compiled → JIT code
                         mov x9, (counter_addr);
-                        ldr w10, [x9];           // 32-bit counter (zero-extended)
-                        sub x10, x10, #1;
-                        str w10, [x9];
-                        cbnz x10, vm_entry;      // not hot yet → VM
-                        // hot: jit_compile_patch(globals=x20, lfp=x22, _=0)
+                        ldr w11, [x9];           // 32-bit counter (zero-extended)
+                        sub x11, x11, #1;
+                        str w11, [x9];
+                        cbnz x11, vm_entry;      // not hot yet → VM
+                        // hot: jit_compile_patch(globals=x20, lfp=x22, slot)
                         mov x0, x(GLOBALS.0);
                         mov x1, x(LFP.0);
-                        mov x2, (0u64);
+                        mov x2, (jit_slot);      // where to publish the entry
                         str x30, [sp, #-16]!;    // save LR
                         // Reserve scratch below SP so the (deep) compile C-call
                         // can't trample the just-built callee Ruby frame, which
@@ -54,7 +60,9 @@ impl Codegen {
                         blr x9;
                         add sp, sp, #(4080);
                         ldr x30, [sp], #16;      // restore LR
-                        b entry;                 // retry (now counter==0 → VM)
+                        b entry;                 // retry: slot now set if compiled
+                    run_jit:
+                        br x10;                  // tail-call the JIT code
                     );
                 }
                 #[cfg(not(jit))]

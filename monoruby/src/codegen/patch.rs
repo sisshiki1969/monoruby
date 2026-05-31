@@ -25,12 +25,17 @@ impl Codegen {
     /// front-end and bails (returns `None`), so a minimal `not(jit_emit)`
     /// variant just drives that and never patches — the A64 trigger falls
     /// through to `vm_entry` on its own. See `doc/aarch64-jitgen-plan.md`.
+    /// aarch64 install via **indirect dispatch** (no runtime branch patching):
+    /// `slot` points at the wrapper's per-method JIT-entry word (init 0). On a
+    /// successful compile we write the compiled entry address there; the
+    /// wrapper loads it and branches to the JIT code on the next call. On bail
+    /// the slot stays 0 and the method stays VM-interpreted.
     #[cfg(not(jit_emit))]
     pub(super) fn compile_patch(
         &mut self,
         globals: &mut Globals,
         lfp: Lfp,
-        _entry: monoasm::CodePtr,
+        slot: monoasm::CodePtr,
     ) -> Option<()> {
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
@@ -41,16 +46,22 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let class_version = self.class_version();
         let jit_entry = self.jit.label();
-        // Drives the front-end + aarch64 lowering. `jit_entry` is bound by
-        // `a64_gen_machine_code` (even on the bail path), so it always resolves
-        // at `finalize`. The result is currently ignored: aarch64 has no
-        // install path yet (no runtime patching), so the method stays
-        // VM-interpreted whether or not it compiled. See Phase 3b in
-        // doc/aarch64-jitgen-plan.md.
-        let _ =
-            self.compile_method(globals, iseq_id, self_class, jit_entry, class_version, None);
+        // `jit_entry` is bound by `a64_gen_machine_code` (even on the bail
+        // path) so it always resolves at `finalize`.
+        let compiled = self
+            .compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None)
+            .is_some();
         self.jit.finalize();
-        None
+        if compiled {
+            // Publish the compiled entry into the wrapper's slot.
+            let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
+            // SAFETY: `slot` is the address of the wrapper's heap-leaked u64
+            // JIT-entry word (see arch/aarch64/wrapper.rs).
+            unsafe { *(slot.as_ptr() as *mut u64) = entry_addr };
+            Some(())
+        } else {
+            None
+        }
     }
 
     #[cfg(jit_emit)]

@@ -9,6 +9,7 @@
 //! grows one variant at a time. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
+use monoasm_macro::monoasm_arm64;
 
 impl Codegen {
     /// Drive AsmIR→A64 lowering for a whole method. Returns `false` (bail) if
@@ -23,6 +24,7 @@ impl Codegen {
         class_version: DestLabel,
     ) -> bool {
         self.jit.bind_label(entry_label);
+        frame.start_codepos = self.jit.get_current();
         // Specialized methods / inline bridges are not supported yet.
         if !frame.specialized_methods.is_empty() {
             return false;
@@ -59,13 +61,87 @@ impl Codegen {
     pub(super) fn compile_asmir(
         &mut self,
         _store: &Store,
-        _frame: &mut AsmInfo,
+        frame: &mut AsmInfo,
         _labels: &SideExitLabels,
         inst: AsmInst,
         _class_version: DestLabel,
     ) -> bool {
+        // lfp (x22) for slot access — same addressing as the VM's a64_op_ret:
+        // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
+        let lfp = GP::R14.a64().0;
         match inst {
-            // Phase 3b: AsmInst lowerings land here, one category at a time.
+            // Source-position record (no code).
+            AsmInst::BcIndex(i) => {
+                let pos = self.jit.get_current() - frame.start_codepos;
+                frame.sourcemap.push((i, pos));
+                true
+            }
+            // Bind a JIT label.
+            AsmInst::Label(label) => {
+                let label = frame.resolve_label(&mut self.jit, label);
+                self.jit.bind_label(label);
+                true
+            }
+            // Method prologue: establish fp/lr, reserve the local frame, and
+            // nil-fill the non-argument locals/temps. Mirrors x86 `init_func`
+            // (rbp == lfp + RBP_LOCAL_FRAME, so slots are lfp-relative here).
+            AsmInst::Init {
+                info,
+                prologue_offset,
+            } => {
+                let prologue_bytes = prologue_offset.unwrap_concrete();
+                // A64 `sub sp, sp, #imm` takes a 12-bit immediate; bail if the
+                // frame is larger than that for now (rare; revisit with a
+                // shifted/!2-instruction form).
+                if prologue_bytes > 4095 {
+                    return false;
+                }
+                monoasm_arm64!(&mut self.jit,
+                    stp x29, x30, [sp, #-16]!;
+                    mov x29, sp;
+                );
+                if prologue_bytes > 0 {
+                    monoasm_arm64!(&mut self.jit,
+                        sub sp, sp, #(prologue_bytes as u32);
+                    );
+                }
+                let clear_len = info.reg_num - info.arg_num;
+                if clear_len > 0 {
+                    monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
+                    for i in 0..clear_len {
+                        let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
+                        monoasm_arm64!(&mut self.jit,
+                            sub x10, x(lfp), #(off);
+                            str x9, [x10];
+                        );
+                    }
+                }
+                true
+            }
+            // Per-method ivar-cache prep: only needed when heap ivars are
+            // accessed; otherwise a no-op. Bail on the heap path for now.
+            AsmInst::Preparation => !frame.ivar_heap_accessed,
+            // reg <- [lfp - slot*8 - LFP_SELF]
+            AsmInst::StackToReg(slot, r) => {
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                let dst = r.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    ldr x(dst), [x10];
+                );
+                true
+            }
+            // Return: the value is already in x0 (acc = Rax -> x0). Epilogue
+            // matches the VM's a64_op_ret (`mov sp,x29; ldp; ret`).
+            AsmInst::Ret => {
+                monoasm_arm64!(&mut self.jit,
+                    mov sp, x29;
+                    ldp x29, x30, [sp], #16;
+                    ret;
+                );
+                true
+            }
+            // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
     }
