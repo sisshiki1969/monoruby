@@ -89,17 +89,53 @@ register-offset. Two items to verify during implementation:
 
 ## Phased plan
 
-### Phase 1 — foundation (this milestone)
-- `build.rs`: keep `cfg(jit)` meaning "JIT front-end compiled"; enable it for
-  aarch64 too. Introduce the back-end seam so x86 emission is gated to
-  `target_arch = x86_64`.
-- Make `GP` / `FPReg::loc` arch-aware.
-- Provide an aarch64 JIT back-end **stub** (`unreachable!`/bail) implementing
-  the back-end interface the front-end calls, so the tree compiles.
-- Keep the aarch64 JIT **trigger disabled** (wrapper still `b vm_entry`), so
-  aarch64 stays VM-only at runtime; the stubs are never hit.
+### Findings from the foundation probe (2026-05) — REQUIRED READING
+
+A spike enabled `cfg(jit)` on aarch64 and gated the `jitgen` emission
+back-end to x86 (with an `unreachable!` `compile_asmir` stub). Outcome,
+which **reshapes Phase 1**:
+
+1. **`cfg(jit)` is not `jitgen`-local — it means "x86 JIT" codebase-wide.**
+   Beyond `jitgen`, the JIT emission is woven into the **builtins**: each
+   inlined method (`Integer#+`, `Array#push`, `Math.sqrt`, …) registers a
+   `#[cfg(jit)]` inline-generator closure (the `inline_gen!` macro in
+   `lib.rs`, with `#[cfg(not(jit))]` no-op twins for the VM build). Enabling
+   `cfg(jit)` on aarch64 compiles **~14 builtins files'** worth of x86
+   inline generators → hundreds of errors outside `jitgen`.
+2. **The front-end is not cleanly AsmIR-only.** Several front-end lowering
+   paths *inline-emit* by calling back-end helpers directly (e.g.
+   `AbstractState::array_integer_index`, `store_fpr_into_xmm`, `gen_shr`,
+   `gen_int_pow`) rather than only pushing `AsmInst`s. So "front-end compiles
+   standalone" is not achievable by module gating alone.
+3. **`GP` does NOT need splitting to compile.** The front-end uses
+   `GP::Rdi` etc. as *abstract* register ids; `GP` is a plain enum that
+   type-checks fine on aarch64. Register *meaning* only matters in the
+   (arch-specific) back-end. Defer the `GP`/`FPReg` arch-mapping to Phase 2.
+4. The `jitgen`-internal back-end gating itself is straightforward and
+   x86-safe (gate `asmir::compile`, `guard`, `deoptimize`, the `jitgen.rs`
+   emission impls, `compiler`/`patch`, `jit_check_stack`, the `compile/index`
+   asm methods, `asmir.rs::{gen_asm,handle_error}` to `target_arch=x86_64`).
+
+**Conclusion:** the seam is bigger than `jitgen`. The first real unit of
+work is a **cfg architecture redesign** that cleanly separates "JIT
+front-end" from "x86 emission" across *both* `jitgen` and the builtins
+inline-generator surface (and likely a new `inline_gen!` arm that stubs the
+generator on aarch64-jit). This is sizeable; it is the gate for everything
+after.
+
+### Phase 1 — cfg architecture seam (revised)
+- Decide the cfg model: e.g. `jit` (front-end planning, both arches) vs
+  `jit_emit_x86` (= `jit && target_arch=x86_64`, the x86 emission incl.
+  builtins inline generators). Rework `inline_gen!` so the aarch64-jit build
+  gets a stub/bail generator (mirroring the `not(jit)` twin).
+- Gate the `jitgen` emission back-end + builtins inline generators to
+  `jit_emit_x86`; provide aarch64 back-end stubs for the emission interface
+  the front-end calls (incl. the inline-emit helpers in finding #2).
+- Keep the aarch64 JIT **trigger disabled** (wrapper stays `b vm_entry`) so
+  aarch64 stays VM-only at runtime; stubs are never hit.
 - **Acceptance:** `cargo check` green on x86 (full JIT) **and** aarch64 (JIT
-  front-end compiled, back-end stubbed, VM at runtime). No behavior change.
+  front-end compiled, emission stubbed, VM at runtime). No behavior change.
+- *(GP/FPReg arch-mapping moves to Phase 2 — not needed to compile.)*
 
 ### Phase 2 — core lowering
 Implement `compile_asmir` AsmInst variants for aarch64, by category:
