@@ -333,7 +333,35 @@ impl Codegen {
                     monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
                 }
             },
-            // Mul/Div/Rem/… need smulh / sdiv handling — not yet ported.
+            // Mul: compute `2a * b` (matching x86's `imul` on the half-untagged
+            // lhs). aarch64 has no `smulh`, so detect overflow with a checking
+            // `sdiv`: if `2a != 0` and `(2a*b)/(2a) != b` the product wrapped.
+            BinOpK::Mul => {
+                let ok = self.jit.label();
+                match mode {
+                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
+                        asr x(r), x(r), #(1u32);   // b (untagged)
+                        sub x(l), x(l), #(1u32);   // 2a
+                    ),
+                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                        let imm = *i as i64 as u64; // raw multiplier
+                        monoasm_arm64!(&mut self.jit,
+                            mov x(r), (imm);
+                            sub x(l), x(l), #(1u32);
+                        );
+                    }
+                }
+                monoasm_arm64!(&mut self.jit,
+                    mul x9, x(l), x(r);            // 2a*b (low 64)
+                    cbz x(l), ok;                  // 2a==0 -> 0, no overflow
+                    sdiv x10, x9, x(l);
+                    cmp x10, x(r);
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, deopt);
+                self.jit.bind_label(ok);
+                monoasm_arm64!(&mut self.jit, add x(l), x9, #(1u32););
+            }
+            // Div/Rem/… still bail (need floor-division adjustment / sdiv).
             _ => return false,
         }
         true
