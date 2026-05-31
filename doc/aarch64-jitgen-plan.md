@@ -123,6 +123,36 @@ inline-generator surface (and likely a new `inline_gen!` arm that stubs the
 generator on aarch64-jit). This is sizeable; it is the gate for everything
 after.
 
+### Decisive finding: planning and emission are interleaved (no clean front-end-only build)
+
+A second pass (introduce a `jit_emit` cfg = `jit && x86_64` and try to keep a
+pure-`jit` front-end compiling on aarch64) shows there is **no useful
+"front-end only" compilation unit**:
+
+- monoruby's JIT does **not** do a clean two-pass *build-IR → lower-IR*. The
+  front-end lowering interleaves planning with emission: it invokes the
+  per-method **inline generators** (emission) during method-call lowering and
+  calls emission helpers inline (`array_integer_index`, `store_fpr_into_xmm`,
+  `gen_shr`, `gen_asm`, guards, write-back, xmm save/restore, …).
+- Therefore any `jit`-but-not-`jit_emit` code that would compile on aarch64
+  must have an aarch64 **stub for essentially the entire emission interface**
+  (~dozens of `Codegen`/`JitModule`/`AbstractState` methods + an aarch64
+  `inline_gen!`/`define_builtin_inline_func` form). The result would be a
+  large body of dead, never-run stubs.
+- Gating *everything* `jit` → `jit_emit` instead makes aarch64 identical to
+  today's VM-only build (no JIT code at all) — i.e. no progress.
+
+So there is **no behavior-neutral, validatable "foundation" milestone** short
+of implementing real aarch64 emission. The honest path is to treat the
+aarch64 JIT as the **emission port itself** (Phase 2), done as a **vertical
+slice**: enable `jit` on aarch64 behind the `jit_emit` seam, then implement
+just enough aarch64 emission (entry/wrapper + `compiler`/`patch` + a minimal
+`compile_asmir` that handles a trivial method and **deopts to the VM on
+everything else**) to get one method JIT-compiling end-to-end under qemu —
+then widen opcode/inline coverage incrementally. The `jit_emit` cfg seam +
+`inline_gen!` aarch64 arm are built as part of that slice (not as a separate
+dormant step, since they can only be validated alongside emission).
+
 ### Phase 1 — cfg architecture seam (revised)
 - Decide the cfg model: e.g. `jit` (front-end planning, both arches) vs
   `jit_emit_x86` (= `jit && target_arch=x86_64`, the x86 emission incl.
