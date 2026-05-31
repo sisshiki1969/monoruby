@@ -17,17 +17,47 @@ impl Codegen {
         );
         match &globals.store[fid].kind {
             FuncKind::ISeq(_) => {
-                // TODO(aarch64 Phase 3a): wire the JIT trigger here. The A64
-                // counter stub + `blr jit_compile_patch` is implemented and
-                // *fires* (it reaches the now-arch-neutral driver and runs the
-                // front-end), but the `lfp` it must hand to `jit_compile_patch`
-                // is not yet correct at this wrapper point: x22 (LFP) at the
-                // wrapper does not match the just-built callee frame (self/meta
-                // read back wrong), so `lfp.func_id()` is garbage. Needs an
-                // `a64_op_send` sp/LFP-timing audit (likely the scratch-reserve
-                // / simple-vs-generic path). Until then, stay VM-only.
-                // See `doc/aarch64-jitgen-plan.md` (Phase 3a).
                 let vm_entry = self.vm_entry();
+                // JIT trigger (Phase 3a). After COUNT_START_COMPILE calls,
+                // invoke `jit_compile_patch`, which runs the arch-neutral
+                // front-end (`traceir_to_asmir`). aarch64 emission isn't
+                // implemented yet, so it bails (`compile() -> None`) and the
+                // method stays VM-interpreted. No entry patching on aarch64 —
+                // the counter falls through to `vm_entry` (it attempts compile
+                // once, when the counter hits 0, then every later call takes
+                // the `cbnz` path). x19..x23 are callee-saved across the
+                // `extern "C"` call; LR is saved across `blr`.
+                #[cfg(jit)]
+                {
+                    // Per-method call counter, heap-leaked so its absolute
+                    // address is known at emit time (aarch64 `adr` can't reach
+                    // a JIT data label from the lazily-generated wrapper).
+                    let counter_addr = Box::into_raw(Box::new(COUNT_START_COMPILE)) as u64;
+                    monoasm_arm64!(&mut self.jit,
+                        mov x9, (counter_addr);
+                        ldr w10, [x9];           // 32-bit counter (zero-extended)
+                        sub x10, x10, #1;
+                        str w10, [x9];
+                        cbnz x10, vm_entry;      // not hot yet → VM
+                        // hot: jit_compile_patch(globals=x20, lfp=x22, _=0)
+                        mov x0, x(GLOBALS.0);
+                        mov x1, x(LFP.0);
+                        mov x2, (0u64);
+                        str x30, [sp, #-16]!;    // save LR
+                        // Reserve scratch below SP so the (deep) compile C-call
+                        // can't trample the just-built callee Ruby frame, which
+                        // sits just below SP and which compile_patch inspects
+                        // (mirrors x86 `subq rsp, 4088`). 4080 fits a 12-bit imm
+                        // and is 16-aligned.
+                        sub sp, sp, #(4080);
+                        mov x9, (crate::codegen::compiler::jit_compile_patch as *const () as u64);
+                        blr x9;
+                        add sp, sp, #(4080);
+                        ldr x30, [sp], #16;      // restore LR
+                        b entry;                 // retry (now counter==0 → VM)
+                    );
+                }
+                #[cfg(not(jit))]
                 monoasm_arm64!(&mut self.jit,
                     b vm_entry;
                 );
