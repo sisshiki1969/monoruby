@@ -6,24 +6,24 @@ Continuation of the aarch64 backend work after the VM tier
 the **JIT compiler** up on aarch64 (macOS/Apple-Silicon target, validated
 under qemu-user on x86 hosts).
 
-> Status: **Phase 1 DONE; Phase 3a driver arch-neutralization DONE; A64
-> trigger lfp bring-up is the one remaining blocker.** The `jit` / `jit_emit`
-> seam is in place, the front-end compiles on aarch64 (emission stubbed), and
-> the full initial-compile **driver chain is now arch-neutral**
+> Status: **Phase 1 DONE; Phase 3a DONE (driver arch-neutral + A64 trigger
+> wired and working).** The `jit` / `jit_emit` seam is in place, the front-end
+> compiles on aarch64, the initial-compile **driver chain is arch-neutral**
 > (`jit_compile` / `compile` / `compile_method` / `jit_compile_patch` +
-> aarch64 `compile_patch` variant; emission + recompile/loop stay `jit_emit`).
-> The A64 wrapper trigger is implemented and *fires* (reaches the driver and
-> runs the front-end), but is left **disabled** (`b vm_entry`) because the
-> `lfp` handed to `jit_compile_patch` is wrong at the wrapper point — `x22`
-> there does not match the just-built callee frame (self/meta read back
-> wrong), so `lfp.func_id()` is garbage. **Next: audit `a64_op_send`'s
-> sp/LFP timing** (likely the generic-path scratch reserve or the
-> simple-vs-generic decision) so the wrapper passes the correct callee `lfp`,
-> then re-enable the trigger.
+> aarch64 `compile_patch`; emission + recompile/loop stay `jit_emit`), and the
+> **A64 wrapper trigger fires for hot ISeq methods**, runs the front-end
+> (`traceir_to_asmir`), bails (no aarch64 emission yet), and falls back to the
+> VM. The earlier garbage-`lfp` crash was the deep compile C-call trampling
+> the just-built callee frame below SP; fixed by reserving scratch
+> (`sub sp,sp,#4080`) before the call (mirrors x86 `subq rsp,4088`).
 >
-> At runtime aarch64 is VM-only and byte-identical to x86. All work is on
-> branch `claude/wizardly-pasteur-8N2Ub`; both arches build green at every
-> commit.
+> **Next: Phase 3b** — implement `compile_asmir` AsmInst lowering incrementally
+> so supported methods actually JIT (unsupported ops deopt to VM via the
+> existing `Err`→`None` bail).
+>
+> At runtime aarch64 is VM-only (front-end runs but bails) and byte-identical
+> to x86. All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
+> build green at every commit.
 
 ## Current state (achieved — committed)
 
