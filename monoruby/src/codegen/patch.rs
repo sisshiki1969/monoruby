@@ -41,17 +41,14 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let class_version = self.class_version();
         let jit_entry = self.jit.label();
-        // Runs the front-end (traceir_to_asmir); aarch64 emission is not
-        // implemented, so this is always `None` and the method stays VM.
+        // Drives the front-end + aarch64 lowering. `jit_entry` is bound by
+        // `a64_gen_machine_code` (even on the bail path), so it always resolves
+        // at `finalize`. The result is currently ignored: aarch64 has no
+        // install path yet (no runtime patching), so the method stays
+        // VM-interpreted whether or not it compiled. See Phase 3b in
+        // doc/aarch64-jitgen-plan.md.
         let _ =
-            self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None);
-        // `jit_entry` was handed to the (bailing) compiler but never emitted;
-        // bind it to a trap so `finalize()` can resolve the label. It is never
-        // branched to (no JIT code was installed).
-        monoasm_macro::monoasm_arm64!(&mut self.jit,
-        jit_entry:
-            brk #0;
-        );
+            self.compile_method(globals, iseq_id, self_class, jit_entry, class_version, None);
         self.jit.finalize();
         None
     }

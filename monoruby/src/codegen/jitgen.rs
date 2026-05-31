@@ -351,10 +351,23 @@ impl Codegen {
         // VM-interpreted. No `finalize` / label emission here, so there is no
         // unresolved-label debt. AsmInst lowering is added incrementally; see
         // doc/aarch64-jitgen-plan.md.
+        // aarch64 (Phase 3b): drive the A64 lowering. It bails (returns false)
+        // on any not-yet-ported AsmInst, in which case we Err and the method
+        // stays VM-interpreted.
         #[cfg(not(jit_emit))]
         {
-            let _ = (&frame, &entry_label, store, &inline_cache, &specialized_info);
-            Err(CompileError)
+            self.jit.finalize();
+            let class_version_label = self.jit.const_i32(class_version as _);
+            if self.a64_gen_machine_code(
+                frame.asm_info,
+                store,
+                entry_label,
+                class_version_label.clone(),
+            ) {
+                Ok((inline_cache, specialized_info, class_version_label))
+            } else {
+                Err(CompileError)
+            }
         }
     }
 }
