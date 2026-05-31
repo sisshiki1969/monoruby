@@ -51,17 +51,24 @@ impl Codegen {
         let compiled = self
             .compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None)
             .is_some();
-        self.jit.finalize();
-        if compiled {
-            // Publish the compiled entry into the wrapper's slot.
-            let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
-            // SAFETY: `slot` is the address of the wrapper's heap-leaked u64
-            // JIT-entry word (see arch/aarch64/wrapper.rs).
-            unsafe { *(slot.as_ptr() as *mut u64) = entry_addr };
-            Some(())
-        } else {
-            None
+        if !compiled {
+            self.jit.finalize();
+            return None;
         }
+        // Front the compiled `jit_entry` with a self-class guard. The JIT body
+        // assumes `self == self_class`, but a single per-method slot is shared
+        // by every receiver class of an inherited method — so publishing the
+        // bare entry would mis-run a sibling subclass. The guard dispatches the
+        // matching class to `jit_entry` and chains other classes to their own
+        // specialization (mirrors the x86 `class_guard_stub`).
+        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        self.jit.finalize();
+        // Publish the guard stub (not the bare entry) into the slot.
+        let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
+        // SAFETY: `slot` is the address of the wrapper's (or a parent guard's)
+        // heap-leaked u64 chain word (see arch/aarch64/wrapper.rs).
+        unsafe { *(slot.as_ptr() as *mut u64) = guard_addr };
+        Some(())
     }
 
     #[cfg(jit_emit)]
