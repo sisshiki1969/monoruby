@@ -29,30 +29,96 @@ impl Codegen {
         if !frame.specialized_methods.is_empty() {
             return false;
         }
-        for (_bb, ir) in frame.detach_ir() {
-            if !self.a64_gen_asm(ir, store, &mut frame, class_version.clone()) {
+
+        let ir_vec = frame.detach_ir();
+
+        // Basic blocks that actually emit code (or have an inline bridge).
+        // Used to decide whether an inline bridge needs a trailing jump.
+        let mut live_bb: std::collections::HashSet<BasicBlockId> =
+            std::collections::HashSet::new();
+        for (bb, ir) in ir_vec.iter() {
+            if let Some(bb) = bb {
+                if !ir.is_empty() || frame.inline_bridge_exists(*bb) {
+                    live_bb.insert(*bb);
+                }
+            }
+        }
+
+        // Main blocks (+ their inline bridges). Bridges carry the trampoline
+        // code that *binds* branch-target labels (e.g. a `CondBr` dest that is
+        // distinct from the destination block's own label); skipping them was
+        // why such branches resolved to offset 0 (an infinite self-loop).
+        for (bbid, ir) in ir_vec.into_iter() {
+            if !self.a64_gen_asm(ir, store, &mut frame, None, None, class_version.clone()) {
+                return false;
+            }
+            if let Some((ir, exit)) = frame.remove_inline_bridge(bbid) {
+                let exit = if let Some(bbid) = bbid {
+                    if let Some(exit) = exit
+                        && (bbid >= exit
+                            || ((bbid + 1)..exit).any(|bb| live_bb.contains(&bb)))
+                    {
+                        Some(exit)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if !self.a64_gen_asm(ir, store, &mut frame, None, exit, class_version.clone()) {
+                    return false;
+                }
+            }
+        }
+
+        // Outlined bridges: each has an explicit entry label to bind and an
+        // exit block to jump to. These commonly host the `CondBr`/branch
+        // destinations.
+        for (ir, entry, exit) in frame.detach_outline_bridges() {
+            let entry = frame.resolve_label(&mut self.jit, entry);
+            if !self.a64_gen_asm(
+                ir,
+                store,
+                &mut frame,
+                Some(entry),
+                Some(exit),
+                class_version.clone(),
+            ) {
                 return false;
             }
         }
+
         true
     }
 
+    /// Lower one block's `AsmIr`. `entry` (if any) is bound first; `exit` (if
+    /// any) appends an unconditional branch to that basic block at the end.
+    /// Returns `false` (bail) on any unsupported instruction or side exit.
     fn a64_gen_asm(
         &mut self,
         ir: AsmIr,
         store: &Store,
         frame: &mut AsmInfo,
+        entry: Option<DestLabel>,
+        exit: Option<BasicBlockId>,
         class_version: DestLabel,
     ) -> bool {
         // Side exits (deopt/evict/error) are not lowered on aarch64 yet.
         if !ir.side_exit.is_empty() {
             return false;
         }
+        if let Some(entry) = &entry {
+            self.jit.bind_label(entry.clone());
+        }
         let labels = SideExitLabels::new();
         for inst in ir.inst {
             if !self.compile_asmir(store, frame, &labels, inst, class_version.clone()) {
                 return false;
             }
+        }
+        if let Some(exit) = exit {
+            let exit = frame.resolve_bb_label(&mut self.jit, exit);
+            monoasm_arm64!(&mut self.jit, b exit;);
         }
         true
     }
@@ -78,7 +144,6 @@ impl Codegen {
     ) -> bool {
         // lfp (x22) for slot access — same addressing as the VM's a64_op_ret:
         // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
-        if std::env::var("DUMP").is_ok() { eprintln!("[asmir] {inst:?}"); }
         let lfp = GP::R14.a64().0;
         match inst {
             // Source-position record (no code).
@@ -285,6 +350,25 @@ impl Codegen {
                     blr x9;
                     ldr x30, [sp], #16;
                 );
+                true
+            }
+            // Conditional branch on the truthiness of rax (x0). `orr 0x10`
+            // folds nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything
+            // else stays != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot
+            // when falsy (Eq). Mirrors x86 `cond_br` and the VM's CondBr.
+            AsmInst::CondBr(brkind, dest) => {
+                let branch_dest = frame.resolve_label(&mut self.jit, dest);
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (0x10);
+                    orr x(rax), x(rax), x10;
+                    cmp x(rax), #(FALSE_VALUE as u32);
+                );
+                let cond = match brkind {
+                    BrKind::BrIf => monoasm::Cond::Ne,
+                    BrKind::BrIfNot => monoasm::Cond::Eq,
+                };
+                self.jit.bcond_label(cond, &branch_dest);
                 true
             }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
