@@ -103,14 +103,74 @@ impl Codegen {
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
     ) -> bool {
-        // Side exits (deopt/evict/error) are not lowered on aarch64 yet.
-        if !ir.side_exit.is_empty() {
-            return false;
+        // Generate the block's side-exit (deopt/evict/error) handlers. They are
+        // cold, so we lay them out here but jump over them (`b skip`); guards in
+        // the main body branch *back* to them (short-range b.cond). aarch64 has
+        // no separate cold page in this path, but `b` reaches them either way.
+        let mut labels = SideExitLabels::new();
+        let skip = if ir.side_exit.is_empty() {
+            None
+        } else {
+            Some(self.jit.label())
+        };
+        if let Some(skip) = &skip {
+            monoasm_arm64!(&mut self.jit, b skip;);
         }
+        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack), DestLabel> =
+            std::collections::HashMap::new();
+        for side_exit in ir.side_exit {
+            let label = match side_exit {
+                // Eviction falls back to the interpreter like a deopt (the
+                // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
+                SideExit::Evict(Some((pc, wb))) => {
+                    let label = self.jit.label();
+                    if !self.a64_gen_deopt(pc, &wb, label.clone()) {
+                        return false;
+                    }
+                    label
+                }
+                SideExit::Deoptimize(pc, wb) => {
+                    let key = (pc, wb);
+                    if let Some(label) = deopt_table.get(&key) {
+                        label.clone()
+                    } else {
+                        let label = self.jit.label();
+                        if !self.a64_gen_deopt(key.0, &key.1, label.clone()) {
+                            return false;
+                        }
+                        deopt_table.insert(key, label.clone());
+                        label
+                    }
+                }
+                // Treat recompile-deopt as a plain deopt for now: fall back to
+                // the interpreter without the counter-gated recompile (still
+                // correct, just not yet self-optimizing).
+                SideExit::RecompileDeoptimize(pc, wb, _reason, _position) => {
+                    let label = self.jit.label();
+                    if !self.a64_gen_deopt(pc, &wb, label.clone()) {
+                        return false;
+                    }
+                    label
+                }
+                SideExit::Error(pc, wb) => {
+                    let label = self.jit.label();
+                    if !self.a64_gen_handle_error(pc, &wb, label.clone()) {
+                        return false;
+                    }
+                    label
+                }
+                // Evict(None) is not expected here.
+                _ => return false,
+            };
+            labels.push(label);
+        }
+        if let Some(skip) = &skip {
+            self.jit.bind_label(skip.clone());
+        }
+
         if let Some(entry) = &entry {
             self.jit.bind_label(entry.clone());
         }
-        let labels = SideExitLabels::new();
         for inst in ir.inst {
             if !self.compile_asmir(store, frame, &labels, inst, class_version.clone()) {
                 return false;
@@ -120,6 +180,88 @@ impl Codegen {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm_arm64!(&mut self.jit, b exit;);
         }
+        true
+    }
+
+    /// Deopt handler: write all live Ruby values back to the LFP (so the frame
+    /// is GC-consistent and the interpreter can resume), set PC, and jump to
+    /// the VM fetch loop. Mirrors x86 `side_exit_with_label` (deopt path).
+    /// Returns `false` (bail) if the write-back needs an unsupported feature.
+    fn a64_gen_deopt(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) -> bool {
+        self.jit.bind_label(entry);
+        if !self.a64_gen_write_back_for_deopt(wb) {
+            return false;
+        }
+        let pc_ptr = pc.as_ptr() as u64;
+        let fetch = self.vm_fetch();
+        // PC == x21.
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc_ptr);
+            b fetch;
+        );
+        true
+    }
+
+    /// Error handler: write back, set PC to the *next* instruction, and jump to
+    /// `entry_raise` (which calls `handle_error`). Mirrors x86 `gen_handle_error`.
+    fn a64_gen_handle_error(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) -> bool {
+        self.jit.bind_label(entry);
+        if !self.a64_gen_write_back_for_deopt(wb) {
+            return false;
+        }
+        let pc1 = (pc + 1isize).as_ptr() as u64;
+        let raise = self.entry_raise();
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc1);
+            b raise;
+        );
+        true
+    }
+
+    /// Write back live values to LFP slots for a side exit, r14(x22)-relative
+    /// (the local frame may be on the heap after a call returns). Mirrors x86
+    /// `gen_write_back_for_deopt`. Bails on FP / forwarding-rest write-backs,
+    /// which need machinery not yet ported.
+    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack) -> bool {
+        if !wb.fpr.is_empty() || !wb.forward_rest.is_empty() {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        for (v, slot) in &wb.literal {
+            if !self.a64_store_imm_to_slot(v.id(), *slot, lfp) {
+                return false;
+            }
+        }
+        for slot in &wb.void {
+            if !self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp) {
+                return false;
+            }
+        }
+        if let Some(slot) = wb.r15 {
+            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+            if off > 4095 {
+                return false;
+            }
+            let acc = GP::R15.a64().0; // x23
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x(lfp), #(off);
+                str x(acc), [x10];
+            );
+        }
+        true
+    }
+
+    /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
+    fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm);
+            sub x10, x(lfp), #(off);
+            str x9, [x10];
+        );
         true
     }
 
@@ -395,6 +537,24 @@ impl Codegen {
                     mov x9, (imm);
                     sub x10, x(lfp), #(off);
                     str x9, [x10];
+                );
+                true
+            }
+            // rax <- deep copy of literal Value (so each evaluation yields a
+            // fresh mutable object). Runtime C call; bails if any xmm is live
+            // (no FP save/restore yet). Mirrors x86 `deepcopy_literal`.
+            AsmInst::DeepCopyLit(v, using_xmm) => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let imm = v.id();
+                let f = Value::value_deep_copy as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, (imm);
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;            // result in x0 (= rax)
+                    ldr x30, [sp], #16;
                 );
                 true
             }
