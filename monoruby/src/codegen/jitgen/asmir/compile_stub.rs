@@ -964,6 +964,66 @@ impl Codegen {
                 self.a64_guard_class_version(&deopt);
                 true
             }
+            // Constant inline-cache guard: deopt if the global constant version
+            // moved since compilation (`const_version` is the baked-in cached
+            // value). Mirrors x86 guard_const_version.
+            AsmInst::GuardConstVersion { const_version, deopt } => {
+                let deopt = labels[deopt].clone();
+                let gv_addr = self
+                    .jit
+                    .get_label_address(&self.const_version_label())
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (gv_addr);
+                    ldr x9, [x9];
+                    mov x10, (const_version as u64);
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+                true
+            }
+            // Guard that the constant's base class (in rax) matches the cached
+            // one. Mirrors x86 GuardConstBaseClass.
+            AsmInst::GuardConstBaseClass { base_class, deopt } => {
+                let deopt = labels[deopt].clone();
+                let rax = GP::Rax.a64().0;
+                let cached = base_class.id() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (cached);
+                    cmp x(rax), x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+                true
+            }
+            // Store to a constant via set_constant(vm, globals, id, val), bumping
+            // the global constant version. Bails if any xmm is live.
+            AsmInst::StoreConstant { id, using_xmm, error } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let error = labels[error].clone();
+                let cv_addr = self
+                    .jit
+                    .get_label_address(&self.const_version_label())
+                    .as_ptr() as u64;
+                let f = runtime::set_constant as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x3, x0;                 // val (was in rax)
+                    mov x0, x19;                // vm
+                    mov x1, x20;                // globals
+                    mov x2, (id.0 as u64);      // ConstSiteId
+                    mov x9, (cv_addr);
+                    ldr x10, [x9];
+                    add x10, x10, #(1u32);
+                    str x10, [x9];              // bump global const version
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                    cbz x0, error;              // None -> error
+                );
+                true
+            }
             // Unconditional deopt to the interpreter.
             AsmInst::Deopt(deopt) => {
                 let deopt = labels[deopt].clone();
