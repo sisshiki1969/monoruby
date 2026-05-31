@@ -334,6 +334,141 @@ impl Codegen {
         self.jit.bcond_label(monoasm::Cond::Ne, fail);
     }
 
+    /// `[sp - off] <- x9`. The callee frame is built at negative offsets from
+    /// the current sp (mirrors x86 `[rsp - off]`).
+    fn a64_store_x9_below_sp(&mut self, off: u32) {
+        monoasm_arm64!(&mut self.jit,
+            sub x10, sp, #(off);
+            str x9, [x10];
+        );
+    }
+
+    /// Lower `SetupMethodFrame`: write the callee frame's outer/meta/svar/cme
+    /// and block fields at `[sp - (RSP_LOCAL_FRAME + LFP_*)]`. Mirrors x86
+    /// `setup_method_frame`.
+    fn a64_setup_method_frame(
+        &mut self,
+        store: &Store,
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    ) {
+        let outer = match outer_lfp {
+            Some(lfp) => lfp.as_ptr() as u64,
+            None => 0,
+        };
+        monoasm_arm64!(&mut self.jit, mov x9, (outer););
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+        monoasm_arm64!(&mut self.jit, mov x9, (meta.get()););
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_META) as u32);
+        monoasm_arm64!(&mut self.jit, mov x9, (0u64););
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_CME) as u32);
+        let callsite = &store[callid];
+        let (block_fid, block_arg) = (callsite.block_fid, callsite.block_arg);
+        self.a64_set_block(block_fid, block_arg);
+    }
+
+    /// Write the callee frame's block-handler slot. Mirrors x86 `set_block`.
+    fn a64_set_block(&mut self, block_fid: Option<FuncId>, block_arg: Option<SlotId>) {
+        let block_off = (RSP_LOCAL_FRAME + LFP_BLOCK) as u32;
+        if let Some(func_id) = block_fid {
+            let bh = BlockHandler::from_caller(func_id);
+            monoasm_arm64!(&mut self.jit, mov x9, (bh.id()););
+        } else if let Some(block) = block_arg {
+            let lfp = GP::R14.a64().0;
+            let off = block.0 as u32 * 8 + LFP_SELF as u32;
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x(lfp), #(off);
+                ldr x9, [x10];
+            );
+        } else {
+            monoasm_arm64!(&mut self.jit, mov x9, (0u64););
+        }
+        self.a64_store_x9_below_sp(block_off);
+    }
+
+    /// Lower `SetArguments`: one C call to `jit_generic_set_arguments(vm,
+    /// globals, callid, callee_lfp, fid)` which massages the caller's args into
+    /// the callee frame. Returns rax==0 (None) on error (followed by a
+    /// HandleError in the IR). `offset` (callee frame size, 16-aligned) is
+    /// reserved below sp around the call. Bails if it exceeds a 12-bit imm.
+    fn a64_set_arguments(&mut self, callid: CallSiteId, fid: FuncId, offset: usize) -> bool {
+        if offset > 4080 {
+            return false;
+        }
+        let f = crate::runtime::jit_generic_set_arguments as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // callid
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32); // callee_lfp (call-site sp)
+            mov x4, (fid.get() as u64);        // callee fid
+            str x30, [sp, #-16]!;              // save LR
+            sub sp, sp, #(offset as u32);      // reserve callee scratch
+            mov x9, (f);
+            blr x9;
+            add sp, sp, #(offset as u32);
+            ldr x30, [sp], #16;                // restore LR
+        );
+        true
+    }
+
+    /// Lower `Call` (the call itself): set the callee LFP, push a control
+    /// frame, set PC, `blr` the callee codeptr, then restore the caller's
+    /// cfp/lfp. Mirrors x86 `do_call` (set_lfp + push_frame + call + pop_frame)
+    /// and the VM invoker's `aftargs` sequence. The eviction-on-return
+    /// patching (`set_deopt_with_return_addr`) is x86-only (runtime branch
+    /// patching), so it is skipped — class-version changes are caught by
+    /// `GuardClassVersion` deopts instead.
+    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId) {
+        let (_meta, codeptr, pc) = store[callee_fid].get_data();
+        let codeptr_addr = codeptr.as_ptr() as u64;
+        // set_lfp + push_frame (EXEC=x19, LFP=x22).
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)]; // prev cfp
+            sub x11, sp, #(RSP_CFP as u32);          // new cfp addr
+            str x10, [x11];                          // new_cfp.prev = prev
+            str x11, [x19, #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];                          // new_cfp.lfp = LFP
+        );
+        if let Some(pc) = pc {
+            let pc_ptr = pc.as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr);); // PC for the VM path
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (codeptr_addr);
+            blr x10;                                 // result in x0
+        );
+        // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x29, #(BP_CFP as u32);
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+    }
+
+    /// Lower `MethodRet`: an explicit `return` (possibly non-local). Set PC to
+    /// the next insn, call `err_method_return(vm, globals, val)` with the value
+    /// in rax, then jump to `entry_raise`. Mirrors x86 `method_return`.
+    fn a64_method_ret(&mut self, pc: BytecodePtr) {
+        let pc1 = (pc + 1isize).as_ptr() as u64;
+        let f = runtime::err_method_return as *const () as u64;
+        let raise = self.entry_raise();
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc1);
+            mov x2, x0;       // val (was in rax/x0)
+            mov x0, x19;      // vm
+            mov x1, x20;      // globals
+            mov x9, (f);
+            blr x9;
+            b raise;
+        );
+    }
+
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
     fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -361,7 +496,7 @@ impl Codegen {
     /// Lower one `AsmInst`. Returns `false` for any not-yet-ported variant.
     pub(super) fn compile_asmir(
         &mut self,
-        _store: &Store,
+        store: &Store,
         frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -776,6 +911,30 @@ impl Codegen {
                 );
                 true
             }
+            // Method-call sequence: frame fields, arg massage, the call itself.
+            AsmInst::SetupMethodFrame { meta, callid, outer_lfp } => {
+                self.a64_setup_method_frame(store, meta, callid, outer_lfp);
+                true
+            }
+            AsmInst::SetArguments { callid, callee_fid } => {
+                let offset = store[callee_fid].get_offset();
+                self.a64_set_arguments(callid, callee_fid, offset)
+            }
+            AsmInst::Call { callee_fid, recv_class: _, evict: _, pc: _ } => {
+                // The `evict` side-exit handler is generated by the driver, but
+                // we do not register a return-address patch point (a64 has no
+                // runtime branch patching); GuardClassVersion handles staleness.
+                self.a64_do_call(store, callee_fid);
+                true
+            }
+            AsmInst::MethodRet(pc) => {
+                self.a64_method_ret(pc);
+                true
+            }
+            // Immediate eviction patches a live frame's return address on x86;
+            // a64 cannot patch return addresses, so this is a no-op (class
+            // version guards cover the staleness it would otherwise catch).
+            AsmInst::ImmediateEvict { .. } => true,
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
