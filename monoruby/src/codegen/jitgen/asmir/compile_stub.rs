@@ -57,6 +57,16 @@ impl Codegen {
         true
     }
 
+    /// Walk `outer` outer-LFP links, leaving the target outer LFP in `dst`.
+    /// `[lfp]` is the immediately-enclosing frame (LFP_OUTER == 0); each extra
+    /// step dereferences again. Mirrors x86 `get_outer`. `outer >= 1`.
+    fn a64_get_outer(&mut self, outer: usize, lfp: u32, dst: u32) {
+        monoasm_arm64!(&mut self.jit, ldr x(dst), [x(lfp)];);
+        for _ in 0..outer.saturating_sub(1) {
+            monoasm_arm64!(&mut self.jit, ldr x(dst), [x(dst)];);
+        }
+    }
+
     /// Lower one `AsmInst`. Returns `false` for any not-yet-ported variant.
     pub(super) fn compile_asmir(
         &mut self,
@@ -191,6 +201,43 @@ impl Codegen {
                 let dest = frame.resolve_label(&mut self.jit, dest);
                 let rax = GP::Rax.a64().0;
                 monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
+                true
+            }
+            // rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
+            // (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load
+            // the slot. Mirrors x86 `load_dyn_var` (`get_outer` + `movq rax,
+            // [rax - offset]`).
+            AsmInst::LoadDynVar { src } => {
+                let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let rax = GP::Rax.a64().0;
+                self.a64_get_outer(src.outer, lfp, rax);
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(rax), #(off);
+                    ldr x(rax), [x10];
+                );
+                true
+            }
+            // dynamic (outer-frame) local <- src. Symmetric to LoadDynVar.
+            AsmInst::StoreDynVar { dst, src } => {
+                let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                // walk to the outer LFP in x9 (avoid clobbering `src`).
+                let outer = GP::Rcx.a64().0;
+                let s = src.a64().0;
+                if s == outer || s == 10 {
+                    // src would be clobbered by the walk/scratch; bail (rare).
+                    return false;
+                }
+                self.a64_get_outer(dst.outer, lfp, outer);
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(outer), #(off);
+                    str x(s), [x10];
+                );
                 true
             }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
