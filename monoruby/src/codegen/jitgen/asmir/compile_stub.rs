@@ -185,6 +185,14 @@ impl Codegen {
                 }
                 true
             }
+            // if Rax (x0) is non-zero (the local is already set), branch to dest.
+            // Mirrors x86 `testq rax, rax; jnz dest`.
+            AsmInst::CheckLocal(dest) => {
+                let dest = frame.resolve_label(&mut self.jit, dest);
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
+                true
+            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
