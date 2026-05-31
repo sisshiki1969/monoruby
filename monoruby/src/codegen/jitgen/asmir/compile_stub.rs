@@ -229,17 +229,25 @@ impl Codegen {
         true
     }
 
-    /// Error handler: write back, set PC to the *next* instruction, and jump to
-    /// `entry_raise` (which calls `handle_error`). Mirrors x86 `gen_handle_error`.
+    /// Error handler: write back, set PC to *this* instruction, and jump to
+    /// `entry_raise` (which calls `handle_error`).
+    ///
+    /// Unlike x86 — where `gen_handle_error` sets PC to the next instruction
+    /// and `init`'s `raise:` subtracts 16 (one bytecode op) before calling
+    /// `handle_error` — aarch64's `entry_raise` passes PC through unchanged
+    /// (matching the VM raise ops, which leave PC at the current instruction).
+    /// So point PC at the raising instruction itself; otherwise the
+    /// exception-table lookup in `handle_error` is off by one and an in-frame
+    /// `rescue` / `ensure` is skipped.
     fn a64_gen_handle_error(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) -> bool {
         self.jit.bind_label(entry);
         if !self.a64_gen_write_back_for_deopt(wb) {
             return false;
         }
-        let pc1 = (pc + 1isize).as_ptr() as u64;
+        let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
-            mov x21, (pc1);
+            mov x21, (pc0);
             b raise;
         );
         true
@@ -547,14 +555,19 @@ impl Codegen {
     }
 
     /// Lower `MethodRet`: an explicit `return` (possibly non-local). Set PC to
-    /// the next insn, call `err_method_return(vm, globals, val)` with the value
-    /// in rax, then jump to `entry_raise`. Mirrors x86 `method_return`.
+    /// *this* instruction, call `err_method_return(vm, globals, val)` with the
+    /// value in rax, then jump to `entry_raise`.
+    ///
+    /// PC must point at the raising instruction (not the next one): aarch64's
+    /// `entry_raise` passes PC straight to `handle_error` without the x86 `-16`
+    /// fixup, so a `pc + 1` here would leave `handle_error`'s exception-table
+    /// lookup off by one and skip the `ensure` body protecting the `return`.
     fn a64_method_ret(&mut self, pc: BytecodePtr) {
-        let pc1 = (pc + 1isize).as_ptr() as u64;
+        let pc0 = pc.as_ptr() as u64;
         let f = runtime::err_method_return as *const () as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
-            mov x21, (pc1);
+            mov x21, (pc0);
             mov x2, x0;       // val (was in rax/x0)
             mov x0, x19;      // vm
             mov x1, x20;      // globals
