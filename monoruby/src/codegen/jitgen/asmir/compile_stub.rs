@@ -11,6 +11,33 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
 
+/// Signed aarch64 condition for a fixnum comparison. `BrIf` gives the
+/// "taken-when-true" condition; `BrIfNot` gives its inverse (so a CmpBr lands
+/// on the fall-through case). TEq behaves like Eq for integers.
+fn a64_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
+    use monoasm::Cond;
+    let taken = match kind {
+        CmpKind::Eq | CmpKind::TEq => Cond::Eq,
+        CmpKind::Ne => Cond::Ne,
+        CmpKind::Lt => Cond::Lt,
+        CmpKind::Le => Cond::Le,
+        CmpKind::Gt => Cond::Gt,
+        CmpKind::Ge => Cond::Ge,
+    };
+    match brkind {
+        BrKind::BrIf => taken,
+        BrKind::BrIfNot => match taken {
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Lt => Cond::Ge,
+            Cond::Ge => Cond::Lt,
+            Cond::Le => Cond::Gt,
+            Cond::Gt => Cond::Le,
+            other => other,
+        },
+    }
+}
+
 impl Codegen {
     /// Drive AsmIR→A64 lowering for a whole method. Returns `false` (bail) if
     /// anything is not yet supported; the caller then keeps the method on the
@@ -249,6 +276,102 @@ impl Codegen {
             );
         }
         true
+    }
+
+    /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
+    /// overflow of the tagged arithmetic == fixnum overflow, so we branch to
+    /// `deopt` on the V flag. Result is left in `lhs`'s register, mirroring x86
+    /// `integer_binop`. Mul/Div/etc. not yet ported (bail).
+    fn a64_integer_binop(
+        &mut self,
+        lhs: GP,
+        rhs: GP,
+        mode: &OpMode,
+        kind: BinOpK,
+        deopt: &DestLabel,
+    ) -> bool {
+        let l = lhs.a64().0;
+        let r = rhs.a64().0;
+        match kind {
+            BinOpK::Add => {
+                match mode {
+                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
+                        sub x(l), x(l), #(1u32);
+                        adds x(l), x(l), x(r);
+                    ),
+                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
+                        let imm = Value::i32(*i as i32).id().wrapping_sub(1);
+                        monoasm_arm64!(&mut self.jit,
+                            mov x9, (imm);
+                            adds x(l), x(l), x9;
+                        );
+                    }
+                }
+                self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+            }
+            BinOpK::Sub => match mode {
+                OpMode::RR(..) => {
+                    monoasm_arm64!(&mut self.jit, subs x(l), x(l), x(r););
+                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
+                }
+                OpMode::RI(_, rhs_i) => {
+                    let imm = Value::i32(*rhs_i as i32).id().wrapping_sub(1);
+                    monoasm_arm64!(&mut self.jit,
+                        mov x9, (imm);
+                        subs x(l), x(l), x9;
+                    );
+                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+                }
+                OpMode::IR(lhs_i, _) => {
+                    let imm = Value::i32(*lhs_i as i32).id();
+                    monoasm_arm64!(&mut self.jit,
+                        mov x(l), (imm);
+                        subs x(l), x(l), x(r);
+                    );
+                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
+                }
+            },
+            // Mul/Div/Rem/… need smulh / sdiv handling — not yet ported.
+            _ => return false,
+        }
+        true
+    }
+
+    /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
+    /// `cmp_integer`.
+    fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
+        let l = lhs.a64().0;
+        match mode {
+            OpMode::RR(..) => {
+                let r = rhs.a64().0;
+                monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
+            }
+            OpMode::RI(_, i) => {
+                let imm = Value::i32(*i as i32).id();
+                monoasm_arm64!(&mut self.jit, mov x9, (imm); cmp x(l), x9;);
+            }
+            OpMode::IR(i, _) => {
+                let r = rhs.a64().0;
+                let imm = Value::i32(*i as i32).id();
+                monoasm_arm64!(&mut self.jit, mov x(l), (imm); cmp x(l), x(r););
+            }
+        }
+    }
+
+    /// After `a64_cmp_integer`, materialize a Ruby boolean in rax (x0):
+    /// `FALSE_VALUE | (cond << 3)` (== 0x14 or 0x1c). Mirrors the VM's
+    /// `a64_op_cmp` and x86 `flag_to_bool`.
+    fn a64_flag_to_bool(&mut self, kind: CmpKind) {
+        let cond = a64_cond_for_cmp(kind, BrKind::BrIf);
+        let rax = GP::Rax.a64();
+        self.jit.cset(rax, cond);
+        monoasm_arm64!(&mut self.jit,
+            lsl x(rax.0), x(rax.0), #(3u32);
+            mov x9, (FALSE_VALUE);
+            orr x(rax.0), x(rax.0), x9;
+        );
     }
 
     /// Type guard: branch to `fail` if the Value in `reg` is not of `class_id`.
@@ -794,6 +917,15 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, b deopt;);
                 true
             }
+            // A NotCached/recompile point: x86 deopts then recompiles once the
+            // inline cache warms (e.g. fib's `+` is cold until the recursion
+            // unwinds). aarch64 has no recompile yet, so treat it as a plain
+            // deopt to the interpreter — correct, just not (yet) re-optimized.
+            AsmInst::RecompileDeopt { deopt, .. } => {
+                let deopt = labels[deopt].clone();
+                monoasm_arm64!(&mut self.jit, b deopt;);
+                true
+            }
             // Error check: a runtime helper returns rax==0 (None) on error;
             // branch to the error side-exit handler in that case. Mirrors x86
             // `handle_error` (`testq rax,rax; jeq error`).
@@ -935,6 +1067,25 @@ impl Codegen {
             // a64 cannot patch return addresses, so this is a no-op (class
             // version guards cover the staleness it would otherwise catch).
             AsmInst::ImmediateEvict { .. } => true,
+            // Inline integer fast paths (independent of inline_gen; emitted by
+            // the BinOp/Cmp bytecode opcodes when the inline cache says both
+            // operands are Integer).
+            AsmInst::IntegerBinOp { kind, lhs, rhs, mode, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt)
+            }
+            AsmInst::IntegerCmp { mode, kind, lhs, rhs } => {
+                self.a64_cmp_integer(&mode, lhs, rhs);
+                self.a64_flag_to_bool(kind);
+                true
+            }
+            AsmInst::IntegerCmpBr { mode, kind, lhs, rhs, brkind, branch_dest } => {
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
+                self.a64_cmp_integer(&mode, lhs, rhs);
+                let cond = a64_cond_for_cmp(kind, brkind);
+                self.jit.bcond_label(cond, &branch_dest);
+                true
+            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
