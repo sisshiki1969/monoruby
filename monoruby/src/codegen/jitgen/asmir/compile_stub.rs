@@ -336,8 +336,11 @@ impl Codegen {
             // Mul: compute `2a * b` (matching x86's `imul` on the half-untagged
             // lhs). aarch64 has no `smulh`, so detect overflow with a checking
             // `sdiv`: if `2a != 0` and `(2a*b)/(2a) != b` the product wrapped.
+            // Mul: compute `2a * b` (matching x86's `imul` on the half-untagged
+            // lhs), then detect 64-bit signed overflow the standard way — the
+            // high half (`smulh`) must equal the sign-extension of the low half
+            // (`low >> 63`); a mismatch means the product wrapped.
             BinOpK::Mul => {
-                let ok = self.jit.label();
                 match mode {
                     OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
                         asr x(r), x(r), #(1u32);   // b (untagged)
@@ -351,14 +354,13 @@ impl Codegen {
                         );
                     }
                 }
+                monoasm_arm64!(&mut self.jit, mul x9, x(l), x(r);); // low 64
+                self.a64_smulh(10, l, r); // x10 = high 64 of 2a*b
                 monoasm_arm64!(&mut self.jit,
-                    mul x9, x(l), x(r);            // 2a*b (low 64)
-                    cbz x(l), ok;                  // 2a==0 -> 0, no overflow
-                    sdiv x10, x9, x(l);
-                    cmp x10, x(r);
+                    asr x11, x9, #(63u32);         // sign-extension of low
+                    cmp x10, x11;                  // high == sign(low)?
                 );
                 self.jit.bcond_label(monoasm::Cond::Ne, deopt);
-                self.jit.bind_label(ok);
                 monoasm_arm64!(&mut self.jit, add x(l), x9, #(1u32););
             }
             // Div: Ruby integer division floors toward negative infinity, but
@@ -390,6 +392,13 @@ impl Codegen {
             _ => return false,
         }
         true
+    }
+
+    /// Emit `smulh Xd, Xn, Xm` (signed high 64 bits of a 64×64 product).
+    /// monoasm's aarch64 DSL has no `smulh`, so emit the raw instruction word:
+    /// `SMULH = 0x9B40_7C00 | (Rm<<16) | (Rn<<5) | Rd` (Ra fixed to xzr).
+    fn a64_smulh(&mut self, d: u32, n: u32, m: u32) {
+        self.jit.emitl(0x9B40_7C00 | (m << 16) | (n << 5) | d);
     }
 
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
@@ -844,6 +853,51 @@ impl Codegen {
             // rax <- $gvar via runtime::get_global_var(vm, globals, name).
             // EXEC (Executor) lives in x19, GLOBALS in x20 (= GP::R12). We have
             // no FP save/restore yet, so bail if any xmm is live across the call.
+            // rax <- @@cvar via runtime::get_class_var(vm, globals, name).
+            AsmInst::LoadCVar { name, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let f = runtime::get_class_var as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;                  // vm
+                    mov x1, x20;                  // globals
+                    mov x2, (name.get() as u64); // name
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;                       // result in x0
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // Stack-overflow check at method entry: if sp <= executor.stack_limit
+            // write back live values, call stack_overflow(vm), and jump to the
+            // error handler. The overflow path is laid out inline but skipped on
+            // the common (no-overflow) path. Mirrors x86 jit_check_stack.
+            AsmInst::CheckStack { write_back, error } => {
+                let error = labels[error].clone();
+                let ok = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, sp;
+                    ldr x11, [x19, #(crate::executor::EXECUTOR_STACK_LIMIT as u32)];
+                    cmp x10, x11;
+                );
+                self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
+                if !self.a64_gen_write_back_for_deopt(&write_back) {
+                    return false;
+                }
+                let f = crate::codegen::stack_overflow as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                    b error;
+                );
+                self.jit.bind_label(ok);
+                true
+            }
             AsmInst::LoadGVar { name, using_xmm } => {
                 if using_xmm.iter().any(|b| *b) {
                     return false;
