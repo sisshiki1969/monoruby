@@ -355,7 +355,7 @@ impl Codegen {
                     }
                 }
                 monoasm_arm64!(&mut self.jit, mul x9, x(l), x(r);); // low 64
-                self.a64_smulh(10, l, r); // x10 = high 64 of 2a*b
+                monoasm_arm64!(&mut self.jit, smulh x10, x(l), x(r););
                 monoasm_arm64!(&mut self.jit,
                     asr x11, x9, #(63u32);         // sign-extension of low
                     cmp x10, x11;                  // high == sign(low)?
@@ -392,13 +392,6 @@ impl Codegen {
             _ => return false,
         }
         true
-    }
-
-    /// Emit `smulh Xd, Xn, Xm` (signed high 64 bits of a 64×64 product).
-    /// monoasm's aarch64 DSL has no `smulh`, so emit the raw instruction word:
-    /// `SMULH = 0x9B40_7C00 | (Rm<<16) | (Rn<<5) | Rd` (Ra fixed to xzr).
-    fn a64_smulh(&mut self, d: u32, n: u32, m: u32) {
-        self.jit.emitl(0x9B40_7C00 | (m << 16) | (n << 5) | d);
     }
 
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
