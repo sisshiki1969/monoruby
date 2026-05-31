@@ -6,9 +6,67 @@ Continuation of the aarch64 backend work after the VM tier
 the **JIT compiler** up on aarch64 (macOS/Apple-Silicon target, validated
 under qemu-user on x86 hosts).
 
-> Status: **Phase 1 (foundation) in progress.** The JIT runs only on
-> x86-64; aarch64 is VM-only. This plan defines the seam and the phased
-> path to an aarch64 JIT.
+> Status: **Phase 1 (cfg seam + front-end) DONE.** The `jit` / `jit_emit`
+> cfg seam is in place; the arch-neutral JIT front-end now compiles on
+> aarch64 with emission stubbed, and the driver entry `jit_compile` is
+> arch-neutral (front-end runs, x86 emits, aarch64 bails). At runtime
+> aarch64 is still VM-only (the JIT trigger is not wired). **Next: Phase 3a
+> — arch-neutralize the driver chain + emit the A64 trigger** (see
+> "Current state" and the revised phases below).
+>
+> All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches build
+> green at every commit.
+
+## Current state (achieved — committed)
+
+The seam from "Phase 1 (revised)" below is implemented and validated:
+
+| Piece | What | cfg |
+|---|---|---|
+| `build.rs` | `jit` = front-end (x86-64 **and** aarch64); `jit_emit` = x86 emission only | — |
+| inline generators | `inline_gen!`, `InlineGen`/`InlineFuncInfo::InlineGen`, `define_builtin_inline_func*`, 13 builtins generator files, the `method_call` invocation arm | `jit_emit` |
+| jitgen emission | `asmir::compile` (+ aarch64 `compile_stub`), `jitgen.rs` emission impls (`load_store!`, xmm/write-back/deopt, `gen_machine_code`), `guard`/`deoptimize`, `gen_asm`, `compile/index` array fast-paths | `jit_emit` |
+| runtime patch | `jit_check_stack`, `jit_execute_gc`, `immediate_eviction`, BOP-redefine entry repatch (`class.rs`) | `jit_emit` |
+| driver entry | `jit_compile` split: arch-neutral front-end (`traceir_to_asmir`), then `gen_machine_code` (x86) **or** `Err(CompileError)` bail (aarch64) | `jit` / `jit_emit` |
+
+**Validated:** both arches `cargo check` green, aarch64 warning-clean; x86
+JIT output unchanged; aarch64 runs a 49-line opcode program **byte-identical
+to x86** under qemu (front-end compiled but unreached — every method is
+VM-interpreted, since the trigger is x86-only).
+
+**Confirmed along the way:**
+- `GP` needs **no** arch split to compile (the front-end uses it as abstract
+  register ids).
+- The compile-time bail path already exists: `jit_compile -> Err(CompileError)`
+  → `compile() -> None` → method stays VM-interpreted (and is marked
+  `jit_invalidated` so it won't retry). This is the hook for incremental
+  TraceIR/AsmInst support.
+- The front-end ↔ emission boundary in `jit_compile` splits cleanly.
+
+## Remaining work (the next, coupled piece)
+
+Making the front-end actually *run* on aarch64 (so it can bail per-method, then
+JIT incrementally) needs the **driver chain** ported. A spike `un-gating`
+`compiler.rs` showed it is more coupled than a single-file change:
+
+1. **Driver entry points are x86-emission-laced.** `compiler.rs::compile()`
+   patches the JIT entry on success (`apply_jmp_patch_address`), `compile_patch`
+   lives in `patch.rs` (`jit_emit`), and `recompile_*` / `save_registers` /
+   `gen_compile_patch` / `gen_recompile*` / `gen_compile_loop` are all x86
+   `monoasm!`. The extern trigger entries (`jit_compile_patch`, …) call into
+   `patch.rs`.
+2. So the chain `trigger → jit_compile_patch → compile_patch[patch.rs] →
+   compile_method → compile → jit_compile` must be arch-neutralized: keep the
+   orchestration as `jit`, gate every emission/patch site to `jit_emit`, and
+   provide aarch64 stubs (on aarch64 `compile()` returns `None`, so the
+   success-path patching is never reached — but it must still type-check).
+3. **A64 JIT trigger.** `arch/aarch64/wrapper.rs` (ISeq path) needs a
+   `monoasm_arm64!` counter + an A64 `gen_compile_patch` equivalent that calls
+   the (now arch-neutral) `jit_compile_patch`. `arch/x86_64/wrapper.rs` +
+   `compiler.rs::gen_compile_patch` are the reference.
+
+This is a coupled, multi-file refactor + new A64 emission with qemu iteration —
+best done as a focused effort, not at the tail of a long session.
 
 ## Background: how the JIT is wired today
 
@@ -165,17 +223,38 @@ dormant step, since they can only be validated alongside emission).
   aarch64 stays VM-only at runtime; stubs are never hit.
 - **Acceptance:** `cargo check` green on x86 (full JIT) **and** aarch64 (JIT
   front-end compiled, emission stubbed, VM at runtime). No behavior change.
-- *(GP/FPReg arch-mapping moves to Phase 2 — not needed to compile.)*
+- *(GP/FPReg arch-mapping moves later — not needed to compile.)*
+- **Status: DONE** (see "Current state" above).
 
-### Phase 2 — core lowering
-Implement `compile_asmir` AsmInst variants for aarch64, by category:
-reg/stack moves + prologue/epilogue → integer arith/cmp + guards → FP →
-method-call arg setup → variables/constants/definitions → deopt/recompile.
+### Phase 3a — arch-neutralize the driver chain + A64 trigger (NEXT)
+Goal: make the front-end actually *run* on aarch64 and bail to the VM, so the
+trigger→compile→bail→VM loop works end-to-end (no method JITs yet). Steps:
+1. Un-gate `compiler.rs` to `cfg(jit)`; gate its emission methods
+   (`gen_compile_patch`, `gen_recompile`, `gen_recompile_specialized`,
+   `gen_compile_loop`) and the success-path patch sites (`apply_jmp_patch_address`,
+   `save_registers`/`restore_registers`) to `jit_emit`.
+2. `patch.rs`: split `compile_patch` so its orchestration is `jit`
+   (calls `compile_method`, checks the `Option`) and only the actual entry
+   repatch is `jit_emit`. Same for any class-guard stub setup.
+3. The extern entries (`jit_compile_patch`, `jit_recompile_*`, `jit_compile_loop`)
+   become `jit` (they only call the now-arch-neutral driver).
+4. `arch/aarch64/wrapper.rs`: emit the A64 JIT trigger for the ISeq path — a
+   `monoasm_arm64!` counter + a `gen_compile_patch` equivalent that, after
+   `COUNT_START_COMPILE` calls, calls `jit_compile_patch` and (on aarch64
+   always) re-enters `vm_entry` since `compile()` returns `None`.
+   Reference: `arch/x86_64/wrapper.rs::gen_jit_stub` + `compiler.rs::gen_compile_patch`.
+5. **Acceptance:** under qemu, a hot method on aarch64 hits the threshold,
+   runs the front-end (`traceir_to_asmir`), bails (`Err`→`None`), and keeps
+   executing via the VM — output unchanged, no crash.
 
-### Phase 3 — integration + trigger
-Rewrite `compiler.rs` (counter/patch setup) and `patch.rs` (class-guard stub)
-for aarch64; PC-relative data + branch patching; flip the aarch64 wrapper to
-the JIT entry path; deopt/recompile round-trips.
+### Phase 3b — incremental AsmInst lowering
+Implement `compile_asmir` aarch64 variants one category at a time (replacing the
+`compile_stub` `unreachable!`/bail), starting from the minimum needed to JIT a
+trivial method: prologue/epilogue/`Ret` → `Integer` `Mov`/`Add`/`Cmp` + guards
+→ branches/loops → FP → method-call arg setup → variables/constants → deopt.
+Anything not yet handled calls `set_jit_unsupported` (to add) → bail → VM, so
+coverage grows safely. PC-relative data (`adr`/literal pool) and branch patching
+(`apply_jmp_patch` A64 / B-BL imm26) are verified here.
 
 ### Phase 4 — validation
 Run the JIT test suite + optcarrot on aarch64 (qemu + Apple Silicon);
