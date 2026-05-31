@@ -6,23 +6,35 @@ Continuation of the aarch64 backend work after the VM tier
 the **JIT compiler** up on aarch64 (macOS/Apple-Silicon target, validated
 under qemu-user on x86 hosts).
 
-> Status: **Phase 1 DONE; Phase 3a DONE (driver arch-neutral + A64 trigger
-> wired and working).** The `jit` / `jit_emit` seam is in place, the front-end
-> compiles on aarch64, the initial-compile **driver chain is arch-neutral**
-> (`jit_compile` / `compile` / `compile_method` / `jit_compile_patch` +
-> aarch64 `compile_patch`; emission + recompile/loop stay `jit_emit`), and the
-> **A64 wrapper trigger fires for hot ISeq methods**, runs the front-end
-> (`traceir_to_asmir`), bails (no aarch64 emission yet), and falls back to the
-> VM. The earlier garbage-`lfp` crash was the deep compile C-call trampling
-> the just-built callee frame below SP; fixed by reserving scratch
-> (`sub sp,sp,#4080`) before the call (mirrors x86 `subq rsp,4088`).
+> Status: **Phase 1 + 3a DONE; Phase 3b IN PROGRESS — aarch64 now JIT-compiles
+> and executes methods.** The `jit`/`jit_emit` seam is in place, the
+> initial-compile driver is arch-neutral, the A64 wrapper trigger fires for hot
+> ISeq methods, runs the front-end, lowers the AsmIR (`a64_gen_machine_code` →
+> `compile_asmir`), and **installs via indirect dispatch** (no runtime branch
+> patching on aarch64: `compile_patch` publishes the compiled entry into a
+> per-method heap slot the wrapper `br`s to). Any not-yet-ported `AsmInst`
+> bails (`compile_asmir` → `false` → `Err` → `None`) so the method stays on the
+> VM — so only fully-lowerable methods JIT and big.rb stays byte-identical to
+> x86.
 >
-> **Next: Phase 3b** — implement `compile_asmir` AsmInst lowering incrementally
-> so supported methods actually JIT (unsupported ops deopt to VM via the
-> existing `Err`→`None` bail).
+> **Supported AsmInst (11):** `Label`, `BcIndex`, `Init` (prologue + nil-fill),
+> `Preparation` (no-op unless heap ivars), `StackToReg`, `RegToStack`,
+> `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `Ret`. Verified under qemu:
+> `def id(a);a;end` / `def c;42;end` / `def pick(a,b);b;end` JIT and return
+> correct values across types; `GP::a64()` maps regs (slots are lfp(x22)-
+> relative, matching `a64_op_ret`; acc=`R15`→x23; result in x0). Earlier
+> garbage-`lfp` crash was the compile C-call trampling the callee frame below
+> SP — fixed by `sub sp,sp,#4080` before the call (mirrors x86 `subq rsp,4088`).
+> `DUMP=1` logs the AsmInst stream (dev aid).
 >
-> At runtime aarch64 is VM-only (front-end runs but bails) and byte-identical
-> to x86. All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
+> **Next:** integer arithmetic needs **side-exit/deopt lowering** (the fixnum
+> guard's failure path: write back regs + jump back to the VM at the deopt
+> pc). `a64_gen_asm` currently bails when `ir.side_exit` is non-empty. After
+> deopt: integer binops/guards → branches/loops → FP → method-call arg setup
+> → variables/constants → arrays/hashes. Port `gen_deopt_with_label` /
+> `gen_write_back` to A64; verify each method JITs under qemu.
+>
+> All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
 > build green at every commit.
 
 ## Current state (achieved — committed)
