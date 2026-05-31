@@ -726,6 +726,56 @@ impl Codegen {
                 );
                 true
             }
+            // rax <- concatenated string via concatenate_string(vm, globals,
+            // &slot[arg], len). Result is Option<Value> (followed by a
+            // HandleError in the IR). Bails if any xmm is live.
+            AsmInst::ConcatStr { arg, len, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let off = arg.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let f = runtime::concatenate_string as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;              // vm
+                    mov x1, x20;              // globals
+                    sub x2, x(lfp), #(off);   // &slot[arg]
+                    mov x3, (len as u64);
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
+            // rax <- Range via gen_range(start, end, vm, globals, exclude_end).
+            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
+                if using_xmm.iter().any(|b| *b) {
+                    return false;
+                }
+                let soff = start.0 as u32 * 8 + LFP_SELF as u32;
+                let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
+                if soff > 4095 || eoff > 4095 {
+                    return false;
+                }
+                let f = runtime::gen_range as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(soff);
+                    ldr x0, [x10];            // start value
+                    sub x10, x(lfp), #(eoff);
+                    ldr x1, [x10];            // end value
+                    mov x2, x19;              // vm
+                    mov x3, x20;              // globals
+                    mov x4, (exclude_end as u64);
+                    str x30, [sp, #-16]!;
+                    mov x9, (f);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                );
+                true
+            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }

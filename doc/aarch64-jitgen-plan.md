@@ -17,41 +17,42 @@ under qemu-user on x86 hosts).
 > VM — so only fully-lowerable methods JIT and big.rb stays byte-identical to
 > x86.
 >
-> **Supported AsmInst (18):** `Label`, `BcIndex`, `Init` (prologue + nil-fill),
-> `Preparation` (no-op unless heap ivars), `StackToReg`, `RegToStack`,
-> `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `Ret`, `CheckLocal`,
-> `LoadDynVar`/`StoreDynVar` (outer-frame locals via `a64_get_outer`),
-> `LoadGVar`/`StoreGVar` (runtime C call; bails if any xmm is live since we
-> have no FP save/restore yet), `CondBr` (truthiness branch), `NilBr`,
-> `LitToStack`. Verified under qemu: `def id(a);a;end` / `def c;42;end` /
-> `def pick(a,b);b;end` plus closures (dynvar), `$g`-mutating methods, and
-> `if`/`else` branching JIT and return correct values across types;
-> `GP::a64()` maps regs (slots are lfp(x22)-relative, matching `a64_op_ret`;
-> acc=`R15`→x23; Executor=x19, Globals=x20=`R12`; result in x0). Earlier
-> garbage-`lfp` crash was the compile C-call trampling the callee frame below
-> SP — fixed by `sub sp,sp,#4080` before the call (mirrors x86 `subq rsp,4088`).
+> **Supported AsmInst (~28):** frame/move/return — `Label`, `BcIndex`, `Init`
+> (prologue + nil-fill), `Preparation`, `StackToReg`, `RegToStack`,
+> `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `LitToStack`, `Ret`;
+> control flow — `CondBr` (truthiness), `NilBr`, `CheckLocal`, `Deopt`,
+> `HandleError`; variables — `LoadDynVar`/`StoreDynVar` (via `a64_get_outer`),
+> `LoadGVar`/`StoreGVar`; allocation/runtime C calls — `DeepCopyLit`,
+> `CreateArray`, `NewArray`, `NewHash`, `ConcatStr`, `NewRange`; guards —
+> `GuardClass`, `GuardClassVersion` (foundational: compile-clean but only
+> reached at call sites, which await method-call lowering). C calls bail if
+> any xmm is live (no FP save/restore yet). `GP::a64()` maps regs (slots
+> lfp(x22)-relative, matching `a64_op_ret`; acc=`R15`→x23; Executor=x19,
+> Globals=x20=`R12`; result in x0).
 >
-> **Bridge processing (critical):** the driver now mirrors x86
-> `gen_machine_code` — it lowers main blocks **and** their inline/outline
-> bridges. A branch destination is often a distinct `JitLabel` from the
-> destination block's own label, bound only inside a bridge trampoline;
-> skipping bridges left such branches at offset 0 (an infinite `b.eq #0`
-> self-loop). `a64_gen_asm` takes optional `entry`/`exit` to bind a bridge's
-> entry label and append the trailing `b <exit_bb>`.
+> **Side-exit/deopt machinery (done):** `a64_gen_asm` emits each block's
+> deopt/evict/error handlers (cold, skipped by a `b`; guards branch back).
+> `a64_gen_deopt` writes live values back to the LFP
+> (`a64_gen_write_back_for_deopt`, bailing on FP/forwarding-rest), sets PC,
+> and jumps to `vm_fetch`; `a64_gen_handle_error` jumps to `entry_raise`.
+> `RecompileDeoptimize` is treated as a plain deopt for now. Exercised
+> end-to-end by hash creation (gen_hash → Option<Value> → `HandleError`
+> `cbz x0`).
 >
-> **Next:** with `inline_gen` off on aarch64, integer arithmetic does **not**
-> become `IntegerBinOp` — `a + 1` de-inlines to a **method call** to
-> `Integer#+` (the AsmIR shows `SetupMethodFrame` + arg setup, not arithmetic).
-> So the next gateway is one of: (a) **method-call lowering** (`SetupMethodFrame`,
-> arg setup, the call, result), plus **side-exit/deopt** lowering (the call/guard
-> failure path: write back regs via `gen_write_back`, set PC, jump to
-> `vm_fetch`); or (b) re-enable the **AsmIR-only inline generators** on aarch64
-> (those that only push `AsmInst` and don't emit x86) so arithmetic inlines to
-> `IntegerBinOp`, which is a smaller lowering. `a64_gen_asm` currently bails when
-> `ir.side_exit` is non-empty, so deopt is needed either way. After that:
-> branches/loops → FP → variables/constants → arrays/hashes. Port
-> `gen_deopt_with_label`/`gen_write_back` to A64 and verify each method JITs
-> under qemu.
+> **Bridge processing (critical):** the driver mirrors x86 `gen_machine_code`
+> — it lowers main blocks **and** their inline/outline bridges. A branch
+> destination is often a distinct `JitLabel` from the destination block's own
+> label, bound only inside a bridge trampoline; skipping bridges left such
+> branches at offset 0 (an infinite `b.eq #0` self-loop). `a64_gen_asm` takes
+> optional `entry`/`exit` to bind a bridge's entry label and append `b <exit>`.
+>
+> **Next:** the big remaining gateway is **method-call lowering**
+> (`SetupMethodFrame`, `SetArguments`, `do_call` + return-address deopt
+> patching, `MethodRet`). With `inline_gen` off, `a + 1` de-inlines to a method
+> call, so this unlocks the bulk of real methods (and finally exercises the
+> class guards at call sites). After that: FP (`XmmSave`/`FloatBinOp`/…),
+> ivars (`LoadIVar*`/`StoreIVar*`), constants, index ops. `inline_gen`
+> re-enablement stays last.
 >
 > All work is on branch `claude/wizardly-pasteur-8N2Ub`; both arches
 > build green at every commit.
