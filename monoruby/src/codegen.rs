@@ -9,13 +9,13 @@ use monoasm_macro::monoasm;
 #[cfg(jit)]
 use std::time::Duration;
 
-#[cfg(jit_emit)]
+#[cfg(jit)]
 mod compiler;
 mod jit_module;
 #[cfg(jit)]
 pub mod jitgen;
 pub(crate) mod signal_table;
-#[cfg(jit_emit)]
+#[cfg(jit)]
 mod patch;
 pub mod runtime;
 

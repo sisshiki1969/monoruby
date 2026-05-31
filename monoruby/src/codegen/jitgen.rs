@@ -330,12 +330,13 @@ impl Codegen {
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
-        self.jit.finalize();
-        let class_version_label = self.jit.const_i32(class_version as _);
         // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
-        // AsmIR→machine-code lowering is x86 only for now.
+        // AsmIR→machine-code lowering (and the `finalize`/data-label setup it
+        // needs) is x86 only for now.
         #[cfg(jit_emit)]
         {
+            self.jit.finalize();
+            let class_version_label = self.jit.const_i32(class_version as _);
             self.gen_machine_code(
                 frame.asm_info,
                 store,
@@ -347,18 +348,12 @@ impl Codegen {
         }
         // aarch64: the front-end ran, but no aarch64 emission exists yet, so
         // bail — `compile()` turns this `Err` into `None` and the method stays
-        // VM-interpreted. AsmInst lowering is added incrementally; see
+        // VM-interpreted. No `finalize` / label emission here, so there is no
+        // unresolved-label debt. AsmInst lowering is added incrementally; see
         // doc/aarch64-jitgen-plan.md.
         #[cfg(not(jit_emit))]
         {
-            let _ = (
-                &frame,
-                &entry_label,
-                store,
-                &inline_cache,
-                &specialized_info,
-                &class_version_label,
-            );
+            let _ = (&frame, &entry_label, store, &inline_cache, &specialized_info);
             Err(CompileError)
         }
     }

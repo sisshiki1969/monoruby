@@ -20,6 +20,43 @@ impl Codegen {
     ///    +-------------------------------+                               +--> JIT code        +--------------------------------+
     ///
     /// ```
+    ///
+    /// aarch64 has no emission yet: `compile_method` runs the arch-neutral
+    /// front-end and bails (returns `None`), so a minimal `not(jit_emit)`
+    /// variant just drives that and never patches — the A64 trigger falls
+    /// through to `vm_entry` on its own. See `doc/aarch64-jitgen-plan.md`.
+    #[cfg(not(jit_emit))]
+    pub(super) fn compile_patch(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        _entry: monoasm::CodePtr,
+    ) -> Option<()> {
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        if globals.store[iseq_id].jit_invalidated() {
+            self.jit.finalize();
+            return None;
+        }
+        let self_class = lfp.self_val().class();
+        let class_version = self.class_version();
+        let jit_entry = self.jit.label();
+        // Runs the front-end (traceir_to_asmir); aarch64 emission is not
+        // implemented, so this is always `None` and the method stays VM.
+        let _ =
+            self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None);
+        // `jit_entry` was handed to the (bailing) compiler but never emitted;
+        // bind it to a trap so `finalize()` can resolve the label. It is never
+        // branched to (no JIT code was installed).
+        monoasm_macro::monoasm_arm64!(&mut self.jit,
+        jit_entry:
+            brk #0;
+        );
+        self.jit.finalize();
+        None
+    }
+
+    #[cfg(jit_emit)]
     pub(super) fn compile_patch(
         &mut self,
         globals: &mut Globals,
@@ -84,6 +121,7 @@ impl Codegen {
     ///
     /// ~~~
     ///
+    #[cfg(jit_emit)]
     fn class_guard_stub(
         &mut self,
         self_class: ClassId,

@@ -17,6 +17,16 @@ impl Codegen {
         );
         match &globals.store[fid].kind {
             FuncKind::ISeq(_) => {
+                // TODO(aarch64 Phase 3a): wire the JIT trigger here. The A64
+                // counter stub + `blr jit_compile_patch` is implemented and
+                // *fires* (it reaches the now-arch-neutral driver and runs the
+                // front-end), but the `lfp` it must hand to `jit_compile_patch`
+                // is not yet correct at this wrapper point: x22 (LFP) at the
+                // wrapper does not match the just-built callee frame (self/meta
+                // read back wrong), so `lfp.func_id()` is garbage. Needs an
+                // `a64_op_send` sp/LFP-timing audit (likely the scratch-reserve
+                // / simple-vs-generic path). Until then, stay VM-only.
+                // See `doc/aarch64-jitgen-plan.md` (Phase 3a).
                 let vm_entry = self.vm_entry();
                 monoasm_arm64!(&mut self.jit,
                     b vm_entry;
