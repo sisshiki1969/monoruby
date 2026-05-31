@@ -45,18 +45,18 @@ mod thread;
 mod time;
 mod true_class;
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use crate::codegen::jitgen::AbstractState;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use codegen::jitgen::asmir::*;
 pub use enumerator::YIELDER;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 pub use monoasm::*;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 pub(crate) use kernel::object_send;
 pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};
 pub use time::TimeInner;

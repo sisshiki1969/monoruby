@@ -2,6 +2,13 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+// AsmIR→machine-code lowering: x86 emits; the JIT front-end build
+// (jit && !jit_emit, i.e. aarch64) uses a stub whose compile_asmir bails so
+// the method deopts to the VM (see doc/aarch64-jitgen-plan.md).
+#[cfg(jit_emit)]
+mod compile;
+#[cfg(all(jit, not(jit_emit)))]
+#[path = "asmir/compile_stub.rs"]
 mod compile;
 
 pub(super) struct InlineProcedure {
@@ -1937,6 +1944,7 @@ pub enum SideExit {
     Error(BytecodePtr, WriteBack),
 }
 
+#[cfg(jit_emit)]
 impl Codegen {
     ///
     /// Generate machine code for *ir*.

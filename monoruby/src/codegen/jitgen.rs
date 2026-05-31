@@ -1,6 +1,9 @@
+#[cfg(jit_emit)]
 use std::collections::HashSet;
 
+#[cfg(jit_emit)]
 use monoasm_macro::monoasm;
+#[cfg(jit_emit)]
 use paste::paste;
 
 use crate::ast::CmpKind;
@@ -25,7 +28,9 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
+#[cfg(jit_emit)]
 mod deoptimize;
+#[cfg(jit_emit)]
 mod guard;
 mod merge;
 mod state;
@@ -291,6 +296,7 @@ impl SpecializedCodeInfo {
     }
 }
 
+#[cfg(jit_emit)]
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -460,6 +466,7 @@ impl Codegen {
     }
 }
 
+#[cfg(jit_emit)]
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -489,6 +496,7 @@ macro_rules! load_store {
     };
 }
 
+#[cfg(jit_emit)]
 impl JitModule {
     load_store!(rax);
     load_store!(rdi);
@@ -819,6 +827,7 @@ impl JitModule {
     }
 }
 
+#[cfg(jit_emit)]
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
@@ -980,6 +989,7 @@ impl Codegen {
     }
 }
 
+#[cfg(jit_emit)]
 #[test]
 fn float_test() {
     let r#gen = Codegen::new();
@@ -1010,6 +1020,7 @@ fn float_test() {
     }
 }
 
+#[cfg(jit_emit)]
 #[test]
 fn float_test2() {
     let mut r#gen = Codegen::new();

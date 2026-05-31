@@ -1,9 +1,9 @@
 use super::*;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use monoasm_macro::monoasm;
 
 impl JitModule {
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());

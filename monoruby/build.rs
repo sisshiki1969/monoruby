@@ -67,10 +67,18 @@ fn main() {
     // `#[cfg(jit_emit)]`/`#[cfg(not(jit_emit))]` for emission.
     println!("cargo::rustc-check-cfg=cfg(jit)");
     println!("cargo::rustc-check-cfg=cfg(jit_emit)");
-    let target_x86 = std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64");
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH");
+    let target_x86 = arch.as_deref() == Ok("x86_64");
+    let target_arm64 = arch.as_deref() == Ok("aarch64");
     let no_jit = std::env::var_os("CARGO_FEATURE_NO_JIT").is_some();
-    if target_x86 && !no_jit {
+    // `jit` (front-end) on any JIT-capable arch; `jit_emit` (x86 emission)
+    // on x86-64 only. aarch64 thus builds the front-end with emission off —
+    // inlined methods fall back to plain calls and AsmIR lowering deopts to
+    // the VM on anything not yet ported.
+    if (target_x86 || target_arm64) && !no_jit {
         println!("cargo::rustc-cfg=jit");
+    }
+    if target_x86 && !no_jit {
         println!("cargo::rustc-cfg=jit_emit");
     }
 

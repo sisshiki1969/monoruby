@@ -4,18 +4,18 @@ use monoasm::*;
 // Provides the `monoasm!` macro to the JIT subtree (`compiler`, `jitgen`,
 // `patch`) via descendant visibility. The arch backends under `arch/` import
 // it directly instead.
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use monoasm_macro::monoasm;
 #[cfg(jit)]
 use std::time::Duration;
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 mod compiler;
 mod jit_module;
 #[cfg(jit)]
 pub mod jitgen;
 pub(crate) mod signal_table;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 mod patch;
 pub mod runtime;
 
@@ -329,7 +329,7 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
@@ -769,9 +769,9 @@ impl Codegen {
             if codegen.bop_redefine_flags() != 0 {
                 // Eviction only applies to JIT-compiled code; the VM-only
                 // build has none, so `cfp` goes unused there.
-                #[cfg(jit)]
+                #[cfg(jit_emit)]
                 codegen.immediate_eviction(cfp);
-                #[cfg(not(jit))]
+                #[cfg(not(jit_emit))]
                 let _ = cfp;
             }
         });
@@ -785,7 +785,7 @@ impl Codegen {
         unsafe { *addr }
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     fn immediate_eviction(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {

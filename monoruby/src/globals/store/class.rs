@@ -1893,7 +1893,7 @@ impl Store {
             // Only needed with the JIT: in VM-only builds (no-jit / aarch64)
             // every entry already jumps to `vm_entry`. (Also avoids the
             // x86-only `apply_jmp_patch_address`.)
-            #[cfg(jit)]
+            #[cfg(jit_emit)]
             {
                 let vm_entry = codegen.vm_entry();
                 for func in self.functions.functions() {
