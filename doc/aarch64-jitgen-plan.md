@@ -17,15 +17,27 @@ under qemu-user on x86 hosts).
 > VM — so only fully-lowerable methods JIT and big.rb stays byte-identical to
 > x86.
 >
-> **Supported AsmInst (11):** `Label`, `BcIndex`, `Init` (prologue + nil-fill),
+> **Supported AsmInst (18):** `Label`, `BcIndex`, `Init` (prologue + nil-fill),
 > `Preparation` (no-op unless heap ivars), `StackToReg`, `RegToStack`,
-> `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `Ret`. Verified under qemu:
-> `def id(a);a;end` / `def c;42;end` / `def pick(a,b);b;end` JIT and return
-> correct values across types; `GP::a64()` maps regs (slots are lfp(x22)-
-> relative, matching `a64_op_ret`; acc=`R15`→x23; result in x0). Earlier
+> `AccToStack`, `RegMove`, `RegToAcc`, `LitToReg`, `Ret`, `CheckLocal`,
+> `LoadDynVar`/`StoreDynVar` (outer-frame locals via `a64_get_outer`),
+> `LoadGVar`/`StoreGVar` (runtime C call; bails if any xmm is live since we
+> have no FP save/restore yet), `CondBr` (truthiness branch), `NilBr`,
+> `LitToStack`. Verified under qemu: `def id(a);a;end` / `def c;42;end` /
+> `def pick(a,b);b;end` plus closures (dynvar), `$g`-mutating methods, and
+> `if`/`else` branching JIT and return correct values across types;
+> `GP::a64()` maps regs (slots are lfp(x22)-relative, matching `a64_op_ret`;
+> acc=`R15`→x23; Executor=x19, Globals=x20=`R12`; result in x0). Earlier
 > garbage-`lfp` crash was the compile C-call trampling the callee frame below
 > SP — fixed by `sub sp,sp,#4080` before the call (mirrors x86 `subq rsp,4088`).
-> `DUMP=1` logs the AsmInst stream (dev aid).
+>
+> **Bridge processing (critical):** the driver now mirrors x86
+> `gen_machine_code` — it lowers main blocks **and** their inline/outline
+> bridges. A branch destination is often a distinct `JitLabel` from the
+> destination block's own label, bound only inside a bridge trampoline;
+> skipping bridges left such branches at offset 0 (an infinite `b.eq #0`
+> self-loop). `a64_gen_asm` takes optional `entry`/`exit` to bind a bridge's
+> entry label and append the trailing `b <exit_bb>`.
 >
 > **Next:** with `inline_gen` off on aarch64, integer arithmetic does **not**
 > become `IntegerBinOp` — `a + 1` de-inlines to a **method call** to

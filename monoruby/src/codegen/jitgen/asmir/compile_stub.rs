@@ -371,6 +371,33 @@ impl Codegen {
                 self.jit.bcond_label(cond, &branch_dest);
                 true
             }
+            // Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax,
+            // NIL_VALUE; jeq dest`.
+            AsmInst::NilBr(dest) => {
+                let branch_dest = frame.resolve_label(&mut self.jit, dest);
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(rax), #(NIL_VALUE as u32);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &branch_dest);
+                true
+            }
+            // [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
+            // materialized in a scratch reg (aarch64 has no store-immediate),
+            // so no GP register is clobbered. Mirrors x86 `literal_to_stack`.
+            AsmInst::LitToStack(v, slot) => {
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                if off > 4095 {
+                    return false;
+                }
+                let imm = v.id();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (imm);
+                    sub x10, x(lfp), #(off);
+                    str x9, [x10];
+                );
+                true
+            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }
