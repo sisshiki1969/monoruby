@@ -296,7 +296,7 @@ impl SpecializedCodeInfo {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit)]
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -332,17 +332,40 @@ impl Codegen {
 
         self.jit.finalize();
         let class_version_label = self.jit.const_i32(class_version as _);
-        self.gen_machine_code(
-            frame.asm_info,
-            store,
-            entry_label,
-            0,
-            class_version_label.clone(),
-        );
-
-        Ok((inline_cache, specialized_info, class_version_label))
+        // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
+        // AsmIR→machine-code lowering is x86 only for now.
+        #[cfg(jit_emit)]
+        {
+            self.gen_machine_code(
+                frame.asm_info,
+                store,
+                entry_label,
+                0,
+                class_version_label.clone(),
+            );
+            Ok((inline_cache, specialized_info, class_version_label))
+        }
+        // aarch64: the front-end ran, but no aarch64 emission exists yet, so
+        // bail — `compile()` turns this `Err` into `None` and the method stays
+        // VM-interpreted. AsmInst lowering is added incrementally; see
+        // doc/aarch64-jitgen-plan.md.
+        #[cfg(not(jit_emit))]
+        {
+            let _ = (
+                &frame,
+                &entry_label,
+                store,
+                &inline_cache,
+                &specialized_info,
+                &class_version_label,
+            );
+            Err(CompileError)
+        }
     }
+}
 
+#[cfg(jit_emit)]
+impl Codegen {
     fn gen_machine_code(
         &mut self,
         mut frame: AsmInfo,
