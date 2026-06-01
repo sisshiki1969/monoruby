@@ -161,7 +161,10 @@ impl JitModule {
         // exec_gc is bound by `construct_vm` (real handler defers to
         // entry_raise on a poll-time error).
         let _ = gc;
-        j.a64_brk_stub_diag(&f64v, 0xffff04); // f64_to_val
+        // f64_to_val is bound later in `construct_vm` (a Codegen context):
+        // `a64_gen_f64_to_val` is an `impl Codegen` helper and nothing in `new`
+        // references the label yet, so leaving it unbound here is fine.
+        let _ = &f64v;
         // vm_stack_overflow is bound by `construct_vm` (the real handler
         // needs entry_raise, which isn't emitted until then).
         let _ = ovf;

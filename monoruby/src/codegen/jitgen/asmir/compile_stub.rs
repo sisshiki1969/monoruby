@@ -601,6 +601,23 @@ impl Codegen {
         }
     }
 
+    /// Physical D-register index for a pool-resident `FPReg`, or `None` (bail →
+    /// the method stays VM-interpreted) otherwise.
+    ///
+    /// Capped to the caller-saved D2-D7: under AAPCS64 D8-D15 are callee-saved
+    /// (unlike x86-64 SysV where every xmm is caller-saved), and the aarch64
+    /// invoker / JIT prologue does not yet preserve them. Restricting the JIT'd
+    /// FP pool to caller-saved registers keeps the ABI sound without that
+    /// prologue work; methods needing >6 live floats (or any spill) just don't
+    /// JIT yet. `f64_to_val`'s heap path and `XmmSave` are consistent with this
+    /// (they only ever touch D2-D7).
+    fn a64_fpr(&self, x: FPReg, base: usize) -> Option<u32> {
+        match x.loc(base) {
+            FPRegLoc::Xmm(p) if p <= 7 => Some(p as u32),
+            _ => None,
+        }
+    }
+
     /// Lower one `AsmInst`. Returns `false` for any not-yet-ported variant.
     pub(super) fn compile_asmir(
         &mut self,
@@ -1259,6 +1276,176 @@ impl Codegen {
                 self.a64_cmp_integer(&mode, lhs, rhs);
                 let cond = a64_cond_for_cmp(kind, brkind);
                 self.jit.bcond_label(cond, &branch_dest);
+                true
+            }
+            // ---- floating point (four-arithmetic) ----
+            // dst <- src
+            AsmInst::FprMove(src, dst) => {
+                let base = frame.base_stack_offset;
+                let (Some(s), Some(d)) =
+                    (self.a64_fpr(src, base), self.a64_fpr(dst, base))
+                else {
+                    return false;
+                };
+                if s != d {
+                    monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
+                }
+                true
+            }
+            // swap two FP registers (via scratch D0)
+            AsmInst::FprSwap(l, r) => {
+                let base = frame.base_stack_offset;
+                let (Some(a), Some(b)) = (self.a64_fpr(l, base), self.a64_fpr(r, base))
+                else {
+                    return false;
+                };
+                if a != b {
+                    monoasm_arm64!(&mut self.jit,
+                        fmov d0, d(a);
+                        fmov d(a), d(b);
+                        fmov d(b), d0;
+                    );
+                }
+                true
+            }
+            // dst <- lhs <op> rhs  (D-register arithmetic)
+            AsmInst::FloatBinOp {
+                kind,
+                binary_xmm,
+                dst,
+            } => {
+                let base = frame.base_stack_offset;
+                let (l, r) = binary_xmm;
+                let (Some(ld), Some(rd), Some(dd)) = (
+                    self.a64_fpr(l, base),
+                    self.a64_fpr(r, base),
+                    self.a64_fpr(dst, base),
+                ) else {
+                    return false;
+                };
+                // aarch64 FP 3-op writes rd, reads rn/rm — no aliasing hazard.
+                match kind {
+                    BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
+                    BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
+                    BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
+                    BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
+                    _ => return false,
+                }
+                true
+            }
+            // dst <- f64 constant
+            AsmInst::F64ToFpr(f, x) => {
+                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
+                    return false;
+                };
+                let bits = f.to_bits();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (bits);
+                    fmov d(p), x9;
+                );
+                true
+            }
+            // dst(f64) <- fixnum in `reg` (untag, signed int -> double)
+            AsmInst::FixnumToFpr(reg, x) => {
+                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
+                    return false;
+                };
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    asr x9, x(r), #(1);   // untag: value >> 1
+                    scvtf d(p), x9;
+                );
+                true
+            }
+            // dst(f64) <- Float Value in `reg`; deopt if `reg` is not a Float.
+            // Mirrors x86 float_to_f64 / float_val_to_f64 (flonum decode +
+            // heap-Float load). `and`/`ror` have no immediate form / the macro
+            // grew `ror`, so the rotate uses `ror` and the mask uses shifts.
+            AsmInst::FloatToFpr(reg, x, deopt) => {
+                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
+                    return false;
+                };
+                let deopt = labels[deopt].clone();
+                let r = reg.a64().0;
+                let heap = self.jit.label();
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    tbnz x(r), #(0), deopt;   // fixnum -> deopt (expected a Float)
+                    tbz x(r), #(1), heap;     // not flonum -> heap Float
+                    // flonum: handle 0.0, else decode.
+                    fmov d(p), xzr;
+                    mov x9, (FLOAT_ZERO);
+                    cmp x(r), x9;
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+                monoasm_arm64!(&mut self.jit,
+                    asr x9, x(r), #(63);      // sign: all-1s / all-0s
+                    add x9, x9, #(2);         // 2 - signbit  (1 or 2)
+                    lsr x10, x(r), #(2);
+                    lsl x10, x10, #(2);       // reg & ~3
+                    orr x10, x10, x9;
+                    ror x10, x10, #(3);       // rotate_right 3
+                    fmov d(p), x10;
+                    b exit;
+                    heap:
+                );
+                self.a64_guard_rvalue(r, FLOAT_CLASS, &deopt);
+                monoasm_arm64!(&mut self.jit,
+                    ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
+                    exit:
+                );
+                true
+            }
+            // [slot] <- box(f64 in x): flonum-encode or heap-allocate.
+            AsmInst::FprToStack(x, slot) => {
+                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
+                    return false;
+                };
+                let f64_to_val = self.f64_to_val.clone();
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                monoasm_arm64!(&mut self.jit,
+                    fmov d0, d(p);
+                    bl f64_to_val;          // x0 = Value(f64)
+                    sub x10, x(lfp), #(off);
+                    str x0, [x10];
+                );
+                true
+            }
+            // Save / restore live FP pool registers around a C-call.
+            AsmInst::XmmSave(using_xmm, cont) => {
+                if using_xmm.not_any() && !cont {
+                    return true;
+                }
+                let sp_offset =
+                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+                monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
+                let mut i = 0u32;
+                for (xi, b) in using_xmm.iter().enumerate() {
+                    if *b {
+                        let pr = xi as u32 + 2;
+                        let ofs = 8 * i;
+                        monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
+                        i += 1;
+                    }
+                }
+                true
+            }
+            AsmInst::XmmRestore(using_xmm, cont) => {
+                if using_xmm.not_any() && !cont {
+                    return true;
+                }
+                let sp_offset =
+                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+                let mut i = 0u32;
+                for (xi, b) in using_xmm.iter().enumerate() {
+                    if *b {
+                        let pr = xi as u32 + 2;
+                        let ofs = 8 * i;
+                        monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
+                        i += 1;
+                    }
+                }
+                monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
                 true
             }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.

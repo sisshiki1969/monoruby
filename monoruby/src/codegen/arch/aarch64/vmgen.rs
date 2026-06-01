@@ -11,6 +11,9 @@ impl Codegen {
         self.a64_gen_entry_raise();
         self.a64_gen_stack_overflow();
         self.a64_gen_exec_gc();
+        // f64_to_val helper (D0 f64 -> X0 boxed Value), used by `FprToStack`.
+        let f64_to_val = self.f64_to_val.clone();
+        self.a64_gen_f64_to_val(&f64_to_val);
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).

@@ -90,6 +90,67 @@ impl Codegen {
         );
     }
 
+    /// `f64_to_val`: convert the f64 in `D0` to a boxed `Value` in `X0` —
+    /// flonum-encode when the exponent is in range, else heap-allocate a
+    /// `Float`. Mirrors x86 `gen_f64_to_val`. Called via `bl` from `FprToStack`.
+    ///
+    /// `and`/`orr` have no immediate form and there is no `ror` in the
+    /// `monoasm_arm64!` macro, so the bit-twiddling uses shift + register-logical
+    /// ops (rotate = `lsl`/`lsr`/`orr`; clear-low-2 = `lsr #2; lsl #2`).
+    pub(in crate::codegen) fn a64_gen_f64_to_val(&mut self, label: &DestLabel) {
+        let normal = self.jit.label();
+        let heap = self.jit.label();
+        self.jit.bind_label(label.clone());
+        monoasm_arm64!(&mut self.jit,
+            fcmp d0, #0.0;           // compare D0 with zero
+        );
+        self.jit.bcond_label(Cond::Ne, &normal); // != 0.0 (or NaN) -> normal
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (FLOAT_ZERO);
+            ret;
+            normal:
+            fmov x0, d0;             // x0 = bits(d0)
+            lsr x1, x0, #(60);
+            add x1, x1, #(1);
+            mov x9, (6);
+            and x1, x1, x9;
+            cmp x1, #(4);
+        );
+        self.jit.bcond_label(Cond::Ne, &heap); // exponent out of flonum range -> heap
+        monoasm_arm64!(&mut self.jit,
+            // flonum-encode: rol 3, clear low 2 bits, set bit1 (0b10).
+            rol x0, x0, #(3);
+            lsr x0, x0, #(2);
+            lsl x0, x0, #(2);        // clear low 2 bits (and -4)
+            mov x9, (2);
+            orr x0, x0, x9;          // set 0b10
+            ret;
+            heap:
+            // Heap-allocate. Save the caller-saved FP pool (D2-D7); D8-D15 are
+            // AAPCS64 callee-saved and preserved by float_heap. D0 still holds
+            // the f64 argument that float_heap reads.
+            str x30, [sp, #(-16)]!;
+            sub sp, sp, #(48);
+            str d2, [sp];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            mov x9, (Value::float_heap as *const () as u64);
+            blr x9;                  // x0 = Value::float_heap(d0)
+            ldr d2, [sp];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            add sp, sp, #(48);
+            ldr x30, [sp], #(16);
+            ret;
+        );
+    }
+
     /// VM-side GC/signal poll. If `alloc_flag >= 8` (the signal handler nudges
     /// it by 10), call `exec_gc` which drains pending signals + runs GC. The
     /// hot path is two loads, a compare, and a fall-through branch.
