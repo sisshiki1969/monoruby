@@ -773,7 +773,9 @@ mod tests {
 
     #[test]
     fn struct_new() {
-        run_test(
+        // `run_test_once` because naming the struct registers `Struct::Foo`;
+        // re-running 25 times would warn on re-initializing the constant.
+        run_test_once(
             r###"
             Struct.new("Foo", :a, :b).to_s
         "###,
@@ -792,12 +794,14 @@ mod tests {
 
     #[test]
     fn struct_inspect() {
-        let code = r###"
+        let prelude = r###"
         S = Struct.new(:a,:b)
+        "###;
+        let code = r###"
         s = S.new(100,200)
         [s.a, s.b, s.inspect]
         "###;
-        run_test(code);
+        run_test_with_prelude(code, prelude);
     }
 
     #[test]
@@ -859,7 +863,10 @@ mod tests {
 
     #[test]
     fn struct_method_added() {
-        run_test(
+        run_test_with_prelude(
+            r##"
+        $added
+        "##,
             r##"
         $added = []
         S = Struct.new(:x, :y) do
@@ -867,7 +874,6 @@ mod tests {
             $added << name
           end
         end
-        $added
         "##,
         );
         run_test_once(
@@ -913,14 +919,16 @@ mod tests {
     fn struct_initialize_visibility() {
         // `initialize` on Struct must be private, matching CRuby. Calling
         // `instance.initialize(...)` directly should raise NoMethodError.
-        run_test(
+        run_test_with_prelude(
             r##"
-            S = Struct.new(:a, :b)
             [
               Struct.private_method_defined?(:initialize, false),
               Struct.public_method_defined?(:initialize, false),
               S.instance_method(:initialize).owner == Struct,
             ]
+            "##,
+            r##"
+            S = Struct.new(:a, :b)
             "##,
         );
     }
@@ -1038,12 +1046,14 @@ mod tests {
     fn struct_inspect_qualified_name() {
         // Nested struct uses fully-qualified module path; anonymous
         // structs render without a class label.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            M::N.new(1, 2).inspect
+            "#,
             r#"
             module M
               N = Struct.new(:a, :b)
             end
-            M::N.new(1, 2).inspect
             "#,
         );
         run_test(r#"Struct.new(:x).new("hello").inspect"#);
@@ -1054,11 +1064,13 @@ mod tests {
         // Members not provided to `new` are explicitly set to nil so they
         // appear in `instance_variables` (matching CRuby's behavior of
         // initializing all member slots).
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b, :c)
             s = S.new(1)
             [s.a, s.b, s.c]
+            "#,
+            r#"
+            S = Struct.new(:a, :b, :c)
             "#,
         );
     }
@@ -1086,27 +1098,33 @@ mod tests {
         // `instance_variables` therefore returns `[]` (matching CRuby
         // `RStruct` semantics) and `instance_variable_get(:@a)` returns
         // nil rather than the member value.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b, :c)
             s = S.new(1, 2, 3)
             s.instance_variables
             "#,
-        );
-        run_test(
             r#"
-            S = Struct.new(:a, :b)
+            S = Struct.new(:a, :b, :c)
+            "#,
+        );
+        run_test_with_prelude(
+            r#"
             s = S.new("v", 2)
             s.instance_variable_get(:@a).nil?
             "#,
+            r#"
+            S = Struct.new(:a, :b)
+            "#,
         );
         // User-set ivars on a Struct still appear in the introspection.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a)
             s = S.new(1)
             s.instance_variable_set(:@x, 99)
             [s.instance_variables, s.instance_variable_get(:@x)]
+            "#,
+            r#"
+            S = Struct.new(:a)
             "#,
         );
     }
@@ -1116,13 +1134,15 @@ mod tests {
         // Reader and writer accessors round-trip through the slot
         // vector. After mutation, the value reflects the new slot
         // contents, not any stale ivar.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:x, :y)
             s = S.new(1, 2)
             s.x = 100
             s[:y] = 200
             [s.x, s.y, s.to_a]
+            "#,
+            r#"
+            S = Struct.new(:x, :y)
             "#,
         );
     }
@@ -1131,13 +1151,15 @@ mod tests {
     fn struct_dup_copies_slots() {
         // Dup'd Struct instances have independent slot vectors;
         // mutating one doesn't affect the other.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             a = S.new(1, 2)
             b = a.dup
             b.a = 99
             [a.a, b.a]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1146,11 +1168,13 @@ mod tests {
     fn struct_default_nil_members() {
         // Members not provided to `new` are nil and appear in `to_a`,
         // not as ivars.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b, :c)
             s = S.new(1)
             [s.to_a, s.instance_variables]
+            "#,
+            r#"
+            S = Struct.new(:a, :b, :c)
             "#,
         );
     }
@@ -1163,22 +1187,28 @@ mod tests {
         // trailing kwarg and stores it on the new class. `keyword_init?`
         // returns the stored value verbatim. Member parsing must not
         // see the kwarg as a positional Symbol.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [S.keyword_init?, S.members]
+            "#,
             r#"
             S = Struct.new(:a, :b, keyword_init: true)
-            [S.keyword_init?, S.members]
             "#,
         );
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [S.keyword_init?, S.members]
+            "#,
             r#"
             S = Struct.new(:a, :b, keyword_init: false)
-            [S.keyword_init?, S.members]
             "#,
         );
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [S.keyword_init?, S.members]
+            "#,
             r#"
             S = Struct.new(:a, :b, keyword_init: nil)
-            [S.keyword_init?, S.members]
             "#,
         );
         // No kwarg at all -> nil.
@@ -1189,10 +1219,12 @@ mod tests {
     fn struct_new_first_arg_nil() {
         // `nil` as the first arg makes the struct anonymous (not stored
         // under `Struct::Foo`); members start at the second arg.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [A.name.nil? || A.name.match?(/^A$/) ? :ok : A.name, A.members]
+            "#,
             r#"
             A = Struct.new(nil, :x, :y)
-            [A.name.nil? || A.name.match?(/^A$/) ? :ok : A.name, A.members]
             "#,
         );
         run_test(
@@ -1231,10 +1263,12 @@ mod tests {
             S.new(1, 2, 3)
             "#,
         );
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [S.new.to_a, S.new(1).to_a, S.new(1, 2).to_a, S.new(1, 2, 3).to_a]
+            "#,
             r#"
             S = Struct.new(:a, :b, :c)
-            [S.new.to_a, S.new(1).to_a, S.new(1, 2).to_a, S.new(1, 2, 3).to_a]
             "#,
         );
     }
@@ -1245,27 +1279,33 @@ mod tests {
     fn struct_eq_with_non_struct() {
         // `==` against a non-Struct (Array, nil, String, Integer)
         // returns false. `!=` is the negation.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b, :c)
             s = S.new(1, 2, 3)
             [s == [1, 2, 3], s == nil, s == "x", s == 1, s == :sym]
             "#,
-        );
-        run_test(
             r#"
             S = Struct.new(:a, :b, :c)
+            "#,
+        );
+        run_test_with_prelude(
+            r#"
             s = S.new(1, 2, 3)
             [s != [1, 2, 3], s != nil, s != "x"]
+            "#,
+            r#"
+            S = Struct.new(:a, :b, :c)
             "#,
         );
         // Different Struct subclasses with identical members/values are
         // NOT equal -- class identity matters.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            [S.new(1, 2) == T.new(1, 2), S.new(1, 2) != T.new(1, 2)]
+            "#,
             r#"
             S = Struct.new(:a, :b)
             T = Struct.new(:a, :b)
-            [S.new(1, 2) == T.new(1, 2), S.new(1, 2) != T.new(1, 2)]
             "#,
         );
     }
@@ -1277,13 +1317,15 @@ mod tests {
         // `run_test` runs the body 25 times, well past the JIT
         // compilation threshold (5 calls in test mode), so this also
         // exercises the JIT-inlined `LoadStructSlot` path.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b, :c)
             s = S.new(10, 20, 30)
             n = 0
             1000.times { n += s.a + s.b + s.c }
             n
+            "#,
+            r#"
+            S = Struct.new(:a, :b, :c)
             "#,
         );
     }
@@ -1294,12 +1336,14 @@ mod tests {
         // class guard. The frozen-check happens via the `GuardFrozen`
         // deopt; here the receiver is mutable so the deopt never
         // fires.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:counter)
             s = S.new(0)
             1000.times { s.counter = s.counter + 1 }
             s.counter
+            "#,
+            r#"
+            S = Struct.new(:counter)
             "#,
         );
     }
@@ -1308,9 +1352,8 @@ mod tests {
     fn struct_writer_frozen_raises() {
         // The wrapper-level frozen check (via `set_struct_slot_with_check`)
         // raises FrozenError on a frozen receiver.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:x)
             s = S.new(1).freeze
             begin
               s.x = 2
@@ -1318,6 +1361,9 @@ mod tests {
             rescue FrozenError
               :ok
             end
+            "#,
+            r#"
+            S = Struct.new(:x)
             "#,
         );
     }
@@ -1327,14 +1373,16 @@ mod tests {
         // Member readers/writers are still introspectable as Ruby
         // methods of the struct subclass even though they live in
         // dedicated `FuncKind::StructReader` / `StructWriter` slots.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             [
               S.instance_method(:a).arity,
               S.instance_method(:a=).arity,
               S.instance_method(:a).owner == S,
             ]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1344,37 +1392,45 @@ mod tests {
     #[test]
     fn struct_hash_basic_invariants() {
         // Same class + same content -> same hash. Hash is an Integer.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             a = S.new(1, 2)
             b = S.new(1, 2)
             [a.hash == b.hash, a.hash.is_a?(Integer)]
             "#,
+            r#"
+            S = Struct.new(:a, :b)
+            "#,
         );
         // Same class + different content -> different hash (overwhelmingly
         // likely; a collision would be a real PRF surprise).
-        run_test(
+        run_test_with_prelude(
+            r#"
+            S.new(1, 2).hash != S.new(1, 3).hash
+            "#,
             r#"
             S = Struct.new(:a, :b)
-            S.new(1, 2).hash != S.new(1, 3).hash
             "#,
         );
         // Different struct classes with identical content -> different hash.
         // The class identity is folded into the hash, matching CRuby.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            A.new(1).hash != B.new(1).hash
+            "#,
             r#"
             A = Struct.new(:x)
             B = Struct.new(:x)
-            A.new(1).hash != B.new(1).hash
             "#,
         );
         // dup'd struct hashes the same as the original.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             s = S.new(10, 20)
             s.hash == s.dup.hash
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1382,12 +1438,14 @@ mod tests {
     #[test]
     fn struct_hash_eql_implies_same_hash() {
         // The contract Hash relies on: `a.eql?(b)` => `a.hash == b.hash`.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             a = S.new(1, "x")
             b = S.new(1, "x")
             [a.eql?(b), a.hash == b.hash]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1396,14 +1454,16 @@ mod tests {
     fn struct_hash_recursive_self_cycle() {
         // Self-recursive struct must hash without StackOverflow. Equal
         // self-cycles still produce equal hashes.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             x = S.new(nil, "tag")
             x.a = x
             y = S.new(nil, "tag")
             y.a = y
             [x.hash.is_a?(Integer), x.hash == y.hash]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1414,14 +1474,16 @@ mod tests {
         // same hash. This is what `exec_recursive_outer` buys us — any
         // recursion at any depth surfaces to the outer call as the same
         // sentinel, so depth-shape doesn't leak into the hash.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:a, :b)
             x = S.new(nil, "tag")
             x.a = x                # depth-1 cycle
             y = S.new(nil, "tag")
             y.a = x                # depth-2 cycle (y -> x -> x)
             x.hash == y.hash
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1431,7 +1493,10 @@ mod tests {
         // An `include`d module's `hash` shadows Struct's: the per-subclass
         // installation is gone, so method lookup walks `S -> iclass(mod) ->
         // Struct` and finds the module's `hash` first.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            S.new(1).hash
+            "#,
             r#"
             mod = Module.new do
               def hash
@@ -1441,7 +1506,6 @@ mod tests {
             S = Struct.new(:arg) do
               include mod
             end
-            S.new(1).hash
             "#,
         );
     }
@@ -1450,13 +1514,15 @@ mod tests {
     fn struct_hash_keyword_init() {
         // keyword_init structs hash like any other struct: members in slot
         // order, class folded in.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: true)
             a = S.new(name: "elefant", legs: 4)
             b = S.new(name: "elefant", legs: 4)
             c = S.new(name: "elefant", legs: 2)
             [a.hash == b.hash, a.hash != c.hash]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
             "#,
         );
     }
@@ -1468,20 +1534,24 @@ mod tests {
         // Plain struct (no `keyword_init:`) accepts kwargs whose keys are
         // member names — Ruby 3.2+ implicit-kwargs behavior. Equivalent to
         // a positional call.
-        run_test(
+        run_test_with_prelude(
             r#"
-            T = Struct.new(:version, :platform)
             pos = T.new("3.2", "OS")
             kw = T.new(version: "3.2", platform: "OS")
             [pos == kw, kw.version, kw.platform]
             "#,
+            r#"
+            T = Struct.new(:version, :platform)
+            "#,
         );
         // Subset of kwargs is allowed: missing members default to nil.
-        run_test(
+        run_test_with_prelude(
             r#"
-            T = Struct.new(:a, :b, :c)
             s = T.new(b: 20)
             [s.a, s.b, s.c]
+            "#,
+            r#"
+            T = Struct.new(:a, :b, :c)
             "#,
         );
     }
@@ -1490,11 +1560,13 @@ mod tests {
     fn struct_init_explicit_hash_is_positional() {
         // A literal Hash positional is one positional value (NOT
         // unpacked as kwargs), distinguishing it from `T.new(a: 1)`.
-        run_test(
+        run_test_with_prelude(
             r#"
-            T = Struct.new(:a, :b)
             s = T.new({a: 1, b: 2})
             [s.a, s.b]
+            "#,
+            r#"
+            T = Struct.new(:a, :b)
             "#,
         );
     }
@@ -1505,20 +1577,24 @@ mod tests {
         // positional Hash appended after positionals. The CRuby spec
         // explicitly tests this "treats keyword arguments as a positional
         // parameter" behavior for non-`keyword_init:` structs.
-        run_test(
+        run_test_with_prelude(
             r#"
-            T = Struct.new(:a, :b)
             s = T.new("a", b: "b")
             [s.a, s.b]
+            "#,
+            r#"
+            T = Struct.new(:a, :b)
             "#,
         );
         // 3-member struct, 1 positional + kwargs -> kwargs become member 1,
         // member 2 stays nil.
-        run_test(
+        run_test_with_prelude(
             r#"
-            T = Struct.new(:a, :b, :c)
             s = T.new("a", b: "b", c: "c")
             [s.a, s.b, s.c]
+            "#,
+            r#"
+            T = Struct.new(:a, :b, :c)
             "#,
         );
     }
@@ -1538,11 +1614,13 @@ mod tests {
     #[test]
     fn struct_init_keyword_init_true_accepts_kwargs() {
         // The canonical keyword_init: true call: kwargs map to members.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: true)
             s = S.new(name: "elefant", legs: 4)
             [s.name, s.legs]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
             "#,
         );
     }
@@ -1551,11 +1629,13 @@ mod tests {
     fn struct_init_keyword_init_true_accepts_single_hash() {
         // keyword_init: true also accepts a single positional Hash (treated
         // as kwargs). The keys are still validated against members.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: true)
             s = S.new({name: "elefant", legs: 4})
             [s.name, s.legs]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
             "#,
         );
     }
@@ -1564,11 +1644,13 @@ mod tests {
     fn struct_init_keyword_init_true_partial_keys() {
         // keyword_init: true with a subset of keys: missing members default
         // to nil.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: true)
             s = S.new(name: "elefant")
             [s.name, s.legs]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
             "#,
         );
     }
@@ -1576,11 +1658,13 @@ mod tests {
     #[test]
     fn struct_init_keyword_init_true_no_args() {
         // keyword_init: true with no args at all: every member is nil.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: true)
             s = S.new
             [s.name, s.legs]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: true)
             "#,
         );
     }
@@ -1589,11 +1673,13 @@ mod tests {
     fn struct_init_keyword_init_truthy_value_normalized() {
         // `keyword_init: 1` (truthy non-true) acts as `keyword_init: true`,
         // and `keyword_init?` returns the canonical `true`.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:x, keyword_init: 1)
             s = S.new(x: 7)
             [S.keyword_init?, s.x]
+            "#,
+            r#"
+            S = Struct.new(:x, keyword_init: 1)
             "#,
         );
     }
@@ -1601,11 +1687,13 @@ mod tests {
     #[test]
     fn struct_init_keyword_init_false_behaves_positional() {
         // keyword_init: false reverts to positional semantics.
-        run_test(
+        run_test_with_prelude(
             r#"
-            S = Struct.new(:name, :legs, keyword_init: false)
             s = S.new("elefant", 4)
             [S.keyword_init?, s.name, s.legs]
+            "#,
+            r#"
+            S = Struct.new(:name, :legs, keyword_init: false)
             "#,
         );
     }
@@ -1685,12 +1773,16 @@ mod tests {
         // Regression: `Class.new(SomeStruct)` stores `/members` on the
         // ancestor; class- and instance-level `members` must walk the
         // superclass chain instead of panicking on a missing ivar.
-        run_tests(&[
-            r#"S = Struct.new(:a, :b); Class.new(S).members"#,
-            r#"S = Struct.new(:a, :b); Class.new(S).new(1, 2).members"#,
-            r#"D = Data.define(:x, :y); Class.new(D).members"#,
-            r#"D = Data.define(:x, :y); Class.new(D).new(1, 2).members"#,
-        ]);
+        run_test_with_prelude(r#"Class.new(S).members"#, r#"S = Struct.new(:a, :b)"#);
+        run_test_with_prelude(
+            r#"Class.new(S).new(1, 2).members"#,
+            r#"S = Struct.new(:a, :b)"#,
+        );
+        run_test_with_prelude(r#"Class.new(D).members"#, r#"D = Data.define(:x, :y)"#);
+        run_test_with_prelude(
+            r#"Class.new(D).new(1, 2).members"#,
+            r#"D = Data.define(:x, :y)"#,
+        );
     }
 
     #[test]
@@ -1699,16 +1791,21 @@ mod tests {
             // String / mixed members are coerced to symbols.
             r#"Data.define("title", :year, "genre").members"#,
             r#"Data.define.members"#,
-            // Instances render as `#<data ...>` (named and anonymous),
-            // reusing Struct's name/anonymity handling.
-            r#"M = Data.define(:amount, :unit); M.new(42, "km").inspect"#,
-            r#"M = Data.define(:amount, :unit); M.new(42, "km").to_s"#,
+            // Anonymous instance rendering.
             r#"Data.define(:a).new("").inspect"#,
-            // #with returns an updated copy and is frozen.
-            r#"M = Data.define(:amount, :unit); m = M.new(42, "km"); m.with(amount: 4).to_h"#,
-            r#"M = Data.define(:amount, :unit); m = M.new(42, "km"); m.with.equal?(m)"#,
-            r#"M = Data.define(:amount, :unit); M.new(1, "m").with("amount" => 9).to_h"#,
-            r#"M = Data.define(:amount, :unit); M.new(1, "m").with(amount: 9).frozen?"#,
         ]);
+        // Named-Data tests assign to a constant; run them through a prelude so
+        // the `Data.define` happens once instead of on every warmup iteration
+        // (which would emit "already initialized constant M" warnings).
+        let prelude = r#"M = Data.define(:amount, :unit)"#;
+        // Instances render as `#<data ...>` (named and anonymous),
+        // reusing Struct's name/anonymity handling.
+        run_test_with_prelude(r#"M.new(42, "km").inspect"#, prelude);
+        run_test_with_prelude(r#"M.new(42, "km").to_s"#, prelude);
+        // #with returns an updated copy and is frozen.
+        run_test_with_prelude(r#"m = M.new(42, "km"); m.with(amount: 4).to_h"#, prelude);
+        run_test_with_prelude(r#"m = M.new(42, "km"); m.with.equal?(m)"#, prelude);
+        run_test_with_prelude(r#"M.new(1, "m").with("amount" => 9).to_h"#, prelude);
+        run_test_with_prelude(r#"M.new(1, "m").with(amount: 9).frozen?"#, prelude);
     }
 }

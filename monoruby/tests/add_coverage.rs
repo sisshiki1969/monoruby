@@ -185,7 +185,10 @@ fn ancestors_deep_chain() {
 
 #[test]
 fn const_nested_access() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+        A::B::C::VAL
+        "#,
         r#"
         module A
           module B
@@ -194,14 +197,16 @@ fn const_nested_access() {
             end
           end
         end
-        A::B::C::VAL
         "#,
     );
 }
 
 #[test]
 fn const_toplevel_access() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+        [C.get_local, C.get_toplevel]
+        "#,
         r#"
         TOP_CONST = 999
         class C
@@ -209,14 +214,16 @@ fn const_toplevel_access() {
           def self.get_local; TOP_CONST; end
           def self.get_toplevel; ::TOP_CONST; end
         end
-        [C.get_local, C.get_toplevel]
         "#,
     );
 }
 
 #[test]
 fn const_dynamic_access() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+        [A, B].map { |c| c::X }
+        "#,
         r#"
         class A
           X = 10
@@ -224,21 +231,22 @@ fn const_dynamic_access() {
         class B
           X = 20
         end
-        [A, B].map { |c| c::X }
         "#,
     );
 }
 
 #[test]
 fn const_inherited() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+        Child::INHERITED
+        "#,
         r#"
         class Parent
           INHERITED = 42
         end
         class Child < Parent
         end
-        Child::INHERITED
         "#,
     );
 }
