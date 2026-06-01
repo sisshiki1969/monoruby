@@ -1006,6 +1006,26 @@ impl Codegen {
                 self.a64_guard_class_version(&deopt);
                 true
             }
+            // Basic-operator-redefinition guard: deopt if any BOP has been
+            // redefined since compilation. Emitted after a folded/fast-path
+            // integer/float BOP (and after a method def), which assumes the
+            // builtin operator. The deopt PC is the BOP instruction itself, so
+            // the interpreter re-runs it through the (now de-optimized, no-opt)
+            // VM handler and dispatches the redefined method. Mirrors x86
+            // `CheckBOP`.
+            AsmInst::CheckBOP { deopt } => {
+                let deopt = labels[deopt].clone();
+                let flag_addr = self
+                    .jit
+                    .get_label_address(&self.bop_redefined_flags)
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (flag_addr);
+                    ldr w9, [x9];
+                    cbnz x9, deopt;   // any BOP redefined -> deopt
+                );
+                true
+            }
             // Constant inline-cache guard: deopt if the global constant version
             // moved since compilation (`const_version` is the baked-in cached
             // value). Mirrors x86 guard_const_version.

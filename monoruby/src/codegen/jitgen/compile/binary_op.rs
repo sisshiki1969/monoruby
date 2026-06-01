@@ -66,6 +66,21 @@ impl<'a> JitContext<'a> {
             }
             _ => match state.binop_type(lhs, rhs, ic) {
                 BinaryOpType::Integer(mode) => {
+                    // A constant-fold bakes the result (e.g. `100 * 100` -> 10000)
+                    // assuming the builtin operator, with no runtime trace of the
+                    // op. Guard that assumption: emit `CheckBOP` *before* the fold
+                    // (so the deopt write-back still sees the operand literals
+                    // live) with the deopt PC at this op, so a later BOP
+                    // redefinition deopts and the interpreter re-runs the op
+                    // through the de-optimized VM handler. x86 recovers via the
+                    // class-version-guard recompile path, so gate this to the
+                    // aarch64 (no-recompile) build. Limited to the fold case: the
+                    // register fast-path keeps its operands at runtime, so it is
+                    // not worth a guard on every arithmetic op.
+                    #[cfg(not(jit_emit))]
+                    if state.check_concrete_i64(mode).is_some() {
+                        ir.check_bop(state);
+                    }
                     state.binop_integer(ir, kind, dst, mode);
                     Ok(CompileResult::Continue)
                 }
