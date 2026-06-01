@@ -1,6 +1,9 @@
+#[cfg(jit_emit)]
 use std::collections::HashSet;
 
+#[cfg(jit_emit)]
 use monoasm_macro::monoasm;
+#[cfg(jit_emit)]
 use paste::paste;
 
 use crate::ast::CmpKind;
@@ -25,7 +28,14 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
+#[cfg(jit_emit)]
 mod deoptimize;
+// Type / class guards, split per arch (mirrors asmir compile/compile_stub):
+// x86 emits via `guard.rs`; the aarch64 lowering uses `guard_stub.rs`.
+#[cfg(jit_emit)]
+mod guard;
+#[cfg(all(jit, not(jit_emit)))]
+#[path = "jitgen/guard_stub.rs"]
 mod guard;
 mod merge;
 mod state;
@@ -291,6 +301,7 @@ impl SpecializedCodeInfo {
     }
 }
 
+#[cfg(jit)]
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -324,19 +335,50 @@ impl Codegen {
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
-        self.jit.finalize();
-        let class_version_label = self.jit.const_i32(class_version as _);
-        self.gen_machine_code(
-            frame.asm_info,
-            store,
-            entry_label,
-            0,
-            class_version_label.clone(),
-        );
-
-        Ok((inline_cache, specialized_info, class_version_label))
+        // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
+        // AsmIR→machine-code lowering (and the `finalize`/data-label setup it
+        // needs) is x86 only for now.
+        #[cfg(jit_emit)]
+        {
+            self.jit.finalize();
+            let class_version_label = self.jit.const_i32(class_version as _);
+            self.gen_machine_code(
+                frame.asm_info,
+                store,
+                entry_label,
+                0,
+                class_version_label.clone(),
+            );
+            Ok((inline_cache, specialized_info, class_version_label))
+        }
+        // aarch64: the front-end ran, but no aarch64 emission exists yet, so
+        // bail — `compile()` turns this `Err` into `None` and the method stays
+        // VM-interpreted. No `finalize` / label emission here, so there is no
+        // unresolved-label debt. AsmInst lowering is added incrementally; see
+        // doc/aarch64-jitgen-plan.md.
+        // aarch64 (Phase 3b): drive the A64 lowering. It bails (returns false)
+        // on any not-yet-ported AsmInst, in which case we Err and the method
+        // stays VM-interpreted.
+        #[cfg(not(jit_emit))]
+        {
+            self.jit.finalize();
+            let class_version_label = self.jit.const_i32(class_version as _);
+            if self.a64_gen_machine_code(
+                frame.asm_info,
+                store,
+                entry_label,
+                class_version_label.clone(),
+            ) {
+                Ok((inline_cache, specialized_info, class_version_label))
+            } else {
+                Err(CompileError)
+            }
+        }
     }
+}
 
+#[cfg(jit_emit)]
+impl Codegen {
     fn gen_machine_code(
         &mut self,
         mut frame: AsmInfo,
@@ -460,6 +502,7 @@ impl Codegen {
     }
 }
 
+#[cfg(jit_emit)]
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -489,6 +532,7 @@ macro_rules! load_store {
     };
 }
 
+#[cfg(jit_emit)]
 impl JitModule {
     load_store!(rax);
     load_store!(rdi);
@@ -819,6 +863,7 @@ impl JitModule {
     }
 }
 
+#[cfg(jit_emit)]
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
@@ -980,6 +1025,7 @@ impl Codegen {
     }
 }
 
+#[cfg(jit_emit)]
 #[test]
 fn float_test() {
     let r#gen = Codegen::new();
@@ -1010,6 +1056,7 @@ fn float_test() {
     }
 }
 
+#[cfg(jit_emit)]
 #[test]
 fn float_test2() {
     let mut r#gen = Codegen::new();

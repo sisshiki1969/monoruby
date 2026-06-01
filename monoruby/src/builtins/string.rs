@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use jitgen::JitContext;
 
 //
@@ -3380,7 +3380,7 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::integer(length as i64))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn string_bytesize(
     state: &mut AbstractState,

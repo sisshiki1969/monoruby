@@ -8,20 +8,20 @@
 // allocation types, JIT runtime arg-handling helpers, etc.). Its asm-emitting
 // parts are `#[cfg(jit)]`-excluded, leaving these helpers unreferenced. Allow
 // that here rather than `#[cfg(jit)]`-gating each one individually.
-#![cfg_attr(not(jit), allow(dead_code, unused_mut))]
+#![cfg_attr(not(jit_emit), allow(dead_code, unused_mut))]
 
 /// Wrap a JIT inline-method generator for the `define_builtin_inline_*`
 /// registrars. On JIT builds it boxes the generator; on VM-only builds
 /// (`not(jit)`: aarch64 / `--features no-jit`) it expands to `()`, dropping
 /// the (JIT-only, `#[cfg(jit)]`) generator fn/closure so it is never named or
 /// compiled. The matching `#[cfg(not(jit))]` registrar twins take `()`.
-#[cfg(jit)]
+#[cfg(jit_emit)]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new($f)
     };
 }
-#[cfg(not(jit))]
+#[cfg(not(jit_emit))]
 macro_rules! inline_gen {
     ($f:expr) => {
         ()
@@ -47,7 +47,7 @@ mod watchdog;
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 pub(crate) use codegen::jitgen::JitContext;
 pub use executor::Executor;
 pub use executor::frame_leak_stats;

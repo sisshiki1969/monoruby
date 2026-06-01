@@ -742,8 +742,16 @@ impl Codegen {
     /// to `raise` if it is 0 (error), else store, advance PC, and dispatch.
     pub(in crate::codegen) fn a64_checked_store_next(&mut self, raise: &DestLabel) {
         let skip = self.jit.label();
+        let ok = self.jit.label();
+        // `cbz x0, raise` but long-range. `remove_vm_bop_optimization`
+        // regenerates the binop/cmp/unop handlers at runtime, far (> ±1MB)
+        // from the startup `entry_raise`, so a bare conditional branch (imm19)
+        // to `raise` overflows. Invert past a near label and reach `raise`
+        // with an unconditional `b` (±128MB).
         monoasm_arm64!(&mut self.jit,
-            cbz x0, raise;
+            cbnz x0, ok;   // result != 0 -> ok
+            b raise;       // result 0 -> error (long range)
+            ok:
             ldrh x10, [x(PC.0), #(4)];
             cbz x10, skip;
             neg x10, x10;

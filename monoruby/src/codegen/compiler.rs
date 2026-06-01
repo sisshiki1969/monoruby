@@ -24,6 +24,7 @@ impl Codegen {
         )
     }
 
+    #[cfg(jit_emit)]
     pub(super) fn gen_compile_patch(
         &mut self,
         no_compile_exit: &DestLabel,
@@ -61,6 +62,7 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
+    #[cfg(jit_emit)]
     pub(super) fn gen_recompile(
         &mut self,
         position: Option<BytecodePtr>,
@@ -105,6 +107,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(jit_emit)]
     pub(super) fn gen_recompile_specialized(
         &mut self,
         idx: usize,
@@ -123,6 +126,7 @@ impl Codegen {
         self.jit.restore_registers();
     }
 
+    #[cfg(jit_emit)]
     pub(super) fn gen_compile_loop(&mut self, entry: &DestLabel, cont: &DestLabel) {
         monoasm!( &mut self.jit,
         entry:
@@ -268,6 +272,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(jit_emit)]
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -306,6 +311,7 @@ impl Codegen {
         Some(())
     }
 
+    #[cfg(jit_emit)]
     fn compile_partial(
         &mut self,
         globals: &mut Globals,
@@ -333,6 +339,7 @@ impl Codegen {
         Some(())
     }
 
+    #[cfg(jit_emit)]
     fn recompile_specialized(
         &mut self,
         globals: &mut Globals,
@@ -363,6 +370,7 @@ impl Codegen {
 // JIT Compiler API for asm codes.
 //
 
+#[cfg(jit_emit)]
 extern "C" fn jit_recompile_specialized(
     globals: &mut Globals,
     idx: usize,
@@ -375,7 +383,7 @@ extern "C" fn jit_recompile_specialized(
     });
 }
 
-extern "C" fn jit_compile_patch(
+pub(in crate::codegen) extern "C" fn jit_compile_patch(
     globals: &mut Globals,
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
@@ -393,6 +401,7 @@ extern "C" fn jit_compile_patch(
     //}
 }
 
+#[cfg(jit_emit)]
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
     //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     CODEGEN.with(|codegen| {
@@ -405,6 +414,7 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
     //}
 }
 
+#[cfg(jit_emit)]
 extern "C" fn jit_recompile_method_with_recovery(
     globals: &mut Globals,
     lfp: Lfp,
@@ -428,6 +438,7 @@ extern "C" fn jit_recompile_method_with_recovery(
 ///
 /// Compile the loop.
 ///
+#[cfg(jit_emit)]
 extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
     if globals.no_jit {
         return;
@@ -438,6 +449,7 @@ extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 ///
 /// Recompile the loop.
 ///
+#[cfg(jit_emit)]
 extern "C" fn jit_recompile_loop(
     globals: &mut Globals,
     lfp: Lfp,
@@ -447,6 +459,7 @@ extern "C" fn jit_recompile_loop(
     compile_loop(globals, lfp, pc, Some(reason));
 }
 
+#[cfg(jit_emit)]
 fn compile_loop(
     globals: &mut Globals,
     lfp: Lfp,

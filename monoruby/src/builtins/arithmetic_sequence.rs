@@ -109,7 +109,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_arithmetic_sequence_inner().begin())
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn as_begin_inline(
     state: &mut AbstractState,
@@ -134,7 +134,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(lfp.self_val().as_arithmetic_sequence_inner().end())
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn as_end_inline(
     state: &mut AbstractState,
@@ -159,7 +159,7 @@ fn step(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(lfp.self_val().as_arithmetic_sequence_inner().step())
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn as_step_inline(
     state: &mut AbstractState,
@@ -191,7 +191,7 @@ fn exclude_end(
     ))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn as_exclude_end_inline(
     state: &mut AbstractState,
@@ -223,7 +223,7 @@ fn as_exclude_end_inline(
 /// (`begin` / `end` / `step`). Loads a 64-bit `Value` from the given
 /// offset within the receiver's `RValue`. AS has no source-level literal
 /// form, so unlike Range we don't fold against a literal here.
-#[cfg(jit)]
+#[cfg(jit_emit)]
 fn inline_field_load(
     state: &mut AbstractState,
     ir: &mut AsmIr,

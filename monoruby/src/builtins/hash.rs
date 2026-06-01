@@ -774,7 +774,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn hash_index(
     state: &mut AbstractState,

@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use jitgen::JitContext;
 use num::ToPrimitive;
 use num::Zero;
@@ -308,7 +308,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn kernel_nil(
     state: &mut AbstractState,
@@ -360,7 +360,7 @@ fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::bool(!res.as_bool()))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn kernel_block_given(
     state: &mut AbstractState,
@@ -2880,7 +2880,7 @@ pub(crate) fn send(
     )
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 pub fn object_send(
     state: &mut AbstractState,
@@ -2944,7 +2944,7 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn kernel_is_a(
     state: &mut AbstractState,
@@ -3235,7 +3235,7 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::bool(false))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn object_respond_to(
     state: &mut AbstractState,

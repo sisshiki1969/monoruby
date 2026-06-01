@@ -54,16 +54,32 @@ fn find_ruby() -> Option<String> {
 }
 
 fn main() {
-    // The JIT compiler (`codegen::jitgen`) emits x86-64 machine code and is
-    // only built when targeting x86-64 with the JIT enabled. The `no-jit`
-    // cargo feature compile-time-excludes it (VM tier only), and any
-    // non-x86-64 target (e.g. the aarch64 VM port) always builds VM-only.
-    // Downstream code gates on `#[cfg(jit)]` / `#[cfg(not(jit))]`.
+    // JIT cfgs. `jit` gates the JIT front-end (bytecode→TraceIR→AsmIR,
+    // abstract state, register-allocation planning) — arch-neutral, intended
+    // to compile on any JIT-capable arch. `jit_emit` gates the x86-64
+    // machine-code emission: the AsmIR→native lowering AND the builtins
+    // inline-method generators (`inline_gen!`). On aarch64 the plan is to
+    // enable `jit` (front-end) with `jit_emit` off — inlined methods fall back
+    // to a plain call, and the AsmIR lowering deopts to the VM on anything not
+    // yet supported (see doc/aarch64-jitgen-plan.md). Today both are set
+    // together (x86-64 && !no-jit), so this is behavior-neutral.
+    // Downstream gates: `#[cfg(jit)]`/`#[cfg(not(jit))]` for the front-end,
+    // `#[cfg(jit_emit)]`/`#[cfg(not(jit_emit))]` for emission.
     println!("cargo::rustc-check-cfg=cfg(jit)");
-    let target_x86 = std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64");
+    println!("cargo::rustc-check-cfg=cfg(jit_emit)");
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH");
+    let target_x86 = arch.as_deref() == Ok("x86_64");
+    let target_arm64 = arch.as_deref() == Ok("aarch64");
     let no_jit = std::env::var_os("CARGO_FEATURE_NO_JIT").is_some();
-    if target_x86 && !no_jit {
+    // `jit` (front-end) on any JIT-capable arch; `jit_emit` (x86 emission)
+    // on x86-64 only. aarch64 thus builds the front-end with emission off —
+    // inlined methods fall back to plain calls and AsmIR lowering deopts to
+    // the VM on anything not yet ported.
+    if (target_x86 || target_arm64) && !no_jit {
         println!("cargo::rustc-cfg=jit");
+    }
+    if target_x86 && !no_jit {
+        println!("cargo::rustc-cfg=jit_emit");
     }
 
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");

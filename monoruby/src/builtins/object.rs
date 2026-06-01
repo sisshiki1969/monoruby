@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(jit)]
+#[cfg(jit_emit)]
 use jitgen::JitContext;
 
 //
@@ -161,7 +161,7 @@ fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::bool(!lfp.self_val().as_bool()))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 fn object_not(
     state: &mut AbstractState,
@@ -239,7 +239,7 @@ pub(super) fn object_id(
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
-#[cfg(jit)]
+#[cfg(jit_emit)]
 
 pub(super) fn object_object_id(
     state: &mut AbstractState,

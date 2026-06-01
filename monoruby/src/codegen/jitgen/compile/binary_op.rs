@@ -5,6 +5,33 @@ use crate::bytecodegen::BinOpK;
 use super::*;
 
 impl<'a> JitContext<'a> {
+    ///
+    /// Outcome of a binary op whose operand class is unknown *and* whose
+    /// inline cache is empty (`Other(None, _)` / the Shl-group `None`).
+    ///
+    /// - **codegen pass**: deopt + recompile this single instruction. Only
+    ///   this path bails at runtime; the rest of the loop stays JIT-compiled,
+    ///   and once the inline cache warms the method recompiles cleanly.
+    /// - **loop-analysis pass**: do *not* abort the block. Aborting drops the
+    ///   loop's back-edge fix-point, which leaves the loop head un-widened —
+    ///   a constant `C` that cannot be reconciled with the runtime `G` value
+    ///   the real back-edge delivers, hitting the `(G, C)` `unreachable!` in
+    ///   `bridge`. Widen the result to a typeless stack value (`S`) and
+    ///   continue so the fix-point converges; the loop head is then widened
+    ///   consistently and the real (codegen) pass emits the per-instruction
+    ///   deopt above.
+    ///
+    fn binop_uncached(&self, state: &mut AbstractState, dst: Option<SlotId>) -> CompileResult {
+        if self.codegen_mode() {
+            CompileResult::Recompile(RecompileReason::NotCached)
+        } else {
+            if let Some(dst) = dst {
+                state.def_S(dst);
+            }
+            CompileResult::Continue
+        }
+    }
+
     pub(super) fn binary_op(
         &mut self,
         state: &mut AbstractState,
@@ -31,7 +58,7 @@ impl<'a> JitContext<'a> {
             | BinOpK::Rem => {
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
-                    None => Ok(CompileResult::Recompile(RecompileReason::NotCached)),
+                    None => Ok(self.binop_uncached(state, dst)),
                     Some(lhs_class) => self.call_binary_method(
                         state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
                     ),
@@ -39,6 +66,21 @@ impl<'a> JitContext<'a> {
             }
             _ => match state.binop_type(lhs, rhs, ic) {
                 BinaryOpType::Integer(mode) => {
+                    // A constant-fold bakes the result (e.g. `100 * 100` -> 10000)
+                    // assuming the builtin operator, with no runtime trace of the
+                    // op. Guard that assumption: emit `CheckBOP` *before* the fold
+                    // (so the deopt write-back still sees the operand literals
+                    // live) with the deopt PC at this op, so a later BOP
+                    // redefinition deopts and the interpreter re-runs the op
+                    // through the de-optimized VM handler. x86 recovers via the
+                    // class-version-guard recompile path, so gate this to the
+                    // aarch64 (no-recompile) build. Limited to the fold case: the
+                    // register fast-path keeps its operands at runtime, so it is
+                    // not worth a guard on every arithmetic op.
+                    #[cfg(not(jit_emit))]
+                    if state.check_concrete_i64(mode).is_some() {
+                        ir.check_bop(state);
+                    }
                     state.binop_integer(ir, kind, dst, mode);
                     Ok(CompileResult::Continue)
                 }
@@ -46,9 +88,7 @@ impl<'a> JitContext<'a> {
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
-                BinaryOpType::Other(None, _) => {
-                    Ok(CompileResult::Recompile(RecompileReason::NotCached))
-                }
+                BinaryOpType::Other(None, _) => Ok(self.binop_uncached(state, dst)),
                 BinaryOpType::Other(Some(lhs_class), rhs_class) => self.call_binary_method(
                     state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
                 ),

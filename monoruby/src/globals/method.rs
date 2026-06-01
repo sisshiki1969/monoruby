@@ -472,7 +472,7 @@ impl Globals {
         func_id
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_inline_func(
         &mut self,
         class_id: ClassId,
@@ -484,7 +484,7 @@ impl Globals {
         self.define_builtin_inline_funcs(class_id, name, &[], address, inline_gen, arg_num)
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_inline_funcs(
         &mut self,
         class_id: ClassId,
@@ -499,7 +499,7 @@ impl Globals {
         )
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_inline_func_with(
         &mut self,
         class_id: ClassId,
@@ -522,7 +522,7 @@ impl Globals {
         )
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_inline_funcs_with(
         &mut self,
         class_id: ClassId,
@@ -548,7 +548,7 @@ impl Globals {
         )
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_inline_funcs_with_kw(
         &mut self,
         class_id: ClassId,
@@ -585,7 +585,7 @@ impl Globals {
     // is dropped to `()` by `inline_gen!`, so only the runtime function is
     // registered. The VM function is identical to the inline form's
     // `address`, so dispatch is unaffected.
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_inline_func(
         &mut self,
         class_id: ClassId,
@@ -597,7 +597,7 @@ impl Globals {
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_inline_funcs(
         &mut self,
         class_id: ClassId,
@@ -610,7 +610,7 @@ impl Globals {
         self.define_builtin_funcs(class_id, name, alias, address, arg_num)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_inline_func_with(
         &mut self,
         class_id: ClassId,
@@ -624,7 +624,7 @@ impl Globals {
         self.define_builtin_func_with(class_id, name, address, min, max, rest)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_inline_funcs_with(
         &mut self,
         class_id: ClassId,
@@ -639,7 +639,7 @@ impl Globals {
         self.define_builtin_funcs_with(class_id, name, alias, address, min, max, rest)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_inline_funcs_with_kw(
         &mut self,
         class_id: ClassId,
@@ -777,7 +777,7 @@ impl Globals {
         )
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
         class_id: ClassId,
@@ -789,7 +789,7 @@ impl Globals {
         self.define_builtin_inline_func_with(class_id, name, address, inline_gen, 0, 0, true)
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_class_inline_funcs_catch_all(
         &mut self,
         class_id: ClassId,
@@ -837,7 +837,7 @@ impl Globals {
         self.define_builtin_func_with(class_id, name, address, min, max, rest)
     }
 
-    #[cfg(jit)]
+    #[cfg(jit_emit)]
     pub(crate) fn define_builtin_module_inline_func(
         &mut self,
         class_id: ClassId,
@@ -852,7 +852,7 @@ impl Globals {
         fid
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_class_inline_func_rest(
         &mut self,
         class_id: ClassId,
@@ -864,7 +864,7 @@ impl Globals {
         self.define_builtin_func_with(class_id, name, address, 0, 0, true)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_class_inline_funcs_catch_all(
         &mut self,
         class_id: ClassId,
@@ -877,7 +877,7 @@ impl Globals {
         self.define_builtin_funcs_with_kw(class_id, name, alias, address, 0, 0, true, &[], true)
     }
 
-    #[cfg(not(jit))]
+    #[cfg(not(jit_emit))]
     pub(crate) fn define_builtin_module_inline_func(
         &mut self,
         class_id: ClassId,

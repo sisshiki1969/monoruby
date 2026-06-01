@@ -20,6 +20,58 @@ impl Codegen {
     ///    +-------------------------------+                               +--> JIT code        +--------------------------------+
     ///
     /// ```
+    ///
+    /// aarch64 has no emission yet: `compile_method` runs the arch-neutral
+    /// front-end and bails (returns `None`), so a minimal `not(jit_emit)`
+    /// variant just drives that and never patches — the A64 trigger falls
+    /// through to `vm_entry` on its own. See `doc/aarch64-jitgen-plan.md`.
+    /// aarch64 install via **indirect dispatch** (no runtime branch patching):
+    /// `slot` points at the wrapper's per-method JIT-entry word (init 0). On a
+    /// successful compile we write the compiled entry address there; the
+    /// wrapper loads it and branches to the JIT code on the next call. On bail
+    /// the slot stays 0 and the method stays VM-interpreted.
+    #[cfg(not(jit_emit))]
+    pub(super) fn compile_patch(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        slot: monoasm::CodePtr,
+    ) -> Option<()> {
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        if globals.store[iseq_id].jit_invalidated() {
+            self.jit.finalize();
+            return None;
+        }
+        let self_class = lfp.self_val().class();
+        let class_version = self.class_version();
+        let jit_entry = self.jit.label();
+        // `jit_entry` is bound by `a64_gen_machine_code` (even on the bail
+        // path) so it always resolves at `finalize`.
+        let compiled = self
+            .compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None)
+            .is_some();
+        if !compiled {
+            self.jit.finalize();
+            return None;
+        }
+        // Front the compiled `jit_entry` with a self-class guard. The JIT body
+        // assumes `self == self_class`, but a single per-method slot is shared
+        // by every receiver class of an inherited method — so publishing the
+        // bare entry would mis-run a sibling subclass. The guard dispatches the
+        // matching class to `jit_entry` and chains other classes to their own
+        // specialization (mirrors the x86 `class_guard_stub`).
+        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        self.jit.finalize();
+        // Publish the guard stub (not the bare entry) into the slot.
+        let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
+        // SAFETY: `slot` is the address of the wrapper's (or a parent guard's)
+        // heap-leaked u64 chain word (see arch/aarch64/wrapper.rs).
+        unsafe { *(slot.as_ptr() as *mut u64) = guard_addr };
+        Some(())
+    }
+
+    #[cfg(jit_emit)]
     pub(super) fn compile_patch(
         &mut self,
         globals: &mut Globals,
@@ -84,6 +136,7 @@ impl Codegen {
     ///
     /// ~~~
     ///
+    #[cfg(jit_emit)]
     fn class_guard_stub(
         &mut self,
         self_class: ClassId,
