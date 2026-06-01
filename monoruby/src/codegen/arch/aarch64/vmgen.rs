@@ -11,6 +11,9 @@ impl Codegen {
         self.a64_gen_entry_raise();
         self.a64_gen_stack_overflow();
         self.a64_gen_exec_gc();
+        // f64_to_val helper (D0 f64 -> X0 boxed Value), used by `FprToStack`.
+        let f64_to_val = self.f64_to_val.clone();
+        self.a64_gen_f64_to_val(&f64_to_val);
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
@@ -1780,8 +1783,26 @@ impl Codegen {
         p
     }
 
+    /// Record the runtime operand classes into the BinOp inline cache so the
+    /// JIT can type the site (e.g. classify a Float `+`): `[PC+8]` = classid1,
+    /// `[PC+12]` = classid2. Mirrors x86 `vm_save_binary_class` (sans the
+    /// polymorphic-flag bookkeeping for now). Operands are the Values in X13
+    /// (lhs) / X14 (rhs); `get_class` reads X0 only, so X13/X14 survive.
+    pub(in crate::codegen) fn a64_save_binary_class(&mut self) {
+        let get_class = self.get_class.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x13;
+            bl get_class;             // x0 = class(lhs)
+            str w0, [x(PC.0), #(8)];  // classid1
+            mov x0, x14;
+            bl get_class;             // x0 = class(rhs)
+            str w0, [x(PC.0), #(12)]; // classid2
+        );
+    }
+
     pub(in crate::codegen) fn a64_generic_binop(&mut self, func: BinaryOpFn) {
         let raise = self.entry_raise.clone();
+        self.a64_save_binary_class();
         monoasm_arm64!(&mut self.jit,
             mov x2, x13;  // lhs
             mov x3, x14;  // rhs
