@@ -46,7 +46,9 @@ impl Codegen {
             | AsmInst::LitToStack(..)
             | AsmInst::CondBr(..)
             | AsmInst::NilBr(..)
-            | AsmInst::CheckLocal(..) => {
+            | AsmInst::CheckLocal(..)
+            | AsmInst::GuardClass(..)
+            | AsmInst::Deopt(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -223,10 +225,6 @@ impl Codegen {
             }
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
-            AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_class(r, class, deopt);
-            }
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
@@ -254,12 +252,6 @@ impl Codegen {
                     class_version,
                     self.specialized_base + idx,
                     deopt,
-                );
-            }
-            AsmInst::Deopt(deopt) => {
-                let deopt = &labels[deopt];
-                monoasm!( &mut self.jit,
-                    jmp deopt;
                 );
             }
             AsmInst::RecompileDeopt {
@@ -990,6 +982,26 @@ impl Codegen {
         monoasm!( &mut self.jit,
             testq rax, rax;
             jnz  dest;
+        );
+    }
+
+    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
+    /// Always succeeds on x86 (the bool result exists for the aarch64 twin,
+    /// which bails on not-yet-supported class kinds).
+    pub(in crate::codegen::jitgen) fn emit_guard_class(
+        &mut self,
+        r: GP,
+        class: ClassId,
+        fail: &DestLabel,
+    ) -> bool {
+        self.guard_class(r, class, fail);
+        true
+    }
+
+    /// Unconditional jump to a side-exit (deopt) label.
+    pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
+        monoasm!( &mut self.jit,
+            jmp deopt;
         );
     }
 

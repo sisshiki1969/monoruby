@@ -713,6 +713,23 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
     }
 
+    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
+    /// Returns `false` (bail) for not-yet-supported class kinds.
+    pub(in crate::codegen::jitgen) fn emit_guard_class(
+        &mut self,
+        r: GP,
+        class: ClassId,
+        fail: &DestLabel,
+    ) -> bool {
+        self.a64_guard_class(r, class, fail)
+    }
+
+    /// Unconditional jump to a side-exit (deopt) label.
+    pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, b deopt;);
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -989,11 +1006,6 @@ impl Codegen {
                 );
                 true
             }
-            // Type guard: deopt if `r` is not of `class`.
-            AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = labels[deopt].clone();
-                self.a64_guard_class(r, class, &deopt)
-            }
             // Inline-cache class-version guard: deopt if the global class
             // version changed since compilation.
             AsmInst::GuardClassVersion { deopt, .. } => {
@@ -1079,12 +1091,6 @@ impl Codegen {
                     ldr x30, [sp], #16;
                     cbz x0, error;              // None -> error
                 );
-                true
-            }
-            // Unconditional deopt to the interpreter.
-            AsmInst::Deopt(deopt) => {
-                let deopt = labels[deopt].clone();
-                monoasm_arm64!(&mut self.jit, b deopt;);
                 true
             }
             // A NotCached/recompile point: x86 deopts then recompiles once the

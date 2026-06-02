@@ -69,6 +69,13 @@ impl Codegen {
                 let dest = frame.resolve_label(&mut self.jit, dest);
                 self.emit_check_local(dest);
             }
+            // Type guard: deopt if `r`'s runtime class is not `class`. (aarch64
+            // bails for not-yet-supported class kinds, hence the bool result.)
+            AsmInst::GuardClass(r, class, deopt) => {
+                return self.emit_guard_class(r, class, &labels[deopt]);
+            }
+            // Unconditional jump to a side-exit (deopt) label.
+            AsmInst::Deopt(deopt) => self.emit_deopt(&labels[deopt]),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
