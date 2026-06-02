@@ -38,6 +38,34 @@ fn a64_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
     }
 }
 
+/// Like `a64_cond_for_cmp` but for `fcmp`: NaN (unordered) must compare false
+/// for every operator except `!=`. After `fcmp`, NZCV is set so that `<` needs
+/// `MI` (not `LT`, which is true when unordered) and `<=` needs `LS` (not `LE`);
+/// the inverse for `BrIfNot` is always the ARM bit-complement of the condition.
+fn a64_float_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
+    use monoasm::Cond;
+    let taken = match kind {
+        CmpKind::Eq | CmpKind::TEq => Cond::Eq,
+        CmpKind::Ne => Cond::Ne,
+        CmpKind::Lt => Cond::Mi,
+        CmpKind::Le => Cond::Ls,
+        CmpKind::Gt => Cond::Gt,
+        CmpKind::Ge => Cond::Ge,
+    };
+    match brkind {
+        BrKind::BrIf => taken,
+        BrKind::BrIfNot => match taken {
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Mi => Cond::Pl,
+            Cond::Ls => Cond::Hi,
+            Cond::Gt => Cond::Le,
+            Cond::Ge => Cond::Lt,
+            other => other,
+        },
+    }
+}
+
 impl Codegen {
     /// Drive AsmIR→A64 lowering for a whole method. Returns `false` (bail) if
     /// anything is not yet supported; the caller then keeps the method on the
@@ -1329,6 +1357,199 @@ impl Codegen {
         true
     }
 
+    /// Save the live FP pool registers (D2..) below sp before a C-call.
+    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        if using_xmm.not_any() && !cont {
+            return true;
+        }
+        let sp_offset =
+            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
+        true
+    }
+
+    /// Restore the live FP pool registers and pop the save area after a C-call.
+    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        if using_xmm.not_any() && !cont {
+            return true;
+        }
+        let sp_offset =
+            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
+        monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
+        true
+    }
+
+    /// Integer binary op fast path (guarded; deopts to `deopt`). Independent of
+    /// `inline_gen`; emitted when the inline cache says both operands are
+    /// Integer. Bails (`false`) on an unsupported `BinOpK`.
+    pub(in crate::codegen::jitgen) fn emit_integer_binop(
+        &mut self,
+        lhs: GP,
+        rhs: GP,
+        mode: OpMode,
+        kind: BinOpK,
+        deopt: DestLabel,
+    ) -> bool {
+        self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt)
+    }
+
+    /// Integer comparison; result Value lands in the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp(
+        &mut self,
+        kind: CmpKind,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+    ) -> bool {
+        self.a64_cmp_integer(&mode, lhs, rhs);
+        self.a64_flag_to_bool(kind);
+        true
+    }
+
+    /// Fused integer compare + conditional branch to `branch_dest`.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp_br(
+        &mut self,
+        kind: CmpKind,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+    ) -> bool {
+        self.a64_cmp_integer(&mode, lhs, rhs);
+        let cond = a64_cond_for_cmp(kind, brkind);
+        self.jit.bcond_label(cond, &branch_dest);
+        true
+    }
+
+    /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in D-registers.
+    /// Bails (`false`) if an operand is not lowerable or `kind` is unsupported.
+    pub(in crate::codegen::jitgen) fn emit_float_binop(
+        &mut self,
+        kind: BinOpK,
+        binary_xmm: (FPReg, FPReg),
+        dst: FPReg,
+        base: usize,
+    ) -> bool {
+        let (l, r) = binary_xmm;
+        let (Some(ld), Some(rd), Some(dd)) = (
+            self.a64_fpr(l, base),
+            self.a64_fpr(r, base),
+            self.a64_fpr(dst, base),
+        ) else {
+            return false;
+        };
+        // aarch64 FP 3-op writes rd, reads rn/rm — no aliasing hazard.
+        match kind {
+            BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
+            BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
+            BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
+            BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Float unary op: negate (flip bit 63) or unary-plus (no-op). The macro
+    /// lacks `fneg`, so the sign flip goes through a GPR (`fmov`/`eor`/`fmov`).
+    /// Bails (`false`) on a spilled operand or an unsupported `UnOpK`.
+    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
+        match kind {
+            UnOpK::Neg => {
+                let Some(p) = self.a64_fpr(dst, base) else {
+                    return false;
+                };
+                monoasm_arm64!(&mut self.jit,
+                    fmov x9, d(p);
+                    mov x10, (0x8000_0000_0000_0000u64);
+                    eor x9, x9, x10;
+                    fmov d(p), x9;
+                );
+            }
+            UnOpK::Pos => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// `[lfp - slot*8 - LFP_SELF] <- Value::integer(i)` and `fpr(x) <- i as f64`
+    /// (a constant int materialized as both a boxed integer and a double).
+    /// Bails (`false`) if the FP destination is not lowerable (spilled).
+    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let id = Value::integer(i).id();
+        let bits = (i as f64).to_bits();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (id);
+            sub x10, x(lfp), #(off);
+            str x9, [x10];
+            mov x9, (bits);
+            fmov d(p), x9;
+        );
+        true
+    }
+
+    /// Float comparison; NaN-correct boolean Value in the accumulator. Mirrors
+    /// `a64_flag_to_bool` but on `fcmp` flags with float condition codes. Bails
+    /// (`false`) if either operand is spilled.
+    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
+        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
+            return false;
+        };
+        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+        let cond = a64_float_cond_for_cmp(kind, BrKind::BrIf);
+        let rax = GP::Rax.a64();
+        self.jit.cset(rax, cond);
+        monoasm_arm64!(&mut self.jit,
+            lsl x(rax.0), x(rax.0), #(3u32);
+            mov x9, (FALSE_VALUE);
+            orr x(rax.0), x(rax.0), x9;
+        );
+        true
+    }
+
+    /// Fused float compare + conditional branch (NaN compares false except
+    /// `!=`). Bails (`false`) if either operand is spilled.
+    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
+        &mut self,
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+        base: usize,
+    ) -> bool {
+        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
+            return false;
+        };
+        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+        let cond = a64_float_cond_for_cmp(kind, brkind);
+        self.jit.bcond_label(cond, &branch_dest);
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -1453,88 +1674,6 @@ impl Codegen {
             // a64 cannot patch return addresses, so this is a no-op (class
             // version guards cover the staleness it would otherwise catch).
             AsmInst::ImmediateEvict { .. } => true,
-            // Inline integer fast paths (independent of inline_gen; emitted by
-            // the BinOp/Cmp bytecode opcodes when the inline cache says both
-            // operands are Integer).
-            AsmInst::IntegerBinOp { kind, lhs, rhs, mode, deopt } => {
-                let deopt = labels[deopt].clone();
-                self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt)
-            }
-            AsmInst::IntegerCmp { mode, kind, lhs, rhs } => {
-                self.a64_cmp_integer(&mode, lhs, rhs);
-                self.a64_flag_to_bool(kind);
-                true
-            }
-            AsmInst::IntegerCmpBr { mode, kind, lhs, rhs, brkind, branch_dest } => {
-                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.a64_cmp_integer(&mode, lhs, rhs);
-                let cond = a64_cond_for_cmp(kind, brkind);
-                self.jit.bcond_label(cond, &branch_dest);
-                true
-            }
-            // ---- floating point (four-arithmetic) ----
-            // dst <- lhs <op> rhs  (D-register arithmetic)
-            AsmInst::FloatBinOp {
-                kind,
-                binary_xmm,
-                dst,
-            } => {
-                let base = frame.base_stack_offset;
-                let (l, r) = binary_xmm;
-                let (Some(ld), Some(rd), Some(dd)) = (
-                    self.a64_fpr(l, base),
-                    self.a64_fpr(r, base),
-                    self.a64_fpr(dst, base),
-                ) else {
-                    return false;
-                };
-                // aarch64 FP 3-op writes rd, reads rn/rm — no aliasing hazard.
-                match kind {
-                    BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
-                    BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
-                    BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
-                    BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
-                    _ => return false,
-                }
-                true
-            }
-            // Save / restore live FP pool registers around a C-call.
-            AsmInst::XmmSave(using_xmm, cont) => {
-                if using_xmm.not_any() && !cont {
-                    return true;
-                }
-                let sp_offset =
-                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
-                monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
-                let mut i = 0u32;
-                for (xi, b) in using_xmm.iter().enumerate() {
-                    if *b {
-                        let pr = xi as u32 + 2;
-                        let ofs = 8 * i;
-                        monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
-                        i += 1;
-                    }
-                }
-                true
-            }
-            AsmInst::XmmRestore(using_xmm, cont) => {
-                if using_xmm.not_any() && !cont {
-                    return true;
-                }
-                let sp_offset =
-                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
-                let mut i = 0u32;
-                for (xi, b) in using_xmm.iter().enumerate() {
-                    if *b {
-                        let pr = xi as u32 + 2;
-                        let ofs = 8 * i;
-                        monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
-                        i += 1;
-                    }
-                }
-                monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
-                true
-            }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }

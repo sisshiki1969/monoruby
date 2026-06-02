@@ -148,6 +148,75 @@ impl Codegen {
             AsmInst::FprToStack(x, slot) => {
                 return self.emit_fpr_to_stack(x, slot, frame.base_stack_offset);
             }
+            // Save / restore live FP pool registers around a C-call.
+            AsmInst::XmmSave(using_xmm, cont) => return self.emit_xmm_save(using_xmm, cont),
+            AsmInst::XmmRestore(using_xmm, cont) => return self.emit_xmm_restore(using_xmm, cont),
+            // Integer / float arithmetic fast paths. Each backend resolves the
+            // same operands and dispatches to its own emission primitive
+            // (aarch64 bails on an unsupported BinOpK, hence the bool results).
+            AsmInst::IntegerBinOp {
+                kind,
+                lhs,
+                rhs,
+                mode,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                return self.emit_integer_binop(lhs, rhs, mode, kind, deopt);
+            }
+            AsmInst::IntegerCmp {
+                mode,
+                kind,
+                lhs,
+                rhs,
+            } => return self.emit_integer_cmp(kind, mode, lhs, rhs),
+            AsmInst::IntegerCmpBr {
+                mode,
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                branch_dest,
+            } => {
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
+                return self.emit_integer_cmp_br(kind, mode, lhs, rhs, brkind, branch_dest);
+            }
+            AsmInst::FloatBinOp {
+                kind,
+                binary_xmm,
+                dst,
+            } => return self.emit_float_binop(kind, binary_xmm, dst, frame.base_stack_offset),
+            AsmInst::FloatUnOp { kind, dst } => {
+                return self.emit_float_unop(kind, dst, frame.base_stack_offset);
+            }
+            // [slot] <- Value::integer(i) and fpr(x) <- i as f64 (constant int
+            // materialized as both a boxed integer and a double).
+            AsmInst::I64ToBoth(i, slot, x) => {
+                return self.emit_i64_to_both(i, slot, x, frame.base_stack_offset);
+            }
+            // Float comparison. NaN compares false (except `!=`); each backend
+            // picks NaN-correct condition codes (x86 ucomisd + setp tricks,
+            // aarch64 fcmp + MI/LS conditions).
+            AsmInst::FloatCmp { kind, lhs, rhs } => {
+                return self.emit_float_cmp(kind, lhs, rhs, frame.base_stack_offset);
+            }
+            AsmInst::FloatCmpBr {
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                branch_dest,
+            } => {
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
+                return self.emit_float_cmp_br(
+                    kind,
+                    lhs,
+                    rhs,
+                    brkind,
+                    branch_dest,
+                    frame.base_stack_offset,
+                );
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
