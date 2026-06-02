@@ -85,7 +85,10 @@ impl Codegen {
             | AsmInst::FloatCmpBr { .. }
             | AsmInst::Ret
             | AsmInst::MethodRet(..)
-            | AsmInst::ImmediateEvict { .. } => {
+            | AsmInst::ImmediateEvict { .. }
+            | AsmInst::GuardClassVersion { .. }
+            | AsmInst::SetupMethodFrame { .. }
+            | AsmInst::SetArguments { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -186,14 +189,6 @@ impl Codegen {
                 self.guard_capture(deopt)
             }
 
-            AsmInst::GuardClassVersion {
-                position,
-                with_recovery,
-                deopt,
-            } => {
-                let deopt = &labels[deopt];
-                self.guard_class_version(class_version, position, with_recovery, deopt);
-            }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
                 self.guard_class_version_specialized(
@@ -231,10 +226,6 @@ impl Codegen {
                     jmp  deopt;
                 );
                 self.jit.select_page(0);
-            }
-            AsmInst::SetArguments { callid, callee_fid } => {
-                let offset = store[callee_fid].get_offset();
-                self.jit_set_arguments(callid, callee_fid, offset);
             }
             AsmInst::SetArgumentsForwarded {
                 callid,
@@ -353,13 +344,6 @@ impl Codegen {
                 };
             }
 
-            AsmInst::SetupMethodFrame {
-                meta,
-                callid,
-                outer_lfp,
-            } => {
-                self.setup_method_frame(store, meta, callid, outer_lfp);
-            }
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
             }
@@ -1623,5 +1607,42 @@ impl Codegen {
         self.return_addr_table
             .entry(*return_addr)
             .and_modify(|e| e.0 = Some(patch_point));
+    }
+
+    /// Inline-cache class-version guard: deopt if the global class version moved
+    /// since compilation. `position`/`with_recovery` drive x86 recompilation.
+    pub(in crate::codegen::jitgen) fn emit_guard_class_version(
+        &mut self,
+        class_version: DestLabel,
+        position: Option<BytecodePtr>,
+        with_recovery: bool,
+        deopt: DestLabel,
+    ) {
+        self.guard_class_version(class_version, position, with_recovery, &deopt);
+    }
+
+    /// Write the callee frame's meta/outer/block fields before a call.
+    pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
+        &mut self,
+        store: &Store,
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    ) {
+        self.setup_method_frame(store, meta, callid, outer_lfp);
+    }
+
+    /// Marshal the call arguments into the callee frame. Always succeeds on x86
+    /// (the bool result mirrors the aarch64 twin, which bails on unsupported
+    /// argument shapes).
+    pub(in crate::codegen::jitgen) fn emit_set_arguments(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    ) -> bool {
+        let offset = store[callee_fid].get_offset();
+        self.jit_set_arguments(callid, callee_fid, offset);
+        true
     }
 }

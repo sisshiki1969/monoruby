@@ -224,6 +224,26 @@ impl Codegen {
             AsmInst::Ret => self.emit_ret(),
             AsmInst::MethodRet(pc) => self.emit_method_ret(pc),
             AsmInst::ImmediateEvict { evict } => self.emit_immediate_evict(evict),
+            // Method-call prologue: class-version guard, callee frame fields,
+            // argument massage. (aarch64 SetArguments bails on a not-yet-ported
+            // argument shape, hence the bool result; the guard ignores the x86
+            // recompile params it has no recompiler for.)
+            AsmInst::GuardClassVersion {
+                position,
+                with_recovery,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
+            }
+            AsmInst::SetupMethodFrame {
+                meta,
+                callid,
+                outer_lfp,
+            } => self.emit_setup_method_frame(store, meta, callid, outer_lfp),
+            AsmInst::SetArguments { callid, callee_fid } => {
+                return self.emit_set_arguments(store, callid, callee_fid);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
