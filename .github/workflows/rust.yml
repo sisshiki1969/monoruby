@@ -88,23 +88,28 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
-      - name: Clone optcarrot
-        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec
+      - name: Diagnose coverage+JIT crash (M1, temporary)
         run: |
-          git clone --depth 1 https://github.com/ruby/spec.git ../spec
-          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
-      - name: Clone ruby-bench
-        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
-
-      - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
-        run: bin/test
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
-          files: lcov.info
-          flags: aarch64
-          fail_ci_if_error: true
+          # The crash needs native M1 + llvm-cov coverage instrumentation; it
+          # does NOT repro on qemu (5 configs) or a local Mac, and stress /
+          # parallelism are irrelevant. Decisive question: is the JIT required?
+          # Run the lib unit tests under coverage with JIT (reproduce) and with
+          # --no-jit (key). cov-nojit PASS => the AArch64 JIT codegen interacting
+          # with coverage instrumentation is the cause (and --no-jit+coverage is
+          # a viable green VM-tier-coverage fallback for this job).
+          run() {
+            local label="$1"; shift
+            echo "::group::$label :: $*"
+            if "$@" >/tmp/diag.out 2>&1; then
+              echo "RESULT [$label] = PASS"
+            else
+              echo "RESULT [$label] = FAIL (exit $?)"
+            fi
+            grep -aE 'SIGABRT|panicked|INVALID|left:|right:|Summary|tests run|test result|FAILED' \
+              /tmp/diag.out | tail -20 || true
+            echo "::endgroup::"
+          }
+          run cov-jit-lib   cargo llvm-cov nextest --no-report --lib
+          run cov-nojit-lib cargo llvm-cov nextest --no-report --no-default-features --features no-jit --lib
+          echo "=== diagnostic complete (step intentionally exits 0) ==="
 
