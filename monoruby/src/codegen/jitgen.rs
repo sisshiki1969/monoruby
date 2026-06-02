@@ -1,9 +1,9 @@
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use std::collections::HashSet;
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use monoasm_macro::monoasm;
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use paste::paste;
 
 use crate::ast::CmpKind;
@@ -28,13 +28,13 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 mod deoptimize;
 // Type / class guards, split per arch (mirrors asmir compile/compile_stub):
 // x86 emits via `guard.rs`; the aarch64 lowering uses `guard_stub.rs`.
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 mod guard;
-#[cfg(all(jit, not(jit_emit)))]
+#[cfg(all(jit, not(jit_x86)))]
 #[path = "jitgen/guard_stub.rs"]
 mod guard;
 mod merge;
@@ -338,7 +338,7 @@ impl Codegen {
         // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
         // AsmIR→machine-code lowering (and the `finalize`/data-label setup it
         // needs) is x86 only for now.
-        #[cfg(jit_emit)]
+        #[cfg(jit_x86)]
         {
             self.jit.finalize();
             let class_version_label = self.jit.const_i32(class_version as _);
@@ -359,7 +359,7 @@ impl Codegen {
         // aarch64 (Phase 3b): drive the A64 lowering. It bails (returns false)
         // on any not-yet-ported AsmInst, in which case we Err and the method
         // stays VM-interpreted.
-        #[cfg(not(jit_emit))]
+        #[cfg(not(jit_x86))]
         {
             self.jit.finalize();
             let class_version_label = self.jit.const_i32(class_version as _);
@@ -377,7 +377,7 @@ impl Codegen {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 impl Codegen {
     fn gen_machine_code(
         &mut self,
@@ -502,7 +502,7 @@ impl Codegen {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -532,7 +532,7 @@ macro_rules! load_store {
     };
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 impl JitModule {
     load_store!(rax);
     load_store!(rdi);
@@ -863,7 +863,7 @@ impl JitModule {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
@@ -1025,7 +1025,7 @@ impl Codegen {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 #[test]
 fn float_test() {
     let r#gen = Codegen::new();
@@ -1056,7 +1056,7 @@ fn float_test() {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 #[test]
 fn float_test2() {
     let mut r#gen = Codegen::new();

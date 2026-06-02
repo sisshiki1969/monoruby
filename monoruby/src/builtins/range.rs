@@ -82,7 +82,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_range().start())
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn range_begin(
     state: &mut AbstractState,
@@ -126,7 +126,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(lfp.self_val().as_range().end())
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn range_end(
     state: &mut AbstractState,
@@ -241,7 +241,7 @@ fn exclude_end(
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn range_exclude_end(
     state: &mut AbstractState,

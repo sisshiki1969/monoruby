@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
 use super::*;
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use jitgen::JitContext;
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 
@@ -422,7 +422,7 @@ enum ReadKind {
     F64,
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn fiddle_read_inline(
     state: &mut AbstractState,
@@ -510,7 +510,7 @@ enum WriteKind {
     F64,
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn fiddle_write_inline(
     state: &mut AbstractState,

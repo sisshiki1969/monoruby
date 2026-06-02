@@ -52,7 +52,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Compile TraceIr::MethodCall with inline method cache info.
     ///
-    #[cfg_attr(not(jit_emit), allow(unused_variables))]
+    #[cfg_attr(not(jit_x86), allow(unused_variables))]
     pub(super) fn compile_method_call(
         &mut self,
         state: &mut AbstractState,
@@ -121,7 +121,7 @@ impl<'a> JitContext<'a> {
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
-                #[cfg(jit_emit)]
+                #[cfg(jit_x86)]
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
