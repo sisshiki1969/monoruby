@@ -131,6 +131,23 @@ impl Codegen {
             }
             AsmInst::ToA { src, using_xmm } => return self.emit_to_a(src, using_xmm),
             AsmInst::DeepCopyLit(v, using_xmm) => return self.emit_deep_copy_lit(v, using_xmm),
+            // Floating-point register transfer/convert family (aarch64 bails if
+            // the FP pool register is not lowerable, hence the bool results).
+            // `base` is the spill base; deopt is a side-exit label.
+            AsmInst::FprMove(src, dst) => {
+                return self.emit_fpr_move(src, dst, frame.base_stack_offset);
+            }
+            AsmInst::FprSwap(l, r) => return self.emit_fpr_swap(l, r, frame.base_stack_offset),
+            AsmInst::F64ToFpr(f, x) => return self.emit_f64_to_fpr(f, x, frame.base_stack_offset),
+            AsmInst::FixnumToFpr(r, x) => {
+                return self.emit_fixnum_to_fpr(r, x, frame.base_stack_offset);
+            }
+            AsmInst::FloatToFpr(reg, x, deopt) => {
+                return self.emit_float_to_fpr(reg, x, &labels[deopt], frame.base_stack_offset);
+            }
+            AsmInst::FprToStack(x, slot) => {
+                return self.emit_fpr_to_stack(x, slot, frame.base_stack_offset);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
