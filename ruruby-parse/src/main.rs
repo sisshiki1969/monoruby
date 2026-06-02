@@ -97,6 +97,10 @@ mod tests {
         res.text().unwrap()
     }
 
+    // Network-dependent: fetches sources over HTTP. Flaky under the full parallel
+    // test run (intermittent connection timeouts), so excluded by default.
+    // Run explicitly with `cargo test -- --ignored` / `cargo nextest run --run-ignored`.
+    #[ignore]
     #[test]
     fn yamanote() {
         let code = fetch_file(
@@ -109,6 +113,8 @@ mod tests {
         parse_and_output(code);
     }
 
+    // Network-dependent (see yamanote); excluded by default.
+    #[ignore]
     #[test]
     fn aobench() {
         let code = fetch_file(
@@ -117,6 +123,8 @@ mod tests {
         parse_and_output(code);
     }
 
+    // Network-dependent (see yamanote); excluded by default.
+    #[ignore]
     #[test]
     fn optcarrot() {
         let code = fetch_file(
