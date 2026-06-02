@@ -43,13 +43,18 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
+          flags: x86_64
           fail_ci_if_error: true
 
   darwin:
-    # Native Apple Silicon (arm64-apple-darwin) runner. monoruby has no JIT on
-    # aarch64 — build.rs only sets the `jit` cfg for x86-64 — so this exercises
-    # the VM tier plus the macOS/aarch64 platform layer. Coverage is not
-    # collected here; the Linux `coverage` job owns the Codecov upload.
+    # Native Apple Silicon (arm64-apple-darwin) runner. build.rs sets the `jit`
+    # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
+    # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
+    # yet ported bail to the VM. It runs the same `bin/test` as the Linux
+    # `coverage` job (portable head/yjit handling makes it BSD/macOS-safe) and
+    # collects coverage; the Codecov upload is split by flag (`aarch64` here,
+    # `x86_64` there) since the two platforms compile different cfg-gated code
+    # (compile_stub.rs vs compile.rs/jit_x86).
     runs-on: macos-latest
     env:
       CARGO_TERM_COLOR: always
@@ -61,6 +66,9 @@ jobs:
           ruby-version: "4.0.1"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
+      - name: Install ruby-bench gem dependencies
+        # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
+        run: gem install erubi --no-document
       - name: Install libffi + pkg-config
         # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
         # with the `system` feature; libffi is keg-only so pkg-config needs its
@@ -71,7 +79,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
-      - name: Test (VM tier, arm64-apple-darwin)
-        run: bin/test-darwin
+      - name: Clone optcarrot
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec
+        run: |
+          git clone --depth 1 https://github.com/ruby/spec.git ../spec
+          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+
+      - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
+        run: bin/test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
+          files: lcov.info
+          flags: aarch64
+          fail_ci_if_error: true
