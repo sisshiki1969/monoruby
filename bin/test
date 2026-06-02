@@ -19,31 +19,46 @@ else
   RUBY=(ruby)
 fi
 
-# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. Under
-# llvm-cov coverage instrumentation on the memory-constrained arm64 macOS CI
-# runner, that combination trips a latent AArch64-JIT-under-stress corruption
-# (a value is freed mid-flight -> String becomes INVALID(255) -> SIGABRT;
-# tracked separately, deterministic only with coverage + both stress features).
-# The x86-64 JIT is unaffected, so enable the stress features only there; other
-# arches still build and coverage-measure the JIT, just without the amplifiers.
+# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. They target
+# the mature x86-64 JIT; enable them only there. Other arches still build and
+# (when coverage is on) measure the JIT, just without the amplifiers.
 case "$(uname -m)" in
   x86_64) STRESS_FEATURES=(--features stress-spill-pool --features gc-stress) ;;
   *)      STRESS_FEATURES=() ;;
 esac
 
-cargo llvm-cov clean --workspace
-cargo llvm-cov nextest "${STRESS_FEATURES[@]}" --no-report
-MONORUBY_PARSER=ruruby cargo llvm-cov nextest "${STRESS_FEATURES[@]}" --no-report
+# Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
+# instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
+# on the GitHub M1 runner llvm-cov coverage instrumentation itself trips a
+# latent VM-layer memory bug (independent of the JIT — `--no-jit` crashes too,
+# and it does not repro on x86-64, qemu-aarch64, or a local Mac), so that job
+# runs the full check but collects no coverage.
+if [ "${SKIP_COV:-0}" = "1" ]; then
+  cov_clean()   { :; }
+  cov_nextest() { cargo nextest run "$@"; }
+  cov_build()   { cargo build --bin monoruby "$@"; }
+  cov_report()  { :; }
+  MONORUBY="$PWD/target/debug/monoruby"
+else
+  cov_clean()   { cargo llvm-cov clean --workspace; }
+  cov_nextest() { cargo llvm-cov nextest "$@" --no-report; }
+  cov_build()   { cargo llvm-cov run --no-report "$@" -- --version > /dev/null; }
+  cov_report()  { cargo llvm-cov report --lcov --output-path lcov.info; rm -f *.profraw; }
+  MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
+fi
 
-cargo llvm-cov run --no-report -- --version > /dev/null
-MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
+cov_clean
+cov_nextest "${STRESS_FEATURES[@]}"
+MONORUBY_PARSER=ruruby cov_nextest "${STRESS_FEATURES[@]}"
+
+cov_build
 
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 "${RUBY[@]}" benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 
-# Build instrumented binary via cargo llvm-cov run
-cargo llvm-cov run --no-report "${STRESS_FEATURES[@]}" -- --version > /dev/null
+# Rebuild the benchmark binary with the stress features (x86-64 only).
+cov_build "${STRESS_FEATURES[@]}"
 
 $MONORUBY benchmark/tarai.rb > monoruby.log
 "${RUBY[@]}" benchmark/tarai.rb > ruby.log
@@ -104,5 +119,4 @@ if [ -d "../spec" ] && [ -d "../mspec" ]; then
   cd "$OLDPWD"
 fi
 
-cargo llvm-cov report --lcov --output-path lcov.info
-rm *.profraw
+cov_report

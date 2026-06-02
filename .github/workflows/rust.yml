@@ -43,7 +43,6 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
-          flags: x86_64
           fail_ci_if_error: true
 
   darwin:
@@ -51,19 +50,21 @@ jobs:
     # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
     # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
     # yet ported bail to the VM. It runs the same `bin/test` as the Linux
-    # `coverage` job (portable head/yjit handling makes it BSD/macOS-safe) and
-    # collects coverage; the Codecov upload is split by flag (`aarch64` here,
-    # `x86_64` there) since the two platforms compile different cfg-gated code
-    # (compile_stub.rs vs compile.rs/jit_x86).
+    # `coverage` job (portable head/yjit handling makes it BSD/macOS-safe), so
+    # the arm64 VM + JIT get the full check scope (unit tests, benchmark diffs,
+    # optcarrot, ruby-bench, ruby/spec).
     #
-    # bin/test enables gc-stress + stress-spill-pool only on x86-64: under
-    # llvm-cov coverage instrumentation those amplifiers trip a latent
-    # AArch64-JIT-under-stress corruption on this runner (a freed value ->
-    # String INVALID(255) -> SIGABRT; tracked separately). The arm64 JIT is
-    # still built and coverage-measured here, just without the amplifiers.
+    # SKIP_COV=1: this job does NOT collect coverage. On the GitHub M1 runner,
+    # llvm-cov coverage instrumentation itself trips a latent VM-layer memory
+    # bug (a value is freed mid-flight -> String INVALID(255) -> SIGABRT). It is
+    # independent of the JIT (`--no-jit` crashes the same way) and does not
+    # reproduce on x86-64, qemu-aarch64, or a local Apple Silicon Mac — so it is
+    # specific to native-M1 + coverage instrumentation and is tracked
+    # separately. The Linux `coverage` job owns the Codecov upload.
     runs-on: macos-latest
     env:
       CARGO_TERM_COLOR: always
+      SKIP_COV: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -85,31 +86,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
-      - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
-      - name: Diagnose coverage+JIT crash (M1, temporary)
+      - name: Clone optcarrot
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec
         run: |
-          # The crash needs native M1 + llvm-cov coverage instrumentation; it
-          # does NOT repro on qemu (5 configs) or a local Mac, and stress /
-          # parallelism are irrelevant. Decisive question: is the JIT required?
-          # Run the lib unit tests under coverage with JIT (reproduce) and with
-          # --no-jit (key). cov-nojit PASS => the AArch64 JIT codegen interacting
-          # with coverage instrumentation is the cause (and --no-jit+coverage is
-          # a viable green VM-tier-coverage fallback for this job).
-          run() {
-            local label="$1"; shift
-            echo "::group::$label :: $*"
-            if "$@" >/tmp/diag.out 2>&1; then
-              echo "RESULT [$label] = PASS"
-            else
-              echo "RESULT [$label] = FAIL (exit $?)"
-            fi
-            grep -aE 'SIGABRT|panicked|INVALID|left:|right:|Summary|tests run|test result|FAILED' \
-              /tmp/diag.out | tail -20 || true
-            echo "::endgroup::"
-          }
-          run cov-jit-lib   cargo llvm-cov nextest --no-report --lib
-          run cov-nojit-lib cargo llvm-cov nextest --no-report --no-default-features --features no-jit --lib
-          echo "=== diagnostic complete (step intentionally exits 0) ==="
+          git clone --depth 1 https://github.com/ruby/spec.git ../spec
+          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+
+      - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
+        run: bin/test
 
