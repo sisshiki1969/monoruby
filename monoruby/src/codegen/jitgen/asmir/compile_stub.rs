@@ -1550,6 +1550,26 @@ impl Codegen {
         true
     }
 
+    /// Method epilogue: the result is already in x0; tear down the frame and
+    /// return (matches the VM's `a64_op_ret`: `mov sp,x29; ldp; ret`).
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            mov sp, x29;
+            ldp x29, x30, [sp], #16;
+            ret;
+        );
+    }
+
+    /// Return through the method-return path, resuming the caller at `pc + 1`.
+    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
+        self.a64_method_ret(pc);
+    }
+
+    /// Immediate eviction patches a live frame's return address on x86; aarch64
+    /// cannot patch return addresses, so this is a no-op (class-version guards
+    /// cover the staleness it would otherwise catch).
+    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, _evict: AsmEvict) {}
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -1604,16 +1624,6 @@ impl Codegen {
             // Per-method ivar-cache prep: only needed when heap ivars are
             // accessed; otherwise a no-op. Bail on the heap path for now.
             AsmInst::Preparation => !frame.ivar_heap_accessed,
-            // Return: the value is already in x0 (acc = Rax -> x0). Epilogue
-            // matches the VM's a64_op_ret (`mov sp,x29; ldp; ret`).
-            AsmInst::Ret => {
-                monoasm_arm64!(&mut self.jit,
-                    mov sp, x29;
-                    ldp x29, x30, [sp], #16;
-                    ret;
-                );
-                true
-            }
             // Inline-cache class-version guard: deopt if the global class
             // version changed since compilation.
             AsmInst::GuardClassVersion { deopt, .. } => {
@@ -1666,14 +1676,6 @@ impl Codegen {
                 self.a64_do_call(store, callee_fid);
                 true
             }
-            AsmInst::MethodRet(pc) => {
-                self.a64_method_ret(pc);
-                true
-            }
-            // Immediate eviction patches a live frame's return address on x86;
-            // a64 cannot patch return addresses, so this is a no-op (class
-            // version guards cover the staleness it would otherwise catch).
-            AsmInst::ImmediateEvict { .. } => true,
             // Phase 3b: more AsmInst lowerings land here, one category at a time.
             _ => false,
         }

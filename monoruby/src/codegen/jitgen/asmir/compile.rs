@@ -82,7 +82,10 @@ impl Codegen {
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
             | AsmInst::FloatCmp { .. }
-            | AsmInst::FloatCmpBr { .. } => {
+            | AsmInst::FloatCmpBr { .. }
+            | AsmInst::Ret
+            | AsmInst::MethodRet(..)
+            | AsmInst::ImmediateEvict { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -262,15 +265,6 @@ impl Codegen {
                 self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
 
-            AsmInst::Ret => {
-                self.epilogue();
-            }
-            AsmInst::MethodRet(pc) => {
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                };
-                self.method_return();
-            }
             AsmInst::BlockBreak(pc) => {
                 monoasm! { &mut self.jit,
                     movq r13, ((pc + 1).as_ptr());
@@ -357,14 +351,6 @@ impl Codegen {
                     lea  rax, [rip + jump_table];
                     jmp  [rax + rdi * 8];
                 };
-            }
-
-            AsmInst::ImmediateEvict { evict } => {
-                let patch_point = self.jit.get_current_address();
-                let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
-                self.return_addr_table
-                    .entry(*return_addr)
-                    .and_modify(|e| e.0 = Some(patch_point));
             }
 
             AsmInst::SetupMethodFrame {
@@ -1615,5 +1601,27 @@ impl Codegen {
         self.cmp_float((lhs, rhs), base);
         self.condbr_float(kind, branch_dest, brkind);
         true
+    }
+
+    /// Method epilogue: tear down the frame and return.
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+        self.epilogue();
+    }
+
+    /// Return through the method-return path, resuming the caller at `pc + 1`.
+    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+        };
+        self.method_return();
+    }
+
+    /// Record this position as the return-address patch point for `evict`.
+    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
+        let patch_point = self.jit.get_current_address();
+        let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
+        self.return_addr_table
+            .entry(*return_addr)
+            .and_modify(|e| e.0 = Some(patch_point));
     }
 }

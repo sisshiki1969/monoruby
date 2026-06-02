@@ -217,6 +217,13 @@ impl Codegen {
                     frame.base_stack_offset,
                 );
             }
+            // Method return / eviction family. `Ret` tears down the frame and
+            // returns; `MethodRet` sets the resume PC then returns through the
+            // method-return path; `ImmediateEvict` records a return-address
+            // patch point on x86 (a no-op on aarch64, which can't patch them).
+            AsmInst::Ret => self.emit_ret(),
+            AsmInst::MethodRet(pc) => self.emit_method_ret(pc),
+            AsmInst::ImmediateEvict { evict } => self.emit_immediate_evict(evict),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
