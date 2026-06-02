@@ -1007,6 +1007,204 @@ impl Codegen {
         true
     }
 
+    // ---- runtime allocation primitives (aarch64) --------------------------
+    // Each builds a heap object via a runtime C call. All bail (`false`) on a
+    // live xmm (no FP save/restore yet) or an out-of-range frame offset.
+
+    /// rax <- Array built from the `len` slots starting at `src`.
+    /// create_array(ptr=&slot[src], len). No xmm save (matches x86).
+    pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::create_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x0, x(lfp), #(off);   // &slot[src]
+            mov x1, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                   // result in x0
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Array literal via gen_array(vm, globals, callid, &self).
+    pub(in crate::codegen::jitgen) fn emit_new_array(
+        &mut self,
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let f = runtime::gen_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // callid
+            sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
+    pub(in crate::codegen::jitgen) fn emit_new_hash(
+        &mut self,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = args.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::gen_hash as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            sub x2, x(lfp), #(off);   // &slot[args]
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Range via gen_range(start, end, vm, globals, exclude_end).
+    pub(in crate::codegen::jitgen) fn emit_new_range(
+        &mut self,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let soff = start.0 as u32 * 8 + LFP_SELF as u32;
+        let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
+        if soff > 4095 || eoff > 4095 {
+            return false;
+        }
+        let f = runtime::gen_range as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(soff);
+            ldr x0, [x10];            // start value
+            sub x10, x(lfp), #(eoff);
+            ldr x1, [x10];            // end value
+            mov x2, x19;              // vm
+            mov x3, x20;              // globals
+            mov x4, (exclude_end as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- the `len` slots at `arg` concatenated into a String via
+    /// concatenate_string(vm, globals, &slot[arg], len). Result is Option<Value>
+    /// (followed by a HandleError in the IR).
+    pub(in crate::codegen::jitgen) fn emit_concat_str(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = arg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::concatenate_string as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            sub x2, x(lfp), #(off);   // &slot[arg]
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- `src` coerced to an Array: load slot `src`; if already an Array
+    /// keep it, otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let toa = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x0, [x10];          // val (rax)
+        );
+        self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
+        monoasm_arm64!(&mut self.jit, b exit;); // already Array
+        let f = runtime::to_a as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            toa:
+            mov x2, x0;             // val
+            mov x0, x19;            // vm
+            mov x1, x20;            // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                 // result in x0
+            ldr x30, [sp], #16;
+            exit:
+        );
+        true
+    }
+
+    /// rax <- a deep copy of literal `v` (a fresh mutable object per
+    /// evaluation). Mirrors x86 `deepcopy_literal`.
+    pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
+        &mut self,
+        v: Value,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let imm = v.id();
+        let f = Value::value_deep_copy as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (imm);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;            // result in x0 (= rax)
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -1071,56 +1269,6 @@ impl Codegen {
                 );
                 true
             }
-            // to_a: load slot `src`; if it is already an Array, keep it in rax,
-            // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
-            AsmInst::ToA { src, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let toa = self.jit.label();
-                let exit = self.jit.label();
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    ldr x0, [x10];          // val (rax)
-                );
-                self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
-                monoasm_arm64!(&mut self.jit, b exit;); // already Array
-                let f = runtime::to_a as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    toa:
-                    mov x2, x0;             // val
-                    mov x0, x19;            // vm
-                    mov x1, x20;            // globals
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                 // result in x0
-                    ldr x30, [sp], #16;
-                    exit:
-                );
-                true
-            }
-            // rax <- deep copy of literal Value (so each evaluation yields a
-            // fresh mutable object). Runtime C call; bails if any xmm is live
-            // (no FP save/restore yet). Mirrors x86 `deepcopy_literal`.
-            AsmInst::DeepCopyLit(v, using_xmm) => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let imm = v.id();
-                let f = Value::value_deep_copy as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, (imm);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;            // result in x0 (= rax)
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
             // Inline-cache class-version guard: deopt if the global class
             // version changed since compilation.
             AsmInst::GuardClassVersion { deopt, .. } => {
@@ -1155,114 +1303,6 @@ impl Codegen {
             AsmInst::RecompileDeopt { deopt, .. } => {
                 let deopt = labels[deopt].clone();
                 monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
-            // rax <- Array built from the `len` slots starting at `src`.
-            // create_array(ptr=&slot[src], len). No xmm save (matches x86).
-            AsmInst::CreateArray { src, len } => {
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::create_array as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    sub x0, x(lfp), #(off);   // &slot[src]
-                    mov x1, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                   // result in x0
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Array literal via gen_array(vm, globals, callid, &self).
-            AsmInst::NewArray { callid, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::gen_array as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                       // vm
-                    mov x1, x20;                       // globals
-                    mov x2, (callid.get() as u64);     // callid
-                    sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
-            AsmInst::NewHash(args, len, using_xmm) => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = args.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::gen_hash as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;              // vm
-                    mov x1, x20;              // globals
-                    sub x2, x(lfp), #(off);   // &slot[args]
-                    mov x3, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- concatenated string via concatenate_string(vm, globals,
-            // &slot[arg], len). Result is Option<Value> (followed by a
-            // HandleError in the IR). Bails if any xmm is live.
-            AsmInst::ConcatStr { arg, len, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = arg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::concatenate_string as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;              // vm
-                    mov x1, x20;              // globals
-                    sub x2, x(lfp), #(off);   // &slot[arg]
-                    mov x3, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Range via gen_range(start, end, vm, globals, exclude_end).
-            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let soff = start.0 as u32 * 8 + LFP_SELF as u32;
-                let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
-                if soff > 4095 || eoff > 4095 {
-                    return false;
-                }
-                let f = runtime::gen_range as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(soff);
-                    ldr x0, [x10];            // start value
-                    sub x10, x(lfp), #(eoff);
-                    ldr x1, [x10];            // end value
-                    mov x2, x19;              // vm
-                    mov x3, x20;              // globals
-                    mov x4, (exclude_end as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
                 true
             }
             // Method-call sequence: frame fields, arg massage, the call itself.

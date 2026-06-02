@@ -113,6 +113,24 @@ impl Codegen {
             AsmInst::LoadCVar { name, using_xmm } => return self.emit_load_cvar(name, using_xmm),
             AsmInst::LoadDynVar { src } => return self.emit_load_dyn_var(src),
             AsmInst::StoreDynVar { dst, src } => return self.emit_store_dyn_var(dst, src),
+            // Runtime allocation / C-call family: each builds a heap object via
+            // a runtime call (aarch64 bails on a live xmm / range overflow,
+            // hence the bool results).
+            AsmInst::CreateArray { src, len } => return self.emit_create_array(src, len),
+            AsmInst::NewArray { callid, using_xmm } => {
+                return self.emit_new_array(callid, using_xmm);
+            }
+            AsmInst::NewHash(args, len, using_xmm) => {
+                return self.emit_new_hash(args, len, using_xmm);
+            }
+            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
+                return self.emit_new_range(start, end, exclude_end, using_xmm);
+            }
+            AsmInst::ConcatStr { arg, len, using_xmm } => {
+                return self.emit_concat_str(arg, len, using_xmm);
+            }
+            AsmInst::ToA { src, using_xmm } => return self.emit_to_a(src, using_xmm),
+            AsmInst::DeepCopyLit(v, using_xmm) => return self.emit_deep_copy_lit(v, using_xmm),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

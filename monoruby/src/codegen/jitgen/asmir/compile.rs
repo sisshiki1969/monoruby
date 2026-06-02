@@ -59,7 +59,14 @@ impl Codegen {
             | AsmInst::StoreGVar { .. }
             | AsmInst::LoadCVar { .. }
             | AsmInst::LoadDynVar { .. }
-            | AsmInst::StoreDynVar { .. } => {
+            | AsmInst::StoreDynVar { .. }
+            | AsmInst::CreateArray { .. }
+            | AsmInst::NewArray { .. }
+            | AsmInst::NewHash(..)
+            | AsmInst::NewRange { .. }
+            | AsmInst::ConcatStr { .. }
+            | AsmInst::ToA { .. }
+            | AsmInst::DeepCopyLit(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -234,8 +241,6 @@ impl Codegen {
             AsmInst::FprToStack(x, slots) => {
                 self.fpr_to_stack(x, &[slots], frame.base_stack_offset);
             }
-            AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
-
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
@@ -569,22 +574,6 @@ impl Codegen {
             } => {
                 self.array_teq(lhs, rhs, using_xmm);
             }
-            AsmInst::NewArray { callid, using_xmm } => {
-                self.new_array(callid, using_xmm);
-            }
-            AsmInst::NewHash(args, len, using_xmm) => {
-                self.new_hash(args, len, using_xmm);
-            }
-            AsmInst::NewRange {
-                start,
-                end,
-                exclude_end,
-                using_xmm,
-            } => {
-                self.load_rdi(start);
-                self.load_rsi(end);
-                self.new_range(exclude_end, using_xmm);
-            }
 
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.get_method_lfp(outer);
@@ -725,14 +714,6 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
-            AsmInst::CreateArray { src, len } => {
-                monoasm!( &mut self.jit,
-                    lea  rdi, [r14 - (conv(src))];
-                    movq rsi, (len);
-                    movq rax, (runtime::create_array);
-                    call rax;
-                );
-            }
             AsmInst::RestKw { rest_kw } => {
                 let data = self.jit.const_align8();
                 for (i, name) in rest_kw.into_iter() {
@@ -748,16 +729,6 @@ impl Codegen {
                     movq rax, (runtime::correct_rest_kw);
                     call rax;
                 );
-            }
-            AsmInst::ConcatStr {
-                arg,
-                len,
-                using_xmm,
-            } => {
-                self.concat_string(arg, len, using_xmm);
-            }
-            AsmInst::ToA { src, using_xmm } => {
-                self.to_a(src, using_xmm);
             }
             AsmInst::ConcatRegexp {
                 arg,
@@ -1078,6 +1049,84 @@ impl Codegen {
     /// dynamic (outer-frame) local <- src.
     pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
         self.store_dyn_var(dst, src);
+        true
+    }
+
+    // ---- runtime allocation primitives (x86-64) ---------------------------
+    // All build a heap object via a runtime call and always succeed (the bool
+    // result exists for the aarch64 twins, which bail on a live xmm / range
+    // overflow).
+
+    /// rax <- Array of the `len` slots starting at `src`.
+    pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
+        monoasm!( &mut self.jit,
+            lea  rdi, [r14 - (conv(src))];
+            movq rsi, (len);
+            movq rax, (runtime::create_array);
+            call rax;
+        );
+        true
+    }
+
+    /// rax <- Array literal (splat-aware) via the call site.
+    pub(in crate::codegen::jitgen) fn emit_new_array(
+        &mut self,
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.new_array(callid, using_xmm);
+        true
+    }
+
+    /// rax <- Hash literal from the `len` key/value slots at `args`.
+    pub(in crate::codegen::jitgen) fn emit_new_hash(
+        &mut self,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.new_hash(args, len, using_xmm);
+        true
+    }
+
+    /// rax <- Range(start, end, exclude_end).
+    pub(in crate::codegen::jitgen) fn emit_new_range(
+        &mut self,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_rdi(start);
+        self.load_rsi(end);
+        self.new_range(exclude_end, using_xmm);
+        true
+    }
+
+    /// rax <- the `len` slots at `arg` concatenated into a String.
+    pub(in crate::codegen::jitgen) fn emit_concat_str(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.concat_string(arg, len, using_xmm);
+        true
+    }
+
+    /// rax <- `src` coerced to an Array (`Array(x)` / splat).
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
+        self.to_a(src, using_xmm);
+        true
+    }
+
+    /// rax <- a deep copy of literal `v` (fresh mutable object per evaluation).
+    pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
+        &mut self,
+        v: Value,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.deepcopy_literal(v, using_xmm);
         true
     }
 
