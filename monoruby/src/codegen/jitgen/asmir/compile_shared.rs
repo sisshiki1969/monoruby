@@ -264,6 +264,15 @@ impl Codegen {
                 let evict_label = labels[evict].clone();
                 self.emit_call(store, callee_fid, recv_class, evict, &evict_label, pc);
             }
+            // Method prologue: establish fp/lr, reserve the local frame, nil-fill
+            // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
+            // sub-sp immediate).
+            AsmInst::Init {
+                info,
+                prologue_offset,
+            } => return self.emit_init(info, prologue_offset),
+            // Per-method ivar-cache prep; aarch64 bails on the heap-ivar path.
+            AsmInst::Preparation => return self.emit_preparation(store, frame),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

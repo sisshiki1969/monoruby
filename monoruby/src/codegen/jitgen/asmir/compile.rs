@@ -91,14 +91,10 @@ impl Codegen {
             | AsmInst::SetArguments { .. }
             | AsmInst::CheckBOP { .. }
             | AsmInst::RecompileDeopt { .. }
-            | AsmInst::Call { .. } => {
+            | AsmInst::Call { .. }
+            | AsmInst::Init { .. }
+            | AsmInst::Preparation => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
-            }
-            AsmInst::Init {
-                info,
-                prologue_offset,
-            } => {
-                self.init_func(&info, prologue_offset.unwrap_concrete());
             }
             AsmInst::LoopJitRspBump { offset } => {
                 let bytes = offset.unwrap_concrete();
@@ -113,42 +109,6 @@ impl Codegen {
                     movq rax, (unreachable);
                     call rax;
                 );
-            }
-            AsmInst::Preparation => {
-                if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
-                    let ivar_len = store[frame.self_class].ivar_len();
-                    let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
-                        ivar_len - OBJECT_INLINE_IVAR
-                    } else {
-                        ivar_len
-                    };
-                    let fail = self.jit.label();
-                    let exit = self.jit.label();
-                    monoasm!(&mut self.jit,
-                        movq rdi, [r14 - (LFP_SELF)];
-                        movq rsi, (heap_len);
-                        movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-                        // check var_table is not None
-                        testq rdx, rdx;
-                        jz   fail;
-                        // check capa is not 0
-                        cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
-                        jz   fail;
-                        // check len >= heap_len
-                        cmpq [rdx + (MONOVEC_LEN)], rsi; // len
-                        jlt  fail;
-                    exit:
-                    );
-                    assert_eq!(0, self.jit.get_page());
-                    self.jit.select_page(1);
-                    monoasm!( &mut self.jit,
-                    fail:
-                        movq rax, (extend_ivar);
-                        call rax;
-                        jmp exit;
-                    );
-                    self.jit.select_page(0);
-                }
             }
             AsmInst::RegAdd(r, i) => {
                 if i != 0 {
@@ -1658,5 +1618,57 @@ impl Codegen {
     ) {
         let return_addr = self.do_call(store, callee_fid, recv_class, pc);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+    }
+
+    /// Method prologue. Always succeeds on x86 (the bool result mirrors the
+    /// aarch64 twin, which bails on an over-large frame).
+    pub(in crate::codegen::jitgen) fn emit_init(
+        &mut self,
+        info: FnInitInfo,
+        prologue_offset: PrologueOffset,
+    ) -> bool {
+        self.init_func(&info, prologue_offset.unwrap_concrete());
+        true
+    }
+
+    /// Per-method ivar-cache preparation: ensure the heap ivar table is large
+    /// enough (extending it via a runtime call if not). No-op for frozen/
+    /// inline-only selves. Always succeeds on x86.
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
+        if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
+            let ivar_len = store[frame.self_class].ivar_len();
+            let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
+                ivar_len - OBJECT_INLINE_IVAR
+            } else {
+                ivar_len
+            };
+            let fail = self.jit.label();
+            let exit = self.jit.label();
+            monoasm!(&mut self.jit,
+                movq rdi, [r14 - (LFP_SELF)];
+                movq rsi, (heap_len);
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                // check var_table is not None
+                testq rdx, rdx;
+                jz   fail;
+                // check capa is not 0
+                cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                jz   fail;
+                // check len >= heap_len
+                cmpq [rdx + (MONOVEC_LEN)], rsi; // len
+                jlt  fail;
+            exit:
+            );
+            assert_eq!(0, self.jit.get_page());
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+            fail:
+                movq rax, (extend_ivar);
+                call rax;
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        }
+        true
     }
 }
