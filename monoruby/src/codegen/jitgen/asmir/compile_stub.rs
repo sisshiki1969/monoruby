@@ -1759,6 +1759,70 @@ impl Codegen {
         );
     }
 
+    /// `ldr`/`str` use a 12-bit scaled (×8) immediate offset; bail above that.
+    fn a64_field_off_ok(off: u32) -> bool {
+        off <= 32760 && off % 8 == 0
+    }
+
+    /// Load an inline (object-embedded) instance variable into the accumulator
+    /// (x23), substituting nil for an unset (zero) slot. Bails if the field
+    /// offset is out of the load immediate's range.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
+        let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let r15 = GP::R15.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            ldr x(r15), [x(rdi), #(off)];
+            mov x9, (NIL_VALUE);
+            cmp x(r15), #(0u32);
+            csel x(r15), x(r15), x9, ne;   // unset slot (0) -> nil
+        );
+        true
+    }
+
+    /// Store the accumulator-side `src` into an inline instance-variable slot.
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
+        let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let s = src.a64().0;
+        monoasm_arm64!(&mut self.jit, str x(s), [x(rdi), #(off)];);
+        true
+    }
+
+    /// Load an inline Struct member slot into the accumulator (x23).
+    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
+        let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let r15 = GP::R15.a64().0;
+        monoasm_arm64!(&mut self.jit, ldr x(r15), [x(rdi), #(off)];);
+        true
+    }
+
+    /// Store `src` into an inline Struct member slot (also returned in rax/x0).
+    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
+        let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let s = src.a64().0;
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            str x(s), [x(rdi), #(off)];
+            mov x(rax), x(s);
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

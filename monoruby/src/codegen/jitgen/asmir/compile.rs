@@ -97,7 +97,11 @@ impl Codegen {
             | AsmInst::FixnumNeg { .. }
             | AsmInst::FixnumBitNot { .. }
             | AsmInst::GuardArrayTy(..)
-            | AsmInst::GuardFrozen { .. } => {
+            | AsmInst::GuardFrozen { .. }
+            | AsmInst::LoadIVarInline { .. }
+            | AsmInst::StoreIVarInline { .. }
+            | AsmInst::LoadStructSlotInline { .. }
+            | AsmInst::StoreStructSlotInline { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::LoopJitRspBump { offset } => {
@@ -364,7 +368,6 @@ impl Codegen {
                 is_object_ty,
                 self_,
             } => self.load_ivar_heap(ivarid, is_object_ty, self_),
-            AsmInst::LoadIVarInline { ivarid } => self.load_ivar_inline(ivarid),
             AsmInst::StoreIVarHeap {
                 src,
                 ivarid,
@@ -376,14 +379,7 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
             } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
-            AsmInst::StoreIVarInline { src, ivarid } => self.store_ivar_object_inline(src, ivarid),
-            AsmInst::LoadStructSlotInline { slot_index } => {
-                self.load_struct_slot_inline(slot_index)
-            }
             AsmInst::LoadStructSlotHeap { slot_index } => self.load_struct_slot_heap(slot_index),
-            AsmInst::StoreStructSlotInline { src, slot_index } => {
-                self.store_struct_slot_inline(src, slot_index)
-            }
             AsmInst::StoreStructSlotHeap { src, slot_index } => {
                 self.store_struct_slot_heap(src, slot_index)
             }
@@ -1677,5 +1673,30 @@ impl Codegen {
     /// Guard that the receiver in rdi is not frozen; deopt otherwise.
     pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
         self.guard_frozen(deopt);
+    }
+
+    /// Load an inline (object-embedded) instance variable into the accumulator,
+    /// substituting nil for an unset slot.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
+        self.load_ivar_inline(ivarid);
+        true
+    }
+
+    /// Store the accumulator-side `src` into an inline instance-variable slot.
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
+        self.store_ivar_object_inline(src, ivarid);
+        true
+    }
+
+    /// Load an inline Struct member slot into the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
+        self.load_struct_slot_inline(slot_index);
+        true
+    }
+
+    /// Store `src` into an inline Struct member slot (also returned in rax).
+    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
+        self.store_struct_slot_inline(src, slot_index);
+        true
     }
 }

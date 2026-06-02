@@ -281,6 +281,19 @@ impl Codegen {
             // is unfrozen.
             AsmInst::GuardArrayTy(reg, deopt) => self.emit_guard_array_ty(reg, &labels[deopt]),
             AsmInst::GuardFrozen { deopt } => self.emit_guard_frozen(&labels[deopt]),
+            // Inline instance-variable / struct-member access on the receiver in
+            // rdi (no Box deref). aarch64 bails if the field offset exceeds the
+            // 12-bit scaled load/store immediate.
+            AsmInst::LoadIVarInline { ivarid } => return self.emit_load_ivar_inline(ivarid),
+            AsmInst::StoreIVarInline { src, ivarid } => {
+                return self.emit_store_ivar_inline(src, ivarid);
+            }
+            AsmInst::LoadStructSlotInline { slot_index } => {
+                return self.emit_load_struct_slot_inline(slot_index);
+            }
+            AsmInst::StoreStructSlotInline { src, slot_index } => {
+                return self.emit_store_struct_slot_inline(src, slot_index);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
