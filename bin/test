@@ -19,9 +19,21 @@ else
   RUBY=(ruby)
 fi
 
+# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. Under
+# llvm-cov coverage instrumentation on the memory-constrained arm64 macOS CI
+# runner, that combination trips a latent AArch64-JIT-under-stress corruption
+# (a value is freed mid-flight -> String becomes INVALID(255) -> SIGABRT;
+# tracked separately, deterministic only with coverage + both stress features).
+# The x86-64 JIT is unaffected, so enable the stress features only there; other
+# arches still build and coverage-measure the JIT, just without the amplifiers.
+case "$(uname -m)" in
+  x86_64) STRESS_FEATURES=(--features stress-spill-pool --features gc-stress) ;;
+  *)      STRESS_FEATURES=() ;;
+esac
+
 cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
-MONORUBY_PARSER=ruruby cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
+cargo llvm-cov nextest "${STRESS_FEATURES[@]}" --no-report
+MONORUBY_PARSER=ruruby cargo llvm-cov nextest "${STRESS_FEATURES[@]}" --no-report
 
 cargo llvm-cov run --no-report -- --version > /dev/null
 MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
@@ -31,7 +43,7 @@ $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 diff -s monoruby.log ruby.log
 
 # Build instrumented binary via cargo llvm-cov run
-cargo llvm-cov run --no-report --features stress-spill-pool --features gc-stress -- --version > /dev/null
+cargo llvm-cov run --no-report "${STRESS_FEATURES[@]}" -- --version > /dev/null
 
 $MONORUBY benchmark/tarai.rb > monoruby.log
 "${RUBY[@]}" benchmark/tarai.rb > ruby.log
