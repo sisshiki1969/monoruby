@@ -186,6 +186,14 @@ impl Codegen {
                 binary_xmm,
                 dst,
             } => return self.emit_float_binop(kind, binary_xmm, dst, frame.base_stack_offset),
+            AsmInst::FloatUnOp { kind, dst } => {
+                return self.emit_float_unop(kind, dst, frame.base_stack_offset);
+            }
+            // [slot] <- Value::integer(i) and fpr(x) <- i as f64 (constant int
+            // materialized as both a boxed integer and a double).
+            AsmInst::I64ToBoth(i, slot, x) => {
+                return self.emit_i64_to_both(i, slot, x, frame.base_stack_offset);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

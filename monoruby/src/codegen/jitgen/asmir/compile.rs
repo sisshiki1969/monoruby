@@ -78,7 +78,9 @@ impl Codegen {
             | AsmInst::IntegerBinOp { .. }
             | AsmInst::IntegerCmp { .. }
             | AsmInst::IntegerCmpBr { .. }
-            | AsmInst::FloatBinOp { .. } => {
+            | AsmInst::FloatBinOp { .. }
+            | AsmInst::FloatUnOp { .. }
+            | AsmInst::I64ToBoth(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -170,39 +172,6 @@ impl Codegen {
                 );
             }
 
-            AsmInst::FloatUnOp { kind, dst } => match kind {
-                UnOpK::Neg => {
-                    let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                    match dst.loc(frame.base_stack_offset) {
-                        FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                            xorps xmm(p), [rip + imm];
-                        ),
-                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                            movq  xmm0, [rbp - (off)];
-                            xorps xmm0, [rip + imm];
-                            movq  [rbp - (off)], xmm0;
-                        ),
-                    }
-                }
-                UnOpK::Pos => {}
-                _ => unreachable!(),
-            },
-
-            AsmInst::I64ToBoth(i, r, x) => {
-                let f = self.jit.const_f64(i as f64);
-                monoasm! {&mut self.jit,
-                    movq [rbp - (rbp_local(r))], (Value::integer(i).id());
-                }
-                match x.loc(frame.base_stack_offset) {
-                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                        movq xmm(p), [rip + f];
-                    ),
-                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                        movq xmm0, [rip + f];
-                        movq [rbp - (off)], xmm0;
-                    ),
-                }
-            }
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
@@ -1597,6 +1566,46 @@ impl Codegen {
         base: usize,
     ) -> bool {
         self.float_binop(kind, dst, binary_xmm, base);
+        true
+    }
+
+    /// Float unary op: negate (flip the sign bit) or unary-plus (no-op).
+    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
+        match kind {
+            UnOpK::Neg => {
+                let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
+                match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                        xorps xmm(p), [rip + imm];
+                    ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq  xmm0, [rbp - (off)];
+                        xorps xmm0, [rip + imm];
+                        movq  [rbp - (off)], xmm0;
+                    ),
+                }
+            }
+            UnOpK::Pos => {}
+            _ => unreachable!(),
+        }
+        true
+    }
+
+    /// [slot] <- box(i) (integer Value) and fpr(x) <- i as f64.
+    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
+        let f = self.jit.const_f64(i as f64);
+        monoasm! {&mut self.jit,
+            movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
+        }
+        match x.loc(base) {
+            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                movq xmm(p), [rip + f];
+            ),
+            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                movq xmm0, [rip + f];
+                movq [rbp - (off)], xmm0;
+            ),
+        }
         true
     }
 }

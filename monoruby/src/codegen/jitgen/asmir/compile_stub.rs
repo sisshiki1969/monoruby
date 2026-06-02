@@ -1440,6 +1440,49 @@ impl Codegen {
         true
     }
 
+    /// Float unary op: negate (flip bit 63) or unary-plus (no-op). The macro
+    /// lacks `fneg`, so the sign flip goes through a GPR (`fmov`/`eor`/`fmov`).
+    /// Bails (`false`) on a spilled operand or an unsupported `UnOpK`.
+    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
+        match kind {
+            UnOpK::Neg => {
+                let Some(p) = self.a64_fpr(dst, base) else {
+                    return false;
+                };
+                monoasm_arm64!(&mut self.jit,
+                    fmov x9, d(p);
+                    mov x10, (0x8000_0000_0000_0000u64);
+                    eor x9, x9, x10;
+                    fmov d(p), x9;
+                );
+            }
+            UnOpK::Pos => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// `[lfp - slot*8 - LFP_SELF] <- Value::integer(i)` and `fpr(x) <- i as f64`
+    /// (a constant int materialized as both a boxed integer and a double).
+    /// Bails (`false`) if the FP destination is not lowerable (spilled).
+    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let id = Value::integer(i).id();
+        let bits = (i as f64).to_bits();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (id);
+            sub x10, x(lfp), #(off);
+            str x9, [x10];
+            mov x9, (bits);
+            fmov d(p), x9;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
