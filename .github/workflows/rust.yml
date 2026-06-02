@@ -59,12 +59,12 @@ jobs:
     # NEXTEST_TEST_THREADS caps test parallelism: under the full default-parallel
     # nextest run, gc-stress + stress-spill-pool drive this memory-constrained
     # M1 runner into memory pressure and a value gets corrupted (String ->
-    # INVALID(255), SIGABRT). The full suite passes serially; a low thread count
-    # keeps memory pressure down. (Does not repro on a local Mac or qemu-user.)
+    # INVALID(255), SIGABRT). The full suite passes serially; 2-way parallelism
+    # still fails, so pin to 1. (Does not repro on a local Mac or qemu-user.)
     runs-on: macos-latest
     env:
       CARGO_TERM_COLOR: always
-      NEXTEST_TEST_THREADS: "2"
+      NEXTEST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
