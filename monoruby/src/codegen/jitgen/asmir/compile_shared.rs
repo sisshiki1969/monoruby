@@ -151,6 +151,41 @@ impl Codegen {
             // Save / restore live FP pool registers around a C-call.
             AsmInst::XmmSave(using_xmm, cont) => return self.emit_xmm_save(using_xmm, cont),
             AsmInst::XmmRestore(using_xmm, cont) => return self.emit_xmm_restore(using_xmm, cont),
+            // Integer / float arithmetic fast paths. Each backend resolves the
+            // same operands and dispatches to its own emission primitive
+            // (aarch64 bails on an unsupported BinOpK, hence the bool results).
+            AsmInst::IntegerBinOp {
+                kind,
+                lhs,
+                rhs,
+                mode,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                return self.emit_integer_binop(lhs, rhs, mode, kind, deopt);
+            }
+            AsmInst::IntegerCmp {
+                mode,
+                kind,
+                lhs,
+                rhs,
+            } => return self.emit_integer_cmp(kind, mode, lhs, rhs),
+            AsmInst::IntegerCmpBr {
+                mode,
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                branch_dest,
+            } => {
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
+                return self.emit_integer_cmp_br(kind, mode, lhs, rhs, brkind, branch_dest);
+            }
+            AsmInst::FloatBinOp {
+                kind,
+                binary_xmm,
+                dst,
+            } => return self.emit_float_binop(kind, binary_xmm, dst, frame.base_stack_offset),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

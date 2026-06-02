@@ -74,7 +74,11 @@ impl Codegen {
             | AsmInst::FloatToFpr(..)
             | AsmInst::FprToStack(..)
             | AsmInst::XmmSave(..)
-            | AsmInst::XmmRestore(..) => {
+            | AsmInst::XmmRestore(..)
+            | AsmInst::IntegerBinOp { .. }
+            | AsmInst::IntegerCmp { .. }
+            | AsmInst::IntegerCmpBr { .. }
+            | AsmInst::FloatBinOp { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -166,11 +170,6 @@ impl Codegen {
                 );
             }
 
-            AsmInst::FloatBinOp {
-                kind,
-                binary_xmm,
-                dst,
-            } => self.float_binop(kind, dst, binary_xmm, frame.base_stack_offset),
             AsmInst::FloatUnOp { kind, dst } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
@@ -464,34 +463,6 @@ impl Codegen {
                 }
             }
 
-            AsmInst::IntegerBinOp {
-                kind,
-                lhs,
-                rhs,
-                mode,
-                deopt,
-            } => {
-                let deopt = &labels[deopt];
-                self.integer_binop(lhs, rhs, &mode, kind, deopt);
-            }
-            AsmInst::IntegerCmp {
-                mode,
-                kind,
-                lhs,
-                rhs,
-            } => self.integer_cmp(kind, mode, lhs, rhs),
-            AsmInst::IntegerCmpBr {
-                mode,
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                branch_dest,
-            } => {
-                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_integer(&mode, lhs, rhs);
-                self.condbr_int(kind, branch_dest, brkind);
-            }
             AsmInst::FloatCmp { kind, lhs, rhs } => {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
@@ -1573,6 +1544,59 @@ impl Codegen {
     /// Restore the live FP pool registers after a C-call.
     pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
         self.xmm_restore_with_cont(using_xmm, cont);
+        true
+    }
+
+    /// Integer binary op fast path (guarded; deopts to `deopt` on overflow /
+    /// type miss). Always succeeds on x86 (the bool mirrors the aarch64 twin).
+    pub(in crate::codegen::jitgen) fn emit_integer_binop(
+        &mut self,
+        lhs: GP,
+        rhs: GP,
+        mode: OpMode,
+        kind: BinOpK,
+        deopt: DestLabel,
+    ) -> bool {
+        self.integer_binop(lhs, rhs, &mode, kind, &deopt);
+        true
+    }
+
+    /// Integer comparison; result Value lands in the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp(
+        &mut self,
+        kind: CmpKind,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+    ) -> bool {
+        self.integer_cmp(kind, mode, lhs, rhs);
+        true
+    }
+
+    /// Fused integer compare + conditional branch to `branch_dest`.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp_br(
+        &mut self,
+        kind: CmpKind,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+    ) -> bool {
+        self.cmp_integer(&mode, lhs, rhs);
+        self.condbr_int(kind, branch_dest, brkind);
+        true
+    }
+
+    /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in FP registers.
+    pub(in crate::codegen::jitgen) fn emit_float_binop(
+        &mut self,
+        kind: BinOpK,
+        binary_xmm: (FPReg, FPReg),
+        dst: FPReg,
+        base: usize,
+    ) -> bool {
+        self.float_binop(kind, dst, binary_xmm, base);
         true
     }
 }
