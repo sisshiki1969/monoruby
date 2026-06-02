@@ -80,7 +80,9 @@ impl Codegen {
             | AsmInst::IntegerCmpBr { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
-            | AsmInst::I64ToBoth(..) => {
+            | AsmInst::I64ToBoth(..)
+            | AsmInst::FloatCmp { .. }
+            | AsmInst::FloatCmpBr { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -430,25 +432,6 @@ impl Codegen {
                     salq  R(r), 1;
                     orq   R(r), 1;
                 }
-            }
-
-            AsmInst::FloatCmp { kind, lhs, rhs } => {
-                monoasm! { &mut self.jit,
-                    xorq rax, rax;
-                };
-                self.cmp_float((lhs, rhs), frame.base_stack_offset);
-                self.setflag_float(kind);
-            }
-            AsmInst::FloatCmpBr {
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                branch_dest,
-            } => {
-                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.cmp_float((lhs, rhs), frame.base_stack_offset);
-                self.condbr_float(kind, branch_dest, brkind);
             }
 
             AsmInst::GenericBinOp {
@@ -1606,6 +1589,31 @@ impl Codegen {
                 movq [rbp - (off)], xmm0;
             ),
         }
+        true
+    }
+
+    /// Float comparison; NaN-correct boolean Value lands in the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+        };
+        self.cmp_float((lhs, rhs), base);
+        self.setflag_float(kind);
+        true
+    }
+
+    /// Fused float compare + conditional branch (NaN compares false except `!=`).
+    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
+        &mut self,
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+        base: usize,
+    ) -> bool {
+        self.cmp_float((lhs, rhs), base);
+        self.condbr_float(kind, branch_dest, brkind);
         true
     }
 }

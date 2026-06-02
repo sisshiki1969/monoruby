@@ -194,6 +194,29 @@ impl Codegen {
             AsmInst::I64ToBoth(i, slot, x) => {
                 return self.emit_i64_to_both(i, slot, x, frame.base_stack_offset);
             }
+            // Float comparison. NaN compares false (except `!=`); each backend
+            // picks NaN-correct condition codes (x86 ucomisd + setp tricks,
+            // aarch64 fcmp + MI/LS conditions).
+            AsmInst::FloatCmp { kind, lhs, rhs } => {
+                return self.emit_float_cmp(kind, lhs, rhs, frame.base_stack_offset);
+            }
+            AsmInst::FloatCmpBr {
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                branch_dest,
+            } => {
+                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
+                return self.emit_float_cmp_br(
+                    kind,
+                    lhs,
+                    rhs,
+                    brkind,
+                    branch_dest,
+                    frame.base_stack_offset,
+                );
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

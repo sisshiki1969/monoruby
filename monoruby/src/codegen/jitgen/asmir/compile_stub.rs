@@ -38,6 +38,34 @@ fn a64_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
     }
 }
 
+/// Like `a64_cond_for_cmp` but for `fcmp`: NaN (unordered) must compare false
+/// for every operator except `!=`. After `fcmp`, NZCV is set so that `<` needs
+/// `MI` (not `LT`, which is true when unordered) and `<=` needs `LS` (not `LE`);
+/// the inverse for `BrIfNot` is always the ARM bit-complement of the condition.
+fn a64_float_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
+    use monoasm::Cond;
+    let taken = match kind {
+        CmpKind::Eq | CmpKind::TEq => Cond::Eq,
+        CmpKind::Ne => Cond::Ne,
+        CmpKind::Lt => Cond::Mi,
+        CmpKind::Le => Cond::Ls,
+        CmpKind::Gt => Cond::Gt,
+        CmpKind::Ge => Cond::Ge,
+    };
+    match brkind {
+        BrKind::BrIf => taken,
+        BrKind::BrIfNot => match taken {
+            Cond::Eq => Cond::Ne,
+            Cond::Ne => Cond::Eq,
+            Cond::Mi => Cond::Pl,
+            Cond::Ls => Cond::Hi,
+            Cond::Gt => Cond::Le,
+            Cond::Ge => Cond::Lt,
+            other => other,
+        },
+    }
+}
+
 impl Codegen {
     /// Drive AsmIR→A64 lowering for a whole method. Returns `false` (bail) if
     /// anything is not yet supported; the caller then keeps the method on the
@@ -1480,6 +1508,45 @@ impl Codegen {
             mov x9, (bits);
             fmov d(p), x9;
         );
+        true
+    }
+
+    /// Float comparison; NaN-correct boolean Value in the accumulator. Mirrors
+    /// `a64_flag_to_bool` but on `fcmp` flags with float condition codes. Bails
+    /// (`false`) if either operand is spilled.
+    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
+        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
+            return false;
+        };
+        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+        let cond = a64_float_cond_for_cmp(kind, BrKind::BrIf);
+        let rax = GP::Rax.a64();
+        self.jit.cset(rax, cond);
+        monoasm_arm64!(&mut self.jit,
+            lsl x(rax.0), x(rax.0), #(3u32);
+            mov x9, (FALSE_VALUE);
+            orr x(rax.0), x(rax.0), x9;
+        );
+        true
+    }
+
+    /// Fused float compare + conditional branch (NaN compares false except
+    /// `!=`). Bails (`false`) if either operand is spilled.
+    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
+        &mut self,
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+        brkind: BrKind,
+        branch_dest: DestLabel,
+        base: usize,
+    ) -> bool {
+        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
+            return false;
+        };
+        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+        let cond = a64_float_cond_for_cmp(kind, brkind);
+        self.jit.bcond_label(cond, &branch_dest);
         true
     }
 
