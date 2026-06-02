@@ -537,6 +537,13 @@ fn lgamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             Value::integer(1),
         ));
     }
+    // Pole at zero: log|gamma| is +Infinity, and the sign of gamma is +1 for
+    // +0.0 and -1 for -0.0. Some libm `lgamma_r` (e.g. macOS) report sign 0
+    // here; normalize to match CRuby (and glibc) explicitly.
+    if f == 0.0 {
+        let sign = if f.is_sign_negative() { -1 } else { 1 };
+        return Ok(Value::array2(Value::float(f64::INFINITY), Value::integer(sign)));
+    }
     // SAFETY: lgamma_r is a standard C math function; sign is a valid pointer to a local variable.
     let mut sign: c_int = 0;
     let result = unsafe { c_lgamma_r(f, &mut sign) };
@@ -870,6 +877,22 @@ mod tests {
             "Math.gamma(10)",
         ]);
         run_test_error("Math.gamma(-Float::INFINITY)");
+    }
+
+    #[test]
+    fn math_lgamma_pole() {
+        // At the zero pole log|gamma| is +Infinity; the sign element is +1 for
+        // +0.0 and -1 for -0.0. Guards the platform-independent pole handling
+        // (some libm `lgamma_r`, e.g. macOS, report sign 0 here). Compare the
+        // sign element and infinite?-ness rather than the raw Infinity float
+        // (the test harness's float compare can't equate two infinities).
+        run_tests(&[
+            "Math.lgamma(0)[1]",
+            "Math.lgamma(0.0)[1]",
+            "Math.lgamma(-0.0)[1]",
+            "Math.lgamma(0)[0].infinite?",
+            "Math.lgamma(-0.0)[0].infinite?",
+        ]);
     }
 
     #[test]

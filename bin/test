@@ -1,57 +1,102 @@
 #!/bin/bash
 set -e
 
-cargo llvm-cov clean --workspace
-cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
-MONORUBY_PARSER=ruruby cargo llvm-cov nextest --features stress-spill-pool --features gc-stress --no-report
+# Portable helpers so this script runs unmodified on x86-64 Linux (CI's
+# `coverage` job) and native arm64 macOS (the `darwin` job). On arm64 macOS
+# build.rs sets the `jit` cfg, so this also exercises and coverage-measures the
+# AArch64 JIT (asmir/compile_stub.rs).
 
-cargo llvm-cov run --no-report -- --version > /dev/null
-MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
+# macOS/BSD `head` rejects `-n -3`; drop the last 3 (non-deterministic timing)
+# lines with awk instead. Identical output to `head -n -3` on GNU.
+drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
+
+# Use YJIT when this ruby supports it (x86-64 Linux CI); fall back to plain ruby
+# where the prebuilt has no YJIT (some arm64 macOS builds). YJIT changes speed,
+# not semantics, so the output diffs are unaffected either way.
+if ruby --yjit -e 'exit(defined?(RubyVM::YJIT) && RubyVM::YJIT.enabled? ? 0 : 1)' >/dev/null 2>&1; then
+  RUBY=(ruby --yjit)
+else
+  RUBY=(ruby)
+fi
+
+# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. They target
+# the mature x86-64 JIT; enable them only there. Other arches still build and
+# (when coverage is on) measure the JIT, just without the amplifiers.
+case "$(uname -m)" in
+  x86_64) STRESS_FEATURES=(--features stress-spill-pool --features gc-stress) ;;
+  *)      STRESS_FEATURES=() ;;
+esac
+
+# Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
+# instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
+# on the GitHub M1 runner llvm-cov coverage instrumentation itself trips a
+# latent VM-layer memory bug (independent of the JIT — `--no-jit` crashes too,
+# and it does not repro on x86-64, qemu-aarch64, or a local Mac), so that job
+# runs the full check but collects no coverage.
+if [ "${SKIP_COV:-0}" = "1" ]; then
+  cov_clean()   { :; }
+  cov_nextest() { cargo nextest run "$@"; }
+  cov_build()   { cargo build --bin monoruby "$@"; }
+  cov_report()  { :; }
+  MONORUBY="$PWD/target/debug/monoruby"
+else
+  cov_clean()   { cargo llvm-cov clean --workspace; }
+  cov_nextest() { cargo llvm-cov nextest "$@" --no-report; }
+  cov_build()   { cargo llvm-cov run --no-report "$@" -- --version > /dev/null; }
+  cov_report()  { cargo llvm-cov report --lcov --output-path lcov.info; rm -f *.profraw; }
+  MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
+fi
+
+cov_clean
+cov_nextest "${STRESS_FEATURES[@]}"
+MONORUBY_PARSER=ruruby cov_nextest "${STRESS_FEATURES[@]}"
+
+cov_build
 
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
-ruby --yjit benchmark/app_fib.rb > ruby.log
+"${RUBY[@]}" benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
 
-# Build instrumented binary via cargo llvm-cov run
-cargo llvm-cov run --no-report --features stress-spill-pool --features gc-stress -- --version > /dev/null
+# Rebuild the benchmark binary with the stress features (x86-64 only).
+cov_build "${STRESS_FEATURES[@]}"
 
 $MONORUBY benchmark/tarai.rb > monoruby.log
-ruby --yjit benchmark/tarai.rb > ruby.log
+"${RUBY[@]}" benchmark/tarai.rb > ruby.log
 diff -s monoruby.log ruby.log
 $MONORUBY benchmark/so_nbody.rb > monoruby.log
-ruby --yjit benchmark/so_nbody.rb > ruby.log
+"${RUBY[@]}" benchmark/so_nbody.rb > ruby.log
 diff -s monoruby.log ruby.log
 #$MONORUBY benchmark/bf.rb > monoruby.log
-#ruby --yjit benchmark/bf.rb > ruby.log
+#"${RUBY[@]}" benchmark/bf.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
 echo "checking plb2.."
 $MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
-ruby --yjit benchmark/plb2/nqueen.rb > ruby.log
+"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
 diff -s monoruby.log ruby.log
 $MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
-ruby --yjit benchmark/plb2/sudoku.rb > ruby.log
+"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
 diff -s monoruby.log ruby.log
 $MONORUBY benchmark/plb2/matmul.rb > monoruby.log
-ruby --yjit benchmark/plb2/matmul.rb > ruby.log
+"${RUBY[@]}" benchmark/plb2/matmul.rb > ruby.log
 diff -s monoruby.log ruby.log
 $MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
-ruby --yjit benchmark/plb2/bedcov.rb > ruby.log
+"${RUBY[@]}" benchmark/plb2/bedcov.rb > ruby.log
 diff -s monoruby.log ruby.log
 
 $MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
 $MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
-ruby --yjit benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
+"${RUBY[@]}" benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
-$MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
+"${RUBY[@]}" ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
 
-$MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > monoruby.log
-ruby --yjit ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | head -n -3 > ruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
+"${RUBY[@]}" ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log
 
@@ -74,5 +119,4 @@ if [ -d "../spec" ] && [ -d "../mspec" ]; then
   cd "$OLDPWD"
 fi
 
-cargo llvm-cov report --lcov --output-path lcov.info
-rm *.profraw
+cov_report
