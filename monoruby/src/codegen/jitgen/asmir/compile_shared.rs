@@ -277,6 +277,10 @@ impl Codegen {
             // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
             AsmInst::FixnumNeg { reg, deopt } => self.emit_fixnum_neg(reg, &labels[deopt]),
             AsmInst::FixnumBitNot { reg } => self.emit_fixnum_bit_not(reg),
+            // Type guards: deopt unless `reg` is an Array / the receiver in rdi
+            // is unfrozen.
+            AsmInst::GuardArrayTy(reg, deopt) => self.emit_guard_array_ty(reg, &labels[deopt]),
+            AsmInst::GuardFrozen { deopt } => self.emit_guard_frozen(&labels[deopt]),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

@@ -95,7 +95,9 @@ impl Codegen {
             | AsmInst::Init { .. }
             | AsmInst::Preparation
             | AsmInst::FixnumNeg { .. }
-            | AsmInst::FixnumBitNot { .. } => {
+            | AsmInst::FixnumBitNot { .. }
+            | AsmInst::GuardArrayTy(..)
+            | AsmInst::GuardFrozen { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::LoopJitRspBump { offset } => {
@@ -145,10 +147,6 @@ impl Codegen {
                 );
             }
 
-            AsmInst::GuardArrayTy(r, deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_array_ty(r, deopt)
-            }
             AsmInst::GuardCapture(deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_capture(deopt)
@@ -389,11 +387,6 @@ impl Codegen {
             AsmInst::StoreStructSlotHeap { src, slot_index } => {
                 self.store_struct_slot_heap(src, slot_index)
             }
-            AsmInst::GuardFrozen { deopt } => {
-                let deopt = &labels[deopt];
-                self.guard_frozen(deopt);
-            }
-
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -1674,5 +1667,15 @@ impl Codegen {
             salq  R(r), 1;
             orq   R(r), 1;
         }
+    }
+
+    /// Guard that `reg` is an Array RValue; deopt otherwise.
+    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
+        self.guard_array_ty(reg, deopt);
+    }
+
+    /// Guard that the receiver in rdi is not frozen; deopt otherwise.
+    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
+        self.guard_frozen(deopt);
     }
 }

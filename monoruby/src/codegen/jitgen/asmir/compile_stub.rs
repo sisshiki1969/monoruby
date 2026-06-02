@@ -1715,6 +1715,34 @@ impl Codegen {
         );
     }
 
+    /// Guard that `reg` is an Array RValue: deopt if it is an immediate (low 3
+    /// bits set) or its `ty` byte is not `ObjTy::ARRAY`.
+    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg.a64().0;
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0b111);
+            and x9, x(r), x9;
+            cbnz x9, deopt;                              // immediate -> deopt
+            ldrb w9, [x(r), #(RVALUE_OFFSET_TY as u32)]; // RValue.ty (u8)
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Guard that the receiver in rdi (x-reg) is not frozen: deopt if the frozen
+    /// flag bit (0b10) is set.
+    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0;
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x(rdi), #(RVALUE_OFFSET_FLAG as u32)];
+            mov x10, (0b10);
+            and x9, x9, x10;       // isolate the frozen bit
+            cbnz x9, deopt;        // frozen -> deopt
+        );
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
