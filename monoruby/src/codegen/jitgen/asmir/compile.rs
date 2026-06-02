@@ -72,7 +72,9 @@ impl Codegen {
             | AsmInst::F64ToFpr(..)
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
-            | AsmInst::FprToStack(..) => {
+            | AsmInst::FprToStack(..)
+            | AsmInst::XmmSave(..)
+            | AsmInst::XmmRestore(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -257,8 +259,6 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            AsmInst::XmmSave(using_xmm, cont) => self.xmm_save_with_cont(using_xmm, cont),
-            AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
                 self.jit_set_arguments(callid, callee_fid, offset);
@@ -1560,6 +1560,19 @@ impl Codegen {
     /// [slot] <- box(xmm(x)) (flonum-encode or heap-allocate the f64).
     pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
         self.fpr_to_stack(x, &[slot], base);
+        true
+    }
+
+    /// Save the live FP pool registers before a C-call. Always succeeds on x86
+    /// (the bool result mirrors the aarch64 twin).
+    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        self.xmm_save_with_cont(using_xmm, cont);
+        true
+    }
+
+    /// Restore the live FP pool registers after a C-call.
+    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        self.xmm_restore_with_cont(using_xmm, cont);
         true
     }
 }

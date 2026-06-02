@@ -1329,6 +1329,46 @@ impl Codegen {
         true
     }
 
+    /// Save the live FP pool registers (D2..) below sp before a C-call.
+    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        if using_xmm.not_any() && !cont {
+            return true;
+        }
+        let sp_offset =
+            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
+        true
+    }
+
+    /// Restore the live FP pool registers and pop the save area after a C-call.
+    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
+        if using_xmm.not_any() && !cont {
+            return true;
+        }
+        let sp_offset =
+            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
+        monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -1496,43 +1536,6 @@ impl Codegen {
                     BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
                     _ => return false,
                 }
-                true
-            }
-            // Save / restore live FP pool registers around a C-call.
-            AsmInst::XmmSave(using_xmm, cont) => {
-                if using_xmm.not_any() && !cont {
-                    return true;
-                }
-                let sp_offset =
-                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
-                monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
-                let mut i = 0u32;
-                for (xi, b) in using_xmm.iter().enumerate() {
-                    if *b {
-                        let pr = xi as u32 + 2;
-                        let ofs = 8 * i;
-                        monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
-                        i += 1;
-                    }
-                }
-                true
-            }
-            AsmInst::XmmRestore(using_xmm, cont) => {
-                if using_xmm.not_any() && !cont {
-                    return true;
-                }
-                let sp_offset =
-                    (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
-                let mut i = 0u32;
-                for (xi, b) in using_xmm.iter().enumerate() {
-                    if *b {
-                        let pr = xi as u32 + 2;
-                        let ofs = 8 * i;
-                        monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
-                        i += 1;
-                    }
-                }
-                monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
                 true
             }
             // Phase 3b: more AsmInst lowerings land here, one category at a time.

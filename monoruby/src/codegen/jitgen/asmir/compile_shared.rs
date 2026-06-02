@@ -148,6 +148,9 @@ impl Codegen {
             AsmInst::FprToStack(x, slot) => {
                 return self.emit_fpr_to_stack(x, slot, frame.base_stack_offset);
             }
+            // Save / restore live FP pool registers around a C-call.
+            AsmInst::XmmSave(using_xmm, cont) => return self.emit_xmm_save(using_xmm, cont),
+            AsmInst::XmmRestore(using_xmm, cont) => return self.emit_xmm_restore(using_xmm, cont),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
