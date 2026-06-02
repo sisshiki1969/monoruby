@@ -814,6 +814,521 @@ impl Codegen {
         true
     }
 
+    /// Constant base-class guard: deopt if the accumulator (rax/x0) is not the
+    /// cached base class. Mirrors x86 `GuardConstBaseClass`.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
+        &mut self,
+        base_class: Value,
+        deopt: &DestLabel,
+    ) {
+        let deopt = deopt.clone();
+        let rax = GP::Rax.a64().0;
+        let cached = base_class.id() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (cached);
+            cmp x(rax), x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Constant version guard: deopt if the global constant version moved since
+    /// compilation (`const_version` is the baked-in cached value). Mirrors x86
+    /// `guard_const_version`.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
+        &mut self,
+        const_version: usize,
+        deopt: &DestLabel,
+    ) {
+        let deopt = deopt.clone();
+        let gv_addr = self
+            .jit
+            .get_label_address(&self.const_version_label())
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (gv_addr);
+            ldr x9, [x9];
+            mov x10, (const_version as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Store the accumulator to a constant via set_constant(vm, globals, id,
+    /// val), bumping the global constant version. Bails (`false`) if any xmm is
+    /// live (no FP save/restore yet). Mirrors x86 `store_constant` + error check.
+    pub(in crate::codegen::jitgen) fn emit_store_constant(
+        &mut self,
+        id: ConstSiteId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let error = error.clone();
+        let cv_addr = self
+            .jit
+            .get_label_address(&self.const_version_label())
+            .as_ptr() as u64;
+        let f = runtime::set_constant as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x0;                 // val (was in rax)
+            mov x0, x19;                // vm
+            mov x1, x20;                // globals
+            mov x2, (id.0 as u64);      // ConstSiteId
+            mov x9, (cv_addr);
+            ldr x10, [x9];
+            add x10, x10, #(1u32);
+            str x10, [x9];              // bump global const version
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            cbz x0, error;              // None -> error
+        );
+        true
+    }
+
+    // ---- variable-access primitives (aarch64) -----------------------------
+    // gvar/cvar go through a runtime C call; dynvar walks the outer-LFP chain.
+    // All bail (`false`) on a live xmm / out-of-range offset (no FP save yet).
+
+    /// rax <- $gvar via runtime::get_global_var(vm, globals, name).
+    pub(in crate::codegen::jitgen) fn emit_load_gvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::get_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            str x30, [sp, #-16]!;         // save LR across the call
+            mov x9, (f);
+            blr x9;                       // result in x0 (= rax)
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// $gvar <- src via runtime::set_global_var(vm, globals, name, val).
+    pub(in crate::codegen::jitgen) fn emit_store_gvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::set_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            sub x10, x(lfp), #(off);
+            ldr x3, [x10];                // val (from slot)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- @@cvar via runtime::get_class_var(vm, globals, name).
+    pub(in crate::codegen::jitgen) fn emit_load_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::get_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                       // result in x0
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
+    /// (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load the slot.
+    /// Mirrors x86 `load_dyn_var`.
+    pub(in crate::codegen::jitgen) fn emit_load_dyn_var(&mut self, src: DynVar) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let rax = GP::Rax.a64().0;
+        self.a64_get_outer(src.outer, lfp, rax);
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(rax), #(off);
+            ldr x(rax), [x10];
+        );
+        true
+    }
+
+    /// dynamic (outer-frame) local <- src. Symmetric to `emit_load_dyn_var`.
+    pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        // walk to the outer LFP in `outer` (avoid clobbering `src`).
+        let outer = GP::Rcx.a64().0;
+        let s = src.a64().0;
+        if s == outer || s == 10 {
+            // src would be clobbered by the walk/scratch; bail (rare).
+            return false;
+        }
+        self.a64_get_outer(dst.outer, lfp, outer);
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(outer), #(off);
+            str x(s), [x10];
+        );
+        true
+    }
+
+    // ---- runtime allocation primitives (aarch64) --------------------------
+    // Each builds a heap object via a runtime C call. All bail (`false`) on a
+    // live xmm (no FP save/restore yet) or an out-of-range frame offset.
+
+    /// rax <- Array built from the `len` slots starting at `src`.
+    /// create_array(ptr=&slot[src], len). No xmm save (matches x86).
+    pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::create_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x0, x(lfp), #(off);   // &slot[src]
+            mov x1, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                   // result in x0
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Array literal via gen_array(vm, globals, callid, &self).
+    pub(in crate::codegen::jitgen) fn emit_new_array(
+        &mut self,
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let f = runtime::gen_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // callid
+            sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
+    pub(in crate::codegen::jitgen) fn emit_new_hash(
+        &mut self,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = args.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::gen_hash as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            sub x2, x(lfp), #(off);   // &slot[args]
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- Range via gen_range(start, end, vm, globals, exclude_end).
+    pub(in crate::codegen::jitgen) fn emit_new_range(
+        &mut self,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let soff = start.0 as u32 * 8 + LFP_SELF as u32;
+        let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
+        if soff > 4095 || eoff > 4095 {
+            return false;
+        }
+        let f = runtime::gen_range as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(soff);
+            ldr x0, [x10];            // start value
+            sub x10, x(lfp), #(eoff);
+            ldr x1, [x10];            // end value
+            mov x2, x19;              // vm
+            mov x3, x20;              // globals
+            mov x4, (exclude_end as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- the `len` slots at `arg` concatenated into a String via
+    /// concatenate_string(vm, globals, &slot[arg], len). Result is Option<Value>
+    /// (followed by a HandleError in the IR).
+    pub(in crate::codegen::jitgen) fn emit_concat_str(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = arg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::concatenate_string as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            sub x2, x(lfp), #(off);   // &slot[arg]
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- `src` coerced to an Array: load slot `src`; if already an Array
+    /// keep it, otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let toa = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x0, [x10];          // val (rax)
+        );
+        self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
+        monoasm_arm64!(&mut self.jit, b exit;); // already Array
+        let f = runtime::to_a as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            toa:
+            mov x2, x0;             // val
+            mov x0, x19;            // vm
+            mov x1, x20;            // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                 // result in x0
+            ldr x30, [sp], #16;
+            exit:
+        );
+        true
+    }
+
+    /// rax <- a deep copy of literal `v` (a fresh mutable object per
+    /// evaluation). Mirrors x86 `deepcopy_literal`.
+    pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
+        &mut self,
+        v: Value,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let imm = v.id();
+        let f = Value::value_deep_copy as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (imm);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;            // result in x0 (= rax)
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    // ---- floating-point transfer primitives (aarch64) ---------------------
+    // FP pool registers map to D-registers via `a64_fpr` (None -> bail). All
+    // return bool; `base` is the spill base.
+
+    /// dst(f64) <- src.
+    pub(in crate::codegen::jitgen) fn emit_fpr_move(
+        &mut self,
+        src: FPReg,
+        dst: FPReg,
+        base: usize,
+    ) -> bool {
+        let (Some(s), Some(d)) = (self.a64_fpr(src, base), self.a64_fpr(dst, base)) else {
+            return false;
+        };
+        if s != d {
+            monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
+        }
+        true
+    }
+
+    /// swap two FP registers (via scratch D0).
+    pub(in crate::codegen::jitgen) fn emit_fpr_swap(&mut self, l: FPReg, r: FPReg, base: usize) -> bool {
+        let (Some(a), Some(b)) = (self.a64_fpr(l, base), self.a64_fpr(r, base)) else {
+            return false;
+        };
+        if a != b {
+            monoasm_arm64!(&mut self.jit,
+                fmov d0, d(a);
+                fmov d(a), d(b);
+                fmov d(b), d0;
+            );
+        }
+        true
+    }
+
+    /// dst(f64) <- f64 constant `f`.
+    pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let bits = f.to_bits();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (bits);
+            fmov d(p), x9;
+        );
+        true
+    }
+
+    /// dst(f64) <- fixnum in GP `reg` (untag, signed int -> double).
+    pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, reg: GP, x: FPReg, base: usize) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let r = reg.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            asr x9, x(r), #(1);   // untag: value >> 1
+            scvtf d(p), x9;
+        );
+        true
+    }
+
+    /// dst(f64) <- Float Value in GP `reg`; deopt if `reg` is not a Float.
+    /// Mirrors x86 float_to_f64 / float_val_to_f64 (flonum decode + heap-Float
+    /// load). `and`/`ror` have no immediate form / the macro grew `ror`, so the
+    /// rotate uses `ror` and the mask uses shifts.
+    pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
+        &mut self,
+        reg: GP,
+        x: FPReg,
+        deopt: &DestLabel,
+        base: usize,
+    ) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let deopt = deopt.clone();
+        let r = reg.a64().0;
+        let heap = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            tbnz x(r), #(0), deopt;   // fixnum -> deopt (expected a Float)
+            tbz x(r), #(1), heap;     // not flonum -> heap Float
+            // flonum: handle 0.0, else decode.
+            fmov d(p), xzr;
+            mov x9, (FLOAT_ZERO);
+            cmp x(r), x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            asr x9, x(r), #(63);      // sign: all-1s / all-0s
+            add x9, x9, #(2);         // 2 - signbit  (1 or 2)
+            lsr x10, x(r), #(2);
+            lsl x10, x10, #(2);       // reg & ~3
+            orr x10, x10, x9;
+            ror x10, x10, #(3);       // rotate_right 3
+            fmov d(p), x10;
+            b exit;
+            heap:
+        );
+        self.a64_guard_rvalue(r, FLOAT_CLASS, &deopt);
+        monoasm_arm64!(&mut self.jit,
+            ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
+            exit:
+        );
+        true
+    }
+
+    /// [slot] <- box(f64 in x): flonum-encode or heap-allocate.
+    pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
+        let Some(p) = self.a64_fpr(x, base) else {
+            return false;
+        };
+        let lfp = GP::R14.a64().0;
+        let f64_to_val = self.f64_to_val.clone();
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        monoasm_arm64!(&mut self.jit,
+            fmov d0, d(p);
+            bl f64_to_val;          // x0 = Value(f64)
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -878,158 +1393,6 @@ impl Codegen {
                 );
                 true
             }
-            // rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
-            // (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load
-            // the slot. Mirrors x86 `load_dyn_var` (`get_outer` + `movq rax,
-            // [rax - offset]`).
-            AsmInst::LoadDynVar { src } => {
-                let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let rax = GP::Rax.a64().0;
-                self.a64_get_outer(src.outer, lfp, rax);
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(rax), #(off);
-                    ldr x(rax), [x10];
-                );
-                true
-            }
-            // dynamic (outer-frame) local <- src. Symmetric to LoadDynVar.
-            AsmInst::StoreDynVar { dst, src } => {
-                let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                // walk to the outer LFP in x9 (avoid clobbering `src`).
-                let outer = GP::Rcx.a64().0;
-                let s = src.a64().0;
-                if s == outer || s == 10 {
-                    // src would be clobbered by the walk/scratch; bail (rare).
-                    return false;
-                }
-                self.a64_get_outer(dst.outer, lfp, outer);
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(outer), #(off);
-                    str x(s), [x10];
-                );
-                true
-            }
-            // rax <- $gvar via runtime::get_global_var(vm, globals, name).
-            // EXEC (Executor) lives in x19, GLOBALS in x20 (= GP::R12). We have
-            // no FP save/restore yet, so bail if any xmm is live across the call.
-            // rax <- @@cvar via runtime::get_class_var(vm, globals, name).
-            AsmInst::LoadCVar { name, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::get_class_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                       // result in x0
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // Stack-overflow check at method entry: if sp <= executor.stack_limit
-            // to_a: load slot `src`; if it is already an Array, keep it in rax,
-            // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
-            AsmInst::ToA { src, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let toa = self.jit.label();
-                let exit = self.jit.label();
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    ldr x0, [x10];          // val (rax)
-                );
-                self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
-                monoasm_arm64!(&mut self.jit, b exit;); // already Array
-                let f = runtime::to_a as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    toa:
-                    mov x2, x0;             // val
-                    mov x0, x19;            // vm
-                    mov x1, x20;            // globals
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                 // result in x0
-                    ldr x30, [sp], #16;
-                    exit:
-                );
-                true
-            }
-            AsmInst::LoadGVar { name, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::get_global_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm (Executor)
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name (IdentId)
-                    str x30, [sp, #-16]!;         // save LR across the call
-                    mov x9, (f);
-                    blr x9;                       // result in x0 (= rax)
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // $gvar <- src via runtime::set_global_var(vm, globals, name, val).
-            // Mirrors x86 store_gvar (the Option<Value> return is discarded).
-            AsmInst::StoreGVar {
-                name,
-                src,
-                using_xmm,
-            } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::set_global_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm (Executor)
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name (IdentId)
-                    sub x10, x(lfp), #(off);
-                    ldr x3, [x10];                // val (from slot)
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- deep copy of literal Value (so each evaluation yields a
-            // fresh mutable object). Runtime C call; bails if any xmm is live
-            // (no FP save/restore yet). Mirrors x86 `deepcopy_literal`.
-            AsmInst::DeepCopyLit(v, using_xmm) => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let imm = v.id();
-                let f = Value::value_deep_copy as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, (imm);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;            // result in x0 (= rax)
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
             // Inline-cache class-version guard: deopt if the global class
             // version changed since compilation.
             AsmInst::GuardClassVersion { deopt, .. } => {
@@ -1057,66 +1420,6 @@ impl Codegen {
                 );
                 true
             }
-            // Constant inline-cache guard: deopt if the global constant version
-            // moved since compilation (`const_version` is the baked-in cached
-            // value). Mirrors x86 guard_const_version.
-            AsmInst::GuardConstVersion { const_version, deopt } => {
-                let deopt = labels[deopt].clone();
-                let gv_addr = self
-                    .jit
-                    .get_label_address(&self.const_version_label())
-                    .as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (gv_addr);
-                    ldr x9, [x9];
-                    mov x10, (const_version as u64);
-                    cmp x9, x10;
-                );
-                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-                true
-            }
-            // Guard that the constant's base class (in rax) matches the cached
-            // one. Mirrors x86 GuardConstBaseClass.
-            AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = labels[deopt].clone();
-                let rax = GP::Rax.a64().0;
-                let cached = base_class.id() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, (cached);
-                    cmp x(rax), x10;
-                );
-                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-                true
-            }
-            // Store to a constant via set_constant(vm, globals, id, val), bumping
-            // the global constant version. Bails if any xmm is live.
-            AsmInst::StoreConstant { id, using_xmm, error } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let error = labels[error].clone();
-                let cv_addr = self
-                    .jit
-                    .get_label_address(&self.const_version_label())
-                    .as_ptr() as u64;
-                let f = runtime::set_constant as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x3, x0;                 // val (was in rax)
-                    mov x0, x19;                // vm
-                    mov x1, x20;                // globals
-                    mov x2, (id.0 as u64);      // ConstSiteId
-                    mov x9, (cv_addr);
-                    ldr x10, [x9];
-                    add x10, x10, #(1u32);
-                    str x10, [x9];              // bump global const version
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    cbz x0, error;              // None -> error
-                );
-                true
-            }
             // A NotCached/recompile point: x86 deopts then recompiles once the
             // inline cache warms (e.g. fib's `+` is cold until the recursion
             // unwinds). aarch64 has no recompile yet, so treat it as a plain
@@ -1124,114 +1427,6 @@ impl Codegen {
             AsmInst::RecompileDeopt { deopt, .. } => {
                 let deopt = labels[deopt].clone();
                 monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
-            // rax <- Array built from the `len` slots starting at `src`.
-            // create_array(ptr=&slot[src], len). No xmm save (matches x86).
-            AsmInst::CreateArray { src, len } => {
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::create_array as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    sub x0, x(lfp), #(off);   // &slot[src]
-                    mov x1, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                   // result in x0
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Array literal via gen_array(vm, globals, callid, &self).
-            AsmInst::NewArray { callid, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::gen_array as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                       // vm
-                    mov x1, x20;                       // globals
-                    mov x2, (callid.get() as u64);     // callid
-                    sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
-            AsmInst::NewHash(args, len, using_xmm) => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = args.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::gen_hash as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;              // vm
-                    mov x1, x20;              // globals
-                    sub x2, x(lfp), #(off);   // &slot[args]
-                    mov x3, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- concatenated string via concatenate_string(vm, globals,
-            // &slot[arg], len). Result is Option<Value> (followed by a
-            // HandleError in the IR). Bails if any xmm is live.
-            AsmInst::ConcatStr { arg, len, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = arg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::concatenate_string as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;              // vm
-                    mov x1, x20;              // globals
-                    sub x2, x(lfp), #(off);   // &slot[arg]
-                    mov x3, (len as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // rax <- Range via gen_range(start, end, vm, globals, exclude_end).
-            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let soff = start.0 as u32 * 8 + LFP_SELF as u32;
-                let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
-                if soff > 4095 || eoff > 4095 {
-                    return false;
-                }
-                let f = runtime::gen_range as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(soff);
-                    ldr x0, [x10];            // start value
-                    sub x10, x(lfp), #(eoff);
-                    ldr x1, [x10];            // end value
-                    mov x2, x19;              // vm
-                    mov x3, x20;              // globals
-                    mov x4, (exclude_end as u64);
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                );
                 true
             }
             // Method-call sequence: frame fields, arg massage, the call itself.
@@ -1278,35 +1473,6 @@ impl Codegen {
                 true
             }
             // ---- floating point (four-arithmetic) ----
-            // dst <- src
-            AsmInst::FprMove(src, dst) => {
-                let base = frame.base_stack_offset;
-                let (Some(s), Some(d)) =
-                    (self.a64_fpr(src, base), self.a64_fpr(dst, base))
-                else {
-                    return false;
-                };
-                if s != d {
-                    monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
-                }
-                true
-            }
-            // swap two FP registers (via scratch D0)
-            AsmInst::FprSwap(l, r) => {
-                let base = frame.base_stack_offset;
-                let (Some(a), Some(b)) = (self.a64_fpr(l, base), self.a64_fpr(r, base))
-                else {
-                    return false;
-                };
-                if a != b {
-                    monoasm_arm64!(&mut self.jit,
-                        fmov d0, d(a);
-                        fmov d(a), d(b);
-                        fmov d(b), d0;
-                    );
-                }
-                true
-            }
             // dst <- lhs <op> rhs  (D-register arithmetic)
             AsmInst::FloatBinOp {
                 kind,
@@ -1330,84 +1496,6 @@ impl Codegen {
                     BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
                     _ => return false,
                 }
-                true
-            }
-            // dst <- f64 constant
-            AsmInst::F64ToFpr(f, x) => {
-                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
-                    return false;
-                };
-                let bits = f.to_bits();
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (bits);
-                    fmov d(p), x9;
-                );
-                true
-            }
-            // dst(f64) <- fixnum in `reg` (untag, signed int -> double)
-            AsmInst::FixnumToFpr(reg, x) => {
-                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
-                    return false;
-                };
-                let r = reg.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    asr x9, x(r), #(1);   // untag: value >> 1
-                    scvtf d(p), x9;
-                );
-                true
-            }
-            // dst(f64) <- Float Value in `reg`; deopt if `reg` is not a Float.
-            // Mirrors x86 float_to_f64 / float_val_to_f64 (flonum decode +
-            // heap-Float load). `and`/`ror` have no immediate form / the macro
-            // grew `ror`, so the rotate uses `ror` and the mask uses shifts.
-            AsmInst::FloatToFpr(reg, x, deopt) => {
-                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
-                    return false;
-                };
-                let deopt = labels[deopt].clone();
-                let r = reg.a64().0;
-                let heap = self.jit.label();
-                let exit = self.jit.label();
-                monoasm_arm64!(&mut self.jit,
-                    tbnz x(r), #(0), deopt;   // fixnum -> deopt (expected a Float)
-                    tbz x(r), #(1), heap;     // not flonum -> heap Float
-                    // flonum: handle 0.0, else decode.
-                    fmov d(p), xzr;
-                    mov x9, (FLOAT_ZERO);
-                    cmp x(r), x9;
-                );
-                self.jit.bcond_label(monoasm::Cond::Eq, &exit);
-                monoasm_arm64!(&mut self.jit,
-                    asr x9, x(r), #(63);      // sign: all-1s / all-0s
-                    add x9, x9, #(2);         // 2 - signbit  (1 or 2)
-                    lsr x10, x(r), #(2);
-                    lsl x10, x10, #(2);       // reg & ~3
-                    orr x10, x10, x9;
-                    ror x10, x10, #(3);       // rotate_right 3
-                    fmov d(p), x10;
-                    b exit;
-                    heap:
-                );
-                self.a64_guard_rvalue(r, FLOAT_CLASS, &deopt);
-                monoasm_arm64!(&mut self.jit,
-                    ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
-                    exit:
-                );
-                true
-            }
-            // [slot] <- box(f64 in x): flonum-encode or heap-allocate.
-            AsmInst::FprToStack(x, slot) => {
-                let Some(p) = self.a64_fpr(x, frame.base_stack_offset) else {
-                    return false;
-                };
-                let f64_to_val = self.f64_to_val.clone();
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                monoasm_arm64!(&mut self.jit,
-                    fmov d0, d(p);
-                    bl f64_to_val;          // x0 = Value(f64)
-                    sub x10, x(lfp), #(off);
-                    str x0, [x10];
-                );
                 true
             }
             // Save / restore live FP pool registers around a C-call.

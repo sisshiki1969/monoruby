@@ -88,6 +88,66 @@ impl Codegen {
             AsmInst::ExecGc { write_back, error } => {
                 return self.emit_exec_gc(write_back, &labels[error], frame.base_stack_offset);
             }
+            // Constant base-class guard: deopt if the constant's base class (in
+            // the accumulator) is not the cached one.
+            AsmInst::GuardConstBaseClass { base_class, deopt } => {
+                self.emit_guard_const_base_class(base_class, &labels[deopt]);
+            }
+            // Constant version guard: deopt if the global constant version moved
+            // since compilation.
+            AsmInst::GuardConstVersion { const_version, deopt } => {
+                self.emit_guard_const_version(const_version, &labels[deopt]);
+            }
+            // Store to a constant, bumping the global constant version (aarch64
+            // bails if any xmm is live, hence the bool result).
+            AsmInst::StoreConstant { id, using_xmm, error } => {
+                return self.emit_store_constant(id, using_xmm, &labels[error]);
+            }
+            // Variable access (aarch64 bails on a live xmm / range overflow,
+            // hence the bool results). gvar/cvar go via a runtime call; dynvar
+            // walks the outer-LFP chain.
+            AsmInst::LoadGVar { name, using_xmm } => return self.emit_load_gvar(name, using_xmm),
+            AsmInst::StoreGVar { name, src, using_xmm } => {
+                return self.emit_store_gvar(name, src, using_xmm);
+            }
+            AsmInst::LoadCVar { name, using_xmm } => return self.emit_load_cvar(name, using_xmm),
+            AsmInst::LoadDynVar { src } => return self.emit_load_dyn_var(src),
+            AsmInst::StoreDynVar { dst, src } => return self.emit_store_dyn_var(dst, src),
+            // Runtime allocation / C-call family: each builds a heap object via
+            // a runtime call (aarch64 bails on a live xmm / range overflow,
+            // hence the bool results).
+            AsmInst::CreateArray { src, len } => return self.emit_create_array(src, len),
+            AsmInst::NewArray { callid, using_xmm } => {
+                return self.emit_new_array(callid, using_xmm);
+            }
+            AsmInst::NewHash(args, len, using_xmm) => {
+                return self.emit_new_hash(args, len, using_xmm);
+            }
+            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
+                return self.emit_new_range(start, end, exclude_end, using_xmm);
+            }
+            AsmInst::ConcatStr { arg, len, using_xmm } => {
+                return self.emit_concat_str(arg, len, using_xmm);
+            }
+            AsmInst::ToA { src, using_xmm } => return self.emit_to_a(src, using_xmm),
+            AsmInst::DeepCopyLit(v, using_xmm) => return self.emit_deep_copy_lit(v, using_xmm),
+            // Floating-point register transfer/convert family (aarch64 bails if
+            // the FP pool register is not lowerable, hence the bool results).
+            // `base` is the spill base; deopt is a side-exit label.
+            AsmInst::FprMove(src, dst) => {
+                return self.emit_fpr_move(src, dst, frame.base_stack_offset);
+            }
+            AsmInst::FprSwap(l, r) => return self.emit_fpr_swap(l, r, frame.base_stack_offset),
+            AsmInst::F64ToFpr(f, x) => return self.emit_f64_to_fpr(f, x, frame.base_stack_offset),
+            AsmInst::FixnumToFpr(r, x) => {
+                return self.emit_fixnum_to_fpr(r, x, frame.base_stack_offset);
+            }
+            AsmInst::FloatToFpr(reg, x, deopt) => {
+                return self.emit_float_to_fpr(reg, x, &labels[deopt], frame.base_stack_offset);
+            }
+            AsmInst::FprToStack(x, slot) => {
+                return self.emit_fpr_to_stack(x, slot, frame.base_stack_offset);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

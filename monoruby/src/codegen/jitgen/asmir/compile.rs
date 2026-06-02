@@ -51,7 +51,28 @@ impl Codegen {
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
             | AsmInst::CheckStack { .. }
-            | AsmInst::ExecGc { .. } => {
+            | AsmInst::ExecGc { .. }
+            | AsmInst::GuardConstBaseClass { .. }
+            | AsmInst::GuardConstVersion { .. }
+            | AsmInst::StoreConstant { .. }
+            | AsmInst::LoadGVar { .. }
+            | AsmInst::StoreGVar { .. }
+            | AsmInst::LoadCVar { .. }
+            | AsmInst::LoadDynVar { .. }
+            | AsmInst::StoreDynVar { .. }
+            | AsmInst::CreateArray { .. }
+            | AsmInst::NewArray { .. }
+            | AsmInst::NewHash(..)
+            | AsmInst::NewRange { .. }
+            | AsmInst::ConcatStr { .. }
+            | AsmInst::ToA { .. }
+            | AsmInst::DeepCopyLit(..)
+            | AsmInst::FprMove(..)
+            | AsmInst::FprSwap(..)
+            | AsmInst::F64ToFpr(..)
+            | AsmInst::FixnumToFpr(..)
+            | AsmInst::FloatToFpr(..)
+            | AsmInst::FprToStack(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -143,12 +164,6 @@ impl Codegen {
                 );
             }
 
-            AsmInst::FprMove(src, dst) => {
-                self.emit_xmm_move(src, dst, frame.base_stack_offset);
-            }
-            AsmInst::FprSwap(l, r) => {
-                self.emit_fpr_swap(l, r, frame.base_stack_offset);
-            }
             AsmInst::FloatBinOp {
                 kind,
                 binary_xmm,
@@ -172,42 +187,6 @@ impl Codegen {
                 _ => unreachable!(),
             },
 
-            AsmInst::F64ToFpr(f, x) => {
-                let f_const = self.jit.const_f64(f);
-                match x.loc(frame.base_stack_offset) {
-                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                        movq xmm(p), [rip + f_const];
-                    ),
-                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                        movq xmm0, [rip + f_const];
-                        movq [rbp - (off)], xmm0;
-                    ),
-                }
-            }
-            AsmInst::FixnumToFpr(r, x) => {
-                let (work, spill_off) = match x.loc(frame.base_stack_offset) {
-                    FPRegLoc::Xmm(p) => (p, None),
-                    FPRegLoc::Spill(off) => (0u64, Some(off)),
-                };
-                self.integer_val_to_f64(r, work);
-                if let Some(off) = spill_off {
-                    monoasm!( &mut self.jit,
-                        movq [rbp - (off)], xmm(work);
-                    );
-                }
-            }
-            AsmInst::FloatToFpr(reg, x, deopt) => {
-                let (work, spill_off) = match x.loc(frame.base_stack_offset) {
-                    FPRegLoc::Xmm(p) => (p, None),
-                    FPRegLoc::Spill(off) => (0u64, Some(off)),
-                };
-                self.float_to_f64(reg, work, &labels[deopt]);
-                if let Some(off) = spill_off {
-                    monoasm!( &mut self.jit,
-                        movq [rbp - (off)], xmm(work);
-                    );
-                }
-            }
             AsmInst::I64ToBoth(i, r, x) => {
                 let f = self.jit.const_f64(i as f64);
                 monoasm! {&mut self.jit,
@@ -223,11 +202,6 @@ impl Codegen {
                     ),
                 }
             }
-            AsmInst::FprToStack(x, slots) => {
-                self.fpr_to_stack(x, &[slots], frame.base_stack_offset);
-            }
-            AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
-
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
@@ -537,30 +511,6 @@ impl Codegen {
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
-            AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = &labels[deopt];
-                let cached_base_class = self.jit.const_i64(base_class.id() as _);
-                monoasm! { &mut self.jit,
-                    cmpq rax, [rip + cached_base_class];  // rax: base_class
-                    jne  deopt;
-                }
-            }
-            AsmInst::GuardConstVersion {
-                const_version,
-                deopt,
-            } => {
-                let deopt = &labels[deopt];
-                self.guard_const_version(const_version, deopt);
-            }
-            AsmInst::StoreConstant {
-                id,
-                using_xmm,
-                error,
-            } => {
-                self.store_constant(id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-
             AsmInst::GenericBinOp {
                 lhs,
                 rhs,
@@ -585,22 +535,6 @@ impl Codegen {
             } => {
                 self.array_teq(lhs, rhs, using_xmm);
             }
-            AsmInst::NewArray { callid, using_xmm } => {
-                self.new_array(callid, using_xmm);
-            }
-            AsmInst::NewHash(args, len, using_xmm) => {
-                self.new_hash(args, len, using_xmm);
-            }
-            AsmInst::NewRange {
-                start,
-                end,
-                exclude_end,
-                using_xmm,
-            } => {
-                self.load_rdi(start);
-                self.load_rsi(end);
-                self.new_range(exclude_end, using_xmm);
-            }
 
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.get_method_lfp(outer);
@@ -619,11 +553,9 @@ impl Codegen {
                 self.store_rax(ret);
             }
 
-            AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
             }
-            AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
                 self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
@@ -661,9 +593,6 @@ impl Codegen {
                 self.guard_frozen(deopt);
             }
 
-            AsmInst::LoadCVar { name, using_xmm } => {
-                self.load_cvar(name, using_xmm);
-            }
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -674,13 +603,6 @@ impl Codegen {
             } => {
                 self.store_cvar(name, src, using_xmm);
             }
-
-            AsmInst::LoadGVar { name, using_xmm } => self.load_gvar(name, using_xmm),
-            AsmInst::StoreGVar {
-                name,
-                src,
-                using_xmm,
-            } => self.store_gvar(name, src, using_xmm),
 
             AsmInst::ClassDef {
                 base,
@@ -753,14 +675,6 @@ impl Codegen {
                 );
                 self.xmm_restore(using_xmm);
             }
-            AsmInst::CreateArray { src, len } => {
-                monoasm!( &mut self.jit,
-                    lea  rdi, [r14 - (conv(src))];
-                    movq rsi, (len);
-                    movq rax, (runtime::create_array);
-                    call rax;
-                );
-            }
             AsmInst::RestKw { rest_kw } => {
                 let data = self.jit.const_align8();
                 for (i, name) in rest_kw.into_iter() {
@@ -776,16 +690,6 @@ impl Codegen {
                     movq rax, (runtime::correct_rest_kw);
                     call rax;
                 );
-            }
-            AsmInst::ConcatStr {
-                arg,
-                len,
-                using_xmm,
-            } => {
-                self.concat_string(arg, len, using_xmm);
-            }
-            AsmInst::ToA { src, using_xmm } => {
-                self.to_a(src, using_xmm);
             }
             AsmInst::ConcatRegexp {
                 arg,
@@ -1022,6 +926,168 @@ impl Codegen {
         base: usize,
     ) -> bool {
         self.jit_execute_gc(&write_back, error, base);
+        true
+    }
+
+    /// Constant base-class guard: deopt if the accumulator (rax) is not the
+    /// cached base class.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
+        &mut self,
+        base_class: Value,
+        deopt: &DestLabel,
+    ) {
+        let cached_base_class = self.jit.const_i64(base_class.id() as _);
+        monoasm! { &mut self.jit,
+            cmpq rax, [rip + cached_base_class];  // rax: base_class
+            jne  deopt;
+        }
+    }
+
+    /// Constant version guard: deopt if the global constant version moved.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
+        &mut self,
+        const_version: usize,
+        deopt: &DestLabel,
+    ) {
+        self.guard_const_version(const_version, deopt);
+    }
+
+    /// Store the accumulator to a constant and bump the global constant
+    /// version. Always succeeds on x86 (the bool result exists for the aarch64
+    /// twin, which bails if any xmm is live).
+    pub(in crate::codegen::jitgen) fn emit_store_constant(
+        &mut self,
+        id: ConstSiteId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.store_constant(id, using_xmm);
+        self.handle_error(error);
+        true
+    }
+
+    // ---- variable-access primitives (x86-64) ------------------------------
+    // All delegate to the existing helpers and always succeed (the bool result
+    // exists for the aarch64 twins, which bail on a live xmm / range overflow).
+
+    /// rax <- $gvar.
+    pub(in crate::codegen::jitgen) fn emit_load_gvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_gvar(name, using_xmm);
+        true
+    }
+
+    /// $gvar <- src.
+    pub(in crate::codegen::jitgen) fn emit_store_gvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.store_gvar(name, src, using_xmm);
+        true
+    }
+
+    /// rax <- @@cvar.
+    pub(in crate::codegen::jitgen) fn emit_load_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_cvar(name, using_xmm);
+        true
+    }
+
+    /// rax <- dynamic (outer-frame) local.
+    pub(in crate::codegen::jitgen) fn emit_load_dyn_var(&mut self, src: DynVar) -> bool {
+        self.load_dyn_var(src);
+        true
+    }
+
+    /// dynamic (outer-frame) local <- src.
+    pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
+        self.store_dyn_var(dst, src);
+        true
+    }
+
+    // ---- runtime allocation primitives (x86-64) ---------------------------
+    // All build a heap object via a runtime call and always succeed (the bool
+    // result exists for the aarch64 twins, which bail on a live xmm / range
+    // overflow).
+
+    /// rax <- Array of the `len` slots starting at `src`.
+    pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
+        monoasm!( &mut self.jit,
+            lea  rdi, [r14 - (conv(src))];
+            movq rsi, (len);
+            movq rax, (runtime::create_array);
+            call rax;
+        );
+        true
+    }
+
+    /// rax <- Array literal (splat-aware) via the call site.
+    pub(in crate::codegen::jitgen) fn emit_new_array(
+        &mut self,
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.new_array(callid, using_xmm);
+        true
+    }
+
+    /// rax <- Hash literal from the `len` key/value slots at `args`.
+    pub(in crate::codegen::jitgen) fn emit_new_hash(
+        &mut self,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.new_hash(args, len, using_xmm);
+        true
+    }
+
+    /// rax <- Range(start, end, exclude_end).
+    pub(in crate::codegen::jitgen) fn emit_new_range(
+        &mut self,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_rdi(start);
+        self.load_rsi(end);
+        self.new_range(exclude_end, using_xmm);
+        true
+    }
+
+    /// rax <- the `len` slots at `arg` concatenated into a String.
+    pub(in crate::codegen::jitgen) fn emit_concat_str(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.concat_string(arg, len, using_xmm);
+        true
+    }
+
+    /// rax <- `src` coerced to an Array (`Array(x)` / splat).
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
+        self.to_a(src, using_xmm);
+        true
+    }
+
+    /// rax <- a deep copy of literal `v` (fresh mutable object per evaluation).
+    pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
+        &mut self,
+        v: Value,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.deepcopy_literal(v, using_xmm);
         true
     }
 
@@ -1370,9 +1436,16 @@ impl Codegen {
     /// combination and avoid the round-trip through xmm0 that the
     /// generic `expand_spills` wrapping would otherwise produce.
     ///
-    fn emit_xmm_move(&mut self, src: FPReg, dst: FPReg, base: usize) {
+    /// dst(f64) <- src. Spill-aware. Always succeeds on x86 (the bool result
+    /// exists for the aarch64 twin, which bails on an unlowerable FP register).
+    pub(in crate::codegen::jitgen) fn emit_fpr_move(
+        &mut self,
+        src: FPReg,
+        dst: FPReg,
+        base: usize,
+    ) -> bool {
         if src == dst {
-            return;
+            return true;
         }
         match (src.loc(base), dst.loc(base)) {
             (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
@@ -1389,6 +1462,7 @@ impl Codegen {
                 movq [rbp - (d_off)], xmm0;
             ),
         }
+        true
     }
 
     ///
@@ -1396,9 +1470,14 @@ impl Codegen {
     /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
     /// nothing in the surrounding code's GP state is disturbed).
     ///
-    fn emit_fpr_swap(&mut self, l: FPReg, r: FPReg, base: usize) {
+    pub(in crate::codegen::jitgen) fn emit_fpr_swap(
+        &mut self,
+        l: FPReg,
+        r: FPReg,
+        base: usize,
+    ) -> bool {
         if l == r {
-            return;
+            return true;
         }
         match (l.loc(base), r.loc(base)) {
             (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
@@ -1423,5 +1502,64 @@ impl Codegen {
                 movq [rbp - (l_off)], xmm1;
             ),
         }
+        true
+    }
+
+    /// xmm(x) <- f64 constant `f`. Spill-aware.
+    pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
+        let f_const = self.jit.const_f64(f);
+        match x.loc(base) {
+            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                movq xmm(p), [rip + f_const];
+            ),
+            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                movq xmm0, [rip + f_const];
+                movq [rbp - (off)], xmm0;
+            ),
+        }
+        true
+    }
+
+    /// xmm(x) <- the fixnum in GP `r`, converted to f64. Spill-aware.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, r: GP, x: FPReg, base: usize) -> bool {
+        let (work, spill_off) = match x.loc(base) {
+            FPRegLoc::Xmm(p) => (p, None),
+            FPRegLoc::Spill(off) => (0u64, Some(off)),
+        };
+        self.integer_val_to_f64(r, work);
+        if let Some(off) = spill_off {
+            monoasm!( &mut self.jit,
+                movq [rbp - (off)], xmm(work);
+            );
+        }
+        true
+    }
+
+    /// xmm(x) <- the Float Value in GP `reg`, decoded to f64; deopt if `reg` is
+    /// not a Float. Spill-aware.
+    pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
+        &mut self,
+        reg: GP,
+        x: FPReg,
+        deopt: &DestLabel,
+        base: usize,
+    ) -> bool {
+        let (work, spill_off) = match x.loc(base) {
+            FPRegLoc::Xmm(p) => (p, None),
+            FPRegLoc::Spill(off) => (0u64, Some(off)),
+        };
+        self.float_to_f64(reg, work, deopt);
+        if let Some(off) = spill_off {
+            monoasm!( &mut self.jit,
+                movq [rbp - (off)], xmm(work);
+            );
+        }
+        true
+    }
+
+    /// [slot] <- box(xmm(x)) (flonum-encode or heap-allocate the f64).
+    pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
+        self.fpr_to_stack(x, &[slot], base);
+        true
     }
 }
