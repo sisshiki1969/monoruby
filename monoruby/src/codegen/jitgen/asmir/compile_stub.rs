@@ -730,6 +730,90 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, b deopt;);
     }
 
+    /// Error check: a runtime helper returns rax==0 (None) on error; branch to
+    /// the error side-exit handler in that case. Mirrors x86 `handle_error`
+    /// (`testq rax,rax; jeq error`).
+    pub(in crate::codegen::jitgen) fn emit_handle_error(&mut self, error: &DestLabel) {
+        let error = error.clone();
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit, cbz x(rax), error;);
+    }
+
+    /// Stack-overflow check: if sp <= limit, write back live values, call
+    /// stack_overflow(vm), and jump to the error handler. The overflow path is
+    /// laid out inline but skipped on the common path. Bails (`false`) if the
+    /// write-back needs an unsupported feature. `base` is unused on aarch64.
+    /// Mirrors x86 `jit_check_stack`.
+    pub(in crate::codegen::jitgen) fn emit_check_stack(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        _base: usize,
+    ) -> bool {
+        let error = error.clone();
+        let ok = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            ldr x11, [x19, #(crate::executor::EXECUTOR_STACK_LIMIT as u32)];
+            cmp x10, x11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
+        if !self.a64_gen_write_back_for_deopt(&write_back) {
+            return false;
+        }
+        let f = crate::codegen::stack_overflow as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b error;
+        );
+        self.jit.bind_label(ok);
+        true
+    }
+
+    /// GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write back
+    /// live values, run execute_gc(vm, globals), and on error jump to the error
+    /// handler. The GC path is laid out inline but skipped on the common path.
+    /// Bails (`false`) like `emit_check_stack`. `base` is unused on aarch64.
+    /// Mirrors x86 `jit_execute_gc`.
+    pub(in crate::codegen::jitgen) fn emit_exec_gc(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        _base: usize,
+    ) -> bool {
+        let error = error.clone();
+        let skip = self.jit.label();
+        let af_addr = self
+            .jit
+            .get_label_address(&self.alloc_flag.clone())
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (af_addr);
+            ldr w9, [x9];
+            cmp x9, #(8u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
+        if !self.a64_gen_write_back_for_deopt(&write_back) {
+            return false;
+        }
+        let f = crate::executor::execute_gc as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            cbz x0, error;             // None -> error
+        );
+        self.jit.bind_label(skip);
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -852,33 +936,6 @@ impl Codegen {
                 true
             }
             // Stack-overflow check at method entry: if sp <= executor.stack_limit
-            // write back live values, call stack_overflow(vm), and jump to the
-            // error handler. The overflow path is laid out inline but skipped on
-            // the common (no-overflow) path. Mirrors x86 jit_check_stack.
-            AsmInst::CheckStack { write_back, error } => {
-                let error = labels[error].clone();
-                let ok = self.jit.label();
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, sp;
-                    ldr x11, [x19, #(crate::executor::EXECUTOR_STACK_LIMIT as u32)];
-                    cmp x10, x11;
-                );
-                self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
-                if !self.a64_gen_write_back_for_deopt(&write_back) {
-                    return false;
-                }
-                let f = crate::codegen::stack_overflow as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    b error;
-                );
-                self.jit.bind_label(ok);
-                true
-            }
             // to_a: load slot `src`; if it is already an Array, keep it in rax,
             // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
             AsmInst::ToA { src, using_xmm } => {
@@ -909,39 +966,6 @@ impl Codegen {
                     ldr x30, [sp], #16;
                     exit:
                 );
-                true
-            }
-            // GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write
-            // back live values, run execute_gc(vm, globals), and on error jump
-            // to the error handler. The GC path is laid out inline but skipped
-            // on the common (no-GC) path. Mirrors x86 execute_gc_inner.
-            AsmInst::ExecGc { write_back, error } => {
-                let error = labels[error].clone();
-                let skip = self.jit.label();
-                let af_addr = self
-                    .jit
-                    .get_label_address(&self.alloc_flag.clone())
-                    .as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (af_addr);
-                    ldr w9, [x9];
-                    cmp x9, #(8u32);
-                );
-                self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
-                if !self.a64_gen_write_back_for_deopt(&write_back) {
-                    return false;
-                }
-                let f = crate::executor::execute_gc as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;
-                    mov x1, x20;
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    cbz x0, error;             // None -> error
-                );
-                self.jit.bind_label(skip);
                 true
             }
             AsmInst::LoadGVar { name, using_xmm } => {
@@ -1100,15 +1124,6 @@ impl Codegen {
             AsmInst::RecompileDeopt { deopt, .. } => {
                 let deopt = labels[deopt].clone();
                 monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
-            // Error check: a runtime helper returns rax==0 (None) on error;
-            // branch to the error side-exit handler in that case. Mirrors x86
-            // `handle_error` (`testq rax,rax; jeq error`).
-            AsmInst::HandleError(error) => {
-                let error = labels[error].clone();
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit, cbz x(rax), error;);
                 true
             }
             // rax <- Array built from the `len` slots starting at `src`.

@@ -48,7 +48,10 @@ impl Codegen {
             | AsmInst::NilBr(..)
             | AsmInst::CheckLocal(..)
             | AsmInst::GuardClass(..)
-            | AsmInst::Deopt(..) => {
+            | AsmInst::Deopt(..)
+            | AsmInst::HandleError(..)
+            | AsmInst::CheckStack { .. }
+            | AsmInst::ExecGc { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -234,10 +237,6 @@ impl Codegen {
                 self.guard_capture(deopt)
             }
 
-            AsmInst::HandleError(error) => {
-                let error = &labels[error];
-                self.handle_error(&error);
-            }
             AsmInst::GuardClassVersion {
                 position,
                 with_recovery,
@@ -286,14 +285,6 @@ impl Codegen {
             }
             AsmInst::XmmSave(using_xmm, cont) => self.xmm_save_with_cont(using_xmm, cont),
             AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
-            AsmInst::ExecGc { write_back, error } => {
-                let error = &labels[error];
-                self.jit_execute_gc(&write_back, error, frame.base_stack_offset)
-            }
-            AsmInst::CheckStack { write_back, error } => {
-                let error = &labels[error];
-                self.jit_check_stack(&write_back, error, frame.base_stack_offset);
-            }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
                 self.jit_set_arguments(callid, callee_fid, offset);
@@ -1003,6 +994,35 @@ impl Codegen {
         monoasm!( &mut self.jit,
             jmp deopt;
         );
+    }
+
+    /// Branch to the error handler if the accumulator (rax) is null (the
+    /// preceding runtime call failed).
+    pub(in crate::codegen::jitgen) fn emit_handle_error(&mut self, error: &DestLabel) {
+        self.handle_error(error);
+    }
+
+    /// Stack-overflow check. Always succeeds on x86 (the bool result exists for
+    /// the aarch64 twin, which bails on an unsupported write-back).
+    pub(in crate::codegen::jitgen) fn emit_check_stack(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        base: usize,
+    ) -> bool {
+        self.jit_check_stack(&write_back, error, base);
+        true
+    }
+
+    /// GC safepoint. Always succeeds on x86 (see `emit_check_stack`).
+    pub(in crate::codegen::jitgen) fn emit_exec_gc(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        base: usize,
+    ) -> bool {
+        self.jit_execute_gc(&write_back, error, base);
+        true
     }
 
     fn set_deopt_with_return_addr(

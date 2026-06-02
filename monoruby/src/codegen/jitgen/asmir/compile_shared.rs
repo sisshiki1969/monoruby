@@ -76,6 +76,18 @@ impl Codegen {
             }
             // Unconditional jump to a side-exit (deopt) label.
             AsmInst::Deopt(deopt) => self.emit_deopt(&labels[deopt]),
+            // Branch to the error handler if the preceding runtime call failed
+            // (returned a null/None result in the accumulator).
+            AsmInst::HandleError(error) => self.emit_handle_error(&labels[error]),
+            // Stack-overflow check before establishing a callee frame (aarch64
+            // bails if the write-back needs an unsupported feature).
+            AsmInst::CheckStack { write_back, error } => {
+                return self.emit_check_stack(write_back, &labels[error], frame.base_stack_offset);
+            }
+            // GC safepoint (aarch64 bails like CheckStack).
+            AsmInst::ExecGc { write_back, error } => {
+                return self.emit_exec_gc(write_back, &labels[error], frame.base_stack_offset);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
