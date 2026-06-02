@@ -54,7 +54,12 @@ impl Codegen {
             | AsmInst::ExecGc { .. }
             | AsmInst::GuardConstBaseClass { .. }
             | AsmInst::GuardConstVersion { .. }
-            | AsmInst::StoreConstant { .. } => {
+            | AsmInst::StoreConstant { .. }
+            | AsmInst::LoadGVar { .. }
+            | AsmInst::StoreGVar { .. }
+            | AsmInst::LoadCVar { .. }
+            | AsmInst::LoadDynVar { .. }
+            | AsmInst::StoreDynVar { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -598,11 +603,9 @@ impl Codegen {
                 self.store_rax(ret);
             }
 
-            AsmInst::LoadDynVar { src } => self.load_dyn_var(src),
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
             }
-            AsmInst::StoreDynVar { dst, src } => self.store_dyn_var(dst, src),
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
                 self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
@@ -640,9 +643,6 @@ impl Codegen {
                 self.guard_frozen(deopt);
             }
 
-            AsmInst::LoadCVar { name, using_xmm } => {
-                self.load_cvar(name, using_xmm);
-            }
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -653,13 +653,6 @@ impl Codegen {
             } => {
                 self.store_cvar(name, src, using_xmm);
             }
-
-            AsmInst::LoadGVar { name, using_xmm } => self.load_gvar(name, using_xmm),
-            AsmInst::StoreGVar {
-                name,
-                src,
-                using_xmm,
-            } => self.store_gvar(name, src, using_xmm),
 
             AsmInst::ClassDef {
                 base,
@@ -1038,6 +1031,53 @@ impl Codegen {
     ) -> bool {
         self.store_constant(id, using_xmm);
         self.handle_error(error);
+        true
+    }
+
+    // ---- variable-access primitives (x86-64) ------------------------------
+    // All delegate to the existing helpers and always succeed (the bool result
+    // exists for the aarch64 twins, which bail on a live xmm / range overflow).
+
+    /// rax <- $gvar.
+    pub(in crate::codegen::jitgen) fn emit_load_gvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_gvar(name, using_xmm);
+        true
+    }
+
+    /// $gvar <- src.
+    pub(in crate::codegen::jitgen) fn emit_store_gvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.store_gvar(name, src, using_xmm);
+        true
+    }
+
+    /// rax <- @@cvar.
+    pub(in crate::codegen::jitgen) fn emit_load_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.load_cvar(name, using_xmm);
+        true
+    }
+
+    /// rax <- dynamic (outer-frame) local.
+    pub(in crate::codegen::jitgen) fn emit_load_dyn_var(&mut self, src: DynVar) -> bool {
+        self.load_dyn_var(src);
+        true
+    }
+
+    /// dynamic (outer-frame) local <- src.
+    pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
+        self.store_dyn_var(dst, src);
         true
     }
 

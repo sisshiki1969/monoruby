@@ -889,6 +889,124 @@ impl Codegen {
         true
     }
 
+    // ---- variable-access primitives (aarch64) -----------------------------
+    // gvar/cvar go through a runtime C call; dynvar walks the outer-LFP chain.
+    // All bail (`false`) on a live xmm / out-of-range offset (no FP save yet).
+
+    /// rax <- $gvar via runtime::get_global_var(vm, globals, name).
+    pub(in crate::codegen::jitgen) fn emit_load_gvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::get_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            str x30, [sp, #-16]!;         // save LR across the call
+            mov x9, (f);
+            blr x9;                       // result in x0 (= rax)
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// $gvar <- src via runtime::set_global_var(vm, globals, name, val).
+    pub(in crate::codegen::jitgen) fn emit_store_gvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::set_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            sub x10, x(lfp), #(off);
+            ldr x3, [x10];                // val (from slot)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- @@cvar via runtime::get_class_var(vm, globals, name).
+    pub(in crate::codegen::jitgen) fn emit_load_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::get_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                       // result in x0
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
+    /// (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load the slot.
+    /// Mirrors x86 `load_dyn_var`.
+    pub(in crate::codegen::jitgen) fn emit_load_dyn_var(&mut self, src: DynVar) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let rax = GP::Rax.a64().0;
+        self.a64_get_outer(src.outer, lfp, rax);
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(rax), #(off);
+            ldr x(rax), [x10];
+        );
+        true
+    }
+
+    /// dynamic (outer-frame) local <- src. Symmetric to `emit_load_dyn_var`.
+    pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        // walk to the outer LFP in `outer` (avoid clobbering `src`).
+        let outer = GP::Rcx.a64().0;
+        let s = src.a64().0;
+        if s == outer || s == 10 {
+            // src would be clobbered by the walk/scratch; bail (rare).
+            return false;
+        }
+        self.a64_get_outer(dst.outer, lfp, outer);
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(outer), #(off);
+            str x(s), [x10];
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -953,64 +1071,6 @@ impl Codegen {
                 );
                 true
             }
-            // rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
-            // (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load
-            // the slot. Mirrors x86 `load_dyn_var` (`get_outer` + `movq rax,
-            // [rax - offset]`).
-            AsmInst::LoadDynVar { src } => {
-                let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let rax = GP::Rax.a64().0;
-                self.a64_get_outer(src.outer, lfp, rax);
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(rax), #(off);
-                    ldr x(rax), [x10];
-                );
-                true
-            }
-            // dynamic (outer-frame) local <- src. Symmetric to LoadDynVar.
-            AsmInst::StoreDynVar { dst, src } => {
-                let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                // walk to the outer LFP in x9 (avoid clobbering `src`).
-                let outer = GP::Rcx.a64().0;
-                let s = src.a64().0;
-                if s == outer || s == 10 {
-                    // src would be clobbered by the walk/scratch; bail (rare).
-                    return false;
-                }
-                self.a64_get_outer(dst.outer, lfp, outer);
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(outer), #(off);
-                    str x(s), [x10];
-                );
-                true
-            }
-            // rax <- $gvar via runtime::get_global_var(vm, globals, name).
-            // EXEC (Executor) lives in x19, GLOBALS in x20 (= GP::R12). We have
-            // no FP save/restore yet, so bail if any xmm is live across the call.
-            // rax <- @@cvar via runtime::get_class_var(vm, globals, name).
-            AsmInst::LoadCVar { name, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::get_class_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;                       // result in x0
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // Stack-overflow check at method entry: if sp <= executor.stack_limit
             // to_a: load slot `src`; if it is already an Array, keep it in rax,
             // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
             AsmInst::ToA { src, using_xmm } => {
@@ -1040,50 +1100,6 @@ impl Codegen {
                     blr x9;                 // result in x0
                     ldr x30, [sp], #16;
                     exit:
-                );
-                true
-            }
-            AsmInst::LoadGVar { name, using_xmm } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let f = runtime::get_global_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm (Executor)
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name (IdentId)
-                    str x30, [sp, #-16]!;         // save LR across the call
-                    mov x9, (f);
-                    blr x9;                       // result in x0 (= rax)
-                    ldr x30, [sp], #16;
-                );
-                true
-            }
-            // $gvar <- src via runtime::set_global_var(vm, globals, name, val).
-            // Mirrors x86 store_gvar (the Option<Value> return is discarded).
-            AsmInst::StoreGVar {
-                name,
-                src,
-                using_xmm,
-            } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let off = src.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let f = runtime::set_global_var as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;                  // vm (Executor)
-                    mov x1, x20;                  // globals
-                    mov x2, (name.get() as u64); // name (IdentId)
-                    sub x10, x(lfp), #(off);
-                    ldr x3, [x10];                // val (from slot)
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
                 );
                 true
             }

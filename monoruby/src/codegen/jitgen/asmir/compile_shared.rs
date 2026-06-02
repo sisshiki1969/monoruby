@@ -103,6 +103,16 @@ impl Codegen {
             AsmInst::StoreConstant { id, using_xmm, error } => {
                 return self.emit_store_constant(id, using_xmm, &labels[error]);
             }
+            // Variable access (aarch64 bails on a live xmm / range overflow,
+            // hence the bool results). gvar/cvar go via a runtime call; dynvar
+            // walks the outer-LFP chain.
+            AsmInst::LoadGVar { name, using_xmm } => return self.emit_load_gvar(name, using_xmm),
+            AsmInst::StoreGVar { name, src, using_xmm } => {
+                return self.emit_store_gvar(name, src, using_xmm);
+            }
+            AsmInst::LoadCVar { name, using_xmm } => return self.emit_load_cvar(name, using_xmm),
+            AsmInst::LoadDynVar { src } => return self.emit_load_dyn_var(src),
+            AsmInst::StoreDynVar { dst, src } => return self.emit_store_dyn_var(dst, src),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
