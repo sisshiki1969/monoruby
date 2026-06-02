@@ -47,14 +47,13 @@ jobs:
           fail_ci_if_error: true
 
   darwin:
-    # Native Apple Silicon (arm64-apple-darwin) runner. build.rs sets the `jit`
-    # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
-    # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
-    # yet ported bail to the VM. It runs the same `bin/test` as the Linux
-    # `coverage` job (portable head/yjit handling makes it BSD/macOS-safe) and
-    # collects coverage; the Codecov upload is split by flag (`aarch64` here,
-    # `x86_64` there) since the two platforms compile different cfg-gated code
-    # (compile_stub.rs vs compile.rs/jit_x86).
+    # TEMPORARY DIAGNOSTIC JOB (PR #650, draft). The full bin/test fails only on
+    # the GitHub macos-latest (M1) runner under gc-stress + stress-spill-pool —
+    # a value gets freed mid-flight (String -> INVALID(255)) and SIGABRTs in
+    # arithmetic_sequence_generic_count_via_size. It does NOT reproduce on a
+    # local Apple Silicon Mac or under qemu-user. This job isolates the trigger:
+    # the single failing test, across feature combos, each in isolation. Reverts
+    # to the real bin/test run once the race is localized.
     runs-on: macos-latest
     env:
       CARGO_TERM_COLOR: always
@@ -64,40 +63,38 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "4.0.1"
-      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
-        run: gem install bigdecimal --no-document
-      - name: Install ruby-bench gem dependencies
-        # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
-        run: gem install erubi --no-document
       - name: Install libffi + pkg-config
-        # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
-        # with the `system` feature; libffi is keg-only so pkg-config needs its
-        # prefix on PKG_CONFIG_PATH to find it.
         run: |
           brew install libffi pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
-      - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
-      - name: Clone optcarrot
-        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec
+      - name: Diagnose aarch64 JIT race under stress
         run: |
-          git clone --depth 1 https://github.com/ruby/spec.git ../spec
-          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
-      - name: Clone ruby-bench
-        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+          T='arithmetic_sequence_generic_count_via_size'
+          run() {
+            local label="$1"; shift
+            echo "::group::$label  ::  $*"
+            if "$@" >/tmp/diag.out 2>&1; then
+              echo "RESULT [$label] = PASS"
+            else
+              echo "RESULT [$label] = FAIL (exit $?)"
+              grep -aE 'SIGABRT|panicked|assertion|INVALID|left:|right:|Summary|test result|FAILED' /tmp/diag.out | head -25 || true
+            fi
+            echo "::endgroup::"
+          }
+          # Single failing test in isolation, across feature combos. If it FAILs
+          # in isolation, the race is intrinsic to this test's JIT codegen; if it
+          # PASSes here but the full suite FAILs, it is load/parallelism-driven.
+          run both-iso      cargo nextest run --features gc-stress,stress-spill-pool -E "test($T)"
+          run gcstress-iso  cargo nextest run --features gc-stress                   -E "test($T)"
+          run spillpool-iso cargo nextest run --features stress-spill-pool           -E "test($T)"
+          run nostress-iso  cargo nextest run                                        -E "test($T)"
+          # Whole arithmetic_sequence module under both stress features (does
+          # running the neighbouring tests in the same process matter?).
+          run both-module   cargo nextest run --no-fail-fast --features gc-stress,stress-spill-pool -E "test(arithmetic_sequence)"
+          echo "=== diagnostic complete (step intentionally exits 0) ==="
 
-      - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
-        run: bin/test
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
-          files: lcov.info
-          flags: aarch64
-          fail_ci_if_error: true
