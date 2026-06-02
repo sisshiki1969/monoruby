@@ -51,6 +51,24 @@ impl Codegen {
             AsmInst::StackToReg(slot, r) => self.emit_stack_to_reg(slot, r),
             // reg <- literal Value (immediate)
             AsmInst::LitToReg(v, r) => self.emit_lit_to_reg(v, r),
+            // [slot] <- literal Value (aarch64 bails if the frame offset
+            // exceeds the 12-bit immediate range, hence the bool result).
+            AsmInst::LitToStack(v, slot) => return self.emit_lit_to_stack(v, slot),
+            // Conditional branch on the truthiness of the accumulator.
+            AsmInst::CondBr(brkind, dest) => {
+                let dest = frame.resolve_label(&mut self.jit, dest);
+                self.emit_cond_br(dest, brkind);
+            }
+            // Branch to dest if the accumulator is nil.
+            AsmInst::NilBr(dest) => {
+                let dest = frame.resolve_label(&mut self.jit, dest);
+                self.emit_nil_br(dest);
+            }
+            // Branch to dest if the local (accumulator) is already set (non-zero).
+            AsmInst::CheckLocal(dest) => {
+                let dest = frame.resolve_label(&mut self.jit, dest);
+                self.emit_check_local(dest);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

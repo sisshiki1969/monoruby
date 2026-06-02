@@ -42,7 +42,13 @@ impl Codegen {
             | AsmInst::AccToStack(..)
             | AsmInst::RegToStack(..)
             | AsmInst::StackToReg(..)
-            | AsmInst::LitToReg(..) => unreachable!("handled by the shared compile_asmir dispatcher"),
+            | AsmInst::LitToReg(..)
+            | AsmInst::LitToStack(..)
+            | AsmInst::CondBr(..)
+            | AsmInst::NilBr(..)
+            | AsmInst::CheckLocal(..) => {
+                unreachable!("handled by the shared compile_asmir dispatcher")
+            }
             AsmInst::Init {
                 info,
                 prologue_offset,
@@ -215,7 +221,6 @@ impl Codegen {
             AsmInst::FprToStack(x, slots) => {
                 self.fpr_to_stack(x, &[slots], frame.base_stack_offset);
             }
-            AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
             AsmInst::GuardClass(r, class, deopt) => {
@@ -390,24 +395,6 @@ impl Codegen {
                     testq rax, rax;
                     jne  raise;
                 };
-            }
-            AsmInst::CondBr(brkind, dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                self.cond_br(branch_dest, brkind);
-            }
-            AsmInst::NilBr(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    cmpq rax, (NIL_VALUE);
-                    jeq  dest;
-                );
-            }
-            AsmInst::CheckLocal(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    testq rax, rax;
-                    jnz  dest;
-                );
             }
             AsmInst::CheckKwRest(slot) => {
                 let exit = self.jit.label();
@@ -975,6 +962,34 @@ impl Codegen {
         let r = r as u64;
         monoasm!( &mut self.jit,
             movq R(r), (v.id());
+        );
+    }
+
+    /// [lfp - slot] <- literal Value. Always succeeds on x86 (no immediate-range
+    /// limit); the bool result exists for the aarch64 twin.
+    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
+        self.literal_to_stack(slot, v);
+        true
+    }
+
+    /// Conditional branch on the truthiness of the accumulator (rax).
+    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
+        self.cond_br(dest, brkind);
+    }
+
+    /// Branch to dest if the accumulator (rax) is nil.
+    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
+        monoasm!( &mut self.jit,
+            cmpq rax, (NIL_VALUE);
+            jeq  dest;
+        );
+    }
+
+    /// Branch to dest if the local (accumulator, rax) is already set (non-zero).
+    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
+        monoasm!( &mut self.jit,
+            testq rax, rax;
+            jnz  dest;
         );
     }
 

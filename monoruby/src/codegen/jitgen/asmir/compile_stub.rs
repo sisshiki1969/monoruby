@@ -660,6 +660,59 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
     }
 
+    /// [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
+    /// materialized in a scratch reg (aarch64 has no store-immediate), so no GP
+    /// register is clobbered. Bails (`false`) if the frame offset exceeds the
+    /// 12-bit immediate range. Mirrors x86 `literal_to_stack`.
+    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let imm = v.id();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm);
+            sub x10, x(lfp), #(off);
+            str x9, [x10];
+        );
+        true
+    }
+
+    /// Conditional branch on the truthiness of rax (x0). `orr 0x10` folds
+    /// nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything else stays
+    /// != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot when falsy (Eq).
+    /// Mirrors x86 `cond_br` and the VM's CondBr.
+    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (0x10);
+            orr x(rax), x(rax), x10;
+            cmp x(rax), #(FALSE_VALUE as u32);
+        );
+        let cond = match brkind {
+            BrKind::BrIf => monoasm::Cond::Ne,
+            BrKind::BrIfNot => monoasm::Cond::Eq,
+        };
+        self.jit.bcond_label(cond, &dest);
+    }
+
+    /// Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax, NIL_VALUE; jeq`.
+    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            cmp x(rax), #(NIL_VALUE as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &dest);
+    }
+
+    /// Branch to dest if the local (rax/x0) is already set (non-zero).
+    /// Mirrors x86 `testq rax, rax; jnz dest`.
+    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -722,14 +775,6 @@ impl Codegen {
                     ldp x29, x30, [sp], #16;
                     ret;
                 );
-                true
-            }
-            // if Rax (x0) is non-zero (the local is already set), branch to dest.
-            // Mirrors x86 `testq rax, rax; jnz dest`.
-            AsmInst::CheckLocal(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
                 true
             }
             // rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
@@ -923,52 +968,6 @@ impl Codegen {
                     mov x9, (f);
                     blr x9;
                     ldr x30, [sp], #16;
-                );
-                true
-            }
-            // Conditional branch on the truthiness of rax (x0). `orr 0x10`
-            // folds nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything
-            // else stays != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot
-            // when falsy (Eq). Mirrors x86 `cond_br` and the VM's CondBr.
-            AsmInst::CondBr(brkind, dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, (0x10);
-                    orr x(rax), x(rax), x10;
-                    cmp x(rax), #(FALSE_VALUE as u32);
-                );
-                let cond = match brkind {
-                    BrKind::BrIf => monoasm::Cond::Ne,
-                    BrKind::BrIfNot => monoasm::Cond::Eq,
-                };
-                self.jit.bcond_label(cond, &branch_dest);
-                true
-            }
-            // Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax,
-            // NIL_VALUE; jeq dest`.
-            AsmInst::NilBr(dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    cmp x(rax), #(NIL_VALUE as u32);
-                );
-                self.jit.bcond_label(monoasm::Cond::Eq, &branch_dest);
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
-            // materialized in a scratch reg (aarch64 has no store-immediate),
-            // so no GP register is clobbered. Mirrors x86 `literal_to_stack`.
-            AsmInst::LitToStack(v, slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let imm = v.id();
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (imm);
-                    sub x10, x(lfp), #(off);
-                    str x9, [x10];
                 );
                 true
             }
