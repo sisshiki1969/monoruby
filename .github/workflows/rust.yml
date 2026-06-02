@@ -74,27 +74,23 @@ jobs:
 
       - name: Diagnose aarch64 JIT race under stress
         run: |
-          T='arithmetic_sequence_generic_count_via_size'
-          run() {
-            local label="$1"; shift
-            echo "::group::$label  ::  $*"
-            if "$@" >/tmp/diag.out 2>&1; then
-              echo "RESULT [$label] = PASS"
-            else
-              echo "RESULT [$label] = FAIL (exit $?)"
-              grep -aE 'SIGABRT|panicked|assertion|INVALID|left:|right:|Summary|test result|FAILED' /tmp/diag.out | head -25 || true
-            fi
-            echo "::endgroup::"
-          }
-          # Single failing test in isolation, across feature combos. If it FAILs
-          # in isolation, the race is intrinsic to this test's JIT codegen; if it
-          # PASSes here but the full suite FAILs, it is load/parallelism-driven.
-          run both-iso      cargo nextest run --features gc-stress,stress-spill-pool -E "test($T)"
-          run gcstress-iso  cargo nextest run --features gc-stress                   -E "test($T)"
-          run spillpool-iso cargo nextest run --features stress-spill-pool           -E "test($T)"
-          run nostress-iso  cargo nextest run                                        -E "test($T)"
-          # Whole arithmetic_sequence module under both stress features (does
-          # running the neighbouring tests in the same process matter?).
-          run both-module   cargo nextest run --no-fail-fast --features gc-stress,stress-spill-pool -E "test(arithmetic_sequence)"
+          # Step 1 (previous commit) showed the failing test PASSes in isolation
+          # on this M1 runner even with both stress features and even running its
+          # whole module — the SIGABRT only appears in the FULL parallel nextest
+          # run. nextest runs each test in its own process, so this points at
+          # inter-process resource/timing pressure (parallel gc-stress). Step 2:
+          # run the FULL suite serially (--test-threads=1) under both features.
+          # PASS  => parallel resource/memory pressure is the trigger.
+          # FAIL  => cumulative/other; not parallelism.
+          echo "::group::full-suite serial :: --test-threads=1, gc-stress+stress-spill-pool"
+          if cargo nextest run --features gc-stress,stress-spill-pool --test-threads 1 \
+               >/tmp/diag.out 2>&1; then
+            echo "RESULT [full-serial] = PASS"
+          else
+            echo "RESULT [full-serial] = FAIL (exit $?)"
+          fi
+          grep -aE 'SIGABRT|panicked|assertion|INVALID|left:|right:|Summary|tests run|test result|FAILED' \
+            /tmp/diag.out | tail -40 || true
+          echo "::endgroup::"
           echo "=== diagnostic complete (step intentionally exits 0) ==="
 
