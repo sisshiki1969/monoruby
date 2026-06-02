@@ -88,7 +88,10 @@ impl Codegen {
             | AsmInst::ImmediateEvict { .. }
             | AsmInst::GuardClassVersion { .. }
             | AsmInst::SetupMethodFrame { .. }
-            | AsmInst::SetArguments { .. } => {
+            | AsmInst::SetArguments { .. }
+            | AsmInst::CheckBOP { .. }
+            | AsmInst::RecompileDeopt { .. }
+            | AsmInst::Call { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -197,35 +200,9 @@ impl Codegen {
                     deopt,
                 );
             }
-            AsmInst::RecompileDeopt {
-                position,
-                deopt,
-                reason,
-            } => {
-                let deopt = &labels[deopt];
-                self.recompile_and_deopt(position, deopt, reason)
-            }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
                 let deopt = &labels[deopt];
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
-            }
-            AsmInst::CheckBOP { deopt } => {
-                let deopt = &labels[deopt];
-                let bop_flag = self.bop_redefined_flags.clone();
-                let l1 = self.jit.label();
-                assert_eq!(0, self.jit.get_page());
-                monoasm!(
-                    &mut self.jit,
-                    cmpl [rip + bop_flag], 0;
-                    jnz l1;
-                );
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                l1:
-                    movq rdi, (Value::symbol_from_str("_bop_guard").id());
-                    jmp  deopt;
-                );
-                self.jit.select_page(0);
             }
             AsmInst::SetArgumentsForwarded {
                 callid,
@@ -346,15 +323,6 @@ impl Codegen {
 
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
-            }
-            AsmInst::Call {
-                callee_fid,
-                recv_class,
-                evict,
-                pc: call_site_bc_ptr,
-            } => {
-                let return_addr = self.do_call(store, callee_fid, recv_class, call_site_bc_ptr);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SpecializedCall {
                 entry,
@@ -1644,5 +1612,51 @@ impl Codegen {
         let offset = store[callee_fid].get_offset();
         self.jit_set_arguments(callid, callee_fid, offset);
         true
+    }
+
+    /// Basic-operator-redefinition guard: deopt (via the `_bop_guard` symbol) if
+    /// any BOP has been redefined since compilation.
+    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
+        let bop_flag = self.bop_redefined_flags.clone();
+        let l1 = self.jit.label();
+        assert_eq!(0, self.jit.get_page());
+        monoasm!(
+            &mut self.jit,
+            cmpl [rip + bop_flag], 0;
+            jnz l1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        l1:
+            movq rdi, (Value::symbol_from_str("_bop_guard").id());
+            jmp  deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
+    /// cache warms.
+    pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
+        &mut self,
+        position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        reason: RecompileReason,
+    ) {
+        self.recompile_and_deopt(position, deopt, reason);
+    }
+
+    /// The call itself: enter the callee and record a return-address deopt
+    /// patch point for `evict`.
+    pub(in crate::codegen::jitgen) fn emit_call(
+        &mut self,
+        store: &Store,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+        pc: BytecodePtr,
+    ) {
+        let return_addr = self.do_call(store, callee_fid, recv_class, pc);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
     }
 }

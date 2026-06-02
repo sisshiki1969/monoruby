@@ -244,6 +244,26 @@ impl Codegen {
             AsmInst::SetArguments { callid, callee_fid } => {
                 return self.emit_set_arguments(store, callid, callee_fid);
             }
+            // Basic-operator-redefinition guard: deopt if any BOP was redefined.
+            AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
+            // Recompile-or-deopt point: x86 recompiles once the inline cache
+            // warms; aarch64 has no recompiler and just deopts.
+            AsmInst::RecompileDeopt {
+                position,
+                deopt,
+                reason,
+            } => self.emit_recompile_deopt(position, &labels[deopt], reason),
+            // The call itself. x86 records a return-address deopt patch point;
+            // aarch64 has no branch patching (class-version guards cover it).
+            AsmInst::Call {
+                callee_fid,
+                recv_class,
+                evict,
+                pc,
+            } => {
+                let evict_label = labels[evict].clone();
+                self.emit_call(store, callee_fid, recv_class, evict, &evict_label, pc);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
