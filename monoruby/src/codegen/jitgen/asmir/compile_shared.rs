@@ -217,6 +217,70 @@ impl Codegen {
                     frame.base_stack_offset,
                 );
             }
+            // Method return / eviction family. `Ret` tears down the frame and
+            // returns; `MethodRet` sets the resume PC then returns through the
+            // method-return path; `ImmediateEvict` records a return-address
+            // patch point on x86 (a no-op on aarch64, which can't patch them).
+            AsmInst::Ret => self.emit_ret(),
+            AsmInst::MethodRet(pc) => self.emit_method_ret(pc),
+            AsmInst::ImmediateEvict { evict } => self.emit_immediate_evict(evict),
+            // Method-call prologue: class-version guard, callee frame fields,
+            // argument massage. (aarch64 SetArguments bails on a not-yet-ported
+            // argument shape, hence the bool result; the guard ignores the x86
+            // recompile params it has no recompiler for.)
+            AsmInst::GuardClassVersion {
+                position,
+                with_recovery,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
+            }
+            AsmInst::SetupMethodFrame {
+                meta,
+                callid,
+                outer_lfp,
+            } => self.emit_setup_method_frame(store, meta, callid, outer_lfp),
+            AsmInst::SetArguments { callid, callee_fid } => {
+                return self.emit_set_arguments(store, callid, callee_fid);
+            }
+            // Basic-operator-redefinition guard: deopt if any BOP was redefined.
+            AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
+            // Recompile-or-deopt point: x86 recompiles once the inline cache
+            // warms; aarch64 has no recompiler and just deopts.
+            AsmInst::RecompileDeopt {
+                position,
+                deopt,
+                reason,
+            } => self.emit_recompile_deopt(position, &labels[deopt], reason),
+            // The call itself. x86 records a return-address deopt patch point;
+            // aarch64 has no branch patching (class-version guards cover it).
+            AsmInst::Call {
+                callee_fid,
+                recv_class,
+                evict,
+                pc,
+            } => {
+                let evict_label = labels[evict].clone();
+                self.emit_call(store, callee_fid, recv_class, evict, &evict_label, pc);
+            }
+            // Method prologue: establish fp/lr, reserve the local frame, nil-fill
+            // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
+            // sub-sp immediate).
+            AsmInst::Init {
+                info,
+                prologue_offset,
+            } => return self.emit_init(info, prologue_offset),
+            // Per-method ivar-cache prep; aarch64 bails on the heap-ivar path.
+            AsmInst::Preparation => return self.emit_preparation(store, frame),
+            // Fixnum unary ops on the tagged value. Negate deopts on i63
+            // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
+            AsmInst::FixnumNeg { reg, deopt } => self.emit_fixnum_neg(reg, &labels[deopt]),
+            AsmInst::FixnumBitNot { reg } => self.emit_fixnum_bit_not(reg),
+            // Type guards: deopt unless `reg` is an Array / the receiver in rdi
+            // is unfrozen.
+            AsmInst::GuardArrayTy(reg, deopt) => self.emit_guard_array_ty(reg, &labels[deopt]),
+            AsmInst::GuardFrozen { deopt } => self.emit_guard_frozen(&labels[deopt]),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

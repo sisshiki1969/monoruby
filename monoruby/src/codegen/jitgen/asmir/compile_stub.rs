@@ -1566,132 +1566,214 @@ impl Codegen {
         true
     }
 
+    /// Method epilogue: the result is already in x0; tear down the frame and
+    /// return (matches the VM's `a64_op_ret`: `mov sp,x29; ldp; ret`).
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            mov sp, x29;
+            ldp x29, x30, [sp], #16;
+            ret;
+        );
+    }
+
+    /// Return through the method-return path, resuming the caller at `pc + 1`.
+    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
+        self.a64_method_ret(pc);
+    }
+
+    /// Immediate eviction patches a live frame's return address on x86; aarch64
+    /// cannot patch return addresses, so this is a no-op (class-version guards
+    /// cover the staleness it would otherwise catch).
+    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, _evict: AsmEvict) {}
+
+    /// Inline-cache class-version guard: deopt if the global class version moved
+    /// since compilation. aarch64 has no recompiler, so the x86 recompile params
+    /// (`class_version`/`position`/`with_recovery`) are unused here.
+    pub(in crate::codegen::jitgen) fn emit_guard_class_version(
+        &mut self,
+        _class_version: DestLabel,
+        _position: Option<BytecodePtr>,
+        _with_recovery: bool,
+        deopt: DestLabel,
+    ) {
+        self.a64_guard_class_version(&deopt);
+    }
+
+    /// Write the callee frame's meta/outer/block fields before a call.
+    pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
+        &mut self,
+        store: &Store,
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    ) {
+        self.a64_setup_method_frame(store, meta, callid, outer_lfp);
+    }
+
+    /// Marshal the call arguments into the callee frame. Bails (`false`) on a
+    /// not-yet-ported argument shape.
+    pub(in crate::codegen::jitgen) fn emit_set_arguments(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    ) -> bool {
+        let offset = store[callee_fid].get_offset();
+        self.a64_set_arguments(callid, callee_fid, offset)
+    }
+
+    /// Basic-operator-redefinition guard: deopt if any BOP has been redefined
+    /// since compilation. The deopt PC is the BOP instruction itself, so the
+    /// interpreter re-runs it through the de-optimized VM handler.
+    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
+        let deopt = deopt.clone();
+        let flag_addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (flag_addr);
+            ldr w9, [x9];
+            cbnz x9, deopt;   // any BOP redefined -> deopt
+        );
+    }
+
+    /// Recompile-or-deopt point: aarch64 has no recompiler yet, so treat it as a
+    /// plain deopt to the interpreter (correct, just not re-optimized). The x86
+    /// recompile params are unused here.
+    pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
+        &mut self,
+        _position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        _reason: RecompileReason,
+    ) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, b deopt;);
+    }
+
+    /// The call itself. aarch64 has no runtime branch patching, so the `evict`
+    /// return-address patch point is not registered (class-version guards cover
+    /// the staleness it would otherwise catch); the x86-only params are unused.
+    pub(in crate::codegen::jitgen) fn emit_call(
+        &mut self,
+        store: &Store,
+        callee_fid: FuncId,
+        _recv_class: ClassId,
+        _evict: AsmEvict,
+        _evict_label: &DestLabel,
+        _pc: BytecodePtr,
+    ) {
+        self.a64_do_call(store, callee_fid);
+    }
+
+    /// Method prologue: establish fp/lr, reserve the local frame, and nil-fill
+    /// the non-argument locals/temps. Mirrors x86 `init_func` (rbp == lfp +
+    /// RBP_LOCAL_FRAME, so slots are lfp-relative here). Bails (`false`) if the
+    /// frame exceeds the 12-bit `sub sp, sp, #imm` immediate.
+    pub(in crate::codegen::jitgen) fn emit_init(
+        &mut self,
+        info: FnInitInfo,
+        prologue_offset: PrologueOffset,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let prologue_bytes = prologue_offset.unwrap_concrete();
+        if prologue_bytes > 4095 {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            stp x29, x30, [sp, #-16]!;
+            mov x29, sp;
+        );
+        if prologue_bytes > 0 {
+            monoasm_arm64!(&mut self.jit,
+                sub sp, sp, #(prologue_bytes as u32);
+            );
+        }
+        let clear_len = info.reg_num - info.arg_num;
+        if clear_len > 0 {
+            monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
+            for i in 0..clear_len {
+                let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    str x9, [x10];
+                );
+            }
+        }
+        true
+    }
+
+    /// Per-method ivar-cache prep: only needed when heap ivars are accessed;
+    /// otherwise a no-op. Bails (`false`) on the heap path for now.
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, _store: &Store, frame: &AsmInfo) -> bool {
+        !frame.ivar_heap_accessed
+    }
+
+    /// Fixnum negate. For a tagged value `t = 2n+1`, `tagged(-n) = 2 - t`, which
+    /// overflows i64 exactly when `-n` is out of i63 range (e.g. -i63::MIN), so
+    /// deopt on the V flag.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (2u64);
+            subs x(r), x9, x(r);   // 2 - t  == tagged(-n)
+        );
+        self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+    }
+
+    /// Fixnum bitwise-not. For a tagged value `t = 2n+1`, `tagged(~n) = -t`
+    /// (since ~n = -n-1), which is always a valid tagged fixnum (no overflow).
+    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
+        let r = reg.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0u64);
+            sub x(r), x9, x(r);    // -t  == tagged(~n)
+        );
+    }
+
+    /// Guard that `reg` is an Array RValue: deopt if it is an immediate (low 3
+    /// bits set) or its `ty` byte is not `ObjTy::ARRAY`.
+    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg.a64().0;
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0b111);
+            and x9, x(r), x9;
+            cbnz x9, deopt;                              // immediate -> deopt
+            ldrb w9, [x(r), #(RVALUE_OFFSET_TY as u32)]; // RValue.ty (u8)
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Guard that the receiver in rdi (x-reg) is not frozen: deopt if the frozen
+    /// flag bit (0b10) is set.
+    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0;
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x(rdi), #(RVALUE_OFFSET_FLAG as u32)];
+            mov x10, (0b10);
+            and x9, x9, x10;       // isolate the frozen bit
+            cbnz x9, deopt;        // frozen -> deopt
+        );
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
-        store: &Store,
-        frame: &mut AsmInfo,
-        labels: &SideExitLabels,
-        inst: AsmInst,
+        _store: &Store,
+        _frame: &mut AsmInfo,
+        _labels: &SideExitLabels,
+        _inst: AsmInst,
         _class_version: DestLabel,
     ) -> bool {
-        // lfp (x22) for slot access — same addressing as the VM's a64_op_ret:
-        // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
-        let lfp = GP::R14.a64().0;
-        match inst {
-            // Method prologue: establish fp/lr, reserve the local frame, and
-            // nil-fill the non-argument locals/temps. Mirrors x86 `init_func`
-            // (rbp == lfp + RBP_LOCAL_FRAME, so slots are lfp-relative here).
-            AsmInst::Init {
-                info,
-                prologue_offset,
-            } => {
-                let prologue_bytes = prologue_offset.unwrap_concrete();
-                // A64 `sub sp, sp, #imm` takes a 12-bit immediate; bail if the
-                // frame is larger than that for now (rare; revisit with a
-                // shifted/!2-instruction form).
-                if prologue_bytes > 4095 {
-                    return false;
-                }
-                monoasm_arm64!(&mut self.jit,
-                    stp x29, x30, [sp, #-16]!;
-                    mov x29, sp;
-                );
-                if prologue_bytes > 0 {
-                    monoasm_arm64!(&mut self.jit,
-                        sub sp, sp, #(prologue_bytes as u32);
-                    );
-                }
-                let clear_len = info.reg_num - info.arg_num;
-                if clear_len > 0 {
-                    monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
-                    for i in 0..clear_len {
-                        let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
-                        monoasm_arm64!(&mut self.jit,
-                            sub x10, x(lfp), #(off);
-                            str x9, [x10];
-                        );
-                    }
-                }
-                true
-            }
-            // Per-method ivar-cache prep: only needed when heap ivars are
-            // accessed; otherwise a no-op. Bail on the heap path for now.
-            AsmInst::Preparation => !frame.ivar_heap_accessed,
-            // Return: the value is already in x0 (acc = Rax -> x0). Epilogue
-            // matches the VM's a64_op_ret (`mov sp,x29; ldp; ret`).
-            AsmInst::Ret => {
-                monoasm_arm64!(&mut self.jit,
-                    mov sp, x29;
-                    ldp x29, x30, [sp], #16;
-                    ret;
-                );
-                true
-            }
-            // Inline-cache class-version guard: deopt if the global class
-            // version changed since compilation.
-            AsmInst::GuardClassVersion { deopt, .. } => {
-                let deopt = labels[deopt].clone();
-                self.a64_guard_class_version(&deopt);
-                true
-            }
-            // Basic-operator-redefinition guard: deopt if any BOP has been
-            // redefined since compilation. Emitted after a folded/fast-path
-            // integer/float BOP (and after a method def), which assumes the
-            // builtin operator. The deopt PC is the BOP instruction itself, so
-            // the interpreter re-runs it through the (now de-optimized, no-opt)
-            // VM handler and dispatches the redefined method. Mirrors x86
-            // `CheckBOP`.
-            AsmInst::CheckBOP { deopt } => {
-                let deopt = labels[deopt].clone();
-                let flag_addr = self
-                    .jit
-                    .get_label_address(&self.bop_redefined_flags)
-                    .as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (flag_addr);
-                    ldr w9, [x9];
-                    cbnz x9, deopt;   // any BOP redefined -> deopt
-                );
-                true
-            }
-            // A NotCached/recompile point: x86 deopts then recompiles once the
-            // inline cache warms (e.g. fib's `+` is cold until the recursion
-            // unwinds). aarch64 has no recompile yet, so treat it as a plain
-            // deopt to the interpreter — correct, just not (yet) re-optimized.
-            AsmInst::RecompileDeopt { deopt, .. } => {
-                let deopt = labels[deopt].clone();
-                monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
-            // Method-call sequence: frame fields, arg massage, the call itself.
-            AsmInst::SetupMethodFrame { meta, callid, outer_lfp } => {
-                self.a64_setup_method_frame(store, meta, callid, outer_lfp);
-                true
-            }
-            AsmInst::SetArguments { callid, callee_fid } => {
-                let offset = store[callee_fid].get_offset();
-                self.a64_set_arguments(callid, callee_fid, offset)
-            }
-            AsmInst::Call { callee_fid, recv_class: _, evict: _, pc: _ } => {
-                // The `evict` side-exit handler is generated by the driver, but
-                // we do not register a return-address patch point (a64 has no
-                // runtime branch patching); GuardClassVersion handles staleness.
-                self.a64_do_call(store, callee_fid);
-                true
-            }
-            AsmInst::MethodRet(pc) => {
-                self.a64_method_ret(pc);
-                true
-            }
-            // Immediate eviction patches a live frame's return address on x86;
-            // a64 cannot patch return addresses, so this is a no-op (class
-            // version guards cover the staleness it would otherwise catch).
-            AsmInst::ImmediateEvict { .. } => true,
-            // Phase 3b: more AsmInst lowerings land here, one category at a time.
-            _ => false,
-        }
+        // Every AsmInst the aarch64 backend supports is now handled by the
+        // shared `compile_asmir` dispatcher (via the per-arch `emit_*`
+        // primitives). Anything reaching here is not yet ported, so bail and
+        // keep the method VM-interpreted.
+        false
     }
 }

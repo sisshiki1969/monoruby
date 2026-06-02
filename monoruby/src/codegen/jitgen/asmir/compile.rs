@@ -82,14 +82,23 @@ impl Codegen {
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
             | AsmInst::FloatCmp { .. }
-            | AsmInst::FloatCmpBr { .. } => {
+            | AsmInst::FloatCmpBr { .. }
+            | AsmInst::Ret
+            | AsmInst::MethodRet(..)
+            | AsmInst::ImmediateEvict { .. }
+            | AsmInst::GuardClassVersion { .. }
+            | AsmInst::SetupMethodFrame { .. }
+            | AsmInst::SetArguments { .. }
+            | AsmInst::CheckBOP { .. }
+            | AsmInst::RecompileDeopt { .. }
+            | AsmInst::Call { .. }
+            | AsmInst::Init { .. }
+            | AsmInst::Preparation
+            | AsmInst::FixnumNeg { .. }
+            | AsmInst::FixnumBitNot { .. }
+            | AsmInst::GuardArrayTy(..)
+            | AsmInst::GuardFrozen { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
-            }
-            AsmInst::Init {
-                info,
-                prologue_offset,
-            } => {
-                self.init_func(&info, prologue_offset.unwrap_concrete());
             }
             AsmInst::LoopJitRspBump { offset } => {
                 let bytes = offset.unwrap_concrete();
@@ -104,42 +113,6 @@ impl Codegen {
                     movq rax, (unreachable);
                     call rax;
                 );
-            }
-            AsmInst::Preparation => {
-                if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
-                    let ivar_len = store[frame.self_class].ivar_len();
-                    let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
-                        ivar_len - OBJECT_INLINE_IVAR
-                    } else {
-                        ivar_len
-                    };
-                    let fail = self.jit.label();
-                    let exit = self.jit.label();
-                    monoasm!(&mut self.jit,
-                        movq rdi, [r14 - (LFP_SELF)];
-                        movq rsi, (heap_len);
-                        movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
-                        // check var_table is not None
-                        testq rdx, rdx;
-                        jz   fail;
-                        // check capa is not 0
-                        cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
-                        jz   fail;
-                        // check len >= heap_len
-                        cmpq [rdx + (MONOVEC_LEN)], rsi; // len
-                        jlt  fail;
-                    exit:
-                    );
-                    assert_eq!(0, self.jit.get_page());
-                    self.jit.select_page(1);
-                    monoasm!( &mut self.jit,
-                    fail:
-                        movq rax, (extend_ivar);
-                        call rax;
-                        jmp exit;
-                    );
-                    self.jit.select_page(0);
-                }
             }
             AsmInst::RegAdd(r, i) => {
                 if i != 0 {
@@ -174,23 +147,11 @@ impl Codegen {
                 );
             }
 
-            AsmInst::GuardArrayTy(r, deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_array_ty(r, deopt)
-            }
             AsmInst::GuardCapture(deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_capture(deopt)
             }
 
-            AsmInst::GuardClassVersion {
-                position,
-                with_recovery,
-                deopt,
-            } => {
-                let deopt = &labels[deopt];
-                self.guard_class_version(class_version, position, with_recovery, deopt);
-            }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
                 self.guard_class_version_specialized(
@@ -199,39 +160,9 @@ impl Codegen {
                     deopt,
                 );
             }
-            AsmInst::RecompileDeopt {
-                position,
-                deopt,
-                reason,
-            } => {
-                let deopt = &labels[deopt];
-                self.recompile_and_deopt(position, deopt, reason)
-            }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
                 let deopt = &labels[deopt];
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
-            }
-            AsmInst::CheckBOP { deopt } => {
-                let deopt = &labels[deopt];
-                let bop_flag = self.bop_redefined_flags.clone();
-                let l1 = self.jit.label();
-                assert_eq!(0, self.jit.get_page());
-                monoasm!(
-                    &mut self.jit,
-                    cmpl [rip + bop_flag], 0;
-                    jnz l1;
-                );
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                l1:
-                    movq rdi, (Value::symbol_from_str("_bop_guard").id());
-                    jmp  deopt;
-                );
-                self.jit.select_page(0);
-            }
-            AsmInst::SetArguments { callid, callee_fid } => {
-                let offset = store[callee_fid].get_offset();
-                self.jit_set_arguments(callid, callee_fid, offset);
             }
             AsmInst::SetArgumentsForwarded {
                 callid,
@@ -262,15 +193,6 @@ impl Codegen {
                 self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
 
-            AsmInst::Ret => {
-                self.epilogue();
-            }
-            AsmInst::MethodRet(pc) => {
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                };
-                self.method_return();
-            }
             AsmInst::BlockBreak(pc) => {
                 monoasm! { &mut self.jit,
                     movq r13, ((pc + 1).as_ptr());
@@ -359,32 +281,8 @@ impl Codegen {
                 };
             }
 
-            AsmInst::ImmediateEvict { evict } => {
-                let patch_point = self.jit.get_current_address();
-                let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
-                self.return_addr_table
-                    .entry(*return_addr)
-                    .and_modify(|e| e.0 = Some(patch_point));
-            }
-
-            AsmInst::SetupMethodFrame {
-                meta,
-                callid,
-                outer_lfp,
-            } => {
-                self.setup_method_frame(store, meta, callid, outer_lfp);
-            }
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
-            }
-            AsmInst::Call {
-                callee_fid,
-                recv_class,
-                evict,
-                pc: call_site_bc_ptr,
-            } => {
-                let return_addr = self.do_call(store, callee_fid, recv_class, call_site_bc_ptr);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SpecializedCall {
                 entry,
@@ -410,28 +308,6 @@ impl Codegen {
                 let block_entry = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-
-            AsmInst::FixnumNeg { reg, deopt } => {
-                let deopt = &labels[deopt];
-                let r = reg as u64;
-                monoasm! { &mut self.jit,
-                    sarq  R(r), 1;
-                    negq  R(r);
-                    jo    deopt;
-                    addq  R(r), R(r);
-                    jo    deopt;
-                    orq   R(r), 1;
-                }
-            }
-            AsmInst::FixnumBitNot { reg } => {
-                let r = reg as u64;
-                monoasm! { &mut self.jit,
-                    sarq  R(r), 1;
-                    notq  R(r);
-                    salq  R(r), 1;
-                    orq   R(r), 1;
-                }
             }
 
             AsmInst::GenericBinOp {
@@ -511,11 +387,6 @@ impl Codegen {
             AsmInst::StoreStructSlotHeap { src, slot_index } => {
                 self.store_struct_slot_heap(src, slot_index)
             }
-            AsmInst::GuardFrozen { deopt } => {
-                let deopt = &labels[deopt];
-                self.guard_frozen(deopt);
-            }
-
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -1615,5 +1486,196 @@ impl Codegen {
         self.cmp_float((lhs, rhs), base);
         self.condbr_float(kind, branch_dest, brkind);
         true
+    }
+
+    /// Method epilogue: tear down the frame and return.
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+        self.epilogue();
+    }
+
+    /// Return through the method-return path, resuming the caller at `pc + 1`.
+    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+        };
+        self.method_return();
+    }
+
+    /// Record this position as the return-address patch point for `evict`.
+    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
+        let patch_point = self.jit.get_current_address();
+        let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
+        self.return_addr_table
+            .entry(*return_addr)
+            .and_modify(|e| e.0 = Some(patch_point));
+    }
+
+    /// Inline-cache class-version guard: deopt if the global class version moved
+    /// since compilation. `position`/`with_recovery` drive x86 recompilation.
+    pub(in crate::codegen::jitgen) fn emit_guard_class_version(
+        &mut self,
+        class_version: DestLabel,
+        position: Option<BytecodePtr>,
+        with_recovery: bool,
+        deopt: DestLabel,
+    ) {
+        self.guard_class_version(class_version, position, with_recovery, &deopt);
+    }
+
+    /// Write the callee frame's meta/outer/block fields before a call.
+    pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
+        &mut self,
+        store: &Store,
+        meta: Meta,
+        callid: CallSiteId,
+        outer_lfp: Option<Lfp>,
+    ) {
+        self.setup_method_frame(store, meta, callid, outer_lfp);
+    }
+
+    /// Marshal the call arguments into the callee frame. Always succeeds on x86
+    /// (the bool result mirrors the aarch64 twin, which bails on unsupported
+    /// argument shapes).
+    pub(in crate::codegen::jitgen) fn emit_set_arguments(
+        &mut self,
+        store: &Store,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+    ) -> bool {
+        let offset = store[callee_fid].get_offset();
+        self.jit_set_arguments(callid, callee_fid, offset);
+        true
+    }
+
+    /// Basic-operator-redefinition guard: deopt (via the `_bop_guard` symbol) if
+    /// any BOP has been redefined since compilation.
+    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
+        let bop_flag = self.bop_redefined_flags.clone();
+        let l1 = self.jit.label();
+        assert_eq!(0, self.jit.get_page());
+        monoasm!(
+            &mut self.jit,
+            cmpl [rip + bop_flag], 0;
+            jnz l1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        l1:
+            movq rdi, (Value::symbol_from_str("_bop_guard").id());
+            jmp  deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
+    /// cache warms.
+    pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
+        &mut self,
+        position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        reason: RecompileReason,
+    ) {
+        self.recompile_and_deopt(position, deopt, reason);
+    }
+
+    /// The call itself: enter the callee and record a return-address deopt
+    /// patch point for `evict`.
+    pub(in crate::codegen::jitgen) fn emit_call(
+        &mut self,
+        store: &Store,
+        callee_fid: FuncId,
+        recv_class: ClassId,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+        pc: BytecodePtr,
+    ) {
+        let return_addr = self.do_call(store, callee_fid, recv_class, pc);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+    }
+
+    /// Method prologue. Always succeeds on x86 (the bool result mirrors the
+    /// aarch64 twin, which bails on an over-large frame).
+    pub(in crate::codegen::jitgen) fn emit_init(
+        &mut self,
+        info: FnInitInfo,
+        prologue_offset: PrologueOffset,
+    ) -> bool {
+        self.init_func(&info, prologue_offset.unwrap_concrete());
+        true
+    }
+
+    /// Per-method ivar-cache preparation: ensure the heap ivar table is large
+    /// enough (extending it via a runtime call if not). No-op for frozen/
+    /// inline-only selves. Always succeeds on x86.
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
+        if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
+            let ivar_len = store[frame.self_class].ivar_len();
+            let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
+                ivar_len - OBJECT_INLINE_IVAR
+            } else {
+                ivar_len
+            };
+            let fail = self.jit.label();
+            let exit = self.jit.label();
+            monoasm!(&mut self.jit,
+                movq rdi, [r14 - (LFP_SELF)];
+                movq rsi, (heap_len);
+                movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
+                // check var_table is not None
+                testq rdx, rdx;
+                jz   fail;
+                // check capa is not 0
+                cmpq [rdx + (MONOVEC_CAPA)], 0; // capa
+                jz   fail;
+                // check len >= heap_len
+                cmpq [rdx + (MONOVEC_LEN)], rsi; // len
+                jlt  fail;
+            exit:
+            );
+            assert_eq!(0, self.jit.get_page());
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+            fail:
+                movq rax, (extend_ivar);
+                call rax;
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        }
+        true
+    }
+
+    /// Fixnum negate (tagged): untag, negate, re-tag; deopt on i63 overflow.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            sarq  R(r), 1;
+            negq  R(r);
+            jo    deopt;
+            addq  R(r), R(r);
+            jo    deopt;
+            orq   R(r), 1;
+        }
+    }
+
+    /// Fixnum bitwise-not (tagged): untag, complement, re-tag. Cannot overflow.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            sarq  R(r), 1;
+            notq  R(r);
+            salq  R(r), 1;
+            orq   R(r), 1;
+        }
+    }
+
+    /// Guard that `reg` is an Array RValue; deopt otherwise.
+    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
+        self.guard_array_ty(reg, deopt);
+    }
+
+    /// Guard that the receiver in rdi is not frozen; deopt otherwise.
+    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
+        self.guard_frozen(deopt);
     }
 }
