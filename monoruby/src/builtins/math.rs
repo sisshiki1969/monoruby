@@ -880,6 +880,22 @@ mod tests {
     }
 
     #[test]
+    fn math_lgamma_pole() {
+        // At the zero pole log|gamma| is +Infinity; the sign element is +1 for
+        // +0.0 and -1 for -0.0. Guards the platform-independent pole handling
+        // (some libm `lgamma_r`, e.g. macOS, report sign 0 here). Compare the
+        // sign element and infinite?-ness rather than the raw Infinity float
+        // (the test harness's float compare can't equate two infinities).
+        run_tests(&[
+            "Math.lgamma(0)[1]",
+            "Math.lgamma(0.0)[1]",
+            "Math.lgamma(-0.0)[1]",
+            "Math.lgamma(0)[0].infinite?",
+            "Math.lgamma(-0.0)[0].infinite?",
+        ]);
+    }
+
+    #[test]
     fn math_acosh_domain() {
         run_test("Math.acosh(1)");
         run_test_error("Math.acosh(0)");
