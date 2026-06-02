@@ -4,7 +4,7 @@ use monoasm::*;
 // Provides the `monoasm!` macro to the JIT subtree (`compiler`, `jitgen`,
 // `patch`) via descendant visibility. The arch backends under `arch/` import
 // it directly instead.
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use monoasm_macro::monoasm;
 #[cfg(jit)]
 use std::time::Duration;
@@ -362,7 +362,7 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
-    #[cfg(jit_emit)]
+    #[cfg(jit_x86)]
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
@@ -802,9 +802,9 @@ impl Codegen {
             if codegen.bop_redefine_flags() != 0 {
                 // Eviction only applies to JIT-compiled code; the VM-only
                 // build has none, so `cfp` goes unused there.
-                #[cfg(jit_emit)]
+                #[cfg(jit_x86)]
                 codegen.immediate_eviction(cfp);
-                #[cfg(not(jit_emit))]
+                #[cfg(not(jit_x86))]
                 let _ = cfp;
             }
         });
@@ -818,7 +818,7 @@ impl Codegen {
         unsafe { *addr }
     }
 
-    #[cfg(jit_emit)]
+    #[cfg(jit_x86)]
     fn immediate_eviction(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {

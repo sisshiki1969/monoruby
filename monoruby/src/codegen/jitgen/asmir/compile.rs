@@ -21,19 +21,38 @@ impl Codegen {
     ///
     /// Generate machine code for *inst*.
     ///
-    pub(super) fn compile_asmir(
+    ///
+    /// Per-arch (x86-64) lowering for every `AsmInst` not handled by the
+    /// arch-neutral `compile_asmir` dispatcher. Always emits (returns `true`).
+    ///
+    pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
         frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         class_version: DestLabel,
-    ) {
+    ) -> bool {
         match inst {
-            AsmInst::BcIndex(i) => {
-                frame
-                    .sourcemap
-                    .push((i, self.jit.get_current() - frame.start_codepos));
+            // Handled by the arch-neutral `compile_asmir` dispatcher.
+            AsmInst::BcIndex(..)
+            | AsmInst::Label(..)
+            | AsmInst::RegMove(..)
+            | AsmInst::RegToAcc(..)
+            | AsmInst::AccToStack(..)
+            | AsmInst::RegToStack(..)
+            | AsmInst::StackToReg(..)
+            | AsmInst::LitToReg(..)
+            | AsmInst::LitToStack(..)
+            | AsmInst::CondBr(..)
+            | AsmInst::NilBr(..)
+            | AsmInst::CheckLocal(..)
+            | AsmInst::GuardClass(..)
+            | AsmInst::Deopt(..)
+            | AsmInst::HandleError(..)
+            | AsmInst::CheckStack { .. }
+            | AsmInst::ExecGc { .. } => {
+                unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
                 info,
@@ -90,46 +109,6 @@ impl Codegen {
                     );
                     self.jit.select_page(0);
                 }
-            }
-            AsmInst::Label(label) => {
-                let label = frame.resolve_label(&mut self.jit, label);
-                self.jit.bind_label(label);
-            }
-            AsmInst::AccToStack(slot) => {
-                self.store_r15(slot);
-            }
-            AsmInst::RegToAcc(r) => {
-                if r != GP::R15 {
-                    let r = r as u64;
-                    monoasm!( &mut self.jit,
-                        movq r15, R(r);
-                    );
-                }
-            }
-            AsmInst::RegToStack(r, slot) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq [rbp - (rbp_local(slot))], R(r);
-                );
-            }
-            AsmInst::StackToReg(slot, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), [rbp - (rbp_local(slot))];
-                );
-            }
-            AsmInst::LitToReg(v, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), (v.id());
-                );
-            }
-            AsmInst::RegMove(src, dst) => {
-                let src = src as u64;
-                let dst = dst as u64;
-                monoasm!( &mut self.jit,
-                    movq R(dst), R(src);
-                );
             }
             AsmInst::RegAdd(r, i) => {
                 if i != 0 {
@@ -247,13 +226,8 @@ impl Codegen {
             AsmInst::FprToStack(x, slots) => {
                 self.fpr_to_stack(x, &[slots], frame.base_stack_offset);
             }
-            AsmInst::LitToStack(v, slot) => self.literal_to_stack(slot, v),
             AsmInst::DeepCopyLit(v, using_xmm) => self.deepcopy_literal(v, using_xmm),
 
-            AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_class(r, class, deopt);
-            }
             AsmInst::GuardArrayTy(r, deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_array_ty(r, deopt)
@@ -263,10 +237,6 @@ impl Codegen {
                 self.guard_capture(deopt)
             }
 
-            AsmInst::HandleError(error) => {
-                let error = &labels[error];
-                self.handle_error(&error);
-            }
             AsmInst::GuardClassVersion {
                 position,
                 with_recovery,
@@ -281,12 +251,6 @@ impl Codegen {
                     class_version,
                     self.specialized_base + idx,
                     deopt,
-                );
-            }
-            AsmInst::Deopt(deopt) => {
-                let deopt = &labels[deopt];
-                monoasm!( &mut self.jit,
-                    jmp deopt;
                 );
             }
             AsmInst::RecompileDeopt {
@@ -321,14 +285,6 @@ impl Codegen {
             }
             AsmInst::XmmSave(using_xmm, cont) => self.xmm_save_with_cont(using_xmm, cont),
             AsmInst::XmmRestore(using_xmm, cont) => self.xmm_restore_with_cont(using_xmm, cont),
-            AsmInst::ExecGc { write_back, error } => {
-                let error = &labels[error];
-                self.jit_execute_gc(&write_back, error, frame.base_stack_offset)
-            }
-            AsmInst::CheckStack { write_back, error } => {
-                let error = &labels[error];
-                self.jit_check_stack(&write_back, error, frame.base_stack_offset);
-            }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
                 self.jit_set_arguments(callid, callee_fid, offset);
@@ -422,24 +378,6 @@ impl Codegen {
                     testq rax, rax;
                     jne  raise;
                 };
-            }
-            AsmInst::CondBr(brkind, dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                self.cond_br(branch_dest, brkind);
-            }
-            AsmInst::NilBr(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    cmpq rax, (NIL_VALUE);
-                    jeq  dest;
-                );
-            }
-            AsmInst::CheckLocal(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                monoasm!( &mut self.jit,
-                    testq rax, rax;
-                    jnz  dest;
-                );
             }
             AsmInst::CheckKwRest(slot) => {
                 let exit = self.jit.label();
@@ -969,6 +907,122 @@ impl Codegen {
                 self.store_fpr_into_xmm(dst, base);
             }
         }
+        true
+    }
+
+    // ---- emission primitives (x86-64) -------------------------------------
+    // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
+    // calls. The aarch64 twins live in `compile_stub.rs`.
+
+    /// dst <- src (general-purpose register move; self-move is a no-op).
+    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
+        if src != dst {
+            let (src, dst) = (src as u64, dst as u64);
+            monoasm!( &mut self.jit,
+                movq R(dst), R(src);
+            );
+        }
+    }
+
+    /// [lfp - slot] <- reg
+    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq [rbp - (rbp_local(slot))], R(r);
+        );
+    }
+
+    /// reg <- [lfp - slot]
+    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq R(r), [rbp - (rbp_local(slot))];
+        );
+    }
+
+    /// reg <- literal Value (immediate)
+    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq R(r), (v.id());
+        );
+    }
+
+    /// [lfp - slot] <- literal Value. Always succeeds on x86 (no immediate-range
+    /// limit); the bool result exists for the aarch64 twin.
+    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
+        self.literal_to_stack(slot, v);
+        true
+    }
+
+    /// Conditional branch on the truthiness of the accumulator (rax).
+    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
+        self.cond_br(dest, brkind);
+    }
+
+    /// Branch to dest if the accumulator (rax) is nil.
+    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
+        monoasm!( &mut self.jit,
+            cmpq rax, (NIL_VALUE);
+            jeq  dest;
+        );
+    }
+
+    /// Branch to dest if the local (accumulator, rax) is already set (non-zero).
+    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
+        monoasm!( &mut self.jit,
+            testq rax, rax;
+            jnz  dest;
+        );
+    }
+
+    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
+    /// Always succeeds on x86 (the bool result exists for the aarch64 twin,
+    /// which bails on not-yet-supported class kinds).
+    pub(in crate::codegen::jitgen) fn emit_guard_class(
+        &mut self,
+        r: GP,
+        class: ClassId,
+        fail: &DestLabel,
+    ) -> bool {
+        self.guard_class(r, class, fail);
+        true
+    }
+
+    /// Unconditional jump to a side-exit (deopt) label.
+    pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
+        monoasm!( &mut self.jit,
+            jmp deopt;
+        );
+    }
+
+    /// Branch to the error handler if the accumulator (rax) is null (the
+    /// preceding runtime call failed).
+    pub(in crate::codegen::jitgen) fn emit_handle_error(&mut self, error: &DestLabel) {
+        self.handle_error(error);
+    }
+
+    /// Stack-overflow check. Always succeeds on x86 (the bool result exists for
+    /// the aarch64 twin, which bails on an unsupported write-back).
+    pub(in crate::codegen::jitgen) fn emit_check_stack(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        base: usize,
+    ) -> bool {
+        self.jit_check_stack(&write_back, error, base);
+        true
+    }
+
+    /// GC safepoint. Always succeeds on x86 (see `emit_check_stack`).
+    pub(in crate::codegen::jitgen) fn emit_exec_gc(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        base: usize,
+    ) -> bool {
+        self.jit_execute_gc(&write_back, error, base);
+        true
     }
 
     fn set_deopt_with_return_addr(

@@ -618,8 +618,206 @@ impl Codegen {
         }
     }
 
-    /// Lower one `AsmInst`. Returns `false` for any not-yet-ported variant.
-    pub(super) fn compile_asmir(
+    // ---- emission primitives (aarch64) ------------------------------------
+    // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
+    // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
+    // `[lfp(x22) - s*8 - LFP_SELF]` (same addressing as the VM's `a64_op_ret`).
+
+    /// dst <- src (general-purpose register move; self-move is a no-op).
+    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
+        let (s, d) = (src.a64().0, dst.a64().0);
+        if s != d {
+            monoasm_arm64!(&mut self.jit, mov x(d), x(s););
+        }
+    }
+
+    /// [lfp - slot*8 - LFP_SELF] <- reg
+    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let src = r.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(src), [x10];
+        );
+    }
+
+    /// reg <- [lfp - slot*8 - LFP_SELF]
+    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let dst = r.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x(dst), [x10];
+        );
+    }
+
+    /// reg <- literal Value (immediate)
+    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
+        let dst = r.a64().0;
+        let imm = v.id();
+        monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
+    }
+
+    /// [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
+    /// materialized in a scratch reg (aarch64 has no store-immediate), so no GP
+    /// register is clobbered. Bails (`false`) if the frame offset exceeds the
+    /// 12-bit immediate range. Mirrors x86 `literal_to_stack`.
+    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let imm = v.id();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm);
+            sub x10, x(lfp), #(off);
+            str x9, [x10];
+        );
+        true
+    }
+
+    /// Conditional branch on the truthiness of rax (x0). `orr 0x10` folds
+    /// nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything else stays
+    /// != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot when falsy (Eq).
+    /// Mirrors x86 `cond_br` and the VM's CondBr.
+    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (0x10);
+            orr x(rax), x(rax), x10;
+            cmp x(rax), #(FALSE_VALUE as u32);
+        );
+        let cond = match brkind {
+            BrKind::BrIf => monoasm::Cond::Ne,
+            BrKind::BrIfNot => monoasm::Cond::Eq,
+        };
+        self.jit.bcond_label(cond, &dest);
+    }
+
+    /// Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax, NIL_VALUE; jeq`.
+    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            cmp x(rax), #(NIL_VALUE as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &dest);
+    }
+
+    /// Branch to dest if the local (rax/x0) is already set (non-zero).
+    /// Mirrors x86 `testq rax, rax; jnz dest`.
+    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
+    }
+
+    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
+    /// Returns `false` (bail) for not-yet-supported class kinds.
+    pub(in crate::codegen::jitgen) fn emit_guard_class(
+        &mut self,
+        r: GP,
+        class: ClassId,
+        fail: &DestLabel,
+    ) -> bool {
+        self.a64_guard_class(r, class, fail)
+    }
+
+    /// Unconditional jump to a side-exit (deopt) label.
+    pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, b deopt;);
+    }
+
+    /// Error check: a runtime helper returns rax==0 (None) on error; branch to
+    /// the error side-exit handler in that case. Mirrors x86 `handle_error`
+    /// (`testq rax,rax; jeq error`).
+    pub(in crate::codegen::jitgen) fn emit_handle_error(&mut self, error: &DestLabel) {
+        let error = error.clone();
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit, cbz x(rax), error;);
+    }
+
+    /// Stack-overflow check: if sp <= limit, write back live values, call
+    /// stack_overflow(vm), and jump to the error handler. The overflow path is
+    /// laid out inline but skipped on the common path. Bails (`false`) if the
+    /// write-back needs an unsupported feature. `base` is unused on aarch64.
+    /// Mirrors x86 `jit_check_stack`.
+    pub(in crate::codegen::jitgen) fn emit_check_stack(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        _base: usize,
+    ) -> bool {
+        let error = error.clone();
+        let ok = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            ldr x11, [x19, #(crate::executor::EXECUTOR_STACK_LIMIT as u32)];
+            cmp x10, x11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
+        if !self.a64_gen_write_back_for_deopt(&write_back) {
+            return false;
+        }
+        let f = crate::codegen::stack_overflow as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b error;
+        );
+        self.jit.bind_label(ok);
+        true
+    }
+
+    /// GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write back
+    /// live values, run execute_gc(vm, globals), and on error jump to the error
+    /// handler. The GC path is laid out inline but skipped on the common path.
+    /// Bails (`false`) like `emit_check_stack`. `base` is unused on aarch64.
+    /// Mirrors x86 `jit_execute_gc`.
+    pub(in crate::codegen::jitgen) fn emit_exec_gc(
+        &mut self,
+        write_back: WriteBack,
+        error: &DestLabel,
+        _base: usize,
+    ) -> bool {
+        let error = error.clone();
+        let skip = self.jit.label();
+        let af_addr = self
+            .jit
+            .get_label_address(&self.alloc_flag.clone())
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (af_addr);
+            ldr w9, [x9];
+            cmp x9, #(8u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
+        if !self.a64_gen_write_back_for_deopt(&write_back) {
+            return false;
+        }
+        let f = crate::executor::execute_gc as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            cbz x0, error;             // None -> error
+        );
+        self.jit.bind_label(skip);
+        true
+    }
+
+    /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
+    /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
+    /// not-yet-ported variant (the method then stays VM-interpreted).
+    pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
         frame: &mut AsmInfo,
@@ -631,18 +829,6 @@ impl Codegen {
         // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
         let lfp = GP::R14.a64().0;
         match inst {
-            // Source-position record (no code).
-            AsmInst::BcIndex(i) => {
-                let pos = self.jit.get_current() - frame.start_codepos;
-                frame.sourcemap.push((i, pos));
-                true
-            }
-            // Bind a JIT label.
-            AsmInst::Label(label) => {
-                let label = frame.resolve_label(&mut self.jit, label);
-                self.jit.bind_label(label);
-                true
-            }
             // Method prologue: establish fp/lr, reserve the local frame, and
             // nil-fill the non-argument locals/temps. Mirrors x86 `init_func`
             // (rbp == lfp + RBP_LOCAL_FRAME, so slots are lfp-relative here).
@@ -682,16 +868,6 @@ impl Codegen {
             // Per-method ivar-cache prep: only needed when heap ivars are
             // accessed; otherwise a no-op. Bail on the heap path for now.
             AsmInst::Preparation => !frame.ivar_heap_accessed,
-            // reg <- [lfp - slot*8 - LFP_SELF]
-            AsmInst::StackToReg(slot, r) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let dst = r.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    ldr x(dst), [x10];
-                );
-                true
-            }
             // Return: the value is already in x0 (acc = Rax -> x0). Epilogue
             // matches the VM's a64_op_ret (`mov sp,x29; ldp; ret`).
             AsmInst::Ret => {
@@ -700,57 +876,6 @@ impl Codegen {
                     ldp x29, x30, [sp], #16;
                     ret;
                 );
-                true
-            }
-            // reg <- literal Value (immediate).
-            AsmInst::LitToReg(v, r) => {
-                let dst = r.a64().0;
-                let imm = v.id();
-                monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- reg
-            AsmInst::RegToStack(r, slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let src = r.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    str x(src), [x10];
-                );
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- acc (R15 -> x23)
-            AsmInst::AccToStack(slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let acc = GP::R15.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    str x(acc), [x10];
-                );
-                true
-            }
-            // dst <- src
-            AsmInst::RegMove(src, dst) => {
-                let (s, d) = (src.a64().0, dst.a64().0);
-                if s != d {
-                    monoasm_arm64!(&mut self.jit, mov x(d), x(s););
-                }
-                true
-            }
-            // acc (R15 -> x23) <- reg
-            AsmInst::RegToAcc(r) => {
-                if r != GP::R15 {
-                    let (acc, src) = (GP::R15.a64().0, r.a64().0);
-                    monoasm_arm64!(&mut self.jit, mov x(acc), x(src););
-                }
-                true
-            }
-            // if Rax (x0) is non-zero (the local is already set), branch to dest.
-            // Mirrors x86 `testq rax, rax; jnz dest`.
-            AsmInst::CheckLocal(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
                 true
             }
             // rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
@@ -811,33 +936,6 @@ impl Codegen {
                 true
             }
             // Stack-overflow check at method entry: if sp <= executor.stack_limit
-            // write back live values, call stack_overflow(vm), and jump to the
-            // error handler. The overflow path is laid out inline but skipped on
-            // the common (no-overflow) path. Mirrors x86 jit_check_stack.
-            AsmInst::CheckStack { write_back, error } => {
-                let error = labels[error].clone();
-                let ok = self.jit.label();
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, sp;
-                    ldr x11, [x19, #(crate::executor::EXECUTOR_STACK_LIMIT as u32)];
-                    cmp x10, x11;
-                );
-                self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
-                if !self.a64_gen_write_back_for_deopt(&write_back) {
-                    return false;
-                }
-                let f = crate::codegen::stack_overflow as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    b error;
-                );
-                self.jit.bind_label(ok);
-                true
-            }
             // to_a: load slot `src`; if it is already an Array, keep it in rax,
             // otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
             AsmInst::ToA { src, using_xmm } => {
@@ -868,39 +966,6 @@ impl Codegen {
                     ldr x30, [sp], #16;
                     exit:
                 );
-                true
-            }
-            // GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write
-            // back live values, run execute_gc(vm, globals), and on error jump
-            // to the error handler. The GC path is laid out inline but skipped
-            // on the common (no-GC) path. Mirrors x86 execute_gc_inner.
-            AsmInst::ExecGc { write_back, error } => {
-                let error = labels[error].clone();
-                let skip = self.jit.label();
-                let af_addr = self
-                    .jit
-                    .get_label_address(&self.alloc_flag.clone())
-                    .as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (af_addr);
-                    ldr w9, [x9];
-                    cmp x9, #(8u32);
-                );
-                self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
-                if !self.a64_gen_write_back_for_deopt(&write_back) {
-                    return false;
-                }
-                let f = crate::executor::execute_gc as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x0, x19;
-                    mov x1, x20;
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    cbz x0, error;             // None -> error
-                );
-                self.jit.bind_label(skip);
                 true
             }
             AsmInst::LoadGVar { name, using_xmm } => {
@@ -947,52 +1012,6 @@ impl Codegen {
                 );
                 true
             }
-            // Conditional branch on the truthiness of rax (x0). `orr 0x10`
-            // folds nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything
-            // else stays != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot
-            // when falsy (Eq). Mirrors x86 `cond_br` and the VM's CondBr.
-            AsmInst::CondBr(brkind, dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, (0x10);
-                    orr x(rax), x(rax), x10;
-                    cmp x(rax), #(FALSE_VALUE as u32);
-                );
-                let cond = match brkind {
-                    BrKind::BrIf => monoasm::Cond::Ne,
-                    BrKind::BrIfNot => monoasm::Cond::Eq,
-                };
-                self.jit.bcond_label(cond, &branch_dest);
-                true
-            }
-            // Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax,
-            // NIL_VALUE; jeq dest`.
-            AsmInst::NilBr(dest) => {
-                let branch_dest = frame.resolve_label(&mut self.jit, dest);
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    cmp x(rax), #(NIL_VALUE as u32);
-                );
-                self.jit.bcond_label(monoasm::Cond::Eq, &branch_dest);
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
-            // materialized in a scratch reg (aarch64 has no store-immediate),
-            // so no GP register is clobbered. Mirrors x86 `literal_to_stack`.
-            AsmInst::LitToStack(v, slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                if off > 4095 {
-                    return false;
-                }
-                let imm = v.id();
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (imm);
-                    sub x10, x(lfp), #(off);
-                    str x9, [x10];
-                );
-                true
-            }
             // rax <- deep copy of literal Value (so each evaluation yields a
             // fresh mutable object). Runtime C call; bails if any xmm is live
             // (no FP save/restore yet). Mirrors x86 `deepcopy_literal`.
@@ -1010,11 +1029,6 @@ impl Codegen {
                     ldr x30, [sp], #16;
                 );
                 true
-            }
-            // Type guard: deopt if `r` is not of `class`.
-            AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = labels[deopt].clone();
-                self.a64_guard_class(r, class, &deopt)
             }
             // Inline-cache class-version guard: deopt if the global class
             // version changed since compilation.
@@ -1103,12 +1117,6 @@ impl Codegen {
                 );
                 true
             }
-            // Unconditional deopt to the interpreter.
-            AsmInst::Deopt(deopt) => {
-                let deopt = labels[deopt].clone();
-                monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
             // A NotCached/recompile point: x86 deopts then recompiles once the
             // inline cache warms (e.g. fib's `+` is cold until the recursion
             // unwinds). aarch64 has no recompile yet, so treat it as a plain
@@ -1116,15 +1124,6 @@ impl Codegen {
             AsmInst::RecompileDeopt { deopt, .. } => {
                 let deopt = labels[deopt].clone();
                 monoasm_arm64!(&mut self.jit, b deopt;);
-                true
-            }
-            // Error check: a runtime helper returns rax==0 (None) on error;
-            // branch to the error side-exit handler in that case. Mirrors x86
-            // `handle_error` (`testq rax,rax; jeq error`).
-            AsmInst::HandleError(error) => {
-                let error = labels[error].clone();
-                let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit, cbz x(rax), error;);
                 true
             }
             // rax <- Array built from the `len` slots starting at `src`.

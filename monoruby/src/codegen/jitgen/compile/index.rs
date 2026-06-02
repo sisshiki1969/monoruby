@@ -56,7 +56,7 @@ impl<'a> JitContext<'a> {
 }
 
 impl AbstractState {
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
     pub(crate) fn array_integer_index(
         &mut self,
         ir: &mut AsmIr,
@@ -114,7 +114,7 @@ impl AbstractState {
     /// ### destroy
     /// - caller save registers except xmm's
     ///
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
     pub(crate) fn array_integer_index_assign(
         &mut self,
         ir: &mut AsmIr,

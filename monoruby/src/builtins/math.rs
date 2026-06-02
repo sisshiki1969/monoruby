@@ -675,7 +675,7 @@ fn log1p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::float(f.ln_1p()))
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn math_sqrt(
     state: &mut AbstractState,

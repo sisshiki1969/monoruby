@@ -2,7 +2,7 @@ use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 use crate::executor::Visibility;
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use jitgen::JitContext;
 
 //
@@ -190,7 +190,7 @@ extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn float_toi(
     state: &mut AbstractState,

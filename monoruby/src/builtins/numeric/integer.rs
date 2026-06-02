@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 use jitgen::JitContext;
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -518,7 +518,7 @@ fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_succ(
     state: &mut AbstractState,
@@ -566,7 +566,7 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::float(f))
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_tof(
     state: &mut AbstractState,
@@ -859,7 +859,7 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_shr(
     state: &mut AbstractState,
@@ -937,7 +937,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_shl(
     state: &mut AbstractState,
@@ -1015,7 +1015,7 @@ fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_rem(
     state: &mut AbstractState,
@@ -1041,7 +1041,7 @@ fn integer_rem(
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_rem_int_rhs(
     state: &mut AbstractState,
@@ -1098,7 +1098,7 @@ fn integer_rem_int_rhs(
     true
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_rem_float_rhs(
     state: &mut AbstractState,
@@ -1143,7 +1143,7 @@ fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_pow(
     state: &mut AbstractState,
@@ -1169,7 +1169,7 @@ fn integer_pow(
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_pow_int_rhs(
     state: &mut AbstractState,
@@ -1200,7 +1200,7 @@ fn integer_pow_int_rhs(
     true
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_pow_float_rhs(
     state: &mut AbstractState,
@@ -1245,7 +1245,7 @@ fn integer_pow_float_rhs(
 /// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
 /// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 fn integer_bitop_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1302,7 +1302,7 @@ fn integer_bitop_inline(
 /// representation fits in `i32`, emit the immediate form directly via
 /// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
 /// emit the register form via `emit_rr`.
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 fn emit_bitop_imm(
     ir: &mut AsmIr,
     imm: Fixnum,
@@ -1322,7 +1322,7 @@ fn emit_bitop_imm(
     }
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_bitor(
     state: &mut AbstractState,
@@ -1353,7 +1353,7 @@ fn integer_bitor(
     )
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_bitand(
     state: &mut AbstractState,
@@ -1384,7 +1384,7 @@ fn integer_bitand(
     )
 }
 
-#[cfg(jit_emit)]
+#[cfg(jit_x86)]
 
 fn integer_bitxor(
     state: &mut AbstractState,

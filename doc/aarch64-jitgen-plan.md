@@ -7,7 +7,7 @@ the **JIT compiler** up on aarch64 (macOS/Apple-Silicon target, validated
 under qemu-user on x86 hosts).
 
 > Status: **Phase 1 + 3a DONE; Phase 3b IN PROGRESS — aarch64 now JIT-compiles
-> and executes methods.** The `jit`/`jit_emit` seam is in place, the
+> and executes methods.** The `jit`/`jit_x86` seam is in place, the
 > initial-compile driver is arch-neutral, the A64 wrapper trigger fires for hot
 > ISeq methods, runs the front-end, lowers the AsmIR (`a64_gen_machine_code` →
 > `compile_asmir`), and **installs via indirect dispatch** (no runtime branch
@@ -91,11 +91,11 @@ The seam from "Phase 1 (revised)" below is implemented and validated:
 
 | Piece | What | cfg |
 |---|---|---|
-| `build.rs` | `jit` = front-end (x86-64 **and** aarch64); `jit_emit` = x86 emission only | — |
-| inline generators | `inline_gen!`, `InlineGen`/`InlineFuncInfo::InlineGen`, `define_builtin_inline_func*`, 13 builtins generator files, the `method_call` invocation arm | `jit_emit` |
-| jitgen emission | `asmir::compile` (+ aarch64 `compile_stub`), `jitgen.rs` emission impls (`load_store!`, xmm/write-back/deopt, `gen_machine_code`), `guard`/`deoptimize`, `gen_asm`, `compile/index` array fast-paths | `jit_emit` |
-| runtime patch | `jit_check_stack`, `jit_execute_gc`, `immediate_eviction`, BOP-redefine entry repatch (`class.rs`) | `jit_emit` |
-| driver entry | `jit_compile` split: arch-neutral front-end (`traceir_to_asmir`), then `gen_machine_code` (x86) **or** `Err(CompileError)` bail (aarch64) | `jit` / `jit_emit` |
+| `build.rs` | `jit` = front-end (x86-64 **and** aarch64); `jit_x86` = x86 emission only | — |
+| inline generators | `inline_gen!`, `InlineGen`/`InlineFuncInfo::InlineGen`, `define_builtin_inline_func*`, 13 builtins generator files, the `method_call` invocation arm | `jit_x86` |
+| jitgen emission | `asmir::compile` (+ aarch64 `compile_stub`), `jitgen.rs` emission impls (`load_store!`, xmm/write-back/deopt, `gen_machine_code`), `guard`/`deoptimize`, `gen_asm`, `compile/index` array fast-paths | `jit_x86` |
+| runtime patch | `jit_check_stack`, `jit_execute_gc`, `immediate_eviction`, BOP-redefine entry repatch (`class.rs`) | `jit_x86` |
+| driver entry | `jit_compile` split: arch-neutral front-end (`traceir_to_asmir`), then `gen_machine_code` (x86) **or** `Err(CompileError)` bail (aarch64) | `jit` / `jit_x86` |
 
 **Validated:** both arches `cargo check` green, aarch64 warning-clean; x86
 JIT output unchanged; aarch64 runs a 49-line opcode program **byte-identical
@@ -119,13 +119,13 @@ JIT incrementally) needs the **driver chain** ported. A spike `un-gating`
 
 1. **Driver entry points are x86-emission-laced.** `compiler.rs::compile()`
    patches the JIT entry on success (`apply_jmp_patch_address`), `compile_patch`
-   lives in `patch.rs` (`jit_emit`), and `recompile_*` / `save_registers` /
+   lives in `patch.rs` (`jit_x86`), and `recompile_*` / `save_registers` /
    `gen_compile_patch` / `gen_recompile*` / `gen_compile_loop` are all x86
    `monoasm!`. The extern trigger entries (`jit_compile_patch`, …) call into
    `patch.rs`.
 2. So the chain `trigger → jit_compile_patch → compile_patch[patch.rs] →
    compile_method → compile → jit_compile` must be arch-neutralized: keep the
-   orchestration as `jit`, gate every emission/patch site to `jit_emit`, and
+   orchestration as `jit`, gate every emission/patch site to `jit_x86`, and
    provide aarch64 stubs (on aarch64 `compile()` returns `None`, so the
    success-path patching is never reached — but it must still type-check).
 3. **A64 JIT trigger.** `arch/aarch64/wrapper.rs` (ISeq path) needs a
@@ -251,7 +251,7 @@ after.
 
 ### Decisive finding: planning and emission are interleaved (no clean front-end-only build)
 
-A second pass (introduce a `jit_emit` cfg = `jit && x86_64` and try to keep a
+A second pass (introduce a `jit_x86` cfg = `jit && x86_64` and try to keep a
 pure-`jit` front-end compiling on aarch64) shows there is **no useful
 "front-end only" compilation unit**:
 
@@ -260,32 +260,32 @@ pure-`jit` front-end compiling on aarch64) shows there is **no useful
   per-method **inline generators** (emission) during method-call lowering and
   calls emission helpers inline (`array_integer_index`, `store_fpr_into_xmm`,
   `gen_shr`, `gen_asm`, guards, write-back, xmm save/restore, …).
-- Therefore any `jit`-but-not-`jit_emit` code that would compile on aarch64
+- Therefore any `jit`-but-not-`jit_x86` code that would compile on aarch64
   must have an aarch64 **stub for essentially the entire emission interface**
   (~dozens of `Codegen`/`JitModule`/`AbstractState` methods + an aarch64
   `inline_gen!`/`define_builtin_inline_func` form). The result would be a
   large body of dead, never-run stubs.
-- Gating *everything* `jit` → `jit_emit` instead makes aarch64 identical to
+- Gating *everything* `jit` → `jit_x86` instead makes aarch64 identical to
   today's VM-only build (no JIT code at all) — i.e. no progress.
 
 So there is **no behavior-neutral, validatable "foundation" milestone** short
 of implementing real aarch64 emission. The honest path is to treat the
 aarch64 JIT as the **emission port itself** (Phase 2), done as a **vertical
-slice**: enable `jit` on aarch64 behind the `jit_emit` seam, then implement
+slice**: enable `jit` on aarch64 behind the `jit_x86` seam, then implement
 just enough aarch64 emission (entry/wrapper + `compiler`/`patch` + a minimal
 `compile_asmir` that handles a trivial method and **deopts to the VM on
 everything else**) to get one method JIT-compiling end-to-end under qemu —
-then widen opcode/inline coverage incrementally. The `jit_emit` cfg seam +
+then widen opcode/inline coverage incrementally. The `jit_x86` cfg seam +
 `inline_gen!` aarch64 arm are built as part of that slice (not as a separate
 dormant step, since they can only be validated alongside emission).
 
 ### Phase 1 — cfg architecture seam (revised)
 - Decide the cfg model: e.g. `jit` (front-end planning, both arches) vs
-  `jit_emit_x86` (= `jit && target_arch=x86_64`, the x86 emission incl.
+  `jit_x86` (= `jit && target_arch=x86_64`, the x86 emission incl.
   builtins inline generators). Rework `inline_gen!` so the aarch64-jit build
   gets a stub/bail generator (mirroring the `not(jit)` twin).
 - Gate the `jitgen` emission back-end + builtins inline generators to
-  `jit_emit_x86`; provide aarch64 back-end stubs for the emission interface
+  `jit_x86`; provide aarch64 back-end stubs for the emission interface
   the front-end calls (incl. the inline-emit helpers in finding #2).
 - Keep the aarch64 JIT **trigger disabled** (wrapper stays `b vm_entry`) so
   aarch64 stays VM-only at runtime; stubs are never hit.
@@ -300,10 +300,10 @@ trigger→compile→bail→VM loop works end-to-end (no method JITs yet). Steps:
 1. Un-gate `compiler.rs` to `cfg(jit)`; gate its emission methods
    (`gen_compile_patch`, `gen_recompile`, `gen_recompile_specialized`,
    `gen_compile_loop`) and the success-path patch sites (`apply_jmp_patch_address`,
-   `save_registers`/`restore_registers`) to `jit_emit`.
+   `save_registers`/`restore_registers`) to `jit_x86`.
 2. `patch.rs`: split `compile_patch` so its orchestration is `jit`
    (calls `compile_method`, checks the `Option`) and only the actual entry
-   repatch is `jit_emit`. Same for any class-guard stub setup.
+   repatch is `jit_x86`. Same for any class-guard stub setup.
 3. The extern entries (`jit_compile_patch`, `jit_recompile_*`, `jit_compile_loop`)
    become `jit` (they only call the now-arch-neutral driver).
 4. `arch/aarch64/wrapper.rs`: emit the A64 JIT trigger for the ISeq path — a
