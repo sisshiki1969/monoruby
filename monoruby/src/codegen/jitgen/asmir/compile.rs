@@ -101,7 +101,11 @@ impl Codegen {
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
             | AsmInst::LoadStructSlotInline { .. }
-            | AsmInst::StoreStructSlotInline { .. } => {
+            | AsmInst::StoreStructSlotInline { .. }
+            | AsmInst::LoadStructSlotHeap { .. }
+            | AsmInst::StoreStructSlotHeap { .. }
+            | AsmInst::RegAdd(..)
+            | AsmInst::RegSub(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::LoopJitRspBump { offset } => {
@@ -117,22 +121,6 @@ impl Codegen {
                     movq rax, (unreachable);
                     call rax;
                 );
-            }
-            AsmInst::RegAdd(r, i) => {
-                if i != 0 {
-                    let r = r as u64;
-                    monoasm! { &mut self.jit,
-                        addq R(r), (i);
-                    }
-                }
-            }
-            AsmInst::RegSub(r, i) => {
-                if i != 0 {
-                    let r = r as u64;
-                    monoasm! { &mut self.jit,
-                        subq R(r), (i);
-                    }
-                }
             }
             AsmInst::RegToRSPOffset(r, ofs) => {
                 let r = r as u64;
@@ -379,10 +367,6 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
             } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
-            AsmInst::LoadStructSlotHeap { slot_index } => self.load_struct_slot_heap(slot_index),
-            AsmInst::StoreStructSlotHeap { src, slot_index } => {
-                self.store_struct_slot_heap(src, slot_index)
-            }
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -1698,5 +1682,33 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
         self.store_struct_slot_inline(src, slot_index);
         true
+    }
+
+    /// Load a heap-spilled Struct member slot into the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_heap(&mut self, slot_index: u16) -> bool {
+        self.load_struct_slot_heap(slot_index);
+        true
+    }
+
+    /// Store `src` into a heap-spilled Struct member slot (also returned in rax).
+    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_heap(&mut self, src: GP, slot_index: u16) -> bool {
+        self.store_struct_slot_heap(src, slot_index);
+        true
+    }
+
+    /// reg += i (no-op when i == 0).
+    pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
+        if i != 0 {
+            let r = reg as u64;
+            monoasm! { &mut self.jit, addq R(r), (i); }
+        }
+    }
+
+    /// reg -= i (no-op when i == 0).
+    pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
+        if i != 0 {
+            let r = reg as u64;
+            monoasm! { &mut self.jit, subq R(r), (i); }
+        }
     }
 }
