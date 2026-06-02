@@ -814,6 +814,81 @@ impl Codegen {
         true
     }
 
+    /// Constant base-class guard: deopt if the accumulator (rax/x0) is not the
+    /// cached base class. Mirrors x86 `GuardConstBaseClass`.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
+        &mut self,
+        base_class: Value,
+        deopt: &DestLabel,
+    ) {
+        let deopt = deopt.clone();
+        let rax = GP::Rax.a64().0;
+        let cached = base_class.id() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (cached);
+            cmp x(rax), x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Constant version guard: deopt if the global constant version moved since
+    /// compilation (`const_version` is the baked-in cached value). Mirrors x86
+    /// `guard_const_version`.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
+        &mut self,
+        const_version: usize,
+        deopt: &DestLabel,
+    ) {
+        let deopt = deopt.clone();
+        let gv_addr = self
+            .jit
+            .get_label_address(&self.const_version_label())
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (gv_addr);
+            ldr x9, [x9];
+            mov x10, (const_version as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+    }
+
+    /// Store the accumulator to a constant via set_constant(vm, globals, id,
+    /// val), bumping the global constant version. Bails (`false`) if any xmm is
+    /// live (no FP save/restore yet). Mirrors x86 `store_constant` + error check.
+    pub(in crate::codegen::jitgen) fn emit_store_constant(
+        &mut self,
+        id: ConstSiteId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let error = error.clone();
+        let cv_addr = self
+            .jit
+            .get_label_address(&self.const_version_label())
+            .as_ptr() as u64;
+        let f = runtime::set_constant as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x0;                 // val (was in rax)
+            mov x0, x19;                // vm
+            mov x1, x20;                // globals
+            mov x2, (id.0 as u64);      // ConstSiteId
+            mov x9, (cv_addr);
+            ldr x10, [x9];
+            add x10, x10, #(1u32);
+            str x10, [x9];              // bump global const version
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            cbz x0, error;              // None -> error
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
@@ -1054,66 +1129,6 @@ impl Codegen {
                     mov x9, (flag_addr);
                     ldr w9, [x9];
                     cbnz x9, deopt;   // any BOP redefined -> deopt
-                );
-                true
-            }
-            // Constant inline-cache guard: deopt if the global constant version
-            // moved since compilation (`const_version` is the baked-in cached
-            // value). Mirrors x86 guard_const_version.
-            AsmInst::GuardConstVersion { const_version, deopt } => {
-                let deopt = labels[deopt].clone();
-                let gv_addr = self
-                    .jit
-                    .get_label_address(&self.const_version_label())
-                    .as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (gv_addr);
-                    ldr x9, [x9];
-                    mov x10, (const_version as u64);
-                    cmp x9, x10;
-                );
-                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-                true
-            }
-            // Guard that the constant's base class (in rax) matches the cached
-            // one. Mirrors x86 GuardConstBaseClass.
-            AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = labels[deopt].clone();
-                let rax = GP::Rax.a64().0;
-                let cached = base_class.id() as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x10, (cached);
-                    cmp x(rax), x10;
-                );
-                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-                true
-            }
-            // Store to a constant via set_constant(vm, globals, id, val), bumping
-            // the global constant version. Bails if any xmm is live.
-            AsmInst::StoreConstant { id, using_xmm, error } => {
-                if using_xmm.iter().any(|b| *b) {
-                    return false;
-                }
-                let error = labels[error].clone();
-                let cv_addr = self
-                    .jit
-                    .get_label_address(&self.const_version_label())
-                    .as_ptr() as u64;
-                let f = runtime::set_constant as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x3, x0;                 // val (was in rax)
-                    mov x0, x19;                // vm
-                    mov x1, x20;                // globals
-                    mov x2, (id.0 as u64);      // ConstSiteId
-                    mov x9, (cv_addr);
-                    ldr x10, [x9];
-                    add x10, x10, #(1u32);
-                    str x10, [x9];              // bump global const version
-                    str x30, [sp, #-16]!;
-                    mov x9, (f);
-                    blr x9;
-                    ldr x30, [sp], #16;
-                    cbz x0, error;              // None -> error
                 );
                 true
             }

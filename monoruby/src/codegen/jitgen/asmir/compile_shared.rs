@@ -88,6 +88,21 @@ impl Codegen {
             AsmInst::ExecGc { write_back, error } => {
                 return self.emit_exec_gc(write_back, &labels[error], frame.base_stack_offset);
             }
+            // Constant base-class guard: deopt if the constant's base class (in
+            // the accumulator) is not the cached one.
+            AsmInst::GuardConstBaseClass { base_class, deopt } => {
+                self.emit_guard_const_base_class(base_class, &labels[deopt]);
+            }
+            // Constant version guard: deopt if the global constant version moved
+            // since compilation.
+            AsmInst::GuardConstVersion { const_version, deopt } => {
+                self.emit_guard_const_version(const_version, &labels[deopt]);
+            }
+            // Store to a constant, bumping the global constant version (aarch64
+            // bails if any xmm is live, hence the bool result).
+            AsmInst::StoreConstant { id, using_xmm, error } => {
+                return self.emit_store_constant(id, using_xmm, &labels[error]);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

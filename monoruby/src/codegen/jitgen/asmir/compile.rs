@@ -51,7 +51,10 @@ impl Codegen {
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
             | AsmInst::CheckStack { .. }
-            | AsmInst::ExecGc { .. } => {
+            | AsmInst::ExecGc { .. }
+            | AsmInst::GuardConstBaseClass { .. }
+            | AsmInst::GuardConstVersion { .. }
+            | AsmInst::StoreConstant { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Init {
@@ -537,30 +540,6 @@ impl Codegen {
                 self.condbr_float(kind, branch_dest, brkind);
             }
 
-            AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = &labels[deopt];
-                let cached_base_class = self.jit.const_i64(base_class.id() as _);
-                monoasm! { &mut self.jit,
-                    cmpq rax, [rip + cached_base_class];  // rax: base_class
-                    jne  deopt;
-                }
-            }
-            AsmInst::GuardConstVersion {
-                const_version,
-                deopt,
-            } => {
-                let deopt = &labels[deopt];
-                self.guard_const_version(const_version, deopt);
-            }
-            AsmInst::StoreConstant {
-                id,
-                using_xmm,
-                error,
-            } => {
-                self.store_constant(id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-
             AsmInst::GenericBinOp {
                 lhs,
                 rhs,
@@ -1022,6 +1001,43 @@ impl Codegen {
         base: usize,
     ) -> bool {
         self.jit_execute_gc(&write_back, error, base);
+        true
+    }
+
+    /// Constant base-class guard: deopt if the accumulator (rax) is not the
+    /// cached base class.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
+        &mut self,
+        base_class: Value,
+        deopt: &DestLabel,
+    ) {
+        let cached_base_class = self.jit.const_i64(base_class.id() as _);
+        monoasm! { &mut self.jit,
+            cmpq rax, [rip + cached_base_class];  // rax: base_class
+            jne  deopt;
+        }
+    }
+
+    /// Constant version guard: deopt if the global constant version moved.
+    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
+        &mut self,
+        const_version: usize,
+        deopt: &DestLabel,
+    ) {
+        self.guard_const_version(const_version, deopt);
+    }
+
+    /// Store the accumulator to a constant and bump the global constant
+    /// version. Always succeeds on x86 (the bool result exists for the aarch64
+    /// twin, which bails if any xmm is live).
+    pub(in crate::codegen::jitgen) fn emit_store_constant(
+        &mut self,
+        id: ConstSiteId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.store_constant(id, using_xmm);
+        self.handle_error(error);
         true
     }
 
