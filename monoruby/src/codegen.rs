@@ -14,10 +14,10 @@ mod compiler;
 mod jit_module;
 #[cfg(jit)]
 pub mod jitgen;
-pub(crate) mod signal_table;
 #[cfg(jit)]
 mod patch;
 pub mod runtime;
+pub(crate) mod signal_table;
 
 // Architecture-specific VM-tier backend. The asm-level VM construction,
 // frame setup, invokers, native-function wrappers, bytecode dispatch, and
@@ -344,7 +344,6 @@ impl JitModule {
         let info = self.get_wrapper_info(pair);
         Self::perf_write(info, func_name);
     }
-
 }
 
 impl JitModule {
@@ -609,10 +608,7 @@ impl Codegen {
     /// next poll. Use of `*mut u32` is fine here because the signal
     /// handler runs on the same thread as the poll.
     pub(crate) fn take_pending_signals(&self) -> u32 {
-        let ptr = self
-            .jit
-            .get_label_address(&self.pending_signals)
-            .as_ptr() as *mut u32;
+        let ptr = self.jit.get_label_address(&self.pending_signals).as_ptr() as *mut u32;
         unsafe {
             let v = std::ptr::read_volatile(ptr);
             if v != 0 {
@@ -653,7 +649,13 @@ impl Codegen {
         };
         // SAFETY: codeptr is a stable pointer into the finalized JIT
         // buffer; SA_RESTART matches the startup install.
-        unsafe { Self::sigaction_to(signo, codeptr.as_ptr() as libc::sighandler_t, libc::SA_RESTART) }
+        unsafe {
+            Self::sigaction_to(
+                signo,
+                codeptr.as_ptr() as libc::sighandler_t,
+                libc::SA_RESTART,
+            )
+        }
     }
 
     /// Set `signo` to `SIG_IGN` (silently discard).
@@ -749,6 +751,12 @@ impl Codegen {
         );
         self.jit.select_page(0);
         let dump = self.jit.dump_code().unwrap();
+        // x86-64 objdump pads the hex-bytes column to a fixed width, so the
+        // mnemonic starts a fixed `i + 24` chars past the `:`. aarch64
+        // instructions are always 4 bytes (`xxxxxxxx `), a much narrower
+        // column, so parse its objdump output by tab field instead:
+        // `<off>:\t<bytes>\t<mnemonic>\t<operands>`.
+        #[cfg(jit_x86)]
         let dump: Vec<(usize, String)> = dump
             .split('\n')
             .filter(|s| s.len() >= 29)
@@ -763,6 +771,16 @@ impl Codegen {
                     },
                     x[i + 24..].to_string(),
                 )
+            })
+            .collect();
+        #[cfg(not(jit_x86))]
+        let dump: Vec<(usize, String)> = dump
+            .split('\n')
+            .filter_map(|x| {
+                let i = x.find(':')?;
+                let off = usize::from_str_radix(x[0..i].trim(), 16).ok()?;
+                let text = x[i + 1..].splitn(3, '\t').nth(2)?.to_string();
+                Some((off, text))
             })
             .collect();
         let iseq = &store[iseq_id];

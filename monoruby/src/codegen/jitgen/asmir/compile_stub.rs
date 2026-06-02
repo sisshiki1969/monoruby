@@ -143,6 +143,22 @@ impl Codegen {
             }
         }
 
+        // Dump the generated A64 machine code, mirroring x86's `gen_machine_code`
+        // tail. `dump_code` shells out to GNU objdump (set `OBJDUMP` to a
+        // binutils objdump on macOS, where the system objdump is LLVM's and
+        // rejects `-b binary`). The trailing `finalize` resolves branch
+        // displacements so the listing shows real targets; `compile_patch`
+        // finalizes again after emitting the class-guard stub (same as x86).
+        #[cfg(feature = "emit-asm")]
+        if self.startup_flag {
+            self.jit.finalize();
+            let iseq_id = frame.iseq_id;
+            let fid = store[iseq_id].func_id();
+            eprintln!("  >>> JIT (aarch64) <{}>", store.func_description(fid));
+            self.dump_disas(store, &frame.sourcemap, iseq_id);
+            eprintln!("  <<<");
+        }
+
         true
     }
 
