@@ -21,20 +21,28 @@ impl Codegen {
     ///
     /// Generate machine code for *inst*.
     ///
-    pub(super) fn compile_asmir(
+    ///
+    /// Per-arch (x86-64) lowering for every `AsmInst` not handled by the
+    /// arch-neutral `compile_asmir` dispatcher. Always emits (returns `true`).
+    ///
+    pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
         frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         class_version: DestLabel,
-    ) {
+    ) -> bool {
         match inst {
-            AsmInst::BcIndex(i) => {
-                frame
-                    .sourcemap
-                    .push((i, self.jit.get_current() - frame.start_codepos));
-            }
+            // Handled by the arch-neutral `compile_asmir` dispatcher.
+            AsmInst::BcIndex(..)
+            | AsmInst::Label(..)
+            | AsmInst::RegMove(..)
+            | AsmInst::RegToAcc(..)
+            | AsmInst::AccToStack(..)
+            | AsmInst::RegToStack(..)
+            | AsmInst::StackToReg(..)
+            | AsmInst::LitToReg(..) => unreachable!("handled by the shared compile_asmir dispatcher"),
             AsmInst::Init {
                 info,
                 prologue_offset,
@@ -90,46 +98,6 @@ impl Codegen {
                     );
                     self.jit.select_page(0);
                 }
-            }
-            AsmInst::Label(label) => {
-                let label = frame.resolve_label(&mut self.jit, label);
-                self.jit.bind_label(label);
-            }
-            AsmInst::AccToStack(slot) => {
-                self.store_r15(slot);
-            }
-            AsmInst::RegToAcc(r) => {
-                if r != GP::R15 {
-                    let r = r as u64;
-                    monoasm!( &mut self.jit,
-                        movq r15, R(r);
-                    );
-                }
-            }
-            AsmInst::RegToStack(r, slot) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq [rbp - (rbp_local(slot))], R(r);
-                );
-            }
-            AsmInst::StackToReg(slot, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), [rbp - (rbp_local(slot))];
-                );
-            }
-            AsmInst::LitToReg(v, r) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq R(r), (v.id());
-                );
-            }
-            AsmInst::RegMove(src, dst) => {
-                let src = src as u64;
-                let dst = dst as u64;
-                monoasm!( &mut self.jit,
-                    movq R(dst), R(src);
-                );
             }
             AsmInst::RegAdd(r, i) => {
                 if i != 0 {
@@ -969,6 +937,45 @@ impl Codegen {
                 self.store_fpr_into_xmm(dst, base);
             }
         }
+        true
+    }
+
+    // ---- emission primitives (x86-64) -------------------------------------
+    // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
+    // calls. The aarch64 twins live in `compile_stub.rs`.
+
+    /// dst <- src (general-purpose register move; self-move is a no-op).
+    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
+        if src != dst {
+            let (src, dst) = (src as u64, dst as u64);
+            monoasm!( &mut self.jit,
+                movq R(dst), R(src);
+            );
+        }
+    }
+
+    /// [lfp - slot] <- reg
+    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq [rbp - (rbp_local(slot))], R(r);
+        );
+    }
+
+    /// reg <- [lfp - slot]
+    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq R(r), [rbp - (rbp_local(slot))];
+        );
+    }
+
+    /// reg <- literal Value (immediate)
+    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq R(r), (v.id());
+        );
     }
 
     fn set_deopt_with_return_addr(

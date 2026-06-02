@@ -2,14 +2,19 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
-// AsmIR→machine-code lowering: x86 emits; the JIT front-end build
-// (jit && !jit_x86, i.e. aarch64) uses a stub whose compile_asmir bails so
-// the method deopts to the VM (see doc/aarch64-jitgen-plan.md).
+// AsmIR→machine-code lowering. The per-arch backend (`compile`) provides the
+// emission primitives + `compile_asmir_arch`; the arch-neutral dispatcher
+// (`compile_shared`) owns the shared instruction arms and forwards the rest.
+// x86 emits via `monoasm!`; the JIT front-end build (jit && !jit_x86, i.e.
+// aarch64) emits what it can via `monoasm_arm64!` and bails (→ deopt to VM)
+// on a not-yet-ported instruction (see doc/aarch64-jitgen-plan.md).
 #[cfg(jit_x86)]
 mod compile;
 #[cfg(all(jit, not(jit_x86)))]
 #[path = "asmir/compile_stub.rs"]
 mod compile;
+#[cfg(jit)]
+mod compile_shared;
 
 pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,

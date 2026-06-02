@@ -618,8 +618,52 @@ impl Codegen {
         }
     }
 
-    /// Lower one `AsmInst`. Returns `false` for any not-yet-ported variant.
-    pub(super) fn compile_asmir(
+    // ---- emission primitives (aarch64) ------------------------------------
+    // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
+    // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
+    // `[lfp(x22) - s*8 - LFP_SELF]` (same addressing as the VM's `a64_op_ret`).
+
+    /// dst <- src (general-purpose register move; self-move is a no-op).
+    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
+        let (s, d) = (src.a64().0, dst.a64().0);
+        if s != d {
+            monoasm_arm64!(&mut self.jit, mov x(d), x(s););
+        }
+    }
+
+    /// [lfp - slot*8 - LFP_SELF] <- reg
+    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let src = r.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(src), [x10];
+        );
+    }
+
+    /// reg <- [lfp - slot*8 - LFP_SELF]
+    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
+        let lfp = GP::R14.a64().0;
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        let dst = r.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x(dst), [x10];
+        );
+    }
+
+    /// reg <- literal Value (immediate)
+    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
+        let dst = r.a64().0;
+        let imm = v.id();
+        monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
+    }
+
+    /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
+    /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
+    /// not-yet-ported variant (the method then stays VM-interpreted).
+    pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
         frame: &mut AsmInfo,
@@ -631,18 +675,6 @@ impl Codegen {
         // slot `s` lives at `[lfp - s*8 - LFP_SELF]`.
         let lfp = GP::R14.a64().0;
         match inst {
-            // Source-position record (no code).
-            AsmInst::BcIndex(i) => {
-                let pos = self.jit.get_current() - frame.start_codepos;
-                frame.sourcemap.push((i, pos));
-                true
-            }
-            // Bind a JIT label.
-            AsmInst::Label(label) => {
-                let label = frame.resolve_label(&mut self.jit, label);
-                self.jit.bind_label(label);
-                true
-            }
             // Method prologue: establish fp/lr, reserve the local frame, and
             // nil-fill the non-argument locals/temps. Mirrors x86 `init_func`
             // (rbp == lfp + RBP_LOCAL_FRAME, so slots are lfp-relative here).
@@ -682,16 +714,6 @@ impl Codegen {
             // Per-method ivar-cache prep: only needed when heap ivars are
             // accessed; otherwise a no-op. Bail on the heap path for now.
             AsmInst::Preparation => !frame.ivar_heap_accessed,
-            // reg <- [lfp - slot*8 - LFP_SELF]
-            AsmInst::StackToReg(slot, r) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let dst = r.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    ldr x(dst), [x10];
-                );
-                true
-            }
             // Return: the value is already in x0 (acc = Rax -> x0). Epilogue
             // matches the VM's a64_op_ret (`mov sp,x29; ldp; ret`).
             AsmInst::Ret => {
@@ -700,49 +722,6 @@ impl Codegen {
                     ldp x29, x30, [sp], #16;
                     ret;
                 );
-                true
-            }
-            // reg <- literal Value (immediate).
-            AsmInst::LitToReg(v, r) => {
-                let dst = r.a64().0;
-                let imm = v.id();
-                monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- reg
-            AsmInst::RegToStack(r, slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let src = r.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    str x(src), [x10];
-                );
-                true
-            }
-            // [lfp - slot*8 - LFP_SELF] <- acc (R15 -> x23)
-            AsmInst::AccToStack(slot) => {
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                let acc = GP::R15.a64().0;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    str x(acc), [x10];
-                );
-                true
-            }
-            // dst <- src
-            AsmInst::RegMove(src, dst) => {
-                let (s, d) = (src.a64().0, dst.a64().0);
-                if s != d {
-                    monoasm_arm64!(&mut self.jit, mov x(d), x(s););
-                }
-                true
-            }
-            // acc (R15 -> x23) <- reg
-            AsmInst::RegToAcc(r) => {
-                if r != GP::R15 {
-                    let (acc, src) = (GP::R15.a64().0, r.a64().0);
-                    monoasm_arm64!(&mut self.jit, mov x(acc), x(src););
-                }
                 true
             }
             // if Rax (x0) is non-zero (the local is already set), branch to dest.
