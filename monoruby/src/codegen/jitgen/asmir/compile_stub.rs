@@ -1693,6 +1693,28 @@ impl Codegen {
         !frame.ivar_heap_accessed
     }
 
+    /// Fixnum negate. For a tagged value `t = 2n+1`, `tagged(-n) = 2 - t`, which
+    /// overflows i64 exactly when `-n` is out of i63 range (e.g. -i63::MIN), so
+    /// deopt on the V flag.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (2u64);
+            subs x(r), x9, x(r);   // 2 - t  == tagged(-n)
+        );
+        self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+    }
+
+    /// Fixnum bitwise-not. For a tagged value `t = 2n+1`, `tagged(~n) = -t`
+    /// (since ~n = -n-1), which is always a valid tagged fixnum (no overflow).
+    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
+        let r = reg.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0u64);
+            sub x(r), x9, x(r);    // -t  == tagged(~n)
+        );
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

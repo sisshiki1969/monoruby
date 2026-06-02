@@ -93,7 +93,9 @@ impl Codegen {
             | AsmInst::RecompileDeopt { .. }
             | AsmInst::Call { .. }
             | AsmInst::Init { .. }
-            | AsmInst::Preparation => {
+            | AsmInst::Preparation
+            | AsmInst::FixnumNeg { .. }
+            | AsmInst::FixnumBitNot { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::LoopJitRspBump { offset } => {
@@ -308,28 +310,6 @@ impl Codegen {
                 let block_entry = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-
-            AsmInst::FixnumNeg { reg, deopt } => {
-                let deopt = &labels[deopt];
-                let r = reg as u64;
-                monoasm! { &mut self.jit,
-                    sarq  R(r), 1;
-                    negq  R(r);
-                    jo    deopt;
-                    addq  R(r), R(r);
-                    jo    deopt;
-                    orq   R(r), 1;
-                }
-            }
-            AsmInst::FixnumBitNot { reg } => {
-                let r = reg as u64;
-                monoasm! { &mut self.jit,
-                    sarq  R(r), 1;
-                    notq  R(r);
-                    salq  R(r), 1;
-                    orq   R(r), 1;
-                }
             }
 
             AsmInst::GenericBinOp {
@@ -1670,5 +1650,29 @@ impl Codegen {
             self.jit.select_page(0);
         }
         true
+    }
+
+    /// Fixnum negate (tagged): untag, negate, re-tag; deopt on i63 overflow.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            sarq  R(r), 1;
+            negq  R(r);
+            jo    deopt;
+            addq  R(r), R(r);
+            jo    deopt;
+            orq   R(r), 1;
+        }
+    }
+
+    /// Fixnum bitwise-not (tagged): untag, complement, re-tag. Cannot overflow.
+    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            sarq  R(r), 1;
+            notq  R(r);
+            salq  R(r), 1;
+            orq   R(r), 1;
+        }
     }
 }
