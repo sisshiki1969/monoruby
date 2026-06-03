@@ -465,7 +465,10 @@ impl<'a> JitContext<'a> {
                 cache,
             } => return self.method_call(state, ir, callid, cache),
             TraceIr::Yield { callid } => {
-                if let Some(block_info) = self.current_method_given_block()
+                // aarch64: specialized (inlined) yield is unsupported by the A64
+                // lowering, so fall through to the plain `compile_yield` path.
+                if cfg!(jit_x86)
+                    && let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
                 {
                     return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);

@@ -80,7 +80,10 @@ impl Codegen {
     ) -> bool {
         self.jit.bind_label(entry_label);
         frame.start_codepos = self.jit.get_current();
-        // Specialized methods / inline bridges are not supported yet.
+        // Specialized (inlined) frames are unsupported by the A64 lowering, so
+        // the front-end never builds them on aarch64 (see the `cfg!(jit_x86)`
+        // gate in compile.rs / method_call.rs). This stays as a defensive net:
+        // if one ever appears, bail to the VM rather than emit wrong code.
         if !frame.specialized_methods.is_empty() {
             return false;
         }

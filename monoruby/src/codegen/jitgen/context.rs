@@ -1074,6 +1074,12 @@ impl<'a> JitContext<'a> {
     /// [`Self::outer_specialized_ids`] for the rationale.
     ///
     pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+        // aarch64 never builds specialized frames (see the `cfg!(jit_x86)` gate
+        // in method_call.rs), so there is no caller chain to encode — fall back
+        // to the plain `MethodRet` instead of `MethodRetSpecialized`.
+        if !cfg!(jit_x86) {
+            return None;
+        }
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
@@ -1095,6 +1101,11 @@ impl<'a> JitContext<'a> {
     /// [`Self::method_caller_specialized_ids`].
     ///
     pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+        // aarch64: no specialized frames (see `method_caller_specialized_ids`),
+        // so emit the plain `BlockBreak` instead of `BlockBreakSpecialized`.
+        if !cfg!(jit_x86) {
+            return None;
+        }
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
