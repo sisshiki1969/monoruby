@@ -7,7 +7,7 @@ on:
     branches: [master, "darwin*"]
 
 jobs:
-  coverage:
+  amd64:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -50,7 +50,7 @@ jobs:
     # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
     # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
     # yet ported bail to the VM. It runs the same `bin/test` as the Linux
-    # `coverage` job (portable head/yjit handling makes it BSD/macOS-safe), so
+    # `amd64` job (portable head/yjit handling makes it BSD/macOS-safe), so
     # the arm64 VM + JIT get the full check scope (unit tests, benchmark diffs,
     # optcarrot, ruby-bench, ruby/spec).
     #
@@ -60,7 +60,7 @@ jobs:
     # independent of the JIT (`--no-jit` crashes the same way) and does not
     # reproduce on x86-64, qemu-aarch64, or a local Apple Silicon Mac — so it is
     # specific to native-M1 + coverage instrumentation and is tracked
-    # separately. The Linux `coverage` job owns the Codecov upload.
+    # separately. The Linux `amd64` job owns the Codecov upload.
     runs-on: macos-latest
     env:
       CARGO_TERM_COLOR: always

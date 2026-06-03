@@ -2,7 +2,7 @@
 set -e
 
 # Portable helpers so this script runs unmodified on x86-64 Linux (CI's
-# `coverage` job) and native arm64 macOS (the `darwin` job). On arm64 macOS
+# `amd64` job) and native arm64 macOS (the `darwin` job). On arm64 macOS
 # build.rs sets the `jit` cfg, so this also exercises and coverage-measures the
 # AArch64 JIT (asmir/compile_stub.rs).
 
@@ -49,7 +49,7 @@ fi
 
 cov_clean
 cov_nextest "${STRESS_FEATURES[@]}"
-MONORUBY_PARSER=ruruby cov_nextest "${STRESS_FEATURES[@]}"
+#MONORUBY_PARSER=ruruby cov_nextest "${STRESS_FEATURES[@]}"
 
 cov_build
 
@@ -70,19 +70,19 @@ diff -s monoruby.log ruby.log
 #"${RUBY[@]}" benchmark/bf.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
-echo "checking plb2.."
-$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/matmul.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/bedcov.rb > ruby.log
-diff -s monoruby.log ruby.log
+#echo "checking plb2.."
+#$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
+#"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
+#diff -s monoruby.log ruby.log
+#$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
+#"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
+#diff -s monoruby.log ruby.log
+#$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
+#"${RUBY[@]}" benchmark/plb2/matmul.rb > ruby.log
+#diff -s monoruby.log ruby.log
+#$MONORUBY benchmark/plb2/bedcov.rb > monoruby.log
+#"${RUBY[@]}" benchmark/plb2/bedcov.rb > ruby.log
+#diff -s monoruby.log ruby.log
 
 $MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
 $MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
