@@ -322,6 +322,14 @@ impl Codegen {
                 is_object_ty,
                 self_,
             } => return self.emit_load_ivar_heap(ivarid, is_object_ty, self_),
+            // Runtime-call definition ops (undef a method / alias a global var).
+            // aarch64 bails when an xmm pool register is live (no xmm save yet).
+            AsmInst::UndefMethod { undef, using_xmm } => {
+                return self.emit_undef_method(undef, using_xmm);
+            }
+            AsmInst::AliasGvar { new, old, using_xmm } => {
+                return self.emit_alias_gvar(new, old, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

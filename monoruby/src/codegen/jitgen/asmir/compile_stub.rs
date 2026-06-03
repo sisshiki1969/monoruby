@@ -1970,6 +1970,45 @@ impl Codegen {
         true
     }
 
+    /// `undef`-method via runtime::undef_method(vm=x19, globals=x20, id). Bails
+    /// when an xmm pool register is live (no aarch64 xmm save around C calls
+    /// yet); lr is preserved across the `blr`.
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::undef_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                   // vm (Executor)
+            mov x1, x20;                   // globals
+            mov x2, (undef.get() as u64);  // undef (IdentId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Alias a global var via runtime::alias_global_var(globals=x20, new, old).
+    /// Bails when an xmm pool register is live.
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::alias_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x20;                 // globals
+            mov x1, (new.get() as u64);  // new IdentId
+            mov x2, (old.get() as u64);  // old IdentId
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

@@ -108,7 +108,9 @@ impl Codegen {
             | AsmInst::RegSub(..)
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
-            | AsmInst::LoadIVarHeap { .. } => {
+            | AsmInst::LoadIVarHeap { .. }
+            | AsmInst::UndefMethod { .. }
+            | AsmInst::AliasGvar { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -457,17 +459,6 @@ impl Codegen {
             } => {
                 self.concat_regexp(arg, len, using_xmm);
             }
-            AsmInst::UndefMethod { undef, using_xmm } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movl rdx, (undef.get());
-                    movq rax, (runtime::undef_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
             AsmInst::AliasMethod {
                 new,
                 old,
@@ -480,21 +471,6 @@ impl Codegen {
                     movq rdx, [r14 - (conv(old))];
                     movq rcx, [r14 - (conv(new))];
                     movq rax, (runtime::alias_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::AliasGvar {
-                new,
-                old,
-                using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, r12;          // &mut Globals
-                    movl rsi, (new.get());  // new IdentId
-                    movl rdx, (old.get());  // old IdentId
-                    movq rax, (runtime::alias_global_var);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
@@ -1727,6 +1703,34 @@ impl Codegen {
         self_: bool,
     ) -> bool {
         self.load_ivar_heap(ivarid, is_object_ty, self_);
+        true
+    }
+
+    /// `undef`-method via runtime::undef_method(vm, globals, id).
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (undef.get());
+            movq rax, (runtime::undef_method);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    /// Alias a global var via runtime::alias_global_var(globals, new, old).
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, r12;          // &mut Globals
+            movl rsi, (new.get());  // new IdentId
+            movl rdx, (old.get());  // old IdentId
+            movq rax, (runtime::alias_global_var);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
         true
     }
 }
