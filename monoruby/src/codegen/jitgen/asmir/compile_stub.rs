@@ -571,8 +571,10 @@ impl Codegen {
     /// patching (`set_deopt_with_return_addr`) is x86-only (runtime branch
     /// patching), so it is skipped — class-version changes are caught by
     /// `GuardClassVersion` deopts instead.
-    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId) {
-        let (_meta, codeptr, pc) = store[callee_fid].get_data();
+    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId, call_site_bc_ptr: BytecodePtr) {
+        let callee = &store[callee_fid];
+        let is_iseq = callee.is_iseq().is_some();
+        let (_meta, codeptr, pc) = callee.get_data();
         let codeptr_addr = codeptr.as_ptr() as u64;
         // set_lfp + push_frame (EXEC=x19, LFP=x22).
         monoasm_arm64!(&mut self.jit,
@@ -584,9 +586,19 @@ impl Codegen {
             sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
             str x22, [x10];                          // new_cfp.lfp = LFP
         );
-        if let Some(pc) = pc {
-            let pc_ptr = pc.as_ptr() as u64;
-            monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr);); // PC for the VM path
+        if is_iseq {
+            // iseq: PC <- callee pc (read by the VM tier / prologue).
+            if let Some(pc) = pc {
+                let pc_ptr = pc.as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr););
+            }
+        } else {
+            // builtin: x3 is the 4th C-arg = the `pc` parameter, which with-pc
+            // builtins use as the call-site bytecode pointer. The native-func
+            // wrapper passes x3 through untouched (mirrors x86 do_call setting
+            // rcx to the call-site bc ptr).
+            let cs = call_site_bc_ptr.as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit, mov x3, (cs););
         }
         monoasm_arm64!(&mut self.jit,
             mov x10, (codeptr_addr);
@@ -1664,9 +1676,9 @@ impl Codegen {
         _recv_class: ClassId,
         _evict: AsmEvict,
         _evict_label: &DestLabel,
-        _pc: BytecodePtr,
+        pc: BytecodePtr,
     ) {
-        self.a64_do_call(store, callee_fid);
+        self.a64_do_call(store, callee_fid, pc);
     }
 
     /// Method prologue: establish fp/lr, reserve the local frame, and nil-fill
@@ -2915,7 +2927,7 @@ impl Codegen {
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);
             sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
             str x22, [x10];
-            sub x1, x21, #(16u32);                       // rcx = call_site bc ptr (caller pc - 16)
+            sub x3, x21, #(16u32);                       // x3 = pc arg (call-site bc ptr) for with-pc callees
             ldr x21, [x26, #(FUNCDATA_PC as u32)];        // PC <- callee pc
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;                                       // result in x0
