@@ -124,7 +124,8 @@ impl Codegen {
             | AsmInst::GenericBinOp { .. }
             | AsmInst::ArrayTEq { .. }
             | AsmInst::ConcatRegexp { .. }
-            | AsmInst::CheckKwRest(..) => {
+            | AsmInst::CheckKwRest(..)
+            | AsmInst::ExpandArray { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -391,27 +392,6 @@ impl Codegen {
                 self.handle_error(&labels[error]);
             }
 
-            AsmInst::ExpandArray {
-                dst,
-                len,
-                rest_pos,
-                using_xmm,
-            } => {
-                let rest = if let Some(rest_pos) = rest_pos {
-                    rest_pos + 1
-                } else {
-                    0
-                };
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    lea rsi, [rbp - (rbp_local(dst))];
-                    movq rdx, (len);
-                    movq rcx, (rest);
-                    movq rax, (runtime::expand_array);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
             AsmInst::RestKw { rest_kw } => {
                 let data = self.jit.const_align8();
                 for (i, name) in rest_kw.into_iter() {
@@ -1813,6 +1793,30 @@ impl Codegen {
             movq [rbp - (rbp_local(slot))], rax;
         exit:
         };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_expand_array(
+        &mut self,
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        let rest = if let Some(rest_pos) = rest_pos {
+            rest_pos + 1
+        } else {
+            0
+        };
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            lea rsi, [rbp - (rbp_local(dst))];
+            movq rdx, (len);
+            movq rcx, (rest);
+            movq rax, (runtime::expand_array);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
         true
     }
 }

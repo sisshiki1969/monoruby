@@ -2452,6 +2452,46 @@ impl Codegen {
         true
     }
 
+    /// Multiple-assignment array expansion via runtime::expand_array(src, dst,
+    /// len, rest). `src` is already in GP::Rdi (x4) from the preceding load;
+    /// `dst` is the (descending) destination base x22-conv(dst). aarch64 C-args:
+    /// x0=src, x1=&dst, x2=len, x3=rest (rest = rest_pos+1, or 0 for none).
+    /// Bails on a live xmm pool reg or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_expand_array(
+        &mut self,
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let rest = if let Some(rest_pos) = rest_pos {
+            rest_pos as u64 + 1
+        } else {
+            0
+        };
+        let lfp = GP::R14.a64().0; // x22
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0; // x4 holds src
+        let f = runtime::expand_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);              // src (from GP::Rdi)
+            sub x1, x(lfp), #(off);      // &dst (descending base)
+            mov x2, (len as u64);        // len
+            mov x3, (rest);              // rest (0 = none)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

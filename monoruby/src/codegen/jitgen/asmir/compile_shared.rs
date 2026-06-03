@@ -377,6 +377,11 @@ impl Codegen {
                 return self.emit_concat_regexp(arg, len, using_xmm);
             }
             AsmInst::CheckKwRest(slot) => return self.emit_check_kw_rest(slot),
+            // Multiple-assignment array expansion (aarch64 bails on a live xmm
+            // pool reg or an out-of-range frame offset).
+            AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
+                return self.emit_expand_array(dst, len, rest_pos, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
