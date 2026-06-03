@@ -1960,6 +1960,70 @@ impl Codegen {
         true
     }
 
+    /// Store `src` into a heap-spilled instance variable of the object in rdi
+    /// (x4) — the non-self twin of emit_store_self_ivar_heap. The var-table may
+    /// be too small (None / capa 0 / len <= idx), so the fast inline store is
+    /// guarded by a bounds check that falls through to a cold
+    /// `set_ivar(obj, ivarid, src)` runtime call (which grows the table). The
+    /// live FP pool is saved around that call. aarch64 lays the cold path inline
+    /// (no separate page). Bails on an out-of-range field offset.
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        let ivar = ivarid.get() as u32;
+        let idx = if is_object_ty {
+            ivar - OBJECT_INLINE_IVAR as u32
+        } else {
+            ivar
+        };
+        let off = idx * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0; // object (&RValue)
+        let s = src.a64().0;
+        let generic = self.jit.label();
+        let exit = self.jit.label();
+        // var_table bounds check (None / capa 0 / len <= idx -> grow via runtime).
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];
+            cbz x9, generic;
+            ldr x10, [x9, #(MONOVEC_CAPA as u32)];
+            cbz x10, generic;
+            ldr x10, [x9, #(MONOVEC_LEN as u32)];
+            cmp x10, #(idx);
+        );
+        self.jit.bcond_label(monoasm::Cond::Le, &generic); // len <= idx -> grow
+        // fast path: write straight into the table slot.
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x9, #(MONOVEC_PTR as u32)];
+            str x(s), [x9, #(off)];
+            b exit;
+        );
+        // cold path: set_ivar(obj, ivarid, src), preserving the FP pool. src (s)
+        // and rdi survive emit_xmm_save (it only touches d-regs / sp) and are
+        // read into the C-arg regs just before the call.
+        let f = set_ivar as *const () as u64;
+        monoasm_arm64!(&mut self.jit, generic:);
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);            // base: &mut RValue
+            mov x1, (ivar as u64);     // id: IvarId
+            mov x2, x(s);              // val
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit, exit:);
+        true
+    }
+
     /// Load a heap-spilled instance variable into the accumulator (x23). Unless
     /// loading from self, bounds-check the var-table (None / capa 0 / len <= idx
     /// -> nil); an unset (zero) slot also reads nil. Bails on an out-of-range
@@ -3124,4 +3188,12 @@ impl Codegen {
         // keep the method VM-interpreted.
         false
     }
+}
+
+/// `set_ivar(base, id, val)` runtime helper for the StoreIVarHeap cold path
+/// (grows the var-table as needed). The x86 twin lives in
+/// `compile/variables.rs`; that module is `jit_x86`-only, so aarch64 carries
+/// its own copy (the two are never compiled together).
+extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+    base.set_ivar_by_ivarid(id, val)
 }

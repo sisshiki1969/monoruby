@@ -114,6 +114,7 @@ impl Codegen {
             | AsmInst::BlockArg { .. }
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
+            | AsmInst::StoreIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
             | AsmInst::UndefMethod { .. }
             | AsmInst::AliasGvar { .. }
@@ -255,12 +256,6 @@ impl Codegen {
                 self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
 
-            AsmInst::StoreIVarHeap {
-                src,
-                ivarid,
-                is_object_ty,
-                using_xmm,
-            } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
             AsmInst::ClassDef {
                 base,
                 superclass,
@@ -1883,6 +1878,19 @@ impl Codegen {
         self.block_arg(using_xmm, call_site_bc_ptr);
         self.handle_error(error);
         self.store_rax(ret);
+        true
+    }
+
+    // ---- heap instance-variable store (former per-arch arm) ----
+
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm);
         true
     }
 }

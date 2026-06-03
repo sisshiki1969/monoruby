@@ -329,6 +329,15 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
             } => return self.emit_store_self_ivar_heap(src, ivarid, is_object_ty),
+            // Store into a heap-spilled ivar of another object (bounds-checked;
+            // grows the table via a runtime call on miss). aarch64 bails on an
+            // out-of-range field offset.
+            AsmInst::StoreIVarHeap {
+                src,
+                ivarid,
+                is_object_ty,
+                using_xmm,
+            } => return self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
             // Load a heap-spilled instance variable (bounds-checked unless self),
             // substituting nil for an out-of-range / unset slot.
             AsmInst::LoadIVarHeap {
