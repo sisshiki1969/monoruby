@@ -110,7 +110,10 @@ impl Codegen {
             | AsmInst::StoreSelfIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
             | AsmInst::UndefMethod { .. }
-            | AsmInst::AliasGvar { .. } => {
+            | AsmInst::AliasGvar { .. }
+            | AsmInst::CheckCVar { .. }
+            | AsmInst::StoreCVar { .. }
+            | AsmInst::AliasMethod { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -354,17 +357,6 @@ impl Codegen {
                 is_object_ty,
                 using_xmm,
             } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
-            AsmInst::CheckCVar { name, using_xmm } => {
-                self.check_cvar(name, using_xmm);
-            }
-            AsmInst::StoreCVar {
-                name,
-                src,
-                using_xmm,
-            } => {
-                self.store_cvar(name, src, using_xmm);
-            }
-
             AsmInst::ClassDef {
                 base,
                 superclass,
@@ -458,22 +450,6 @@ impl Codegen {
                 using_xmm,
             } => {
                 self.concat_regexp(arg, len, using_xmm);
-            }
-            AsmInst::AliasMethod {
-                new,
-                old,
-                using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rdx, [r14 - (conv(old))];
-                    movq rcx, [r14 - (conv(new))];
-                    movq rax, (runtime::alias_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
             }
             AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
             AsmInst::DefinedConst {
@@ -1728,6 +1704,47 @@ impl Codegen {
             movl rsi, (new.get());  // new IdentId
             movl rdx, (old.get());  // old IdentId
             movq rax, (runtime::alias_global_var);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    /// Check class-variable existence via runtime::check_class_var.
+    pub(in crate::codegen::jitgen) fn emit_check_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.check_cvar(name, using_xmm);
+        true
+    }
+
+    /// @@cvar <- src via runtime::set_class_var.
+    pub(in crate::codegen::jitgen) fn emit_store_cvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.store_cvar(name, src, using_xmm);
+        true
+    }
+
+    /// Alias a method via runtime::alias_method (old/new read from frame slots).
+    pub(in crate::codegen::jitgen) fn emit_alias_method(
+        &mut self,
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (conv(old))];
+            movq rcx, [r14 - (conv(new))];
+            movq rax, (runtime::alias_method);
             call rax;
         );
         self.xmm_restore(using_xmm);

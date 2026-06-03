@@ -2012,6 +2012,99 @@ impl Codegen {
         true
     }
 
+    /// Check class variable existence via runtime::check_class_var(vm, globals,
+    /// name); the looked-up Value lands in x0. Bails when an xmm pool register
+    /// is live (no xmm save around the C call yet).
+    pub(in crate::codegen::jitgen) fn emit_check_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::check_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// @@cvar <- src via runtime::set_class_var(vm, globals, name, val). The
+    /// Option<Value> result (None == error) is checked by a following
+    /// HandleError. Bails when an xmm pool register is live or the slot offset
+    /// exceeds the 12-bit scaled load immediate.
+    pub(in crate::codegen::jitgen) fn emit_store_cvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::set_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            sub x10, x(lfp), #(off);
+            ldr x3, [x10];               // val (from slot)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Alias a method via runtime::alias_method(vm, globals, old, new) where
+    /// `old`/`new` are the symbol/string Values read from the `old`/`new`
+    /// frame slots. The Option<Value> result (None == error) is checked by a
+    /// following HandleError. Bails when an xmm pool register is live or a slot
+    /// offset exceeds the 12-bit scaled load immediate.
+    pub(in crate::codegen::jitgen) fn emit_alias_method(
+        &mut self,
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_old = old.0 as u32 * 8 + LFP_SELF as u32;
+        let off_new = new.0 as u32 * 8 + LFP_SELF as u32;
+        if off_old > 4095 || off_new > 4095 {
+            return false;
+        }
+        let f = runtime::alias_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm (Executor)
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_old);
+            ldr x2, [x10];              // old (slot value)
+            sub x10, x(lfp), #(off_new);
+            ldr x3, [x10];             // new (slot value)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

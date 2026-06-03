@@ -330,6 +330,17 @@ impl Codegen {
             AsmInst::AliasGvar { new, old, using_xmm } => {
                 return self.emit_alias_gvar(new, old, using_xmm);
             }
+            // Runtime-call class-variable / method-alias ops. aarch64 bails
+            // when an xmm pool register is live (no xmm save yet).
+            AsmInst::CheckCVar { name, using_xmm } => {
+                return self.emit_check_cvar(name, using_xmm);
+            }
+            AsmInst::StoreCVar { name, src, using_xmm } => {
+                return self.emit_store_cvar(name, src, using_xmm);
+            }
+            AsmInst::AliasMethod { new, old, using_xmm } => {
+                return self.emit_alias_method(new, old, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
