@@ -126,7 +126,9 @@ impl Codegen {
             | AsmInst::ConcatRegexp { .. }
             | AsmInst::CheckKwRest(..)
             | AsmInst::ExpandArray { .. }
-            | AsmInst::OptEqCmp { .. } => {
+            | AsmInst::OptEqCmp { .. }
+            | AsmInst::CFunc_F_F { .. }
+            | AsmInst::CFunc_FF_F { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -401,44 +403,6 @@ impl Codegen {
                 );
             }
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
-            AsmInst::CFunc_F_F {
-                f,
-                src,
-                dst,
-                using_xmm,
-            } => {
-                let base = frame.base_stack_offset;
-                self.xmm_save(using_xmm);
-                self.load_fpr_into_xmm0(src, base);
-                monoasm!( &mut self.jit,
-                    movq rax, (f);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                self.store_fpr_into_xmm(dst, base);
-            }
-            AsmInst::CFunc_FF_F {
-                f,
-                lhs,
-                rhs,
-                dst,
-                using_xmm,
-            } => {
-                let base = frame.base_stack_offset;
-                self.xmm_save(using_xmm);
-                // Load both args into xmm0/xmm1 (the SysV ABI passes
-                // f64 args in xmm0, xmm1, ...). Pool ids resolve to
-                // xmm2..xmm15, so a Phys source can never alias the
-                // scratch register we're writing into.
-                self.load_fpr_into_xmm0(lhs, base);
-                self.load_fpr_into_xmm1(rhs, base);
-                monoasm!( &mut self.jit,
-                    movq rax, (f);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                self.store_fpr_into_xmm(dst, base);
-            }
         }
         true
     }
@@ -1821,6 +1785,51 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+        true
+    }
+
+    // ---- float C-function calls (the former per-arch arms, verbatim) ----
+
+    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
+        &mut self,
+        f: unsafe extern "C" fn(f64) -> f64,
+        src: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        self.load_fpr_into_xmm0(src, base);
+        monoasm!( &mut self.jit,
+            movq rax, (f);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        self.store_fpr_into_xmm(dst, base);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
+        &mut self,
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        // Load both args into xmm0/xmm1 (the SysV ABI passes f64 args
+        // in xmm0, xmm1, ...). Pool ids resolve to xmm2..xmm15, so a
+        // Phys source can never alias the scratch register written into.
+        self.load_fpr_into_xmm0(lhs, base);
+        self.load_fpr_into_xmm1(rhs, base);
+        monoasm!( &mut self.jit,
+            movq rax, (f);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        self.store_fpr_into_xmm(dst, base);
         true
     }
 }

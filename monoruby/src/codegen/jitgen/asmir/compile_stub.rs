@@ -2563,6 +2563,81 @@ impl Codegen {
         true
     }
 
+    /// Unary float C helper `f(f64) -> f64` (sin, sqrt, …): load the operand
+    /// into d0 (the first/only AAPCS f64 arg = return reg), call, store d0 into
+    /// dst. The live FP pool (d2-d7, caller-saved = clobbered by the callee) is
+    /// saved/restored around the call exactly like the x86 twin. Bails if the
+    /// source or destination is a spill slot (a64_fpr only handles d2-d7).
+    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
+        &mut self,
+        f: unsafe extern "C" fn(f64) -> f64,
+        src: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        let Some(s) = self.a64_fpr(src, base) else {
+            return false;
+        };
+        let Some(d) = self.a64_fpr(dst, base) else {
+            return false;
+        };
+        let fp = f as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            fmov d0, d(s);
+            mov x9, (fp);
+            blr x9;            // result in d0
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            fmov d(d), d0;
+        );
+        true
+    }
+
+    /// Binary float C helper `f(f64, f64) -> f64` (atan2, hypot, …): load lhs
+    /// into d0 and rhs into d1 (the first two AAPCS f64 args), call, store the
+    /// d0 result into dst. Pool sources resolve to d2-d7 so they never alias the
+    /// d0/d1 scratch regs. Saves/restores the live FP pool like the x86 twin.
+    /// Bails if any operand or the destination is a spill slot.
+    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
+        &mut self,
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        let Some(l) = self.a64_fpr(lhs, base) else {
+            return false;
+        };
+        let Some(r) = self.a64_fpr(rhs, base) else {
+            return false;
+        };
+        let Some(d) = self.a64_fpr(dst, base) else {
+            return false;
+        };
+        let fp = f as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            fmov d0, d(l);
+            fmov d1, d(r);
+            mov x9, (fp);
+            blr x9;            // result in d0
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            fmov d(d), d0;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

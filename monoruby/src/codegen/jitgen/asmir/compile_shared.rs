@@ -385,6 +385,14 @@ impl Codegen {
             AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
                 return self.emit_expand_array(dst, len, rest_pos, using_xmm);
             }
+            // Float C-function calls (Math.sqrt/sin/…). aarch64 saves the live
+            // FP pool (d2-d7) around the call and bails on a spilled operand.
+            AsmInst::CFunc_F_F { f, src, dst, using_xmm } => {
+                return self.emit_cfunc_f_f(f, src, dst, using_xmm, frame.base_stack_offset);
+            }
+            AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm } => {
+                return self.emit_cfunc_ff_f(f, lhs, rhs, dst, using_xmm, frame.base_stack_offset);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
