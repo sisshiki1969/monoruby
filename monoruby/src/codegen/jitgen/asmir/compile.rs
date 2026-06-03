@@ -130,7 +130,11 @@ impl Codegen {
             | AsmInst::CFunc_F_F { .. }
             | AsmInst::CFunc_FF_F { .. }
             | AsmInst::MethodDef { .. }
-            | AsmInst::SingletonMethodDef { .. } => {
+            | AsmInst::SingletonMethodDef { .. }
+            | AsmInst::Raise
+            | AsmInst::Retry(..)
+            | AsmInst::Redo(..)
+            | AsmInst::EnsureEnd => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -213,46 +217,6 @@ impl Codegen {
             }
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset.unwrap_concrete());
-            }
-            AsmInst::Raise => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, rax;
-                    movq rax, (runtime::raise_err);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::Retry(pc) => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                    movq rdi, rbx;
-                    movq rax, (runtime::err_retry);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::Redo(pc) => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                    movq rdi, rbx;
-                    movq rax, (runtime::err_redo);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::EnsureEnd => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rax, (runtime::ensure_end);
-                    call rax;
-                    testq rax, rax;
-                    jne  raise;
-                };
             }
             AsmInst::OptCase {
                 max,
@@ -1839,6 +1803,56 @@ impl Codegen {
     ) -> bool {
         self.singleton_method_def(obj, name, func_id, using_xmm);
         self.handle_error(error);
+        true
+    }
+
+    // ---- exception / non-local control flow (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_raise(&mut self) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, rax;
+            movq rax, (runtime::raise_err);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_retry(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+            movq rdi, rbx;
+            movq rax, (runtime::err_retry);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_redo(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+            movq rdi, rbx;
+            movq rax, (runtime::err_redo);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rax, (runtime::ensure_end);
+            call rax;
+            testq rax, rax;
+            jne  raise;
+        };
         true
     }
 }

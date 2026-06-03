@@ -2704,6 +2704,84 @@ impl Codegen {
         true
     }
 
+    // ---- exception / non-local control flow -------------------------------
+    // All four branch into `entry_raise` (the shared unwind/dispatch entry,
+    // bound by a64_gen_entry_raise). None carry a `using_xmm` set — an
+    // in-flight exception abandons the FP pool. C-arg regs: x0=vm (x19).
+
+    /// `raise` — runtime::raise_err(vm, err_val) then unwind. The value to
+    /// raise is in the accumulator scratch (GP::Rax = x0), so it is moved into
+    /// x1 *before* x0 is overwritten with the executor.
+    pub(in crate::codegen::jitgen) fn emit_raise(&mut self) -> bool {
+        let raise = self.entry_raise();
+        let acc = GP::Rax.a64().0; // x0
+        let f = runtime::raise_err as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x1, x(acc);          // err_val (read before clobbering x0)
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// `retry` — set PC (x21) to `pc + 1`, call runtime::err_retry(vm), unwind.
+    pub(in crate::codegen::jitgen) fn emit_retry(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        let pcv = (pc + 1).as_ptr() as u64;
+        let f = runtime::err_retry as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pcv);          // PC <- pc + 1
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// `redo` — like `retry` but runtime::err_redo(vm).
+    pub(in crate::codegen::jitgen) fn emit_redo(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        let pcv = (pc + 1).as_ptr() as u64;
+        let f = runtime::err_redo as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pcv);          // PC <- pc + 1
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// End of an `ensure` clause — runtime::ensure_end(vm) returns a nonzero
+    /// value when a pending exception must keep propagating (→ entry_raise);
+    /// zero means fall through to the normal continuation.
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self) -> bool {
+        let raise = self.entry_raise();
+        let cont = self.jit.label();
+        let f = runtime::ensure_end as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                  // x0 = 0 (continue) / nonzero (re-raise)
+            ldr x30, [sp], #16;
+            cbz x0, cont;
+            b raise;
+            cont:
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

@@ -400,6 +400,12 @@ impl Codegen {
             AsmInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
                 return self.emit_singleton_method_def(obj, name, func_id, using_xmm, &labels[error]);
             }
+            // Exception / non-local control flow (raise / retry / redo / ensure).
+            // All branch into the shared entry_raise unwind path.
+            AsmInst::Raise => return self.emit_raise(),
+            AsmInst::Retry(pc) => return self.emit_retry(pc),
+            AsmInst::Redo(pc) => return self.emit_redo(pc),
+            AsmInst::EnsureEnd => return self.emit_ensure_end(),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
