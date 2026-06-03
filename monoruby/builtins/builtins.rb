@@ -652,3 +652,61 @@ module FileTest
     File.zero?(path)
   end
 end
+
+# True aliases required by ruby/spec's "Move <Class> to rely less on shared
+# examples" refactoring wave (2026-06; e.g. ruby/spec d714c5a84 for Integer and
+# its siblings for Float/Symbol/Set/...), which replaced behavioral shared
+# examples with strict `Klass.instance_method(:a) == Klass.instance_method(:b)`
+# identity checks. monoruby had registered several of these as separate builtins
+# sharing one Rust fn (distinct FuncId), so the identity checks failed. Redefine
+# them as real aliases, matching CRuby. (Integer's are handled in
+# `builtins/numeric/integer.rs`.) This file loads after every class .rb, so the
+# aliased originals are all defined by now.
+class Float
+  alias === ==
+  alias modulo %
+  alias quo fdiv
+end
+class Symbol
+  alias === ==
+  alias id2name to_s
+  alias intern to_sym
+  alias size length
+end
+class Rational
+  alias magnitude abs
+end
+class Hash
+  alias store []=
+end
+class Set
+  alias < proper_subset?
+  alias > proper_superset?
+  alias << add
+  alias eql? ==
+end
+class Thread
+  alias exit kill
+end
+class Time
+  alias asctime ctime
+end
+class Encoding
+  alias to_s name
+end
+class MatchData
+  alias deconstruct captures
+end
+class Struct
+  alias inspect to_s
+end
+# Deferred (not fixed here): Complex#quo, Enumerator#with_object, Proc#eql?,
+# Proc#inspect, Thread#inspect. CRuby defines the aliased *originals*
+# (Complex#/, Enumerable... -> Enumerator#each_with_object, Proc#==, Proc#to_s,
+# Thread#to_s) directly on the class, whereas monoruby inherits them (from
+# Numeric/Enumerable/BasicObject/Kernel). A Ruby `alias` here would only copy
+# the inherited entry under the new name, so the strict
+# `instance_method(:a) == instance_method(:b)` identity check would still fail
+# (different owner) AND it would shadow monoruby's own class-specific impls
+# (e.g. Proc#inspect). These need the originals defined on the class first;
+# they are not in `bin/test`'s ruby/spec category list, so they don't block CI.
