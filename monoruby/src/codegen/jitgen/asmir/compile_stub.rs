@@ -2638,6 +2638,72 @@ impl Codegen {
         true
     }
 
+    /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
+    /// The Option<Value> result (None == error) is checked by the trailing
+    /// HandleError. Bails when an xmm pool register is live (no save around the
+    /// C call).
+    pub(in crate::codegen::jitgen) fn emit_method_def(
+        &mut self,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::define_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                     // vm (Executor)
+            mov x1, x20;                     // globals
+            mov x2, (name.get() as u64);     // name (IdentId)
+            mov x3, (func_id.get() as u64);  // func_id (FuncId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                          // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        true
+    }
+
+    /// `def obj.name; … end` — runtime::singleton_define_method(vm, globals,
+    /// name, func_id, obj) where `obj` is the receiver Value read from its
+    /// frame slot (5th AAPCS arg = x4). Bails on a live xmm pool reg or an
+    /// out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_singleton_method_def(
+        &mut self,
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = obj.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::singleton_define_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                     // vm (Executor)
+            mov x1, x20;                     // globals
+            mov x2, (name.get() as u64);     // name (IdentId)
+            mov x3, (func_id.get() as u64);  // func_id (FuncId)
+            sub x10, x(lfp), #(off);
+            ldr x4, [x10];                   // obj (receiver Value)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                          // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

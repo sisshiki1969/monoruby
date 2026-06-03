@@ -128,7 +128,9 @@ impl Codegen {
             | AsmInst::ExpandArray { .. }
             | AsmInst::OptEqCmp { .. }
             | AsmInst::CFunc_F_F { .. }
-            | AsmInst::CFunc_FF_F { .. } => {
+            | AsmInst::CFunc_FF_F { .. }
+            | AsmInst::MethodDef { .. }
+            | AsmInst::SingletonMethodDef { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -366,26 +368,6 @@ impl Codegen {
             } => {
                 self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
             }
-            AsmInst::MethodDef {
-                name,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                self.method_def(name, func_id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-            AsmInst::SingletonMethodDef {
-                obj,
-                name,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                self.singleton_method_def(obj, name, func_id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-
             AsmInst::RestKw { rest_kw } => {
                 let data = self.jit.const_align8();
                 for (i, name) in rest_kw.into_iter() {
@@ -1830,6 +1812,33 @@ impl Codegen {
         );
         self.xmm_restore(using_xmm);
         self.store_fpr_into_xmm(dst, base);
+        true
+    }
+
+    // ---- method definition (the former per-arch arms, verbatim) ----
+
+    pub(in crate::codegen::jitgen) fn emit_method_def(
+        &mut self,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.method_def(name, func_id, using_xmm);
+        self.handle_error(error);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_singleton_method_def(
+        &mut self,
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.singleton_method_def(obj, name, func_id, using_xmm);
+        self.handle_error(error);
         true
     }
 }
