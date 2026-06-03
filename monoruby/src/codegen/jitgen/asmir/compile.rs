@@ -105,16 +105,10 @@ impl Codegen {
             | AsmInst::LoadStructSlotHeap { .. }
             | AsmInst::StoreStructSlotHeap { .. }
             | AsmInst::RegAdd(..)
-            | AsmInst::RegSub(..) => {
+            | AsmInst::RegSub(..)
+            | AsmInst::LoopJitRspBump { .. }
+            | AsmInst::StoreSelfIVarHeap { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
-            }
-            AsmInst::LoopJitRspBump { offset } => {
-                let bytes = offset.unwrap_concrete();
-                if bytes > 0 {
-                    monoasm! { &mut self.jit,
-                        subq rsp, (bytes as i32);
-                    }
-                }
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -362,11 +356,6 @@ impl Codegen {
                 is_object_ty,
                 using_xmm,
             } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
-            AsmInst::StoreSelfIVarHeap {
-                src,
-                ivarid,
-                is_object_ty,
-            } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -1710,5 +1699,26 @@ impl Codegen {
             let r = reg as u64;
             monoasm! { &mut self.jit, subq R(r), (i); }
         }
+    }
+
+    /// Loop-JIT entry: reserve the loop body's spill area on the native stack.
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+        let bytes = offset.unwrap_concrete();
+        if bytes > 0 {
+            monoasm! { &mut self.jit, subq rsp, (bytes as i32); }
+        }
+        true
+    }
+
+    /// Store the accumulator-side `src` into a heap-spilled instance variable of
+    /// self (no bounds check; the table is pre-sized).
+    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+    ) -> bool {
+        self.store_self_ivar_heap(src, ivarid, is_object_ty);
+        true
     }
 }

@@ -1879,6 +1879,49 @@ impl Codegen {
         }
     }
 
+    /// Loop-JIT entry stack bump. Bails if the byte count exceeds the 12-bit
+    /// `sub sp, sp, #imm` immediate.
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+        let bytes = offset.unwrap_concrete();
+        if bytes == 0 {
+            return true;
+        }
+        if bytes > 4095 {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit, sub sp, sp, #(bytes as u32););
+        true
+    }
+
+    /// Store `src` into a heap-spilled instance variable of self: deref the
+    /// var-table and its data pointer (via scratch x9), then store. No bounds
+    /// check (the table is pre-sized). Bails on an out-of-range field offset.
+    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+    ) -> bool {
+        let ivar = ivarid.get() as u32;
+        let idx = if is_object_ty {
+            ivar - OBJECT_INLINE_IVAR as u32
+        } else {
+            ivar
+        };
+        let off = idx * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let s = src.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];
+            ldr x9, [x9, #(MONOVEC_PTR as u32)];
+            str x(s), [x9, #(off)];
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
