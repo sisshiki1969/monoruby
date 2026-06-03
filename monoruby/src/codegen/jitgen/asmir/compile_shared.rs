@@ -406,6 +406,13 @@ impl Codegen {
             AsmInst::Retry(pc) => return self.emit_retry(pc),
             AsmInst::Redo(pc) => return self.emit_redo(pc),
             AsmInst::EnsureEnd => return self.emit_ensure_end(),
+            // Generic `yield` (block target resolved at runtime). aarch64 builds
+            // the block frame and calls the funcdata indirectly; the x86-only
+            // return-address eviction patch is applied by the x86 emit_yield.
+            AsmInst::Yield { callid, error, evict } => {
+                let evict_label = labels[evict].clone();
+                return self.emit_yield(callid, &labels[error], evict, &evict_label);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

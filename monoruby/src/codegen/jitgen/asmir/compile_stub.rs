@@ -2782,6 +2782,129 @@ impl Codegen {
         true
     }
 
+    /// If the outer LFP in `x(reg)` points at a stack frame already promoted to
+    /// the heap (its Meta `kind` byte at `[lfp - 1]` has the `invalidated` bit
+    /// 0b1000 set), forward the pointer to the live heap copy stored in the
+    /// owning CFP's LFP slot (`[lfp + 8]`). Null `reg` (default ProcData on a
+    /// no-block error) is left as-is. Mirrors x86 `resolve_invalidated_outer`.
+    fn a64_resolve_invalidated_outer(&mut self, reg: u32) {
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            cbz x(reg), skip;             // null outer -> leave (error checked later)
+            sub x10, x(reg), #(1u32);
+            ldrb w9, [x10];               // Meta.kind byte
+            mov x11, (0b1000u64);
+            tst x9, x11;                  // invalidated bit?
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &skip); // clear -> not promoted
+        monoasm_arm64!(&mut self.jit,
+            ldr x(reg), [x(reg), #(8u32)]; // forward to heap copy (cfp.lfp slot)
+            skip:
+        );
+    }
+
+    /// Lower the generic `Yield` (block call whose target is resolved at runtime
+    /// via `get_yield_data`). Mirrors x86 `gen_yield`: fetch the block's
+    /// ProcData, build the callee block frame, massage arguments, then call the
+    /// block's funcdata indirectly. The eviction-on-return patching is x86-only
+    /// (runtime branch patching), so it is skipped — class-version guards cover
+    /// it. `error` catches a missing block, an argument error, or a callee
+    /// raise. Bails on an out-of-range callee-frame offset.
+    pub(in crate::codegen::jitgen) fn emit_yield(
+        &mut self,
+        callid: CallSiteId,
+        error: &DestLabel,
+        _evict: AsmEvict,
+        _evict_label: &DestLabel,
+    ) -> bool {
+        // Closely mirrors the proven VM `a64_op_yield`. x25/x26 are callee-saved
+        // and used by neither the JIT global set (x19-x23) nor JIT'd code, so
+        // they survive the C calls and hold the outer LFP / funcdata. The
+        // continuation frame is already reserved by the surrounding
+        // xmm_save_cont, so no extra push here.
+        let f_yield = runtime::get_yield_data as *const () as u64;
+        let f_args = runtime::jit_handle_arguments_no_block as *const () as u64;
+        // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f_yield);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.a64_resolve_invalidated_outer(0);
+        self.emit_handle_error(error); // null outer (no block given) -> error
+        monoasm_arm64!(&mut self.jit, mov x25, x0;); // outer (callee-saved)
+        // get_func_data: FuncId (x1) -> &FuncData (x9 -> x26).
+        monoasm_arm64!(&mut self.jit, mov x2, x1;);
+        self.a64_get_func_data_x2(); // x9 = &FuncData (clobbers x10, x11)
+        monoasm_arm64!(&mut self.jit, mov x26, x9;);
+        // Build the callee block frame fields below sp (outer/svar/cme/block/
+        // self/meta). self is inherited from the outer frame.
+        monoasm_arm64!(&mut self.jit,
+            mov x12, (0u64);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x25, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];
+            sub x10, x25, #(LFP_SELF as u32);
+            ldr x10, [x10];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x10, [x11];
+            ldr x10, [x26, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x10, [x11];
+        );
+        // jit_handle_arguments_no_block(vm, globals, caller_lfp, callee_lfp,
+        // callid). callee_lfp is computed before the dynamic callee-scratch
+        // reservation; the pre-reservation sp is saved in x25 and restored
+        // afterwards (x26 survives as fdata).
+        monoasm_arm64!(&mut self.jit,
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32);   // callee_lfp
+            mov x25, sp;                             // save sp (outer no longer needed)
+            ldrh w10, [x26, #(FUNCDATA_OFS as u32)];
+            lsl x10, x10, #(4);
+            add x10, x10, #(16);                     // 16-aligned reservation
+            sub x11, x25, x10;
+            mov sp, x11;
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, x22;                             // caller LFP
+            mov x4, (callid.get() as u64);
+            mov x9, (f_args);
+            blr x9;                                  // x0 = Option<Value>
+            mov sp, x25;                             // restore sp
+        );
+        self.emit_handle_error(error); // argument error -> error
+        // call_funcdata (indirect, fdata in x26): push the control frame, set
+        // the callee LFP/PC, blr the codeptr, then restore the caller frame
+        // (cfp from the saved prev slot, lfp from x29 == the JIT frame pointer).
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            sub x1, x21, #(16u32);                       // rcx = call_site bc ptr (caller pc - 16)
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];        // PC <- callee pc
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                       // result in x0
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

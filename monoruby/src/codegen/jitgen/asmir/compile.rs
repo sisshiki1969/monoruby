@@ -134,7 +134,8 @@ impl Codegen {
             | AsmInst::Raise
             | AsmInst::Retry(..)
             | AsmInst::Redo(..)
-            | AsmInst::EnsureEnd => {
+            | AsmInst::EnsureEnd
+            | AsmInst::Yield { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -255,15 +256,6 @@ impl Codegen {
                     patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(entry_label, patch_point);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-            AsmInst::Yield {
-                callid,
-                error,
-                evict,
-            } => {
-                let error = &labels[error];
-                let return_addr = self.gen_yield(callid, error);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             AsmInst::SpecializedYield { entry, evict } => {
@@ -1853,6 +1845,20 @@ impl Codegen {
             testq rax, rax;
             jne  raise;
         };
+        true
+    }
+
+    // ---- generic yield (former per-arch arm) ----
+
+    pub(in crate::codegen::jitgen) fn emit_yield(
+        &mut self,
+        callid: CallSiteId,
+        error: &DestLabel,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+    ) -> bool {
+        let return_addr = self.gen_yield(callid, error);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }
 }
