@@ -47,9 +47,9 @@ pub struct LvarCollector {
     kwrest: Option<LvarId>,
     block: Option<LvarId>,
     pub forwarding_param: Option<LvarId>,
-    pub numbered_param: Option<crate::Loc>,
+    pub numbered_param: Option<super::Loc>,
     pub numbered_param_max: u8,
-    pub prohibit_numbered_param: Option<crate::Loc>,
+    pub prohibit_numbered_param: Option<super::Loc>,
 }
 
 impl LvarCollector {

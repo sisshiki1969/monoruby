@@ -7,16 +7,6 @@ pub struct ParseErr {
     pub source_info: SourceInfoRef,
 }
 
-impl ParseErr {
-    pub(crate) fn from_lexer_err(err: LexerErr, source_info: SourceInfoRef) -> Self {
-        Self {
-            kind: err.0,
-            loc: err.1,
-            source_info,
-        }
-    }
-}
-
 #[derive(Clone, PartialEq)]
 pub enum ParseErrKind {
     UnexpectedEOF,

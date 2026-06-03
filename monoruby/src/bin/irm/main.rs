@@ -38,9 +38,9 @@ fn main() {
     let mut executor = Executor::init(&mut globals, "irm").unwrap();
     executor.init_stack_limit(&globals);
 
-    let parse_result = ruruby_parse::Parser::parse_program(
+    let parse_result = monoruby::parser::parse_program(
         String::new(),
-        std::path::Path::new(&format!("(irm):{script_line}")),
+        std::path::PathBuf::from(format!("(irm):{script_line}")),
     )
     .unwrap();
     let dummy_fid = monoruby::bytecode_compile_script(&mut globals, parse_result).unwrap();

@@ -1,5 +1,4 @@
 use crate::*;
-use ruruby_parse::Parser;
 use std::{io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
@@ -12,14 +11,6 @@ static RUBY: LazyLock<String> = LazyLock::new(|| {
     // M3 Ultra takes about 16 million years in --release config
     find_ruby()
 });
-
-/// True when the suite is running under the legacy ruruby-parse
-/// backend (`MONORUBY_PARSER=ruruby`, used by `bin/test`'s second
-/// nextest pass). Tests that assert behaviour of constructs only the
-/// Prism backend lowers should early-return when this is true.
-pub fn parser_is_ruruby() -> bool {
-    std::env::var("MONORUBY_PARSER").ok().as_deref() == Some("ruruby")
-}
 
 pub fn run_test(code: &str) {
     let wrapped = format!(
@@ -258,7 +249,7 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     };
 
     let res = res.trim_end().split('\n').last().unwrap();
-    let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
+    let nodes = crate::parser::parse_program(res.to_string(), PathBuf::new())
         .unwrap()
         .node;
 

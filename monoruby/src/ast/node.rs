@@ -492,14 +492,6 @@ impl Node {
         Node::new(NodeKind::RImaginary(num, den), loc)
     }
 
-    pub(crate) fn new_string(s: RubyString, loc: Loc) -> Self {
-        let kind = match s {
-            RubyString::Bytes(bytes) => NodeKind::Bytes(bytes),
-            RubyString::Utf8(s) => NodeKind::String(s),
-        };
-        Node::new(kind, loc)
-    }
-
     pub(crate) fn new_array(nodes: Vec<Node>, loc: Loc) -> Self {
         let loc = match nodes.last() {
             Some(node) => loc.merge(node.loc()),

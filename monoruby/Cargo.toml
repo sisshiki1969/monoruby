@@ -47,12 +47,12 @@ paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
-ruruby-parse = { path = "../ruruby-parse" }
 ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", branch = "monoruby-vendored" }
 monoruby-attr = { path = "../monoruby_attr" }
 rubymap = { path = "../rubymap" }
 indexmap = "2.14.0"
 num = "0.4.3"
+console = "0.15.11"
 fxhash = "0.2.1"
 tempfile = "3.27.0"
 dtoa = "1.0.11"

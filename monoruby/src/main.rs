@@ -19,7 +19,6 @@ fn handle_error(err: MonorubyErr, globals: &Globals) -> ! {
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum ParserKind {
-    Ruruby,
     Prism,
 }
 
@@ -41,9 +40,8 @@ struct CommandLineArgs {
     /// switch for garbage collection.
     #[arg(long)]
     no_gc: bool,
-    /// dump parsed AST and exit. Defaults to `ruruby`; pass `prism`
-    /// to dump the equivalent ruby-prism AST.
-    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "ruruby", value_name = "PARSER")]
+    /// dump the parsed ruby-prism AST and exit.
+    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "prism", value_name = "PARSER")]
     ast: Option<ParserKind>,
     /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
@@ -56,12 +54,8 @@ struct CommandLineArgs {
     file: Vec<String>,
 }
 
-fn dump_ast(code: &str, path: &std::path::Path, kind: ParserKind, globals: &Globals) {
+fn dump_ast(code: &str, _path: &std::path::Path, kind: ParserKind, _globals: &Globals) {
     match kind {
-        ParserKind::Ruruby => match ruruby_parse::Parser::parse_program(code.to_string(), path) {
-            Ok(res) => eprintln!("{:#?}", res.node),
-            Err(err) => handle_error(MonorubyErr::parse(err), globals),
-        },
         ParserKind::Prism => {
             let result = ruby_prism::parse(code.as_bytes());
             for diag in result.errors() {
