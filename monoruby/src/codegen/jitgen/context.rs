@@ -1098,11 +1098,8 @@ impl<'a> JitContext<'a> {
     /// [`Self::method_caller_specialized_ids`].
     ///
     pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
-        // aarch64: no specialized frames (see `method_caller_specialized_ids`),
-        // so emit the plain `BlockBreak` instead of `BlockBreakSpecialized`.
-        if !cfg!(jit_x86) {
-            return None;
-        }
+        // Block inlining is lowered on aarch64 now, so `break` out of an inlined
+        // block can encode its caller chain for `BlockBreakSpecialized` too.
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
