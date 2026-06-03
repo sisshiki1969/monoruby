@@ -122,7 +122,9 @@ impl Codegen {
             | AsmInst::DefinedIvar { .. }
             | AsmInst::DefinedCvar { .. }
             | AsmInst::GenericBinOp { .. }
-            | AsmInst::ArrayTEq { .. } => {
+            | AsmInst::ArrayTEq { .. }
+            | AsmInst::ConcatRegexp { .. }
+            | AsmInst::CheckKwRest(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -244,17 +246,6 @@ impl Codegen {
                     call rax;
                     testq rax, rax;
                     jne  raise;
-                };
-            }
-            AsmInst::CheckKwRest(slot) => {
-                let exit = self.jit.label();
-                monoasm! { &mut self.jit,
-                    cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
-                    jne  exit;
-                    movq rax, (runtime::empty_hash);
-                    call rax;
-                    movq [rbp - (rbp_local(slot))], rax;
-                exit:
                 };
             }
             AsmInst::OptCase {
@@ -436,13 +427,6 @@ impl Codegen {
                     movq rax, (runtime::correct_rest_kw);
                     call rax;
                 );
-            }
-            AsmInst::ConcatRegexp {
-                arg,
-                len,
-                using_xmm,
-            } => {
-                self.concat_regexp(arg, len, using_xmm);
             }
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
             AsmInst::CFunc_F_F {
@@ -1804,6 +1788,31 @@ impl Codegen {
         using_xmm: UsingXmm,
     ) -> bool {
         self.array_teq(lhs, rhs, using_xmm);
+        true
+    }
+
+    // ---- regexp build / kw-rest fixup runtime calls ----
+
+    pub(in crate::codegen::jitgen) fn emit_concat_regexp(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.concat_regexp(arg, len, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
+            jne  exit;
+            movq rax, (runtime::empty_hash);
+            call rax;
+            movq [rbp - (rbp_local(slot))], rax;
+        exit:
+        };
         true
     }
 }

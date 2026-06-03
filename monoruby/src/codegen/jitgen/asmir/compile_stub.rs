@@ -2389,6 +2389,69 @@ impl Codegen {
         true
     }
 
+    /// Build a Regexp from the `len` interpolated parts based at slot `arg` via
+    /// runtime::concatenate_regexp (x0=vm, x1=globals, x2=&arg, x3=len);
+    /// Option<Value> result in x0. The runtime reads `arg, arg-1, …` (descending
+    /// addresses), matching the x86 `lea rdx,[rbp-rbp_local(arg)]`. Bails on a
+    /// live xmm pool reg or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_concat_regexp(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = arg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::concatenate_regexp as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x2, x(lfp), #(off);      // &arg (slot address)
+            mov x3, (len as u64);        // len
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Keyword-rest fixup: if the `slot` is nil, replace it with a fresh empty
+    /// Hash (runtime::empty_hash, no args, result in x0). Mirrors the x86 inline
+    /// path (no xmm save — no xmm is live at kw-rest setup). Bails on an
+    /// out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let exit = self.jit.label();
+        let f = runtime::empty_hash as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x11, [x10];
+            cmp x11, #(NIL_VALUE);       // slot == nil ?
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &exit); // not nil -> keep
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                      // x0 = {}
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);     // x10 clobbered by the call; recompute
+            str x0, [x10];               // slot = {}
+        exit:
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

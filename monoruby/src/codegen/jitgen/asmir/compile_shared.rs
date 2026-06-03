@@ -372,6 +372,11 @@ impl Codegen {
             AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
                 return self.emit_array_teq(lhs, rhs, using_xmm);
             }
+            // Regexp interpolation / keyword-rest fixup runtime calls.
+            AsmInst::ConcatRegexp { arg, len, using_xmm } => {
+                return self.emit_concat_regexp(arg, len, using_xmm);
+            }
+            AsmInst::CheckKwRest(slot) => return self.emit_check_kw_rest(slot),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
