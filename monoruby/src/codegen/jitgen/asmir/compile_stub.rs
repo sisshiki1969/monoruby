@@ -701,6 +701,89 @@ impl Codegen {
         }
     }
 
+    // ---- specialized (inlined) frame lowering (aarch64) -------------------
+
+    /// `MethodRetSpecialized` / `BlockBreakSpecialized`: a clean return that
+    /// unwinds `rbp_offset` bytes of inlined frames at once. Mirrors x86
+    /// `method_return_specialized` (`lea rbp,[rbp+off]; leave; ret`): adjust the
+    /// native frame base (x29), then run the standard epilogue. No error path —
+    /// the value is already in the accumulator and the caller frame is JIT'd.
+    fn a64_method_ret_specialized(&mut self, rbp_offset: usize) {
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (rbp_offset as u64);
+            add x29, x29, x10;          // rbp += off (skip inlined frames)
+            mov sp, x29;                // leave
+            ldp x29, x30, [sp], #(16);  // restore caller fp/lr
+            ret;
+        );
+    }
+
+    /// `LoadDynVarSpecialized`: rax <- outer-scope local at a pre-resolved
+    /// frame-base offset. Mirrors x86
+    /// `movq rax, [rbp + (offset - (BP_CFP+CFP_LFP) - 8 - conv(reg))]`. The
+    /// effective displacement can be negative, so it is materialized in a
+    /// scratch and added to x29 (x9..x15 are reserved lowering temps, never a
+    /// GP-mapped register).
+    fn a64_load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
+        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(reg) as i64;
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (e as u64);
+            add x10, x29, x10;
+            ldr x(rax), [x10];
+        );
+    }
+
+    /// `StoreDynVarSpecialized`: outer-scope local <- src, symmetric to
+    /// `a64_load_dyn_var_specialized`. `src` maps to x0..x8 / x20..x23, never
+    /// the x10 scratch, so there is no clobber.
+    fn a64_store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64;
+        let s = src.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (e as u64);
+            add x10, x29, x10;
+            str x(s), [x10];
+        );
+    }
+
+    /// `SpecializedCall` / `SpecializedYield`: a direct branch-with-link into
+    /// an inlined method/block entry already emitted in this code buffer.
+    /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, optionally bind
+    /// the deopt re-entry `patch_point`, `bl entry`, then pop_frame. Returns the
+    /// post-`bl` address (the return continuation); the caller records it via
+    /// `set_deopt_with_return_addr` so `immediate_eviction` can later overwrite
+    /// the continuation with a `B deopt` on BOP redefinition.
+    fn a64_do_specialized_call(
+        &mut self,
+        entry: DestLabel,
+        patch_point: Option<DestLabel>,
+    ) -> CodePtr {
+        // set_lfp + push_frame (mirror a64_do_call).
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)]; // prev cfp
+            sub x11, sp, #(RSP_CFP as u32);          // new cfp addr
+            str x10, [x11];                          // new_cfp.prev = prev
+            str x11, [x19, #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];                          // new_cfp.lfp = LFP
+        );
+        if let Some(patch) = patch_point {
+            self.jit.bind_label(patch);
+        }
+        monoasm_arm64!(&mut self.jit, bl entry;);
+        let return_addr = self.jit.get_current_address();
+        // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x29, #(BP_CFP as u32);
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        return_addr
+    }
+
     // ---- emission primitives (aarch64) ------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
@@ -1667,10 +1750,37 @@ impl Codegen {
         );
     }
 
-    /// Immediate eviction patches a live frame's return address on x86; aarch64
-    /// cannot patch return addresses, so this is a no-op (class-version guards
-    /// cover the staleness it would otherwise catch).
-    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, _evict: AsmEvict) {}
+    /// Record this position (the return continuation of a specialized call) as
+    /// the return-address patch point for `evict`. On BOP redefinition,
+    /// `Codegen::immediate_eviction` overwrites the instruction here with a
+    /// `B deopt` so the stale specialized frame deopts on return. Mirrors x86.
+    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
+        // Only specialized calls register a return address on aarch64; normal
+        // calls (`emit_call`) ignore `evict` and rely on the callee's own entry
+        // guard rather than return-address patching. So an unregistered evict
+        // here is a normal call with nothing to patch — skip it. (On x86 every
+        // call registers, so the lookup always succeeds there.)
+        if let Some(&return_addr) = self.asm_return_addr_table.get(&evict) {
+            let patch_point = self.jit.get_current_address();
+            self.return_addr_table
+                .entry(return_addr)
+                .and_modify(|e| e.0 = Some(patch_point));
+        }
+    }
+
+    /// Register a specialized call's return address so `immediate_eviction` can
+    /// find and patch it. Identical to the x86 helper (the tables are arch-
+    /// neutral `#[cfg(jit)]` fields on `Codegen`).
+    fn set_deopt_with_return_addr(
+        &mut self,
+        return_addr: CodePtr,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+    ) {
+        self.asm_return_addr_table.insert(evict, return_addr);
+        self.return_addr_table
+            .insert(return_addr, (None, evict_label.clone()));
+    }
 
     /// Inline-cache class-version guard: deopt if the global class version moved
     /// since compilation. aarch64 has no recompiler, so the x86 recompile params
@@ -3248,16 +3358,59 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         _store: &Store,
-        _frame: &mut AsmInfo,
-        _labels: &SideExitLabels,
-        _inst: AsmInst,
+        frame: &mut AsmInfo,
+        labels: &SideExitLabels,
+        inst: AsmInst,
         _class_version: DestLabel,
     ) -> bool {
-        // Every AsmInst the aarch64 backend supports is now handled by the
-        // shared `compile_asmir` dispatcher (via the per-arch `emit_*`
-        // primitives). Anything reaching here is not yet ported, so bail and
+        // The specialized (inlined-frame) AsmInst family is lowered here; every
+        // other variant is handled by the shared `compile_asmir` dispatcher.
+        // Anything still reaching the wildcard is not yet ported, so bail and
         // keep the method VM-interpreted.
-        false
+        match inst {
+            // Clean return / block-break out of an inlined frame.
+            AsmInst::MethodRetSpecialized { rbp_offset }
+            | AsmInst::BlockBreakSpecialized { rbp_offset } => {
+                self.a64_method_ret_specialized(rbp_offset.unwrap_concrete());
+            }
+            // Outer-scope local access at a pre-resolved frame offset.
+            AsmInst::LoadDynVarSpecialized { offset, reg } => {
+                self.a64_load_dyn_var_specialized(offset.unwrap_concrete(), reg);
+            }
+            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
+                self.a64_store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
+            }
+            // Inline-cache class-version guard. aarch64 has no recompiler, so
+            // both the specialized guard and the recompile-or-deopt point
+            // degrade to a plain deopt (sound — the global class-version
+            // compare conservatively deopts on any class change since compile).
+            AsmInst::GuardClassVersionSpecialized { idx: _, deopt } => {
+                self.a64_guard_class_version(&labels[deopt]);
+            }
+            AsmInst::RecompileDeoptSpecialized {
+                idx: _,
+                deopt,
+                reason: _,
+            } => {
+                self.emit_deopt(&labels[deopt]);
+            }
+            // Direct call into an inlined method entry, with the return-address
+            // patch point recorded for BOP-redefinition eviction.
+            AsmInst::SpecializedCall {
+                entry,
+                patch_point,
+                evict,
+            } => {
+                let patch_point = patch_point.map(|l| frame.resolve_label(&mut self.jit, l));
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
+                let return_addr = self.a64_do_specialized_call(entry_label, patch_point);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+            }
+            // SpecializedYield + SetupYieldFrame (block/yield inlining) are not
+            // ported yet: bail so the method stays VM-interpreted (sound).
+            _ => return false,
+        }
+        true
     }
 }
 

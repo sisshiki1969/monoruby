@@ -820,9 +820,9 @@ impl Codegen {
             if codegen.bop_redefine_flags() != 0 {
                 // Eviction only applies to JIT-compiled code; the VM-only
                 // build has none, so `cfp` goes unused there.
-                #[cfg(jit_x86)]
+                #[cfg(jit)]
                 codegen.immediate_eviction(cfp);
-                #[cfg(not(jit_x86))]
+                #[cfg(not(jit))]
                 let _ = cfp;
             }
         });
@@ -836,7 +836,7 @@ impl Codegen {
         unsafe { *addr }
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(jit)]
     fn immediate_eviction(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
@@ -844,13 +844,41 @@ impl Codegen {
             if !self.check_vm_address(ret) {
                 if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
                     let patch_point = patch_point.unwrap();
-                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
-                    unsafe { patch_point.as_ptr().write(0xe9) };
+                    self.patch_return_to_deopt(patch_point, &deopt);
                 }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
+    }
+
+    /// Overwrite the instruction(s) at a specialized call's return continuation
+    /// (`patch_point`) so the now-stale frame deopts when control returns to it.
+    /// x86 has a coherent I-cache and RWX pages, so it just writes the
+    /// `jmp deopt` in place.
+    #[cfg(jit_x86)]
+    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
+        self.jit.apply_jmp_patch_address(patch_point, deopt);
+        unsafe { patch_point.as_ptr().write(0xe9) };
+    }
+
+    /// aarch64 twin: overwrite the single 4-byte instruction at `patch_point`
+    /// with an unconditional `B deopt` (`0x14000000 | imm26`). Unlike x86 this
+    /// must (a) make the page writable and (b) synchronize the I-cache, since
+    /// AArch64 does not keep I/D caches coherent across self-modifying code —
+    /// `set_writable`/`set_executable` handle both (the latter invalidates the
+    /// I-cache; both are no-ops on Linux's RWX pages except that invalidation).
+    #[cfg(all(jit, not(jit_x86)))]
+    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
+        self.jit.set_writable();
+        let dest = self.jit.get_label_address(deopt);
+        // Byte displacement from the patch point to the deopt handler; both are
+        // 4-byte aligned, so imm26 = disp / 4 (B's range is ±128 MiB).
+        let disp = dest - patch_point;
+        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
+        let word = 0x1400_0000u32 | imm26;
+        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
+        self.jit.set_executable();
     }
 
     #[cfg(jit)]
