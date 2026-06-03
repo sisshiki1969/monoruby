@@ -341,6 +341,29 @@ impl Codegen {
             AsmInst::AliasMethod { new, old, using_xmm } => {
                 return self.emit_alias_method(new, old, using_xmm);
             }
+            // defined? runtime-call family (aarch64 bails on a live xmm pool reg
+            // or an out-of-range frame offset).
+            AsmInst::DefinedYield { dst, using_xmm } => {
+                return self.emit_defined_yield(dst, using_xmm);
+            }
+            AsmInst::DefinedSuper { dst, using_xmm } => {
+                return self.emit_defined_super(dst, using_xmm);
+            }
+            AsmInst::DefinedGvar { dst, name, using_xmm } => {
+                return self.emit_defined_gvar(dst, name, using_xmm);
+            }
+            AsmInst::DefinedCvar { dst, name, using_xmm } => {
+                return self.emit_defined_cvar(dst, name, using_xmm);
+            }
+            AsmInst::DefinedConst { dst, siteid, using_xmm } => {
+                return self.emit_defined_const(dst, siteid, using_xmm);
+            }
+            AsmInst::DefinedMethod { dst, recv, name, using_xmm } => {
+                return self.emit_defined_method(dst, recv, name, using_xmm);
+            }
+            AsmInst::DefinedIvar { dst, name, using_xmm } => {
+                return self.emit_defined_ivar(dst, name, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

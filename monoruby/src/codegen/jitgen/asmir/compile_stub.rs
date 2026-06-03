@@ -2105,6 +2105,222 @@ impl Codegen {
         true
     }
 
+    // ---- defined? runtime-call family --------------------------------------
+    //
+    // Two ABI shapes (mirroring the x86 helpers):
+    //  * result-in-x0 then stored to `dst` (yield/super/gvar/cvar)
+    //  * `dst` passed as an out-pointer the runtime writes through
+    //    (const/method/ivar)
+    // All bail when an xmm pool reg is live or a slot offset exceeds the 12-bit
+    // `sub`/`ldr`/`str` immediate.
+
+    /// "yield" if a block is callable, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_yield(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_yield as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                      // result in x0
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];               // -> dst
+        );
+        true
+    }
+
+    /// "super" if super is callable, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_super(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_super as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// "global-variable" if $name exists, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_gvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_gvar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (name.get() as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// "class variable" if @@name exists, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_cvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_cvar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (name.get() as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// defined?(Const): runtime writes the result through the `dst` out-pointer.
+    pub(in crate::codegen::jitgen) fn emit_defined_const(
+        &mut self,
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_const as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+            mov x3, (siteid.0 as u64);   // ConstSiteId
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// defined?(recv.name): runtime writes the result through `dst`.
+    pub(in crate::codegen::jitgen) fn emit_defined_method(
+        &mut self,
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off_dst = dst.0 as u32 * 8 + LFP_SELF as u32;
+        let off_recv = recv.0 as u32 * 8 + LFP_SELF as u32;
+        if off_dst > 4095 || off_recv > 4095 {
+            return false;
+        }
+        let f = runtime::defined_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off_dst);  // &dst (out-pointer)
+            sub x10, x(lfp), #(off_recv);
+            ldr x3, [x10];               // recv (slot value)
+            mov x4, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// defined?(@name): runtime writes the result through `dst`.
+    pub(in crate::codegen::jitgen) fn emit_defined_ivar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_ivar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+            mov x3, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

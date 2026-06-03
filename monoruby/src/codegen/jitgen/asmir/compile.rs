@@ -113,7 +113,14 @@ impl Codegen {
             | AsmInst::AliasGvar { .. }
             | AsmInst::CheckCVar { .. }
             | AsmInst::StoreCVar { .. }
-            | AsmInst::AliasMethod { .. } => {
+            | AsmInst::AliasMethod { .. }
+            | AsmInst::DefinedYield { .. }
+            | AsmInst::DefinedConst { .. }
+            | AsmInst::DefinedMethod { .. }
+            | AsmInst::DefinedSuper { .. }
+            | AsmInst::DefinedGvar { .. }
+            | AsmInst::DefinedIvar { .. }
+            | AsmInst::DefinedCvar { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -451,37 +458,6 @@ impl Codegen {
             } => {
                 self.concat_regexp(arg, len, using_xmm);
             }
-            AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
-            AsmInst::DefinedConst {
-                dst,
-                siteid,
-                using_xmm,
-            } => self.defined_const(dst, siteid, using_xmm),
-            AsmInst::DefinedMethod {
-                dst,
-                recv,
-                name,
-                using_xmm,
-            } => self.defined_method(dst, recv, name, using_xmm),
-            AsmInst::DefinedSuper { dst, using_xmm } => self.defined_super(dst, using_xmm),
-            AsmInst::DefinedGvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_gvar(dst, name, using_xmm),
-
-            AsmInst::DefinedIvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_ivar(dst, name, using_xmm),
-
-            AsmInst::DefinedCvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_cvar(dst, name, using_xmm),
-
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
             AsmInst::CFunc_F_F {
                 f,
@@ -1748,6 +1724,77 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+        true
+    }
+
+    // ---- defined? runtime-call family (delegate to the existing helpers) ----
+
+    pub(in crate::codegen::jitgen) fn emit_defined_yield(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_yield(dst, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_super(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_super(dst, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_gvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_gvar(dst, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_cvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_cvar(dst, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_const(
+        &mut self,
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_const(dst, siteid, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_method(
+        &mut self,
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_method(dst, recv, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_ivar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_ivar(dst, name, using_xmm);
         true
     }
 }
