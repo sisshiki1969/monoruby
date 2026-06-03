@@ -784,6 +784,55 @@ impl Codegen {
         return_addr
     }
 
+    /// `SetupYieldFrame`: build the callee **block** frame for a specialized
+    /// `yield` before `SpecializedYield` branches into it. Walks `outer - 1`
+    /// outer-LFP links to the block's defining frame, then writes the callee
+    /// frame's outer/meta/svar/cme/block/self slots. A literal translation of
+    /// x86 `setup_yield_frame` (x29-free; uses x9 = outer LFP, x10 = address
+    /// scratch, x11 = value scratch — none of which are GP-mapped). The cfp
+    /// prev/lfp it also writes are immediately overwritten by the following
+    /// `SpecializedYield`'s push_frame, exactly as on x86.
+    fn a64_setup_yield_frame(&mut self, meta: Meta, outer: usize) {
+        let outer = outer - 1;
+        monoasm_arm64!(&mut self.jit, ldr x9, [x19, #(EXECUTOR_CFP as u32)];);
+        for _ in 0..outer {
+            monoasm_arm64!(&mut self.jit, ldr x9, [x9];);
+        }
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x9, #(CFP_LFP as u32);
+            ldr x9, [x10];                                    // x9 <- outer LFP
+            // new_cfp.prev = exec.cfp
+            ldr x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, sp, #(RSP_CFP as u32);
+            str x11, [x10];
+            // new_cfp.lfp = rsp + (24 - RSP_LOCAL_FRAME) = sp - 16
+            sub x11, sp, #(16u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x11, [x10];
+            // frame.outer = outer LFP
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x9, [x10];
+            // frame.meta
+            mov x11, (meta.get());
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x11, [x10];
+            // svar / cme / block = 0 (block callee resolves via outer chain;
+            // zeroed so the GC mark walker stays sound)
+            mov x11, (0u64);
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x11, [x10];
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x11, [x10];
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x11, [x10];
+            // frame.self = [outer LFP - LFP_SELF]
+            sub x10, x9, #(LFP_SELF as u32);
+            ldr x11, [x10];
+            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x11, [x10];
+        );
+    }
+
     // ---- emission primitives (aarch64) ------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
@@ -3406,8 +3455,17 @@ impl Codegen {
                 let return_addr = self.a64_do_specialized_call(entry_label, patch_point);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            // SpecializedYield + SetupYieldFrame (block/yield inlining) are not
-            // ported yet: bail so the method stays VM-interpreted (sound).
+            // Specialized `yield`: build the block frame, then branch into the
+            // inlined block entry (no patch_point — the eviction continuation is
+            // recorded the same way as SpecializedCall).
+            AsmInst::SetupYieldFrame { meta, outer } => {
+                self.a64_setup_yield_frame(meta, outer);
+            }
+            AsmInst::SpecializedYield { entry, evict } => {
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
+                let return_addr = self.a64_do_specialized_call(entry_label, None);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+            }
             _ => return false,
         }
         true
