@@ -1922,6 +1922,54 @@ impl Codegen {
         true
     }
 
+    /// Load a heap-spilled instance variable into the accumulator (x23). Unless
+    /// loading from self, bounds-check the var-table (None / capa 0 / len <= idx
+    /// -> nil); an unset (zero) slot also reads nil. Bails on an out-of-range
+    /// field offset. `x9` is the scratch for the table/data pointer chain.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+    ) -> bool {
+        let ivar = ivarid.get() as u32;
+        let idx = if is_object_ty {
+            ivar - OBJECT_INLINE_IVAR as u32
+        } else {
+            ivar
+        };
+        let off = idx * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let r15 = GP::R15.a64().0;
+        let nil = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];   // var_table
+        );
+        if !self_ {
+            monoasm_arm64!(&mut self.jit,
+                cbz x9, nil;                                 // None -> nil
+                ldr x10, [x9, #(MONOVEC_CAPA as u32)];
+                cbz x10, nil;                                // capa 0 -> nil
+                ldr x10, [x9, #(MONOVEC_LEN as u32)];
+                cmp x10, #(idx);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &nil);   // len <= idx -> nil
+        }
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x9, #(MONOVEC_PTR as u32)];             // data ptr
+            ldr x(r15), [x9, #(off)];                        // value
+            cbnz x(r15), exit;                               // set -> exit
+        nil:
+            mov x(r15), (NIL_VALUE);
+        exit:
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

@@ -107,7 +107,8 @@ impl Codegen {
             | AsmInst::RegAdd(..)
             | AsmInst::RegSub(..)
             | AsmInst::LoopJitRspBump { .. }
-            | AsmInst::StoreSelfIVarHeap { .. } => {
+            | AsmInst::StoreSelfIVarHeap { .. }
+            | AsmInst::LoadIVarHeap { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -345,11 +346,6 @@ impl Codegen {
                 self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
 
-            AsmInst::LoadIVarHeap {
-                ivarid,
-                is_object_ty,
-                self_,
-            } => self.load_ivar_heap(ivarid, is_object_ty, self_),
             AsmInst::StoreIVarHeap {
                 src,
                 ivarid,
@@ -1719,6 +1715,18 @@ impl Codegen {
         is_object_ty: bool,
     ) -> bool {
         self.store_self_ivar_heap(src, ivarid, is_object_ty);
+        true
+    }
+
+    /// Load a heap-spilled instance variable into the accumulator, substituting
+    /// nil for an out-of-range (non-self) or unset slot.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+    ) -> bool {
+        self.load_ivar_heap(ivarid, is_object_ty, self_);
         true
     }
 }

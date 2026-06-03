@@ -315,6 +315,13 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
             } => return self.emit_store_self_ivar_heap(src, ivarid, is_object_ty),
+            // Load a heap-spilled instance variable (bounds-checked unless self),
+            // substituting nil for an out-of-range / unset slot.
+            AsmInst::LoadIVarHeap {
+                ivarid,
+                is_object_ty,
+                self_,
+            } => return self.emit_load_ivar_heap(ivarid, is_object_ty, self_),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
