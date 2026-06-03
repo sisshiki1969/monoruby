@@ -1879,6 +1879,136 @@ impl Codegen {
         }
     }
 
+    /// Loop-JIT entry stack bump. Bails if the byte count exceeds the 12-bit
+    /// `sub sp, sp, #imm` immediate.
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+        let bytes = offset.unwrap_concrete();
+        if bytes == 0 {
+            return true;
+        }
+        if bytes > 4095 {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit, sub sp, sp, #(bytes as u32););
+        true
+    }
+
+    /// Store `src` into a heap-spilled instance variable of self: deref the
+    /// var-table and its data pointer (via scratch x9), then store. No bounds
+    /// check (the table is pre-sized). Bails on an out-of-range field offset.
+    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+    ) -> bool {
+        let ivar = ivarid.get() as u32;
+        let idx = if is_object_ty {
+            ivar - OBJECT_INLINE_IVAR as u32
+        } else {
+            ivar
+        };
+        let off = idx * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let s = src.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];
+            ldr x9, [x9, #(MONOVEC_PTR as u32)];
+            str x(s), [x9, #(off)];
+        );
+        true
+    }
+
+    /// Load a heap-spilled instance variable into the accumulator (x23). Unless
+    /// loading from self, bounds-check the var-table (None / capa 0 / len <= idx
+    /// -> nil); an unset (zero) slot also reads nil. Bails on an out-of-range
+    /// field offset. `x9` is the scratch for the table/data pointer chain.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+    ) -> bool {
+        let ivar = ivarid.get() as u32;
+        let idx = if is_object_ty {
+            ivar - OBJECT_INLINE_IVAR as u32
+        } else {
+            ivar
+        };
+        let off = idx * 8;
+        if !Self::a64_field_off_ok(off) {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0;
+        let r15 = GP::R15.a64().0;
+        let nil = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];   // var_table
+        );
+        if !self_ {
+            monoasm_arm64!(&mut self.jit,
+                cbz x9, nil;                                 // None -> nil
+                ldr x10, [x9, #(MONOVEC_CAPA as u32)];
+                cbz x10, nil;                                // capa 0 -> nil
+                ldr x10, [x9, #(MONOVEC_LEN as u32)];
+                cmp x10, #(idx);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &nil);   // len <= idx -> nil
+        }
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x9, #(MONOVEC_PTR as u32)];             // data ptr
+            ldr x(r15), [x9, #(off)];                        // value
+            cbnz x(r15), exit;                               // set -> exit
+        nil:
+            mov x(r15), (NIL_VALUE);
+        exit:
+        );
+        true
+    }
+
+    /// `undef`-method via runtime::undef_method(vm=x19, globals=x20, id). Bails
+    /// when an xmm pool register is live (no aarch64 xmm save around C calls
+    /// yet); lr is preserved across the `blr`.
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::undef_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                   // vm (Executor)
+            mov x1, x20;                   // globals
+            mov x2, (undef.get() as u64);  // undef (IdentId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Alias a global var via runtime::alias_global_var(globals=x20, new, old).
+    /// Bails when an xmm pool register is live.
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::alias_global_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x20;                 // globals
+            mov x1, (new.get() as u64);  // new IdentId
+            mov x2, (old.get() as u64);  // old IdentId
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

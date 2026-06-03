@@ -305,6 +305,31 @@ impl Codegen {
             // reg += i / reg -= i (no-op when i == 0).
             AsmInst::RegAdd(reg, i) => self.emit_reg_add(reg, i),
             AsmInst::RegSub(reg, i) => self.emit_reg_sub(reg, i),
+            // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
+            // the 12-bit sub-sp immediate).
+            AsmInst::LoopJitRspBump { offset } => return self.emit_loop_jit_rsp_bump(offset),
+            // Store into a heap-spilled instance variable of self (the table is
+            // known large enough, so no bounds check / runtime extend).
+            AsmInst::StoreSelfIVarHeap {
+                src,
+                ivarid,
+                is_object_ty,
+            } => return self.emit_store_self_ivar_heap(src, ivarid, is_object_ty),
+            // Load a heap-spilled instance variable (bounds-checked unless self),
+            // substituting nil for an out-of-range / unset slot.
+            AsmInst::LoadIVarHeap {
+                ivarid,
+                is_object_ty,
+                self_,
+            } => return self.emit_load_ivar_heap(ivarid, is_object_ty, self_),
+            // Runtime-call definition ops (undef a method / alias a global var).
+            // aarch64 bails when an xmm pool register is live (no xmm save yet).
+            AsmInst::UndefMethod { undef, using_xmm } => {
+                return self.emit_undef_method(undef, using_xmm);
+            }
+            AsmInst::AliasGvar { new, old, using_xmm } => {
+                return self.emit_alias_gvar(new, old, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

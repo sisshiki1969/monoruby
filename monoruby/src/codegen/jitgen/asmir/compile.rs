@@ -105,16 +105,13 @@ impl Codegen {
             | AsmInst::LoadStructSlotHeap { .. }
             | AsmInst::StoreStructSlotHeap { .. }
             | AsmInst::RegAdd(..)
-            | AsmInst::RegSub(..) => {
+            | AsmInst::RegSub(..)
+            | AsmInst::LoopJitRspBump { .. }
+            | AsmInst::StoreSelfIVarHeap { .. }
+            | AsmInst::LoadIVarHeap { .. }
+            | AsmInst::UndefMethod { .. }
+            | AsmInst::AliasGvar { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
-            }
-            AsmInst::LoopJitRspBump { offset } => {
-                let bytes = offset.unwrap_concrete();
-                if bytes > 0 {
-                    monoasm! { &mut self.jit,
-                        subq rsp, (bytes as i32);
-                    }
-                }
             }
             AsmInst::Unreachable => {
                 monoasm!( &mut self.jit,
@@ -351,22 +348,12 @@ impl Codegen {
                 self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
 
-            AsmInst::LoadIVarHeap {
-                ivarid,
-                is_object_ty,
-                self_,
-            } => self.load_ivar_heap(ivarid, is_object_ty, self_),
             AsmInst::StoreIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
                 using_xmm,
             } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
-            AsmInst::StoreSelfIVarHeap {
-                src,
-                ivarid,
-                is_object_ty,
-            } => self.store_self_ivar_heap(src, ivarid, is_object_ty),
             AsmInst::CheckCVar { name, using_xmm } => {
                 self.check_cvar(name, using_xmm);
             }
@@ -472,17 +459,6 @@ impl Codegen {
             } => {
                 self.concat_regexp(arg, len, using_xmm);
             }
-            AsmInst::UndefMethod { undef, using_xmm } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movl rdx, (undef.get());
-                    movq rax, (runtime::undef_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
             AsmInst::AliasMethod {
                 new,
                 old,
@@ -495,21 +471,6 @@ impl Codegen {
                     movq rdx, [r14 - (conv(old))];
                     movq rcx, [r14 - (conv(new))];
                     movq rax, (runtime::alias_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::AliasGvar {
-                new,
-                old,
-                using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, r12;          // &mut Globals
-                    movl rsi, (new.get());  // new IdentId
-                    movl rdx, (old.get());  // old IdentId
-                    movq rax, (runtime::alias_global_var);
                     call rax;
                 );
                 self.xmm_restore(using_xmm);
@@ -1710,5 +1671,66 @@ impl Codegen {
             let r = reg as u64;
             monoasm! { &mut self.jit, subq R(r), (i); }
         }
+    }
+
+    /// Loop-JIT entry: reserve the loop body's spill area on the native stack.
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+        let bytes = offset.unwrap_concrete();
+        if bytes > 0 {
+            monoasm! { &mut self.jit, subq rsp, (bytes as i32); }
+        }
+        true
+    }
+
+    /// Store the accumulator-side `src` into a heap-spilled instance variable of
+    /// self (no bounds check; the table is pre-sized).
+    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+    ) -> bool {
+        self.store_self_ivar_heap(src, ivarid, is_object_ty);
+        true
+    }
+
+    /// Load a heap-spilled instance variable into the accumulator, substituting
+    /// nil for an out-of-range (non-self) or unset slot.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
+        &mut self,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+    ) -> bool {
+        self.load_ivar_heap(ivarid, is_object_ty, self_);
+        true
+    }
+
+    /// `undef`-method via runtime::undef_method(vm, globals, id).
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (undef.get());
+            movq rax, (runtime::undef_method);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    /// Alias a global var via runtime::alias_global_var(globals, new, old).
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, r12;          // &mut Globals
+            movl rsi, (new.get());  // new IdentId
+            movl rdx, (old.get());  // old IdentId
+            movq rax, (runtime::alias_global_var);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
     }
 }
