@@ -22,7 +22,15 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, inline_gen!(integer_rem), 1);
+    // `modulo` is a true alias of `%` (ruby/spec core/integer/modulo_spec.rb).
+    globals.define_builtin_inline_funcs(
+        INTEGER_CLASS,
+        "%",
+        &["modulo"],
+        int_rem,
+        inline_gen!(integer_rem),
+        1,
+    );
     globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen!(integer_pow), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen!(integer_bitand), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen!(integer_bitor), 1);
@@ -30,8 +38,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen!(integer_shr), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen!(integer_shl), 1);
-    globals.define_builtin_func(INTEGER_CLASS, "==", eq, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "===", eq, 1);
+    // `===` is a true alias of `==` (ruby/spec core/integer/case_compare_spec.rb).
+    globals.define_builtin_funcs(INTEGER_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">", gt, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=", le, 1);
@@ -48,8 +56,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
+    // `magnitude` is a true alias of `abs` (ruby/spec core/integer/magnitude_spec.rb).
+    globals.define_builtin_funcs(INTEGER_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "pow", pow, 1, 2, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "floor", int_floor, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "ceil", int_ceil, 0, 1, false);
