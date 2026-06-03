@@ -109,6 +109,7 @@ impl Codegen {
             | AsmInst::RegToRSPOffset(..)
             | AsmInst::ZeroToRSPOffset(..)
             | AsmInst::U64ToRSPOffset(..)
+            | AsmInst::GuardCapture(..)
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
@@ -147,11 +148,6 @@ impl Codegen {
                     call rax;
                 );
             }
-            AsmInst::GuardCapture(deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_capture(deopt)
-            }
-
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
                 self.guard_class_version_specialized(
@@ -1869,6 +1865,13 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
         );
+        true
+    }
+
+    // ---- block-passing side-effect guard (former per-arch arm) ----
+
+    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
+        self.guard_capture(deopt);
         true
     }
 }

@@ -2963,6 +2963,26 @@ impl Codegen {
         true
     }
 
+    /// Side-effect guard for a method that passes a block: deopt if the current
+    /// frame has been captured/promoted (so a materialized closure observes
+    /// later local writes). Tests the captured (0b1000_0000) / invalidated
+    /// (0b0000_1000) bits of the Meta `kind` byte at `[lfp - 1]`. Mirrors x86
+    /// `branch_if_captured` + `guard_capture`; aarch64 lays the deopt inline (no
+    /// cold page) so this is just a conditional branch to the deopt label.
+    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let off = (LFP_META as i64 - META_KIND as i64) as u32; // == 1 (kind byte)
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldrb w9, [x10];
+            mov x11, (0b1000_1000u64);
+            tst x9, x11;                 // captured or invalidated?
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

@@ -313,6 +313,9 @@ impl Codegen {
             AsmInst::RegToRSPOffset(r, ofs) => return self.emit_reg_to_rsp_offset(r, ofs),
             AsmInst::ZeroToRSPOffset(ofs) => return self.emit_zero_to_rsp_offset(ofs),
             AsmInst::U64ToRSPOffset(i, ofs) => return self.emit_u64_to_rsp_offset(i, ofs),
+            // Side-effect guard for block-passing calls: deopt if the frame was
+            // captured/promoted.
+            AsmInst::GuardCapture(deopt) => return self.emit_guard_capture(&labels[deopt]),
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
             AsmInst::StoreSelfIVarHeap {
