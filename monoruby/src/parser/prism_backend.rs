@@ -4181,25 +4181,19 @@ $1
     // test honest: it would notice if any layer (parser, bytecodegen,
     // value constructors) lost the encoding on the way through.
     //
-    // We force the prism backend explicitly rather than going through
-    // `Globals::run` (which routes via `MONORUBY_PARSER`): magic-comment
-    // handling is prism-only, and `bin/test` runs the suite a second
-    // time with `MONORUBY_PARSER=ruruby` for coverage of the legacy
-    // backend — every test in this module is prism-specific by design.
+    // These go through the full parse → bytecode → eval pipeline; prism
+    // is monoruby's only parser, so `crate::parser::parse_program` is the
+    // backend under test.
 
-    /// Drive a short Ruby script through the prism backend explicitly,
+    /// Drive a short Ruby script through the parser explicitly,
     /// returning the final `Value` and the `Globals` it ran against.
     /// Callers inspect the value with the returned `Globals` (needed
     /// for `Value::inspect`).
     fn run_prism_source(source: &str) -> (crate::Globals, crate::Value) {
         let path = std::path::Path::new("(test)");
         let mut globals = crate::Globals::new_test();
-        let parsed = crate::parser::parse_program_with(
-            crate::parser::Backend::Prism,
-            source.to_owned(),
-            path,
-        )
-        .expect("parse_program_with(Prism)");
+        let parsed = crate::parser::parse_program(source.to_owned(), path)
+            .expect("parse_program");
         let fid = crate::bytecodegen::bytecode_compile_script(&mut globals, parsed)
             .expect("bytecode_compile_script");
         let mut executor = crate::executor::Executor::init(&mut globals, "(test)")

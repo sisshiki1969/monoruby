@@ -3509,11 +3509,7 @@ mod tests {
     #[test]
     fn hash_bracket_kwarg_form() {
         // `Recv[k => v]` / `Recv[**h]` — the trailing keywords form an
-        // implicit positional Hash; previously dropped. This `[]`-call
-        // lowering is Prism-only (ruruby-parse lowers it differently).
-        if parser_is_ruruby() {
-            return;
-        }
+        // implicit positional Hash; previously dropped.
         run_tests(&[
             r#"Hash[5 => 6]"#,
             r#"Hash["a" => 1, "b" => 2]"#,
