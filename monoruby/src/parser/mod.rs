@@ -4,8 +4,7 @@
 //! is the Prism-based lowerer (`prism_backend`), which lowers ruby-prism's
 //! AST into monoruby's [`crate::ast`] node tree.
 //!
-//! The module presents the same three entry points the rest of the
-//! crate previously called on `ruruby_parse::Parser` directly:
+//! The module presents three entry points to the rest of the crate:
 //! `parse_program`, `parse_program_eval`, and `parse_program_binding`.
 //! All produce a [`crate::ast::ParseResult`] and report errors as
 //! [`crate::globals::MonorubyErr`].
