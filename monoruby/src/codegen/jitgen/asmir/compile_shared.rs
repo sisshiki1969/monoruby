@@ -364,6 +364,14 @@ impl Codegen {
             AsmInst::DefinedIvar { dst, name, using_xmm } => {
                 return self.emit_defined_ivar(dst, name, using_xmm);
             }
+            // Generic binary-op / Array=== runtime calls (aarch64 bails on a
+            // live xmm pool reg or an out-of-range frame offset).
+            AsmInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
+                return self.emit_generic_binop(lhs, rhs, func, using_xmm);
+            }
+            AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
+                return self.emit_array_teq(lhs, rhs, using_xmm);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

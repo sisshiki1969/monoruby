@@ -120,7 +120,9 @@ impl Codegen {
             | AsmInst::DefinedSuper { .. }
             | AsmInst::DefinedGvar { .. }
             | AsmInst::DefinedIvar { .. }
-            | AsmInst::DefinedCvar { .. } => {
+            | AsmInst::DefinedCvar { .. }
+            | AsmInst::GenericBinOp { .. }
+            | AsmInst::ArrayTEq { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -309,14 +311,6 @@ impl Codegen {
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
-            AsmInst::GenericBinOp {
-                lhs,
-                rhs,
-                func,
-                using_xmm,
-            } => {
-                self.generic_binop(lhs, rhs, func, using_xmm);
-            }
             AsmInst::OptEqCmp {
                 lhs,
                 rhs,
@@ -326,14 +320,6 @@ impl Codegen {
             } => {
                 self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
             }
-            AsmInst::ArrayTEq {
-                lhs,
-                rhs,
-                using_xmm,
-            } => {
-                self.array_teq(lhs, rhs, using_xmm);
-            }
-
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.get_method_lfp(outer);
                 self.block_arg_proxy(outer);
@@ -1795,6 +1781,29 @@ impl Codegen {
         using_xmm: UsingXmm,
     ) -> bool {
         self.defined_ivar(dst, name, using_xmm);
+        true
+    }
+
+    // ---- generic binary-op runtime calls (delegate to the helpers) ----
+
+    pub(in crate::codegen::jitgen) fn emit_generic_binop(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.generic_binop(lhs, rhs, func, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_array_teq(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.array_teq(lhs, rhs, using_xmm);
         true
     }
 }

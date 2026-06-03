@@ -2321,6 +2321,74 @@ impl Codegen {
         true
     }
 
+    /// Generic binary-op C-call (no receiver-class guard), mirroring the VM's
+    /// call_binop convention: x0=vm, x1=globals, x2=lhs, x3=rhs; Option<Value>
+    /// result in x0. Bails on a live xmm pool reg or an out-of-range offset.
+    pub(in crate::codegen::jitgen) fn emit_generic_binop(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = func as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// `lhs === rhs` for an Array lhs via runtime::array_teq (x0=vm, x1=globals,
+    /// x2=lhs, x3=rhs); Option<Value> result in x0. Bails as above.
+    pub(in crate::codegen::jitgen) fn emit_array_teq(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = runtime::array_teq as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).
