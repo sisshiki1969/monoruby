@@ -2963,6 +2963,95 @@ impl Codegen {
         true
     }
 
+    /// `&block` proxy: materialize the current method's block handler into
+    /// `ret`. Walk `outer` outer-frame links to reach the method LFP (x0), load
+    /// its block slot ([lfp - LFP_BLOCK]); if the low bit is set (already a
+    /// BlockHandler proxy rather than a frame pointer) bump the nesting tag by
+    /// `(outer << 2) + 2`. No runtime call, no xmm pressure. Bails on an
+    /// out-of-range frame offset or nesting tag immediate.
+    pub(in crate::codegen::jitgen) fn emit_block_arg_proxy(
+        &mut self,
+        ret: SlotId,
+        outer: usize,
+    ) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let rax = GP::Rax.a64().0; // x0
+        let off = ret.0 as u32 * 8 + LFP_SELF as u32;
+        let tag = ((outer << 2) + 2) as u32;
+        if off > 4095 || tag > 4095 {
+            return false;
+        }
+        // get_method_lfp(outer): x0 <- method LFP (walk `outer` outer links).
+        if outer == 0 {
+            monoasm_arm64!(&mut self.jit, mov x(rax), x(lfp););
+        } else {
+            monoasm_arm64!(&mut self.jit, ldr x(rax), [x(lfp)];);
+            for _ in 0..outer - 1 {
+                monoasm_arm64!(&mut self.jit, ldr x(rax), [x(rax)];);
+            }
+        }
+        // block_arg_proxy(outer): x0 <- [x0 - LFP_BLOCK]; if (x0 & 1) bump tag.
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(rax), #(LFP_BLOCK as u32);
+            ldr x(rax), [x10];
+            mov x11, (1u64);
+            tst x(rax), x11;             // Z = ((x0 & 1) == 0)
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            add x(rax), x(rax), #(tag);
+            exit:
+        );
+        // store_rax(ret): [lfp - off] <- x0
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(rax), [x10];
+        );
+        true
+    }
+
+    /// `&block` captured as a Proc value: runtime::block_arg(vm, globals, lfp,
+    /// call_site) materializes the current frame's block handler into a Proc
+    /// (promoting the frame to the heap if needed). The Option<Value> result is
+    /// stored to `ret` after a HandleError. Bails on a live xmm pool reg (no
+    /// save around the C call) or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_block_arg(
+        &mut self,
+        ret: SlotId,
+        using_xmm: UsingXmm,
+        call_site_bc_ptr: BytecodePtr,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = ret.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let cs = call_site_bc_ptr.as_ptr() as u64;
+        let f = runtime::block_arg as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;          // vm
+            mov x1, x20;          // globals
+            mov x2, x(lfp);       // caller LFP
+            mov x3, (cs);         // call-site bc ptr
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;               // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(rax), [x10];    // ret <- Proc
+        );
+        true
+    }
+
     /// Side-effect guard for a method that passes a block: deopt if the current
     /// frame has been captured/promoted (so a materialized closure observes
     /// later local writes). Tests the captured (0b1000_0000) / invalidated

@@ -110,6 +110,8 @@ impl Codegen {
             | AsmInst::ZeroToRSPOffset(..)
             | AsmInst::U64ToRSPOffset(..)
             | AsmInst::GuardCapture(..)
+            | AsmInst::BlockArgProxy { .. }
+            | AsmInst::BlockArg { .. }
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
@@ -244,23 +246,6 @@ impl Codegen {
                 let block_entry = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-
-            AsmInst::BlockArgProxy { ret, outer } => {
-                self.get_method_lfp(outer);
-                self.block_arg_proxy(outer);
-                self.store_rax(ret);
-            }
-            AsmInst::BlockArg {
-                ret,
-                _outer: _,
-                using_xmm,
-                error,
-                call_site_bc_ptr,
-            } => {
-                self.block_arg(using_xmm, call_site_bc_ptr);
-                self.handle_error(&labels[error]);
-                self.store_rax(ret);
             }
 
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
@@ -1872,6 +1857,32 @@ impl Codegen {
 
     pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
         self.guard_capture(deopt);
+        true
+    }
+
+    // ---- &block forwarding (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_block_arg_proxy(
+        &mut self,
+        ret: SlotId,
+        outer: usize,
+    ) -> bool {
+        self.get_method_lfp(outer);
+        self.block_arg_proxy(outer);
+        self.store_rax(ret);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_block_arg(
+        &mut self,
+        ret: SlotId,
+        using_xmm: UsingXmm,
+        call_site_bc_ptr: BytecodePtr,
+        error: &DestLabel,
+    ) -> bool {
+        self.block_arg(using_xmm, call_site_bc_ptr);
+        self.handle_error(error);
+        self.store_rax(ret);
         true
     }
 }

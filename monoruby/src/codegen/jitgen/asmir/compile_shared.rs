@@ -316,6 +316,12 @@ impl Codegen {
             // Side-effect guard for block-passing calls: deopt if the frame was
             // captured/promoted.
             AsmInst::GuardCapture(deopt) => return self.emit_guard_capture(&labels[deopt]),
+            // `&block` forwarding: proxy the block handler, or materialize it
+            // into a Proc value (aarch64 bails on a live xmm / range overflow).
+            AsmInst::BlockArgProxy { ret, outer } => return self.emit_block_arg_proxy(ret, outer),
+            AsmInst::BlockArg { ret, _outer: _, using_xmm, error, call_site_bc_ptr } => {
+                return self.emit_block_arg(ret, using_xmm, call_site_bc_ptr, &labels[error]);
+            }
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
             AsmInst::StoreSelfIVarHeap {
