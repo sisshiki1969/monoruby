@@ -833,6 +833,30 @@ impl Codegen {
         );
     }
 
+    /// `RestKw`: build a const-data table of (name: i32, slot-id: i32) pairs
+    /// terminated by (0, 0), then call `correct_rest_kw(&table, lfp)` which
+    /// reads the listed slots and returns the `**kwrest` Hash in x0. Mirrors
+    /// the x86 `RestKw` arm; the const-table emission is arch-neutral and the
+    /// table address is taken with PC-relative `adr` (as in OptCase).
+    fn a64_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+        let data = self.jit.const_align8();
+        for (i, name) in rest_kw.into_iter() {
+            self.jit.const_i32(name.get() as i32);
+            self.jit.const_i32(i.0 as i32);
+        }
+        self.jit.const_i32(0);
+        self.jit.const_i32(0);
+        let f = runtime::correct_rest_kw as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            adr x0, data;          // &table
+            mov x1, x22;           // lfp (R14)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                // x0 = kwrest Hash
+            ldr x30, [sp], #16;
+        );
+    }
+
     // ---- emission primitives (aarch64) ------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
@@ -3466,6 +3490,19 @@ impl Codegen {
                 let return_addr = self.a64_do_specialized_call(entry_label, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
+            // Trap for statically-unreachable code: call the panicking helper.
+            AsmInst::Unreachable => {
+                let f = unreachable as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (f);
+                    blr x9;
+                );
+            }
+            // `**kwrest` fixup: build a const table of (name, slot) pairs and
+            // call correct_rest_kw(&table, lfp) -> kwrest Hash (result in x0).
+            AsmInst::RestKw { rest_kw } => {
+                self.a64_rest_kw(rest_kw);
+            }
             _ => return false,
         }
         true
@@ -3478,4 +3515,10 @@ impl Codegen {
 /// its own copy (the two are never compiled together).
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
+}
+
+/// Trap target for the `Unreachable` AsmInst. The x86 twin lives in
+/// `compile.rs` (a `jit_x86`-only module), so aarch64 carries its own copy.
+extern "C" fn unreachable() {
+    unreachable!("reached unreachable code");
 }
