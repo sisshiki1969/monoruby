@@ -302,6 +302,73 @@ fn case_opt() {
     ]);
 }
 
+// A `break` out of a block lowers to the `BlockBreak` AsmInst (a non-local
+// exit through `err_block_break`). Each method's block is exercised enough to
+// JIT, so the break path runs through native code on both the x86-64 `amd64`
+// job and the native arm64 `darwin` job. Covers conditional and unconditional
+// breaks, breaks carrying a value, and `each`/`times`/range iterators.
+#[test]
+fn block_break_jit() {
+    run_test(
+        r#"
+        def first_even(a); a.each { |x| break x if x % 2 == 0 }; end
+        def take_first(a); a.each { |x| break x * 10 }; end
+        def upto_three(n); (0...n).each { |i| break i if i == 3 }; end
+        def sum_until(n); r = 0; n.times { |i| break if i == 5; r += i }; r; end
+        [
+          first_even([1, 3, 8, 9]),
+          first_even([1, 3, 5]),
+          take_first([5, 6, 7]),
+          upto_three(10),
+          sum_until(10),
+        ]
+        "#,
+    );
+}
+
+// A dense (>= 8 integer `when`) `case` lowers to the `OptCase` jump-table
+// bytecode rather than an `===` chain. Wrapping it in a method exercised many
+// times forces the JIT to compile the `OptCase` AsmInst (covered on both the
+// x86-64 `amd64` job and the native arm64 `darwin` job). Covers below-min,
+// in-range, boundaries, above-max -> else, a non-zero `min`, and several
+// `when` values mapping to one body.
+#[test]
+fn case_opt_jit() {
+    run_test(
+        r#"
+        def classify(n)
+          case n
+          when 0 then "z0"
+          when 1 then "z1"
+          when 2 then "z2"
+          when 3 then "z3"
+          when 4 then "z4"
+          when 5 then "z5"
+          when 6 then "z6"
+          when 7 then "z7"
+          when 8 then "z8"
+          when 9 then "z9"
+          else "other"
+          end
+        end
+        (-3..13).map { |n| classify(n) }
+        "#,
+    );
+    run_test(
+        r#"
+        def bucket(n)
+          case n
+          when 10, 12, 14 then :low
+          when 11, 13, 15 then :mid
+          when 16, 17, 18, 19 then :high
+          else :none
+          end
+        end
+        (8..21).map { |n| bucket(n) }
+        "#,
+    );
+}
+
 //
 // Tests for call site patterns (exercises CallSiteInfo methods)
 //

@@ -69,6 +69,16 @@ impl Codegen {
                 let dest = frame.resolve_label(&mut self.jit, dest);
                 self.emit_check_local(dest);
             }
+            // Dense-integer `case`: range-check the (fixnum) condition against
+            // `[min, max]`, then dispatch through a jump table of absolute
+            // branch-target addresses (else for out-of-range). Terminates the
+            // basic block (no fallthrough).
+            AsmInst::OptCase {
+                max,
+                min,
+                else_label,
+                branch_labels,
+            } => self.emit_opt_case(frame, max, min, else_label, branch_labels),
             // Type guard: deopt if `r`'s runtime class is not `class`. (aarch64
             // bails for not-yet-supported class kinds, hence the bool result.)
             AsmInst::GuardClass(r, class, deopt) => {
@@ -219,10 +229,13 @@ impl Codegen {
             }
             // Method return / eviction family. `Ret` tears down the frame and
             // returns; `MethodRet` sets the resume PC then returns through the
-            // method-return path; `ImmediateEvict` records a return-address
-            // patch point on x86 (a no-op on aarch64, which can't patch them).
+            // method-return path; `BlockBreak` does the same through the
+            // block-break path (a non-local `break` out of a block);
+            // `ImmediateEvict` records a return-address patch point on x86 (a
+            // no-op on aarch64, which can't patch them).
             AsmInst::Ret => self.emit_ret(),
             AsmInst::MethodRet(pc) => self.emit_method_ret(pc),
+            AsmInst::BlockBreak(pc) => self.emit_block_break(pc),
             AsmInst::ImmediateEvict { evict } => self.emit_immediate_evict(evict),
             // Method-call prologue: class-version guard, callee frame fields,
             // argument massage. (aarch64 SetArguments bails on a not-yet-ported

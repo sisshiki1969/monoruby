@@ -636,6 +636,30 @@ impl Codegen {
         );
     }
 
+    /// Lower `BlockBreak`: a `break` out of a block. Same shape as
+    /// `a64_method_ret` (set PC, call the error builder with the break value in
+    /// x0, jump to `entry_raise`) but through `err_block_break`, which unwinds
+    /// to the block's defining method rather than the current frame's caller.
+    ///
+    /// As in `a64_method_ret`, PC points at *this* instruction (not `pc + 1`):
+    /// aarch64's `entry_raise` hands PC to `handle_error` without the x86 `-16`
+    /// fixup, so storing `pc` (the value x86 reaches via `pc + 1` then `-16`)
+    /// keeps the exception-table lookup aligned with the raising instruction.
+    fn a64_block_break(&mut self, pc: BytecodePtr) {
+        let pc0 = pc.as_ptr() as u64;
+        let f = runtime::err_block_break as *const () as u64;
+        let raise = self.entry_raise();
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc0);
+            mov x2, x0;       // val (was in rax/x0)
+            mov x0, x19;      // vm
+            mov x1, x20;      // globals
+            mov x9, (f);
+            blr x9;
+            b raise;
+        );
+    }
+
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
     fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -1594,6 +1618,53 @@ impl Codegen {
     /// Return through the method-return path, resuming the caller at `pc + 1`.
     pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
         self.a64_method_ret(pc);
+    }
+
+    /// Non-local exit through the block-break path (a `break` out of a block).
+    pub(in crate::codegen::jitgen) fn emit_block_break(&mut self, pc: BytecodePtr) {
+        self.a64_block_break(pc);
+    }
+
+    /// Dense-integer `case` dispatch — aarch64 twin of x86 `emit_opt_case`. The
+    /// condition (a tagged fixnum) is in x4 (`GP::Rdi`), placed by the
+    /// front-end. Untag, range-check `[min, max]` (signed, both < 2048 so they
+    /// fit a 12-bit `cmp` immediate), then index a jump table of absolute
+    /// branch-target addresses by `cond - min` and branch indirectly.
+    ///
+    /// The table is built with `const_align8` + `abs_address`, exactly as on
+    /// x86; `resolve_constants` emits it into this method's own code page right
+    /// after the body, so it is well within `adr`'s ±1MB reach. Terminates the
+    /// basic block (the `br` is an unconditional indirect branch).
+    pub(in crate::codegen::jitgen) fn emit_opt_case(
+        &mut self,
+        frame: &mut AsmInfo,
+        max: u16,
+        min: u16,
+        else_label: JitLabel,
+        branch_labels: Box<[JitLabel]>,
+    ) {
+        let jump_table = self.jit.const_align8();
+        for label in branch_labels.iter() {
+            let dest_label = frame.resolve_label(&mut self.jit, *label);
+            self.jit.abs_address(dest_label);
+        }
+        let else_dest = frame.resolve_label(&mut self.jit, else_label);
+        let cond = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            asr x(cond), x(cond), #1;   // untag fixnum: x4 = n
+            cmp x(cond), #(max as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &else_dest); // n > max -> else
+        monoasm_arm64!(&mut self.jit,
+            cmp x(cond), #(min as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &else_dest); // n < min -> else
+        monoasm_arm64!(&mut self.jit,
+            sub x(cond), x(cond), #(min as u32);     // index = n - min
+            adr x10, jump_table;                     // table base (PC-relative)
+            ldr x10, [x10, x(cond), lsl #3];         // table[n - min]
+            br x10;
+        );
     }
 
     /// Immediate eviction patches a live frame's return address on x86; aarch64
