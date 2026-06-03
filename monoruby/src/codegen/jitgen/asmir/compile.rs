@@ -125,7 +125,8 @@ impl Codegen {
             | AsmInst::ArrayTEq { .. }
             | AsmInst::ConcatRegexp { .. }
             | AsmInst::CheckKwRest(..)
-            | AsmInst::ExpandArray { .. } => {
+            | AsmInst::ExpandArray { .. }
+            | AsmInst::OptEqCmp { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -303,15 +304,6 @@ impl Codegen {
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
 
-            AsmInst::OptEqCmp {
-                lhs,
-                rhs,
-                kind,
-                func,
-                using_xmm,
-            } => {
-                self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
-            }
             AsmInst::BlockArgProxy { ret, outer } => {
                 self.get_method_lfp(outer);
                 self.block_arg_proxy(outer);
@@ -1768,6 +1760,18 @@ impl Codegen {
         using_xmm: UsingXmm,
     ) -> bool {
         self.array_teq(lhs, rhs, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
         true
     }
 

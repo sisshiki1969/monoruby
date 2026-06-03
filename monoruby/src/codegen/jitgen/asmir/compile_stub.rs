@@ -2492,6 +2492,77 @@ impl Codegen {
         true
     }
 
+    /// `==` / `!=` with an inline immediate fast path (mirrors the x86
+    /// `opt_eq_cmp`). If BOTH operands are non-heap, non-flonum immediates the
+    /// Ruby result is exact bit (identity) equality, produced inline via
+    /// cmp + cset; otherwise fall through to the generic C-call `func`
+    /// (x0=vm, x1=globals, x2=lhs, x3=rhs). `lhs`/`rhs` are loaded into x2/x3
+    /// up front so the slow path can reuse them. Bails on a live xmm pool reg
+    /// or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = func as u64;
+        let slow = self.jit.label();
+        let done = self.jit.label();
+        // Load operands into the C-arg registers (reused by the slow path).
+        // Heap iff (bits & 0b111) == 0; Flonum iff (bits & 0b011) == 0b010.
+        // Either operand heap/flonum -> generic C-call.
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            mov x14, (7u64);
+            and x9, x2, x14;
+            cbz x9, slow;                // lhs heap -> slow
+            mov x14, (3u64);
+            and x9, x2, x14;
+            cmp x9, #(2u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow); // lhs flonum -> slow
+        monoasm_arm64!(&mut self.jit,
+            mov x14, (7u64);
+            and x9, x3, x14;
+            cbz x9, slow;                // rhs heap -> slow
+            mov x14, (3u64);
+            and x9, x3, x14;
+            cmp x9, #(2u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow); // rhs flonum -> slow
+        // Fast path: both identity-comparable immediates -> bit equality.
+        monoasm_arm64!(&mut self.jit,
+            cmp x2, x3;
+        );
+        self.a64_flag_to_bool(kind); // x0 = bool Value
+        monoasm_arm64!(&mut self.jit,
+            b done;
+        slow:
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals (x2=lhs, x3=rhs intact)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        done:
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

@@ -369,6 +369,9 @@ impl Codegen {
             AsmInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
                 return self.emit_generic_binop(lhs, rhs, func, using_xmm);
             }
+            AsmInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
+                return self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+            }
             AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
                 return self.emit_array_teq(lhs, rhs, using_xmm);
             }
