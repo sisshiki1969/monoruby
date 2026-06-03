@@ -1864,10 +1864,22 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
         if i != 0 {
             let d = reg.a64().0;
-            monoasm_arm64!(&mut self.jit,
-                mov x9, (i as i64 as u64);
-                add x(d), x(d), x9;
-            );
+            if reg == GP::Rsp {
+                // Register 31 decodes as XZR (not SP) in the add/sub
+                // shifted-register form, so `add x31, x31, x9` would be a no-op.
+                // Go through a GP temp: mov to/from SP is the sp-aware form.
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    mov x10, sp;
+                    add x10, x10, x9;
+                    mov sp, x10;
+                );
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    add x(d), x(d), x9;
+                );
+            }
         }
     }
 
@@ -1875,10 +1887,21 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
         if i != 0 {
             let d = reg.a64().0;
-            monoasm_arm64!(&mut self.jit,
-                mov x9, (i as i64 as u64);
-                sub x(d), x(d), x9;
-            );
+            if reg == GP::Rsp {
+                // See emit_reg_add: SP must be updated via a GP temp (reg 31 is
+                // XZR in the shifted-register form).
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    mov x10, sp;
+                    sub x10, x10, x9;
+                    mov sp, x10;
+                );
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    sub x(d), x(d), x9;
+                );
+            }
         }
     }
 
