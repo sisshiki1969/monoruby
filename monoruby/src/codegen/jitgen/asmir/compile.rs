@@ -106,11 +106,42 @@ impl Codegen {
             | AsmInst::StoreStructSlotHeap { .. }
             | AsmInst::RegAdd(..)
             | AsmInst::RegSub(..)
+            | AsmInst::RegToRSPOffset(..)
+            | AsmInst::ZeroToRSPOffset(..)
+            | AsmInst::U64ToRSPOffset(..)
+            | AsmInst::GuardCapture(..)
+            | AsmInst::BlockArgProxy { .. }
+            | AsmInst::BlockArg { .. }
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
             | AsmInst::UndefMethod { .. }
-            | AsmInst::AliasGvar { .. } => {
+            | AsmInst::AliasGvar { .. }
+            | AsmInst::CheckCVar { .. }
+            | AsmInst::StoreCVar { .. }
+            | AsmInst::AliasMethod { .. }
+            | AsmInst::DefinedYield { .. }
+            | AsmInst::DefinedConst { .. }
+            | AsmInst::DefinedMethod { .. }
+            | AsmInst::DefinedSuper { .. }
+            | AsmInst::DefinedGvar { .. }
+            | AsmInst::DefinedIvar { .. }
+            | AsmInst::DefinedCvar { .. }
+            | AsmInst::GenericBinOp { .. }
+            | AsmInst::ArrayTEq { .. }
+            | AsmInst::ConcatRegexp { .. }
+            | AsmInst::CheckKwRest(..)
+            | AsmInst::ExpandArray { .. }
+            | AsmInst::OptEqCmp { .. }
+            | AsmInst::CFunc_F_F { .. }
+            | AsmInst::CFunc_FF_F { .. }
+            | AsmInst::MethodDef { .. }
+            | AsmInst::SingletonMethodDef { .. }
+            | AsmInst::Raise
+            | AsmInst::Retry(..)
+            | AsmInst::Redo(..)
+            | AsmInst::EnsureEnd
+            | AsmInst::Yield { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -119,28 +150,6 @@ impl Codegen {
                     call rax;
                 );
             }
-            AsmInst::RegToRSPOffset(r, ofs) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
-                );
-            }
-            AsmInst::ZeroToRSPOffset(ofs) => {
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
-                );
-            }
-            AsmInst::U64ToRSPOffset(i, ofs) => {
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
-                );
-            }
-
-            AsmInst::GuardCapture(deopt) => {
-                let deopt = &labels[deopt];
-                self.guard_capture(deopt)
-            }
-
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
                 self.guard_class_version_specialized(
@@ -194,57 +203,6 @@ impl Codegen {
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
-            AsmInst::Raise => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, rax;
-                    movq rax, (runtime::raise_err);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::Retry(pc) => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                    movq rdi, rbx;
-                    movq rax, (runtime::err_retry);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::Redo(pc) => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                    movq rdi, rbx;
-                    movq rax, (runtime::err_redo);
-                    call rax;
-                    jmp  raise;
-                };
-            }
-            AsmInst::EnsureEnd => {
-                let raise = self.entry_raise();
-                monoasm! { &mut self.jit,
-                    movq rdi, rbx;
-                    movq rax, (runtime::ensure_end);
-                    call rax;
-                    testq rax, rax;
-                    jne  raise;
-                };
-            }
-            AsmInst::CheckKwRest(slot) => {
-                let exit = self.jit.label();
-                monoasm! { &mut self.jit,
-                    cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
-                    jne  exit;
-                    movq rax, (runtime::empty_hash);
-                    call rax;
-                    movq [rbp - (rbp_local(slot))], rax;
-                exit:
-                };
-            }
             AsmInst::OptCase {
                 max,
                 min,
@@ -284,61 +242,10 @@ impl Codegen {
                 let return_addr = self.do_specialized_call(entry_label, patch_point);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            AsmInst::Yield {
-                callid,
-                error,
-                evict,
-            } => {
-                let error = &labels[error];
-                let return_addr = self.gen_yield(callid, error);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
             AsmInst::SpecializedYield { entry, evict } => {
                 let block_entry = frame.resolve_label(&mut self.jit, entry);
                 let return_addr = self.do_specialized_call(block_entry, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-
-            AsmInst::GenericBinOp {
-                lhs,
-                rhs,
-                func,
-                using_xmm,
-            } => {
-                self.generic_binop(lhs, rhs, func, using_xmm);
-            }
-            AsmInst::OptEqCmp {
-                lhs,
-                rhs,
-                kind,
-                func,
-                using_xmm,
-            } => {
-                self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
-            }
-            AsmInst::ArrayTEq {
-                lhs,
-                rhs,
-                using_xmm,
-            } => {
-                self.array_teq(lhs, rhs, using_xmm);
-            }
-
-            AsmInst::BlockArgProxy { ret, outer } => {
-                self.get_method_lfp(outer);
-                self.block_arg_proxy(outer);
-                self.store_rax(ret);
-            }
-            AsmInst::BlockArg {
-                ret,
-                _outer: _,
-                using_xmm,
-                error,
-                call_site_bc_ptr,
-            } => {
-                self.block_arg(using_xmm, call_site_bc_ptr);
-                self.handle_error(&labels[error]);
-                self.store_rax(ret);
             }
 
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
@@ -354,17 +261,6 @@ impl Codegen {
                 is_object_ty,
                 using_xmm,
             } => self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
-            AsmInst::CheckCVar { name, using_xmm } => {
-                self.check_cvar(name, using_xmm);
-            }
-            AsmInst::StoreCVar {
-                name,
-                src,
-                using_xmm,
-            } => {
-                self.store_cvar(name, src, using_xmm);
-            }
-
             AsmInst::ClassDef {
                 base,
                 superclass,
@@ -395,47 +291,6 @@ impl Codegen {
             } => {
                 self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
             }
-            AsmInst::MethodDef {
-                name,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                self.method_def(name, func_id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-            AsmInst::SingletonMethodDef {
-                obj,
-                name,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                self.singleton_method_def(obj, name, func_id, using_xmm);
-                self.handle_error(&labels[error]);
-            }
-
-            AsmInst::ExpandArray {
-                dst,
-                len,
-                rest_pos,
-                using_xmm,
-            } => {
-                let rest = if let Some(rest_pos) = rest_pos {
-                    rest_pos + 1
-                } else {
-                    0
-                };
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    lea rsi, [rbp - (rbp_local(dst))];
-                    movq rdx, (len);
-                    movq rcx, (rest);
-                    movq rax, (runtime::expand_array);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
             AsmInst::RestKw { rest_kw } => {
                 let data = self.jit.const_align8();
                 for (i, name) in rest_kw.into_iter() {
@@ -452,99 +307,7 @@ impl Codegen {
                     call rax;
                 );
             }
-            AsmInst::ConcatRegexp {
-                arg,
-                len,
-                using_xmm,
-            } => {
-                self.concat_regexp(arg, len, using_xmm);
-            }
-            AsmInst::AliasMethod {
-                new,
-                old,
-                using_xmm,
-            } => {
-                self.xmm_save(using_xmm);
-                monoasm!( &mut self.jit,
-                    movq rdi, rbx;
-                    movq rsi, r12;
-                    movq rdx, [r14 - (conv(old))];
-                    movq rcx, [r14 - (conv(new))];
-                    movq rax, (runtime::alias_method);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-            }
-            AsmInst::DefinedYield { dst, using_xmm } => self.defined_yield(dst, using_xmm),
-            AsmInst::DefinedConst {
-                dst,
-                siteid,
-                using_xmm,
-            } => self.defined_const(dst, siteid, using_xmm),
-            AsmInst::DefinedMethod {
-                dst,
-                recv,
-                name,
-                using_xmm,
-            } => self.defined_method(dst, recv, name, using_xmm),
-            AsmInst::DefinedSuper { dst, using_xmm } => self.defined_super(dst, using_xmm),
-            AsmInst::DefinedGvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_gvar(dst, name, using_xmm),
-
-            AsmInst::DefinedIvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_ivar(dst, name, using_xmm),
-
-            AsmInst::DefinedCvar {
-                dst,
-                name,
-                using_xmm,
-            } => self.defined_cvar(dst, name, using_xmm),
-
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
-            AsmInst::CFunc_F_F {
-                f,
-                src,
-                dst,
-                using_xmm,
-            } => {
-                let base = frame.base_stack_offset;
-                self.xmm_save(using_xmm);
-                self.load_fpr_into_xmm0(src, base);
-                monoasm!( &mut self.jit,
-                    movq rax, (f);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                self.store_fpr_into_xmm(dst, base);
-            }
-            AsmInst::CFunc_FF_F {
-                f,
-                lhs,
-                rhs,
-                dst,
-                using_xmm,
-            } => {
-                let base = frame.base_stack_offset;
-                self.xmm_save(using_xmm);
-                // Load both args into xmm0/xmm1 (the SysV ABI passes
-                // f64 args in xmm0, xmm1, ...). Pool ids resolve to
-                // xmm2..xmm15, so a Phys source can never alias the
-                // scratch register we're writing into.
-                self.load_fpr_into_xmm0(lhs, base);
-                self.load_fpr_into_xmm1(rhs, base);
-                monoasm!( &mut self.jit,
-                    movq rax, (f);
-                    call rax;
-                );
-                self.xmm_restore(using_xmm);
-                self.store_fpr_into_xmm(dst, base);
-            }
         }
         true
     }
@@ -1731,6 +1494,395 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
+        true
+    }
+
+    /// Check class-variable existence via runtime::check_class_var.
+    pub(in crate::codegen::jitgen) fn emit_check_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.check_cvar(name, using_xmm);
+        true
+    }
+
+    /// @@cvar <- src via runtime::set_class_var.
+    pub(in crate::codegen::jitgen) fn emit_store_cvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.store_cvar(name, src, using_xmm);
+        true
+    }
+
+    /// Alias a method via runtime::alias_method (old/new read from frame slots).
+    pub(in crate::codegen::jitgen) fn emit_alias_method(
+        &mut self,
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (conv(old))];
+            movq rcx, [r14 - (conv(new))];
+            movq rax, (runtime::alias_method);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    // ---- defined? runtime-call family (delegate to the existing helpers) ----
+
+    pub(in crate::codegen::jitgen) fn emit_defined_yield(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_yield(dst, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_super(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_super(dst, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_gvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_gvar(dst, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_cvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_cvar(dst, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_const(
+        &mut self,
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_const(dst, siteid, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_method(
+        &mut self,
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_method(dst, recv, name, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_defined_ivar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.defined_ivar(dst, name, using_xmm);
+        true
+    }
+
+    // ---- generic binary-op runtime calls (delegate to the helpers) ----
+
+    pub(in crate::codegen::jitgen) fn emit_generic_binop(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.generic_binop(lhs, rhs, func, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_array_teq(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.array_teq(lhs, rhs, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+        true
+    }
+
+    // ---- regexp build / kw-rest fixup runtime calls ----
+
+    pub(in crate::codegen::jitgen) fn emit_concat_regexp(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.concat_regexp(arg, len, using_xmm);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
+            jne  exit;
+            movq rax, (runtime::empty_hash);
+            call rax;
+            movq [rbp - (rbp_local(slot))], rax;
+        exit:
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_expand_array(
+        &mut self,
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        let rest = if let Some(rest_pos) = rest_pos {
+            rest_pos + 1
+        } else {
+            0
+        };
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            lea rsi, [rbp - (rbp_local(dst))];
+            movq rdx, (len);
+            movq rcx, (rest);
+            movq rax, (runtime::expand_array);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    // ---- float C-function calls (the former per-arch arms, verbatim) ----
+
+    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
+        &mut self,
+        f: unsafe extern "C" fn(f64) -> f64,
+        src: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        self.load_fpr_into_xmm0(src, base);
+        monoasm!( &mut self.jit,
+            movq rax, (f);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        self.store_fpr_into_xmm(dst, base);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
+        &mut self,
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        // Load both args into xmm0/xmm1 (the SysV ABI passes f64 args
+        // in xmm0, xmm1, ...). Pool ids resolve to xmm2..xmm15, so a
+        // Phys source can never alias the scratch register written into.
+        self.load_fpr_into_xmm0(lhs, base);
+        self.load_fpr_into_xmm1(rhs, base);
+        monoasm!( &mut self.jit,
+            movq rax, (f);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        self.store_fpr_into_xmm(dst, base);
+        true
+    }
+
+    // ---- method definition (the former per-arch arms, verbatim) ----
+
+    pub(in crate::codegen::jitgen) fn emit_method_def(
+        &mut self,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.method_def(name, func_id, using_xmm);
+        self.handle_error(error);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_singleton_method_def(
+        &mut self,
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        self.singleton_method_def(obj, name, func_id, using_xmm);
+        self.handle_error(error);
+        true
+    }
+
+    // ---- exception / non-local control flow (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_raise(&mut self) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, rax;
+            movq rax, (runtime::raise_err);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_retry(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+            movq rdi, rbx;
+            movq rax, (runtime::err_retry);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_redo(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+            movq rdi, rbx;
+            movq rax, (runtime::err_redo);
+            call rax;
+            jmp  raise;
+        };
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self) -> bool {
+        let raise = self.entry_raise();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rax, (runtime::ensure_end);
+            call rax;
+            testq rax, rax;
+            jne  raise;
+        };
+        true
+    }
+
+    // ---- generic yield (former per-arch arm) ----
+
+    pub(in crate::codegen::jitgen) fn emit_yield(
+        &mut self,
+        callid: CallSiteId,
+        error: &DestLabel,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+    ) -> bool {
+        let return_addr = self.gen_yield(callid, error);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        true
+    }
+
+    // ---- callee-frame argument stores (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
+        );
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
+        );
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
+        );
+        true
+    }
+
+    // ---- block-passing side-effect guard (former per-arch arm) ----
+
+    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
+        self.guard_capture(deopt);
+        true
+    }
+
+    // ---- &block forwarding (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_block_arg_proxy(
+        &mut self,
+        ret: SlotId,
+        outer: usize,
+    ) -> bool {
+        self.get_method_lfp(outer);
+        self.block_arg_proxy(outer);
+        self.store_rax(ret);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_block_arg(
+        &mut self,
+        ret: SlotId,
+        using_xmm: UsingXmm,
+        call_site_bc_ptr: BytecodePtr,
+        error: &DestLabel,
+    ) -> bool {
+        self.block_arg(using_xmm, call_site_bc_ptr);
+        self.handle_error(error);
+        self.store_rax(ret);
         true
     }
 }

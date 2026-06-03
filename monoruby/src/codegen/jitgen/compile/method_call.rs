@@ -284,7 +284,12 @@ impl<'a> JitContext<'a> {
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
-                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
+                // aarch64: the A64 lowering does not yet support specialized
+                // (inlined) frames, so never enter one — fall through to the
+                // plain `send` path below, which is always a correct
+                // (un-inlined) fallback. On x86 keep specializing as before.
+                if cfg!(jit_x86)
+                    && (iseq_block.is_some() || (specializable && self.specialize_level() < 5))
                 /*name == Some(IdentId::NEW)*/
                 {
                     return self.specialized_iseq(

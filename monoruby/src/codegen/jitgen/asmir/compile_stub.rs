@@ -80,7 +80,10 @@ impl Codegen {
     ) -> bool {
         self.jit.bind_label(entry_label);
         frame.start_codepos = self.jit.get_current();
-        // Specialized methods / inline bridges are not supported yet.
+        // Specialized (inlined) frames are unsupported by the A64 lowering, so
+        // the front-end never builds them on aarch64 (see the `cfg!(jit_x86)`
+        // gate in compile.rs / method_call.rs). This stays as a defensive net:
+        // if one ever appears, bail to the VM rather than emit wrong code.
         if !frame.specialized_methods.is_empty() {
             return false;
         }
@@ -568,8 +571,10 @@ impl Codegen {
     /// patching (`set_deopt_with_return_addr`) is x86-only (runtime branch
     /// patching), so it is skipped — class-version changes are caught by
     /// `GuardClassVersion` deopts instead.
-    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId) {
-        let (_meta, codeptr, pc) = store[callee_fid].get_data();
+    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId, call_site_bc_ptr: BytecodePtr) {
+        let callee = &store[callee_fid];
+        let is_iseq = callee.is_iseq().is_some();
+        let (_meta, codeptr, pc) = callee.get_data();
         let codeptr_addr = codeptr.as_ptr() as u64;
         // set_lfp + push_frame (EXEC=x19, LFP=x22).
         monoasm_arm64!(&mut self.jit,
@@ -581,9 +586,19 @@ impl Codegen {
             sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
             str x22, [x10];                          // new_cfp.lfp = LFP
         );
-        if let Some(pc) = pc {
-            let pc_ptr = pc.as_ptr() as u64;
-            monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr);); // PC for the VM path
+        if is_iseq {
+            // iseq: PC <- callee pc (read by the VM tier / prologue).
+            if let Some(pc) = pc {
+                let pc_ptr = pc.as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr););
+            }
+        } else {
+            // builtin: x3 is the 4th C-arg = the `pc` parameter, which with-pc
+            // builtins use as the call-site bytecode pointer. The native-func
+            // wrapper passes x3 through untouched (mirrors x86 do_call setting
+            // rcx to the call-site bc ptr).
+            let cs = call_site_bc_ptr.as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit, mov x3, (cs););
         }
         monoasm_arm64!(&mut self.jit,
             mov x10, (codeptr_addr);
@@ -1661,9 +1676,9 @@ impl Codegen {
         _recv_class: ClassId,
         _evict: AsmEvict,
         _evict_label: &DestLabel,
-        _pc: BytecodePtr,
+        pc: BytecodePtr,
     ) {
-        self.a64_do_call(store, callee_fid);
+        self.a64_do_call(store, callee_fid, pc);
     }
 
     /// Method prologue: establish fp/lr, reserve the local frame, and nil-fill
@@ -1861,10 +1876,22 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
         if i != 0 {
             let d = reg.a64().0;
-            monoasm_arm64!(&mut self.jit,
-                mov x9, (i as i64 as u64);
-                add x(d), x(d), x9;
-            );
+            if reg == GP::Rsp {
+                // Register 31 decodes as XZR (not SP) in the add/sub
+                // shifted-register form, so `add x31, x31, x9` would be a no-op.
+                // Go through a GP temp: mov to/from SP is the sp-aware form.
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    mov x10, sp;
+                    add x10, x10, x9;
+                    mov sp, x10;
+                );
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    add x(d), x(d), x9;
+                );
+            }
         }
     }
 
@@ -1872,10 +1899,21 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
         if i != 0 {
             let d = reg.a64().0;
-            monoasm_arm64!(&mut self.jit,
-                mov x9, (i as i64 as u64);
-                sub x(d), x(d), x9;
-            );
+            if reg == GP::Rsp {
+                // See emit_reg_add: SP must be updated via a GP temp (reg 31 is
+                // XZR in the shifted-register form).
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    mov x10, sp;
+                    sub x10, x10, x9;
+                    mov sp, x10;
+                );
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (i as i64 as u64);
+                    sub x(d), x(d), x9;
+                );
+            }
         }
     }
 
@@ -2006,6 +2044,1066 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        true
+    }
+
+    /// Check class variable existence via runtime::check_class_var(vm, globals,
+    /// name); the looked-up Value lands in x0. Bails when an xmm pool register
+    /// is live (no xmm save around the C call yet).
+    pub(in crate::codegen::jitgen) fn emit_check_cvar(
+        &mut self,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::check_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// @@cvar <- src via runtime::set_class_var(vm, globals, name, val). The
+    /// Option<Value> result (None == error) is checked by a following
+    /// HandleError. Bails when an xmm pool register is live or the slot offset
+    /// exceeds the 12-bit scaled load immediate.
+    pub(in crate::codegen::jitgen) fn emit_store_cvar(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::set_class_var as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, (name.get() as u64); // name (IdentId)
+            sub x10, x(lfp), #(off);
+            ldr x3, [x10];               // val (from slot)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Alias a method via runtime::alias_method(vm, globals, old, new) where
+    /// `old`/`new` are the symbol/string Values read from the `old`/`new`
+    /// frame slots. The Option<Value> result (None == error) is checked by a
+    /// following HandleError. Bails when an xmm pool register is live or a slot
+    /// offset exceeds the 12-bit scaled load immediate.
+    pub(in crate::codegen::jitgen) fn emit_alias_method(
+        &mut self,
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_old = old.0 as u32 * 8 + LFP_SELF as u32;
+        let off_new = new.0 as u32 * 8 + LFP_SELF as u32;
+        if off_old > 4095 || off_new > 4095 {
+            return false;
+        }
+        let f = runtime::alias_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm (Executor)
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_old);
+            ldr x2, [x10];              // old (slot value)
+            sub x10, x(lfp), #(off_new);
+            ldr x3, [x10];             // new (slot value)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    // ---- defined? runtime-call family --------------------------------------
+    //
+    // Two ABI shapes (mirroring the x86 helpers):
+    //  * result-in-x0 then stored to `dst` (yield/super/gvar/cvar)
+    //  * `dst` passed as an out-pointer the runtime writes through
+    //    (const/method/ivar)
+    // All bail when an xmm pool reg is live or a slot offset exceeds the 12-bit
+    // `sub`/`ldr`/`str` immediate.
+
+    /// "yield" if a block is callable, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_yield(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_yield as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                      // result in x0
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];               // -> dst
+        );
+        true
+    }
+
+    /// "super" if super is callable, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_super(
+        &mut self,
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_super as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// "global-variable" if $name exists, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_gvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_gvar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (name.get() as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// "class variable" if @@name exists, else nil. result -> dst.
+    pub(in crate::codegen::jitgen) fn emit_defined_cvar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_cvar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (name.get() as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);
+            str x0, [x10];
+        );
+        true
+    }
+
+    /// defined?(Const): runtime writes the result through the `dst` out-pointer.
+    pub(in crate::codegen::jitgen) fn emit_defined_const(
+        &mut self,
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_const as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+            mov x3, (siteid.0 as u64);   // ConstSiteId
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// defined?(recv.name): runtime writes the result through `dst`.
+    pub(in crate::codegen::jitgen) fn emit_defined_method(
+        &mut self,
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off_dst = dst.0 as u32 * 8 + LFP_SELF as u32;
+        let off_recv = recv.0 as u32 * 8 + LFP_SELF as u32;
+        if off_dst > 4095 || off_recv > 4095 {
+            return false;
+        }
+        let f = runtime::defined_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off_dst);  // &dst (out-pointer)
+            sub x10, x(lfp), #(off_recv);
+            ldr x3, [x10];               // recv (slot value)
+            mov x4, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// defined?(@name): runtime writes the result through `dst`.
+    pub(in crate::codegen::jitgen) fn emit_defined_ivar(
+        &mut self,
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::defined_ivar as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+            mov x3, (name.get() as u64); // name
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Generic binary-op C-call (no receiver-class guard), mirroring the VM's
+    /// call_binop convention: x0=vm, x1=globals, x2=lhs, x3=rhs; Option<Value>
+    /// result in x0. Bails on a live xmm pool reg or an out-of-range offset.
+    pub(in crate::codegen::jitgen) fn emit_generic_binop(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = func as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// `lhs === rhs` for an Array lhs via runtime::array_teq (x0=vm, x1=globals,
+    /// x2=lhs, x3=rhs); Option<Value> result in x0. Bails as above.
+    pub(in crate::codegen::jitgen) fn emit_array_teq(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0;
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = runtime::array_teq as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Build a Regexp from the `len` interpolated parts based at slot `arg` via
+    /// runtime::concatenate_regexp (x0=vm, x1=globals, x2=&arg, x3=len);
+    /// Option<Value> result in x0. The runtime reads `arg, arg-1, …` (descending
+    /// addresses), matching the x86 `lea rdx,[rbp-rbp_local(arg)]`. Bails on a
+    /// live xmm pool reg or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_concat_regexp(
+        &mut self,
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = arg.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::concatenate_regexp as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+            sub x2, x(lfp), #(off);      // &arg (slot address)
+            mov x3, (len as u64);        // len
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// Keyword-rest fixup: if the `slot` is nil, replace it with a fresh empty
+    /// Hash (runtime::empty_hash, no args, result in x0). Mirrors the x86 inline
+    /// path (no xmm save — no xmm is live at kw-rest setup). Bails on an
+    /// out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let exit = self.jit.label();
+        let f = runtime::empty_hash as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldr x11, [x10];
+            cmp x11, #(NIL_VALUE);       // slot == nil ?
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &exit); // not nil -> keep
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                      // x0 = {}
+            ldr x30, [sp], #16;
+            sub x10, x(lfp), #(off);     // x10 clobbered by the call; recompute
+            str x0, [x10];               // slot = {}
+        exit:
+        );
+        true
+    }
+
+    /// Multiple-assignment array expansion via runtime::expand_array(src, dst,
+    /// len, rest). `src` is already in GP::Rdi (x4) from the preceding load;
+    /// `dst` is the (descending) destination base x22-conv(dst). aarch64 C-args:
+    /// x0=src, x1=&dst, x2=len, x3=rest (rest = rest_pos+1, or 0 for none).
+    /// Bails on a live xmm pool reg or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_expand_array(
+        &mut self,
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let rest = if let Some(rest_pos) = rest_pos {
+            rest_pos as u64 + 1
+        } else {
+            0
+        };
+        let lfp = GP::R14.a64().0; // x22
+        let off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let rdi = GP::Rdi.a64().0; // x4 holds src
+        let f = runtime::expand_array as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);              // src (from GP::Rdi)
+            sub x1, x(lfp), #(off);      // &dst (descending base)
+            mov x2, (len as u64);        // len
+            mov x3, (rest);              // rest (0 = none)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        true
+    }
+
+    /// `==` / `!=` with an inline immediate fast path (mirrors the x86
+    /// `opt_eq_cmp`). If BOTH operands are non-heap, non-flonum immediates the
+    /// Ruby result is exact bit (identity) equality, produced inline via
+    /// cmp + cset; otherwise fall through to the generic C-call `func`
+    /// (x0=vm, x1=globals, x2=lhs, x3=rhs). `lhs`/`rhs` are loaded into x2/x3
+    /// up front so the slow path can reuse them. Bails on a live xmm pool reg
+    /// or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
+        &mut self,
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
+        let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
+        if off_l > 4095 || off_r > 4095 {
+            return false;
+        }
+        let f = func as u64;
+        let slow = self.jit.label();
+        let done = self.jit.label();
+        // Load operands into the C-arg registers (reused by the slow path).
+        // Heap iff (bits & 0b111) == 0; Flonum iff (bits & 0b011) == 0b010.
+        // Either operand heap/flonum -> generic C-call.
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off_l);
+            ldr x2, [x10];               // lhs
+            sub x10, x(lfp), #(off_r);
+            ldr x3, [x10];               // rhs
+            mov x14, (7u64);
+            and x9, x2, x14;
+            cbz x9, slow;                // lhs heap -> slow
+            mov x14, (3u64);
+            and x9, x2, x14;
+            cmp x9, #(2u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow); // lhs flonum -> slow
+        monoasm_arm64!(&mut self.jit,
+            mov x14, (7u64);
+            and x9, x3, x14;
+            cbz x9, slow;                // rhs heap -> slow
+            mov x14, (3u64);
+            and x9, x3, x14;
+            cmp x9, #(2u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow); // rhs flonum -> slow
+        // Fast path: both identity-comparable immediates -> bit equality.
+        monoasm_arm64!(&mut self.jit,
+            cmp x2, x3;
+        );
+        self.a64_flag_to_bool(kind); // x0 = bool Value
+        monoasm_arm64!(&mut self.jit,
+            b done;
+        slow:
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals (x2=lhs, x3=rhs intact)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        done:
+        );
+        true
+    }
+
+    /// Unary float C helper `f(f64) -> f64` (sin, sqrt, …): load the operand
+    /// into d0 (the first/only AAPCS f64 arg = return reg), call, store d0 into
+    /// dst. The live FP pool (d2-d7, caller-saved = clobbered by the callee) is
+    /// saved/restored around the call exactly like the x86 twin. Bails if the
+    /// source or destination is a spill slot (a64_fpr only handles d2-d7).
+    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
+        &mut self,
+        f: unsafe extern "C" fn(f64) -> f64,
+        src: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        let Some(s) = self.a64_fpr(src, base) else {
+            return false;
+        };
+        let Some(d) = self.a64_fpr(dst, base) else {
+            return false;
+        };
+        let fp = f as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            fmov d0, d(s);
+            mov x9, (fp);
+            blr x9;            // result in d0
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            fmov d(d), d0;
+        );
+        true
+    }
+
+    /// Binary float C helper `f(f64, f64) -> f64` (atan2, hypot, …): load lhs
+    /// into d0 and rhs into d1 (the first two AAPCS f64 args), call, store the
+    /// d0 result into dst. Pool sources resolve to d2-d7 so they never alias the
+    /// d0/d1 scratch regs. Saves/restores the live FP pool like the x86 twin.
+    /// Bails if any operand or the destination is a spill slot.
+    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
+        &mut self,
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) -> bool {
+        let Some(l) = self.a64_fpr(lhs, base) else {
+            return false;
+        };
+        let Some(r) = self.a64_fpr(rhs, base) else {
+            return false;
+        };
+        let Some(d) = self.a64_fpr(dst, base) else {
+            return false;
+        };
+        let fp = f as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            fmov d0, d(l);
+            fmov d1, d(r);
+            mov x9, (fp);
+            blr x9;            // result in d0
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            fmov d(d), d0;
+        );
+        true
+    }
+
+    /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
+    /// The Option<Value> result (None == error) is checked by the trailing
+    /// HandleError. Bails when an xmm pool register is live (no save around the
+    /// C call).
+    pub(in crate::codegen::jitgen) fn emit_method_def(
+        &mut self,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let f = runtime::define_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                     // vm (Executor)
+            mov x1, x20;                     // globals
+            mov x2, (name.get() as u64);     // name (IdentId)
+            mov x3, (func_id.get() as u64);  // func_id (FuncId)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                          // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        true
+    }
+
+    /// `def obj.name; … end` — runtime::singleton_define_method(vm, globals,
+    /// name, func_id, obj) where `obj` is the receiver Value read from its
+    /// frame slot (5th AAPCS arg = x4). Bails on a live xmm pool reg or an
+    /// out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_singleton_method_def(
+        &mut self,
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = obj.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let f = runtime::singleton_define_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                     // vm (Executor)
+            mov x1, x20;                     // globals
+            mov x2, (name.get() as u64);     // name (IdentId)
+            mov x3, (func_id.get() as u64);  // func_id (FuncId)
+            sub x10, x(lfp), #(off);
+            ldr x4, [x10];                   // obj (receiver Value)
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                          // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        true
+    }
+
+    // ---- exception / non-local control flow -------------------------------
+    // All four branch into `entry_raise` (the shared unwind/dispatch entry,
+    // bound by a64_gen_entry_raise). None carry a `using_xmm` set — an
+    // in-flight exception abandons the FP pool. C-arg regs: x0=vm (x19).
+
+    /// `raise` — runtime::raise_err(vm, err_val) then unwind. The value to
+    /// raise is in the accumulator scratch (GP::Rax = x0), so it is moved into
+    /// x1 *before* x0 is overwritten with the executor.
+    pub(in crate::codegen::jitgen) fn emit_raise(&mut self) -> bool {
+        let raise = self.entry_raise();
+        let acc = GP::Rax.a64().0; // x0
+        let f = runtime::raise_err as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x1, x(acc);          // err_val (read before clobbering x0)
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// `retry` — set PC (x21) to `pc + 1`, call runtime::err_retry(vm), unwind.
+    pub(in crate::codegen::jitgen) fn emit_retry(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        let pcv = (pc + 1).as_ptr() as u64;
+        let f = runtime::err_retry as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pcv);          // PC <- pc + 1
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// `redo` — like `retry` but runtime::err_redo(vm).
+    pub(in crate::codegen::jitgen) fn emit_redo(&mut self, pc: BytecodePtr) -> bool {
+        let raise = self.entry_raise();
+        let pcv = (pc + 1).as_ptr() as u64;
+        let f = runtime::err_redo as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pcv);          // PC <- pc + 1
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            b raise;
+        );
+        true
+    }
+
+    /// End of an `ensure` clause — runtime::ensure_end(vm) returns a nonzero
+    /// value when a pending exception must keep propagating (→ entry_raise);
+    /// zero means fall through to the normal continuation.
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self) -> bool {
+        let raise = self.entry_raise();
+        let cont = self.jit.label();
+        let f = runtime::ensure_end as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;             // vm
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                  // x0 = 0 (continue) / nonzero (re-raise)
+            ldr x30, [sp], #16;
+            cbz x0, cont;
+            b raise;
+            cont:
+        );
+        true
+    }
+
+    /// If the outer LFP in `x(reg)` points at a stack frame already promoted to
+    /// the heap (its Meta `kind` byte at `[lfp - 1]` has the `invalidated` bit
+    /// 0b1000 set), forward the pointer to the live heap copy stored in the
+    /// owning CFP's LFP slot (`[lfp + 8]`). Null `reg` (default ProcData on a
+    /// no-block error) is left as-is. Mirrors x86 `resolve_invalidated_outer`.
+    fn a64_resolve_invalidated_outer(&mut self, reg: u32) {
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            cbz x(reg), skip;             // null outer -> leave (error checked later)
+            sub x10, x(reg), #(1u32);
+            ldrb w9, [x10];               // Meta.kind byte
+            mov x11, (0b1000u64);
+            tst x9, x11;                  // invalidated bit?
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &skip); // clear -> not promoted
+        monoasm_arm64!(&mut self.jit,
+            ldr x(reg), [x(reg), #(8u32)]; // forward to heap copy (cfp.lfp slot)
+            skip:
+        );
+    }
+
+    /// Lower the generic `Yield` (block call whose target is resolved at runtime
+    /// via `get_yield_data`). Mirrors x86 `gen_yield`: fetch the block's
+    /// ProcData, build the callee block frame, massage arguments, then call the
+    /// block's funcdata indirectly. The eviction-on-return patching is x86-only
+    /// (runtime branch patching), so it is skipped — class-version guards cover
+    /// it. `error` catches a missing block, an argument error, or a callee
+    /// raise. Bails on an out-of-range callee-frame offset.
+    pub(in crate::codegen::jitgen) fn emit_yield(
+        &mut self,
+        callid: CallSiteId,
+        error: &DestLabel,
+        _evict: AsmEvict,
+        _evict_label: &DestLabel,
+    ) -> bool {
+        // Closely mirrors the proven VM `a64_op_yield`. x25/x26 are callee-saved
+        // and used by neither the JIT global set (x19-x23) nor JIT'd code, so
+        // they survive the C calls and hold the outer LFP / funcdata. The
+        // continuation frame is already reserved by the surrounding
+        // xmm_save_cont, so no extra push here.
+        let f_yield = runtime::get_yield_data as *const () as u64;
+        let f_args = runtime::jit_handle_arguments_no_block as *const () as u64;
+        // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f_yield);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.a64_resolve_invalidated_outer(0);
+        self.emit_handle_error(error); // null outer (no block given) -> error
+        monoasm_arm64!(&mut self.jit, mov x25, x0;); // outer (callee-saved)
+        // get_func_data: FuncId (x1) -> &FuncData (x9 -> x26).
+        monoasm_arm64!(&mut self.jit, mov x2, x1;);
+        self.a64_get_func_data_x2(); // x9 = &FuncData (clobbers x10, x11)
+        monoasm_arm64!(&mut self.jit, mov x26, x9;);
+        // Build the callee block frame fields below sp (outer/svar/cme/block/
+        // self/meta). self is inherited from the outer frame.
+        monoasm_arm64!(&mut self.jit,
+            mov x12, (0u64);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x25, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];
+            sub x10, x25, #(LFP_SELF as u32);
+            ldr x10, [x10];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x10, [x11];
+            ldr x10, [x26, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x10, [x11];
+        );
+        // jit_handle_arguments_no_block(vm, globals, caller_lfp, callee_lfp,
+        // callid). callee_lfp is computed before the dynamic callee-scratch
+        // reservation; the pre-reservation sp is saved in x25 and restored
+        // afterwards (x26 survives as fdata).
+        monoasm_arm64!(&mut self.jit,
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32);   // callee_lfp
+            mov x25, sp;                             // save sp (outer no longer needed)
+            ldrh w10, [x26, #(FUNCDATA_OFS as u32)];
+            lsl x10, x10, #(4);
+            add x10, x10, #(16);                     // 16-aligned reservation
+            sub x11, x25, x10;
+            mov sp, x11;
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, x22;                             // caller LFP
+            mov x4, (callid.get() as u64);
+            mov x9, (f_args);
+            blr x9;                                  // x0 = Option<Value>
+            mov sp, x25;                             // restore sp
+        );
+        self.emit_handle_error(error); // argument error -> error
+        // call_funcdata (indirect, fdata in x26): push the control frame, set
+        // the callee LFP/PC, blr the codeptr, then restore the caller frame
+        // (cfp from the saved prev slot, lfp from x29 == the JIT frame pointer).
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            sub x3, x21, #(16u32);                       // x3 = pc arg (call-site bc ptr) for with-pc callees
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];        // PC <- callee pc
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                       // result in x0
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        true
+    }
+
+    /// `dst <- sp + (ofs - RSP_LOCAL_FRAME)` (the absolute callee-slot address).
+    /// The displacement is usually negative (the callee frame sits below sp).
+    /// Returns `false` if it exceeds the 12-bit add/sub immediate.
+    fn a64_rsp_slot_addr(&mut self, ofs: i32, dst: u32) -> bool {
+        let signed = ofs - RSP_LOCAL_FRAME;
+        if signed >= 0 {
+            if signed > 4095 {
+                return false;
+            }
+            monoasm_arm64!(&mut self.jit, add x(dst), sp, #(signed as u32););
+        } else {
+            let n = (-signed) as u32;
+            if n > 4095 {
+                return false;
+            }
+            monoasm_arm64!(&mut self.jit, sub x(dst), sp, #(n););
+        }
+        true
+    }
+
+    // ---- callee-frame argument stores ([sp + (ofs - RSP_LOCAL_FRAME)]) ------
+    // Used by the inline argument-setup fast path (fetch_for_callee). Bail on an
+    // out-of-range slot offset.
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- reg`
+    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        let r = r.a64().0;
+        monoasm_arm64!(&mut self.jit, str x(r), [x10];);
+        true
+    }
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- 0`
+    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0u64);
+            str x9, [x10];
+        );
+        true
+    }
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- imm`
+    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (i);
+            str x9, [x10];
+        );
+        true
+    }
+
+    /// `&block` proxy: materialize the current method's block handler into
+    /// `ret`. Walk `outer` outer-frame links to reach the method LFP (x0), load
+    /// its block slot ([lfp - LFP_BLOCK]); if the low bit is set (already a
+    /// BlockHandler proxy rather than a frame pointer) bump the nesting tag by
+    /// `(outer << 2) + 2`. No runtime call, no xmm pressure. Bails on an
+    /// out-of-range frame offset or nesting tag immediate.
+    pub(in crate::codegen::jitgen) fn emit_block_arg_proxy(
+        &mut self,
+        ret: SlotId,
+        outer: usize,
+    ) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let rax = GP::Rax.a64().0; // x0
+        let off = ret.0 as u32 * 8 + LFP_SELF as u32;
+        let tag = ((outer << 2) + 2) as u32;
+        if off > 4095 || tag > 4095 {
+            return false;
+        }
+        // get_method_lfp(outer): x0 <- method LFP (walk `outer` outer links).
+        if outer == 0 {
+            monoasm_arm64!(&mut self.jit, mov x(rax), x(lfp););
+        } else {
+            monoasm_arm64!(&mut self.jit, ldr x(rax), [x(lfp)];);
+            for _ in 0..outer - 1 {
+                monoasm_arm64!(&mut self.jit, ldr x(rax), [x(rax)];);
+            }
+        }
+        // block_arg_proxy(outer): x0 <- [x0 - LFP_BLOCK]; if (x0 & 1) bump tag.
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(rax), #(LFP_BLOCK as u32);
+            ldr x(rax), [x10];
+            mov x11, (1u64);
+            tst x(rax), x11;             // Z = ((x0 & 1) == 0)
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            add x(rax), x(rax), #(tag);
+            exit:
+        );
+        // store_rax(ret): [lfp - off] <- x0
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(rax), [x10];
+        );
+        true
+    }
+
+    /// `&block` captured as a Proc value: runtime::block_arg(vm, globals, lfp,
+    /// call_site) materializes the current frame's block handler into a Proc
+    /// (promoting the frame to the heap if needed). The Option<Value> result is
+    /// stored to `ret` after a HandleError. Bails on a live xmm pool reg (no
+    /// save around the C call) or an out-of-range frame offset.
+    pub(in crate::codegen::jitgen) fn emit_block_arg(
+        &mut self,
+        ret: SlotId,
+        using_xmm: UsingXmm,
+        call_site_bc_ptr: BytecodePtr,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let off = ret.0 as u32 * 8 + LFP_SELF as u32;
+        if off > 4095 {
+            return false;
+        }
+        let cs = call_site_bc_ptr.as_ptr() as u64;
+        let f = runtime::block_arg as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;          // vm
+            mov x1, x20;          // globals
+            mov x2, x(lfp);       // caller LFP
+            mov x3, (cs);         // call-site bc ptr
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;               // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        let rax = GP::Rax.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            str x(rax), [x10];    // ret <- Proc
+        );
+        true
+    }
+
+    /// Side-effect guard for a method that passes a block: deopt if the current
+    /// frame has been captured/promoted (so a materialized closure observes
+    /// later local writes). Tests the captured (0b1000_0000) / invalidated
+    /// (0b0000_1000) bits of the Meta `kind` byte at `[lfp - 1]`. Mirrors x86
+    /// `branch_if_captured` + `guard_capture`; aarch64 lays the deopt inline (no
+    /// cold page) so this is just a conditional branch to the deopt label.
+    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let off = (LFP_META as i64 - META_KIND as i64) as u32; // == 1 (kind byte)
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(off);
+            ldrb w9, [x10];
+            mov x11, (0b1000_1000u64);
+            tst x9, x11;                 // captured or invalidated?
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
         true
     }
 

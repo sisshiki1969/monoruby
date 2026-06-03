@@ -308,6 +308,20 @@ impl Codegen {
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
             AsmInst::LoopJitRspBump { offset } => return self.emit_loop_jit_rsp_bump(offset),
+            // Inline argument-setup stores into the callee frame (aarch64 bails
+            // on an out-of-range slot offset).
+            AsmInst::RegToRSPOffset(r, ofs) => return self.emit_reg_to_rsp_offset(r, ofs),
+            AsmInst::ZeroToRSPOffset(ofs) => return self.emit_zero_to_rsp_offset(ofs),
+            AsmInst::U64ToRSPOffset(i, ofs) => return self.emit_u64_to_rsp_offset(i, ofs),
+            // Side-effect guard for block-passing calls: deopt if the frame was
+            // captured/promoted.
+            AsmInst::GuardCapture(deopt) => return self.emit_guard_capture(&labels[deopt]),
+            // `&block` forwarding: proxy the block handler, or materialize it
+            // into a Proc value (aarch64 bails on a live xmm / range overflow).
+            AsmInst::BlockArgProxy { ret, outer } => return self.emit_block_arg_proxy(ret, outer),
+            AsmInst::BlockArg { ret, _outer: _, using_xmm, error, call_site_bc_ptr } => {
+                return self.emit_block_arg(ret, using_xmm, call_site_bc_ptr, &labels[error]);
+            }
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
             AsmInst::StoreSelfIVarHeap {
@@ -329,6 +343,89 @@ impl Codegen {
             }
             AsmInst::AliasGvar { new, old, using_xmm } => {
                 return self.emit_alias_gvar(new, old, using_xmm);
+            }
+            // Runtime-call class-variable / method-alias ops. aarch64 bails
+            // when an xmm pool register is live (no xmm save yet).
+            AsmInst::CheckCVar { name, using_xmm } => {
+                return self.emit_check_cvar(name, using_xmm);
+            }
+            AsmInst::StoreCVar { name, src, using_xmm } => {
+                return self.emit_store_cvar(name, src, using_xmm);
+            }
+            AsmInst::AliasMethod { new, old, using_xmm } => {
+                return self.emit_alias_method(new, old, using_xmm);
+            }
+            // defined? runtime-call family (aarch64 bails on a live xmm pool reg
+            // or an out-of-range frame offset).
+            AsmInst::DefinedYield { dst, using_xmm } => {
+                return self.emit_defined_yield(dst, using_xmm);
+            }
+            AsmInst::DefinedSuper { dst, using_xmm } => {
+                return self.emit_defined_super(dst, using_xmm);
+            }
+            AsmInst::DefinedGvar { dst, name, using_xmm } => {
+                return self.emit_defined_gvar(dst, name, using_xmm);
+            }
+            AsmInst::DefinedCvar { dst, name, using_xmm } => {
+                return self.emit_defined_cvar(dst, name, using_xmm);
+            }
+            AsmInst::DefinedConst { dst, siteid, using_xmm } => {
+                return self.emit_defined_const(dst, siteid, using_xmm);
+            }
+            AsmInst::DefinedMethod { dst, recv, name, using_xmm } => {
+                return self.emit_defined_method(dst, recv, name, using_xmm);
+            }
+            AsmInst::DefinedIvar { dst, name, using_xmm } => {
+                return self.emit_defined_ivar(dst, name, using_xmm);
+            }
+            // Generic binary-op / Array=== runtime calls (aarch64 bails on a
+            // live xmm pool reg or an out-of-range frame offset).
+            AsmInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
+                return self.emit_generic_binop(lhs, rhs, func, using_xmm);
+            }
+            AsmInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
+                return self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+            }
+            AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
+                return self.emit_array_teq(lhs, rhs, using_xmm);
+            }
+            // Regexp interpolation / keyword-rest fixup runtime calls.
+            AsmInst::ConcatRegexp { arg, len, using_xmm } => {
+                return self.emit_concat_regexp(arg, len, using_xmm);
+            }
+            AsmInst::CheckKwRest(slot) => return self.emit_check_kw_rest(slot),
+            // Multiple-assignment array expansion (aarch64 bails on a live xmm
+            // pool reg or an out-of-range frame offset).
+            AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
+                return self.emit_expand_array(dst, len, rest_pos, using_xmm);
+            }
+            // Float C-function calls (Math.sqrt/sin/…). aarch64 saves the live
+            // FP pool (d2-d7) around the call and bails on a spilled operand.
+            AsmInst::CFunc_F_F { f, src, dst, using_xmm } => {
+                return self.emit_cfunc_f_f(f, src, dst, using_xmm, frame.base_stack_offset);
+            }
+            AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm } => {
+                return self.emit_cfunc_ff_f(f, lhs, rhs, dst, using_xmm, frame.base_stack_offset);
+            }
+            // Method definition (`def`). aarch64 bails on a live xmm pool reg.
+            AsmInst::MethodDef { name, func_id, using_xmm, error } => {
+                return self.emit_method_def(name, func_id, using_xmm, &labels[error]);
+            }
+            AsmInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
+                return self.emit_singleton_method_def(obj, name, func_id, using_xmm, &labels[error]);
+            }
+            // Exception / non-local control flow (raise / retry / redo / ensure).
+            // All branch into the shared entry_raise unwind path.
+            AsmInst::Raise => return self.emit_raise(),
+            AsmInst::Retry(pc) => return self.emit_retry(pc),
+            AsmInst::Redo(pc) => return self.emit_redo(pc),
+            AsmInst::EnsureEnd => return self.emit_ensure_end(),
+            // Generic `yield` (block target resolved at runtime). aarch64 builds
+            // the block frame and calls the funcdata indirectly; the x86-only
+            // return-address eviction patch is applied by the x86 emit_yield.
+            AsmInst::Yield { callid, error, evict } => {
+                let evict_label = labels[evict].clone();
+                return self.emit_yield(callid, &labels[error], evict, &evict_label);
             }
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
