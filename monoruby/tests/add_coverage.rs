@@ -302,6 +302,30 @@ fn case_opt() {
     ]);
 }
 
+// A `break` out of a block lowers to the `BlockBreak` AsmInst (a non-local
+// exit through `err_block_break`). Each method's block is exercised enough to
+// JIT, so the break path runs through native code on both the x86-64 `amd64`
+// job and the native arm64 `darwin` job. Covers conditional and unconditional
+// breaks, breaks carrying a value, and `each`/`times`/range iterators.
+#[test]
+fn block_break_jit() {
+    run_test(
+        r#"
+        def first_even(a); a.each { |x| break x if x % 2 == 0 }; end
+        def take_first(a); a.each { |x| break x * 10 }; end
+        def upto_three(n); (0...n).each { |i| break i if i == 3 }; end
+        def sum_until(n); r = 0; n.times { |i| break if i == 5; r += i }; r; end
+        [
+          first_even([1, 3, 8, 9]),
+          first_even([1, 3, 5]),
+          take_first([5, 6, 7]),
+          upto_three(10),
+          sum_until(10),
+        ]
+        "#,
+    );
+}
+
 // A dense (>= 8 integer `when`) `case` lowers to the `OptCase` jump-table
 // bytecode rather than an `===` chain. Wrapping it in a method exercised many
 // times forces the JIT to compile the `OptCase` AsmInst (covered on both the

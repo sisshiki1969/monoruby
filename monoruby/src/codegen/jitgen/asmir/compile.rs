@@ -86,6 +86,7 @@ impl Codegen {
             | AsmInst::FloatCmpBr { .. }
             | AsmInst::Ret
             | AsmInst::MethodRet(..)
+            | AsmInst::BlockBreak(..)
             | AsmInst::ImmediateEvict { .. }
             | AsmInst::GuardClassVersion { .. }
             | AsmInst::SetupMethodFrame { .. }
@@ -193,12 +194,6 @@ impl Codegen {
                 self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
 
-            AsmInst::BlockBreak(pc) => {
-                monoasm! { &mut self.jit,
-                    movq r13, ((pc + 1).as_ptr());
-                };
-                self.block_break();
-            }
             AsmInst::MethodRetSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
@@ -1174,6 +1169,14 @@ impl Codegen {
             movq r13, ((pc + 1).as_ptr());
         };
         self.method_return();
+    }
+
+    /// Non-local exit through the block-break path, resuming at `pc + 1`.
+    pub(in crate::codegen::jitgen) fn emit_block_break(&mut self, pc: BytecodePtr) {
+        monoasm! { &mut self.jit,
+            movq r13, ((pc + 1).as_ptr());
+        };
+        self.block_break();
     }
 
     /// Dense-integer `case` dispatch (cond fixnum in rdi). Build a jump table of

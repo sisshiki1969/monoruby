@@ -636,6 +636,30 @@ impl Codegen {
         );
     }
 
+    /// Lower `BlockBreak`: a `break` out of a block. Same shape as
+    /// `a64_method_ret` (set PC, call the error builder with the break value in
+    /// x0, jump to `entry_raise`) but through `err_block_break`, which unwinds
+    /// to the block's defining method rather than the current frame's caller.
+    ///
+    /// As in `a64_method_ret`, PC points at *this* instruction (not `pc + 1`):
+    /// aarch64's `entry_raise` hands PC to `handle_error` without the x86 `-16`
+    /// fixup, so storing `pc` (the value x86 reaches via `pc + 1` then `-16`)
+    /// keeps the exception-table lookup aligned with the raising instruction.
+    fn a64_block_break(&mut self, pc: BytecodePtr) {
+        let pc0 = pc.as_ptr() as u64;
+        let f = runtime::err_block_break as *const () as u64;
+        let raise = self.entry_raise();
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc0);
+            mov x2, x0;       // val (was in rax/x0)
+            mov x0, x19;      // vm
+            mov x1, x20;      // globals
+            mov x9, (f);
+            blr x9;
+            b raise;
+        );
+    }
+
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
     fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -1594,6 +1618,11 @@ impl Codegen {
     /// Return through the method-return path, resuming the caller at `pc + 1`.
     pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
         self.a64_method_ret(pc);
+    }
+
+    /// Non-local exit through the block-break path (a `break` out of a block).
+    pub(in crate::codegen::jitgen) fn emit_block_break(&mut self, pc: BytecodePtr) {
+        self.a64_block_break(pc);
     }
 
     /// Dense-integer `case` dispatch — aarch64 twin of x86 `emit_opt_case`. The
