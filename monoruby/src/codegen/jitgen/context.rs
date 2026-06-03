@@ -1074,12 +1074,9 @@ impl<'a> JitContext<'a> {
     /// [`Self::outer_specialized_ids`] for the rationale.
     ///
     pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
-        // aarch64 never builds specialized frames (see the `cfg!(jit_x86)` gate
-        // in method_call.rs), so there is no caller chain to encode — fall back
-        // to the plain `MethodRet` instead of `MethodRetSpecialized`.
-        if !cfg!(jit_x86) {
-            return None;
-        }
+        // Method specialization is lowered on both arches now, so the caller
+        // chain is encoded for `MethodRetSpecialized` on aarch64 too. (Block
+        // inlining stays x86-only — see `iter_caller_specialized_ids`.)
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;

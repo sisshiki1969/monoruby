@@ -284,12 +284,13 @@ impl<'a> JitContext<'a> {
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
-                // aarch64: the A64 lowering does not yet support specialized
-                // (inlined) frames, so never enter one — fall through to the
-                // plain `send` path below, which is always a correct
-                // (un-inlined) fallback. On x86 keep specializing as before.
-                if cfg!(jit_x86)
-                    && (iseq_block.is_some() || (specializable && self.specialize_level() < 5))
+                // Method specialization (inlining a callee iseq) is now lowered
+                // on both x86 and aarch64. Block-argument inlining
+                // (`iseq_block`) stays x86-only — its `SpecializedYield` /
+                // `SetupYieldFrame` lowering is not ported to aarch64 yet, so
+                // keep that path gated and fall through to the plain `send`.
+                if (specializable && self.specialize_level() < 5)
+                    || (cfg!(jit_x86) && iseq_block.is_some())
                 /*name == Some(IdentId::NEW)*/
                 {
                     return self.specialized_iseq(
