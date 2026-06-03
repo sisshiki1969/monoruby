@@ -106,6 +106,9 @@ impl Codegen {
             | AsmInst::StoreStructSlotHeap { .. }
             | AsmInst::RegAdd(..)
             | AsmInst::RegSub(..)
+            | AsmInst::RegToRSPOffset(..)
+            | AsmInst::ZeroToRSPOffset(..)
+            | AsmInst::U64ToRSPOffset(..)
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
@@ -144,23 +147,6 @@ impl Codegen {
                     call rax;
                 );
             }
-            AsmInst::RegToRSPOffset(r, ofs) => {
-                let r = r as u64;
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
-                );
-            }
-            AsmInst::ZeroToRSPOffset(ofs) => {
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
-                );
-            }
-            AsmInst::U64ToRSPOffset(i, ofs) => {
-                monoasm!( &mut self.jit,
-                    movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
-                );
-            }
-
             AsmInst::GuardCapture(deopt) => {
                 let deopt = &labels[deopt];
                 self.guard_capture(deopt)
@@ -1859,6 +1845,30 @@ impl Codegen {
     ) -> bool {
         let return_addr = self.gen_yield(callid, error);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        true
+    }
+
+    // ---- callee-frame argument stores (former per-arch arms) ----
+
+    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
+        let r = r as u64;
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
+        );
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
+        );
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
+        monoasm!( &mut self.jit,
+            movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
+        );
         true
     }
 }

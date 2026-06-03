@@ -2905,6 +2905,64 @@ impl Codegen {
         true
     }
 
+    /// `dst <- sp + (ofs - RSP_LOCAL_FRAME)` (the absolute callee-slot address).
+    /// The displacement is usually negative (the callee frame sits below sp).
+    /// Returns `false` if it exceeds the 12-bit add/sub immediate.
+    fn a64_rsp_slot_addr(&mut self, ofs: i32, dst: u32) -> bool {
+        let signed = ofs - RSP_LOCAL_FRAME;
+        if signed >= 0 {
+            if signed > 4095 {
+                return false;
+            }
+            monoasm_arm64!(&mut self.jit, add x(dst), sp, #(signed as u32););
+        } else {
+            let n = (-signed) as u32;
+            if n > 4095 {
+                return false;
+            }
+            monoasm_arm64!(&mut self.jit, sub x(dst), sp, #(n););
+        }
+        true
+    }
+
+    // ---- callee-frame argument stores ([sp + (ofs - RSP_LOCAL_FRAME)]) ------
+    // Used by the inline argument-setup fast path (fetch_for_callee). Bail on an
+    // out-of-range slot offset.
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- reg`
+    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        let r = r.a64().0;
+        monoasm_arm64!(&mut self.jit, str x(r), [x10];);
+        true
+    }
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- 0`
+    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0u64);
+            str x9, [x10];
+        );
+        true
+    }
+
+    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- imm`
+    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
+        if !self.a64_rsp_slot_addr(ofs, 10) {
+            return false;
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (i);
+            str x9, [x10];
+        );
+        true
+    }
+
     /// Per-arch (aarch64) lowering for every `AsmInst` not handled by the
     /// arch-neutral `compile_asmir` dispatcher. Returns `false` for any
     /// not-yet-ported variant (the method then stays VM-interpreted).

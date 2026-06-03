@@ -308,6 +308,11 @@ impl Codegen {
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
             AsmInst::LoopJitRspBump { offset } => return self.emit_loop_jit_rsp_bump(offset),
+            // Inline argument-setup stores into the callee frame (aarch64 bails
+            // on an out-of-range slot offset).
+            AsmInst::RegToRSPOffset(r, ofs) => return self.emit_reg_to_rsp_offset(r, ofs),
+            AsmInst::ZeroToRSPOffset(ofs) => return self.emit_zero_to_rsp_offset(ofs),
+            AsmInst::U64ToRSPOffset(i, ofs) => return self.emit_u64_to_rsp_offset(i, ofs),
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
             AsmInst::StoreSelfIVarHeap {
