@@ -857,6 +857,188 @@ impl Codegen {
         );
     }
 
+    /// Shared tail of `ClassDef` / `SingletonClassDef`: enter the class
+    /// context, run the class body, store the result, then leave. Expects the
+    /// new class/module `self` in x0. Mirrors x86 `jit_class_def_sub`; the
+    /// call_funcdata sequence is the same as `emit_yield`'s. `dst_off`, if set,
+    /// is the pre-range-checked `conv(dst)` byte offset of the result slot.
+    fn a64_jit_class_def_sub(&mut self, func_id: FuncId, dst_off: Option<u32>, error: &DestLabel) {
+        let lfp = GP::R14.a64().0; // x22
+        let f_enter = runtime::enter_classdef as *const () as u64;
+        let f_exit = runtime::exit_classdef as *const () as u64;
+        // x25 <- self (callee-saved, survives the C calls). enter_classdef(
+        // vm, globals, func_id, self) -> x0 = &FuncData; saved in x26.
+        monoasm_arm64!(&mut self.jit,
+            mov x25, x0;
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (func_id.get() as u64);
+            mov x3, x25;
+            str x30, [sp, #-16]!;
+            mov x9, (f_enter);
+            blr x9;
+            ldr x30, [sp], #16;
+            mov x26, x0;                                  // &FuncData
+            // callee block/method frame fields below sp.
+            mov x12, (0u64);
+            ldr x10, [x26, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x10, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x25, [x11];
+            // set_method_outer: outer/svar/cme = 0
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x12, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
+            str x12, [x11];
+            // call_funcdata (fdata in x26): push frame, set callee LFP/PC, call.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            sub x3, x21, #(16u32);                        // with-pc call-site bc ptr
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                       // x0 = body result
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        // store_rax(dst)
+        if let Some(off) = dst_off {
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x(lfp), #(off);
+                str x0, [x10];
+            );
+        }
+        // pop class context: exit_classdef(vm, globals), preserving the result.
+        monoasm_arm64!(&mut self.jit,
+            mov x25, x0;
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f_exit);
+            blr x9;
+            ldr x30, [sp], #16;
+            mov x0, x25;
+        );
+        self.emit_handle_error(error);
+    }
+
+    /// `ClassDef`: define (or reopen) a class/module, then run its body.
+    /// Bails on a live xmm pool reg (no FP save around the C calls, matching the
+    /// other aarch64 runtime-call emits) or an out-of-range frame slot.
+    fn a64_class_def(
+        &mut self,
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
+        dst: Option<SlotId>,
+        name: IdentId,
+        func_id: FuncId,
+        is_module: bool,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        // Range-check every frame slot up front (so we never bail mid-emit).
+        let sc_off = match superclass {
+            Some(s) => match (conv(s) as u32 <= 4095).then(|| conv(s) as u32) {
+                Some(o) => Some(o),
+                None => return false,
+            },
+            None => None,
+        };
+        let base_off = match base {
+            Some(b) => match (conv(b) as u32 <= 4095).then(|| conv(b) as u32) {
+                Some(o) => Some(o),
+                None => return false,
+            },
+            None => None,
+        };
+        let dst_off = match dst {
+            Some(d) => match (conv(d) as u32 <= 4095).then(|| conv(d) as u32) {
+                Some(o) => Some(o),
+                None => return false,
+            },
+            None => None,
+        };
+        let lfp = GP::R14.a64().0; // x22
+        let f = runtime::define_class as *const () as u64;
+        // superclass -> x3, base -> x5 (Option<Value>; 0 == None)
+        match sc_off {
+            Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x3, [x10];),
+            None => monoasm_arm64!(&mut self.jit, mov x3, (0u64);),
+        }
+        match base_off {
+            Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x5, [x10];),
+            None => monoasm_arm64!(&mut self.jit, mov x5, (0u64);),
+        }
+        // define_class(vm, globals, name, superclass, is_module, base)
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (name.get() as u64);
+            mov x4, (is_module as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                                        // x0 = Option<Value> self
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        true
+    }
+
+    /// `SingletonClassDef`: `class << obj; … end`. Like `a64_class_def` but the
+    /// class is obtained via `define_singleton_class(vm, globals, obj)`.
+    fn a64_singleton_class_def(
+        &mut self,
+        base: SlotId,
+        dst: Option<SlotId>,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) -> bool {
+        if using_xmm.iter().any(|b| *b) {
+            return false;
+        }
+        let base_off = conv(base) as u32;
+        let dst_off = match dst {
+            Some(d) => Some(conv(d) as u32),
+            None => None,
+        };
+        if base_off > 4095 || dst_off.is_some_and(|o| o > 4095) {
+            return false;
+        }
+        let lfp = GP::R14.a64().0; // x22
+        let f = runtime::define_singleton_class as *const () as u64;
+        // define_singleton_class(vm, globals, base)
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(base_off);
+            ldr x2, [x10];                                 // base (receiver Value)
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                                        // x0 = Option<Value> self
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);
+        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        true
+    }
+
     // ---- emission primitives (aarch64) ------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
@@ -3502,6 +3684,37 @@ impl Codegen {
             // call correct_rest_kw(&table, lfp) -> kwrest Hash (result in x0).
             AsmInst::RestKw { rest_kw } => {
                 self.a64_rest_kw(rest_kw);
+            }
+            // `class`/`module` (re)definition + body, and `class << obj`.
+            AsmInst::ClassDef {
+                base,
+                superclass,
+                dst,
+                name,
+                func_id,
+                is_module,
+                using_xmm,
+                error,
+            } => {
+                return self.a64_class_def(
+                    base,
+                    superclass,
+                    dst,
+                    name,
+                    func_id,
+                    is_module,
+                    using_xmm,
+                    &labels[error],
+                );
+            }
+            AsmInst::SingletonClassDef {
+                base,
+                dst,
+                func_id,
+                using_xmm,
+                error,
+            } => {
+                return self.a64_singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
             }
             _ => return false,
         }
