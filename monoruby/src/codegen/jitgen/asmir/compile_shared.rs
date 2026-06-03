@@ -69,6 +69,16 @@ impl Codegen {
                 let dest = frame.resolve_label(&mut self.jit, dest);
                 self.emit_check_local(dest);
             }
+            // Dense-integer `case`: range-check the (fixnum) condition against
+            // `[min, max]`, then dispatch through a jump table of absolute
+            // branch-target addresses (else for out-of-range). Terminates the
+            // basic block (no fallthrough).
+            AsmInst::OptCase {
+                max,
+                min,
+                else_label,
+                branch_labels,
+            } => self.emit_opt_case(frame, max, min, else_label, branch_labels),
             // Type guard: deopt if `r`'s runtime class is not `class`. (aarch64
             // bails for not-yet-supported class kinds, hence the bool result.)
             AsmInst::GuardClass(r, class, deopt) => {

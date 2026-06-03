@@ -1596,6 +1596,48 @@ impl Codegen {
         self.a64_method_ret(pc);
     }
 
+    /// Dense-integer `case` dispatch — aarch64 twin of x86 `emit_opt_case`. The
+    /// condition (a tagged fixnum) is in x4 (`GP::Rdi`), placed by the
+    /// front-end. Untag, range-check `[min, max]` (signed, both < 2048 so they
+    /// fit a 12-bit `cmp` immediate), then index a jump table of absolute
+    /// branch-target addresses by `cond - min` and branch indirectly.
+    ///
+    /// The table is built with `const_align8` + `abs_address`, exactly as on
+    /// x86; `resolve_constants` emits it into this method's own code page right
+    /// after the body, so it is well within `adr`'s ±1MB reach. Terminates the
+    /// basic block (the `br` is an unconditional indirect branch).
+    pub(in crate::codegen::jitgen) fn emit_opt_case(
+        &mut self,
+        frame: &mut AsmInfo,
+        max: u16,
+        min: u16,
+        else_label: JitLabel,
+        branch_labels: Box<[JitLabel]>,
+    ) {
+        let jump_table = self.jit.const_align8();
+        for label in branch_labels.iter() {
+            let dest_label = frame.resolve_label(&mut self.jit, *label);
+            self.jit.abs_address(dest_label);
+        }
+        let else_dest = frame.resolve_label(&mut self.jit, else_label);
+        let cond = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            asr x(cond), x(cond), #1;   // untag fixnum: x4 = n
+            cmp x(cond), #(max as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &else_dest); // n > max -> else
+        monoasm_arm64!(&mut self.jit,
+            cmp x(cond), #(min as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &else_dest); // n < min -> else
+        monoasm_arm64!(&mut self.jit,
+            sub x(cond), x(cond), #(min as u32);     // index = n - min
+            adr x10, jump_table;                     // table base (PC-relative)
+            ldr x10, [x10, x(cond), lsl #3];         // table[n - min]
+            br x10;
+        );
+    }
+
     /// Immediate eviction patches a live frame's return address on x86; aarch64
     /// cannot patch return addresses, so this is a no-op (class-version guards
     /// cover the staleness it would otherwise catch).

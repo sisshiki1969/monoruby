@@ -47,6 +47,7 @@ impl Codegen {
             | AsmInst::CondBr(..)
             | AsmInst::NilBr(..)
             | AsmInst::CheckLocal(..)
+            | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
@@ -204,31 +205,6 @@ impl Codegen {
             AsmInst::BlockBreakSpecialized { rbp_offset } => {
                 self.method_return_specialized(rbp_offset.unwrap_concrete());
             }
-            AsmInst::OptCase {
-                max,
-                min,
-                else_label,
-                branch_labels,
-            } => {
-                // generate a jump table.
-                let jump_table = self.jit.const_align8();
-                for label in branch_labels.iter() {
-                    let dest_label = frame.resolve_label(&mut self.jit, *label);
-                    self.jit.abs_address(dest_label);
-                }
-
-                let else_dest = frame.resolve_label(&mut self.jit, else_label);
-                monoasm! {&mut self.jit,
-                    sarq rdi, 1;
-                    cmpq rdi, (max);
-                    jgt  else_dest;
-                    subq rdi, (min);
-                    jlt  else_dest;
-                    lea  rax, [rip + jump_table];
-                    jmp  [rax + rdi * 8];
-                };
-            }
-
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.setup_yield_frame(meta, outer);
             }
@@ -1198,6 +1174,36 @@ impl Codegen {
             movq r13, ((pc + 1).as_ptr());
         };
         self.method_return();
+    }
+
+    /// Dense-integer `case` dispatch (cond fixnum in rdi). Build a jump table of
+    /// absolute branch-target addresses, range-check `[min, max]`, then index
+    /// it with `cond - min`.
+    pub(in crate::codegen::jitgen) fn emit_opt_case(
+        &mut self,
+        frame: &mut AsmInfo,
+        max: u16,
+        min: u16,
+        else_label: JitLabel,
+        branch_labels: Box<[JitLabel]>,
+    ) {
+        // generate a jump table.
+        let jump_table = self.jit.const_align8();
+        for label in branch_labels.iter() {
+            let dest_label = frame.resolve_label(&mut self.jit, *label);
+            self.jit.abs_address(dest_label);
+        }
+
+        let else_dest = frame.resolve_label(&mut self.jit, else_label);
+        monoasm! {&mut self.jit,
+            sarq rdi, 1;
+            cmpq rdi, (max);
+            jgt  else_dest;
+            subq rdi, (min);
+            jlt  else_dest;
+            lea  rax, [rip + jump_table];
+            jmp  [rax + rdi * 8];
+        };
     }
 
     /// Record this position as the return-address patch point for `evict`.

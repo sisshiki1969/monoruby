@@ -302,6 +302,49 @@ fn case_opt() {
     ]);
 }
 
+// A dense (>= 8 integer `when`) `case` lowers to the `OptCase` jump-table
+// bytecode rather than an `===` chain. Wrapping it in a method exercised many
+// times forces the JIT to compile the `OptCase` AsmInst (covered on both the
+// x86-64 `amd64` job and the native arm64 `darwin` job). Covers below-min,
+// in-range, boundaries, above-max -> else, a non-zero `min`, and several
+// `when` values mapping to one body.
+#[test]
+fn case_opt_jit() {
+    run_test(
+        r#"
+        def classify(n)
+          case n
+          when 0 then "z0"
+          when 1 then "z1"
+          when 2 then "z2"
+          when 3 then "z3"
+          when 4 then "z4"
+          when 5 then "z5"
+          when 6 then "z6"
+          when 7 then "z7"
+          when 8 then "z8"
+          when 9 then "z9"
+          else "other"
+          end
+        end
+        (-3..13).map { |n| classify(n) }
+        "#,
+    );
+    run_test(
+        r#"
+        def bucket(n)
+          case n
+          when 10, 12, 14 then :low
+          when 11, 13, 15 then :mid
+          when 16, 17, 18, 19 then :high
+          else :none
+          end
+        end
+        (8..21).map { |n| bucket(n) }
+        "#,
+    );
+}
+
 //
 // Tests for call site patterns (exercises CallSiteInfo methods)
 //
