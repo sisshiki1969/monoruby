@@ -1473,11 +1473,9 @@ impl Codegen {
         callid: CallSiteId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let f = runtime::gen_array as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                       // vm
             mov x1, x20;                       // globals
@@ -1488,6 +1486,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1498,15 +1497,13 @@ impl Codegen {
         len: usize,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = args.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::gen_hash as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -1517,6 +1514,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1528,9 +1526,6 @@ impl Codegen {
         exclude_end: bool,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let soff = start.0 as u32 * 8 + LFP_SELF as u32;
         let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
@@ -1538,6 +1533,7 @@ impl Codegen {
             return false;
         }
         let f = runtime::gen_range as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             sub x10, x(lfp), #(soff);
             ldr x0, [x10];            // start value
@@ -1551,6 +1547,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1563,15 +1560,13 @@ impl Codegen {
         len: u16,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::concatenate_string as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -1582,15 +1577,13 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
     /// rax <- `src` coerced to an Array: load slot `src`; if already an Array
     /// keep it, otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
     pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
@@ -1598,6 +1591,10 @@ impl Codegen {
         }
         let toa = self.jit.label();
         let exit = self.jit.label();
+        // Reserve the FP-pool save area for the whole sequence; both the
+        // already-Array fast path and the to_a C call fall through to the
+        // matching restore, so sp stays balanced either way.
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             sub x10, x(lfp), #(off);
             ldr x0, [x10];          // val (rax)
@@ -1616,6 +1613,7 @@ impl Codegen {
             ldr x30, [sp], #16;
             exit:
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1626,11 +1624,9 @@ impl Codegen {
         v: Value,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let imm = v.id();
         let f = Value::value_deep_copy as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, (imm);
             str x30, [sp, #-16]!;
@@ -1638,6 +1634,7 @@ impl Codegen {
             blr x9;            // result in x0 (= rax)
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
