@@ -1310,10 +1310,13 @@ impl Codegen {
         p
     }
 
-    /// op 30-33 `send`/`send_simple`: method call (slow-path only — no inline
-    /// cache; `find_method` does the lookup every time). Handles the simple
-    /// case (no kw/block/splat). Bytecode (32 bytes): `+0` callid, `+4` ret
-    /// slot, `+8` pos_num, `+10` arg slot, `+12` recv slot.
+    /// op 30-33 `send`/`send_simple`: method call. The VM always does the
+    /// `find_method` lookup (no VM-side fast-path read of the cache), but it
+    /// now writes the inline cache (FuncId/class/version via
+    /// [`Self::a64_save_method_cache`]) so the JIT can specialize the site.
+    /// Handles the simple case (no kw/block/splat). Bytecode (32 bytes): `+0`
+    /// callid, `+4` ret slot, `+8` pos_num, `+10` arg slot, `+12` recv slot;
+    /// inline cache `+16` FuncId, `+24` class, `+28` version.
     pub(in crate::codegen) fn a64_op_send(&mut self, is_simple: bool) -> CodePtr {
         let p = self.jit.get_current_address();
         let mm = self.jit.label();
@@ -1350,6 +1353,11 @@ impl Codegen {
             mov x9, (runtime::find_method as *const () as u64);
             blr x9;
             cbz x0, mm;
+        );
+        // Populate the inline cache (X0 = FuncId) so the JIT can type this
+        // call site. X0 is preserved across the call.
+        self.a64_save_method_cache();
+        monoasm_arm64!(&mut self.jit,
         // get_func_data: X15 = funcinfo_base + funcid*64 + FUNCINFO_DATA
             lsl x10, x0, #(6);
             mov x11, (GLOBALS_FUNCINFO as u64);
@@ -1723,6 +1731,9 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             tbz x13, #(0), generic;
             tbz x14, #(0), generic;
+        );
+        self.a64_save_binary_integer();
+        monoasm_arm64!(&mut self.jit,
             cmp x13, x14;
         );
         self.jit.cset(X13, cond);
@@ -1800,6 +1811,51 @@ impl Codegen {
         );
     }
 
+    /// Fixnum-fast-path counterpart of [`Self::a64_save_binary_class`]: stamp
+    /// `Integer`/`Integer` into the BinOp inline cache (`[PC+8]` classid1,
+    /// `[PC+12]` classid2) so the JIT can type integer arithmetic/compare
+    /// sites. Without this the cache stays empty (`<INVALID>`) and the JIT
+    /// deopts every integer binop. Mirrors x86 `vm_save_binary_integer`.
+    /// Clobbers X10; leaves the NZCV flags untouched (mov-immediate + stores).
+    pub(in crate::codegen) fn a64_save_binary_integer(&mut self) {
+        let int_class: u32 = INTEGER_CLASS.into();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (int_class);
+            str w10, [x(PC.0), #(8)];   // classid1
+            str w10, [x(PC.0), #(12)];  // classid2
+        );
+    }
+
+    /// Stamp the method-call inline cache so the JIT can specialize this call
+    /// site (otherwise `pc.method_cache()` stays `None` and every call deopts).
+    /// Mirrors x86 `save_cache`. On entry X0 = the resolved FuncId. Writes
+    /// FuncId @ `[PC+16]`, receiver ClassId @ `[PC+24]` and the current
+    /// class_version @ `[PC+28]` (the layout `method_cache()` reads). The
+    /// receiver is reloaded from its slot `[PC+12]` (rather than trusting a
+    /// register) since `find_method` is a C call that clobbers the caller-saved
+    /// receiver register. X0 is preserved (reloaded from the FuncId cache
+    /// slot); clobbers X1/X2/X11 and the link register.
+    pub(in crate::codegen) fn a64_save_method_cache(&mut self) {
+        let cv_addr = self
+            .jit
+            .get_label_address(&self.class_version_label())
+            .as_ptr() as u64;
+        let get_class = self.get_class.clone();
+        monoasm_arm64!(&mut self.jit,
+            str w0, [x(PC.0), #(16)];   // CACHED_FUNCID (also our save of X0)
+            ldrh x0, [x(PC.0), #(12)];  // recv slot index
+        );
+        self.a64_slot_value(X0); // X0 = receiver value
+        monoasm_arm64!(&mut self.jit,
+            bl get_class;               // x0 = class(recv)
+            str w0, [x(PC.0), #(24)];   // CACHED_CLASS
+            mov x11, (cv_addr);
+            ldr w0, [x11];              // class_version (i32)
+            str w0, [x(PC.0), #(28)];   // CACHED_VERSION
+            ldr w0, [x(PC.0), #(16)];   // reload FuncId into X0 (u32, zero-ext)
+        );
+    }
+
     pub(in crate::codegen) fn a64_generic_binop(&mut self, func: BinaryOpFn) {
         let raise = self.entry_raise.clone();
         self.a64_save_binary_class();
@@ -1851,6 +1907,7 @@ impl Codegen {
             tbz x13, #(0), generic;
             tbz x14, #(0), generic;
         );
+        self.a64_save_binary_integer();
         if is_sub {
             monoasm_arm64!(&mut self.jit,
                 subs x9, x13, x14;
