@@ -579,6 +579,58 @@ impl Codegen {
         true
     }
 
+    /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
+    /// fast path). aarch64 does not yet emit the inline element-copy fast path,
+    /// so the non-deferred shape falls back to the generic
+    /// `jit_generic_set_arguments` — the x86 fast path's own miss target, so
+    /// correct, just unoptimized. The `deferred_src` (D1) shape skipped building
+    /// `f`'s `...` rest array on the JIT path, so it cannot use the generic
+    /// helper and bails (the method stays VM-interpreted, where the array is
+    /// built normally).
+    fn a64_set_arguments_forwarded(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+        deferred_src: Option<(SlotId, u16)>,
+    ) -> bool {
+        if deferred_src.is_some() {
+            return false;
+        }
+        self.a64_set_arguments(callid, fid, offset)
+    }
+
+    /// Lower `SetArgumentsForwardedHelper`: same asm shape as
+    /// `a64_set_arguments`, but dispatches to the specialized
+    /// `jit_forwarded_set_arguments` runtime helper (forwarding `g(x.., ...)`
+    /// into a no-keyword iseq with opt/post/rest). Bails if the callee frame
+    /// size exceeds a 12-bit immediate.
+    fn a64_set_arguments_forwarded_helper(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+    ) -> bool {
+        if offset > 4080 {
+            return false;
+        }
+        let f = crate::runtime::jit_forwarded_set_arguments as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // callid
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32); // callee_lfp (call-site sp)
+            mov x4, (fid.get() as u64);        // callee fid
+            str x30, [sp, #-16]!;              // save LR
+            sub sp, sp, #(offset as u32);      // reserve callee scratch
+            mov x9, (f);
+            blr x9;
+            add sp, sp, #(offset as u32);
+            ldr x30, [sp], #16;                // restore LR
+        );
+        true
+    }
+
     /// Lower `Call` (the call itself): set the callee LFP, push a control
     /// frame, set PC, `blr` the callee codeptr, then restore the caller's
     /// cfp/lfp. Mirrors x86 `do_call` (set_lfp + push_frame + call + pop_frame)
@@ -3688,7 +3740,7 @@ impl Codegen {
     /// not-yet-ported variant (the method then stays VM-interpreted).
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
-        _store: &Store,
+        store: &Store,
         frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -3791,6 +3843,19 @@ impl Codegen {
                 error,
             } => {
                 return self.a64_singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
+            }
+            AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                deferred_src,
+                ..
+            } => {
+                let offset = store[callee_fid].get_offset();
+                return self.a64_set_arguments_forwarded(callid, callee_fid, offset, deferred_src);
+            }
+            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
+                let offset = store[callee_fid].get_offset();
+                return self.a64_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
             _ => return false,
         }
