@@ -1298,15 +1298,13 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let error = error.clone();
         let cv_addr = self
             .jit
             .get_label_address(&self.const_version_label())
             .as_ptr() as u64;
         let f = runtime::set_constant as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x3, x0;                 // val (was in rax)
             mov x0, x19;                // vm
@@ -1320,6 +1318,11 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
+        );
+        // Restore the FP pool *before* the error branch: the cold error handler
+        // writes the live floats back from the pool, so they must be valid.
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
             cbz x0, error;              // None -> error
         );
         true
@@ -1335,10 +1338,8 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::get_global_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -1348,6 +1349,7 @@ impl Codegen {
             blr x9;                       // result in x0 (= rax)
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1358,15 +1360,13 @@ impl Codegen {
         src: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::set_global_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -1378,6 +1378,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -1387,10 +1388,8 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::get_class_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm
             mov x1, x20;                  // globals
@@ -1400,6 +1399,7 @@ impl Codegen {
             blr x9;                       // result in x0
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2566,10 +2566,8 @@ impl Codegen {
     /// when an xmm pool register is live (no aarch64 xmm save around C calls
     /// yet); lr is preserved across the `blr`.
     pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::undef_method as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                   // vm (Executor)
             mov x1, x20;                   // globals
@@ -2579,16 +2577,15 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
     /// Alias a global var via runtime::alias_global_var(globals=x20, new, old).
     /// Bails when an xmm pool register is live.
     pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::alias_global_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x20;                 // globals
             mov x1, (new.get() as u64);  // new IdentId
@@ -2598,6 +2595,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2609,10 +2607,8 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::check_class_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -2622,6 +2618,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2635,15 +2632,13 @@ impl Codegen {
         src: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::set_class_var as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -2655,6 +2650,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2669,9 +2665,6 @@ impl Codegen {
         old: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off_old = old.0 as u32 * 8 + LFP_SELF as u32;
         let off_new = new.0 as u32 * 8 + LFP_SELF as u32;
@@ -2679,6 +2672,7 @@ impl Codegen {
             return false;
         }
         let f = runtime::alias_method as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm (Executor)
             mov x1, x20;                 // globals
@@ -2691,6 +2685,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2709,15 +2704,13 @@ impl Codegen {
         dst: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_yield as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -2728,6 +2721,7 @@ impl Codegen {
             sub x10, x(lfp), #(off);
             str x0, [x10];               // -> dst
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2737,15 +2731,13 @@ impl Codegen {
         dst: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_super as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2756,6 +2748,7 @@ impl Codegen {
             sub x10, x(lfp), #(off);
             str x0, [x10];
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2766,15 +2759,13 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_gvar as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2786,6 +2777,7 @@ impl Codegen {
             sub x10, x(lfp), #(off);
             str x0, [x10];
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2796,15 +2788,13 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_cvar as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2816,6 +2806,7 @@ impl Codegen {
             sub x10, x(lfp), #(off);
             str x0, [x10];
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2826,15 +2817,13 @@ impl Codegen {
         siteid: ConstSiteId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_const as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2845,6 +2834,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2856,9 +2846,6 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off_dst = dst.0 as u32 * 8 + LFP_SELF as u32;
         let off_recv = recv.0 as u32 * 8 + LFP_SELF as u32;
@@ -2866,6 +2853,7 @@ impl Codegen {
             return false;
         }
         let f = runtime::defined_method as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2878,6 +2866,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2888,15 +2877,13 @@ impl Codegen {
         name: IdentId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::defined_ivar as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2907,6 +2894,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2920,9 +2908,6 @@ impl Codegen {
         func: crate::executor::BinaryOpFn,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
@@ -2930,6 +2915,7 @@ impl Codegen {
             return false;
         }
         let f = func as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -2942,6 +2928,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2953,9 +2940,6 @@ impl Codegen {
         rhs: SlotId,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0;
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
@@ -2963,6 +2947,7 @@ impl Codegen {
             return false;
         }
         let f = runtime::array_teq as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -2975,6 +2960,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -2989,15 +2975,13 @@ impl Codegen {
         len: u16,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::concatenate_regexp as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -3008,6 +2992,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -3053,9 +3038,6 @@ impl Codegen {
         rest_pos: Option<usize>,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let rest = if let Some(rest_pos) = rest_pos {
             rest_pos as u64 + 1
         } else {
@@ -3068,6 +3050,7 @@ impl Codegen {
         }
         let rdi = GP::Rdi.a64().0; // x4 holds src
         let f = runtime::expand_array as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x(rdi);              // src (from GP::Rdi)
             sub x1, x(lfp), #(off);      // &dst (descending base)
@@ -3078,6 +3061,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         true
     }
 
@@ -3238,10 +3222,8 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let f = runtime::define_method as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
@@ -3252,6 +3234,7 @@ impl Codegen {
             blr x9;                          // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         true
     }
@@ -3268,15 +3251,13 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = obj.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
             return false;
         }
         let f = runtime::singleton_define_method as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
@@ -3289,6 +3270,7 @@ impl Codegen {
             blr x9;                          // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         true
     }
