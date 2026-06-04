@@ -3070,8 +3070,10 @@ impl Codegen {
     /// Ruby result is exact bit (identity) equality, produced inline via
     /// cmp + cset; otherwise fall through to the generic C-call `func`
     /// (x0=vm, x1=globals, x2=lhs, x3=rhs). `lhs`/`rhs` are loaded into x2/x3
-    /// up front so the slow path can reuse them. Bails on a live xmm pool reg
-    /// or an out-of-range frame offset.
+    /// up front so the slow path can reuse them. The live xmm pool is
+    /// saved/restored *only* around the slow-path C call (the inline fast path
+    /// never touches the caller-saved d2.. pool regs); bails only on an
+    /// out-of-range frame offset.
     pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
         &mut self,
         lhs: SlotId,
@@ -3080,9 +3082,6 @@ impl Codegen {
         func: crate::executor::BinaryOpFn,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
@@ -3127,10 +3126,20 @@ impl Codegen {
         slow:
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals (x2=lhs, x3=rhs intact)
+        );
+        // Save the live FP pool only on the slow path: the C call clobbers the
+        // caller-saved d2.. pool regs, but the inline fast path above (which
+        // branches straight to `done`) leaves them untouched, so both paths
+        // reach `done` with sp and the pool registers consistent.
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
         done:
         );
         true
@@ -3585,8 +3594,10 @@ impl Codegen {
     /// `&block` captured as a Proc value: runtime::block_arg(vm, globals, lfp,
     /// call_site) materializes the current frame's block handler into a Proc
     /// (promoting the frame to the heap if needed). The Option<Value> result is
-    /// stored to `ret` after a HandleError. Bails on a live xmm pool reg (no
-    /// save around the C call) or an out-of-range frame offset.
+    /// stored to `ret` after a HandleError. The live xmm pool is saved/restored
+    /// around the C call (restore placed before the HandleError branch so the
+    /// side exit writes the live floats back from the pool); bails only on an
+    /// out-of-range frame offset.
     pub(in crate::codegen::jitgen) fn emit_block_arg(
         &mut self,
         ret: SlotId,
@@ -3594,9 +3605,6 @@ impl Codegen {
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
@@ -3604,6 +3612,7 @@ impl Codegen {
         }
         let cs = call_site_bc_ptr.as_ptr() as u64;
         let f = runtime::block_arg as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm
             mov x1, x20;          // globals
@@ -3614,6 +3623,7 @@ impl Codegen {
             blr x9;               // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         let rax = GP::Rax.a64().0;
         monoasm_arm64!(&mut self.jit,
