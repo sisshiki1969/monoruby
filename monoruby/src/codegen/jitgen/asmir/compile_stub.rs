@@ -754,16 +754,19 @@ impl Codegen {
     /// Physical D-register index for a pool-resident `FPReg`, or `None` (bail →
     /// the method stays VM-interpreted) otherwise.
     ///
-    /// Capped to the caller-saved D2-D7: under AAPCS64 D8-D15 are callee-saved
-    /// (unlike x86-64 SysV where every xmm is caller-saved), and the aarch64
-    /// invoker / JIT prologue does not yet preserve them. Restricting the JIT'd
-    /// FP pool to caller-saved registers keeps the ABI sound without that
-    /// prologue work; methods needing >6 live floats (or any spill) just don't
-    /// JIT yet. `f64_to_val`'s heap path and `XmmSave` are consistent with this
-    /// (they only ever touch D2-D7).
+    /// Covers the full FP pool D2-D15 (`PHYS_XMM_POOL` = 14 ⇒ `Xmm(2..=15)`).
+    /// D2-D7 are AAPCS64 caller-saved; D8-D15 are callee-saved, so the
+    /// Rust↔JIT boundary (the invoker prologue/epilogue and the fiber-switch
+    /// `a64_{push,pop}_callee_save`) saves/restores D8-D15 to preserve the Rust
+    /// caller's values. Within the JIT world the whole pool is treated as
+    /// caller-saved — `XmmSave`/`XmmRestore` spill the live subset around any
+    /// clobbering call (a JIT→JIT `blr` clobbers D2-D15; a C-call's Rust callee
+    /// preserves D8-D15 but the spill is harmless), and `f64_to_val`'s heap
+    /// path saves D2-D7 while relying on `float_heap` to preserve D8-D15.
+    /// Only a spill (>14 live floats) still bails.
     fn a64_fpr(&self, x: FPReg, base: usize) -> Option<u32> {
         match x.loc(base) {
-            FPRegLoc::Xmm(p) if p <= 7 => Some(p as u32),
+            FPRegLoc::Xmm(p) if p <= 15 => Some(p as u32),
             _ => None,
         }
     }
