@@ -877,7 +877,13 @@ impl Codegen {
     /// new class/module `self` in x0. Mirrors x86 `jit_class_def_sub`; the
     /// call_funcdata sequence is the same as `emit_yield`'s. `dst_off`, if set,
     /// is the pre-range-checked `conv(dst)` byte offset of the result slot.
-    fn a64_jit_class_def_sub(&mut self, func_id: FuncId, dst_off: Option<u32>, error: &DestLabel) {
+    fn a64_jit_class_def_sub(
+        &mut self,
+        func_id: FuncId,
+        dst_off: Option<u32>,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) {
         let lfp = GP::R14.a64().0; // x22
         let f_enter = runtime::enter_classdef as *const () as u64;
         let f_exit = runtime::exit_classdef as *const () as u64;
@@ -946,12 +952,17 @@ impl Codegen {
             ldr x30, [sp], #16;
             mov x0, x25;
         );
+        // Reload the pool (clobbered by the class body + exit_classdef) and pop
+        // the save area before the final HandleError branch.
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
     }
 
-    /// `ClassDef`: define (or reopen) a class/module, then run its body.
-    /// Bails on a live xmm pool reg (no FP save around the C calls, matching the
-    /// other aarch64 runtime-call emits) or an out-of-range frame slot.
+    /// `ClassDef`: define (or reopen) a class/module, then run its body. The
+    /// live FP pool is saved once for the whole sequence (the define/enter/exit
+    /// C calls and the class body all clobber d2..) and reloaded into the pool
+    /// registers before each HandleError branch; bails only on an out-of-range
+    /// frame slot.
     fn a64_class_def(
         &mut self,
         base: Option<SlotId>,
@@ -963,9 +974,6 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         // Range-check every frame slot up front (so we never bail mid-emit).
         let sc_off = match superclass {
             Some(s) => match (conv(s) as u32 <= 4095).then(|| conv(s) as u32) {
@@ -990,6 +998,10 @@ impl Codegen {
         };
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_class as *const () as u64;
+        // Save the live FP pool for the whole ClassDef sequence; it persists
+        // across define_class, the class body, and exit_classdef, is reloaded
+        // into d2.. before each HandleError, and is popped once at the end.
+        self.emit_xmm_save(using_xmm, false);
         // superclass -> x3, base -> x5 (Option<Value>; 0 == None)
         match sc_off {
             Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x3, [x10];),
@@ -1010,8 +1022,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
+        self.a64_xmm_reload(using_xmm);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
         true
     }
 
@@ -1025,9 +1038,6 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let base_off = conv(base) as u32;
         let dst_off = match dst {
             Some(d) => Some(conv(d) as u32),
@@ -1038,6 +1048,7 @@ impl Codegen {
         }
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_singleton_class as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         // define_singleton_class(vm, globals, base)
         monoasm_arm64!(&mut self.jit,
             sub x10, x(lfp), #(base_off);
@@ -1049,8 +1060,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
+        self.a64_xmm_reload(using_xmm);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
         true
     }
 
@@ -1800,6 +1812,24 @@ impl Codegen {
         }
         monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
         true
+    }
+
+    /// Reload the live FP pool registers from the save area *without* popping
+    /// it. Used inside a multi-C-call emit (class_def) whose save area must
+    /// persist across several clobbering calls: the pool regs are reloaded
+    /// before each intermediate side-exit branch (whose handler reads the pool
+    /// *registers*), while the save area itself is popped only once at the end
+    /// via `emit_xmm_restore`. No-op when the pool is empty.
+    fn a64_xmm_reload(&mut self, using_xmm: UsingXmm) {
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
     }
 
     /// Integer binary op fast path (guarded; deopts to `deopt`). Independent of
