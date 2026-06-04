@@ -685,9 +685,6 @@ class Set
   alias << add
   alias eql? ==
 end
-class Thread
-  alias exit kill
-end
 class Time
   alias asctime ctime
 end
@@ -700,13 +697,31 @@ end
 class Struct
   alias inspect to_s
 end
-# Deferred (not fixed here): Complex#quo, Enumerator#with_object, Proc#eql?,
-# Proc#inspect, Thread#inspect. CRuby defines the aliased *originals*
-# (Complex#/, Enumerable... -> Enumerator#each_with_object, Proc#==, Proc#to_s,
-# Thread#to_s) directly on the class, whereas monoruby inherits them (from
-# Numeric/Enumerable/BasicObject/Kernel). A Ruby `alias` here would only copy
-# the inherited entry under the new name, so the strict
-# `instance_method(:a) == instance_method(:b)` identity check would still fail
-# (different owner) AND it would shadow monoruby's own class-specific impls
-# (e.g. Proc#inspect). These need the originals defined on the class first;
-# they are not in `bin/test`'s ruby/spec category list, so they don't block CI.
+
+# The remaining aliases need their *original* defined on the class, because
+# CRuby keeps the original there too (the strict identity check compares the
+# owner). monoruby inherits them, so we re-root the original on the class (a
+# `super`-forwarding stub preserves behaviour) and then alias.
+#
+# NOT done here: Complex#quo == Complex#/. CRuby keeps both on Complex as one
+# method; in monoruby `quo` (Rational-component result) and the inherited
+# Numeric#/ (and the `/` *operator*, which has a separate fast path that is
+# itself buggy — e.g. `Complex(1,2) / 2` => `(0+1i)`) are genuinely different
+# implementations, so aliasing them changes results. Tracked as an issue.
+class Enumerator
+  # identical to with_object; re-root on Enumerator (overrides Enumerable's).
+  alias each_with_object with_object
+end
+class Thread
+  alias exit kill
+  # inherited Kernel#inspect dumps Thread's ivars; use the short Kernel#to_s
+  # form for both (matches CRuby's `inspect`==`to_s`).
+  def to_s = super
+  alias inspect to_s
+end
+class Proc
+  def ==(other) = super
+  alias eql? ==
+  def to_s = super
+  alias inspect to_s
+end
