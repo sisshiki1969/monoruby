@@ -198,7 +198,7 @@ impl Codegen {
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone()) {
+                    if !self.a64_gen_deopt(pc, &wb, label.clone(), frame.base_stack_offset) {
                         return false;
                     }
                     label
@@ -209,7 +209,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        if !self.a64_gen_deopt(key.0, &key.1, label.clone()) {
+                        if !self.a64_gen_deopt(key.0, &key.1, label.clone(), frame.base_stack_offset) {
                             return false;
                         }
                         deopt_table.insert(key, label.clone());
@@ -221,14 +221,14 @@ impl Codegen {
                 // correct, just not yet self-optimizing).
                 SideExit::RecompileDeoptimize(pc, wb, _reason, _position) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone()) {
+                    if !self.a64_gen_deopt(pc, &wb, label.clone(), frame.base_stack_offset) {
                         return false;
                     }
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_handle_error(pc, &wb, label.clone()) {
+                    if !self.a64_gen_handle_error(pc, &wb, label.clone(), frame.base_stack_offset) {
                         return false;
                     }
                     label
@@ -261,9 +261,9 @@ impl Codegen {
     /// is GC-consistent and the interpreter can resume), set PC, and jump to
     /// the VM fetch loop. Mirrors x86 `side_exit_with_label` (deopt path).
     /// Returns `false` (bail) if the write-back needs an unsupported feature.
-    fn a64_gen_deopt(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) -> bool {
+    fn a64_gen_deopt(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel, base: usize) -> bool {
         self.jit.bind_label(entry);
-        if !self.a64_gen_write_back_for_deopt(wb) {
+        if !self.a64_gen_write_back_for_deopt(wb, base) {
             return false;
         }
         let pc_ptr = pc.as_ptr() as u64;
@@ -286,9 +286,15 @@ impl Codegen {
     /// So point PC at the raising instruction itself; otherwise the
     /// exception-table lookup in `handle_error` is off by one and an in-frame
     /// `rescue` / `ensure` is skipped.
-    fn a64_gen_handle_error(&mut self, pc: BytecodePtr, wb: &WriteBack, entry: DestLabel) -> bool {
+    fn a64_gen_handle_error(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        entry: DestLabel,
+        base: usize,
+    ) -> bool {
         self.jit.bind_label(entry);
-        if !self.a64_gen_write_back_for_deopt(wb) {
+        if !self.a64_gen_write_back_for_deopt(wb, base) {
             return false;
         }
         let pc0 = pc.as_ptr() as u64;
@@ -304,9 +310,18 @@ impl Codegen {
     /// (the local frame may be on the heap after a call returns). Mirrors x86
     /// `gen_write_back_for_deopt`. Bails on FP / forwarding-rest write-backs,
     /// which need machinery not yet ported.
-    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack) -> bool {
-        if !wb.fpr.is_empty() || !wb.forward_rest.is_empty() {
+    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) -> bool {
+        if !wb.forward_rest.is_empty() {
             return false;
+        }
+        // Spill each live FP-pool register to its slot(s) as a boxed Float
+        // Value, so the interpreter sees the up-to-date float after the deopt.
+        for (fpr, slots) in &wb.fpr {
+            for slot in slots {
+                if !self.emit_fpr_to_stack(*fpr, *slot, base) {
+                    return false;
+                }
+            }
         }
         let lfp = GP::R14.a64().0; // x22
         for (v, slot) in &wb.literal {
@@ -1169,7 +1184,7 @@ impl Codegen {
         &mut self,
         write_back: WriteBack,
         error: &DestLabel,
-        _base: usize,
+        base: usize,
     ) -> bool {
         let error = error.clone();
         let ok = self.jit.label();
@@ -1179,7 +1194,7 @@ impl Codegen {
             cmp x10, x11;
         );
         self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
-        if !self.a64_gen_write_back_for_deopt(&write_back) {
+        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
             return false;
         }
         let f = crate::codegen::stack_overflow as *const () as u64;
@@ -1204,7 +1219,7 @@ impl Codegen {
         &mut self,
         write_back: WriteBack,
         error: &DestLabel,
-        _base: usize,
+        base: usize,
     ) -> bool {
         let error = error.clone();
         let skip = self.jit.label();
@@ -1218,7 +1233,7 @@ impl Codegen {
             cmp x9, #(8u32);
         );
         self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
-        if !self.a64_gen_write_back_for_deopt(&write_back) {
+        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
             return false;
         }
         let f = crate::executor::execute_gc as *const () as u64;
@@ -2154,10 +2169,52 @@ impl Codegen {
         true
     }
 
-    /// Per-method ivar-cache prep: only needed when heap ivars are accessed;
-    /// otherwise a no-op. Bails (`false`) on the heap path for now.
-    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, _store: &Store, frame: &AsmInfo) -> bool {
-        !frame.ivar_heap_accessed
+    /// Per-method ivar-cache prep: when the method accesses heap ivars, ensure
+    /// self's var-table is large enough (so the later `Load/StoreIVarHeap` fast
+    /// paths can write straight to a slot); grow it via `extend_ivar` otherwise.
+    /// A no-op when no heap ivar is accessed or self is always-frozen. Mirrors
+    /// x86 `emit_preparation` (inline cold path instead of a page-1 split).
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
+        if frame.self_class.is_always_frozen() || !frame.ivar_heap_accessed {
+            return true;
+        }
+        let ivar_len = store[frame.self_class].ivar_len();
+        let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
+            ivar_len - OBJECT_INLINE_IVAR
+        } else {
+            ivar_len
+        };
+        let lfp = GP::R14.a64().0; // x22
+        let f = extend_ivar as *const () as u64;
+        let extend = self.jit.label();
+        let exit = self.jit.label();
+        // x0 = self (&RValue) and x1 = heap_len are also the `extend_ivar` args,
+        // so they are set up *before* the var-table checks (which may branch to
+        // `extend` straight away on a None table).
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(lfp), #(LFP_SELF as u32);
+            ldr x0, [x10];                              // self
+            mov x1, (heap_len as u64);                  // heap_len
+            ldr x9, [x0, #(RVALUE_OFFSET_VAR as u32)];  // var_table ptr
+            cbz x9, extend;                             // None -> grow
+            ldr x10, [x9, #(MONOVEC_CAPA as u32)];
+            cbz x10, extend;                            // capa 0 -> grow
+            ldr x10, [x9, #(MONOVEC_LEN as u32)];
+            cmp x10, x1;                                // len vs heap_len
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &extend); // len < heap_len -> grow
+        monoasm_arm64!(&mut self.jit, b exit;);
+        // cold: extend_ivar(self, heap_len). At method prologue, so no live FP
+        // pool register to preserve (matches x86, which also omits xmm save).
+        monoasm_arm64!(&mut self.jit,
+            extend:
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            exit:
+        );
+        true
     }
 
     /// Fixnum negate. For a tagged value `t = 2n+1`, `tagged(-n) = 2 - t`, which
@@ -3728,6 +3785,12 @@ impl Codegen {
 /// its own copy (the two are never compiled together).
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
+}
+
+/// Grow `rvalue`'s heap ivar var-table to at least `heap_len` slots. Cold path
+/// of `emit_preparation`. The x86 twin lives in the `jit_x86`-only `compile.rs`.
+extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
+    rvalue.extend_ivar(heap_len);
 }
 
 /// Trap target for the `Unreachable` AsmInst. The x86 twin lives in
