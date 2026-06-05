@@ -1,6 +1,6 @@
 use super::*;
-#[cfg(jit_x86)]
-use jitgen::JitContext;
+#[cfg(jit)]
+use jitgen::{AbstractState, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 
@@ -32,9 +32,9 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         1,
     );
     globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen!(integer_pow), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen!(integer_bitand), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen!(integer_bitor), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen!(integer_bitxor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen2!(integer_bitand), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen2!(integer_bitor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen2!(integer_bitxor), 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen!(integer_shr), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen!(integer_shl), 1);
@@ -1253,7 +1253,7 @@ fn integer_pow_float_rhs(
 /// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
 /// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
-#[cfg(jit_x86)]
+#[cfg(jit)]
 fn integer_bitop_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1310,7 +1310,7 @@ fn integer_bitop_inline(
 /// representation fits in `i32`, emit the immediate form directly via
 /// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
 /// emit the register form via `emit_rr`.
-#[cfg(jit_x86)]
+#[cfg(jit)]
 fn emit_bitop_imm(
     ir: &mut AsmIr,
     imm: Fixnum,
@@ -1322,16 +1322,21 @@ fn emit_bitop_imm(
         ir.inline(move |r#gen, _, _, _| emit_imm(r#gen, tagged));
     } else {
         ir.inline(move |r#gen, _, _, _| {
+            // Load the 64-bit tagged literal into rsi (x86) / x3 (aarch64).
+            #[cfg(jit_x86)]
             monoasm!( &mut r#gen.jit,
                 movq rsi, (tagged);
+            );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                mov x3, (tagged as u64);  // GP::Rsi == x3
             );
             emit_rr(r#gen);
         });
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_bitor(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1349,20 +1354,27 @@ fn integer_bitor(
         rhs_class,
         |a, b| a | b,
         |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                orq rdi, (imm);
+            // `(2a+1) | (2b+1)` keeps LSB=1, so the tag survives directly.
+            #[cfg(jit_x86)]
+            monoasm!( &mut r#gen.jit, orq rdi, (imm); );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                mov x9, (imm as u64);
+                orr x4, x4, x9;          // GP::Rdi == x4
             );
         },
         |r#gen| {
-            monoasm!( &mut r#gen.jit,
-                orq rdi, rsi;
+            #[cfg(jit_x86)]
+            monoasm!( &mut r#gen.jit, orq rdi, rsi; );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                orr x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
             );
         },
     )
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_bitand(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1380,20 +1392,27 @@ fn integer_bitand(
         rhs_class,
         |a, b| a & b,
         |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                andq rdi, (imm);
+            // `(2a+1) & (2b+1)` keeps LSB=1, so the tag survives directly.
+            #[cfg(jit_x86)]
+            monoasm!( &mut r#gen.jit, andq rdi, (imm); );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                mov x9, (imm as u64);
+                and x4, x4, x9;          // GP::Rdi == x4
             );
         },
         |r#gen| {
-            monoasm!( &mut r#gen.jit,
-                andq rdi, rsi;
+            #[cfg(jit_x86)]
+            monoasm!( &mut r#gen.jit, andq rdi, rsi; );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                and x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
             );
         },
     )
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_bitxor(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1414,14 +1433,27 @@ fn integer_bitxor(
         rhs_class,
         |a, b| a ^ b,
         |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                xorq rdi, (imm - 1);
+            // XOR clears the tag bit; using `imm - 1` (tag stripped from the
+            // literal) keeps lhs's tag, so no re-tag is needed.
+            #[cfg(jit_x86)]
+            monoasm!( &mut r#gen.jit, xorq rdi, (imm - 1); );
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                mov x9, ((imm - 1) as u64);
+                eor x4, x4, x9;          // GP::Rdi == x4
             );
         },
         |r#gen| {
+            #[cfg(jit_x86)]
             monoasm!( &mut r#gen.jit,
                 xorq rdi, rsi;
                 addq rdi, 1;
+            );
+            // `(2a+1) ^ (2b+1)` clears LSB, so re-tag with `+1`.
+            #[cfg(not(jit_x86))]
+            monoasm_arm64!( &mut r#gen.jit,
+                eor x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
+                add x4, x4, #(1);
             );
         },
     )

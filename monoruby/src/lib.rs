@@ -21,8 +21,34 @@ macro_rules! inline_gen {
         Box::new($f)
     };
 }
-#[cfg(not(jit_x86))]
+// aarch64 JIT: the generator `$f` is still x86-only (its inline asm has not
+// been ported), so register the universal `noinline_gen` instead — it declines
+// to inline, falling back to a normal method call, without ever naming `$f`.
+#[cfg(all(jit, not(jit_x86)))]
 macro_rules! inline_gen {
+    ($f:expr) => {
+        Box::new(crate::globals::noinline_gen)
+    };
+}
+#[cfg(not(jit))]
+macro_rules! inline_gen {
+    ($f:expr) => {
+        ()
+    };
+}
+
+/// Like [`inline_gen!`], but for generators whose inline asm has been ported to
+/// every JIT arch (`$f` exists and is valid on both x86 and aarch64). Use this
+/// when registering a builtin whose generator is `#[cfg(jit)]` with
+/// arch-switched asm; `inline_gen!` stays for the x86-only ones.
+#[cfg(jit)]
+macro_rules! inline_gen2 {
+    ($f:expr) => {
+        Box::new($f)
+    };
+}
+#[cfg(not(jit))]
+macro_rules! inline_gen2 {
     ($f:expr) => {
         ()
     };

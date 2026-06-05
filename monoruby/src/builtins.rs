@@ -47,12 +47,12 @@ mod true_class;
 
 #[cfg(jit_x86)]
 use crate::codegen::jitgen::AbstractState;
-#[cfg(jit_x86)]
+#[cfg(jit)]
 use codegen::jitgen::asmir::*;
 pub use enumerator::YIELDER;
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub use monoasm::*;
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;

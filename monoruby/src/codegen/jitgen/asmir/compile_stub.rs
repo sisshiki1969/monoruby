@@ -3964,6 +3964,11 @@ impl Codegen {
                 let offset = store[callee_fid].get_offset();
                 return self.a64_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
+            // Inlined builtin method body. The generator's closure emits the
+            // arch-appropriate asm directly (ported generators cfg-switch to
+            // aarch64). Un-ported generators never reach here: they register
+            // `noinline_gen`, which declines to inline. Mirrors x86.
+            AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
             _ => return false,
         }
         true
