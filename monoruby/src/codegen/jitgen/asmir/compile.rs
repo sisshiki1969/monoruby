@@ -1771,7 +1771,10 @@ impl Codegen {
 
     // ---- exception / non-local control flow (former per-arch arms) ----
 
-    pub(in crate::codegen::jitgen) fn emit_raise(&mut self) -> bool {
+    // The `_loop_jit_spill_bytes` params mirror the aarch64 twins, which undo
+    // the loop-JIT sp-bump before resuming the VM. x86's VM frame is
+    // rbp-relative, so a stale rsp is harmless and the bump is ignored here.
+    pub(in crate::codegen::jitgen) fn emit_raise(&mut self, _loop_jit_spill_bytes: usize) -> bool {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
@@ -1783,7 +1786,11 @@ impl Codegen {
         true
     }
 
-    pub(in crate::codegen::jitgen) fn emit_retry(&mut self, pc: BytecodePtr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_retry(
+        &mut self,
+        pc: BytecodePtr,
+        _loop_jit_spill_bytes: usize,
+    ) -> bool {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
@@ -1795,7 +1802,11 @@ impl Codegen {
         true
     }
 
-    pub(in crate::codegen::jitgen) fn emit_redo(&mut self, pc: BytecodePtr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_redo(
+        &mut self,
+        pc: BytecodePtr,
+        _loop_jit_spill_bytes: usize,
+    ) -> bool {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
@@ -1807,7 +1818,7 @@ impl Codegen {
         true
     }
 
-    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self, _loop_jit_spill_bytes: usize) -> bool {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;

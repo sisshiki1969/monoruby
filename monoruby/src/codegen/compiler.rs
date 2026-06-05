@@ -311,7 +311,7 @@ impl Codegen {
         Some(())
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(jit)]
     fn compile_partial(
         &mut self,
         globals: &mut Globals,
@@ -325,18 +325,31 @@ impl Codegen {
         let iseq_id = globals.store[func_id].as_iseq();
         let class_version = self.class_version();
 
-        self.compile(
-            globals,
-            iseq_id,
-            self_class,
-            Some(pc),
-            entry_label.clone(),
-            class_version,
-            is_recompile,
-        )?;
-        let codeptr = self.jit.get_label_address(&entry_label);
-        pc.write2(codeptr.as_ptr() as u64);
-        Some(())
+        let ret = if self
+            .compile(
+                globals,
+                iseq_id,
+                self_class,
+                Some(pc),
+                entry_label.clone(),
+                class_version,
+                is_recompile,
+            )
+            .is_some()
+        {
+            let codeptr = self.jit.get_label_address(&entry_label);
+            pc.write2(codeptr.as_ptr() as u64);
+            Some(())
+        } else {
+            None
+        };
+        // Re-arm executable permission (and flush the icache) on the JIT
+        // region: `compile` toggled it writable to emit the loop body, and the
+        // VM/JIT code we return into lives in that same region — without this
+        // it would fault on the next instruction (W^X on Apple Silicon). A
+        // no-op on x86. Mirrors `compile_patch`.
+        self.jit.finalize();
+        ret
     }
 
     #[cfg(jit_x86)]
@@ -438,12 +451,34 @@ extern "C" fn jit_recompile_method_with_recovery(
 ///
 /// Compile the loop.
 ///
-#[cfg(jit_x86)]
-extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
+/// Loop (partial) JIT is arch-neutral: `compile_partial` drives the shared
+/// front-end and the per-arch `*_gen_machine_code` lowering, so this is
+/// enabled on every JIT-capable arch (`jit`), not just x86 (`jit_x86`). On
+/// aarch64 the lowering bails (and `compile_partial` writes no codeptr) for a
+/// loop body that still contains an unported AsmInst; the VM stub parks the
+/// loop counter so it does not retry the failed compile every iteration.
+#[cfg(jit)]
+pub(in crate::codegen) extern "C" fn jit_compile_loop(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) {
     if globals.no_jit {
         return;
     }
-    compile_loop(globals, lfp, pc, None);
+    // A panic during loop compilation must not abort the process across this
+    // `extern "C"` boundary. The aarch64 backend can still panic on a large
+    // loop body (e.g. an out-of-range `TBZ`/`TBNZ` to a far deopt — imm14 is
+    // only ±32 KiB); catch it, leave the codeptr unpublished (the VM keeps
+    // interpreting and parks the loop counter), and re-arm the JIT region as
+    // executable since the aborted emit left it writable. A no-op on x86,
+    // whose branches reach far enough never to overflow.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_loop(globals, lfp, pc, None);
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    }
 }
 
 ///
@@ -459,7 +494,7 @@ extern "C" fn jit_recompile_loop(
     compile_loop(globals, lfp, pc, Some(reason));
 }
 
-#[cfg(jit_x86)]
+#[cfg(jit)]
 fn compile_loop(
     globals: &mut Globals,
     lfp: Lfp,
