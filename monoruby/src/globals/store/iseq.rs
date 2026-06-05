@@ -148,6 +148,12 @@ pub struct ISeqInfo {
     /// JIT code info for each class of *self*.
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
+    /// aarch64 only: per-self-class address of the indirect-dispatch slot
+    /// (the wrapper's / a class-guard chain link's heap word). Recorded at
+    /// `compile_patch` so the recompiler can overwrite the slot in place
+    /// (aarch64 installs JIT code via this slot, not x86 branch patching).
+    #[cfg(not(jit_x86))]
+    pub(super) jit_slot: HashMap<ClassId, u64>,
     pub(super) jit_invalidated: bool,
     ///
     /// Basic block information.
@@ -212,6 +218,8 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
+            #[cfg(not(jit_x86))]
+            jit_slot: HashMap::default(),
             jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
@@ -468,6 +476,20 @@ impl ISeqInfo {
         eprintln!("{:?}", self.jit_entry);
     }
 
+    /// aarch64 only: record the indirect-dispatch slot address for a self
+    /// class (see `jit_slot`). Called from `compile_patch` after publishing
+    /// the compiled guard stub into the slot.
+    #[cfg(not(jit_x86))]
+    pub(crate) fn set_jit_slot(&mut self, self_class: ClassId, slot: u64) {
+        self.jit_slot.insert(self_class, slot);
+    }
+
+    /// aarch64 only: the dispatch-slot address for a self class, if compiled.
+    #[cfg(not(jit_x86))]
+    pub(crate) fn get_jit_slot(&self, self_class: ClassId) -> Option<u64> {
+        self.jit_slot.get(&self_class).copied()
+    }
+
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
@@ -509,6 +531,8 @@ impl ISeqInfo {
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_invalidated = true;
         self.jit_entry.clear();
+        #[cfg(not(jit_x86))]
+        self.jit_slot.clear();
     }
 }
 
