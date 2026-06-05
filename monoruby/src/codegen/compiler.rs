@@ -311,6 +311,49 @@ impl Codegen {
         Some(())
     }
 
+    /// aarch64 whole-method recompile: re-run the front-end + A64 lowering and
+    /// overwrite the method's dispatch slot in place (aarch64 installs JIT code
+    /// via the indirect slot recorded at `compile_patch`, not x86 branch
+    /// patching). Bails (leaving the old code) if the slot is unknown or the
+    /// method was JIT-invalidated.
+    #[cfg(not(jit_x86))]
+    fn recompile_method(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        reason: RecompileReason,
+    ) -> Option<()> {
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        if globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
+        let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
+        let jit_entry = self.jit.label();
+        let class_version = self.class_version();
+        let compiled = self
+            .compile_method(
+                globals,
+                iseq_id,
+                self_class,
+                jit_entry.clone(),
+                class_version,
+                Some(reason),
+            )
+            .is_some();
+        if !compiled {
+            self.jit.finalize();
+            return None;
+        }
+        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        self.jit.finalize();
+        let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
+        // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
+        unsafe { *(slot as *mut u64) = guard_addr };
+        Some(())
+    }
+
     #[cfg(jit)]
     fn compile_partial(
         &mut self,
@@ -425,6 +468,20 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
     //    #[cfg(feature = "jit-log")]
     //    eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
     //}
+}
+
+/// aarch64 counterpart, called from the `RecompileDeopt` lowering
+/// (`compile_stub.rs`). Recompiles the current method and overwrites its
+/// dispatch slot via [`Codegen::recompile_method`].
+#[cfg(not(jit_x86))]
+pub(in crate::codegen) extern "C" fn jit_recompile_method(
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) {
+    CODEGEN.with(|codegen| {
+        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    });
 }
 
 #[cfg(jit_x86)]

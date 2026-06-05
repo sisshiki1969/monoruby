@@ -2217,12 +2217,59 @@ impl Codegen {
     /// recompile params are unused here.
     pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
         &mut self,
-        _position: Option<BytecodePtr>,
+        position: Option<BytecodePtr>,
         deopt: &DestLabel,
-        _reason: RecompileReason,
+        reason: RecompileReason,
     ) {
         let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit, b deopt;);
+        // aarch64 recompiles whole methods only; at a loop-JIT recompile point
+        // (`position` = Some) just deopt (no loop recompile yet).
+        if position.is_some() {
+            monoasm_arm64!(&mut self.jit, b deopt;);
+            return;
+        }
+        // Counter-gated one-shot recompile, then fall through to the deopt side
+        // exit (which undoes any loop sp-bump, writes back live values, and
+        // re-enters the VM). Mirrors x86 `recompile_and_deopt`: x19-x23 are
+        // AAPCS64 callee-saved so the C call preserves them, and the deopt does
+        // the value write-back; the caller-saved d2-d7 pool is saved around the
+        // call because that write-back reads it (d8-d15 are callee-saved).
+        let counter = Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64;
+        let f = crate::codegen::compiler::jit_recompile_method as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (counter);
+            ldr w11, [x9];
+            cmp w11, #0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Le, &deopt); // <= 0 -> just deopt
+        monoasm_arm64!(&mut self.jit,
+            sub w11, w11, #1;
+            str w11, [x9];
+            cbnz w11, deopt;                 // not yet exhausted -> just deopt
+            // counter hit 0: recompile once, then deopt.
+            sub sp, sp, #(48);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            mov x0, x20;                     // globals
+            mov x1, x22;                     // lfp
+            mov x2, (reason as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            add sp, sp, #(48);
+            b deopt;
+        );
     }
 
     /// The call itself. aarch64 has no runtime branch patching, so the `evict`
