@@ -78,15 +78,24 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: DestLabel,
     ) -> bool {
+        // Emit the inlined (specialized) method bodies first, recursively, so
+        // the `SpecializedCall` sites in the main body can branch into them.
+        // This must run *before* binding `entry_label`, so entering the main
+        // body does not fall through the specialized bodies (mirrors the x86
+        // `gen_machine_code` recursion). aarch64 ignores the specialized
+        // recompile index — its `GuardClassVersionSpecialized` /
+        // `RecompileDeoptSpecialized` degrade to a plain deopt — so, unlike x86,
+        // we do not register `self.specialized_info`; the `SpecializedCall`
+        // lowering binds each call-site patch point itself.
+        for info_entry in std::mem::take(&mut frame.specialized_methods) {
+            let entry = frame.resolve_label(&mut self.jit, info_entry.entry);
+            if !self.a64_gen_machine_code(info_entry.info, store, entry, class_version.clone()) {
+                return false;
+            }
+        }
+
         self.jit.bind_label(entry_label);
         frame.start_codepos = self.jit.get_current();
-        // Specialized (inlined) frames are unsupported by the A64 lowering, so
-        // the front-end never builds them on aarch64 (see the `cfg!(jit_x86)`
-        // gate in compile.rs / method_call.rs). This stays as a defensive net:
-        // if one ever appears, bail to the VM rather than emit wrong code.
-        if !frame.specialized_methods.is_empty() {
-            return false;
-        }
 
         let ir_vec = frame.detach_ir();
 
