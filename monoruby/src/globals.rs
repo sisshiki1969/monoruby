@@ -24,7 +24,7 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
@@ -34,6 +34,25 @@ pub(crate) type InlineGen = dyn Fn(
     ClassId,
     Option<ClassId>,
 ) -> bool;
+
+/// Universal inline generator that always declines to inline (returns
+/// `false`), so the call site falls back to a normal method call. Used on
+/// aarch64 for builtins whose hand-written inline asm has not been ported yet:
+/// registration goes through the same path on both arches, but un-ported
+/// generators register this instead of arch-specific codegen (see the
+/// `inline_gen!` macro). x86 never uses it.
+#[cfg(jit)]
+pub(crate) fn noinline_gen(
+    _: &mut jitgen::AbstractState,
+    _: &mut jitgen::asmir::AsmIr,
+    _: &crate::jitgen::JitContext,
+    _: &Store,
+    _: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    false
+}
 
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;

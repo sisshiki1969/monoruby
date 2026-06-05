@@ -121,7 +121,7 @@ impl<'a> JitContext<'a> {
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
-                #[cfg(jit_x86)]
+                #[cfg(jit)]
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
