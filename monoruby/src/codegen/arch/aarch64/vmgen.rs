@@ -255,12 +255,22 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         monoasm_arm64!(&mut self.jit,
-            mov x0, x(EXEC.0);
-            mov x1, x(GLOBALS.0);
             ldrh x2, [x(PC.0), #(2)];
         );
-        self.a64_slot_value(X2); // src
+        self.a64_slot_value(X2); // src (for get_class)
+        // Fill the UnOp inline cache (operand class @ classid1 = [PC+8]) so the
+        // JIT can type the operand instead of bailing NotCached. Mirrors x86
+        // vm_save_lhs_class. NB: get_class clobbers x1/x2 for immediate
+        // receivers (nil/bool/symbol), so the operand is reloaded below before
+        // the op call.
+        self.a64_save_lhs_class();
         monoasm_arm64!(&mut self.jit,
+            ldrh x2, [x(PC.0), #(2)];
+        );
+        self.a64_slot_value(X2); // reload src (get_class clobbered x2)
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
             mov x9, (abs);
             blr x9;
         );
@@ -1752,6 +1762,13 @@ impl Codegen {
         self.a64_fetch_and_dispatch();
         monoasm_arm64!(&mut self.jit,
             generic:
+        );
+        // Fill the BinOp inline cache on the generic (non-fixnum) path too, so
+        // the JIT can type non-integer comparisons (Float/String/...) instead
+        // of bailing NotCached and recompiling forever. Reads X13/X14 (they
+        // survive get_class), clobbers x0.
+        self.a64_save_binary_class();
+        monoasm_arm64!(&mut self.jit,
         // cmp_*_values(vm, globals, lhs=X13, rhs=X14) -> Option<Value>
             mov x2, x13;  // lhs
             mov x3, x14;  // rhs
@@ -1799,6 +1816,20 @@ impl Codegen {
     /// `[PC+12]` = classid2. Mirrors x86 `vm_save_binary_class` (sans the
     /// polymorphic-flag bookkeeping for now). Operands are the Values in X13
     /// (lhs) / X14 (rhs); `get_class` reads X0 only, so X13/X14 survive.
+    /// Record the unary operand's class into the UnOp inline cache (classid1
+    /// `[PC+8]`) so the JIT can type the site. Mirrors x86 `vm_save_lhs_class`.
+    /// Operand is the Value in x2. NB: `get_class` clobbers x1/x2 for
+    /// immediate receivers, so callers must reload the operand afterwards.
+    /// Clobbers x0/x1/x2 and the link register.
+    pub(in crate::codegen) fn a64_save_lhs_class(&mut self) {
+        let get_class = self.get_class.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x2;
+            bl get_class;             // x0 = class(operand)
+            str w0, [x(PC.0), #(8)];  // classid1
+        );
+    }
+
     pub(in crate::codegen) fn a64_save_binary_class(&mut self) {
         let get_class = self.get_class.clone();
         monoasm_arm64!(&mut self.jit,
