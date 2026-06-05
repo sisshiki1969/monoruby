@@ -579,6 +579,58 @@ impl Codegen {
         true
     }
 
+    /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
+    /// fast path). aarch64 does not yet emit the inline element-copy fast path,
+    /// so the non-deferred shape falls back to the generic
+    /// `jit_generic_set_arguments` — the x86 fast path's own miss target, so
+    /// correct, just unoptimized. The `deferred_src` (D1) shape skipped building
+    /// `f`'s `...` rest array on the JIT path, so it cannot use the generic
+    /// helper and bails (the method stays VM-interpreted, where the array is
+    /// built normally).
+    fn a64_set_arguments_forwarded(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+        deferred_src: Option<(SlotId, u16)>,
+    ) -> bool {
+        if deferred_src.is_some() {
+            return false;
+        }
+        self.a64_set_arguments(callid, fid, offset)
+    }
+
+    /// Lower `SetArgumentsForwardedHelper`: same asm shape as
+    /// `a64_set_arguments`, but dispatches to the specialized
+    /// `jit_forwarded_set_arguments` runtime helper (forwarding `g(x.., ...)`
+    /// into a no-keyword iseq with opt/post/rest). Bails if the callee frame
+    /// size exceeds a 12-bit immediate.
+    fn a64_set_arguments_forwarded_helper(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+    ) -> bool {
+        if offset > 4080 {
+            return false;
+        }
+        let f = crate::runtime::jit_forwarded_set_arguments as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // callid
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32); // callee_lfp (call-site sp)
+            mov x4, (fid.get() as u64);        // callee fid
+            str x30, [sp, #-16]!;              // save LR
+            sub sp, sp, #(offset as u32);      // reserve callee scratch
+            mov x9, (f);
+            blr x9;
+            add sp, sp, #(offset as u32);
+            ldr x30, [sp], #16;                // restore LR
+        );
+        true
+    }
+
     /// Lower `Call` (the call itself): set the callee LFP, push a control
     /// frame, set PC, `blr` the callee codeptr, then restore the caller's
     /// cfp/lfp. Mirrors x86 `do_call` (set_lfp + push_frame + call + pop_frame)
@@ -702,16 +754,19 @@ impl Codegen {
     /// Physical D-register index for a pool-resident `FPReg`, or `None` (bail →
     /// the method stays VM-interpreted) otherwise.
     ///
-    /// Capped to the caller-saved D2-D7: under AAPCS64 D8-D15 are callee-saved
-    /// (unlike x86-64 SysV where every xmm is caller-saved), and the aarch64
-    /// invoker / JIT prologue does not yet preserve them. Restricting the JIT'd
-    /// FP pool to caller-saved registers keeps the ABI sound without that
-    /// prologue work; methods needing >6 live floats (or any spill) just don't
-    /// JIT yet. `f64_to_val`'s heap path and `XmmSave` are consistent with this
-    /// (they only ever touch D2-D7).
+    /// Covers the full FP pool D2-D15 (`PHYS_XMM_POOL` = 14 ⇒ `Xmm(2..=15)`).
+    /// D2-D7 are AAPCS64 caller-saved; D8-D15 are callee-saved, so the
+    /// Rust↔JIT boundary (the invoker prologue/epilogue and the fiber-switch
+    /// `a64_{push,pop}_callee_save`) saves/restores D8-D15 to preserve the Rust
+    /// caller's values. Within the JIT world the whole pool is treated as
+    /// caller-saved — `XmmSave`/`XmmRestore` spill the live subset around any
+    /// clobbering call (a JIT→JIT `blr` clobbers D2-D15; a C-call's Rust callee
+    /// preserves D8-D15 but the spill is harmless), and `f64_to_val`'s heap
+    /// path saves D2-D7 while relying on `float_heap` to preserve D8-D15.
+    /// Only a spill (>14 live floats) still bails.
     fn a64_fpr(&self, x: FPReg, base: usize) -> Option<u32> {
         match x.loc(base) {
-            FPRegLoc::Xmm(p) if p <= 7 => Some(p as u32),
+            FPRegLoc::Xmm(p) if p <= 15 => Some(p as u32),
             _ => None,
         }
     }
@@ -877,7 +932,13 @@ impl Codegen {
     /// new class/module `self` in x0. Mirrors x86 `jit_class_def_sub`; the
     /// call_funcdata sequence is the same as `emit_yield`'s. `dst_off`, if set,
     /// is the pre-range-checked `conv(dst)` byte offset of the result slot.
-    fn a64_jit_class_def_sub(&mut self, func_id: FuncId, dst_off: Option<u32>, error: &DestLabel) {
+    fn a64_jit_class_def_sub(
+        &mut self,
+        func_id: FuncId,
+        dst_off: Option<u32>,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) {
         let lfp = GP::R14.a64().0; // x22
         let f_enter = runtime::enter_classdef as *const () as u64;
         let f_exit = runtime::exit_classdef as *const () as u64;
@@ -946,12 +1007,17 @@ impl Codegen {
             ldr x30, [sp], #16;
             mov x0, x25;
         );
+        // Reload the pool (clobbered by the class body + exit_classdef) and pop
+        // the save area before the final HandleError branch.
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
     }
 
-    /// `ClassDef`: define (or reopen) a class/module, then run its body.
-    /// Bails on a live xmm pool reg (no FP save around the C calls, matching the
-    /// other aarch64 runtime-call emits) or an out-of-range frame slot.
+    /// `ClassDef`: define (or reopen) a class/module, then run its body. The
+    /// live FP pool is saved once for the whole sequence (the define/enter/exit
+    /// C calls and the class body all clobber d2..) and reloaded into the pool
+    /// registers before each HandleError branch; bails only on an out-of-range
+    /// frame slot.
     fn a64_class_def(
         &mut self,
         base: Option<SlotId>,
@@ -963,9 +1029,6 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         // Range-check every frame slot up front (so we never bail mid-emit).
         let sc_off = match superclass {
             Some(s) => match (conv(s) as u32 <= 4095).then(|| conv(s) as u32) {
@@ -990,6 +1053,10 @@ impl Codegen {
         };
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_class as *const () as u64;
+        // Save the live FP pool for the whole ClassDef sequence; it persists
+        // across define_class, the class body, and exit_classdef, is reloaded
+        // into d2.. before each HandleError, and is popped once at the end.
+        self.emit_xmm_save(using_xmm, false);
         // superclass -> x3, base -> x5 (Option<Value>; 0 == None)
         match sc_off {
             Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x3, [x10];),
@@ -1010,8 +1077,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
+        self.a64_xmm_reload(using_xmm);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
         true
     }
 
@@ -1025,9 +1093,6 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let base_off = conv(base) as u32;
         let dst_off = match dst {
             Some(d) => Some(conv(d) as u32),
@@ -1038,6 +1103,7 @@ impl Codegen {
         }
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_singleton_class as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         // define_singleton_class(vm, globals, base)
         monoasm_arm64!(&mut self.jit,
             sub x10, x(lfp), #(base_off);
@@ -1049,8 +1115,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
+        self.a64_xmm_reload(using_xmm);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
         true
     }
 
@@ -1800,6 +1867,24 @@ impl Codegen {
         }
         monoasm_arm64!(&mut self.jit, add sp, sp, #(sp_offset););
         true
+    }
+
+    /// Reload the live FP pool registers from the save area *without* popping
+    /// it. Used inside a multi-C-call emit (class_def) whose save area must
+    /// persist across several clobbering calls: the pool regs are reloaded
+    /// before each intermediate side-exit branch (whose handler reads the pool
+    /// *registers*), while the save area itself is popped only once at the end
+    /// via `emit_xmm_restore`. No-op when the pool is empty.
+    fn a64_xmm_reload(&mut self, using_xmm: UsingXmm) {
+        let mut i = 0u32;
+        for (xi, b) in using_xmm.iter().enumerate() {
+            if *b {
+                let pr = xi as u32 + 2;
+                let ofs = 8 * i;
+                monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
+                i += 1;
+            }
+        }
     }
 
     /// Integer binary op fast path (guarded; deopts to `deopt`). Independent of
@@ -3070,8 +3155,10 @@ impl Codegen {
     /// Ruby result is exact bit (identity) equality, produced inline via
     /// cmp + cset; otherwise fall through to the generic C-call `func`
     /// (x0=vm, x1=globals, x2=lhs, x3=rhs). `lhs`/`rhs` are loaded into x2/x3
-    /// up front so the slow path can reuse them. Bails on a live xmm pool reg
-    /// or an out-of-range frame offset.
+    /// up front so the slow path can reuse them. The live xmm pool is
+    /// saved/restored *only* around the slow-path C call (the inline fast path
+    /// never touches the caller-saved d2.. pool regs); bails only on an
+    /// out-of-range frame offset.
     pub(in crate::codegen::jitgen) fn emit_opt_eq_cmp(
         &mut self,
         lhs: SlotId,
@@ -3080,9 +3167,6 @@ impl Codegen {
         func: crate::executor::BinaryOpFn,
         using_xmm: UsingXmm,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
@@ -3127,10 +3211,20 @@ impl Codegen {
         slow:
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals (x2=lhs, x3=rhs intact)
+        );
+        // Save the live FP pool only on the slow path: the C call clobbers the
+        // caller-saved d2.. pool regs, but the inline fast path above (which
+        // branches straight to `done`) leaves them untouched, so both paths
+        // reach `done` with sp and the pool registers consistent.
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
         done:
         );
         true
@@ -3585,8 +3679,10 @@ impl Codegen {
     /// `&block` captured as a Proc value: runtime::block_arg(vm, globals, lfp,
     /// call_site) materializes the current frame's block handler into a Proc
     /// (promoting the frame to the heap if needed). The Option<Value> result is
-    /// stored to `ret` after a HandleError. Bails on a live xmm pool reg (no
-    /// save around the C call) or an out-of-range frame offset.
+    /// stored to `ret` after a HandleError. The live xmm pool is saved/restored
+    /// around the C call (restore placed before the HandleError branch so the
+    /// side exit writes the live floats back from the pool); bails only on an
+    /// out-of-range frame offset.
     pub(in crate::codegen::jitgen) fn emit_block_arg(
         &mut self,
         ret: SlotId,
@@ -3594,9 +3690,6 @@ impl Codegen {
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
     ) -> bool {
-        if using_xmm.iter().any(|b| *b) {
-            return false;
-        }
         let lfp = GP::R14.a64().0; // x22
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
         if off > 4095 {
@@ -3604,6 +3697,7 @@ impl Codegen {
         }
         let cs = call_site_bc_ptr.as_ptr() as u64;
         let f = runtime::block_arg as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm
             mov x1, x20;          // globals
@@ -3614,6 +3708,7 @@ impl Codegen {
             blr x9;               // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
+        self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         let rax = GP::Rax.a64().0;
         monoasm_arm64!(&mut self.jit,
@@ -3648,7 +3743,7 @@ impl Codegen {
     /// not-yet-ported variant (the method then stays VM-interpreted).
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
-        _store: &Store,
+        store: &Store,
         frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
@@ -3751,6 +3846,19 @@ impl Codegen {
                 error,
             } => {
                 return self.a64_singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
+            }
+            AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                deferred_src,
+                ..
+            } => {
+                let offset = store[callee_fid].get_offset();
+                return self.a64_set_arguments_forwarded(callid, callee_fid, offset, deferred_src);
+            }
+            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
+                let offset = store[callee_fid].get_offset();
+                return self.a64_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
             _ => return false,
         }

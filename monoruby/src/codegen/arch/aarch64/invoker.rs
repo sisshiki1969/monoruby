@@ -6,6 +6,39 @@ use super::*;
 use monoasm_macro::monoasm_arm64;
 
 impl JitModule {
+    /// Save the AAPCS64 callee-saved FP registers D8-D15 (64 bytes) below sp.
+    /// The JIT uses the whole FP pool D2-D15 as scratch (see `a64_fpr`), so
+    /// every Rust↔JIT boundary must preserve D8-D15 for the Rust caller.
+    /// `monoasm_arm64`'s `stp`/`ldp` are GPR-only, so save them individually.
+    pub(in crate::codegen) fn a64_save_fp_callee_save(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(64);
+            str d8,  [sp];
+            str d9,  [sp, #(8)];
+            str d10, [sp, #(16)];
+            str d11, [sp, #(24)];
+            str d12, [sp, #(32)];
+            str d13, [sp, #(40)];
+            str d14, [sp, #(48)];
+            str d15, [sp, #(56)];
+        );
+    }
+
+    /// Restore what `a64_save_fp_callee_save` saved and pop the 64-byte area.
+    pub(in crate::codegen) fn a64_restore_fp_callee_save(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr d8,  [sp];
+            ldr d9,  [sp, #(8)];
+            ldr d10, [sp, #(16)];
+            ldr d11, [sp, #(24)];
+            ldr d12, [sp, #(32)];
+            ldr d13, [sp, #(40)];
+            ldr d14, [sp, #(48)];
+            ldr d15, [sp, #(56)];
+            add sp, sp, #(64);
+        );
+    }
+
     pub(in crate::codegen) fn a64_invoker_prologue(&mut self) {
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
@@ -16,6 +49,9 @@ impl JitModule {
             mov x(EXEC.0), x0;
             mov x(GLOBALS.0), x1;
         );
+        // Preserve the Rust caller's callee-saved FP regs (the JIT body
+        // clobbers D8-D15 as FP-pool scratch). Mirrored by the epilogue.
+        self.a64_save_fp_callee_save();
     }
 
     /// fdata(X9) = funcinfo_base + (X2 = funcid)*64 + FUNCINFO_DATA.
@@ -120,6 +156,7 @@ impl JitModule {
     /// Standard invoker epilogue: restore the callee-saved registers saved by
     /// a64_invoker_prologue and return (result in x0).
     pub(in crate::codegen) fn a64_invoker_epilogue(&mut self) {
+        self.a64_restore_fp_callee_save();
         monoasm_arm64!(&mut self.jit,
             ldp x25, x26, [sp], #(16);
             ldp x(ACC.0), x24, [sp], #(16);
@@ -130,7 +167,11 @@ impl JitModule {
         );
     }
 
-    /// Save all callee-saved GPRs (x19-x28) + fp/lr for a fiber context switch.
+    /// Save all callee-saved GPRs (x19-x28) + fp/lr + the callee-saved FP regs
+    /// (D8-D15) for a fiber context switch. D8-D15 are part of the JIT FP pool
+    /// (see `a64_fpr`), so a fiber yielding mid-computation — and the parent
+    /// whose D8-D15 the fiber body clobbers — both need them preserved across
+    /// the switch.
     pub(in crate::codegen) fn a64_push_callee_save(&mut self) {
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
@@ -140,10 +181,12 @@ impl JitModule {
             stp x21, x22, [sp, #(-16)]!;
             stp x19, x20, [sp, #(-16)]!;
         );
+        self.a64_save_fp_callee_save();
     }
 
     /// Restore what a64_push_callee_save saved (reverse order).
     pub(in crate::codegen) fn a64_pop_callee_save(&mut self) {
+        self.a64_restore_fp_callee_save();
         monoasm_arm64!(&mut self.jit,
             ldp x19, x20, [sp], #(16);
             ldp x21, x22, [sp], #(16);
@@ -331,15 +374,10 @@ impl JitModule {
             sub x11, sp, #(RSP_CFP as u32);
             ldr x10, [x11];
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
-        // epilogue
-            ldp x25, x26, [sp], #(16);
-            ldp x(ACC.0), x24, [sp], #(16);
-            ldp x(PC.0), x(LFP.0), [sp], #(16);
-            ldp x(EXEC.0), x(GLOBALS.0), [sp], #(16);
-            ldp x29, x30, [sp], #(16);
-            ret;
-        // SAFETY: codeptr is an extern "C" fn with the BindingInvoker ABI.
         );
+        // epilogue (restores D8-D15 + the saved GPRs, then ret)
+        self.a64_invoker_epilogue();
+        // SAFETY: codeptr is an extern "C" fn with the BindingInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, BindingInvoker>(&codeptr.as_ptr()) }
     }
     pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
