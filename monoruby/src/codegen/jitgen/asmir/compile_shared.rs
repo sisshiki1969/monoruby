@@ -438,10 +438,10 @@ impl Codegen {
             }
             // Exception / non-local control flow (raise / retry / redo / ensure).
             // All branch into the shared entry_raise unwind path.
-            AsmInst::Raise => return self.emit_raise(),
-            AsmInst::Retry(pc) => return self.emit_retry(pc),
-            AsmInst::Redo(pc) => return self.emit_redo(pc),
-            AsmInst::EnsureEnd => return self.emit_ensure_end(),
+            AsmInst::Raise => return self.emit_raise(frame.loop_jit_spill_bytes),
+            AsmInst::Retry(pc) => return self.emit_retry(pc, frame.loop_jit_spill_bytes),
+            AsmInst::Redo(pc) => return self.emit_redo(pc, frame.loop_jit_spill_bytes),
+            AsmInst::EnsureEnd => return self.emit_ensure_end(frame.loop_jit_spill_bytes),
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; the x86-only
             // return-address eviction patch is applied by the x86 emit_yield.

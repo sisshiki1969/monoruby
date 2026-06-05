@@ -46,12 +46,19 @@ impl Codegen {
         self.dispatch[162] = mul_rr;
         self.dispatch[163] = div_rr;
 
-        // loop_start (14) / loop_end (15): in the VM-only build these just
-        // advance to the next instruction. TODO(aarch64): the GC poll in
-        // loop_start (vm_execute_gc) — currently skipped (works with --no-gc).
-        let loop_op = self.a64_op_loop();
-        self.dispatch[14] = loop_op;
-        self.dispatch[15] = loop_op;
+        // loop_end (15): just advance to the next instruction.
+        // loop_start (14): drives the loop (partial) JIT under `jit`; without
+        // it (no-jit build) it also just advances. TODO(aarch64): the GC poll
+        // in loop_start (vm_execute_gc) — currently skipped (works with --no-gc).
+        self.dispatch[15] = self.a64_op_loop();
+        #[cfg(jit)]
+        {
+            self.dispatch[14] = self.a64_op_loop_start();
+        }
+        #[cfg(not(jit))]
+        {
+            self.dispatch[14] = self.a64_op_loop();
+        }
 
         // branches (the shared `branch` target lives inside `br_inst`).
         let (br_inst, branch) = self.a64_op_br();
@@ -1680,6 +1687,82 @@ impl Codegen {
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// loop_start (op 14) with loop (partial) JIT. Mirrors x86 `vm_loop_start`.
+    ///
+    /// The loop_start bytecode reserves two operand slots: a per-loop hit
+    /// counter at `[PC+0]` (i32) and the compiled-loop codeptr at `[PC+8]`
+    /// (written by `compile_partial` via `BytecodePtr::write2`). When the
+    /// codeptr is set, jump straight into the compiled loop. Otherwise bump the
+    /// counter and, once it reaches `COUNT_LOOP_START_COMPILE`, call
+    /// `jit_compile_loop` to compile the loop body. A captured (on-heap /
+    /// invalidated) frame skips the JIT — its locals may be aliased on the
+    /// heap, which the register-caching JIT can't honour.
+    ///
+    /// The compiled loop is entered with PC advanced 16 bytes past the
+    /// loop_start op, matching x86 (whose `fetch_and_dispatch` advanced r13 by
+    /// 16 before dispatching to the handler).
+    ///
+    /// The codeptr slot at `[PC+8]` is tri-state: `0` = not compiled yet, `1` =
+    /// a disabled sentinel (the compile bailed on an unported AsmInst — never
+    /// retry, just keep interpreting), any other value = the real compiled
+    /// entry. Without the sentinel a bailing hot loop would re-run the (failed,
+    /// non-trivial) compile every time the counter crosses the threshold —
+    /// thousands of times per call — which is far slower than just interpreting
+    /// it. aarch64-only; x86 effectively never bails so it does not need this.
+    #[cfg(jit)]
+    pub(in crate::codegen) fn a64_op_loop_start(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let compile = self.jit.label();
+        let cont = self.jit.label();
+        let count = self.jit.label();
+        let enter = self.jit.label();
+        let f = crate::codegen::compiler::jit_compile_loop as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            // Skip the JIT for a captured frame: the meta `kind` byte at
+            // [LFP - (LFP_META - META_KIND)] has bit7 = on_heap, bit3 = invalidated.
+            sub x10, x(LFP.0), #((LFP_META - META_KIND as i32) as u32);
+            ldrb x10, [x10];
+            tbnz x10, #(7), cont;
+            tbnz x10, #(3), cont;
+            ldr x10, [x(PC.0), #(8)];      // codeptr slot (0 / 1-sentinel / codeptr)
+            cbz x10, count;                // 0 -> count toward the threshold
+            cmp x10, #(1);
+        );
+        self.jit.bcond_label(Cond::Eq, &cont); // 1 -> compile bailed, interpret
+        monoasm_arm64!(&mut self.jit,
+            enter:
+            add x(PC.0), x(PC.0), #(16);   // PC past loop_start (x86 r13 convention)
+            br x10;                         // real codeptr -> enter the compiled loop
+            count:
+            ldr w11, [x(PC.0)];            // per-loop hit counter (i32)
+            add w11, w11, #(1);
+            str w11, [x(PC.0)];
+            cmp w11, #(COUNT_LOOP_START_COMPILE);
+        );
+        self.jit.bcond_label(Cond::Ge, &compile);
+        monoasm_arm64!(&mut self.jit,
+            cont:
+            add x(PC.0), x(PC.0), #(16);
+        );
+        self.a64_fetch_and_dispatch();
+        monoasm_arm64!(&mut self.jit,
+            // Threshold reached: compile the loop body now.
+            compile:
+            mov x0, x(GLOBALS.0);          // globals
+            mov x1, x(LFP.0);              // lfp
+            mov x2, x(PC.0);               // pc (loop_start)
+            mov x9, (f);
+            blr x9;
+            ldr x10, [x(PC.0), #(8)];      // codeptr written on success, else 0
+            cbnz x10, enter;
+            // Bail: stamp the sentinel so this loop is never re-compiled.
+            mov x10, #(1);
+            str x10, [x(PC.0), #(8)];
+            b cont;
+        );
         p
     }
 
