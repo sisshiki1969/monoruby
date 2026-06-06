@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(jit_x86)]
 use jitgen::JitContext;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use num::Zero;
 use std::{io::Write, mem::transmute};
@@ -12,7 +14,7 @@ use std::{io::Write, mem::transmute};
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen!(kernel_nil), 0);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen2!(kernel_nil), 0);
     globals.define_builtin_func(kernel_class, "!~", not_match, 1);
     //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
@@ -72,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "block_given?",
         block_given,
-        inline_gen!(kernel_block_given),
+        inline_gen2!(kernel_block_given),
         0,
     );
     //globals.define_builtin_module_func_rest(kernel_class, "p", p);
@@ -205,14 +207,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "object_id",
         super::object::object_id,
-        inline_gen!(super::object::object_object_id),
+        inline_gen2!(super::object::object_object_id),
         0,
     );
     globals.define_builtin_inline_func_with(
         kernel_class,
         "respond_to?",
         respond_to,
-        inline_gen!(object_respond_to),
+        inline_gen2!(object_respond_to),
         1,
         2,
         false,
@@ -231,7 +233,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "is_a?",
         &["kind_of?"],
         is_a,
-        inline_gen!(kernel_is_a),
+        inline_gen2!(kernel_is_a),
         1,
     );
     globals.define_builtin_inline_funcs_with_kw(
@@ -308,8 +310,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -335,11 +336,19 @@ fn kernel_nil(
     } else {
         state.load(ir, recv, GP::Rdi);
         ir.inline(|r#gen, _, _, _| {
+            #[cfg(jit_x86)]
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rsi, (TRUE_VALUE);
                 cmpq rdi, (NIL_VALUE);
                 cmoveqq rax, rsi;
+            }
+            #[cfg(not(jit_x86))]
+            monoasm_arm64! { &mut r#gen.jit,
+                mov  x0, #(FALSE_VALUE);    // GP::Rax == x0
+                mov  x3, #(TRUE_VALUE);     // GP::Rsi == x3
+                cmp  x4, #(NIL_VALUE);      // GP::Rdi == x4
+                csel x0, x3, x0, eq;        // nil -> TRUE, else FALSE
             }
         });
         state.def_rax2acc(ir, dst);
@@ -360,8 +369,7 @@ fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::bool(!res.as_bool()))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn kernel_block_given(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -385,6 +393,7 @@ fn kernel_block_given(
     } else {
         ir.inline(|r#gen, _, _, _| {
             let exit = r#gen.jit.label();
+            #[cfg(jit_x86)]
             monoasm! { &mut r#gen.jit,
                 movq rax, (FALSE_VALUE);
                 movq rdi, [r14 - (LFP_BLOCK)];
@@ -394,6 +403,22 @@ fn kernel_block_given(
                 jeq exit;
                 movq rax, (TRUE_VALUE);
             exit:
+            }
+            // block slot at [LFP - LFP_BLOCK]; 0 or NIL means no block given.
+            #[cfg(not(jit_x86))]
+            {
+                monoasm_arm64! { &mut r#gen.jit,
+                    mov x0, #(FALSE_VALUE);             // GP::Rax == x0
+                    sub x9, x22, #(LFP_BLOCK as u32);   // x22 == LFP (r14)
+                    ldr x4, [x9];                       // block handle -> GP::Rdi
+                    cbz x4, exit;
+                    cmp x4, #(NIL_VALUE);
+                }
+                r#gen.jit.bcond_label(monoasm::Cond::Eq, &exit);
+                monoasm_arm64! { &mut r#gen.jit,
+                    mov x0, #(TRUE_VALUE);
+                }
+                r#gen.jit.bind_label(exit);
             }
         });
         state.def_rax2acc(ir, dst);
@@ -2944,8 +2969,7 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn kernel_is_a(
     state: &mut AbstractState,
     _ir: &mut AsmIr,
@@ -3235,8 +3259,7 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::bool(false))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn object_respond_to(
     state: &mut AbstractState,
     _: &mut AsmIr,

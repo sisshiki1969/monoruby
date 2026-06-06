@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(jit)]
+use jitgen::{AbstractState, JitContext};
 
 use num::{BigInt, ToPrimitive, Zero};
 
@@ -43,28 +45,28 @@ pub(super) fn init(globals: &mut Globals) {
         ARITHMETIC_SEQUENCE_CLASS,
         "begin",
         begin,
-        inline_gen!(as_begin_inline),
+        inline_gen2!(as_begin_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "end",
         end,
-        inline_gen!(as_end_inline),
+        inline_gen2!(as_end_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "step",
         step,
-        inline_gen!(as_step_inline),
+        inline_gen2!(as_step_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "exclude_end?",
         exclude_end,
-        inline_gen!(as_exclude_end_inline),
+        inline_gen2!(as_exclude_end_inline),
         0,
     );
     // `each` is intentionally NOT registered here — it's defined in
@@ -109,8 +111,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_arithmetic_sequence_inner().begin())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn as_begin_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -134,8 +135,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(lfp.self_val().as_arithmetic_sequence_inner().end())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn as_end_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -159,8 +159,7 @@ fn step(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(lfp.self_val().as_arithmetic_sequence_inner().step())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn as_step_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -191,8 +190,7 @@ fn exclude_end(
     ))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn as_exclude_end_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -209,10 +207,19 @@ fn as_exclude_end_inline(
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
             shlq rax, 3;
             orq  rax, (FALSE_VALUE);
+        }
+        // exclude_end is 0/1; (v<<3) is 0 or 8. FALSE_VALUE=0x14 has bit3 clear,
+        // so `add` == `or`: 0->FALSE_VALUE, 8->0x1c=TRUE_VALUE.
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr w0, [x4, #(crate::rvalue::AS_EXCLUDE_END_OFFSET as u32)];
+            lsl x0, x0, #3;
+            add x0, x0, #(FALSE_VALUE);
         }
     });
     state.def_reg2acc(ir, GP::Rax, dst);
@@ -223,7 +230,7 @@ fn as_exclude_end_inline(
 /// (`begin` / `end` / `step`). Loads a 64-bit `Value` from the given
 /// offset within the receiver's `RValue`. AS has no source-level literal
 /// form, so unlike Range we don't fold against a literal here.
-#[cfg(jit_x86)]
+#[cfg(jit)]
 fn inline_field_load(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -238,8 +245,13 @@ fn inline_field_load(
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (offset as i32)];
+        }
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr x0, [x4, #(offset as u32)];
         }
     });
     state.def_reg2acc(ir, GP::Rax, dst);

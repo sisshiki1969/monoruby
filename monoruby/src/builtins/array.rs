@@ -39,14 +39,14 @@ pub(super) fn init(globals: &mut Globals) {
         ARRAY_CLASS,
         "clone",
         clone,
-        inline_gen!(array_clone),
+        inline_gen2!(array_clone),
         0,
     );
     globals.define_builtin_inline_func(
         ARRAY_CLASS,
         "dup",
         dup,
-        inline_gen!(array_dup_inline),
+        inline_gen2!(array_dup_inline),
         0,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
@@ -63,7 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "shift", shift, 0, 1, false);
     globals.define_builtin_funcs_rest(ARRAY_CLASS, "unshift", &["prepend"], unshift);
     globals.define_builtin_func_rest(ARRAY_CLASS, "concat", concat);
-    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, inline_gen!(array_shl), 1);
+    globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, inline_gen2!(array_shl), 1);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
     globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
@@ -383,8 +383,7 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(cloned)
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_clone(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -403,10 +402,13 @@ fn array_clone(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movq rax, (array_clone_extern);
             call rax;
         }
+        #[cfg(not(jit_x86))]
+        r#gen.a64_array_clone(array_clone_extern as *const () as u64);
     });
     ir.xmm_restore(using_xmm);
     state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
@@ -431,8 +433,7 @@ fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     ))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_dup_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -451,12 +452,15 @@ fn array_dup_inline(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             // rdi already holds val from state.load above.
             movq rsi, r12; // globals
             movq rax, (array_dup_extern);
             call rax;
         }
+        #[cfg(not(jit_x86))]
+        r#gen.a64_array_dup(array_dup_extern as *const () as u64);
     });
     ir.xmm_restore(using_xmm);
     state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
@@ -931,8 +935,7 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
     ary.into()
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -954,10 +957,13 @@ fn array_shl(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm!( &mut r#gen.jit,
             movq rax, (ary_shl);
             call rax;
         );
+        #[cfg(not(jit_x86))]
+        r#gen.a64_array_shl(ary_shl as *const () as u64);
     });
     ir.xmm_restore(using_xmm);
     state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
