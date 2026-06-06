@@ -499,6 +499,55 @@ impl Codegen {
         true
     }
 
+    /// Inlined `Integer#>>` / `Integer#<<` by a constant shift amount (the
+    /// "shift right by `imm`" primitive). Operand is the tagged fixnum `2n+1`
+    /// in Rdi (x4). aarch64 twin of x86 `gen_shr_imm`.
+    pub(crate) fn gen_shr_imm(&mut self, imm: u8) {
+        let rdi = GP::Rdi.a64().0; // x4
+        if imm >= 64 {
+            // Shift-out: -1 (all bits) collapses to -1, everything else to 0.
+            let zero = self.jit.label();
+            let exit = self.jit.label();
+            let neg1 = Value::i32(-1).id();
+            let z = Value::i32(0).id();
+            monoasm_arm64!(&mut self.jit,
+                tbz x(rdi), #(63), zero;   // non-negative -> 0
+                mov x(rdi), (neg1);
+                b exit;
+                zero:
+                mov x(rdi), (z);
+                exit:
+            );
+        } else {
+            // `((2n+1) >>a imm) | 1` == `2*(n>>imm) + 1`. monoasm has no
+            // `orr`-immediate, so set the tag bit via a scratch register.
+            monoasm_arm64!(&mut self.jit,
+                asr x(rdi), x(rdi), #(imm as u32);
+                mov x9, #(1);
+                orr x(rdi), x(rdi), x9;
+            );
+        }
+    }
+
+    /// Inlined `Integer#<<` by a constant shift amount, with a fixnum-overflow
+    /// guard that deopts. Operand `2n+1` in Rdi (x4). aarch64 twin of x86
+    /// `gen_shl_rhs_imm`. x86 uses `lzcnt` for the overflow test; monoasm has
+    /// no `clz`, so detect overflow by shifting back: a fixnum `n<<rhs` fits
+    /// i63 iff the tagged `2n<<rhs` fits i64, i.e. `(2n<<rhs) >>a rhs == 2n`.
+    pub(crate) fn gen_shl_rhs_imm(&mut self, rhs: u8, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            sub x(rdi), x(rdi), #(1);          // 2n (strip tag)
+            lsl x9, x(rdi), #(rhs as u32);     // 2n << rhs
+            asr x10, x9, #(rhs as u32);        // shift back (signed)
+            cmp x(rdi), x10;                   // lost significant bits?
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, deopt); // overflow -> deopt
+        monoasm_arm64!(&mut self.jit,
+            add x(rdi), x9, #(1);              // 2(n<<rhs) is even, so +1 sets the tag
+        );
+    }
+
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
     fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
