@@ -36,8 +36,8 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen2!(integer_bitor), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen2!(integer_bitxor), 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen!(integer_shr), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen!(integer_shl), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen2!(integer_shr), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen2!(integer_shl), 1);
     // `===` is a true alias of `==` (ruby/spec core/integer/case_compare_spec.rb).
     globals.define_builtin_funcs(INTEGER_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);
@@ -867,8 +867,7 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_shr(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -913,25 +912,50 @@ fn integer_shr(
                     r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
                 });
             } else {
-                // shift too large for inline, deopt
+                // shift too large for inline: only 0 stays 0, else deopt.
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels, _| {
-                    let deopt = &labels[deopt];
-                    monoasm!( &mut r#gen.jit,
-                        cmpq rdi, (Value::i32(0).id());
-                        jne deopt;
-                        movq rdi, (Value::i32(0).id());
-                    );
-                });
+                ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
             }
         }
     } else {
-        state.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
+        // Variable shift amount: x86 uses gen_shr (lzcnt overflow guard,
+        // two-page cold path). Not yet ported to aarch64 — bail to a method
+        // call.
+        #[cfg(jit_x86)]
+        {
+            state.load_fixnum(ir, args, GP::Rcx);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
+        }
+        #[cfg(not(jit_x86))]
+        return false;
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+/// Inline body for `n << k` / `n >> -k` with `k >= 64`: a non-zero `n`
+/// overflows (deopt); `0` shifts to `0`. Shared by `integer_shl`/`integer_shr`.
+#[cfg(jit)]
+fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
+    let z = Value::i32(0).id();
+    #[cfg(jit_x86)]
+    monoasm!( &mut r#gen.jit,
+        cmpq rdi, (z);
+        jne deopt;
+        movq rdi, (z);
+    );
+    #[cfg(not(jit_x86))]
+    {
+        monoasm_arm64!( &mut r#gen.jit,
+            mov x9, (z);
+            cmp x4, x9;              // GP::Rdi == x4
+        );
+        r#gen.jit.bcond_label(Cond::Ne, deopt);
+        monoasm_arm64!( &mut r#gen.jit,
+            mov x4, x9;
+        );
+    }
 }
 
 ///
@@ -945,8 +969,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -988,25 +1011,26 @@ fn integer_shl(
             let k = (-rhs) as u64;
             ir.inline(move |r#gen, _, _, _| r#gen.gen_shr_imm(k.min(64) as u8));
         } else {
-            // rhs >= 64: deopt (overflow for non-zero lhs)
+            // rhs >= 64: non-zero lhs overflows (deopt); 0 stays 0.
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels, _| {
-                let deopt = &labels[deopt];
-                monoasm!( &mut r#gen.jit,
-                    cmpq rdi, (Value::i32(0).id());
-                    jne deopt;
-                    movq rdi, (Value::i32(0).id());
-                );
-            });
+            ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
         }
-    } else if let Some(lhs) = state.is_fixnum_literal(recv) {
-        state.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
     } else {
-        state.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
+        // Variable shift amount (gen_shl / gen_shl_lhs_imm): x86's lzcnt
+        // overflow guard + two-page cold path is not yet ported to aarch64 —
+        // bail to a method call.
+        #[cfg(jit_x86)]
+        if let Some(lhs) = state.is_fixnum_literal(recv) {
+            state.load_fixnum(ir, args, GP::Rcx);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
+        } else {
+            state.load_fixnum(ir, args, GP::Rcx);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
+        }
+        #[cfg(not(jit_x86))]
+        return false;
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
