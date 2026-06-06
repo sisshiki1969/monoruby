@@ -5,6 +5,8 @@ use super::*;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
 #[cfg(jit_x86)]
 use jitgen::JitContext;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 
 //
 // String class
@@ -71,7 +73,7 @@ pub(super) fn init(globals: &mut Globals) {
         "bytesize",
         &[],
         bytesize,
-        inline_gen!(string_bytesize),
+        inline_gen2!(string_bytesize),
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
@@ -3380,8 +3382,7 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::integer(length as i64))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn string_bytesize(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -3398,12 +3399,22 @@ fn string_bytesize(
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (STRING_INLINE_CAP);
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
             salq rax, 1;
             orq  rax, 1;
+        }
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, #(STRING_INLINE_CAP as u32);
+            csel x0, x9, x0, gt;   // capa > inline cap -> use heap_len
+            lsl x0, x0, #1;
+            add x0, x0, #1;
         }
     });
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
