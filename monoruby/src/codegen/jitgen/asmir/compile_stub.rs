@@ -584,6 +584,31 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Integer#**` between two fixnums: untag and call the runtime
+    /// `pow_ii(a, b, vm)` (which returns the boxed result, possibly a BigInt,
+    /// or 0/None on error). Result Value lands in Rax (x0). aarch64 twin of x86
+    /// `gen_int_pow`. The FP pool is saved around the C-call.
+    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4 (a, tagged)
+        let rsi = GP::Rsi.a64().0; // x3 (b, tagged)
+        let f = crate::executor::op::pow_ii as *const () as u64;
+        let error = error.clone();
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            asr x0, x(rdi), #(1);    // a (untagged) -> arg0
+            asr x1, x(rsi), #(1);    // b (untagged) -> arg1
+            mov x2, x19;             // vm (EXEC) -> arg2
+            str x30, [sp, #-16]!;    // save LR
+            mov x9, (f);
+            blr x9;                  // x0 = pow_ii(a, b, vm)
+            ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, error;           // 0/None -> raise
+        );
+    }
+
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
     fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {

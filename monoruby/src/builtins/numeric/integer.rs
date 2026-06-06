@@ -31,7 +31,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         inline_gen2!(integer_rem),
         1,
     );
-    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen!(integer_pow), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen2!(integer_pow), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen2!(integer_bitand), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen2!(integer_bitor), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen2!(integer_bitxor), 1);
@@ -1186,8 +1186,7 @@ fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_pow(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1212,8 +1211,7 @@ fn integer_pow(
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_pow_int_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1243,8 +1241,7 @@ fn integer_pow_int_rhs(
     true
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_pow_float_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1267,12 +1264,24 @@ fn integer_pow_float_rhs(
         // else: fall through to runtime call
     }
 
-    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-    let rhs_xmm = state.load_xmm(ir, args);
-    let using_xmm = state.get_using_xmm();
-    ir.inline(move |r#gen, _, _, base| r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base));
-    state.def_reg2acc(ir, GP::Rax, dst);
-    true
+    // The runtime float-power path (`gen_int_pow_if`, an xmm C-call) is not
+    // ported to aarch64 yet; bail to a method call.
+    #[cfg(not(jit_x86))]
+    {
+        let _ = (ir, recv, args);
+        false
+    }
+    #[cfg(jit_x86)]
+    {
+        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+        let rhs_xmm = state.load_xmm(ir, args);
+        let using_xmm = state.get_using_xmm();
+        ir.inline(move |r#gen, _, _, base| {
+            r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
+        });
+        state.def_reg2acc(ir, GP::Rax, dst);
+        true
+    }
 }
 
 ///
