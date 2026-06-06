@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         "%",
         &["modulo"],
         int_rem,
-        inline_gen!(integer_rem),
+        inline_gen2!(integer_rem),
         1,
     );
     globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen!(integer_pow), 1);
@@ -1049,8 +1049,7 @@ fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_rem(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1075,8 +1074,7 @@ fn integer_rem(
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_rem_int_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1107,17 +1105,19 @@ fn integer_rem_int_rhs(
             state.load_fixnum(ir, recv, GP::Rdi);
             let mask = rhs_val * 2 - 1;
             ir.inline(move |r#gen, _, _, _| {
+                // lhs % 2^k == lhs & mask, applied to the tagged fixnum.
+                #[cfg(jit_x86)]
                 if let Ok(imm32) = i32::try_from(mask) {
                     let imm = imm32 as i64;
-                    monoasm!( &mut r#gen.jit,
-                        andq rdi, (imm);
-                    );
+                    monoasm!( &mut r#gen.jit, andq rdi, (imm); );
                 } else {
-                    monoasm!( &mut r#gen.jit,
-                        movq rax, (mask);
-                        andq rdi, rax;
-                    );
+                    monoasm!( &mut r#gen.jit, movq rax, (mask); andq rdi, rax; );
                 }
+                #[cfg(not(jit_x86))]
+                monoasm_arm64!( &mut r#gen.jit,
+                    mov x9, (mask as u64);
+                    and x4, x4, x9;          // GP::Rdi == x4
+                );
             });
             state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
             return true;
@@ -1132,8 +1132,7 @@ fn integer_rem_int_rhs(
     true
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_rem_float_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1152,18 +1151,28 @@ fn integer_rem_float_rhs(
         }
     }
 
-    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-    let rhs_xmm = state.load_xmm(ir, args);
-    let Some(dst) = dst else {
-        // Result discarded; no work needed (rem_ff is pure).
-        return true;
-    };
-    let dst_xmm = state.def_F(dst);
-    let using_xmm = state.get_using_xmm();
-    ir.inline(move |r#gen, _, _, base| {
-        r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
-    });
-    true
+    // The runtime float-remainder path (`gen_int_rem_if`, an xmm C-call) is not
+    // ported to aarch64 yet; bail to a method call.
+    #[cfg(not(jit_x86))]
+    {
+        let _ = (ir, recv, args);
+        false
+    }
+    #[cfg(jit_x86)]
+    {
+        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+        let rhs_xmm = state.load_xmm(ir, args);
+        let Some(dst) = dst else {
+            // Result discarded; no work needed (rem_ff is pure).
+            return true;
+        };
+        let dst_xmm = state.def_F(dst);
+        let using_xmm = state.get_using_xmm();
+        ir.inline(move |r#gen, _, _, base| {
+            r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
+        });
+        true
+    }
 }
 
 ///
