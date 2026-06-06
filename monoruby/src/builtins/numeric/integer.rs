@@ -53,8 +53,10 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
-    globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
-    globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
+    // `inspect` is a true alias of `to_s` (shares one FuncId), so
+    // `Integer.instance_method(:inspect) == Integer.instance_method(:to_s)`
+    // holds — see ruby/spec core/integer/inspect_spec.rb.
+    globals.define_builtin_funcs_with(INTEGER_CLASS, "to_s", &["inspect"], to_s, 0, 1, false);
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
     // `magnitude` is a true alias of `abs` (ruby/spec core/integer/magnitude_spec.rb).
     globals.define_builtin_funcs(INTEGER_CLASS, "abs", &["magnitude"], abs, 0);
@@ -2054,6 +2056,13 @@ r##"
         [chained(v), literal]
         "##
         );
+    }
+
+    #[test]
+    fn inspect_is_alias_of_to_s() {
+        // ruby/spec core/integer/inspect_spec.rb: inspect is an alias of to_s
+        // (same method entry / FuncId).
+        run_test("Integer.instance_method(:inspect) == Integer.instance_method(:to_s)");
     }
 
     #[test]

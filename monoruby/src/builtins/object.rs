@@ -17,8 +17,11 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen!(object_object_id),
         0,
     );
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
+    // `equal?` is an alias of `==` on BasicObject (they share one method
+    // entry/FuncId), so `BasicObject.instance_method(:equal?) ==
+    // BasicObject.instance_method(:==)` holds — see ruby/spec
+    // core/basicobject/equal_spec.rb.
+    globals.define_builtin_funcs(BASIC_OBJECT_CLASS, "==", &["equal?"], eq, 1);
     // CRuby defines `===` on Kernel/Object, NOT on BasicObject. Keeping
     // it on BasicObject would trap `===` for BasicObject subclasses (like
     // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
@@ -418,6 +421,14 @@ mod tests {
         b = a
         a.equal?(b)"##,
         ]);
+    }
+
+    #[test]
+    fn basicobject_equal_is_alias_of_eq() {
+        // ruby/spec core/basicobject/equal_spec.rb: `equal?` must be the same
+        // method entry as `==` on BasicObject.
+        run_test("BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)");
+        run_test("BasicObject.public_instance_methods(false).include?(:equal?)");
     }
 
     #[test]

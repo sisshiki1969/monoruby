@@ -25,10 +25,21 @@ jobs:
 
       - name: Clone optcarrot
         run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec
+      - name: Clone ruby/spec and mspec (pinned)
+        # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
+        # `bin/test` runs these specs under `set -e`, so a single newly added
+        # upstream spec that monoruby doesn't pass yet would fail the whole run.
+        # Bump these SHAs deliberately when adopting newer specs.
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
-          git clone --depth 1 https://github.com/ruby/spec.git ../spec
-          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
       - name: Clone ruby-bench
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
       - name: Install ruby-bench gem dependencies
@@ -90,10 +101,19 @@ jobs:
 
       - name: Clone optcarrot
         run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec
+      - name: Clone ruby/spec and mspec (pinned)
+        # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
+        # Keep these SHAs in sync with the `amd64` job above; bump deliberately.
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
-          git clone --depth 1 https://github.com/ruby/spec.git ../spec
-          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
       - name: Clone ruby-bench
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
 

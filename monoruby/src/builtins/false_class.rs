@@ -66,4 +66,14 @@ mod tests {
             r##"false.equal?(false)"##,
         ]);
     }
+
+    #[test]
+    fn alias_identities() {
+        // ruby/spec core/false/{inspect,xor}_spec.rb: inspect aliases to_s and
+        // ^ aliases | on FalseClass (same method entry).
+        run_tests(&[
+            r##"false.method(:inspect) == false.method(:to_s)"##,
+            r##"false.method(:^) == false.method(:|)"##,
+        ]);
+    }
 }

@@ -43,13 +43,11 @@ end
 # which boolean was observed first.
 
 class NilClass
-  def ^(other)
-    !!other
-  end
-
   def |(other)
     !!other
   end
+  # ruby/spec core/nil/xor_spec.rb: ^ is an alias of |.
+  alias ^ |
 
   def &(other)
     false
@@ -696,6 +694,20 @@ class MatchData
 end
 class Struct
   alias inspect to_s
+end
+class TrueClass
+  # core/true/inspect_spec.rb: inspect is an alias of to_s (to_s on TrueClass).
+  alias inspect to_s
+end
+class FalseClass
+  # core/false/inspect_spec.rb: inspect is an alias of to_s (to_s on FalseClass).
+  alias inspect to_s
+  # core/false/xor_spec.rb: ^ is an alias of |. Both `|` and `^` are rooted
+  # directly on FalseClass (registered by bool_class.rs on FALSE_CLASS, not an
+  # inherited parent), so just re-point `^` at the existing `|`. For false,
+  # `false ^ x` and `false | x` are both `!!x`, so behaviour is unchanged.
+  # (`true` keeps distinct `^`/`|` on the shared Boolean, where they differ.)
+  alias ^ |
 end
 
 # The remaining aliases need their *original* defined on the class, because

@@ -111,4 +111,10 @@ mod tests {
             r##"nil.| "100""##,
         ]);
     }
+
+    #[test]
+    fn xor_is_alias_of_or() {
+        // ruby/spec core/nil/xor_spec.rb: ^ is an alias of | on NilClass.
+        run_test("nil.method(:^) == nil.method(:|)");
+    }
 }
