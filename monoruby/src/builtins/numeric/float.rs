@@ -4,6 +4,8 @@ use super::*;
 use crate::executor::Visibility;
 #[cfg(jit_x86)]
 use jitgen::JitContext;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Float class
@@ -32,7 +34,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         "to_i",
         &["to_int"],
         toi,
-        inline_gen!(float_toi),
+        inline_gen2!(float_toi),
         0,
     );
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
@@ -190,8 +192,7 @@ extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn float_toi(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -211,14 +212,19 @@ fn float_toi(
     if let Some(dst) = dst {
         ir.inline(move |r#gen, _, labels, base| {
             let deopt = &labels[deopt];
-            // Load fsrc into xmm0 (handles both pool and spill).
-            r#gen.load_fpr_into_xmm0(fsrc, base);
-            monoasm! { &mut r#gen.jit,
-                cvttsd2siq rdi, xmm0;
-                addq  rdi, rdi;
-                jo    deopt;
-                orq   rdi, 1;
+            #[cfg(jit_x86)]
+            {
+                // Load fsrc into xmm0 (handles both pool and spill).
+                r#gen.load_fpr_into_xmm0(fsrc, base);
+                monoasm! { &mut r#gen.jit,
+                    cvttsd2siq rdi, xmm0;
+                    addq  rdi, rdi;
+                    jo    deopt;
+                    orq   rdi, 1;
+                }
             }
+            #[cfg(not(jit_x86))]
+            r#gen.a64_float_to_int(fsrc, deopt, base);
         });
         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     }

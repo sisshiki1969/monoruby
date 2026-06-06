@@ -3561,6 +3561,113 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
+    /// double with `scvtf`, and store into `fret`. aarch64 twin of x86
+    /// `integer_tof`'s `sarq` + `cvtsi2sdq` + `store_fpr_into_xmm`.
+    pub(crate) fn a64_int_to_float(&mut self, fret: FPReg, base: usize) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            asr x(rdi), x(rdi), #(1);  // untag
+            scvtf d0, x(rdi);
+        );
+        self.a64_d0_into_fpr(fret, base);
+    }
+
+    /// Inlined `Float#to_i`: truncate the double in `fsrc` to i64 (`fcvtzs`),
+    /// then tag it as a fixnum. `fcvtzs` saturates out-of-range doubles to
+    /// i64::MIN/MAX; doubling the result (`adds`) then overflows for both the
+    /// saturated case and any value that doesn't fit in a 63-bit fixnum, so a
+    /// single signed-overflow branch covers both. aarch64 twin of x86
+    /// `cvttsd2siq` + `addq;jo` + `orq 1`. Result Value lands in Rdi (x4).
+    pub(crate) fn a64_float_to_int(&mut self, fsrc: FPReg, deopt: &DestLabel, base: usize) {
+        let rdi = GP::Rdi.a64().0; // x4
+        self.a64_fpr_into_d0(fsrc, base);
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            fcvtzs x(rdi), d0;
+            adds x(rdi), x(rdi), x(rdi);   // ×2, set NZCV
+        );
+        self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // overflow -> deopt
+        monoasm_arm64!(&mut self.jit,
+            add x(rdi), x(rdi), #(1);      // tag (low bit clear after ×2)
+        );
+    }
+
+    /// Inlined `BasicObject#object_id`: `i64_to_value(self_id)`. The receiver
+    /// (its raw id) is in Rdi (x4); move it to the C ABI arg0 (x0) and call.
+    /// Result Value lands in Rax (x0). The FP pool is saved by the surrounding
+    /// AsmIr xmm_save/xmm_restore; here we only preserve LR around the `blr`.
+    pub(crate) fn a64_object_id(&mut self) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let f = crate::executor::op::i64_to_value as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // self id -> arg0
+            mov x9, (f);
+            str x30, [sp, #-16]!; // save LR
+            blr x9;               // x0 = i64_to_value(id)
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// Inlined `Hash#[]`: `hashindex(vm, globals, recv, key)`. The receiver is
+    /// already in Rdx (x2 == C arg2) and the key in Rcx (x1); move the key to
+    /// arg3 first (before x1 is overwritten by globals), then load vm/globals.
+    /// Result Value lands in Rax (x0); errors are checked by the trailing
+    /// HandleError. FP pool saved by the surrounding xmm_save/restore.
+    pub(crate) fn a64_hash_index(&mut self, hashindex: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x1;           // key (Rcx) -> arg3   [recv already in x2 == Rdx]
+            mov x0, x19;          // vm (EXEC) -> arg0
+            mov x1, x20;          // globals (GLOBALS) -> arg1
+            mov x9, (hashindex);
+            str x30, [sp, #-16]!; // save LR
+            blr x9;               // x0 = hashindex(vm, globals, recv, key)
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.
+    /// Result Value in Rax (x0). FP pool saved by the surrounding xmm_save.
+    pub(crate) fn a64_array_clone(&mut self, f: u64) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // recv -> arg0
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// Inlined `Array#dup`: `array_dup_extern(recv, globals)`. recv (Rdi/x4) ->
+    /// arg0, globals (GLOBALS/x20) -> arg1. Result Value in Rax (x0).
+    pub(crate) fn a64_array_dup(&mut self, f: u64) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // recv -> arg0
+            mov x1, x20;          // globals -> arg1
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// Inlined `Array#<<`: `ary_shl(recv, arg)`. recv (Rdi/x4) -> arg0,
+    /// arg (Rsi/x3) -> arg1. Result Value in Rax (x0).
+    pub(crate) fn a64_array_shl(&mut self, f: u64) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let rsi = GP::Rsi.a64().0; // x3
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // recv -> arg0
+            mov x1, x(rsi);       // arg  -> arg1
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
     /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
     /// The Option<Value> result (None == error) is checked by the trailing
     /// HandleError. Bails when an xmm pool register is live (no save around the

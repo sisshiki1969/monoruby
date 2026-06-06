@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen!(integer_tof), 0);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen2!(integer_tof), 0);
     globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
@@ -576,8 +576,7 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::float(f))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn integer_tof(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -606,11 +605,16 @@ fn integer_tof(
         let fret = state.def_F(ret);
         ir.inline(move |r#gen, _, _, base| {
             // Convert into xmm0, then store into fret (pool or spill).
-            monoasm! { &mut r#gen.jit,
-                sarq  rdi, 1;
-                cvtsi2sdq xmm0, rdi;
+            #[cfg(jit_x86)]
+            {
+                monoasm! { &mut r#gen.jit,
+                    sarq  rdi, 1;
+                    cvtsi2sdq xmm0, rdi;
+                }
+                r#gen.store_fpr_into_xmm(fret, base);
             }
-            r#gen.store_fpr_into_xmm(fret, base);
+            #[cfg(not(jit_x86))]
+            r#gen.a64_int_to_float(fret, base);
         });
     }
     true

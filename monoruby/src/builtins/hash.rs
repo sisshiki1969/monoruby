@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Hash class
@@ -24,7 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
     globals.define_builtin_func(HASH_CLASS, ">=", ge, 1);
-    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, inline_gen!(hash_index), 1);
+    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, inline_gen2!(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
@@ -774,8 +776,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn hash_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -797,12 +798,15 @@ fn hash_index(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(|r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! {&mut r#gen.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (hashindex);
             call rax;
         }
+        #[cfg(not(jit_x86))]
+        r#gen.a64_hash_index(hashindex as *const () as u64);
     });
     ir.xmm_restore(using_xmm);
     let error = ir.new_error(state);

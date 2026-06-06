@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(jit_x86)]
 use jitgen::JitContext;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 
 //
 // BasicObject class and Object class
@@ -14,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
         BASIC_OBJECT_CLASS,
         "__id__",
         object_id,
-        inline_gen!(object_object_id),
+        inline_gen2!(object_object_id),
         0,
     );
     // `equal?` is an alias of `==` on BasicObject (they share one method
@@ -27,7 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
     // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
     // `method_missing`, breaking the `actual.should === expected` idiom.
     globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
-    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen!(object_not), 0);
+    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen2!(object_not), 0);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
@@ -164,8 +166,7 @@ fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::bool(!lfp.self_val().as_bool()))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn object_not(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -191,12 +192,25 @@ fn object_not(
     } else {
         state.load(ir, recv, GP::Rdi);
         ir.inline(|r#gen, _, _, _| {
+            // `recv | 0x10` maps nil(0x04)->0x14 and false(0x14)->0x14, so the
+            // result is FALSE_VALUE exactly for the two falsy immediates; any
+            // truthy value differs. eq -> TRUE, ne -> FALSE.
+            #[cfg(jit_x86)]
             monoasm! { &mut r#gen.jit,
                 orq  rdi, (0x10);
                 movq rax, (TRUE_VALUE);
                 movq rsi, (FALSE_VALUE);
                 cmpq rdi, (FALSE_VALUE);
                 cmovneq rax, rsi;
+            }
+            #[cfg(not(jit_x86))]
+            monoasm_arm64! { &mut r#gen.jit,
+                mov  x9, #(0x10);
+                orr  x4, x4, x9;            // GP::Rdi == x4
+                mov  x0, #(TRUE_VALUE);     // GP::Rax == x0
+                mov  x3, #(FALSE_VALUE);    // GP::Rsi == x3
+                cmp  x4, #(FALSE_VALUE);
+                csel x0, x0, x3, eq;        // eq -> TRUE, else FALSE
             }
         });
         state.def_rax2acc(ir, dst);
@@ -242,8 +256,7 @@ pub(super) fn object_id(
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 pub(super) fn object_object_id(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -262,10 +275,13 @@ pub(super) fn object_object_id(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! {&mut r#gen.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
         }
+        #[cfg(not(jit_x86))]
+        r#gen.a64_object_id();
     });
     ir.xmm_restore(using_xmm);
     state.def_rax2acc(ir, ret);
