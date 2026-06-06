@@ -3436,6 +3436,55 @@ impl Codegen {
         true
     }
 
+    /// Load a `FPReg` (pool reg or spill slot) into `d0`.
+    fn a64_fpr_into_d0(&mut self, src: FPReg, base: usize) {
+        match src.loc(base) {
+            FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d0, d(p as u32);),
+            FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
+                mov x10, (off as i64 as u64);
+                sub x10, x29, x10;        // [x29 - off] (mirrors x86 [rbp - off])
+                ldr d0, [x10];
+            ),
+        }
+    }
+
+    /// Store `d0` into a `FPReg` (pool reg or spill slot).
+    fn a64_d0_into_fpr(&mut self, dst: FPReg, base: usize) {
+        match dst.loc(base) {
+            FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(p as u32), d0;),
+            FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
+                mov x10, (off as i64 as u64);
+                sub x10, x29, x10;
+                str d0, [x10];
+            ),
+        }
+    }
+
+    /// Inlined `Math.sqrt`: `fsqrt` on the unboxed argument. NaN passes through
+    /// (`sqrt(NaN) == NaN`); a negative argument deopts so the interpreter
+    /// re-runs the builtin and raises DomainError (`-0.0` compares equal to
+    /// `0.0`, so it falls through and `fsqrt(-0.0) == -0.0`, as CRuby).
+    /// aarch64 twin of x86 `math_sqrt`'s inline body.
+    pub(crate) fn a64_math_sqrt(
+        &mut self,
+        src: FPReg,
+        dst: Option<FPReg>,
+        deopt: &DestLabel,
+        base: usize,
+    ) {
+        self.a64_fpr_into_d0(src, base);
+        let do_sqrt = self.jit.label();
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
+        self.jit.bcond_label(monoasm::Cond::Vs, &do_sqrt); // NaN (unordered) -> sqrt
+        self.jit.bcond_label(monoasm::Cond::Mi, &deopt); // negative -> deopt
+        self.jit.bind_label(do_sqrt);
+        if let Some(dst) = dst {
+            monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
+            self.a64_d0_into_fpr(dst, base);
+        }
+    }
+
     /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
     /// The Option<Value> result (None == error) is checked by the trailing
     /// HandleError. Bails when an xmm pool register is live (no save around the
