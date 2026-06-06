@@ -3546,6 +3546,21 @@ impl Codegen {
         }
     }
 
+    /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.
+    /// Arrays store a short length inline (the `capa` field) and switch to a
+    /// heap buffer past `ARRAY_INLINE_CAPA`, in which case the real length is
+    /// `heap_len`. aarch64 twin of x86 `get_array_length` (`cmovgt` → `csel`).
+    pub(crate) fn get_array_length(&mut self) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let rax = GP::Rax.a64().0; // x0
+        monoasm_arm64!(&mut self.jit,
+            ldr x(rax), [x(rdi), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x(rax), #(ARRAY_INLINE_CAPA as u32);
+            csel x(rax), x9, x(rax), gt;   // capa > inline cap -> use heap_len
+        );
+    }
+
     /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
     /// The Option<Value> result (None == error) is checked by the trailing
     /// HandleError. Bails when an xmm pool register is live (no save around the

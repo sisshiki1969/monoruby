@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(jit_x86)]
 use jitgen::JitContext;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 use rubymap::RubyEql;
 use smallvec::smallvec;
 use std::cmp::Ordering;
@@ -30,7 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
         "size",
         &["length"],
         size,
-        inline_gen!(array_size),
+        inline_gen2!(array_size),
         0,
     );
     globals.define_builtin_inline_func(
@@ -330,8 +332,7 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::integer(len as i64))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_size(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -349,9 +350,15 @@ fn array_size(
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.get_array_length();
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             salq  rax, 1;
             orq   rax, 1;
+        }
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            lsl x0, x0, #1;
+            add x0, x0, #1;
         }
     });
 

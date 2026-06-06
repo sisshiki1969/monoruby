@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(jit)]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Range class
@@ -8,15 +10,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
     globals.store[RANGE_CLASS].set_alloc_func(range_alloc_func);
-    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, inline_gen!(range_begin), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, inline_gen2!(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
-    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, inline_gen!(range_end), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, inline_gen2!(range_end), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_inline_func(
         RANGE_CLASS,
         "exclude_end?",
         exclude_end,
-        inline_gen!(range_exclude_end),
+        inline_gen2!(range_exclude_end),
         0,
     );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
@@ -82,8 +84,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(lfp.self_val().as_range().start())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn range_begin(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -106,8 +107,13 @@ fn range_begin(
     }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (crate::rvalue::RANGE_START_OFFSET as i32)];
+        }
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr x0, [x4, #(crate::rvalue::RANGE_START_OFFSET as u32)];
         }
     });
 
@@ -126,8 +132,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(lfp.self_val().as_range().end())
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn range_end(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -150,8 +155,13 @@ fn range_end(
     }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movq rax, [rdi + (crate::rvalue::RANGE_END_OFFSET as i32)];
+        }
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr x0, [x4, #(crate::rvalue::RANGE_END_OFFSET as u32)];
         }
     });
 
@@ -241,8 +251,7 @@ fn exclude_end(
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn range_exclude_end(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -264,10 +273,19 @@ fn range_exclude_end(
     }
     state.load(ir, callsite.recv, GP::Rdi);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm! { &mut r#gen.jit,
             movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
             shlq rax, 3;
             orq  rax, (FALSE_VALUE);
+        }
+        // exclude_end is 0/1; (v<<3) is 0 or 8. FALSE_VALUE=0x14 has bit3 clear,
+        // so `add` == `or` here: 0+0x14=FALSE_VALUE, 8+0x14=0x1c=TRUE_VALUE.
+        #[cfg(not(jit_x86))]
+        monoasm_arm64! { &mut r#gen.jit,
+            ldr w0, [x4, #(crate::rvalue::RANGE_EXCLUDE_END_OFFSET as u32)];
+            lsl x0, x0, #3;
+            add x0, x0, #(FALSE_VALUE);
         }
     });
 
