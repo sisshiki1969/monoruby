@@ -36,7 +36,10 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_funcs(COMPLEX_CLASS, "angle", &["arg", "phase"], angle, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "polar", polar_instance, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "to_c", to_c, 0);
-    globals.define_builtin_func(COMPLEX_CLASS, "quo", quo, 1);
+    // `Complex#/` and `Complex#quo` are the same (aliased) method in CRuby
+    // (`Complex.instance_method(:quo) == Complex.instance_method(:/)`), so
+    // register one implementation under both names.
+    globals.define_builtin_funcs(COMPLEX_CLASS, "/", &["quo"], div, 1);
     globals.define_builtin_func_with(COMPLEX_CLASS, "rationalize", rationalize, 0, 1, false);
     globals.define_builtin_func(COMPLEX_CLASS, "real?", real_q, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "finite?", finite_q, 0);
@@ -707,27 +710,150 @@ fn to_c(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(lfp.self_val())
 }
 
+/// `x.quo(y)` — exact division that yields a Rational for integer operands
+/// and a Float when either operand is a Float (mirrors CRuby's `f_quo`).
+fn f_quo(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    let quo_id = IdentId::get_id("quo");
+    vm.invoke_method_inner(globals, quo_id, x, &[y], None, None)
+}
+
+fn f_add(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    vm.invoke_method_inner(globals, IdentId::_ADD, x, &[y], None, None)
+}
+
+fn f_sub(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    vm.invoke_method_inner(globals, IdentId::_SUB, x, &[y], None, None)
+}
+
+fn f_mul(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    vm.invoke_method_inner(globals, IdentId::_MUL, x, &[y], None, None)
+}
+
+fn f_abs(vm: &mut Executor, globals: &mut Globals, x: Value) -> Result<Value> {
+    let abs_id = IdentId::get_id("abs");
+    vm.invoke_method_inner(globals, abs_id, x, &[], None, None)
+}
+
+/// `x > y` (CRuby's `f_gt_p`).
+fn f_gt(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<bool> {
+    let gt_id = IdentId::get_id(">");
+    Ok(vm
+        .invoke_method_inner(globals, gt_id, x, &[y], None, None)?
+        .as_bool())
+}
+
+/// CRuby's `rb_rational_canonicalize`: a Rational whose denominator is 1 is
+/// reduced to its (Integer) numerator; anything else is returned unchanged.
+/// Complex division applies this to each resulting component so that e.g.
+/// `Complex(6, 8) / 4` yields `((3/2)+2i)` (the imaginary `(2/1)` becomes `2`).
+fn rational_canonicalize(value: Value) -> Value {
+    if let Some(r) = value.try_rational() {
+        if num::One::is_one(r.den()) {
+            return r.num_as_value();
+        }
+    }
+    value
+}
+
+/// Is `other` a real divisor that `Complex#/` divides component-wise?
+/// Mirrors CRuby's `k_numeric_p(other) && f_real_p(other)`: built-in Integer /
+/// Float / Rational, or a Numeric subclass whose `real?` returns true.
+fn is_real_divisor(vm: &mut Executor, globals: &mut Globals, other: Value) -> Result<bool> {
+    if matches!(other.unpack(), RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_))
+        || other.try_rational().is_some()
+    {
+        return Ok(true);
+    }
+    is_real_like_numeric(vm, globals, other)
+}
+
 ///
+/// ### Complex#/
 /// ### Complex#quo
 ///
-/// Complex division that preserves Rational parts when dividing by an
-/// integer exponent. Delegates to `real.quo(other)` / `imag.quo(other)`.
+/// Complex division, following CRuby's `f_divide` (used for both `/` and the
+/// aliased `quo`). Integer/Rational components divide exactly (producing
+/// Rational parts), while a Float anywhere makes the result Float; the
+/// numerically stable Smith's algorithm matches CRuby's component arithmetic
+/// and rounding.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/=2f.html]
 #[monoruby_builtin]
-fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let c = self_val.as_complex();
     let other = lfp.arg(0);
-    // For Complex/Complex: use normal division.
-    if other.try_complex().is_some() {
-        let div_id = IdentId::_DIV;
-        return vm.invoke_method_inner(globals, div_id, self_val, &[other], None, None);
+    let (a_re, a_im) = {
+        let c = self_val.as_complex();
+        (c.re().get(), c.im().get())
+    };
+
+    // Complex / Complex: Smith's algorithm using `quo` on the components.
+    if let Some(o) = other.try_complex() {
+        let (b_re, b_im) = (o.re().get(), o.im().get());
+        let one = Value::integer(1);
+        let abs_re = f_abs(vm, globals, b_re)?;
+        let abs_im = f_abs(vm, globals, b_im)?;
+        let (mut x, mut y);
+        if f_gt(vm, globals, abs_re, abs_im)? {
+            // r = b_im / b_re ; n = b_re * (1 + r*r)
+            let r = f_quo(vm, globals, b_im, b_re)?;
+            let rr = f_mul(vm, globals, r, r)?;
+            let one_plus = f_add(vm, globals, one, rr)?;
+            let n = f_mul(vm, globals, b_re, one_plus)?;
+            // x = (a_re + a_im*r) / n ; y = (a_im - a_re*r) / n
+            let aim_r = f_mul(vm, globals, a_im, r)?;
+            let num_x = f_add(vm, globals, a_re, aim_r)?;
+            let are_r = f_mul(vm, globals, a_re, r)?;
+            let num_y = f_sub(vm, globals, a_im, are_r)?;
+            x = f_quo(vm, globals, num_x, n)?;
+            y = f_quo(vm, globals, num_y, n)?;
+        } else {
+            // r = b_re / b_im ; n = b_im * (1 + r*r)
+            let r = f_quo(vm, globals, b_re, b_im)?;
+            let rr = f_mul(vm, globals, r, r)?;
+            let one_plus = f_add(vm, globals, one, rr)?;
+            let n = f_mul(vm, globals, b_im, one_plus)?;
+            // x = (a_re*r + a_im) / n ; y = (a_im*r - a_re) / n
+            let are_r = f_mul(vm, globals, a_re, r)?;
+            let num_x = f_add(vm, globals, are_r, a_im)?;
+            let aim_r = f_mul(vm, globals, a_im, r)?;
+            let num_y = f_sub(vm, globals, aim_r, a_re)?;
+            x = f_quo(vm, globals, num_x, n)?;
+            y = f_quo(vm, globals, num_y, n)?;
+        }
+        x = rational_canonicalize(x);
+        y = rational_canonicalize(y);
+        let re_r = Real::try_from(globals, x)?;
+        let im_r = Real::try_from(globals, y)?;
+        return Ok(Value::complex(re_r, im_r));
     }
-    let quo_id = IdentId::get_id("quo");
-    let re = vm.invoke_method_inner(globals, quo_id, c.re().get(), &[other], None, None)?;
-    let im = vm.invoke_method_inner(globals, quo_id, c.im().get(), &[other], None, None)?;
-    let re_r = Real::try_from(globals, re)?;
-    let im_r = Real::try_from(globals, im)?;
-    Ok(Value::complex(re_r, im_r))
+
+    // Complex / real: divide each component by the real divisor.
+    if is_real_divisor(vm, globals, other)? {
+        let x = rational_canonicalize(f_quo(vm, globals, a_re, other)?);
+        let y = rational_canonicalize(f_quo(vm, globals, a_im, other)?);
+        let re_r = Real::try_from(globals, x)?;
+        let im_r = Real::try_from(globals, y)?;
+        return Ok(Value::complex(re_r, im_r));
+    }
+
+    // Otherwise fall back to the coerce protocol (`rb_num_coerce_bin`). The
+    // re-dispatch uses `quo` (CRuby passes `id_quo` to `f_divide`), so e.g.
+    // `coerce` returning `[5, 2]` yields `5.quo(2) == (5/2)`.
+    let coerce_id = IdentId::get_id("coerce");
+    if globals.check_method(other, coerce_id).is_none() {
+        return Err(MonorubyErr::typeerr(format!(
+            "{} can't be coerced into Complex",
+            other.get_real_class_name(&globals.store)
+        )));
+    }
+    let result = vm.invoke_method_inner(globals, coerce_id, other, &[self_val], None, None)?;
+    if let Some(ary) = result.try_array_ty() {
+        if ary.len() == 2 {
+            return f_quo(vm, globals, ary[0], ary[1]);
+        }
+    }
+    Err(MonorubyErr::typeerr("coerce must return [x, y]".to_string()))
 }
 
 ///
@@ -872,6 +998,42 @@ mod tests {
         let v = &["4.2-1.5i", "4+5i", "4.0+5.0i", "134", "1.34"];
         run_binop_tests(v, &["+", "-", "*", "==", "!="], v);
         run_binop_tests2(&["4.5-8.0i"], &["/"], &["0.5-2.0i"]);
+        // Complex#/ (== Complex#quo): exact Rational components when dividing
+        // integer/rational Complex values; Float anywhere makes it Float.
+        // Regression for #662 (the `/` operator used to truncate via Integer
+        // division, giving e.g. `Complex(1,2)/2 #=> (0+1i)`).
+        run_tests(&[
+            // `/` operator, dot-call, and `send(:/)` all agree.
+            "(Complex(1, 2) / 2).to_s",
+            "Complex(1, 2)./(2).to_s",
+            "Complex(1, 2).send(:/, 2).to_s",
+            "Complex(1, 2).quo(2).to_s",
+            // `/` and `quo` are the same (aliased) method.
+            "Complex.instance_method(:quo) == Complex.instance_method(:/)",
+            // Complex / Integer with mixed exact/Float components.
+            "(Complex(6, 8) / 4).to_s",
+            "(Complex(6, 8) / 2).to_s",
+            "(Complex(1.0, 2) / 2).to_s",
+            "(Complex(1, 2.0) / 2).to_s",
+            "(Complex(1, 2) / 2.0).to_s",
+            // Complex / Rational.
+            "(Complex(1, 2) / Rational(2, 3)).to_s",
+            "(Complex(2, 4) / Rational(2, 1)).to_s",
+            // Complex / Complex (exact and Float paths, both Smith's branches).
+            "(Complex(7, 3) / Complex(2, 1)).to_s",
+            "(Complex(1, 2) / Complex(1, 1)).to_s",
+            "(Complex(1, 2) / Complex(0, 2)).to_s",
+            "(Complex(4.5, -8.0) / Complex(0.5, -2.0)).to_s",
+            // real / Complex via the coerce protocol.
+            "(6 / Complex(1, 1)).to_s",
+            "(2 / Complex(1, 1)).to_s",
+            "(2.0 / Complex(1, 1)).to_s",
+            // Division by zero / type errors.
+            "begin; Complex(1, 2) / 0; rescue ZeroDivisionError; :zd; end",
+            "(Complex(1, 2) / 0.0).to_s",
+            "begin; Complex(1, 2) / Complex(0, 0); rescue ZeroDivisionError; :zd; end",
+            "begin; Complex(1, 2) / 'x'; rescue TypeError; :te; end",
+        ]);
         //run_test(r#"(47-15i) % (4-5i)"#);
         run_test_error(r#"(4.27-1.5i) + :5"#);
         run_test_error(r#"(4.27-1.5i) - :5"#);

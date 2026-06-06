@@ -6,7 +6,7 @@ use super::*;
 
 use num::{BigInt, Signed, ToPrimitive, Zero};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Rem, Shl, Shr, Sub};
 
 /// Try the `coerce` protocol: call `rhs.coerce(lhs)` and if it returns
 /// a 2-element array, call `ary[0].op(ary[1])`.  Returns `None` if
@@ -206,72 +206,18 @@ pub(crate) extern "C" fn div_values(
         }
         _ => {}
     }
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::BigInt(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Float");
-        }
-        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from((*lhs).div(rhs))
-        }
-        (RV::Complex(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Float(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Complex");
-        }
+    match (lhs.unpack(), rhs.unpack()) {
+        // Complex on the left: dispatch to `Complex#/` (handles Complex/Complex,
+        // Complex/real, and the coerce fallback with exact Rational arithmetic).
+        (RV::Complex(_), _) => vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]),
+        // real / Complex (and real / non-real): use the coerce protocol, which
+        // wraps the real operand into a Complex and re-dispatches to `Complex#/`.
+        (RV::Float(_), _) => try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Float"),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer");
+            try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer")
         }
-        _ => {
-            return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
-        }
-    };
-    Some(v)
+        _ => vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]),
+    }
 }
 
 pub(crate) extern "C" fn rem_values(
