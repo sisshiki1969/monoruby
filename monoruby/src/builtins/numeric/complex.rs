@@ -116,15 +116,22 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/polar.html]
 #[monoruby_builtin]
-fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let r = RealKind::expect(globals, lfp.arg(0))?.to_f64();
-    let theta = if let Some(theta) = lfp.try_arg(1) {
-        RealKind::expect(globals, theta)?.to_f64()
+fn complex_polar(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Both arguments accept a real Numeric or a zero-imaginary Complex
+    // (CRuby's `nucomp_real_check`).
+    let abs = real_component_for_rect(vm, globals, lfp.arg(0))?;
+    let arg = if let Some(theta) = lfp.try_arg(1) {
+        real_component_for_rect(vm, globals, theta)?
     } else {
-        RealKind::Float(0.0).to_f64()
+        Real::from(0)
     };
-    let c = num::complex::Complex::from_polar(r, theta);
-    Ok(Value::complex(c.re, c.im))
+    // `f_complex_polar_real`: when either part is zero the magnitude type is
+    // preserved (imaginary becomes Float 0.0); otherwise use the float form.
+    if abs.is_zero() || arg.is_zero() {
+        return Ok(Value::complex(abs, Real::from(0.0)));
+    }
+    let c = num::complex::Complex::from_polar(abs.to_f64(), arg.to_f64());
+    Ok(Value::complex(Real::from(c.re), Real::from(c.im)))
 }
 
 ///
@@ -136,46 +143,47 @@ fn complex_polar(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/rect.html]
 #[monoruby_builtin]
 fn complex_rect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let r_arg = lfp.arg(0);
-    ensure_real_for_rect(vm, globals, r_arg)?;
-    let r = Real::try_from(globals, r_arg)?;
+    let r = real_component_for_rect(vm, globals, lfp.arg(0))?;
     let i = if let Some(i_arg) = lfp.try_arg(1) {
-        ensure_real_for_rect(vm, globals, i_arg)?;
-        Real::try_from(globals, i_arg)?
+        real_component_for_rect(vm, globals, i_arg)?
     } else {
         Real::from(0)
     };
     Ok(Value::complex(r, i))
 }
 
-/// Reject values whose `real?` method returns false (e.g. a Complex-typed
-/// Numeric subclass).
-fn ensure_real_for_rect(
+/// Extract the real component to store for `Complex.rect`. Accepts a built-in
+/// real (Integer/Float/Rational), a Complex whose imaginary part is zero (its
+/// real part is used, mirroring CRuby's `nucomp_real_check` + canonicalize),
+/// or a Numeric subclass whose `real?` returns true. Anything else raises
+/// `TypeError: not a real`.
+fn real_component_for_rect(
     vm: &mut Executor,
     globals: &mut Globals,
     value: Value,
-) -> Result<()> {
-    // Direct numeric types are always real.
+) -> Result<Real> {
     match value.unpack() {
-        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => return Ok(()),
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => return Real::try_from(globals, value),
         _ => {}
     }
     if value.try_rational().is_some() {
-        return Ok(());
+        return Real::try_from(globals, value);
     }
-    // Complex numbers are not accepted as rect parts.
-    if value.try_complex().is_some() {
+    if let Some(c) = value.try_complex() {
+        if c.im().is_zero() {
+            return Ok(c.re());
+        }
         return Err(MonorubyErr::typeerr("not a real"));
     }
     // Numeric subclass responding to real? — honour that answer.
     let real_q_id = IdentId::get_id("real?");
     if globals.check_method(value, real_q_id).is_some() {
         let v = vm.invoke_method_inner(globals, real_q_id, value, &[], None, None)?;
-        if !v.as_bool() {
-            return Err(MonorubyErr::typeerr("not a real"));
+        if v.as_bool() {
+            return Real::try_from(globals, value);
         }
     }
-    Ok(())
+    Err(MonorubyErr::typeerr("not a real"))
 }
 
 ///
@@ -253,9 +261,11 @@ fn coerce(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let wrapped = Value::complex(Real::from(r.to_f()), Real::from(0));
         return Ok(Value::array2(wrapped, self_val));
     }
-    // Numeric subclass with real? → true: pass through unchanged.
+    // Numeric subclass with real? → true: wrap as Complex(other, 0).
     if is_real_like_numeric(vm, globals, other)? {
-        return Ok(Value::array2(other, self_val));
+        let re = Real::try_from(globals, other)?;
+        let wrapped = Value::complex(re, Real::from(0));
+        return Ok(Value::array2(wrapped, self_val));
     }
     Err(MonorubyErr::typeerr(format!(
         "{} can't be coerced into Complex",
@@ -983,6 +993,52 @@ fn pow_by_integer_exp(self_val: Value, exp: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn complex_numeric_protocol() {
+        // `+`/`-`/`*` with a Rational operate component-wise (real part for
+        // +/-, both parts for *).
+        run_tests(&[
+            "(Complex(1, 2) + Rational(1, 2)).to_s",
+            "(Complex(1, 2) - Rational(1, 2)).to_s",
+            "(Complex(1, 2) * Rational(1, 2)).to_s",
+            "(Complex(1, 2) + 3).to_s",
+            "(Complex(1, 2) * 3).to_s",
+        ]);
+        // `+`/`-`/`*`/`coerce`/`-@` follow CRuby's `real?` protocol for a
+        // custom Numeric, and `polar`/`rectangular` accept zero-imaginary
+        // Complex arguments.
+        run_test_with_prelude(
+            r#"
+            [
+              Complex(1, 2) + R.new,                       # real? true: real-part op
+              Complex(1, 2) - R.new,
+              Complex(N.new(1), N.new(2)).send(:-@).to_s,  # -@ dispatched to parts
+              (-Complex(N.new(1), N.new(2))).to_s,
+              Complex(3, 4).coerce(R.new).map(&:to_s),     # coerce wraps as Complex
+              Complex.rectangular(1.0 + 0i, 2 + 0.0i).to_s,
+              Complex.polar(2, 0).to_s,                    # zero arg preserves Integer
+              Complex.polar(1 + 0.0i).to_s,
+            ]
+            "#,
+            r#"
+            class R < Numeric
+              def real?; true; end
+              def coerce(x); [x, 4]; end
+              def to_s; "R"; end
+            end
+            class N < Numeric
+              def initialize(n); @n = n; end
+              def -@; @n == 1 ? -1 : -2; end
+            end
+            "#,
+        );
+        // real? false → coerce to Complex; non-real argument → TypeError.
+        run_tests(&[
+            "begin; Complex.rectangular(1.0 + 1i, 2); rescue TypeError; :te; end",
+            "begin; Complex.polar(nil); rescue TypeError; :te; end",
+        ]);
+    }
 
     #[test]
     fn complex() {

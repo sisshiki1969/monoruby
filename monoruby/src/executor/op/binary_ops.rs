@@ -45,6 +45,87 @@ pub(crate) fn try_coerce_and_apply(
     }
 }
 
+/// Is `rhs` a real number for the purpose of `Complex#+/-/*`? Mirrors CRuby's
+/// `k_numeric_p(rhs) && f_real_p(rhs)`: built-in Integer/Float/Rational, or a
+/// Numeric subclass whose `real?` returns true. Errors from `real?` propagate.
+fn rhs_is_real_numeric(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    rhs: Value,
+) -> Result<bool> {
+    match rhs.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => return Ok(true),
+        _ => {}
+    }
+    if rhs.try_rational().is_some() {
+        return Ok(true);
+    }
+    let numeric = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Numeric"))
+    {
+        Some(v) => v.as_class_id(),
+        None => return Ok(false),
+    };
+    if !rhs.is_kind_of(&globals.store, numeric) {
+        return Ok(false);
+    }
+    let real_q_id = IdentId::get_id("real?");
+    if globals.check_method(rhs, real_q_id).is_none() {
+        return Ok(false);
+    }
+    Ok(vm
+        .invoke_method_inner(globals, real_q_id, rhs, &[], None, None)?
+        .as_bool())
+}
+
+/// CRuby's `Complex#+/-/*` for a RHS that is not a built-in Integer/Float/
+/// BigInt/Complex (i.e. Rational, a Numeric subclass, or an object needing
+/// coercion). A real numeric RHS is applied component-wise — only the real
+/// part for `+`/`-`, both parts for `*` — exactly as CRuby's `f_addsub` /
+/// `rb_complex_mul`. Everything else goes through the coerce protocol.
+fn complex_real_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let is_real = match rhs_is_real_numeric(vm, globals, rhs) {
+        Ok(b) => b,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    if !is_real {
+        return try_coerce_and_apply(vm, globals, op, lhs, rhs, "Complex");
+    }
+    let c = lhs.try_complex().unwrap();
+    let (re, im) = (c.re().get(), c.im().get());
+    let new_re = vm.invoke_method_simple(globals, op, re, &[rhs])?;
+    let new_im = if op == IdentId::_MUL {
+        vm.invoke_method_simple(globals, op, im, &[rhs])?
+    } else {
+        im
+    };
+    let re_r = match Real::try_from(globals, new_re) {
+        Ok(r) => r,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    let im_r = match Real::try_from(globals, new_im) {
+        Ok(r) => r,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    Some(Value::complex(re_r, im_r))
+}
+
 /// CRuby-compatible coerce for bitwise operations (Integer#&, |, ^).
 ///
 /// CRuby's rb_num_coerce_bit:
@@ -148,7 +229,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Complex(_), _) => {
-                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Complex");
+                        return complex_real_op(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
                         return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);

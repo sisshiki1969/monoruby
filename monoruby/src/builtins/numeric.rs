@@ -24,7 +24,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
     globals.define_builtin_func(INTEGER_CLASS, "-@", neg, 0);
     globals.define_builtin_func(FLOAT_CLASS, "-@", neg, 0);
-    globals.define_builtin_func(COMPLEX_CLASS, "-@", neg, 0);
+    // NOTE: `Complex#-@` is defined in `complex::init` (`neg_op`), which sends
+    // `-@` to each component (required for custom Numeric parts). Do not
+    // override it here with the generic `neg`/`neg_value` fast path.
     globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
     globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
