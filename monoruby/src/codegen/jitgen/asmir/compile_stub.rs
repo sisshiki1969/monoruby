@@ -548,6 +548,67 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Integer#%` (general fixnum case). `a` (Rdi/x4) and `b` (Rsi/x3)
+    /// are tagged; the floor-mod remainder is returned tagged in Rax (x0). b==0
+    /// deopts with a `_divide_by_zero` marker. aarch64 twin of x86
+    /// `gen_int_rem`; mirrors the floor adjustment of `a64_integer_binop`'s Div
+    /// (`sdiv` truncates toward zero, so when the remainder is non-zero and its
+    /// sign differs from the divisor's, add the divisor back).
+    pub(crate) fn gen_int_rem(&mut self, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4 (a, tagged)
+        let rsi = GP::Rsi.a64().0; // x3 (b, tagged)
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let zero_div = self.jit.label();
+        let exit = self.jit.label();
+        let done = self.jit.label();
+        let deopt = deopt.clone();
+        let sym = Value::symbol_from_str("_divide_by_zero").id();
+        monoasm_arm64!(&mut self.jit,
+            asr x(rsi), x(rsi), #(1);        // b untagged
+            cbz x(rsi), zero_div;            // b==0 -> ZeroDivisionError
+            asr x9, x(rdi), #(1);            // a untagged
+            sdiv x10, x9, x(rsi);            // q = trunc(a/b)
+            msub x11, x10, x(rsi), x9;       // rem = a - q*b
+            cbz x11, exit;                   // exact -> no floor adjust
+            eor x12, x11, x(rsi);            // sign(rem) vs sign(b)
+            tbz x12, #(63), exit;            // same sign -> no adjust
+            add x11, x11, x(rsi);            // floor-mod: rem += b
+            exit:
+            lsl x(rax), x11, #(1);           // re-tag the remainder
+            add x(rax), x(rax), #(1);
+            b done;
+            zero_div:
+            mov x(rdi), (sym);               // deopt marker reg (mirrors x86)
+            b deopt;
+            done:
+        );
+    }
+
+    /// Inlined `Integer#**` between two fixnums: untag and call the runtime
+    /// `pow_ii(a, b, vm)` (which returns the boxed result, possibly a BigInt,
+    /// or 0/None on error). Result Value lands in Rax (x0). aarch64 twin of x86
+    /// `gen_int_pow`. The FP pool is saved around the C-call.
+    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4 (a, tagged)
+        let rsi = GP::Rsi.a64().0; // x3 (b, tagged)
+        let f = crate::executor::op::pow_ii as *const () as u64;
+        let error = error.clone();
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            asr x0, x(rdi), #(1);    // a (untagged) -> arg0
+            asr x1, x(rsi), #(1);    // b (untagged) -> arg1
+            mov x2, x19;             // vm (EXEC) -> arg2
+            str x30, [sp, #-16]!;    // save LR
+            mov x9, (f);
+            blr x9;                  // x0 = pow_ii(a, b, vm)
+            ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, error;           // 0/None -> raise
+        );
+    }
+
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
     fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
