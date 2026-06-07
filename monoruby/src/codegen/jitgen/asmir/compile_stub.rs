@@ -1051,23 +1051,86 @@ impl Codegen {
         }
     }
 
-    /// Physical D-register index for a pool-resident `FPReg`, or `None` (bail →
-    /// the method stays VM-interpreted) otherwise.
-    ///
-    /// Covers the full FP pool D2-D15 (`PHYS_XMM_POOL` = 14 ⇒ `Xmm(2..=15)`).
-    /// D2-D7 are AAPCS64 caller-saved; D8-D15 are callee-saved, so the
-    /// Rust↔JIT boundary (the invoker prologue/epilogue and the fiber-switch
-    /// `a64_{push,pop}_callee_save`) saves/restores D8-D15 to preserve the Rust
-    /// caller's values. Within the JIT world the whole pool is treated as
-    /// caller-saved — `XmmSave`/`XmmRestore` spill the live subset around any
-    /// clobbering call (a JIT→JIT `blr` clobbers D2-D15; a C-call's Rust callee
-    /// preserves D8-D15 but the spill is harmless), and `f64_to_val`'s heap
-    /// path saves D2-D7 while relying on `float_heap` to preserve D8-D15.
-    /// Only a spill (>14 live floats) still bails.
-    fn a64_fpr(&self, x: FPReg, base: usize) -> Option<u32> {
-        match x.loc(base) {
-            FPRegLoc::Xmm(p) if p <= 15 => Some(p as u32),
-            _ => None,
+    // ---- spill-aware FP-register access -----------------------------------
+    // The FP register allocator keeps unboxed floats in the pool D2-D15
+    // (`PHYS_XMM_POOL` = 14 ⇒ `FPRegLoc::Xmm(2..=15)`); when it needs more live
+    // floats than that, the overflow spills to frame slots
+    // (`FPRegLoc::Spill(off)` ⇒ `[x29-off]`, mirroring x86's `[rbp-off]`).
+    // D0/D1 are reserved scratch and never alias a pool register, so they carry
+    // spilled operands during an op. The common (pool-resident) case emits
+    // exactly the same code as before — `read`/`wtmp` return the pool register
+    // and emit nothing, `commit` is a no-op.
+    //
+    // Pool save/restore invariant: D2-D7 are AAPCS64 caller-saved, D8-D15
+    // callee-saved, so the Rust↔JIT boundary (the invoker prologue/epilogue and
+    // the fiber-switch `a64_{push,pop}_callee_save`) preserves D8-D15 for the
+    // Rust caller. Within the JIT world the whole pool is treated as
+    // caller-saved — `XmmSave`/`XmmRestore` spill the live subset around any
+    // clobbering call (a JIT→JIT `blr` clobbers D2-D15; a C-call's Rust callee
+    // preserves D8-D15 but the spill is harmless), and `f64_to_val`'s heap path
+    // saves D2-D7 while relying on `float_heap` to preserve D8-D15.
+
+    /// Place `src`'s value into physical D-register `dreg` unconditionally
+    /// (`fmov` for a pool register, a frame load for a spill slot).
+    fn a64_fpr_load(&mut self, src: FPReg, dreg: u32, base: usize) {
+        match src.loc(base) {
+            FPRegLoc::Xmm(p) => {
+                if p as u32 != dreg {
+                    monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32););
+                }
+            }
+            FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
+                mov x10, (off as i64 as u64);
+                sub x10, x29, x10;
+                ldr d(dreg), [x10];
+            ),
+        }
+    }
+
+    /// Store physical D-register `dreg` into `dst` unconditionally (`fmov` for a
+    /// pool register, a frame store for a spill slot).
+    fn a64_fpr_save(&mut self, dst: FPReg, dreg: u32, base: usize) {
+        match dst.loc(base) {
+            FPRegLoc::Xmm(p) => {
+                if p as u32 != dreg {
+                    monoasm_arm64!(&mut self.jit, fmov d(p as u32), d(dreg););
+                }
+            }
+            FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
+                mov x10, (off as i64 as u64);
+                sub x10, x29, x10;
+                str d(dreg), [x10];
+            ),
+        }
+    }
+
+    /// Register holding `src`'s value, ready to read: its pool register if
+    /// resident (no code emitted), otherwise the spill loaded into scratch
+    /// `dreg`.
+    fn a64_fpr_read(&mut self, src: FPReg, dreg: u32, base: usize) -> u32 {
+        match src.loc(base) {
+            FPRegLoc::Xmm(p) => p as u32,
+            FPRegLoc::Spill(_) => {
+                self.a64_fpr_load(src, dreg, base);
+                dreg
+            }
+        }
+    }
+
+    /// Register to write `dst` into: its pool register if resident, else scratch
+    /// `dreg` (the caller must follow with `a64_fpr_commit`). Emits nothing.
+    fn a64_fpr_wtmp(&self, dst: FPReg, dreg: u32, base: usize) -> u32 {
+        match dst.loc(base) {
+            FPRegLoc::Xmm(p) => p as u32,
+            FPRegLoc::Spill(_) => dreg,
+        }
+    }
+
+    /// Flush scratch `dreg` back to `dst`'s spill slot; a no-op when `dst` is
+    /// pool-resident (the op already wrote its pool register in place).
+    fn a64_fpr_commit(&mut self, dst: FPReg, dreg: u32, base: usize) {
+        if let FPRegLoc::Spill(_) = dst.loc(base) {
+            self.a64_fpr_save(dst, dreg, base);
         }
     }
 
@@ -2006,8 +2069,9 @@ impl Codegen {
     }
 
     // ---- floating-point transfer primitives (aarch64) ---------------------
-    // FP pool registers map to D-registers via `a64_fpr` (None -> bail). All
-    // return bool; `base` is the spill base.
+    // Operands resolve through the spill-aware accessors above (`a64_fpr_read`/
+    // `_wtmp`/`_load`/`_save`/`_commit`). All return bool; `base` is the spill
+    // base.
 
     /// dst(f64) <- src.
     pub(in crate::codegen::jitgen) fn emit_fpr_move(
@@ -2016,53 +2080,47 @@ impl Codegen {
         dst: FPReg,
         base: usize,
     ) -> bool {
-        let (Some(s), Some(d)) = (self.a64_fpr(src, base), self.a64_fpr(dst, base)) else {
-            return false;
-        };
+        let s = self.a64_fpr_read(src, 0, base);
+        let d = self.a64_fpr_wtmp(dst, 0, base);
         if s != d {
             monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
         }
+        self.a64_fpr_commit(dst, 0, base);
         true
     }
 
-    /// swap two FP registers (via scratch D0).
+    /// swap two FP registers (via scratch D0/D1, spill-aware).
     pub(in crate::codegen::jitgen) fn emit_fpr_swap(&mut self, l: FPReg, r: FPReg, base: usize) -> bool {
-        let (Some(a), Some(b)) = (self.a64_fpr(l, base), self.a64_fpr(r, base)) else {
-            return false;
-        };
-        if a != b {
-            monoasm_arm64!(&mut self.jit,
-                fmov d0, d(a);
-                fmov d(a), d(b);
-                fmov d(b), d0;
-            );
-        }
+        // Force both values into scratch, then store back crossed. (When both
+        // are pool-resident this is the old `fmov`-through-d0 swap.)
+        self.a64_fpr_load(l, 0, base);
+        self.a64_fpr_load(r, 1, base);
+        self.a64_fpr_save(l, 1, base);
+        self.a64_fpr_save(r, 0, base);
         true
     }
 
     /// dst(f64) <- f64 constant `f`.
     pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
-        let Some(p) = self.a64_fpr(x, base) else {
-            return false;
-        };
+        let p = self.a64_fpr_wtmp(x, 0, base);
         let bits = f.to_bits();
         monoasm_arm64!(&mut self.jit,
             mov x9, (bits);
             fmov d(p), x9;
         );
+        self.a64_fpr_commit(x, 0, base);
         true
     }
 
     /// dst(f64) <- fixnum in GP `reg` (untag, signed int -> double).
     pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, reg: GP, x: FPReg, base: usize) -> bool {
-        let Some(p) = self.a64_fpr(x, base) else {
-            return false;
-        };
+        let p = self.a64_fpr_wtmp(x, 0, base);
         let r = reg.a64().0;
         monoasm_arm64!(&mut self.jit,
             asr x9, x(r), #(1);   // untag: value >> 1
             scvtf d(p), x9;
         );
+        self.a64_fpr_commit(x, 0, base);
         true
     }
 
@@ -2077,9 +2135,7 @@ impl Codegen {
         deopt: &DestLabel,
         base: usize,
     ) -> bool {
-        let Some(p) = self.a64_fpr(x, base) else {
-            return false;
-        };
+        let p = self.a64_fpr_wtmp(x, 0, base);
         let deopt = deopt.clone();
         let r = reg.a64().0;
         let heap = self.jit.label();
@@ -2109,19 +2165,17 @@ impl Codegen {
             ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
             exit:
         );
+        self.a64_fpr_commit(x, 0, base);
         true
     }
 
     /// [slot] <- box(f64 in x): flonum-encode or heap-allocate.
     pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
-        let Some(p) = self.a64_fpr(x, base) else {
-            return false;
-        };
         let lfp = GP::R14.a64().0;
         let f64_to_val = self.f64_to_val.clone();
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        self.a64_fpr_load(x, 0, base); // value -> d0 (pool fmov or spill load)
         monoasm_arm64!(&mut self.jit,
-            fmov d0, d(p);
             bl f64_to_val;          // x0 = Value(f64)
             sub x10, x(lfp), #(off);
             str x0, [x10];
@@ -2240,21 +2294,24 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let (l, r) = binary_xmm;
-        let (Some(ld), Some(rd), Some(dd)) = (
-            self.a64_fpr(l, base),
-            self.a64_fpr(r, base),
-            self.a64_fpr(dst, base),
-        ) else {
+        // Reject an unsupported op before emitting any operand loads.
+        if !matches!(kind, BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div) {
             return false;
-        };
+        }
+        // Operands resolve to their pool register, or load a spill into d0/d1;
+        // the result writes its pool register or scratch d0 (committed below).
+        let ld = self.a64_fpr_read(l, 0, base);
+        let rd = self.a64_fpr_read(r, 1, base);
+        let dd = self.a64_fpr_wtmp(dst, 0, base);
         // aarch64 FP 3-op writes rd, reads rn/rm — no aliasing hazard.
         match kind {
             BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
             BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
             BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
             BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
-            _ => return false,
+            _ => unreachable!(),
         }
+        self.a64_fpr_commit(dst, 0, base);
         true
     }
 
@@ -2264,15 +2321,14 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
         match kind {
             UnOpK::Neg => {
-                let Some(p) = self.a64_fpr(dst, base) else {
-                    return false;
-                };
+                let p = self.a64_fpr_read(dst, 0, base);
                 monoasm_arm64!(&mut self.jit,
                     fmov x9, d(p);
                     mov x10, (0x8000_0000_0000_0000u64);
                     eor x9, x9, x10;
                     fmov d(p), x9;
                 );
+                self.a64_fpr_commit(dst, 0, base);
             }
             UnOpK::Pos => {}
             _ => return false,
@@ -2284,9 +2340,7 @@ impl Codegen {
     /// (a constant int materialized as both a boxed integer and a double).
     /// Bails (`false`) if the FP destination is not lowerable (spilled).
     pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
-        let Some(p) = self.a64_fpr(x, base) else {
-            return false;
-        };
+        let p = self.a64_fpr_wtmp(x, 0, base);
         let lfp = GP::R14.a64().0;
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
         let id = Value::integer(i).id();
@@ -2298,6 +2352,7 @@ impl Codegen {
             mov x9, (bits);
             fmov d(p), x9;
         );
+        self.a64_fpr_commit(x, 0, base);
         true
     }
 
@@ -2305,9 +2360,8 @@ impl Codegen {
     /// `a64_flag_to_bool` but on `fcmp` flags with float condition codes. Bails
     /// (`false`) if either operand is spilled.
     pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
-        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
-            return false;
-        };
+        let lp = self.a64_fpr_read(lhs, 0, base);
+        let rp = self.a64_fpr_read(rhs, 1, base);
         monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
         let cond = a64_float_cond_for_cmp(kind, BrKind::BrIf);
         let rax = GP::Rax.a64();
@@ -2331,9 +2385,8 @@ impl Codegen {
         branch_dest: DestLabel,
         base: usize,
     ) -> bool {
-        let (Some(lp), Some(rp)) = (self.a64_fpr(lhs, base), self.a64_fpr(rhs, base)) else {
-            return false;
-        };
+        let lp = self.a64_fpr_read(lhs, 0, base);
+        let rp = self.a64_fpr_read(rhs, 1, base);
         monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
         let cond = a64_float_cond_for_cmp(kind, brkind);
         self.jit.bcond_label(cond, &branch_dest);
@@ -3605,8 +3658,8 @@ impl Codegen {
     /// Unary float C helper `f(f64) -> f64` (sin, sqrt, …): load the operand
     /// into d0 (the first/only AAPCS f64 arg = return reg), call, store d0 into
     /// dst. The live FP pool (d2-d7, caller-saved = clobbered by the callee) is
-    /// saved/restored around the call exactly like the x86 twin. Bails if the
-    /// source or destination is a spill slot (a64_fpr only handles d2-d7).
+    /// saved/restored around the call exactly like the x86 twin. A spilled
+    /// source/destination is handled by the spill-aware load/save helpers.
     pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
         &mut self,
         f: unsafe extern "C" fn(f64) -> f64,
@@ -3615,25 +3668,17 @@ impl Codegen {
         using_xmm: UsingXmm,
         base: usize,
     ) -> bool {
-        let Some(s) = self.a64_fpr(src, base) else {
-            return false;
-        };
-        let Some(d) = self.a64_fpr(dst, base) else {
-            return false;
-        };
         let fp = f as u64;
         monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
         self.emit_xmm_save(using_xmm, false);
+        self.a64_fpr_load(src, 0, base); // arg -> d0 (spill slots are x29-relative)
         monoasm_arm64!(&mut self.jit,
-            fmov d0, d(s);
             mov x9, (fp);
             blr x9;            // result in d0
         );
         self.emit_xmm_restore(using_xmm, false);
-        monoasm_arm64!(&mut self.jit,
-            ldr x30, [sp], #16;
-            fmov d(d), d0;
-        );
+        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+        self.a64_fpr_save(dst, 0, base); // result d0 -> dst (after the pool restore)
         true
     }
 
@@ -3651,29 +3696,18 @@ impl Codegen {
         using_xmm: UsingXmm,
         base: usize,
     ) -> bool {
-        let Some(l) = self.a64_fpr(lhs, base) else {
-            return false;
-        };
-        let Some(r) = self.a64_fpr(rhs, base) else {
-            return false;
-        };
-        let Some(d) = self.a64_fpr(dst, base) else {
-            return false;
-        };
         let fp = f as u64;
         monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
         self.emit_xmm_save(using_xmm, false);
+        self.a64_fpr_load(lhs, 0, base); // arg0 -> d0
+        self.a64_fpr_load(rhs, 1, base); // arg1 -> d1
         monoasm_arm64!(&mut self.jit,
-            fmov d0, d(l);
-            fmov d1, d(r);
             mov x9, (fp);
             blr x9;            // result in d0
         );
         self.emit_xmm_restore(using_xmm, false);
-        monoasm_arm64!(&mut self.jit,
-            ldr x30, [sp], #16;
-            fmov d(d), d0;
-        );
+        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+        self.a64_fpr_save(dst, 0, base); // result d0 -> dst (after the pool restore)
         true
     }
 

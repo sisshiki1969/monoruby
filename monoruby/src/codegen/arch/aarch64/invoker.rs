@@ -7,7 +7,7 @@ use monoasm_macro::monoasm_arm64;
 
 impl JitModule {
     /// Save the AAPCS64 callee-saved FP registers D8-D15 (64 bytes) below sp.
-    /// The JIT uses the whole FP pool D2-D15 as scratch (see `a64_fpr`), so
+    /// The JIT uses the whole FP pool D2-D15 as scratch (`FPRegLoc::Xmm`), so
     /// every Rust↔JIT boundary must preserve D8-D15 for the Rust caller.
     /// `monoasm_arm64`'s `stp`/`ldp` are GPR-only, so save them individually.
     pub(in crate::codegen) fn a64_save_fp_callee_save(&mut self) {
@@ -202,7 +202,7 @@ impl JitModule {
 
     /// Save all callee-saved GPRs (x19-x28) + fp/lr + the callee-saved FP regs
     /// (D8-D15) for a fiber context switch. D8-D15 are part of the JIT FP pool
-    /// (see `a64_fpr`), so a fiber yielding mid-computation — and the parent
+    /// (`FPRegLoc::Xmm`), so a fiber yielding mid-computation — and the parent
     /// whose D8-D15 the fiber body clobbers — both need them preserved across
     /// the switch.
     pub(in crate::codegen) fn a64_push_callee_save(&mut self) {
