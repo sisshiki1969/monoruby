@@ -3561,6 +3561,117 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Array index read with a non-negative i64 index. aarch64 twin of x86
+    /// `array_index`.
+    ///
+    /// ### in
+    /// - Rdi (x4): base Array
+    /// - Rsi (x3): index, non-negative i64
+    ///
+    /// ### out
+    /// - Rax (x0): result Value (NIL when out of range)
+    ///
+    pub(crate) fn array_index(&mut self, out_range: &DestLabel) {
+        // Unlike x86, the cold (heap / out-of-range) blocks are laid out inline
+        // on the same page: aarch64 b/b.cond can't reach monoasm's second page
+        // (it is mapped far past the ±128 MB branch range).
+        let exit = self.jit.label();
+        let heap = self.jit.label();
+        let out_range = out_range.clone();
+        monoasm_arm64! { &mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x0, #(ARRAY_INLINE_CAPA as u32);
+            b.gt heap;
+            // inline: x3 (index) is a non-negative integer.
+            cmp x0, x3;                              // capa vs index
+            b.le out_range;                          // index >= capa -> out of range
+            add x9, x4, x3, lsl #3;
+            ldr x0, [x9, #(RVALUE_OFFSET_INLINE as u32)];
+            b exit;
+        }
+        self.jit.bind_label(heap);
+        monoasm_arm64! { &mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, x3;
+            b.le out_range;
+            ldr x4, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            ldr x0, [x4, x3, lsl #3];
+            b exit;
+        }
+        self.jit.bind_label(out_range);
+        monoasm_arm64! { &mut self.jit,
+            mov x0, #(NIL_VALUE as u32);
+        }
+        self.jit.bind_label(exit); // out_range falls through to exit
+    }
+
+    ///
+    /// Array index assign with a non-negative i64 index. aarch64 twin of x86
+    /// `array_index_assign`.
+    ///
+    /// ### in
+    /// - Rdi (x4): base Array
+    /// - Rsi (x3): index, non-negative i64
+    /// - Rdx (x2): source Value
+    ///
+    /// ### destroy
+    /// - caller-save registers except the FP pool
+    ///
+    pub(crate) fn array_index_assign(
+        &mut self,
+        using_xmm: UsingXmm,
+        generic: &DestLabel,
+        error: &DestLabel,
+    ) {
+        // Cold (heap / generic-C-call) blocks laid out inline; see array_index
+        // for why select_page can't be used on aarch64.
+        let exit = self.jit.label();
+        let heap = self.jit.label();
+        let generic = generic.clone();
+        monoasm_arm64! { &mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x0, #(ARRAY_INLINE_CAPA as u32);
+            b.gt heap;
+            // inline: x3 (index) is a non-negative integer.
+            cmp x0, x3;
+            b.le generic;                            // index >= capa -> generic
+            add x9, x4, x3, lsl #3;
+            str x2, [x9, #(RVALUE_OFFSET_INLINE as u32)];  // src (Rdx) -> slot
+            b exit;
+        }
+        self.jit.bind_label(heap);
+        monoasm_arm64! { &mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, x3;
+            b.le generic;
+            ldr x4, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            add x9, x4, x3, lsl #3;
+            str x2, [x9];
+            b exit;
+        }
+        self.jit.bind_label(generic);
+        self.emit_xmm_save(using_xmm, false);
+        // set_array_integer_index(base, index, vm, globals, src). Source regs at
+        // entry: base=x4, index=x3, src=x2. Reorder into the C ABI args
+        // (x0..x4) without clobbering a still-needed source.
+        let f = set_array_integer_index as *const () as u64;
+        monoasm_arm64! { &mut self.jit,
+            mov x0, x4;            // base -> arg0
+            mov x4, x2;            // src  -> arg4   (x2 free after this)
+            mov x1, x3;            // index -> arg1
+            mov x3, x20;           // globals -> arg3
+            mov x2, x19;           // vm -> arg2
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        }
+        self.emit_xmm_restore(using_xmm, false);
+        self.emit_handle_error(error);
+        self.jit.bind_label(exit); // generic C-call path falls through to exit
+    }
+
     /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
     /// double with `scvtf`, and store into `fret`. aarch64 twin of x86
     /// `integer_tof`'s `sarq` + `cvtsi2sdq` + `store_fpr_into_xmm`.
@@ -4289,4 +4400,20 @@ extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
 /// `compile.rs` (a `jit_x86`-only module), so aarch64 carries its own copy.
 extern "C" fn unreachable() {
     unreachable!("reached unreachable code");
+}
+
+/// Generic `Array#[]=` fallback (out-of-fast-path index). Returns `None` and
+/// sets the error on failure (negative index past the start). The x86 twin
+/// lives in the `jit_x86`-only `asmir/compile/index.rs`.
+extern "C" fn set_array_integer_index(
+    base: Value,
+    index: i64,
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    src: Value,
+) -> Option<Value> {
+    base.as_array()
+        .set_index(index, src)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
