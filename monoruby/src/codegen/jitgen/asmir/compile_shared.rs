@@ -260,8 +260,9 @@ impl Codegen {
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
             // Recompile-or-deopt point: both arches recompile the whole method
-            // once a small miss counter warms, then deopt. aarch64 has no loop
-            // or specialized recompiler yet, so those positions just deopt.
+            // (or loop body) once a small miss counter warms, then deopt.
+            // aarch64 has no specialized-frame recompiler yet (those go through
+            // RecompileDeoptSpecialized and just deopt).
             AsmInst::RecompileDeopt {
                 position,
                 deopt,
