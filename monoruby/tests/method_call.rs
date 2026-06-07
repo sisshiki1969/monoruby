@@ -2506,3 +2506,30 @@ fn forwarding_super_block_passthrough() {
         "##,
     );
 }
+
+#[test]
+fn method_missing_in_hot_loop() {
+    // A call site that dispatches via `method_missing` caches the receiver
+    // class with a null func_id. The JIT must plain-deopt such a site (the VM
+    // handles method_missing) rather than request a recompile — otherwise the
+    // hot method recompiles on every warm-up cycle (`NotCached`) forever and
+    // never stabilizes. This drives the call through a BasicObject proxy's
+    // method_missing 100×, well past the JIT threshold, then checks the result.
+    run_test_with_prelude(
+        r##"
+        res = 0
+        d = Proxy.new(Target.new)
+        200.times { res += d.value_plus(40) }
+        res
+        "##,
+        r##"
+        class Target
+          def value_plus(n) = 2 + n
+        end
+        class Proxy < BasicObject
+          def initialize(t) = @t = t
+          def method_missing(name, *args) = @t.__send__(name, *args)
+        end
+        "##,
+    );
+}

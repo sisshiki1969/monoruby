@@ -14,7 +14,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        cache: Option<MethodCacheEntry>,
+        cache: MethodCache,
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let recv_class = state.class(callsite.recv);
@@ -27,23 +27,39 @@ impl<'a> JitContext<'a> {
             }
         } else {
             // here, recv_class is none.
-            if let Some(cache) = cache {
-                if cache.version != self.class_version() {
-                    // the inline method cache is invalid.
-                    let recv_class = cache.recv_class;
-                    let func_id = if let Some(fid) = self.jit_check_call(recv_class, callsite.name)
-                    {
-                        fid
+            match cache {
+                MethodCache::Cached(cache) => {
+                    if cache.version != self.class_version() {
+                        // the inline method cache is invalid.
+                        let recv_class = cache.recv_class;
+                        let func_id =
+                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
+                                fid
+                            } else {
+                                return Ok(CompileResult::Recompile(
+                                    RecompileReason::MethodNotFound,
+                                ));
+                            };
+                        (recv_class, func_id)
                     } else {
-                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
-                    };
-                    (recv_class, func_id)
-                } else {
-                    // the inline method cache is valid.
-                    (cache.recv_class, cache.func_id)
+                        // the inline method cache is valid.
+                        (cache.recv_class, cache.func_id)
+                    }
                 }
-            } else {
-                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                // The VM resolved this call to `method_missing` and the cached
+                // class version is still current. The JIT has no lowering for a
+                // method_missing dispatch, so plain-deopt to the VM here instead
+                // of requesting a recompile. A recompile would re-read the null
+                // fid → `NotCached` → recompile again, never stabilizing — the
+                // recompile-thrash that makes method_missing-heavy hot loops
+                // ~100x slower than the interpreter.
+                MethodCache::MethodMissing { version, .. } if version == self.class_version() => {
+                    return Ok(CompileResult::Deopt);
+                }
+                // No cache, or a stale method_missing cache (the resolution may
+                // have changed): fall back to the recompile-once path, which
+                // re-reads the cache after the VM warms it.
+                _ => return Ok(CompileResult::Recompile(RecompileReason::NotCached)),
             }
         };
         self.compile_method_call(state, ir, recv_class, None, func_id, callid, false)

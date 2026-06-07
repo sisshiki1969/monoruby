@@ -59,6 +59,23 @@ impl std::cmp::PartialEq for MethodCacheEntry {
     }
 }
 
+/// State of a method call's inline cache, as read from the bytecode at JIT
+/// compile time.
+#[derive(Debug, Clone)]
+pub(crate) enum MethodCache {
+    /// Both the receiver class and the resolved func are cached.
+    Cached(MethodCacheEntry),
+    /// The receiver class is cached, but the call dispatches via
+    /// `method_missing` (the cached func_id slot is null). The VM handles this
+    /// fine; the JIT has no lowering for it, so it must plain-deopt here rather
+    /// than request a recompile (which would re-read the null fid → `NotCached`
+    /// → recompile, looping forever). `version` is the class version at the time
+    /// the VM populated the cache.
+    MethodMissing { recv_class: ClassId, version: u32 },
+    /// Nothing cached yet (the call site has not been executed by the VM).
+    None,
+}
+
 ///
 /// IR for JIT compiler.
 ///
@@ -182,7 +199,7 @@ pub(crate) enum TraceIr {
     MethodCall {
         _polymorphic: bool,
         callid: CallSiteId,
-        cache: Option<MethodCacheEntry>,
+        cache: MethodCache,
     },
 
     /// return(%src)
@@ -415,11 +432,7 @@ impl TraceIr {
                         1 => true,
                         _ => unreachable!(),
                     };
-                    let cache = if let Some(cache) = pc.method_cache() {
-                        Some(cache)
-                    } else {
-                        None
-                    };
+                    let cache = pc.method_cache_state();
                     TraceIr::MethodCall {
                         _polymorphic: polymorphic,
                         callid,
@@ -982,20 +995,21 @@ impl TraceIr {
                 let CallSiteInfo { recv, dst, .. } = callsite;
                 let s = callsite.format_args();
                 let op1 = format!("{} = {:?}.{name}{s}", ret_str(*dst), recv);
+                let (cache_class, cache_fid) = match &cache {
+                    MethodCache::Cached(entry) => {
+                        (Some(entry.recv_class), format!("{:?}", entry.func_id))
+                    }
+                    MethodCache::MethodMissing { recv_class, .. } => {
+                        (Some(*recv_class), "method_missing".to_string())
+                    }
+                    MethodCache::None => (None, "-".to_string()),
+                };
                 format!(
                     "{:36} {}[{}] {}",
                     op1,
                     if polymorphic { "POLYMORPHIC " } else { "" },
-                    store.debug_class_name(if let Some(entry) = &cache {
-                        Some(entry.recv_class)
-                    } else {
-                        None
-                    }),
-                    if let Some(entry) = cache {
-                        format!("{:?}", entry.func_id)
-                    } else {
-                        "-".to_string()
-                    }
+                    store.debug_class_name(cache_class),
+                    cache_fid
                 )
             }
             TraceIr::Yield { callid } => {
