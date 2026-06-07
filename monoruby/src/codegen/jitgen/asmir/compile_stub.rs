@@ -548,6 +548,113 @@ impl Codegen {
         );
     }
 
+    /// `Integer#>>` by a variable amount. lhs (tagged) in Rdi (x4), shift amount
+    /// (tagged) in Rcx (x1); result tagged in Rdi. A negative shift means a left
+    /// shift, which overflows -> deopt. aarch64 twin of x86 `gen_shr`, but
+    /// without `lzcnt`/`select_page`: overflow is checked by shifting back, and
+    /// the cold (left-shift / >=64) blocks are laid out inline.
+    pub(crate) fn gen_shr(&mut self, deopt: &DestLabel) {
+        let shl = self.jit.label();
+        let after = self.jit.label();
+        let under = self.jit.label();
+        let cont = self.jit.label();
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            asr x1, x1, #1;            // untag shift amount (Rcx == x1)
+            cmp x1, #0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &shl); // negative -> left shift
+        monoasm_arm64!(&mut self.jit, cmp x1, #64;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &under);
+        monoasm_arm64!(&mut self.jit, asr x4, x4, x1;); // tagged sar (Rdi == x4)
+        self.jit.bind_label(after.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #1;
+            orr x4, x4, x9;           // re-tag fixnum
+            b cont;
+        );
+        // left shift by -k (cold)
+        self.jit.bind_label(shl);
+        monoasm_arm64!(&mut self.jit, neg x1, x1; cmp x1, #64;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &deopt); // left >=64 -> overflow
+        monoasm_arm64!(&mut self.jit,
+            sub x4, x4, #1;           // strip tag -> 2n
+            lsl x9, x4, x1;           // 2n << k
+            asr x10, x9, x1;          // shift back
+            cmp x10, x4;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // overflow
+        monoasm_arm64!(&mut self.jit, mov x4, x9; b after;);
+        // right shift by >= 64 (cold): 0 if lhs >= 0, else -1
+        self.jit.bind_label(under);
+        self.a64_shift_under(&after);
+        self.jit.bind_label(cont);
+    }
+
+    /// `Integer#<<` by a variable amount. lhs (tagged) in Rdi (x4), shift amount
+    /// (tagged) in Rcx (x1); result tagged in Rdi. A left shift that overflows
+    /// the fixnum range deopts; a negative shift means a right shift. aarch64
+    /// twin of x86 `gen_shl` (shift-back overflow, inline cold blocks). Used for
+    /// both the literal- and register-lhs cases (recv is always loaded into Rdi
+    /// by the builtin), so x86's `gen_shl_lhs_imm` has no aarch64 counterpart.
+    pub(crate) fn gen_shl(&mut self, deopt: &DestLabel) {
+        let shr = self.jit.label();
+        let after = self.jit.label();
+        let under = self.jit.label();
+        let cont = self.jit.label();
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            asr x1, x1, #1;            // untag shift amount
+            cmp x1, #0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &shr); // negative -> right shift
+        monoasm_arm64!(&mut self.jit, cmp x1, #64;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &deopt); // left >=64 -> overflow
+        monoasm_arm64!(&mut self.jit,
+            sub x4, x4, #1;           // strip tag -> 2n
+            lsl x9, x4, x1;           // 2n << k
+            asr x10, x9, x1;          // shift back
+            cmp x10, x4;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // overflow
+        monoasm_arm64!(&mut self.jit, mov x4, x9;);
+        self.jit.bind_label(after.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #1;
+            orr x4, x4, x9;           // re-tag fixnum
+            b cont;
+        );
+        // right shift by -k (cold)
+        self.jit.bind_label(shr);
+        monoasm_arm64!(&mut self.jit, neg x1, x1; cmp x1, #64;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &under);
+        monoasm_arm64!(&mut self.jit, asr x4, x4, x1; b after;);
+        // right shift by >= 64 (cold): 0 if lhs >= 0, else -1
+        self.jit.bind_label(under);
+        self.a64_shift_under(&after);
+        self.jit.bind_label(cont);
+    }
+
+    /// Shared cold tail for a shift-right by >= 64 bits: the tagged lhs is in
+    /// Rdi (x4); leave 0 (Value 0) for a non-negative lhs or -1 (Value -1) for a
+    /// negative one, then branch to `after` (which re-tags). Mirrors x86
+    /// `shift_under`.
+    fn a64_shift_under(&mut self, after: &DestLabel) {
+        let zero = self.jit.label();
+        monoasm_arm64!(&mut self.jit, cmp x4, #0;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &zero);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, #0;
+            sub x4, x4, #1;           // -1 (sar of a negative number by >=64)
+            b after;
+        );
+        self.jit.bind_label(zero);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, #0;
+            b after;
+        );
+    }
+
     /// Inlined `Integer#%` (general fixnum case). `a` (Rdi/x4) and `b` (Rsi/x3)
     /// are tagged; the floor-mod remainder is returned tagged in Rax (x0). b==0
     /// deopts with a `_divide_by_zero` marker. aarch64 twin of x86
