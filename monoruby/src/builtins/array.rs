@@ -74,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) {
         "[]",
         &["slice"],
         index,
-        inline_gen!(array_index),
+        inline_gen2!(array_index),
         1,
         2,
         false,
@@ -83,7 +83,7 @@ pub(super) fn init(globals: &mut Globals) {
         ARRAY_CLASS,
         "[]=",
         index_assign,
-        inline_gen!(array_index_assign),
+        inline_gen2!(array_index_assign),
         2,
         3,
         false,
@@ -1203,8 +1203,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1301,8 +1300,7 @@ fn index_assign(
     }
 }
 
-#[cfg(jit_x86)]
-
+#[cfg(jit)]
 fn array_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
