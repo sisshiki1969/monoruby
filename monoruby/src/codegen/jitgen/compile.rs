@@ -920,11 +920,22 @@ impl<'a> JitContext<'a> {
                 deopt,
                 reason,
             }),
-            _ => ir.push(AsmInst::RecompileDeopt {
-                position: self.position(),
-                deopt,
-                reason,
-            }),
+            _ => {
+                // aarch64 surfaces a recompile-time panic as a Ruby FatalError,
+                // so it needs an error side-exit (write-back + raise) to branch
+                // into when `jit_recompile_method` returns None. x86 recompiles
+                // in place and never returns an error here.
+                #[cfg(not(jit_x86))]
+                let error = Some(ir.new_error(state));
+                #[cfg(jit_x86)]
+                let error = None;
+                ir.push(AsmInst::RecompileDeopt {
+                    position: self.position(),
+                    deopt,
+                    error,
+                    reason,
+                })
+            }
         }
     }
 }

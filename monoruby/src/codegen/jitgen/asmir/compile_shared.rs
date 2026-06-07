@@ -259,13 +259,18 @@ impl Codegen {
             }
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
-            // Recompile-or-deopt point: x86 recompiles once the inline cache
-            // warms; aarch64 has no recompiler and just deopts.
+            // Recompile-or-deopt point: both arches recompile the whole method
+            // once a small miss counter warms, then deopt. aarch64 has no loop
+            // or specialized recompiler yet, so those positions just deopt.
             AsmInst::RecompileDeopt {
                 position,
                 deopt,
+                error,
                 reason,
-            } => self.emit_recompile_deopt(position, &labels[deopt], reason),
+            } => {
+                let error = error.map(|e| labels[e].clone());
+                self.emit_recompile_deopt(position, &labels[deopt], error.as_ref(), reason)
+            }
             // The call itself. x86 records a return-address deopt patch point;
             // aarch64 has no branch patching (class-version guards cover it).
             AsmInst::Call {
