@@ -191,28 +191,7 @@ fn object_not(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| {
-            // `recv | 0x10` maps nil(0x04)->0x14 and false(0x14)->0x14, so the
-            // result is FALSE_VALUE exactly for the two falsy immediates; any
-            // truthy value differs. eq -> TRUE, ne -> FALSE.
-            #[cfg(jit_x86)]
-            monoasm! { &mut r#gen.jit,
-                orq  rdi, (0x10);
-                movq rax, (TRUE_VALUE);
-                movq rsi, (FALSE_VALUE);
-                cmpq rdi, (FALSE_VALUE);
-                cmovneq rax, rsi;
-            }
-            #[cfg(not(jit_x86))]
-            monoasm_arm64! { &mut r#gen.jit,
-                mov  x9, #(0x10);
-                orr  x4, x4, x9;            // GP::Rdi == x4
-                mov  x0, #(TRUE_VALUE);     // GP::Rax == x0
-                mov  x3, #(FALSE_VALUE);    // GP::Rsi == x3
-                cmp  x4, #(FALSE_VALUE);
-                csel x0, x0, x3, eq;        // eq -> TRUE, else FALSE
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_object_not());
         state.def_rax2acc(ir, dst);
     }
     true
@@ -274,15 +253,7 @@ pub(super) fn object_object_id(
     state.load(ir, recv, GP::Rdi);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _, _| {
-        #[cfg(jit_x86)]
-        monoasm! {&mut r#gen.jit,
-            movq rax, (crate::executor::op::i64_to_value);
-            call rax;
-        }
-        #[cfg(not(jit_x86))]
-        r#gen.a64_object_id();
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_object_id());
     ir.xmm_restore(using_xmm);
     state.def_rax2acc(ir, ret);
     true

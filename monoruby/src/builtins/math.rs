@@ -707,31 +707,10 @@ fn math_sqrt(
     let deopt = ir.new_deopt(state);
     let fret = dst.map(|dst| state.def_F(dst));
     ir.inline(move |r#gen, _, labels, base| {
-        let deopt_label = &labels[deopt];
-        // NaN passes through (sqrt(NaN) = NaN); negative values deopt.
-        // -0.0 compares equal to 0.0, so it skips the deopt and yields -0.0
-        // as CRuby does.
-        #[cfg(jit_x86)]
-        {
-            let do_sqrt = r#gen.jit.label();
-            // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
-            r#gen.load_fpr_into_xmm0(fsrc, base);
-            monoasm!( &mut r#gen.jit,
-                xorpd xmm1, xmm1;
-                ucomisd xmm0, xmm1;
-                jp do_sqrt;
-                jb deopt_label;
-            do_sqrt:
-            );
-            if let Some(fret) = fret {
-                monoasm!( &mut r#gen.jit,
-                    sqrtsd xmm0, xmm0;
-                );
-                r#gen.store_fpr_into_xmm(fret, base);
-            }
-        }
-        #[cfg(not(jit_x86))]
-        r#gen.a64_math_sqrt(fsrc, fret, deopt_label, base);
+        // NaN passes through (sqrt(NaN) = NaN); negative values deopt (the
+        // interpreter re-runs and raises DomainError). -0.0 compares equal to
+        // 0.0, so it skips the deopt and yields -0.0 as CRuby does.
+        r#gen.emit_math_sqrt(fsrc, fret, &labels[deopt], base)
     });
     true
 }

@@ -335,22 +335,7 @@ fn kernel_nil(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| {
-            #[cfg(jit_x86)]
-            monoasm! { &mut r#gen.jit,
-                movq rax, (FALSE_VALUE);
-                movq rsi, (TRUE_VALUE);
-                cmpq rdi, (NIL_VALUE);
-                cmoveqq rax, rsi;
-            }
-            #[cfg(not(jit_x86))]
-            monoasm_arm64! { &mut r#gen.jit,
-                mov  x0, #(FALSE_VALUE);    // GP::Rax == x0
-                mov  x3, #(TRUE_VALUE);     // GP::Rsi == x3
-                cmp  x4, #(NIL_VALUE);      // GP::Rdi == x4
-                csel x0, x3, x0, eq;        // nil -> TRUE, else FALSE
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_kernel_nil());
         state.def_rax2acc(ir, dst);
     }
     true
@@ -391,36 +376,7 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _, _| {
-            let exit = r#gen.jit.label();
-            #[cfg(jit_x86)]
-            monoasm! { &mut r#gen.jit,
-                movq rax, (FALSE_VALUE);
-                movq rdi, [r14 - (LFP_BLOCK)];
-                testq rdi, rdi;
-                jz exit;
-                cmpq rdi, (NIL_VALUE);
-                jeq exit;
-                movq rax, (TRUE_VALUE);
-            exit:
-            }
-            // block slot at [LFP - LFP_BLOCK]; 0 or NIL means no block given.
-            #[cfg(not(jit_x86))]
-            {
-                monoasm_arm64! { &mut r#gen.jit,
-                    mov x0, #(FALSE_VALUE);             // GP::Rax == x0
-                    sub x9, x22, #(LFP_BLOCK as u32);   // x22 == LFP (r14)
-                    ldr x4, [x9];                       // block handle -> GP::Rdi
-                    cbz x4, exit;
-                    cmp x4, #(NIL_VALUE);
-                }
-                r#gen.jit.bcond_label(monoasm::Cond::Eq, &exit);
-                monoasm_arm64! { &mut r#gen.jit,
-                    mov x0, #(TRUE_VALUE);
-                }
-                r#gen.jit.bind_label(exit);
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_block_given());
         state.def_rax2acc(ir, dst);
     }
 

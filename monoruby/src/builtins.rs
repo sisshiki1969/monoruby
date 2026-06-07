@@ -52,7 +52,11 @@ use codegen::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 #[cfg(jit)]
 pub use monoasm::*;
-#[cfg(jit)]
+// The asm macros are only used by the x86-only inline generators
+// (`fiddle`, the x86 `gen_class_new_inline`/`object_send`, and the integer
+// float/shift paths). aarch64 builtins emit no asm directly — they call the
+// `emit_*` Codegen methods in `asmir/compile_stub.rs`.
+#[cfg(jit_x86)]
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;

@@ -60,16 +60,7 @@ pub(super) fn gen_class_allocate_inline(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
-        #[cfg(jit_x86)]
-        monoasm!( &mut r#gen.jit,
-            // alloc_func(class_id, &mut Globals) -> Value
-            movl rdi, (class_id.u32());
-            movq rsi, r12;
-            movq rax, (alloc_func);
-            call rax;
-        );
-        #[cfg(not(jit_x86))]
-        r#gen.a64_class_allocate(class_id.u32(), alloc_func as *const () as u64);
+        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
     });
     ir.xmm_restore(using_xmm);
     // The allocator produces an instance of exactly `class_id`. Record
@@ -525,7 +516,7 @@ pub(super) fn gen_class_new_inline(
     let alloc_func = alloc_func as *const () as u64;
     let ci = check_initializer as *const () as u64;
     ir.inline(move |r#gen, _, _, _| {
-        r#gen.a64_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
+        r#gen.emit_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
     });
     ir.xmm_restore(using_xmm);
     ir.handle_error(error);

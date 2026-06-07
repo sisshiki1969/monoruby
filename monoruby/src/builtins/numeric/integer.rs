@@ -603,19 +603,7 @@ fn integer_tof(
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
         let fret = state.def_F(ret);
-        ir.inline(move |r#gen, _, _, base| {
-            // Convert into xmm0, then store into fret (pool or spill).
-            #[cfg(jit_x86)]
-            {
-                monoasm! { &mut r#gen.jit,
-                    sarq  rdi, 1;
-                    cvtsi2sdq xmm0, rdi;
-                }
-                r#gen.store_fpr_into_xmm(fret, base);
-            }
-            #[cfg(not(jit_x86))]
-            r#gen.a64_int_to_float(fret, base);
-        });
+        ir.inline(move |r#gen, _, _, base| r#gen.emit_int_to_float(fret, base));
     }
     true
 }
@@ -944,24 +932,8 @@ fn integer_shr(
 /// overflows (deopt); `0` shifts to `0`. Shared by `integer_shl`/`integer_shr`.
 #[cfg(jit)]
 fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
-    let z = Value::i32(0).id();
-    #[cfg(jit_x86)]
-    monoasm!( &mut r#gen.jit,
-        cmpq rdi, (z);
-        jne deopt;
-        movq rdi, (z);
-    );
-    #[cfg(not(jit_x86))]
-    {
-        monoasm_arm64!( &mut r#gen.jit,
-            mov x9, (z);
-            cmp x4, x9;              // GP::Rdi == x4
-        );
-        r#gen.jit.bcond_label(Cond::Ne, deopt);
-        monoasm_arm64!( &mut r#gen.jit,
-            mov x4, x9;
-        );
-    }
+    let z = Value::i32(0).id() as i64;
+    r#gen.emit_shl_overflow_zero(z, deopt);
 }
 
 ///
@@ -1108,21 +1080,8 @@ fn integer_rem_int_rhs(
         if rhs_val > 0 && (rhs_val as u64).is_power_of_two() {
             state.load_fixnum(ir, recv, GP::Rdi);
             let mask = rhs_val * 2 - 1;
-            ir.inline(move |r#gen, _, _, _| {
-                // lhs % 2^k == lhs & mask, applied to the tagged fixnum.
-                #[cfg(jit_x86)]
-                if let Ok(imm32) = i32::try_from(mask) {
-                    let imm = imm32 as i64;
-                    monoasm!( &mut r#gen.jit, andq rdi, (imm); );
-                } else {
-                    monoasm!( &mut r#gen.jit, movq rax, (mask); andq rdi, rax; );
-                }
-                #[cfg(not(jit_x86))]
-                monoasm_arm64!( &mut r#gen.jit,
-                    mov x9, (mask as u64);
-                    and x4, x4, x9;          // GP::Rdi == x4
-                );
-            });
+            // lhs % 2^k == lhs & mask, applied to the tagged fixnum.
+            ir.inline(move |r#gen, _, _, _| r#gen.emit_int_rem_pow2_mask(mask));
             state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
             return true;
         }
@@ -1370,15 +1329,7 @@ fn emit_bitop_imm(
         ir.inline(move |r#gen, _, _, _| emit_imm(r#gen, tagged));
     } else {
         ir.inline(move |r#gen, _, _, _| {
-            // Load the 64-bit tagged literal into rsi (x86) / x3 (aarch64).
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit,
-                movq rsi, (tagged);
-            );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                mov x3, (tagged as u64);  // GP::Rsi == x3
-            );
+            r#gen.emit_load_tagged_rsi(tagged);
             emit_rr(r#gen);
         });
     }
@@ -1401,24 +1352,8 @@ fn integer_bitor(
         callid,
         rhs_class,
         |a, b| a | b,
-        |r#gen, imm| {
-            // `(2a+1) | (2b+1)` keeps LSB=1, so the tag survives directly.
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit, orq rdi, (imm); );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                mov x9, (imm as u64);
-                orr x4, x4, x9;          // GP::Rdi == x4
-            );
-        },
-        |r#gen| {
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit, orq rdi, rsi; );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                orr x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitor_imm(imm),
+        |r#gen| r#gen.emit_bitor_rr(),
     )
 }
 
@@ -1439,24 +1374,8 @@ fn integer_bitand(
         callid,
         rhs_class,
         |a, b| a & b,
-        |r#gen, imm| {
-            // `(2a+1) & (2b+1)` keeps LSB=1, so the tag survives directly.
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit, andq rdi, (imm); );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                mov x9, (imm as u64);
-                and x4, x4, x9;          // GP::Rdi == x4
-            );
-        },
-        |r#gen| {
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit, andq rdi, rsi; );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                and x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitand_imm(imm),
+        |r#gen| r#gen.emit_bitand_rr(),
     )
 }
 
@@ -1480,30 +1399,8 @@ fn integer_bitxor(
         callid,
         rhs_class,
         |a, b| a ^ b,
-        |r#gen, imm| {
-            // XOR clears the tag bit; using `imm - 1` (tag stripped from the
-            // literal) keeps lhs's tag, so no re-tag is needed.
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit, xorq rdi, (imm - 1); );
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                mov x9, ((imm - 1) as u64);
-                eor x4, x4, x9;          // GP::Rdi == x4
-            );
-        },
-        |r#gen| {
-            #[cfg(jit_x86)]
-            monoasm!( &mut r#gen.jit,
-                xorq rdi, rsi;
-                addq rdi, 1;
-            );
-            // `(2a+1) ^ (2b+1)` clears LSB, so re-tag with `+1`.
-            #[cfg(not(jit_x86))]
-            monoasm_arm64!( &mut r#gen.jit,
-                eor x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
-                add x4, x4, #(1);
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitxor_imm(imm),
+        |r#gen| r#gen.emit_bitxor_rr(),
     )
 }
 
