@@ -211,20 +211,7 @@ fn float_toi(
     let deopt = ir.new_deopt(state);
     if let Some(dst) = dst {
         ir.inline(move |r#gen, _, labels, base| {
-            let deopt = &labels[deopt];
-            #[cfg(jit_x86)]
-            {
-                // Load fsrc into xmm0 (handles both pool and spill).
-                r#gen.load_fpr_into_xmm0(fsrc, base);
-                monoasm! { &mut r#gen.jit,
-                    cvttsd2siq rdi, xmm0;
-                    addq  rdi, rdi;
-                    jo    deopt;
-                    orq   rdi, 1;
-                }
-            }
-            #[cfg(not(jit_x86))]
-            r#gen.a64_float_to_int(fsrc, deopt, base);
+            r#gen.emit_float_to_int(fsrc, &labels[deopt], base)
         });
         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     }

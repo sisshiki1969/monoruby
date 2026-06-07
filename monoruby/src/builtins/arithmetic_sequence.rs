@@ -206,22 +206,7 @@ fn as_exclude_end_inline(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        #[cfg(jit_x86)]
-        monoasm! { &mut r#gen.jit,
-            movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-        // exclude_end is 0/1; (v<<3) is 0 or 8. FALSE_VALUE=0x14 has bit3 clear,
-        // so `add` == `or`: 0->FALSE_VALUE, 8->0x1c=TRUE_VALUE.
-        #[cfg(not(jit_x86))]
-        monoasm_arm64! { &mut r#gen.jit,
-            ldr w0, [x4, #(crate::rvalue::AS_EXCLUDE_END_OFFSET as u32)];
-            lsl x0, x0, #3;
-            add x0, x0, #(FALSE_VALUE);
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_as_exclude_end());
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -244,16 +229,7 @@ fn inline_field_load(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        #[cfg(jit_x86)]
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (offset as i32)];
-        }
-        #[cfg(not(jit_x86))]
-        monoasm_arm64! { &mut r#gen.jit,
-            ldr x0, [x4, #(offset as u32)];
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_load_value_field(offset));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }

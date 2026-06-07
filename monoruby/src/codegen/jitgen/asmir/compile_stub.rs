@@ -3526,7 +3526,7 @@ impl Codegen {
     /// re-runs the builtin and raises DomainError (`-0.0` compares equal to
     /// `0.0`, so it falls through and `fsqrt(-0.0) == -0.0`, as CRuby).
     /// aarch64 twin of x86 `math_sqrt`'s inline body.
-    pub(crate) fn a64_math_sqrt(
+    pub(crate) fn emit_math_sqrt(
         &mut self,
         src: FPReg,
         dst: Option<FPReg>,
@@ -3544,6 +3544,214 @@ impl Codegen {
             monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
             self.a64_d0_into_fpr(dst, base);
         }
+    }
+
+    /// `Range#begin`: load the start Value from the receiver in Rdi (x4) → Rax.
+    pub(crate) fn emit_range_begin(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(crate::rvalue::RANGE_START_OFFSET as u32)];
+        );
+    }
+
+    /// `Range#end`: load the end Value from the receiver in Rdi (x4) → Rax.
+    pub(crate) fn emit_range_end(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(crate::rvalue::RANGE_END_OFFSET as u32)];
+        );
+    }
+
+    /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, then add
+    /// FALSE_VALUE (whose bit 3 is clear, so `add` == `or`): 0→FALSE_VALUE,
+    /// 8→0x1c=TRUE_VALUE. Receiver in Rdi (x4) → Rax (x0).
+    pub(crate) fn emit_range_exclude_end(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr w0, [x4, #(crate::rvalue::RANGE_EXCLUDE_END_OFFSET as u32)];
+            lsl x0, x0, #3;
+            add x0, x0, #(FALSE_VALUE);
+        );
+    }
+
+    /// `Fiber.yield` with no args: the yielded value (Rsi/x3) is nil.
+    pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            mov x3, (Value::nil().id());   // GP::Rsi == x3
+        );
+    }
+
+    /// `Fiber.yield(*args)` with ≥2 args: build the args array, leaving it in
+    /// Rsi (x3). `args_off` is `conv(args)`; bounded by the caller.
+    pub(crate) fn emit_fiber_yield_value_array(&mut self, args_off: usize, pos_num: usize) {
+        monoasm_arm64!(&mut self.jit,
+            sub x0, x22, #(args_off as u32);   // &args (lfp - conv)
+            mov x1, (pos_num);
+            mov x9, (crate::runtime::create_array as *const () as u64);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+            mov x3, x0;
+        );
+    }
+
+    /// `Fiber.yield`: call `yield_fiber(vm, value)` with value in Rsi (x3). The
+    /// method's own LR is saved: the invoker's a64_push_callee_save stashes the
+    /// *post-blr* x30, not ours, so we restore the real return address after the
+    /// fiber resumes back here.
+    pub(crate) fn emit_fiber_yield_call(&mut self, yield_fiber: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;          // vm (EXEC)
+            mov x1, x3;           // value (Rsi)
+            mov x9, (yield_fiber);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// Load a 64-bit tagged fixnum literal into Rsi (x3) for an `Integer` bit-op
+    /// whose immediate doesn't fit a 32-bit encoding.
+    pub(crate) fn emit_load_tagged_rsi(&mut self, tagged: i64) {
+        monoasm_arm64!(&mut self.jit, mov x3, (tagged as u64);); // GP::Rsi == x3
+    }
+
+    /// `Integer#|` with a tagged immediate (`(2a+1)|(2b+1)` keeps LSB=1).
+    pub(crate) fn emit_bitor_imm(&mut self, imm: i64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm as u64);
+            orr x4, x4, x9;          // GP::Rdi == x4
+        );
+    }
+    /// `Integer#|` register-register.
+    pub(crate) fn emit_bitor_rr(&mut self) {
+        monoasm_arm64!(&mut self.jit, orr x4, x4, x3;); // Rdi==x4, Rsi==x3
+    }
+    /// `Integer#&` with a tagged immediate (`(2a+1)&(2b+1)` keeps LSB=1).
+    pub(crate) fn emit_bitand_imm(&mut self, imm: i64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm as u64);
+            and x4, x4, x9;          // GP::Rdi == x4
+        );
+    }
+    /// `Integer#&` register-register.
+    pub(crate) fn emit_bitand_rr(&mut self) {
+        monoasm_arm64!(&mut self.jit, and x4, x4, x3;);
+    }
+    /// `Integer#^` with a tagged immediate (use `imm-1` so lhs's tag survives).
+    pub(crate) fn emit_bitxor_imm(&mut self, imm: i64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, ((imm - 1) as u64);
+            eor x4, x4, x9;          // GP::Rdi == x4
+        );
+    }
+    /// `Integer#^` register-register (`(2a+1)^(2b+1)` clears LSB, re-tag +1).
+    pub(crate) fn emit_bitxor_rr(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            eor x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
+            add x4, x4, #(1);
+        );
+    }
+
+    /// `n << k` / `n >> -k` with `k >= 64`: a non-zero `n` overflows (deopt);
+    /// `0` shifts to `0`. lhs in Rdi (x4).
+    pub(crate) fn emit_shl_overflow_zero(&mut self, z: i64, deopt: &DestLabel) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (z as u64);
+            cmp x4, x9;              // GP::Rdi == x4
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, deopt);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, x9;
+        );
+    }
+
+    /// `Integer#%` by a positive power of two: `lhs & mask` on the tagged
+    /// fixnum in Rdi (x4).
+    pub(crate) fn emit_int_rem_pow2_mask(&mut self, mask: i64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (mask as u64);
+            and x4, x4, x9;          // GP::Rdi == x4
+        );
+    }
+
+    /// `Enumerator::ArithmeticSequence#exclude_end?`: same encoding as
+    /// `emit_range_exclude_end` but from the AS field.
+    pub(crate) fn emit_as_exclude_end(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr w0, [x4, #(crate::rvalue::AS_EXCLUDE_END_OFFSET as u32)];
+            lsl x0, x0, #3;
+            add x0, x0, #(FALSE_VALUE);
+        );
+    }
+
+    /// Load a 64-bit Value field at `offset` from the receiver in Rdi (x4) → Rax
+    /// (x0). Shared by `ArithmeticSequence#begin`/`#end`/`#step`.
+    pub(crate) fn emit_load_value_field(&mut self, offset: usize) {
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(offset as u32)];
+        );
+    }
+
+    /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
+    /// eq→TRUE, ne→FALSE. Receiver in Rdi (x4) → Rax (x0).
+    pub(crate) fn emit_object_not(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            mov  x9, #(0x10);
+            orr  x4, x4, x9;            // GP::Rdi == x4
+            mov  x0, #(TRUE_VALUE);     // GP::Rax == x0
+            mov  x3, #(FALSE_VALUE);    // GP::Rsi == x3
+            cmp  x4, #(FALSE_VALUE);
+            csel x0, x0, x3, eq;        // eq -> TRUE, else FALSE
+        );
+    }
+
+    /// `Kernel#nil?`: receiver in Rdi (x4) → Rax (x0), nil→TRUE else FALSE.
+    pub(crate) fn emit_kernel_nil(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            mov  x0, #(FALSE_VALUE);    // GP::Rax == x0
+            mov  x3, #(TRUE_VALUE);     // GP::Rsi == x3
+            cmp  x4, #(NIL_VALUE);      // GP::Rdi == x4
+            csel x0, x3, x0, eq;        // nil -> TRUE, else FALSE
+        );
+    }
+
+    /// `Kernel#block_given?`: the block slot at [LFP - LFP_BLOCK] is 0 or NIL
+    /// when no block was passed. Result Value in Rax (x0).
+    pub(crate) fn emit_block_given(&mut self) {
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(FALSE_VALUE);             // GP::Rax == x0
+            sub x9, x22, #(LFP_BLOCK as u32);   // x22 == LFP (r14)
+            ldr x4, [x9];                       // block handle -> GP::Rdi
+            cbz x4, exit;
+            cmp x4, #(NIL_VALUE);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(TRUE_VALUE);
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// `Array#size`/`#length`: untagged length (`get_array_length`) tagged as a
+    /// fixnum in Rax (x0).
+    pub(crate) fn emit_array_size(&mut self) {
+        self.get_array_length();
+        monoasm_arm64!(&mut self.jit,
+            lsl x0, x0, #1;
+            add x0, x0, #1;
+        );
+    }
+
+    /// `String#bytesize`: inline-vs-heap length select, tagged as a fixnum in
+    /// Rax (x0). Receiver in Rdi (x4).
+    pub(crate) fn emit_string_bytesize(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, #(STRING_INLINE_CAP as u32);
+            csel x0, x9, x0, gt;   // capa > inline cap -> use heap_len
+            lsl x0, x0, #1;
+            add x0, x0, #1;
+        );
     }
 
     /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.
@@ -3675,7 +3883,7 @@ impl Codegen {
     /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
     /// double with `scvtf`, and store into `fret`. aarch64 twin of x86
     /// `integer_tof`'s `sarq` + `cvtsi2sdq` + `store_fpr_into_xmm`.
-    pub(crate) fn a64_int_to_float(&mut self, fret: FPReg, base: usize) {
+    pub(crate) fn emit_int_to_float(&mut self, fret: FPReg, base: usize) {
         let rdi = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
             asr x(rdi), x(rdi), #(1);  // untag
@@ -3690,7 +3898,7 @@ impl Codegen {
     /// saturated case and any value that doesn't fit in a 63-bit fixnum, so a
     /// single signed-overflow branch covers both. aarch64 twin of x86
     /// `cvttsd2siq` + `addq;jo` + `orq 1`. Result Value lands in Rdi (x4).
-    pub(crate) fn a64_float_to_int(&mut self, fsrc: FPReg, deopt: &DestLabel, base: usize) {
+    pub(crate) fn emit_float_to_int(&mut self, fsrc: FPReg, deopt: &DestLabel, base: usize) {
         let rdi = GP::Rdi.a64().0; // x4
         self.a64_fpr_into_d0(fsrc, base);
         let deopt = deopt.clone();
@@ -3708,7 +3916,7 @@ impl Codegen {
     /// (its raw id) is in Rdi (x4); move it to the C ABI arg0 (x0) and call.
     /// Result Value lands in Rax (x0). The FP pool is saved by the surrounding
     /// AsmIr xmm_save/xmm_restore; here we only preserve LR around the `blr`.
-    pub(crate) fn a64_object_id(&mut self) {
+    pub(crate) fn emit_object_id(&mut self) {
         let rdi = GP::Rdi.a64().0; // x4
         let f = crate::executor::op::i64_to_value as *const () as u64;
         monoasm_arm64!(&mut self.jit,
@@ -3725,7 +3933,7 @@ impl Codegen {
     /// arg3 first (before x1 is overwritten by globals), then load vm/globals.
     /// Result Value lands in Rax (x0); errors are checked by the trailing
     /// HandleError. FP pool saved by the surrounding xmm_save/restore.
-    pub(crate) fn a64_hash_index(&mut self, hashindex: u64) {
+    pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x3, x1;           // key (Rcx) -> arg3   [recv already in x2 == Rdx]
             mov x0, x19;          // vm (EXEC) -> arg0
@@ -3741,7 +3949,7 @@ impl Codegen {
     /// (a u32) and the resolved allocator pointer are embedded as constants;
     /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).
     /// FP pool saved by the surrounding xmm_save.
-    pub(crate) fn a64_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
+    pub(crate) fn emit_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
             mov x1, x20;               // globals -> arg1
@@ -3766,7 +3974,7 @@ impl Codegen {
     /// `initialize` error (checked by the trailing HandleError). FP pool saved
     /// by the surrounding xmm_save/restore. The args slot offset is bounded by
     /// the caller (`gen_class_new_inline` bails past the `sub` immediate range).
-    pub(crate) fn a64_class_new(
+    pub(crate) fn emit_class_new(
         &mut self,
         class_id: u32,
         alloc_func: u64,
@@ -3817,7 +4025,7 @@ impl Codegen {
 
     /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.
     /// Result Value in Rax (x0). FP pool saved by the surrounding xmm_save.
-    pub(crate) fn a64_array_clone(&mut self, f: u64) {
+    pub(crate) fn emit_array_clone(&mut self, f: u64) {
         let rdi = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
             mov x0, x(rdi);       // recv -> arg0
@@ -3830,7 +4038,7 @@ impl Codegen {
 
     /// Inlined `Array#dup`: `array_dup_extern(recv, globals)`. recv (Rdi/x4) ->
     /// arg0, globals (GLOBALS/x20) -> arg1. Result Value in Rax (x0).
-    pub(crate) fn a64_array_dup(&mut self, f: u64) {
+    pub(crate) fn emit_array_dup(&mut self, f: u64) {
         let rdi = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
             mov x0, x(rdi);       // recv -> arg0
@@ -3844,7 +4052,7 @@ impl Codegen {
 
     /// Inlined `Array#<<`: `ary_shl(recv, arg)`. recv (Rdi/x4) -> arg0,
     /// arg (Rsi/x3) -> arg1. Result Value in Rax (x0).
-    pub(crate) fn a64_array_shl(&mut self, f: u64) {
+    pub(crate) fn emit_array_shl(&mut self, f: u64) {
         let rdi = GP::Rdi.a64().0; // x4
         let rsi = GP::Rsi.a64().0; // x3
         monoasm_arm64!(&mut self.jit,

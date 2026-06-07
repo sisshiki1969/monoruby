@@ -3398,25 +3398,7 @@ fn string_bytesize(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        #[cfg(jit_x86)]
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-            cmpq rax, (STRING_INLINE_CAP);
-            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            salq rax, 1;
-            orq  rax, 1;
-        }
-        #[cfg(not(jit_x86))]
-        monoasm_arm64! { &mut r#gen.jit,
-            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
-            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
-            cmp x0, #(STRING_INLINE_CAP as u32);
-            csel x0, x9, x0, gt;   // capa > inline cap -> use heap_len
-            lsl x0, x0, #1;
-            add x0, x0, #1;
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_string_bytesize());
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }

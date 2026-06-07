@@ -98,65 +98,19 @@ fn fiber_yield_inline(
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
+    // TODO: we must check if the parent fiber exits.
     if pos_num == 0 {
-        ir.inline(move |r#gen, _, _, _| {
-            // TODO: we must check if the parent fiber exits.
-            #[cfg(jit_x86)]
-            monoasm! { &mut r#gen.jit,
-                movq rsi, (Value::nil().id());
-            }
-            #[cfg(not(jit_x86))]
-            monoasm_arm64! { &mut r#gen.jit,
-                mov x3, (Value::nil().id());   // GP::Rsi == x3
-            }
-        });
+        ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_nil());
     } else if pos_num == 1 {
         state.load(ir, args, GP::Rsi);
     } else {
         state.write_back_recv_and_callargs(ir, callsite);
-        ir.inline(move |r#gen, _, _, _| {
-            // TODO: we must check if the parent fiber exits.
-            #[cfg(jit_x86)]
-            monoasm! { &mut r#gen.jit,
-                lea rdi, [r14 - (jitgen::conv(args))];
-                movq rsi, (pos_num);
-                movq rax, (crate::runtime::create_array);
-                call rax;
-                movq rsi, rax;
-            }
-            // create_array(&args, len) -> Array; result -> Rsi (x3).
-            #[cfg(not(jit_x86))]
-            monoasm_arm64! { &mut r#gen.jit,
-                sub x0, x22, #(jitgen::conv(args) as u32);   // &args (lfp - conv)
-                mov x1, (pos_num);
-                mov x9, (crate::runtime::create_array as *const () as u64);
-                str x30, [sp, #-16]!;
-                blr x9;
-                ldr x30, [sp], #16;
-                mov x3, x0;
-            }
-        });
+        let args_off = jitgen::conv(args) as usize;
+        ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_array(args_off, pos_num));
     }
     ir.inline(move |r#gen, _, _, _| {
-        let fiber_yield = r#gen.yield_fiber;
-        #[cfg(jit_x86)]
-        monoasm! { &mut r#gen.jit,
-            movq rdi, rbx;
-            movq rax, (fiber_yield);
-            call rax;
-        }
-        // yield_fiber(vm, value). Save the method's own LR: the invoker's
-        // a64_push_callee_save stashes the *post-blr* x30, not ours, so we
-        // restore the real return address after the fiber resumes here.
-        #[cfg(not(jit_x86))]
-        monoasm_arm64! { &mut r#gen.jit,
-            mov x0, x19;          // vm (EXEC)
-            mov x1, x3;           // value (Rsi)
-            mov x9, (fiber_yield as *const () as u64);
-            str x30, [sp, #-16]!;
-            blr x9;
-            ldr x30, [sp], #16;
-        }
+        let yield_fiber = r#gen.yield_fiber as *const () as u64;
+        r#gen.emit_fiber_yield_call(yield_fiber)
     });
     ir.xmm_restore(using_xmm);
     ir.handle_error(error);
