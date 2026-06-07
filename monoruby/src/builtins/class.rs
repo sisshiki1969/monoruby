@@ -476,6 +476,14 @@ pub(super) fn gen_class_new_inline(
     true
 }
 
+// NOTE(aarch64): `Class#new` is NOT inlined on aarch64. It needs to invoke the
+// resolved `initialize` via `method_invoker2`, but that invoker is still a trap
+// stub (`a64_stub_fn(0x2)`) on aarch64 — calling it aborts with "unimplemented
+// opcode 0x51410002". Porting the real method invoker is a prerequisite; until
+// then `gen_class_new_object` stays on the `inline_gen!` noinline fallback.
+// (`Class#allocate` *is* inlined — see `gen_class_allocate_inline` — so object
+// construction through startup.rb's Ruby `Class#new` still inlines the alloc.)
+
 extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {
     globals.check_method(receiver, IdentId::INITIALIZE)
 }
