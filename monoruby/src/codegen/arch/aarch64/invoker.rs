@@ -72,7 +72,11 @@ impl JitModule {
     /// argument setup (simple copy or runtime arg massager), call into the
     /// callee, then the epilogue. Assumes fdata in X9, meta in X14, x4 = args
     /// ptr, x5 = len, x7 = kw (Option<Hashmap>).
-    pub(in crate::codegen) fn a64_invoker_args_and_call(&mut self) {
+    /// `upward == true`: args are an ascending `*const Value` (method/block
+    /// invoker). `upward == false`: args are a descending `Arg` in a caller
+    /// frame (method_invoker2). Only the simple-copy direction and the generic
+    /// runtime handler (`handle_invoker_arguments` vs `…2`) differ.
+    pub(in crate::codegen) fn a64_invoker_args_and_call(&mut self, upward: bool) {
         let fdata = X9;
         let generic = self.jit.label();
         let simple_done = self.jit.label();
@@ -90,25 +94,47 @@ impl JitModule {
         self.jit.bcond_label(Cond::Ne, &generic);
         monoasm_arm64!(&mut self.jit,
             cbnz x7, generic;  // kw present
-        // simple copy (upward): args[0..len] -> callee slots 1..=len
             cbz x5, simple_done;
-            mov x10, x5;  // down counter = len
-            neg x11, x5;  // up counter = -len
-            sub x12, x4, #(8);  // args - 8
-            argloop:
-            add x13, x12, x10, lsl #(3);  // &args[down-1]
-            ldr x14, [x13];
-            sub x15, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            add x15, x15, x11, lsl #(3);
-            str x14, [x15];
-            sub x10, x10, #(1);
-            add x11, x11, #(1);
-            cbnz x11, argloop;
-            simple_done:
-            b aftargs;
-        // generic: handle_invoker_arguments(exec, globals, callee_lfp,
+        );
+        if upward {
+            // ascending args: args[len-1..0] -> callee slots, src counts down.
+            monoasm_arm64!(&mut self.jit,
+                mov x10, x5;  // down counter = len
+                neg x11, x5;  // up counter = -len
+                sub x12, x4, #(8);  // args - 8
+                argloop:
+                add x13, x12, x10, lsl #(3);  // &args[down-1]
+                ldr x14, [x13];
+                sub x15, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+                add x15, x15, x11, lsl #(3);
+                str x14, [x15];
+                sub x10, x10, #(1);
+                add x11, x11, #(1);
+                cbnz x11, argloop;
+                simple_done:
+                b aftargs;
+            );
+        } else {
+            // descending args (Arg): args[0] at x4, args[i] at x4 - i*8.
+            // counter x11 runs -len..0; src = [x4 + x11*8 + 8].
+            monoasm_arm64!(&mut self.jit,
+                neg x11, x5;  // counter = -len
+                argloop:
+                add x13, x4, x11, lsl #(3);
+                ldr x14, [x13, #(8)];         // [x4 + x11*8 + 8]
+                sub x15, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+                add x15, x15, x11, lsl #(3);
+                str x14, [x15];
+                add x11, x11, #(1);
+                cbnz x11, argloop;
+                simple_done:
+                b aftargs;
+            );
+        }
+        // generic: handle_invoker_arguments[2](exec, globals, callee_lfp,
         // arg_num, args, kw). Reserve scratch below the callee frame and
         // preserve SP (X25) + funcdata (X26, caller-saved) across the call.
+        monoasm_arm64!(&mut self.jit,
             generic:
             mov x25, sp;
             mov x26, x(fdata.0);
@@ -122,8 +148,15 @@ impl JitModule {
             mov x5, x7;  // kw
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-        // x4 = args (unchanged); upward path => handle_invoker_arguments
-            mov x9, (runtime::handle_invoker_arguments as *const () as u64);
+        // x4 = args (unchanged)
+        );
+        let handler = if upward {
+            runtime::handle_invoker_arguments as *const () as u64
+        } else {
+            runtime::handle_invoker_arguments2 as *const () as u64
+        };
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (handler);
             blr x9;
             mov x9, x26;  // restore fdata
             mov sp, x25;  // restore SP
@@ -217,14 +250,38 @@ impl JitModule {
             str x14, [x(fb.0), #(32)];  // LFP_META  = funcdata.meta
             str x13, [x(fb.0), #(40)];  // LFP_OUTER = 0
         );
-        self.a64_invoker_args_and_call();
+        self.a64_invoker_args_and_call(true);
         self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }
     }
 
+    /// Like `method_invoker`, but the args come as a descending `Arg` in a
+    /// caller frame (not an ascending `*const Value`) and there is no block or
+    /// keyword argument. ABI: x0 exec, x1 globals, x2 funcid, x3 self, x4 args
+    /// (Arg), x5 len. Used by the inlined `Class#new` to run `initialize`.
     pub(in crate::codegen) fn method_invoker2(&mut self) -> MethodInvoker2 {
-        self.a64_stub_fn(0x2)
+        let codeptr = self.jit.get_current_address();
+        let fdata = X9;
+        self.a64_invoker_prologue();
+        self.a64_get_func_data_x2();
+        let fb = X12;
+        monoasm_arm64!(&mut self.jit,
+            sub x(fb.0), sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            mov x13, (0);
+            mov x7, (0);                // no keyword args
+            str x3, [x(fb.0)];          // LFP_SELF  = self
+            str x13, [x(fb.0), #(8)];   // LFP_BLOCK = 0
+            str x13, [x(fb.0), #(16)];  // LFP_CME   = 0
+            str x13, [x(fb.0), #(24)];  // LFP_SVAR  = 0
+            ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
+            str x14, [x(fb.0), #(32)];  // LFP_META  = funcdata.meta
+            str x13, [x(fb.0), #(40)];  // LFP_OUTER = 0
+        );
+        self.a64_invoker_args_and_call(false);
+        self.a64_invoker_epilogue();
+        // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker2 ABI.
+        unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker2>(&codeptr.as_ptr()) }
     }
 
     /// Block invoker. AAPCS64 in: x0 exec, x1 globals, x2 &ProcData,
@@ -299,7 +356,7 @@ impl JitModule {
         monoasm_arm64!(&mut self.jit,
             mov x7, x6;  // shared arg setup expects kw in x7
         );
-        self.a64_invoker_args_and_call();
+        self.a64_invoker_args_and_call(true);
         self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the BlockInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, BlockInvoker>(&codeptr.as_ptr()) }
@@ -333,7 +390,7 @@ impl JitModule {
         monoasm_arm64!(&mut self.jit,
             mov x7, (0);  // fibers carry no keyword args
         );
-        self.a64_invoker_args_and_call();
+        self.a64_invoker_args_and_call(true);
         // body completed: mark this fiber terminated, switch back to parent.
         monoasm_arm64!(&mut self.jit,
             mov x10, (u64::MAX);  // -1 = terminated

@@ -3752,6 +3752,69 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Class#new`: allocate via the resolved `alloc_func`, then run
+    /// `initialize` on the new instance through `method_invoker2` (now a real
+    /// invoker on aarch64). aarch64 twin of x86 `gen_class_new_inline`, minus
+    /// the self-modifying inline cache: `data_i32` slots are bound only at
+    /// `finalize`, so an emit-time `get_label_address` would bake a bogus
+    /// address. Instead `initialize` is re-resolved with `check_initializer` on
+    /// every call (a cheap method-table lookup) — still cheaper than the
+    /// un-inlined `Class#new` dispatch.
+    ///
+    /// The new instance is held in R15 (x23, ACC — overwritten by the trailing
+    /// def_rax2acc anyway); the result Value lands in Rax (x0), 0 on an
+    /// `initialize` error (checked by the trailing HandleError). FP pool saved
+    /// by the surrounding xmm_save/restore. The args slot offset is bounded by
+    /// the caller (`gen_class_new_inline` bails past the `sub` immediate range).
+    pub(crate) fn a64_class_new(
+        &mut self,
+        class_id: u32,
+        alloc_func: u64,
+        args_off: u32,
+        pos_num: usize,
+        check_initializer: u64,
+    ) {
+        let r15 = GP::R15.a64().0; // x23 (instance holder)
+        let m2 = self.method_invoker2 as *const () as u64;
+        let use_instance = self.jit.label();
+        let done = self.jit.label();
+        monoasm_arm64! { &mut self.jit,
+            // o = alloc_func(class_id, globals)
+            mov x0, (class_id as u64);
+            mov x1, x20;
+            mov x9, (alloc_func);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+            mov x(r15), x0;               // R15 = new instance
+            // fid = check_initializer(globals, instance)  (0 == no initialize)
+            mov x0, x20;
+            mov x1, x(r15);
+            mov x9, (check_initializer);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+            cbz x0, use_instance;         // no initialize -> return instance
+            // method_invoker2(vm, globals, fid, recv, args, pos_num)
+            mov x2, x0;                   // fid
+            mov x0, x19;                  // vm
+            mov x1, x20;                  // globals
+            mov x3, x(r15);               // receiver
+            sub x4, x22, #(args_off);     // &args (lfp - conv(args))
+            mov x5, (pos_num as u64);
+            mov x9, (m2);
+            str x30, [sp, #-16]!;
+            blr x9;                       // x0 = Option<Value> (0 == error)
+            ldr x30, [sp], #16;
+            cbz x0, done;                 // initialize raised -> x0 = 0
+        }
+        self.jit.bind_label(use_instance);
+        monoasm_arm64! { &mut self.jit,
+            mov x0, x(r15);               // result = instance
+        }
+        self.jit.bind_label(done);
+    }
+
     /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.
     /// Result Value in Rax (x0). FP pool saved by the surrounding xmm_save.
     pub(crate) fn a64_array_clone(&mut self, f: u64) {

@@ -11,7 +11,7 @@ use jitgen::{AbstractState, JitContext};
 /// function pointer into the generated code, and calls it directly (ABI:
 /// `extern "C" fn(ClassId, &mut Globals) -> Value`), matching the slow-path
 /// `call_alloc_func` helper.
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub fn gen_class_new_object() -> Box<InlineGen> {
     Box::new(gen_class_new_inline)
 }
@@ -121,7 +121,7 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         &[],
         new,
-        inline_gen!(gen_class_new_object()),
+        inline_gen2!(gen_class_new_object()),
         0,
         0,
         true,
@@ -476,13 +476,62 @@ pub(super) fn gen_class_new_inline(
     true
 }
 
-// NOTE(aarch64): `Class#new` is NOT inlined on aarch64. It needs to invoke the
-// resolved `initialize` via `method_invoker2`, but that invoker is still a trap
-// stub (`a64_stub_fn(0x2)`) on aarch64 — calling it aborts with "unimplemented
-// opcode 0x51410002". Porting the real method invoker is a prerequisite; until
-// then `gen_class_new_object` stays on the `inline_gen!` noinline fallback.
-// (`Class#allocate` *is* inlined — see `gen_class_allocate_inline` — so object
-// construction through startup.rb's Ruby `Class#new` still inlines the alloc.)
+/// aarch64 twin of `gen_class_new_inline`. The hot-path asm (allocate + resolve
+/// + invoke `initialize` via `method_invoker2`) lives in `Codegen::a64_class_new`;
+/// here we resolve the allocator at JIT-compile time and write back the
+/// receiver/args so the invoker can read them from the frame.
+#[cfg(all(jit, not(jit_x86)))]
+pub(super) fn gen_class_new_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    self_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let mut self_module = store[self_class].get_module();
+    if let Some(origin) = self_module.is_singleton() {
+        self_module = origin.as_class();
+    }
+    let class_id = self_module.id();
+    let alloc_func = match store[class_id].alloc_func() {
+        Some(f) => f,
+        None => return false,
+    };
+    let CallSiteInfo {
+        recv,
+        args,
+        pos_num,
+        dst,
+        ..
+    } = *callsite;
+    // `a64_class_new` reaches the args via `sub x4, lfp, #conv(args)`, whose
+    // immediate is bounded; bail to the slow path on an out-of-range frame.
+    let args_off = crate::executor::jitgen::conv(args);
+    if args_off > 4095 {
+        return false;
+    }
+    state.writeback_acc(ir);
+    state.load(ir, recv, GP::Rdi);
+    state.write_back_recv_and_callargs(ir, callsite);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state);
+    ir.xmm_save(using_xmm);
+    let alloc_func = alloc_func as *const () as u64;
+    let ci = check_initializer as *const () as u64;
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.a64_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
+    });
+    ir.xmm_restore(using_xmm);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, dst);
+    true
+}
 
 extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {
     globals.check_method(receiver, IdentId::INITIALIZE)
