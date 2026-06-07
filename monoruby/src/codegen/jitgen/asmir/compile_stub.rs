@@ -2486,11 +2486,11 @@ impl Codegen {
         );
     }
 
-    /// Recompile-or-deopt point. For a whole-method recompile (`position` =
-    /// None) this counter-gates a one-shot call to `jit_recompile_method`
-    /// (mirrors x86 `recompile_and_deopt`) and then deopts. For a loop-JIT
-    /// recompile point (`position` = Some) aarch64 has no loop recompiler yet,
-    /// so it just deopts.
+    /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
+    /// through to the deopt side exit. For a whole-method recompile (`position`
+    /// = None) it calls `jit_recompile_method`; for a loop-JIT recompile point
+    /// (`position` = Some loop-pc) it calls `jit_recompile_loop`. Mirrors x86
+    /// `recompile_and_deopt` / `jit_recompile_loop`.
     pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
         &mut self,
         position: Option<BytecodePtr>,
@@ -2499,20 +2499,13 @@ impl Codegen {
         reason: RecompileReason,
     ) {
         let deopt = deopt.clone();
-        // aarch64 recompiles whole methods only; at a loop-JIT recompile point
-        // (`position` = Some) just deopt (no loop recompile yet).
-        if position.is_some() {
-            monoasm_arm64!(&mut self.jit, b deopt;);
-            return;
-        }
         // Counter-gated one-shot recompile, then fall through to the deopt side
         // exit (which undoes any loop sp-bump, writes back live values, and
-        // re-enters the VM). Mirrors x86 `recompile_and_deopt`: x19-x23 are
-        // AAPCS64 callee-saved so the C call preserves them, and the deopt does
-        // the value write-back; the caller-saved d2-d7 pool is saved around the
-        // call because that write-back reads it (d8-d15 are callee-saved).
+        // re-enters the VM). x19-x23 are AAPCS64 callee-saved so the C call
+        // preserves them, and the deopt does the value write-back; the
+        // caller-saved d2-d7 pool is saved around the call because that
+        // write-back reads it (d8-d15 are callee-saved).
         let counter = Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64;
-        let f = crate::codegen::compiler::jit_recompile_method as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (counter);
             ldr w11, [x9];
@@ -2534,7 +2527,23 @@ impl Codegen {
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
             mov x2, x22;                     // lfp
-            mov x3, (reason as u64);
+        );
+        // Select the recompiler + set up its trailing args. Both take
+        // (vm, globals, lfp, ...) above; the loop variant adds the loop pc.
+        let f = if let Some(pc) = position {
+            let pc_ptr = pc.as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit,
+                mov x3, (pc_ptr);            // loop pc
+                mov x4, (reason as u64);
+            );
+            crate::codegen::compiler::jit_recompile_loop as *const () as u64
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x3, (reason as u64);
+            );
+            crate::codegen::compiler::jit_recompile_method as *const () as u64
+        };
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                          // -> Option<Value>: None (x0=0) = panic
@@ -2547,10 +2556,10 @@ impl Codegen {
             ldr d7, [sp, #(40)];
             add sp, sp, #(48);
         );
-        // Check the compiler's return value: `jit_recompile_method` caught a
-        // panic, set a Ruby `FatalError`, and returned None (x0 = 0). Branch to
-        // the error side-exit (write-back + raise via entry_raise) instead of
-        // resuming the interpreter. On success (x0 != 0) just deopt.
+        // Check the compiler's return value: the recompiler caught a panic, set
+        // a Ruby `FatalError`, and returned None (x0 = 0). Branch to the error
+        // side-exit (write-back + raise via entry_raise) instead of resuming the
+        // interpreter. On success (x0 != 0) just deopt.
         if let Some(error) = error {
             let error = error.clone();
             monoasm_arm64!(&mut self.jit,

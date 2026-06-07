@@ -504,6 +504,41 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
     Some(Value::nil())
 }
 
+/// aarch64 loop recompile, called from the `RecompileDeopt` lowering
+/// (`compile_stub.rs`) when `position` is the loop pc. Re-runs `compile_partial`
+/// for the loop body and rewrites the loop's codeptr at `[pc + 8]`, so the next
+/// `loop_start` enters the freshly specialized loop.
+///
+/// Like [`jit_recompile_method`] it returns `Option<Value>` (`Some(nil)` on
+/// success, `None` on a recompile-time panic) and surfaces a panic as a Ruby
+/// `FatalError`: aarch64 can panic while emitting a large loop body (an
+/// out-of-range branch to a far deopt), exactly the case `jit_compile_loop`
+/// already catches for the initial loop JIT.
+#[cfg(not(jit_x86))]
+pub(in crate::codegen) extern "C" fn jit_recompile_loop(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reason: RecompileReason,
+) -> Option<Value> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_partial(globals, lfp, pc, Some(reason));
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: JIT loop recompilation panicked.",
+        ));
+        return None;
+    }
+    Some(Value::nil())
+}
+
 #[cfg(jit_x86)]
 extern "C" fn jit_recompile_method_with_recovery(
     globals: &mut Globals,
