@@ -497,6 +497,50 @@ impl Codegen {
             // Inlined builtin method body: the generator closure emits the
             // arch-appropriate asm directly.
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
+            // ---- Class/module definition + misc runtime-call ops --------------
+            // `class`/`module` (re)definition + body, and `class << obj`. aarch64
+            // bails on a live xmm pool reg / out-of-range frame offset.
+            AsmInst::ClassDef {
+                base,
+                superclass,
+                dst,
+                name,
+                func_id,
+                is_module,
+                using_xmm,
+                error,
+            } => {
+                return self.class_def(
+                    base,
+                    superclass,
+                    dst,
+                    name,
+                    func_id,
+                    is_module,
+                    using_xmm,
+                    &labels[error],
+                );
+            }
+            AsmInst::SingletonClassDef {
+                base,
+                dst,
+                func_id,
+                using_xmm,
+                error,
+            } => {
+                return self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
+            }
+            // Forwarding-trampoline helper frame setup (aarch64 bails on an
+            // out-of-range frame offset).
+            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
+                let offset = store[callee_fid].get_offset();
+                return self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
+            }
+            // Trap for statically-unreachable code: call the panicking helper.
+            AsmInst::Unreachable => self.emit_unreachable(),
+            // `**kwrest` fixup: build a (name, slot) const table and call
+            // `correct_rest_kw(&table, lfp) -> kwrest Hash`.
+            AsmInst::RestKw { rest_kw } => self.emit_rest_kw(rest_kw),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

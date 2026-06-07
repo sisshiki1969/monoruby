@@ -801,7 +801,7 @@ impl Codegen {
     /// `jit_forwarded_set_arguments` runtime helper (forwarding `g(x.., ...)`
     /// into a no-keyword iseq with opt/post/rest). Bails if the callee frame
     /// size exceeds a 12-bit immediate.
-    fn a64_set_arguments_forwarded_helper(
+    pub(in crate::codegen::jitgen) fn jit_set_arguments_forwarded_helper(
         &mut self,
         callid: CallSiteId,
         fid: FuncId,
@@ -1167,7 +1167,7 @@ impl Codegen {
     /// reads the listed slots and returns the `**kwrest` Hash in x0. Mirrors
     /// the x86 `RestKw` arm; the const-table emission is arch-neutral and the
     /// table address is taken with PC-relative `adr` (as in OptCase).
-    fn a64_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
         let data = self.jit.const_align8();
         for (i, name) in rest_kw.into_iter() {
             self.jit.const_i32(name.get() as i32);
@@ -1277,7 +1277,7 @@ impl Codegen {
     /// C calls and the class body all clobber d2..) and reloaded into the pool
     /// registers before each HandleError branch; bails only on an out-of-range
     /// frame slot.
-    fn a64_class_def(
+    pub(in crate::codegen::jitgen) fn class_def(
         &mut self,
         base: Option<SlotId>,
         superclass: Option<SlotId>,
@@ -1342,9 +1342,9 @@ impl Codegen {
         true
     }
 
-    /// `SingletonClassDef`: `class << obj; … end`. Like `a64_class_def` but the
+    /// `SingletonClassDef`: `class << obj; … end`. Like `class_def` but the
     /// class is obtained via `define_singleton_class(vm, globals, obj)`.
-    fn a64_singleton_class_def(
+    pub(in crate::codegen::jitgen) fn singleton_class_def(
         &mut self,
         base: SlotId,
         dst: Option<SlotId>,
@@ -1384,6 +1384,15 @@ impl Codegen {
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The x86 twins live in `compile.rs`. Slot `s` lives at
     // `[lfp(x22) - s*8 - LFP_SELF]` (same addressing as the VM's `a64_op_ret`).
+
+    /// Trap for statically-unreachable code: call the panicking helper.
+    pub(in crate::codegen::jitgen) fn emit_unreachable(&mut self) {
+        let f = unreachable as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (f);
+            blr x9;
+        );
+    }
 
     /// dst <- src (general-purpose register move; self-move is a no-op).
     pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
@@ -4725,50 +4734,6 @@ impl Codegen {
                 self.a64_call_recompile_specialized(global_idx, reason);
                 monoasm_arm64!(&mut self.jit, b deopt;);
             }
-            // Trap for statically-unreachable code: call the panicking helper.
-            AsmInst::Unreachable => {
-                let f = unreachable as *const () as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (f);
-                    blr x9;
-                );
-            }
-            // `**kwrest` fixup: build a const table of (name, slot) pairs and
-            // call correct_rest_kw(&table, lfp) -> kwrest Hash (result in x0).
-            AsmInst::RestKw { rest_kw } => {
-                self.a64_rest_kw(rest_kw);
-            }
-            // `class`/`module` (re)definition + body, and `class << obj`.
-            AsmInst::ClassDef {
-                base,
-                superclass,
-                dst,
-                name,
-                func_id,
-                is_module,
-                using_xmm,
-                error,
-            } => {
-                return self.a64_class_def(
-                    base,
-                    superclass,
-                    dst,
-                    name,
-                    func_id,
-                    is_module,
-                    using_xmm,
-                    &labels[error],
-                );
-            }
-            AsmInst::SingletonClassDef {
-                base,
-                dst,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                return self.a64_singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
-            }
             AsmInst::SetArgumentsForwarded {
                 callid,
                 callee_fid,
@@ -4777,10 +4742,6 @@ impl Codegen {
             } => {
                 let offset = store[callee_fid].get_offset();
                 return self.a64_set_arguments_forwarded(callid, callee_fid, offset, deferred_src);
-            }
-            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
-                let offset = store[callee_fid].get_offset();
-                return self.a64_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
             _ => return false,
         }

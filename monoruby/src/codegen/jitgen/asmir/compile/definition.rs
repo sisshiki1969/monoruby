@@ -14,7 +14,7 @@ impl Codegen {
     /// - dst: destination slot (SlotId).
     /// - name: class name (IdentId)
     /// ~~~
-    pub(super) fn class_def(
+    pub(in crate::codegen::jitgen) fn class_def(
         &mut self,
         base: Option<SlotId>,
         superclass: Option<SlotId>,
@@ -24,7 +24,7 @@ impl Codegen {
         is_module: bool,
         using_xmm: UsingXmm,
         error: &DestLabel,
-    ) {
+    ) -> bool {
         self.xmm_save(using_xmm);
         // r9 <- base: Option<Value>
         if let Some(base) = base {
@@ -54,16 +54,17 @@ impl Codegen {
         self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
         self.xmm_restore(using_xmm);
+        true
     }
 
-    pub(super) fn singleton_class_def(
+    pub(in crate::codegen::jitgen) fn singleton_class_def(
         &mut self,
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
         using_xmm: UsingXmm,
         error: &DestLabel,
-    ) {
+    ) -> bool {
         self.xmm_save(using_xmm);
         monoasm! { &mut self.jit,
             movq rdx, [rbp - (rbp_local(base))];  // rdx <- name
@@ -75,6 +76,7 @@ impl Codegen {
         self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
         self.xmm_restore(using_xmm);
+        true
     }
 
     pub(super) fn method_def(&mut self, name: IdentId, func_id: FuncId, using_xmm: UsingXmm) {
