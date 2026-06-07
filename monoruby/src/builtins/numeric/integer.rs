@@ -853,8 +853,13 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
         // when k > u32::MAX (handled by safe_int_shl as RangeError).
         return None;
     }
-    let result = lhs.checked_shl(k as u32)?;
-    if Value::is_i63(result) {
+    // `checked_shl` only guards the shift amount (k >= 64), not the value
+    // overflow `lhs << k` silently drops the high bits (e.g. `3 << 62`).
+    // Confirm the shift is lossless by shifting back before trusting it, then
+    // require the result to fit an i63 fixnum; otherwise fold is not possible.
+    let k = k as u32;
+    let result = lhs.wrapping_shl(k);
+    if result.wrapping_shr(k) == lhs && Value::is_i63(result) {
         Some(result)
     } else {
         None
@@ -2931,11 +2936,44 @@ r##"
             def shl_g; -1 << -100; end
             def shl_h; 1 << 62; end
             def shl_i; 1 << 100; end
+            # Regression (#687): the fold guard used `checked_shl`, which only
+            # catches a shift amount >= 64, so a value overflow wrapped into a
+            # bogus fixnum instead of promoting to Bignum.
+            def shl_ov_a; 3 << 62; end
+            def shl_ov_b; 4 << 62; end
+            def shl_ov_c; 5 << 62; end
+            def shl_ov_d; 7 << 62; end
+            def shl_ov_e; -5 << 62; end
+            def shl_ov_f; -256 << 62; end
+            def shl_ov_g; 16 << 60; end
+            def shl_ov_h; 8 << 61; end
+            def shl_ov_i; 123456789 << 40; end
         ";
         run_test_with_prelude(
             "[shr_a, shr_b, shr_c, shr_d, shr_e, shr_f, shr_g, shr_h, shr_i,
-              shl_a, shl_b, shl_c, shl_d, shl_e, shl_f, shl_g, shl_h, shl_i]",
+              shl_a, shl_b, shl_c, shl_d, shl_e, shl_f, shl_g, shl_h, shl_i,
+              shl_ov_a, shl_ov_b, shl_ov_c, shl_ov_d, shl_ov_e, shl_ov_f,
+              shl_ov_g, shl_ov_h, shl_ov_i]",
             prelude,
+        );
+    }
+
+    #[test]
+    fn integer_shl_overflow_promotes_to_bignum() {
+        // Regression (#687): `safe_int_shl` used `checked_shl` + a sign-preserve
+        // guard, which let a value overflow (shift amount < 64) wrap into i64
+        // instead of promoting to Bignum. The amounts are non-literal here so
+        // the runtime helper is exercised rather than constant folding.
+        run_test(
+            "
+            r = []
+            [0, 1, 2, 3, 4, 5, 7, 16, 100, 123456789,
+             -1, -4, -5, -256, 4611686018427387903, -4611686018427387904].each do |v|
+              [40, 60, 61, 62, 63, 64, 100].each do |s|
+                r << (v << s)
+              end
+            end
+            r",
         );
     }
 
