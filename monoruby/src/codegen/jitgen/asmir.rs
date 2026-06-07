@@ -1968,7 +1968,7 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
-    ) {
+    ) -> bool {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
@@ -2045,6 +2045,9 @@ impl Codegen {
         if entry.is_some() && exit.is_some() {
             self.jit.select_page(0);
         }
+        // x86 never bails (every `AsmInst` is lowered); the `bool` return exists
+        // only to share the driver (`gen_machine_code`) with aarch64.
+        true
     }
 
     ///
