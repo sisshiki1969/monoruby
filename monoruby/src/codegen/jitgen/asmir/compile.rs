@@ -29,7 +29,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
-        frame: &mut AsmInfo,
+        _frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         class_version: DestLabel,
@@ -145,7 +145,15 @@ impl Codegen {
             | AsmInst::Retry(..)
             | AsmInst::Redo(..)
             | AsmInst::EnsureEnd
-            | AsmInst::Yield { .. } => {
+            | AsmInst::Yield { .. }
+            | AsmInst::MethodRetSpecialized { .. }
+            | AsmInst::BlockBreakSpecialized { .. }
+            | AsmInst::SetupYieldFrame { .. }
+            | AsmInst::SpecializedCall { .. }
+            | AsmInst::SpecializedYield { .. }
+            | AsmInst::LoadDynVarSpecialized { .. }
+            | AsmInst::StoreDynVarSpecialized { .. }
+            | AsmInst::Inline(..) => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::Unreachable => {
@@ -195,39 +203,6 @@ impl Codegen {
                 self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
 
-            AsmInst::MethodRetSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset.unwrap_concrete());
-            }
-            AsmInst::BlockBreakSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset.unwrap_concrete());
-            }
-            AsmInst::SetupYieldFrame { meta, outer } => {
-                self.setup_yield_frame(meta, outer);
-            }
-            AsmInst::SpecializedCall {
-                entry,
-                patch_point,
-                evict,
-            } => {
-                let patch_point =
-                    patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
-                let entry_label = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.do_specialized_call(entry_label, patch_point);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-            AsmInst::SpecializedYield { entry, evict } => {
-                let block_entry = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.do_specialized_call(block_entry, None);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-
-            AsmInst::LoadDynVarSpecialized { offset, reg } => {
-                self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
-            }
-            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
-                self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
-            }
-
             AsmInst::ClassDef {
                 base,
                 superclass,
@@ -274,7 +249,6 @@ impl Codegen {
                     call rax;
                 );
             }
-            AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
         }
         true
     }
@@ -556,7 +530,7 @@ impl Codegen {
         true
     }
 
-    fn set_deopt_with_return_addr(
+    pub(super) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,

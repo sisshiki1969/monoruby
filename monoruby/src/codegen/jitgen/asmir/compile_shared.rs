@@ -455,6 +455,48 @@ impl Codegen {
                 let evict_label = labels[evict].clone();
                 return self.emit_yield(callid, &labels[error], evict, &evict_label);
             }
+            // ---- Specialized inlined-frame family ------------------------------
+            // These lower an inlined callee / block frame. Each arm is identical
+            // on both arches and dispatches to a per-arch method of the same name
+            // (defined in `compile.rs` for x86, `compile_stub.rs` for aarch64).
+            // Clean return / block-break out of an inlined frame.
+            AsmInst::MethodRetSpecialized { rbp_offset }
+            | AsmInst::BlockBreakSpecialized { rbp_offset } => {
+                self.method_return_specialized(rbp_offset.unwrap_concrete());
+            }
+            // Outer-scope local access at a pre-resolved frame offset.
+            AsmInst::LoadDynVarSpecialized { offset, reg } => {
+                self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
+            }
+            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
+                self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
+            }
+            // Direct call into an inlined method entry; the return-address patch
+            // point is recorded for BOP-redefinition eviction.
+            AsmInst::SpecializedCall {
+                entry,
+                patch_point,
+                evict,
+            } => {
+                let patch_point =
+                    patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
+                let return_addr = self.do_specialized_call(entry_label, patch_point);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+            }
+            // Specialized `yield`: build the block frame, then branch into the
+            // inlined block entry (no patch point).
+            AsmInst::SetupYieldFrame { meta, outer } => {
+                self.setup_yield_frame(meta, outer);
+            }
+            AsmInst::SpecializedYield { entry, evict } => {
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
+                let return_addr = self.do_specialized_call(entry_label, None);
+                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+            }
+            // Inlined builtin method body: the generator closure emits the
+            // arch-appropriate asm directly.
+            AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }

@@ -297,7 +297,7 @@ impl Codegen {
         );
     }
 
-    pub(super) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
+    pub(in crate::codegen::jitgen) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
         monoasm!( &mut self.jit,
             movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(reg) as usize))];
         );
@@ -311,7 +311,7 @@ impl Codegen {
         );
     }
 
-    pub(super) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+    pub(in crate::codegen::jitgen) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
         monoasm!( &mut self.jit,
             movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], R(src as _);
         );
