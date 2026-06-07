@@ -11,6 +11,8 @@ impl Codegen {
     /// vm-stub `b vm_entry` (x86 `gen_vm_stub`). TODO(aarch64): other
     /// FuncKinds (Builtin/AttrReader/ConstReturn/…).
     pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
+        #[cfg(jit)]
+        let no_jit = globals.no_jit;
         let entry = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             entry:
@@ -32,7 +34,15 @@ impl Codegen {
                 // x19..x23 are callee-saved across the `extern "C"` call; LR is
                 // saved across `blr`.
                 #[cfg(jit)]
-                {
+                if no_jit {
+                    // `--no-jit`: never install the JIT trigger; stay in the VM
+                    // (mirrors x86 `gen_wrapper` emitting `gen_vm_stub`). Without
+                    // this gate the method JIT — and its class-version recompile
+                    // path — fires regardless of the flag.
+                    monoasm_arm64!(&mut self.jit,
+                        b vm_entry;
+                    );
+                } else {
                     let counter_addr = Box::into_raw(Box::new(COUNT_START_COMPILE)) as u64;
                     let jit_slot = Box::into_raw(Box::new(0u64)) as u64;
                     let run_jit = self.jit.label();
