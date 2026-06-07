@@ -41,11 +41,16 @@ impl Codegen {
             subl [rip + counter], 1;
             jne no_compile_exit;
 
+            // hot enough overall: profile this self-class and compile only if
+            // *it* (not just any class) is hot. jit_profile_patch re-arms the
+            // counter (rcx) when the class isn't hot yet, so the stub keeps
+            // interpreting and samples again later.
             movq rdi, r12;
             movq rsi, r14;
             movq rdx, (patch_point_addr.as_ptr());
+            lea  rcx, [rip + counter];
             subq rsp, 4088;
-            movq rax, (jit_compile_patch as *const ());
+            movq rax, (jit_profile_patch as *const ());
             call rax;
             addq rsp, 4088;
             jmp entry;
@@ -519,6 +524,42 @@ pub(in crate::codegen) extern "C" fn jit_compile_patch(
     //    #[cfg(feature = "jit-log")]
     //    eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
     //}
+}
+
+/// Warm-up profiler hook: called from the JIT stub when its per-stub warm-up
+/// counter expires. Instead of unconditionally compiling for whatever receiver
+/// class happens to be current (which thrashes the compiler when each call has
+/// a fresh receiver class — e.g. `Class.new.foo` in a loop), it samples the
+/// current `self`'s class and only compiles once that class is hot.
+///
+/// If the class is not hot yet, it re-arms the stub's counter (`counter_addr`)
+/// so the stub keeps interpreting and samples again after another interval.
+///
+/// `entry_patch_point` is the stub's patch/slot pointer, forwarded verbatim to
+/// `compile_patch` (an entry to branch-patch on x86; an indirect-dispatch slot
+/// on aarch64).
+pub(in crate::codegen) extern "C" fn jit_profile_patch(
+    globals: &mut Globals,
+    lfp: Lfp,
+    entry_patch_point: monoasm::CodePtr,
+    counter_addr: *mut i32,
+) {
+    let self_class = lfp.self_val().class();
+    let func_id = lfp.func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
+    if globals.store[iseq_id].profile_self_class(self_class) {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_patch(globals, lfp, entry_patch_point);
+        });
+    } else {
+        // Not hot yet — keep interpreting and sample again later.
+        // SAFETY: `counter_addr` is the address of the calling stub's own i32
+        // warm-up counter (a heap-leaked word on aarch64, a JIT data slot on
+        // x86); the stub passes its own counter's address.
+        unsafe { *counter_addr = COUNT_START_COMPILE };
+    }
 }
 
 #[cfg(jit_x86)]

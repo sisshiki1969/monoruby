@@ -154,6 +154,14 @@ pub struct ISeqInfo {
     /// (aarch64 installs JIT code via this slot, not x86 branch patching).
     #[cfg(not(jit_x86))]
     pub(super) jit_slot: HashMap<ClassId, u64>,
+    /// Bounded per-self-class warm-up profile used to decide *which* receiver
+    /// class is hot enough to specialize for. Without it, the first call that
+    /// trips the global warm-up counter compiles for whatever class happens to
+    /// be current — so a hot loop that calls a method on a fresh `Class.new`
+    /// object every iteration compiles the method once per (singleton-class of
+    /// each) class. Capped so transient classes evict each other and never
+    /// accumulate. See `profile_self_class`.
+    pub(super) jit_class_profile: Vec<(ClassId, u32)>,
     pub(super) jit_invalidated: bool,
     ///
     /// Basic block information.
@@ -220,6 +228,7 @@ impl ISeqInfo {
             jit_entry: HashMap::default(),
             #[cfg(not(jit_x86))]
             jit_slot: HashMap::default(),
+            jit_class_profile: Vec::new(),
             jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
@@ -531,8 +540,42 @@ impl ISeqInfo {
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_invalidated = true;
         self.jit_entry.clear();
+        self.jit_class_profile.clear();
         #[cfg(not(jit_x86))]
         self.jit_slot.clear();
+    }
+
+    /// Record one warm-up sample of *self_class* for this iseq and report
+    /// whether that class has now been seen enough times to justify compiling
+    /// a specialization for it.
+    ///
+    /// The profile is a small bounded set: a class must be sampled
+    /// `PROFILE_THRESHOLD` times before it is considered hot. Because the
+    /// sampler runs only when the stub's warm-up counter expires (every
+    /// `COUNT_START_COMPILE` calls), a receiver class that is used for just a
+    /// single call — e.g. every `Class.new` object in a hot loop — is sampled
+    /// at most once and is evicted by later classes, so it never reaches the
+    /// threshold and is never compiled for. A genuinely hot (mono- or modestly
+    /// polymorphic) receiver is sampled repeatedly and crosses the threshold.
+    pub(crate) fn profile_self_class(&mut self, class: ClassId) -> bool {
+        const PROFILE_CAP: usize = 8;
+        const PROFILE_THRESHOLD: u32 = 2;
+        let prof = &mut self.jit_class_profile;
+        if let Some(idx) = prof.iter().position(|(c, _)| *c == class) {
+            prof[idx].1 += 1;
+            if prof[idx].1 >= PROFILE_THRESHOLD {
+                // hot: drop the profile entry (the class is about to be
+                // compiled and will fast-path the guard from now on).
+                prof.remove(idx);
+                return true;
+            }
+            return false;
+        }
+        if prof.len() >= PROFILE_CAP {
+            prof.remove(0);
+        }
+        prof.push((class, 1));
+        false
     }
 }
 
