@@ -732,10 +732,17 @@ fn safe_int_shl(lhs: i64, rhs: u64, vm: &mut Executor) -> Option<Value> {
         }
     } else {
         let rhs = rhs as u32;
-        Some(match lhs.checked_shl(rhs) {
-            Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
-            _ => bigint_shl(&BigInt::from(lhs), rhs),
-        })
+        // `checked_shl` only fails when `rhs >= 64`; it silently drops the high
+        // bits on an i64 value overflow (e.g. `5 << 62`). Detect lost bits by
+        // shifting back: if `(lhs << rhs) >> rhs == lhs`, the result is exact and
+        // fits in i64; otherwise promote to Bignum.
+        if rhs < i64::BITS {
+            let res = lhs.wrapping_shl(rhs);
+            if res.wrapping_shr(rhs) == lhs {
+                return Some(Value::integer(res));
+            }
+        }
+        Some(bigint_shl(&BigInt::from(lhs), rhs))
     }
 }
 
