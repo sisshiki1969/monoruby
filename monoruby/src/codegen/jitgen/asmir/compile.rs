@@ -1281,6 +1281,9 @@ impl Codegen {
         &mut self,
         position: Option<BytecodePtr>,
         deopt: &DestLabel,
+        // x86 recompiles in place (no extern-boundary panic surfaced here), so
+        // the aarch64-only error side-exit is unused.
+        _error: Option<&DestLabel>,
         reason: RecompileReason,
     ) {
         self.recompile_and_deopt(position, deopt, reason);

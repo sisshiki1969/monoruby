@@ -1129,6 +1129,11 @@ pub(super) enum AsmInst {
     RecompileDeopt {
         position: Option<BytecodePtr>,
         deopt: AsmDeopt,
+        /// Error side-exit reached when the recompile itself raises (a Rust
+        /// `panic!` during recompilation, caught at the `extern "C"` boundary
+        /// and turned into a Ruby `FatalError`). `None` on x86, which
+        /// recompiles in place and never returns an error here.
+        error: Option<AsmError>,
         reason: RecompileReason,
     },
     RecompileDeoptSpecialized {
@@ -1917,6 +1922,7 @@ impl AsmInst {
             Self::RecompileDeopt {
                 position,
                 deopt: _,
+                error: _,
                 reason,
             } => {
                 format!("recompile_deopt {:?} {:?}", position, reason)

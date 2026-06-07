@@ -21,15 +21,14 @@ impl Codegen {
     ///
     /// ```
     ///
-    /// aarch64 has no emission yet: `compile_method` runs the arch-neutral
-    /// front-end and bails (returns `None`), so a minimal `not(jit_x86)`
-    /// variant just drives that and never patches — the A64 trigger falls
-    /// through to `vm_entry` on its own. See `doc/aarch64-jitgen-plan.md`.
-    /// aarch64 install via **indirect dispatch** (no runtime branch patching):
-    /// `slot` points at the wrapper's per-method JIT-entry word (init 0). On a
-    /// successful compile we write the compiled entry address there; the
-    /// wrapper loads it and branches to the JIT code on the next call. On bail
-    /// the slot stays 0 and the method stays VM-interpreted.
+    /// aarch64 installs JIT code via **indirect dispatch** (no runtime branch
+    /// patching): `slot` points at the wrapper's per-method JIT-entry word
+    /// (init 0). `compile_method` runs the arch-neutral front-end and the A64
+    /// lowering; on success we publish the compiled entry's address (fronted by
+    /// a self-class guard, see below) into `slot`, and the wrapper loads it and
+    /// branches to the JIT code on the next call. If the lowering bails on an
+    /// unported AsmInst the slot stays 0 and the method stays VM-interpreted.
+    /// See `doc/aarch64-jitgen-plan.md`.
     #[cfg(not(jit_x86))]
     pub(super) fn compile_patch(
         &mut self,

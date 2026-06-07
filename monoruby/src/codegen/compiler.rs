@@ -473,15 +473,35 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
 /// aarch64 counterpart, called from the `RecompileDeopt` lowering
 /// (`compile_stub.rs`). Recompiles the current method and overwrites its
 /// dispatch slot via [`Codegen::recompile_method`].
+///
+/// Returns `Option<Value>`: `Some(nil)` on success, `None` if recompilation
+/// panicked. A panic must not cross this `extern "C"` boundary and abort the
+/// process — aarch64 can panic while emitting a large method body (e.g. an
+/// out-of-range branch to a far deopt). We catch it, re-arm the JIT region as
+/// executable (the aborted emit left it writable, mirroring `jit_compile_loop`),
+/// and set a Ruby `FatalError` on `vm`. The caller (`emit_recompile_deopt`)
+/// checks the `None` return and branches to the error side-exit so the
+/// `FatalError` is raised (it is uncatchable by `rescue` and propagates up).
 #[cfg(not(jit_x86))]
 pub(in crate::codegen) extern "C" fn jit_recompile_method(
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     reason: RecompileReason,
-) {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
-    });
+) -> Option<Value> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: JIT method recompilation panicked.",
+        ));
+        return None;
+    }
+    Some(Value::nil())
 }
 
 #[cfg(jit_x86)]
