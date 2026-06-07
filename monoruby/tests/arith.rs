@@ -1505,3 +1505,71 @@ fn polymorphic_call2() {
             "#,
     );
 }
+
+// Float-register spill coverage. The aarch64 JIT keeps unboxed floats in a
+// 14-entry pool (D2-D15); a method that needs more live floats than that spills
+// the overflow to frame slots (`FPRegLoc::Spill`). The right-associated
+// multiplication chain forces all 14 inputs (plus the running product) live
+// simultaneously, so at least one operand of every float op is a spill slot.
+// Before the spill-aware lowering these methods bailed to the interpreter.
+
+#[test]
+fn fp_spill_method() {
+    run_test(
+        r#"
+        def calc(i)
+          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.7
+          k = i * 1.5; l = i * 0.5; m = i * 1.7; n = i * 0.3
+          o = i * 1.9; p = i * 0.1; q = i * 2.1; s = i * 0.2
+          t = i * 2.3; u = i * 0.4
+          f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+        end
+        r = 0.0
+        r += calc(1.01); r += calc(2.02); r += calc(0.5)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn fp_spill_mixed_ops() {
+    // Same register pressure, but also exercising the spill-aware float
+    // comparison, negation, and a float C-helper (`Math.sqrt`).
+    run_test(
+        r#"
+        def calc(i)
+          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.7
+          k = i * 1.5; l = i * 0.5; m = i * 1.7; n = i * 0.3
+          o = i * 1.9; p = i * 0.1; q = i * 2.1; s = i * 0.2
+          t = i * 2.3; u = i * 0.4
+          chain = f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+          acc = -chain
+          acc += Math.sqrt(f * f + g * g + h * h + j * j)
+          acc += 1.0 if k < l
+          acc -= 2.0 if m > n
+          acc + o + p + q + s + t + u
+        end
+        r = 0.0
+        r += calc(1.01); r += calc(2.02); r += calc(0.5)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn fp_spill_loop() {
+    // Loop-JIT variant: the spill region lives in the loop frame.
+    run_test(
+        r#"
+        r = 0.0
+        for i in 0..50
+          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.7
+          k = i * 1.5; l = i * 0.5; m = i * 1.7; n = i * 0.3
+          o = i * 1.9; p = i * 0.1; q = i * 2.1; s = i * 0.2
+          t = i * 2.3; u = i * 0.4
+          r += f * (g * (h * (j * (k * (l * (m * (n * (o * (p * (q * (s * (t * u))))))))))))
+        end
+        r
+        "#,
+    );
+}
