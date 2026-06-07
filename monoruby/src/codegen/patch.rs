@@ -45,8 +45,8 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let class_version = self.class_version();
         let jit_entry = self.jit.label();
-        // `jit_entry` is bound by `a64_gen_machine_code` (even on the bail
-        // path) so it always resolves at `finalize`.
+        // `jit_entry` is bound by `gen_machine_code` (even on the bail path)
+        // so it always resolves at `finalize`.
         let compiled = self
             .compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None)
             .is_some();

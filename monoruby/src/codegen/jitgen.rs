@@ -336,49 +336,42 @@ impl Codegen {
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
         // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
-        // AsmIR→machine-code lowering (and the `finalize`/data-label setup it
-        // needs) is x86 only for now.
+        // shared `gen_machine_code` driver then drives the per-arch `gen_asm`
+        // lowering. It returns `false` only on aarch64, when the lowering bails
+        // on a not-yet-ported `AsmInst`; we turn that into `Err` and the method
+        // stays VM-interpreted (x86 always succeeds).
+        self.jit.finalize();
+        let class_version_label = self.jit.const_i32(class_version as _);
+        let ok = self.gen_machine_code(
+            frame.asm_info,
+            store,
+            entry_label,
+            0,
+            class_version_label.clone(),
+        );
+        // x86 finalizes the freshly emitted code here (the old `gen_machine_code`
+        // did this internally); aarch64's outer caller (`compile` /
+        // `compile_partial` / `compile_patch`) finalizes after any trailing
+        // emission (e.g. the class-guard stub).
         #[cfg(jit_x86)]
-        {
-            self.jit.finalize();
-            let class_version_label = self.jit.const_i32(class_version as _);
-            self.gen_machine_code(
-                frame.asm_info,
-                store,
-                entry_label,
-                0,
-                class_version_label.clone(),
-            );
+        self.jit.finalize();
+        if ok {
             Ok((inline_cache, specialized_info, class_version_label))
-        }
-        // aarch64: the front-end ran, but no aarch64 emission exists yet, so
-        // bail — `compile()` turns this `Err` into `None` and the method stays
-        // VM-interpreted. No `finalize` / label emission here, so there is no
-        // unresolved-label debt. AsmInst lowering is added incrementally; see
-        // doc/aarch64-jitgen-plan.md.
-        // aarch64 (Phase 3b): drive the A64 lowering. It bails (returns false)
-        // on any not-yet-ported AsmInst, in which case we Err and the method
-        // stays VM-interpreted.
-        #[cfg(not(jit_x86))]
-        {
-            self.jit.finalize();
-            let class_version_label = self.jit.const_i32(class_version as _);
-            if self.a64_gen_machine_code(
-                frame.asm_info,
-                store,
-                entry_label,
-                class_version_label.clone(),
-            ) {
-                Ok((inline_cache, specialized_info, class_version_label))
-            } else {
-                Err(CompileError)
-            }
+        } else {
+            Err(CompileError)
         }
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(jit)]
 impl Codegen {
+    /// Arch-neutral driver: emit machine code for a whole method and its
+    /// inlined specialized callees (recursively), calling the per-arch
+    /// `gen_asm` per basic block / bridge. Returns `false` if the lowering
+    /// bailed on a not-yet-ported instruction (aarch64 only; x86 always returns
+    /// `true`) — the caller then keeps the method VM-interpreted. Does not
+    /// `finalize`; `jit_compile` does that (x86) or the outer caller does
+    /// (aarch64).
     fn gen_machine_code(
         &mut self,
         mut frame: AsmInfo,
@@ -386,7 +379,7 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
         class_version: DestLabel,
-    ) {
+    ) -> bool {
         for context::SpecializeInfo {
             entry: specialized_entry,
             info: specialized_info,
@@ -402,13 +395,15 @@ impl Codegen {
                 ));
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
-            self.gen_machine_code(
+            if !self.gen_machine_code(
                 specialized_info,
                 store,
                 entry,
                 level + 1,
                 class_version.clone(),
-            );
+            ) {
+                return false;
+            }
         }
 
         self.jit.bind_label(entry_label);
@@ -428,12 +423,12 @@ impl Codegen {
             }
         }
 
-        #[cfg(feature = "emit-asm")]
-        {
-            frame.start_codepos = self.jit.get_current();
-        }
+        // Sourcemap base for the shared `BcIndex` lowering (emit-asm/perf
+        // disassembly only; correctness-neutral). Set unconditionally so both
+        // arches agree.
+        frame.start_codepos = self.jit.get_current();
 
-        #[cfg(feature = "perf")]
+        #[cfg(all(feature = "perf", jit_x86))]
         let pair = self.get_address_pair();
 
         let ir_vec = frame.detach_ir();
@@ -449,7 +444,9 @@ impl Codegen {
 
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
-            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone());
+            if !self.gen_asm(ir, store, &mut frame, None, None, class_version.clone()) {
+                return false;
+            }
             // generate machine code for the inlined bridge
             if let Some((ir, exit)) = frame.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
@@ -463,42 +460,55 @@ impl Codegen {
                 } else {
                     None
                 };
-                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone());
+                if !self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone()) {
+                    return false;
+                }
             }
         }
 
         // generate machine code for outlined bridges
         for (ir, entry, exit) in frame.detach_outline_bridges() {
             let entry = frame.resolve_label(&mut self.jit, entry);
-            self.gen_asm(
+            if !self.gen_asm(
                 ir,
                 store,
                 &mut frame,
                 Some(entry),
                 Some(exit),
                 class_version.clone(),
-            );
+            ) {
+                return false;
+            }
         }
 
         if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();
         }
-        self.jit.finalize();
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
+            // Resolve branch displacements so the listing shows real targets
+            // (the real `finalize` happens in `jit_compile` / the outer caller).
+            self.jit.finalize();
+            #[cfg(not(jit_x86))]
+            {
+                let fid = store[frame.iseq_id].func_id();
+                eprintln!("  >>> JIT (aarch64) <{}>", store.func_description(fid));
+            }
             let iseq_id = frame.iseq_id;
             self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
-        #[cfg(feature = "perf")]
+        #[cfg(all(feature = "perf", jit_x86))]
         {
             let iseq_id = frame.iseq_id;
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);
         }
+
+        true
     }
 }
 
