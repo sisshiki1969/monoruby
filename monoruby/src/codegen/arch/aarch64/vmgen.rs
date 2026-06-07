@@ -1346,7 +1346,8 @@ impl Codegen {
         let skip = self.jit.label();
         let after_call = self.jit.label();
         let exec = self.jit.label();
-        let slow = self.jit.label();
+        let slow_class = self.jit.label();
+        let slow_ver = self.jit.label();
         let raise = self.entry_raise.clone();
         let get_class = self.get_class.clone();
         // Absolute address of the global `class_version` (aarch64 has no
@@ -1385,14 +1386,14 @@ impl Codegen {
             ldr w11, [x(PC.0), #(24)];  // CACHED_CLASS
             cmp w0, w11;
         );
-        self.jit.bcond_label(Cond::Ne, &slow); // class mismatch -> slow path
+        self.jit.bcond_label(Cond::Ne, &slow_class); // class mismatch (maybe polymorphic)
         monoasm_arm64!(&mut self.jit,
             mov x11, (cv_addr);
             ldr w11, [x11];             // current class_version
             ldr w12, [x(PC.0), #(28)];  // CACHED_VERSION
             cmp w11, w12;
         );
-        self.jit.bcond_label(Cond::Ne, &slow); // version mismatch -> slow path
+        self.jit.bcond_label(Cond::Ne, &slow_ver); // version mismatch -> plain refill
         monoasm_arm64!(&mut self.jit,
         // cache hit: load the cached FuncId. 0 means method_missing was cached.
             exec:
@@ -1550,8 +1551,22 @@ impl Codegen {
         // JIT can type the site, then rejoin at `exec`. A method_missing result
         // (FuncId 0) is cached as well, so repeated misses hit the fast path and
         // fall through to `mm` without re-running find_method.
+        //
+        // `slow_class` is the class-mismatch entry (mirrors x86 `slow_path1`):
+        // if a FuncId was already cached, the call site has now seen >=2
+        // receiver classes, so mark it polymorphic by writing 1 to the
+        // `opcode_sub` byte (offset +7; PC points at the op start on aarch64).
+        // The JIT reads this back via `BytecodePtr::opcode_sub()` and emits a
+        // non-deoptimizing dispatch instead of a monomorphic class guard. The
+        // version-mismatch entry (`slow_ver`, x86 `slow_path2`) skips this:
+        // the class still matched, so a stale class_version is not polymorphism.
         monoasm_arm64!(&mut self.jit,
-            slow:
+            slow_class:
+            ldr w11, [x(PC.0), #(16)];  // CACHED_FUNCID
+            cbz w11, slow_ver;          // nothing cached yet -> first resolution
+            mov x11, (1);
+            strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            slow_ver:
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldr w2, [x(PC.0)];  // callid
@@ -1901,7 +1916,7 @@ impl Codegen {
         // Fill the BinOp inline cache on the generic (non-fixnum) path too, so
         // the JIT can type non-integer comparisons (Float/String/...) instead
         // of bailing NotCached and recompiling forever. Reads X13/X14 (they
-        // survive get_class), clobbers x0.
+        // survive get_class), clobbers x0/x1/x2 and x10/x11/x12.
         self.a64_save_binary_class();
         monoasm_arm64!(&mut self.jit,
         // cmp_*_values(vm, globals, lhs=X13, rhs=X14) -> Option<Value>
@@ -1948,9 +1963,11 @@ impl Codegen {
 
     /// Record the runtime operand classes into the BinOp inline cache so the
     /// JIT can type the site (e.g. classify a Float `+`): `[PC+8]` = classid1,
-    /// `[PC+12]` = classid2. Mirrors x86 `vm_save_binary_class` (sans the
-    /// polymorphic-flag bookkeeping for now). Operands are the Values in X13
-    /// (lhs) / X14 (rhs); `get_class` reads X0 only, so X13/X14 survive.
+    /// `[PC+12]` = classid2. Mirrors x86 `vm_save_binary_class`, including the
+    /// polymorphic-flag bookkeeping (sets `opcode_sub` = 1 when an operand
+    /// class changes after the cache is populated). Operands are the Values in
+    /// X13 (lhs) / X14 (rhs); `get_class` reads X0 only, so X13/X14 survive.
+    /// Clobbers x0/x1/x2 and x10/x11/x12 and the link register.
     /// Record the unary operand's class into the UnOp inline cache (classid1
     /// `[PC+8]`) so the JIT can type the site. Mirrors x86 `vm_save_lhs_class`.
     /// Operand is the Value in x2. NB: `get_class` clobbers x1/x2 for
@@ -1967,13 +1984,42 @@ impl Codegen {
 
     pub(in crate::codegen) fn a64_save_binary_class(&mut self) {
         let get_class = self.get_class.clone();
+        let set_poly = self.jit.label();
+        let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit,
+            // Read the previously-cached operand classes before overwriting
+            // them (x10 = old classid1, x12 = old classid2; 0 = cache empty),
+            // for polymorphic detection. get_class only touches x0/x1/x2/x9/lr,
+            // so x10/x12/x13/x14 survive across the calls below.
+            ldr w10, [x(PC.0), #(8)];   // old classid1
+            ldr w12, [x(PC.0), #(12)];  // old classid2
             mov x0, x13;
             bl get_class;             // x0 = class(lhs)
             str w0, [x(PC.0), #(8)];  // classid1
             mov x0, x14;
             bl get_class;             // x0 = class(rhs)
             str w0, [x(PC.0), #(12)]; // classid2
+            // Polymorphic detection (mirrors x86 `vm_save_binary_class`): once
+            // the cache is populated (old classid1 != 0), if either operand's
+            // class changed, mark the site polymorphic (opcode_sub = 1, offset
+            // +7) so the JIT emits a non-deoptimizing dispatch instead of a
+            // monomorphic class guard.
+            cbz w10, skip;
+            ldr w11, [x(PC.0), #(8)];
+            cmp w10, w11;
+        );
+        self.jit.bcond_label(Cond::Ne, &set_poly);
+        monoasm_arm64!(&mut self.jit,
+            ldr w11, [x(PC.0), #(12)];
+            cmp w12, w11;
+        );
+        self.jit.bcond_label(Cond::Ne, &set_poly);
+        monoasm_arm64!(&mut self.jit,
+            b skip;
+            set_poly:
+            mov x11, (1);
+            strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            skip:
         );
     }
 
