@@ -609,6 +609,54 @@ impl Codegen {
         );
     }
 
+    /// `Integer#%` with a Float rhs: `rem_ff(lhs, rhs)` (f64,f64 -> f64). The
+    /// operands are loaded into d0/d1, the result (d0) stored into `dst_xmm`.
+    /// aarch64 twin of x86 `gen_int_rem_if`.
+    pub(crate) fn gen_int_rem_if(
+        &mut self,
+        lhs_xmm: FPReg,
+        rhs_xmm: FPReg,
+        dst_xmm: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) {
+        let f = crate::executor::op::rem_ff as *const () as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        self.a64_fpr_into_d(lhs_xmm, 0, base);
+        self.a64_fpr_into_d(rhs_xmm, 1, base);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (f);
+            blr x9;                  // d0 = rem_ff(d0, d1)
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+        self.a64_d0_into_fpr(dst_xmm, base);
+    }
+
+    /// `Integer#**` with a Float rhs: `pow_ff(lhs, rhs)` (f64,f64 -> Value, which
+    /// may be Complex). The operands are loaded into d0/d1; the result Value
+    /// lands in Rax (x0). aarch64 twin of x86 `gen_int_pow_if`.
+    pub(crate) fn gen_int_pow_if(
+        &mut self,
+        lhs_xmm: FPReg,
+        rhs_xmm: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    ) {
+        let f = crate::executor::op::pow_ff as *const () as u64;
+        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+        self.emit_xmm_save(using_xmm, false);
+        self.a64_fpr_into_d(lhs_xmm, 0, base);
+        self.a64_fpr_into_d(rhs_xmm, 1, base);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (f);
+            blr x9;                  // x0 = pow_ff(d0, d1)
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+    }
+
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
     fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
@@ -3515,12 +3563,18 @@ impl Codegen {
 
     /// Load a `FPReg` (pool reg or spill slot) into `d0`.
     fn a64_fpr_into_d0(&mut self, src: FPReg, base: usize) {
+        self.a64_fpr_into_d(src, 0, base);
+    }
+
+    /// Load a `FPReg` (pool reg or spill slot) into the scratch register `dreg`
+    /// (D0/D1, outside the D2-D15 pool). Spill-aware, so it never bails.
+    fn a64_fpr_into_d(&mut self, src: FPReg, dreg: u32, base: usize) {
         match src.loc(base) {
-            FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d0, d(p as u32);),
+            FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32);),
             FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
                 mov x10, (off as i64 as u64);
                 sub x10, x29, x10;        // [x29 - off] (mirrors x86 [rbp - off])
-                ldr d0, [x10];
+                ldr d(dreg), [x10];
             ),
         }
     }

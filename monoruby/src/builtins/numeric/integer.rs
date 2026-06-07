@@ -1114,28 +1114,18 @@ fn integer_rem_float_rhs(
         }
     }
 
-    // The runtime float-remainder path (`gen_int_rem_if`, an xmm C-call) is not
-    // ported to aarch64 yet; bail to a method call.
-    #[cfg(not(jit_x86))]
-    {
-        let _ = (ir, recv, args);
-        false
-    }
-    #[cfg(jit_x86)]
-    {
-        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-        let rhs_xmm = state.load_xmm(ir, args);
-        let Some(dst) = dst else {
-            // Result discarded; no work needed (rem_ff is pure).
-            return true;
-        };
-        let dst_xmm = state.def_F(dst);
-        let using_xmm = state.get_using_xmm();
-        ir.inline(move |r#gen, _, _, base| {
-            r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
-        });
-        true
-    }
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let Some(dst) = dst else {
+        // Result discarded; no work needed (rem_ff is pure).
+        return true;
+    };
+    let dst_xmm = state.def_F(dst);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
+    });
+    true
 }
 
 ///
@@ -1227,24 +1217,14 @@ fn integer_pow_float_rhs(
         // else: fall through to runtime call
     }
 
-    // The runtime float-power path (`gen_int_pow_if`, an xmm C-call) is not
-    // ported to aarch64 yet; bail to a method call.
-    #[cfg(not(jit_x86))]
-    {
-        let _ = (ir, recv, args);
-        false
-    }
-    #[cfg(jit_x86)]
-    {
-        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-        let rhs_xmm = state.load_xmm(ir, args);
-        let using_xmm = state.get_using_xmm();
-        ir.inline(move |r#gen, _, _, base| {
-            r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
-        });
-        state.def_reg2acc(ir, GP::Rax, dst);
-        true
-    }
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
+    });
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 ///
