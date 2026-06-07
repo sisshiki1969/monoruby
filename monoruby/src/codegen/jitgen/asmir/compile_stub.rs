@@ -82,14 +82,28 @@ impl Codegen {
         // the `SpecializedCall` sites in the main body can branch into them.
         // This must run *before* binding `entry_label`, so entering the main
         // body does not fall through the specialized bodies (mirrors the x86
-        // `gen_machine_code` recursion). aarch64 ignores the specialized
-        // recompile index — its `GuardClassVersionSpecialized` /
-        // `RecompileDeoptSpecialized` degrade to a plain deopt — so, unlike x86,
-        // we do not register `self.specialized_info`; the `SpecializedCall`
-        // lowering binds each call-site patch point itself.
-        for info_entry in std::mem::take(&mut frame.specialized_methods) {
-            let entry = frame.resolve_label(&mut self.jit, info_entry.entry);
-            if !self.a64_gen_machine_code(info_entry.info, store, entry, class_version.clone()) {
+        // `gen_machine_code` recursion). For each direct specialized child of
+        // the outermost frame, register `(iseq, self_class, patch_point)` in
+        // `self.specialized_info` (mirrors x86) so a later
+        // `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` can
+        // recompile it and rewrite the `SpecializedCall` site's `bl`. The
+        // `patch_point` label is bound at that `bl` by `a64_do_specialized_call`.
+        for crate::codegen::jitgen::context::SpecializeInfo {
+            entry: specialized_entry,
+            info: specialized_info,
+            patch_point,
+        } in std::mem::take(&mut frame.specialized_methods)
+        {
+            if !frame.is_specialized() {
+                let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
+                self.specialized_info.push((
+                    specialized_info.iseq_id,
+                    specialized_info.self_class,
+                    patch_point,
+                ));
+            }
+            let entry = frame.resolve_label(&mut self.jit, specialized_entry);
+            if !self.a64_gen_machine_code(specialized_info, store, entry, class_version.clone()) {
                 return false;
             }
         }
@@ -153,6 +167,13 @@ impl Codegen {
             ) {
                 return false;
             }
+        }
+
+        // Advance the specialized-recompile base past this compilation's
+        // entries, so the next compilation's local `idx` maps to fresh
+        // `specialized_info` slots (mirrors x86 `gen_machine_code`).
+        if !frame.is_specialized() {
+            self.specialized_base = self.specialized_info.len();
         }
 
         // Dump the generated A64 machine code, mirroring x86's `gen_machine_code`
@@ -2571,6 +2592,39 @@ impl Codegen {
         );
     }
 
+    /// Emit the FP-pool-preserving C call to
+    /// `jit_recompile_specialized(globals, idx, reason)`. The caller-saved
+    /// d2-d7 pool is saved around the call because the following deopt's
+    /// write-back reads it (d8-d15 are callee-saved); x19-x23 are AAPCS64
+    /// callee-saved so the VM globals survive. `global_idx` is the resolved
+    /// `specialized_base + idx` slot in `specialized_info`.
+    fn a64_call_recompile_specialized(&mut self, global_idx: usize, reason: RecompileReason) {
+        let f = crate::codegen::compiler::jit_recompile_specialized as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(48);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            mov x0, x20;                  // globals
+            mov x1, (global_idx as u64);  // specialized_info index
+            mov x2, (reason as u64);      // RecompileReason
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            add sp, sp, #(48);
+        );
+    }
+
     /// The call itself. aarch64 has no runtime branch patching, so the `evict`
     /// return-address patch point is not registered (class-version guards cover
     /// the staleness it would otherwise catch); the x86-only params are unused.
@@ -4734,19 +4788,45 @@ impl Codegen {
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
                 self.a64_store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
             }
-            // Inline-cache class-version guard. aarch64 has no recompiler, so
-            // both the specialized guard and the recompile-or-deopt point
-            // degrade to a plain deopt (sound — the global class-version
-            // compare conservatively deopts on any class change since compile).
-            AsmInst::GuardClassVersionSpecialized { idx: _, deopt } => {
-                self.a64_guard_class_version(&labels[deopt]);
+            // Specialized class-version guard: on a version mismatch, recompile
+            // the specialized body (rewriting its `SpecializedCall` `bl`) then
+            // deopt. Mirrors x86 `guard_class_version_specialized` (no counter —
+            // the recompile bakes in the new version, so it won't re-fire).
+            AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
+                let global_idx = self.specialized_base + idx;
+                let deopt = labels[deopt].clone();
+                let miss = self.jit.label();
+                let done = self.jit.label();
+                self.a64_guard_class_version(&miss); // mismatch -> miss
+                monoasm_arm64!(&mut self.jit, b done;); // match -> continue
+                self.jit.bind_label(miss.clone());
+                self.a64_call_recompile_specialized(
+                    global_idx,
+                    RecompileReason::ClassVersionGuardFailed,
+                );
+                monoasm_arm64!(&mut self.jit, b deopt;);
+                self.jit.bind_label(done);
             }
-            AsmInst::RecompileDeoptSpecialized {
-                idx: _,
-                deopt,
-                reason: _,
-            } => {
-                self.emit_deopt(&labels[deopt]);
+            // Counter-gated specialized recompile-or-deopt point (mirrors x86
+            // `recompile_and_deopt_specialized`).
+            AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
+                let global_idx = self.specialized_base + idx;
+                let deopt = labels[deopt].clone();
+                let counter =
+                    Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE_SPECIALIZED)) as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (counter);
+                    ldr w11, [x9];
+                    cmp w11, #0;
+                );
+                self.jit.bcond_label(monoasm::Cond::Le, &deopt); // <= 0 -> deopt
+                monoasm_arm64!(&mut self.jit,
+                    sub w11, w11, #1;
+                    str w11, [x9];
+                    cbnz w11, deopt;                 // not yet exhausted -> deopt
+                );
+                self.a64_call_recompile_specialized(global_idx, reason);
+                monoasm_arm64!(&mut self.jit, b deopt;);
             }
             // Direct call into an inlined method entry, with the return-address
             // patch point recorded for BOP-redefinition eviction.

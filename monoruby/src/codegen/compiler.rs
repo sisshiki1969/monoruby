@@ -420,6 +420,43 @@ impl Codegen {
         self.jit.apply_jmp_patch_address(patch_point, &entry);
         Some(())
     }
+
+    /// aarch64 specialized recompile. Mirrors the x86 variant, but installs the
+    /// recompiled body by rewriting the `SpecializedCall` site's `bl` to it
+    /// (aarch64 has no `apply_jmp_patch_address`, but it can patch a single
+    /// branch instruction — see [`Codegen::patch_call_to_entry`]). Bails
+    /// (leaving the old specialized body in place) if the lowering bails.
+    #[cfg(not(jit_x86))]
+    fn recompile_specialized(
+        &mut self,
+        globals: &mut Globals,
+        idx: usize,
+        reason: RecompileReason,
+    ) -> Option<()> {
+        let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
+        let entry = self.jit.label();
+        let class_version = self.class_version();
+        let compiled = self
+            .compile(
+                globals,
+                iseq_id,
+                self_class,
+                None,
+                entry.clone(),
+                class_version,
+                Some(reason),
+            )
+            .is_some();
+        // Re-arm executable permission / flush the I-cache for the freshly
+        // emitted body (and resolve `entry`'s address) before patching.
+        self.jit.finalize();
+        if !compiled {
+            return None;
+        }
+        let patch_point = self.jit.get_label_address(&patch_point);
+        self.patch_call_to_entry(patch_point, &entry);
+        Some(())
+    }
 }
 
 //
@@ -437,6 +474,33 @@ extern "C" fn jit_recompile_specialized(
             .borrow_mut()
             .recompile_specialized(globals, idx, reason);
     });
+}
+
+/// aarch64 specialized recompile entry, called from the
+/// `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` lowering
+/// (`compile_stub.rs`). Unlike x86 this catches a recompile-time panic so it
+/// cannot abort across the `extern "C"` boundary (aarch64 can panic emitting a
+/// large body); on panic it re-arms the JIT region as executable (mirrors
+/// `jit_compile_loop`) and returns — the generated code then just deopts to the
+/// interpreter (the old specialized body stays installed). No `Option<Value>`
+/// is returned: there is no FatalError path here, matching x86's recompile
+/// behavior (which is best-effort and falls back to deopt on failure).
+#[cfg(not(jit_x86))]
+pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
+    globals: &mut Globals,
+    idx: usize,
+    reason: RecompileReason,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .recompile_specialized(globals, idx, reason);
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    }
 }
 
 pub(in crate::codegen) extern "C" fn jit_compile_patch(

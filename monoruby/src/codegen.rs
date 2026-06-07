@@ -888,6 +888,28 @@ impl Codegen {
     ) -> Option<(Option<CodePtr>, DestLabel)> {
         self.return_addr_table.get(&return_addr).cloned()
     }
+
+    /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
+    /// instruction at `patch_point` (the `SpecializedCall` site, bound just
+    /// before the `bl` in `a64_do_specialized_call`) so it now branches into
+    /// the freshly compiled body at `entry`. The twin of
+    /// [`Self::patch_return_to_deopt`] but writing a `BL` (`0x9400_0000 |
+    /// imm26`) instead of a `B`: same ±128 MiB range and the same
+    /// writable / I-cache-synchronize dance (AArch64 has no I/D coherence for
+    /// self-modifying code). The new `bl` keeps the same return continuation
+    /// (the next instruction), so the post-call frame teardown is unchanged.
+    #[cfg(all(jit, not(jit_x86)))]
+    fn patch_call_to_entry(&mut self, patch_point: CodePtr, entry: &DestLabel) {
+        self.jit.set_writable();
+        let dest = self.jit.get_label_address(entry);
+        let disp = dest - patch_point;
+        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
+        let word = 0x9400_0000u32 | imm26;
+        // SAFETY: `patch_point` is the 4-byte-aligned address of the `bl`
+        // emitted by `a64_do_specialized_call`.
+        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
+        self.jit.set_executable();
+    }
 }
 
 #[repr(C)]
