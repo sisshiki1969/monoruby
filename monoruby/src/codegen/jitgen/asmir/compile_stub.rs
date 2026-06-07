@@ -1037,7 +1037,7 @@ impl Codegen {
     /// `method_return_specialized` (`lea rbp,[rbp+off]; leave; ret`): adjust the
     /// native frame base (x29), then run the standard epilogue. No error path —
     /// the value is already in the accumulator and the caller frame is JIT'd.
-    fn a64_method_ret_specialized(&mut self, rbp_offset: usize) {
+    pub(super) fn method_return_specialized(&mut self, rbp_offset: usize) {
         monoasm_arm64!(&mut self.jit,
             mov x10, (rbp_offset as u64);
             add x29, x29, x10;          // rbp += off (skip inlined frames)
@@ -1053,7 +1053,7 @@ impl Codegen {
     /// effective displacement can be negative, so it is materialized in a
     /// scratch and added to x29 (x9..x15 are reserved lowering temps, never a
     /// GP-mapped register).
-    fn a64_load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
+    pub(super) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
         let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(reg) as i64;
         let rax = GP::Rax.a64().0;
         monoasm_arm64!(&mut self.jit,
@@ -1064,9 +1064,9 @@ impl Codegen {
     }
 
     /// `StoreDynVarSpecialized`: outer-scope local <- src, symmetric to
-    /// `a64_load_dyn_var_specialized`. `src` maps to x0..x8 / x20..x23, never
+    /// `load_dyn_var_specialized`. `src` maps to x0..x8 / x20..x23, never
     /// the x10 scratch, so there is no clobber.
-    fn a64_store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+    pub(super) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
         let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64;
         let s = src.a64().0;
         monoasm_arm64!(&mut self.jit,
@@ -1083,7 +1083,7 @@ impl Codegen {
     /// post-`bl` address (the return continuation); the caller records it via
     /// `set_deopt_with_return_addr` so `immediate_eviction` can later overwrite
     /// the continuation with a `B deopt` on BOP redefinition.
-    fn a64_do_specialized_call(
+    pub(super) fn do_specialized_call(
         &mut self,
         entry: DestLabel,
         patch_point: Option<DestLabel>,
@@ -1121,7 +1121,7 @@ impl Codegen {
     /// scratch, x11 = value scratch — none of which are GP-mapped). The cfp
     /// prev/lfp it also writes are immediately overwritten by the following
     /// `SpecializedYield`'s push_frame, exactly as on x86.
-    fn a64_setup_yield_frame(&mut self, meta: Meta, outer: usize) {
+    pub(super) fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
         let outer = outer - 1;
         monoasm_arm64!(&mut self.jit, ldr x9, [x19, #(EXECUTOR_CFP as u32)];);
         for _ in 0..outer {
@@ -2372,7 +2372,7 @@ impl Codegen {
     /// Register a specialized call's return address so `immediate_eviction` can
     /// find and patch it. Identical to the x86 helper (the tables are arch-
     /// neutral `#[cfg(jit)]` fields on `Codegen`).
-    fn set_deopt_with_return_addr(
+    pub(super) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,
@@ -4675,7 +4675,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn compile_asmir_arch(
         &mut self,
         store: &Store,
-        frame: &mut AsmInfo,
+        _frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
         _class_version: DestLabel,
@@ -4685,18 +4685,6 @@ impl Codegen {
         // Anything still reaching the wildcard is not yet ported, so bail and
         // keep the method VM-interpreted.
         match inst {
-            // Clean return / block-break out of an inlined frame.
-            AsmInst::MethodRetSpecialized { rbp_offset }
-            | AsmInst::BlockBreakSpecialized { rbp_offset } => {
-                self.a64_method_ret_specialized(rbp_offset.unwrap_concrete());
-            }
-            // Outer-scope local access at a pre-resolved frame offset.
-            AsmInst::LoadDynVarSpecialized { offset, reg } => {
-                self.a64_load_dyn_var_specialized(offset.unwrap_concrete(), reg);
-            }
-            AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
-                self.a64_store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
-            }
             // Specialized class-version guard: on a version mismatch, recompile
             // the specialized body (rewriting its `SpecializedCall` `bl`) then
             // deopt. Mirrors x86 `guard_class_version_specialized` (no counter —
@@ -4736,29 +4724,6 @@ impl Codegen {
                 );
                 self.a64_call_recompile_specialized(global_idx, reason);
                 monoasm_arm64!(&mut self.jit, b deopt;);
-            }
-            // Direct call into an inlined method entry, with the return-address
-            // patch point recorded for BOP-redefinition eviction.
-            AsmInst::SpecializedCall {
-                entry,
-                patch_point,
-                evict,
-            } => {
-                let patch_point = patch_point.map(|l| frame.resolve_label(&mut self.jit, l));
-                let entry_label = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.a64_do_specialized_call(entry_label, patch_point);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
-            }
-            // Specialized `yield`: build the block frame, then branch into the
-            // inlined block entry (no patch_point — the eviction continuation is
-            // recorded the same way as SpecializedCall).
-            AsmInst::SetupYieldFrame { meta, outer } => {
-                self.a64_setup_yield_frame(meta, outer);
-            }
-            AsmInst::SpecializedYield { entry, evict } => {
-                let entry_label = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.a64_do_specialized_call(entry_label, None);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
             // Trap for statically-unreachable code: call the panicking helper.
             AsmInst::Unreachable => {
@@ -4817,11 +4782,6 @@ impl Codegen {
                 let offset = store[callee_fid].get_offset();
                 return self.a64_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
-            // Inlined builtin method body. The generator's closure emits the
-            // arch-appropriate asm directly (ported generators cfg-switch to
-            // aarch64). Un-ported generators never reach here: they register
-            // `noinline_gen`, which declines to inline. Mirrors x86.
-            AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
             _ => return false,
         }
         true

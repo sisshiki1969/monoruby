@@ -891,7 +891,7 @@ impl Codegen {
 
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
     /// instruction at `patch_point` (the `SpecializedCall` site, bound just
-    /// before the `bl` in `a64_do_specialized_call`) so it now branches into
+    /// before the `bl` in `do_specialized_call`) so it now branches into
     /// the freshly compiled body at `entry`. The twin of
     /// [`Self::patch_return_to_deopt`] but writing a `BL` (`0x9400_0000 |
     /// imm26`) instead of a `B`: same ±128 MiB range and the same
@@ -906,7 +906,7 @@ impl Codegen {
         let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
         let word = 0x9400_0000u32 | imm26;
         // SAFETY: `patch_point` is the 4-byte-aligned address of the `bl`
-        // emitted by `a64_do_specialized_call`.
+        // emitted by `do_specialized_call`.
         unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
         self.jit.set_executable();
     }

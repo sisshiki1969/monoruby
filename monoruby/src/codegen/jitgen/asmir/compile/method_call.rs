@@ -196,7 +196,7 @@ impl Codegen {
     /// ### destroy
     /// - rax, rdi
     ///
-    pub(super) fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
+    pub(in crate::codegen::jitgen) fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
         let outer = outer - 1;
         monoasm! { &mut self.jit,
             movq rdi, [rbx + (EXECUTOR_CFP)];
@@ -269,7 +269,7 @@ impl Codegen {
         return_addr
     }
 
-    pub(super) fn do_specialized_call(
+    pub(in crate::codegen::jitgen) fn do_specialized_call(
         &mut self,
         entry: DestLabel,
         patch_point: Option<DestLabel>,
