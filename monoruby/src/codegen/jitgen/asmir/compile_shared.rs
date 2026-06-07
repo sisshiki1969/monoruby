@@ -261,8 +261,8 @@ impl Codegen {
             AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
             // Recompile-or-deopt point: both arches recompile the whole method
             // (or loop body) once a small miss counter warms, then deopt.
-            // aarch64 has no specialized-frame recompiler yet (those go through
-            // RecompileDeoptSpecialized and just deopt).
+            // (Specialized frames recompile via RecompileDeoptSpecialized /
+            // GuardClassVersionSpecialized in the per-arch lowering.)
             AsmInst::RecompileDeopt {
                 position,
                 deopt,
