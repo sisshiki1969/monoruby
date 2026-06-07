@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(all(jit, not(jit_x86)))]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Class class
@@ -14,7 +16,7 @@ pub fn gen_class_new_object() -> Box<InlineGen> {
     Box::new(gen_class_new_inline)
 }
 
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub fn gen_class_allocate() -> Box<InlineGen> {
     Box::new(gen_class_allocate_inline)
 }
@@ -27,7 +29,7 @@ pub fn gen_class_allocate() -> Box<InlineGen> {
 /// back (returns false ⇒ normal native `allocate`) when the call site
 /// is not simple or the class has no `alloc_func`.
 ///
-#[cfg(jit_x86)]
+#[cfg(jit)]
 pub(super) fn gen_class_allocate_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -58,6 +60,7 @@ pub(super) fn gen_class_allocate_inline(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
+        #[cfg(jit_x86)]
         monoasm!( &mut r#gen.jit,
             // alloc_func(class_id, &mut Globals) -> Value
             movl rdi, (class_id.u32());
@@ -65,6 +68,8 @@ pub(super) fn gen_class_allocate_inline(
             movq rax, (alloc_func);
             call rax;
         );
+        #[cfg(not(jit_x86))]
+        r#gen.a64_class_allocate(class_id.u32(), alloc_func as *const () as u64);
     });
     ir.xmm_restore(using_xmm);
     // The allocator produces an instance of exactly `class_id`. Record
@@ -102,7 +107,7 @@ pub(super) fn init(globals: &mut Globals) {
         CLASS_CLASS,
         "__builtin_allocate__",
         allocate,
-        inline_gen!(gen_class_allocate()),
+        inline_gen2!(gen_class_allocate()),
         0,
     );
     globals.add_method(

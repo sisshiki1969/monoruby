@@ -3626,6 +3626,21 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Class#allocate`: `alloc_func(class_id, globals)`. The class id
+    /// (a u32) and the resolved allocator pointer are embedded as constants;
+    /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).
+    /// FP pool saved by the surrounding xmm_save.
+    pub(crate) fn a64_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
+            mov x1, x20;               // globals -> arg1
+            mov x9, (alloc_func);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
     /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.
     /// Result Value in Rax (x0). FP pool saved by the surrounding xmm_save.
     pub(crate) fn a64_array_clone(&mut self, f: u64) {
