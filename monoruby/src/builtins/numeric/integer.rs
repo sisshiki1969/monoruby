@@ -912,17 +912,10 @@ fn integer_shr(
             }
         }
     } else {
-        // Variable shift amount: x86 uses gen_shr (lzcnt overflow guard,
-        // two-page cold path). Not yet ported to aarch64 — bail to a method
-        // call.
-        #[cfg(jit_x86)]
-        {
-            state.load_fixnum(ir, args, GP::Rcx);
-            let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
-        }
-        #[cfg(not(jit_x86))]
-        return false;
+        // Variable shift amount.
+        state.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(state);
+        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -994,21 +987,21 @@ fn integer_shl(
             ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
         }
     } else {
-        // Variable shift amount (gen_shl / gen_shl_lhs_imm): x86's lzcnt
-        // overflow guard + two-page cold path is not yet ported to aarch64 —
-        // bail to a method call.
+        // Variable shift amount.
+        state.load_fixnum(ir, args, GP::Rcx);
+        let deopt = ir.new_deopt(state);
+        // x86 has a literal-lhs fast path (`gen_shl_lhs_imm`) that folds the
+        // overflow guard to a constant `lzcnt`; aarch64's shift-back overflow
+        // check gains nothing from a constant lhs (recv is already in Rdi), so
+        // it uses `gen_shl` for both cases.
         #[cfg(jit_x86)]
         if let Some(lhs) = state.is_fixnum_literal(recv) {
-            state.load_fixnum(ir, args, GP::Rcx);
-            let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
         } else {
-            state.load_fixnum(ir, args, GP::Rcx);
-            let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
         }
         #[cfg(not(jit_x86))]
-        return false;
+        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -1114,28 +1107,18 @@ fn integer_rem_float_rhs(
         }
     }
 
-    // The runtime float-remainder path (`gen_int_rem_if`, an xmm C-call) is not
-    // ported to aarch64 yet; bail to a method call.
-    #[cfg(not(jit_x86))]
-    {
-        let _ = (ir, recv, args);
-        false
-    }
-    #[cfg(jit_x86)]
-    {
-        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-        let rhs_xmm = state.load_xmm(ir, args);
-        let Some(dst) = dst else {
-            // Result discarded; no work needed (rem_ff is pure).
-            return true;
-        };
-        let dst_xmm = state.def_F(dst);
-        let using_xmm = state.get_using_xmm();
-        ir.inline(move |r#gen, _, _, base| {
-            r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
-        });
-        true
-    }
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let Some(dst) = dst else {
+        // Result discarded; no work needed (rem_ff is pure).
+        return true;
+    };
+    let dst_xmm = state.def_F(dst);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
+    });
+    true
 }
 
 ///
@@ -1227,24 +1210,14 @@ fn integer_pow_float_rhs(
         // else: fall through to runtime call
     }
 
-    // The runtime float-power path (`gen_int_pow_if`, an xmm C-call) is not
-    // ported to aarch64 yet; bail to a method call.
-    #[cfg(not(jit_x86))]
-    {
-        let _ = (ir, recv, args);
-        false
-    }
-    #[cfg(jit_x86)]
-    {
-        let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-        let rhs_xmm = state.load_xmm(ir, args);
-        let using_xmm = state.get_using_xmm();
-        ir.inline(move |r#gen, _, _, base| {
-            r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
-        });
-        state.def_reg2acc(ir, GP::Rax, dst);
-        true
-    }
+    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
+    let rhs_xmm = state.load_xmm(ir, args);
+    let using_xmm = state.get_using_xmm();
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
+    });
+    state.def_reg2acc(ir, GP::Rax, dst);
+    true
 }
 
 ///
