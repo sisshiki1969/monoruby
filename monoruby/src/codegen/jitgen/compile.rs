@@ -118,6 +118,11 @@ impl<'a> JitContext<'a> {
                     self.recompile_and_deopt(&mut state, &mut ir, reason);
                     return Ok(ir);
                 }
+                CompileResult::Deopt => {
+                    self.new_return(ReturnState::default());
+                    ir.deopt(&mut state);
+                    return Ok(ir);
+                }
                 CompileResult::Abort => {
                     #[cfg(feature = "emit-bc")]
                     self.dump_iseq();

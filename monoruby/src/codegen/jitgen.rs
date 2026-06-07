@@ -70,6 +70,10 @@ enum CompileResult {
     Break(ReturnState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
+    /// deoptimize to the VM without recompiling (e.g. a `method_missing`
+    /// dispatch site, which the JIT cannot lower but the VM handles — recompiling
+    /// would loop forever on `NotCached`).
+    Deopt,
     /// internal error.
     #[allow(dead_code)]
     Abort,

@@ -1,5 +1,5 @@
 #[cfg(jit)]
-use crate::codegen::jitgen::trace_ir::MethodCacheEntry;
+use crate::codegen::jitgen::trace_ir::{MethodCache, MethodCacheEntry};
 
 use super::*;
 
@@ -356,15 +356,24 @@ impl BytecodePtr {
     }
 
     #[cfg(jit)]
-    pub(crate) fn method_cache(self) -> Option<MethodCacheEntry> {
-        if let Some(cached_class) = self.cached_class1() {
-            Some(MethodCacheEntry {
-                recv_class: cached_class,
-                func_id: self.cached_fid()?,
-                version: (self + 1).cached_version(),
-            })
+    pub(crate) fn method_cache_state(self) -> MethodCache {
+        if let Some(recv_class) = self.cached_class1() {
+            let version = (self + 1).cached_version();
+            match self.cached_fid() {
+                Some(func_id) => MethodCache::Cached(MethodCacheEntry {
+                    recv_class,
+                    func_id,
+                    version,
+                }),
+                // class cached but func_id slot is null → the VM resolved this
+                // call to `method_missing`.
+                None => MethodCache::MethodMissing {
+                    recv_class,
+                    version,
+                },
+            }
         } else {
-            None
+            MethodCache::None
         }
     }
 
