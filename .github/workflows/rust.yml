@@ -51,10 +51,15 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
+        # Coverage upload is a non-essential, externally-dependent step: the
+        # Codecov CLI download/GPG-signature verification fails intermittently
+        # on Codecov's side (e.g. "Could not verify signature. No public key"),
+        # which must not fail the whole CI run when the tests themselves pass.
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   darwin:
     # Native Apple Silicon (arm64-apple-darwin) runner. build.rs sets the `jit`
