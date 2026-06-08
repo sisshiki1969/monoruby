@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(jit)]
 use jitgen::{AbstractState, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -528,7 +527,7 @@ fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 
 fn integer_succ(
     state: &mut AbstractState,
@@ -576,7 +575,6 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::float(f))
 }
 
-#[cfg(jit)]
 fn integer_tof(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -866,7 +864,6 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
     }
 }
 
-#[cfg(jit)]
 fn integer_shr(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -928,7 +925,6 @@ fn integer_shr(
 
 /// Inline body for `n << k` / `n >> -k` with `k >= 64`: a non-zero `n`
 /// overflows (deopt); `0` shifts to `0`. Shared by `integer_shl`/`integer_shr`.
-#[cfg(jit)]
 fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
     let z = Value::i32(0).id() as i64;
     r#gen.emit_shl_overflow_zero(z, deopt);
@@ -945,7 +941,6 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit)]
 fn integer_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -999,13 +994,13 @@ fn integer_shl(
         // overflow guard to a constant `lzcnt`; aarch64's shift-back overflow
         // check gains nothing from a constant lhs (recv is already in Rdi), so
         // it uses `gen_shl` for both cases.
-        #[cfg(jit_x86)]
+        #[cfg(target_arch = "x86_64")]
         if let Some(lhs) = state.is_fixnum_literal(recv) {
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
         } else {
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
         }
-        #[cfg(not(jit_x86))]
+        #[cfg(target_arch = "aarch64")]
         ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -1023,7 +1018,6 @@ fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit)]
 fn integer_rem(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1048,7 +1042,6 @@ fn integer_rem(
     }
 }
 
-#[cfg(jit)]
 fn integer_rem_int_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1093,7 +1086,6 @@ fn integer_rem_int_rhs(
     true
 }
 
-#[cfg(jit)]
 fn integer_rem_float_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1137,7 +1129,6 @@ fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
 }
 
-#[cfg(jit)]
 fn integer_pow(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1162,7 +1153,6 @@ fn integer_pow(
     }
 }
 
-#[cfg(jit)]
 fn integer_pow_int_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1192,7 +1182,6 @@ fn integer_pow_int_rhs(
     true
 }
 
-#[cfg(jit)]
 fn integer_pow_float_rhs(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1238,7 +1227,6 @@ fn integer_pow_float_rhs(
 /// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
 /// fixnum rhs that fits in `i32`).
 /// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
-#[cfg(jit)]
 fn integer_bitop_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1295,7 +1283,6 @@ fn integer_bitop_inline(
 /// representation fits in `i32`, emit the immediate form directly via
 /// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
 /// emit the register form via `emit_rr`.
-#[cfg(jit)]
 fn emit_bitop_imm(
     ir: &mut AsmIr,
     imm: Fixnum,
@@ -1313,7 +1300,6 @@ fn emit_bitop_imm(
     }
 }
 
-#[cfg(jit)]
 fn integer_bitor(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1335,7 +1321,6 @@ fn integer_bitor(
     )
 }
 
-#[cfg(jit)]
 fn integer_bitand(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1357,7 +1342,6 @@ fn integer_bitand(
     )
 }
 
-#[cfg(jit)]
 fn integer_bitxor(
     state: &mut AbstractState,
     ir: &mut AsmIr,

@@ -1890,10 +1890,9 @@ impl Store {
             codegen.set_bop_redefine();
             self.invalidate_jit_code();
             // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
-            // Only needed with the JIT: in VM-only builds (no-jit / aarch64)
-            // every entry already jumps to `vm_entry`. (Also avoids the
-            // x86-only `apply_jmp_patch_address`.)
-            #[cfg(jit_x86)]
+            // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite
+            // the entry jumps in place.
+            #[cfg(target_arch = "x86_64")]
             {
                 let vm_entry = codegen.vm_entry();
                 for func in self.functions.functions() {

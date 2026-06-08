@@ -1,7 +1,7 @@
 use super::*;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use num::Zero;
@@ -310,7 +310,6 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-#[cfg(jit)]
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -354,7 +353,6 @@ fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::bool(!res.as_bool()))
 }
 
-#[cfg(jit)]
 fn kernel_block_given(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -2861,7 +2859,7 @@ pub(crate) fn send(
     )
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 
 pub fn object_send(
     state: &mut AbstractState,
@@ -2925,7 +2923,6 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
-#[cfg(jit)]
 fn kernel_is_a(
     state: &mut AbstractState,
     _ir: &mut AsmIr,
@@ -3215,7 +3212,6 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::bool(false))
 }
 
-#[cfg(jit)]
 fn object_respond_to(
     state: &mut AbstractState,
     _: &mut AsmIr,

@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(jit)]
 use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use std::os::raw::c_int;
@@ -684,7 +683,6 @@ fn log1p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::float(f.ln_1p()))
 }
 
-#[cfg(jit)]
 fn math_sqrt(
     state: &mut AbstractState,
     ir: &mut AsmIr,

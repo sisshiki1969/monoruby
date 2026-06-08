@@ -4,8 +4,7 @@
 //! JIT-tier code: `bytecodegen` builds a `BasicBlockInfo` for every method
 //! (see `bytecodegen::encode`) and stores it in `ISeqInfo.bb_info`, where the
 //! interpreter/runtime reads it. It therefore lives outside `codegen::jitgen`
-//! so it survives when the JIT subsystem is `#[cfg]`-excluded (the aarch64 /
-//! `no-jit` VM-only build).
+//! so the VM/runtime tier can use it without depending on the JIT front-end.
 
 use std::iter::Step;
 

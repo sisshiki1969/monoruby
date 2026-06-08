@@ -3,9 +3,9 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -3382,7 +3382,6 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::integer(length as i64))
 }
 
-#[cfg(jit)]
 fn string_bytesize(
     state: &mut AbstractState,
     ir: &mut AsmIr,

@@ -77,7 +77,7 @@ impl<'a> JitContext<'a> {
                     // aarch64 (no-recompile) build. Limited to the fold case: the
                     // register fast-path keeps its operands at runtime, so it is
                     // not worth a guard on every arithmetic op.
-                    #[cfg(not(jit_x86))]
+                    #[cfg(target_arch = "aarch64")]
                     if state.check_concrete_i64(mode).is_some() {
                         ir.check_bop(state);
                     }

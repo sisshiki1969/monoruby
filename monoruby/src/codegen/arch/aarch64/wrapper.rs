@@ -7,11 +7,11 @@ use super::*;
 use monoasm_macro::monoasm_arm64;
 
 impl Codegen {
-    /// Per-method entry wrapper. For ISeq methods (VM-only build) this is the
-    /// vm-stub `b vm_entry` (x86 `gen_vm_stub`). TODO(aarch64): other
-    /// FuncKinds (Builtin/AttrReader/ConstReturn/…).
+    /// Per-method entry wrapper. For ISeq methods this installs the method-JIT
+    /// trigger, or — under `--no-jit` — the vm-stub `b vm_entry` (x86
+    /// `gen_vm_stub`). TODO(aarch64): other FuncKinds
+    /// (Builtin/AttrReader/ConstReturn/…).
     pub(crate) fn gen_wrapper(&mut self, globals: &Globals, fid: FuncId) -> DestLabel {
-        #[cfg(jit)]
         let no_jit = globals.no_jit;
         let entry = self.jit.label();
         monoasm_arm64!(&mut self.jit,
@@ -33,7 +33,6 @@ impl Codegen {
                 //     the slot. Unsupported AsmInsts bail → stays VM.
                 // x19..x23 are callee-saved across the `extern "C"` call; LR is
                 // saved across `blr`.
-                #[cfg(jit)]
                 if no_jit {
                     // `--no-jit`: never install the JIT trigger; stay in the VM
                     // (mirrors x86 `gen_wrapper` emitting `gen_vm_stub`). Without
@@ -86,10 +85,6 @@ impl Codegen {
                         br x10;                  // tail-call the JIT code
                     );
                 }
-                #[cfg(not(jit))]
-                monoasm_arm64!(&mut self.jit,
-                    b vm_entry;
-                );
             }
             FuncKind::Builtin { abs_address } => {
                 let abs = *abs_address;
@@ -170,7 +165,6 @@ impl Codegen {
     ///         else countdown; hot -> compile this new class (extends chain)
     ///                         cold -> vm_entry
     /// ```
-    #[cfg(jit)]
     pub(in crate::codegen) fn a64_gen_class_guard_stub(
         &mut self,
         self_class: ClassId,

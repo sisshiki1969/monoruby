@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -776,7 +776,6 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-#[cfg(jit)]
 fn hash_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,

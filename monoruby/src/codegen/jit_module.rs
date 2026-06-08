@@ -1,9 +1,9 @@
 use super::*;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
 
 impl JitModule {
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());

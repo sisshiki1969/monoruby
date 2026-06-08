@@ -1,7 +1,7 @@
 use super::*;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 use rubymap::RubyEql;
 use smallvec::smallvec;
@@ -332,7 +332,6 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(Value::integer(len as i64))
 }
 
-#[cfg(jit)]
 fn array_size(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -371,7 +370,6 @@ fn clone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(cloned)
 }
 
-#[cfg(jit)]
 fn array_clone(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -415,7 +413,6 @@ fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     ))
 }
 
-#[cfg(jit)]
 fn array_dup_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -909,7 +906,6 @@ extern "C" fn ary_shl(mut ary: Array, arg: Value) -> Value {
     ary.into()
 }
 
-#[cfg(jit)]
 fn array_shl(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1169,7 +1165,6 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-#[cfg(jit)]
 fn array_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1266,7 +1261,6 @@ fn index_assign(
     }
 }
 
-#[cfg(jit)]
 fn array_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,

@@ -54,34 +54,14 @@ fn find_ruby() -> Option<String> {
 }
 
 fn main() {
-    // JIT cfgs. `jit` gates the JIT front-end (bytecode→TraceIR→AsmIR,
-    // abstract state, register-allocation planning) — arch-neutral, intended
-    // to compile on any JIT-capable arch. `jit_x86` gates the parts that only
-    // exist for x86-64: the x86 `monoasm!` machine-code emission/runtime
-    // (recompile stubs, `immediate_eviction`'s branch patching, …) AND the
-    // builtins inline-method generators (`inline_gen!`). aarch64 builds `jit`
-    // (front-end) with `jit_x86` off: it has its own AsmIR→A64 lowering
-    // (`asmir/compile_stub.rs`, gated by `jit && not(jit_x86)`), inlined
-    // methods fall back to a plain call, and the lowering deopts to the VM on
-    // anything not yet supported (see doc/aarch64-jitgen-plan.md).
-    // Downstream gates: `#[cfg(jit)]`/`#[cfg(not(jit))]` for the front-end,
-    // `#[cfg(jit_x86)]`/`#[cfg(not(jit_x86)]` for x86-only emission + inline_gen.
-    println!("cargo::rustc-check-cfg=cfg(jit)");
-    println!("cargo::rustc-check-cfg=cfg(jit_x86)");
-    let arch = std::env::var("CARGO_CFG_TARGET_ARCH");
-    let target_x86 = arch.as_deref() == Ok("x86_64");
-    let target_arm64 = arch.as_deref() == Ok("aarch64");
-    let no_jit = std::env::var_os("CARGO_FEATURE_NO_JIT").is_some();
-    // `jit` (front-end) on any JIT-capable arch; `jit_x86` (x86 emission +
-    // inline generators) on x86-64 only. aarch64 thus builds the front-end
-    // with x86 emission off — it uses its own A64 lowering, inlined methods
-    // fall back to plain calls, and lowering deopts to the VM when unported.
-    if (target_x86 || target_arm64) && !no_jit {
-        println!("cargo::rustc-cfg=jit");
-    }
-    if target_x86 && !no_jit {
-        println!("cargo::rustc-cfg=jit_x86");
-    }
+    // The JIT is always compiled in (the `--no-jit` runtime flag disables it
+    // at run time; there is no build-time switch). The front-end
+    // (bytecode→TraceIR→AsmIR) and arch backends are selected purely by
+    // `target_arch`: x86-64 emits via `monoasm!` (plus the builtins inline
+    // generators), aarch64 uses its own AsmIR→A64 lowering
+    // (`asmir/compile_stub.rs`, gated by `target_arch = "aarch64"`), where
+    // inlined methods fall back to a plain call and the lowering deopts to the
+    // VM on anything not yet supported (see doc/aarch64-jitgen-plan.md).
 
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 

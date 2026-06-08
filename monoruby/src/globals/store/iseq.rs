@@ -152,7 +152,7 @@ pub struct ISeqInfo {
     /// (the wrapper's / a class-guard chain link's heap word). Recorded at
     /// `compile_patch` so the recompiler can overwrite the slot in place
     /// (aarch64 installs JIT code via this slot, not x86 branch patching).
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     pub(super) jit_slot: HashMap<ClassId, u64>,
     /// Bounded per-self-class warm-up profile used to decide *which* receiver
     /// class is hot enough to specialize for. Without it, the first call that
@@ -226,7 +226,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
-            #[cfg(not(jit_x86))]
+            #[cfg(target_arch = "aarch64")]
             jit_slot: HashMap::default(),
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
@@ -488,13 +488,13 @@ impl ISeqInfo {
     /// aarch64 only: record the indirect-dispatch slot address for a self
     /// class (see `jit_slot`). Called from `compile_patch` after publishing
     /// the compiled guard stub into the slot.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     pub(crate) fn set_jit_slot(&mut self, self_class: ClassId, slot: u64) {
         self.jit_slot.insert(self_class, slot);
     }
 
     /// aarch64 only: the dispatch-slot address for a self class, if compiled.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     pub(crate) fn get_jit_slot(&self, self_class: ClassId) -> Option<u64> {
         self.jit_slot.get(&self_class).copied()
     }
@@ -541,7 +541,7 @@ impl ISeqInfo {
         self.jit_invalidated = true;
         self.jit_entry.clear();
         self.jit_class_profile.clear();
-        #[cfg(not(jit_x86))]
+        #[cfg(target_arch = "aarch64")]
         self.jit_slot.clear();
     }
 

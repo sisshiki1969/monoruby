@@ -1,7 +1,7 @@
 use super::*;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -166,7 +166,6 @@ fn not_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(Value::bool(!lfp.self_val().as_bool()))
 }
 
-#[cfg(jit)]
 fn object_not(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -235,7 +234,6 @@ pub(super) fn object_id(
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
-#[cfg(jit)]
 pub(super) fn object_object_id(
     state: &mut AbstractState,
     ir: &mut AsmIr,

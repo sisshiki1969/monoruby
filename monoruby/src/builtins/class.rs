@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -11,12 +11,10 @@ use jitgen::{AbstractState, JitContext};
 /// function pointer into the generated code, and calls it directly (ABI:
 /// `extern "C" fn(ClassId, &mut Globals) -> Value`), matching the slow-path
 /// `call_alloc_func` helper.
-#[cfg(jit)]
 pub fn gen_class_new_object() -> Box<InlineGen> {
     Box::new(gen_class_new_inline)
 }
 
-#[cfg(jit)]
 pub fn gen_class_allocate() -> Box<InlineGen> {
     Box::new(gen_class_allocate_inline)
 }
@@ -29,7 +27,6 @@ pub fn gen_class_allocate() -> Box<InlineGen> {
 /// back (returns false ⇒ normal native `allocate`) when the call site
 /// is not simple or the class has no `alloc_func`.
 ///
-#[cfg(jit)]
 pub(super) fn gen_class_allocate_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -366,7 +363,7 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
 ///
 /// Bails to the slow path (Rust `new`, which raises `TypeError`) when the
 /// class has no allocator, mirroring `call_alloc_func`.
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 pub(super) fn gen_class_new_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -471,7 +468,7 @@ pub(super) fn gen_class_new_inline(
 /// + invoke `initialize` via `method_invoker2`) lives in `Codegen::a64_class_new`;
 /// here we resolve the allocator at JIT-compile time and write back the
 /// receiver/args so the invoker can read them from the frame.
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 pub(super) fn gen_class_new_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,

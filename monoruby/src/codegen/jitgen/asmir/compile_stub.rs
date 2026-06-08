@@ -2380,7 +2380,7 @@ impl Codegen {
 
     /// Register a specialized call's return address so `immediate_eviction` can
     /// find and patch it. Identical to the x86 helper (the tables are arch-
-    /// neutral `#[cfg(jit)]` fields on `Codegen`).
+    /// neutral fields on `Codegen`).
     pub(super) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
@@ -4751,27 +4751,27 @@ impl Codegen {
 
 /// `set_ivar(base, id, val)` runtime helper for the StoreIVarHeap cold path
 /// (grows the var-table as needed). The x86 twin lives in
-/// `compile/variables.rs`; that module is `jit_x86`-only, so aarch64 carries
+/// `compile/variables.rs`; that module is x86-only, so aarch64 carries
 /// its own copy (the two are never compiled together).
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
 }
 
 /// Grow `rvalue`'s heap ivar var-table to at least `heap_len` slots. Cold path
-/// of `emit_preparation`. The x86 twin lives in the `jit_x86`-only `compile.rs`.
+/// of `emit_preparation`. The x86 twin lives in the x86-only `compile.rs`.
 extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
     rvalue.extend_ivar(heap_len);
 }
 
 /// Trap target for the `Unreachable` AsmInst. The x86 twin lives in
-/// `compile.rs` (a `jit_x86`-only module), so aarch64 carries its own copy.
+/// `compile.rs` (an x86-only module), so aarch64 carries its own copy.
 extern "C" fn unreachable() {
     unreachable!("reached unreachable code");
 }
 
 /// Generic `Array#[]=` fallback (out-of-fast-path index). Returns `None` and
 /// sets the error on failure (negative index past the start). The x86 twin
-/// lives in the `jit_x86`-only `asmir/compile/index.rs`.
+/// lives in the x86-only `asmir/compile/index.rs`.
 extern "C" fn set_array_integer_index(
     base: Value,
     index: i64,
