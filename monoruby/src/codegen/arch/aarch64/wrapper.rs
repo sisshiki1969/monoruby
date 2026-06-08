@@ -63,10 +63,13 @@ impl Codegen {
                         cbz x11, compile_hot;    // hot → fall through to compile
                         b vm_entry;              // not hot yet → VM (long range)
                     compile_hot:
-                        // hot: jit_compile_patch(globals=x20, lfp=x22, slot)
+                        // hot enough overall: profile this self-class and
+                        // compile only if *it* (not just any class) is hot.
+                        // jit_profile_patch(globals=x20, lfp=x22, slot, &counter)
                         mov x0, x(GLOBALS.0);
                         mov x1, x(LFP.0);
                         mov x2, (jit_slot);      // where to publish the entry
+                        mov x3, (counter_addr);  // re-armed if this class isn't hot yet
                         str x30, [sp, #-16]!;    // save LR
                         // Reserve scratch below SP so the (deep) compile C-call
                         // can't trample the just-built callee Ruby frame, which
@@ -74,7 +77,7 @@ impl Codegen {
                         // (mirrors x86 `subq rsp, 4088`). 4080 fits a 12-bit imm
                         // and is 16-aligned.
                         sub sp, sp, #(4080);
-                        mov x9, (crate::codegen::compiler::jit_compile_patch as *const () as u64);
+                        mov x9, (crate::codegen::compiler::jit_profile_patch as *const () as u64);
                         blr x9;
                         add sp, sp, #(4080);
                         ldr x30, [sp], #16;      // restore LR
@@ -203,13 +206,16 @@ impl Codegen {
             cbz x11, compile_next;   // hot for this new class -> compile it
             b vm_entry;              // still cold -> VM
         compile_next:
-            // jit_compile_patch(globals=x20, lfp=x22, slot=next_slot)
+            // profile this new class; compile a specialization only once it is
+            // hot (re-arming next_counter otherwise — see jit_profile_patch).
+            // jit_profile_patch(globals=x20, lfp=x22, slot=next_slot, &next_counter)
             mov x0, x(GLOBALS.0);
             mov x1, x(LFP.0);
             mov x2, (next_slot);     // publish the new class's guard here
+            mov x3, (next_counter);  // re-armed if this class isn't hot yet
             str x30, [sp, #-16]!;    // save LR
             sub sp, sp, #(4080);     // scratch below the callee frame (see gen_wrapper)
-            mov x9, (crate::codegen::compiler::jit_compile_patch as *const () as u64);
+            mov x9, (crate::codegen::compiler::jit_profile_patch as *const () as u64);
             blr x9;
             add sp, sp, #(4080);
             ldr x30, [sp], #16;      // restore LR

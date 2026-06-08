@@ -2533,3 +2533,24 @@ fn method_missing_in_hot_loop() {
         "##,
     );
 }
+
+#[test]
+fn method_call_on_fresh_class_each_iteration() {
+    // Calling an (inherited) instance method on a freshly created class object
+    // every iteration: the receiver's self-class is a brand-new singleton class
+    // each time. The JIT must not compile a specialization per singleton class
+    // (the per-class warm-up profiler keeps these one-shot classes out of the
+    // compiler). Correctness must be unaffected regardless.
+    run_test_with_prelude(
+        r##"
+        res = 0
+        300.times { res += Class.new.tag }
+        res
+        "##,
+        r##"
+        class Object
+          def tag = 7
+        end
+        "##,
+    );
+}
