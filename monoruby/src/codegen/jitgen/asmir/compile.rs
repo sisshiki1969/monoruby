@@ -153,14 +153,13 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
-            | AsmInst::Inline(..) => {
+            | AsmInst::Inline(..)
+            | AsmInst::ClassDef { .. }
+            | AsmInst::SingletonClassDef { .. }
+            | AsmInst::SetArgumentsForwardedHelper { .. }
+            | AsmInst::Unreachable
+            | AsmInst::RestKw { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
-            }
-            AsmInst::Unreachable => {
-                monoasm!( &mut self.jit,
-                    movq rax, (unreachable);
-                    call rax;
-                );
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &labels[deopt];
@@ -198,57 +197,6 @@ impl Codegen {
                     deferred_src,
                 );
             }
-            AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
-                let offset = store[callee_fid].get_offset();
-                self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
-            }
-
-            AsmInst::ClassDef {
-                base,
-                superclass,
-                dst,
-                name,
-                func_id,
-                is_module,
-                using_xmm,
-                error,
-            } => {
-                self.class_def(
-                    base,
-                    superclass,
-                    dst,
-                    name,
-                    func_id,
-                    is_module,
-                    using_xmm,
-                    &labels[error],
-                );
-            }
-            AsmInst::SingletonClassDef {
-                base,
-                dst,
-                func_id,
-                using_xmm,
-                error,
-            } => {
-                self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
-            }
-            AsmInst::RestKw { rest_kw } => {
-                let data = self.jit.const_align8();
-                for (i, name) in rest_kw.into_iter() {
-                    self.jit.const_i32(name.get() as i32);
-                    self.jit.const_i32(i.0 as i32);
-                }
-                self.jit.const_i32(0);
-                self.jit.const_i32(0);
-
-                monoasm!( &mut self.jit,
-                    lea  rdi, [rip + data];
-                    movq rsi, r14;
-                    movq rax, (runtime::correct_rest_kw);
-                    call rax;
-                );
-            }
         }
         true
     }
@@ -256,6 +204,33 @@ impl Codegen {
     // ---- emission primitives (x86-64) -------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
     // calls. The aarch64 twins live in `compile_stub.rs`.
+
+    /// Trap for statically-unreachable code: call the panicking helper.
+    pub(in crate::codegen::jitgen) fn emit_unreachable(&mut self) {
+        monoasm!( &mut self.jit,
+            movq rax, (unreachable);
+            call rax;
+        );
+    }
+
+    /// `**kwrest` fixup: build a const table of (name, slot) pairs and call
+    /// `correct_rest_kw(&table, lfp) -> kwrest Hash`.
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
+        let data = self.jit.const_align8();
+        for (i, name) in rest_kw.into_iter() {
+            self.jit.const_i32(name.get() as i32);
+            self.jit.const_i32(i.0 as i32);
+        }
+        self.jit.const_i32(0);
+        self.jit.const_i32(0);
+
+        monoasm!( &mut self.jit,
+            lea  rdi, [rip + data];
+            movq rsi, r14;
+            movq rax, (runtime::correct_rest_kw);
+            call rax;
+        );
+    }
 
     /// dst <- src (general-purpose register move; self-move is a no-op).
     pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
@@ -850,12 +825,12 @@ impl Codegen {
     /// ### destroy
     /// - caller save registers
     ///
-    fn jit_set_arguments_forwarded_helper(
+    pub(in crate::codegen::jitgen) fn jit_set_arguments_forwarded_helper(
         &mut self,
         callid: CallSiteId,
         fid: FuncId,
         offset: usize,
-    ) {
+    ) -> bool {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -867,6 +842,7 @@ impl Codegen {
             call rax;
             addq rsp, (offset);
         }
+        true
     }
 
     ///
