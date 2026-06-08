@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::asmir::compile_shared::set_array_integer_index;
 
 impl Codegen {
     ///
@@ -124,19 +125,6 @@ impl Codegen {
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
         }
     }
-}
-
-extern "C" fn set_array_integer_index(
-    base: Value,
-    index: i64,
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    src: Value,
-) -> Option<Value> {
-    base.as_array()
-        .set_index(index, src)
-        .map_err(|err| vm.set_error(err))
-        .ok()
 }
 
 #[cfg(test)]

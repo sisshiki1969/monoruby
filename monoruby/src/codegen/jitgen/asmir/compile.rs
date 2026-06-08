@@ -10,13 +10,7 @@ mod init_method;
 mod method_call;
 mod variables;
 
-extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
-    rvalue.extend_ivar(heap_len);
-}
-
-extern "C" fn unreachable() {
-    unreachable!("reached unreachable code");
-}
+use super::compile_shared::{extend_ivar, unreachable};
 
 impl Codegen {
     ///

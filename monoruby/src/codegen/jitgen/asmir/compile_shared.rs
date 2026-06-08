@@ -547,3 +547,39 @@ impl Codegen {
         true
     }
 }
+
+// Arch-neutral runtime helpers called (as function pointers) from both
+// backends' emission primitives. The asm that loads and calls them differs per
+// arch, but the Rust bodies are identical, so they live here once rather than
+// being duplicated in `compile/*.rs` (x86) and `compile_stub.rs` (aarch64).
+
+/// `self.@ivar = val` cold path (StoreIVarHeap): set via IvarId, growing the
+/// var-table as needed.
+pub(in crate::codegen::jitgen) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+    base.set_ivar_by_ivarid(id, val)
+}
+
+/// Grow `rvalue`'s heap ivar var-table to at least `heap_len` slots.
+pub(in crate::codegen::jitgen) extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
+    rvalue.extend_ivar(heap_len);
+}
+
+/// Trap target for the `Unreachable` AsmInst (statically-unreachable code).
+pub(in crate::codegen::jitgen) extern "C" fn unreachable() {
+    unreachable!("reached unreachable code");
+}
+
+/// Generic `Array#[]=` fallback (out-of-fast-path index). Returns `None` and
+/// sets the error on failure (negative index past the start).
+pub(in crate::codegen::jitgen) extern "C" fn set_array_integer_index(
+    base: Value,
+    index: i64,
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    src: Value,
+) -> Option<Value> {
+    base.as_array()
+        .set_index(index, src)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
