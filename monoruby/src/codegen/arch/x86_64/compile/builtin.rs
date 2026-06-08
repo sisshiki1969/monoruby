@@ -3,7 +3,7 @@
 //! These are the assembly bodies of the `#[monoruby_builtin]` inline
 //! generators (`builtins/*.rs`). The generators themselves are arch-neutral
 //! (they build `AsmIr` and call one of these `emit_*` methods from inside
-//! `ir.inline`); the aarch64 counterparts live in `asmir/compile_stub.rs`
+//! `ir.inline`); the aarch64 counterparts live in `arch/aarch64/compile.rs`
 //! with the same method names.
 
 use super::*;

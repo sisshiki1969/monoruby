@@ -107,7 +107,7 @@ impl AbstractState {
     }
 
     /// aarch64 twin of `array_integer_index`. The hot-path asm lives in
-    /// `Codegen::array_index` (compile_stub.rs); here we set up the index
+    /// `Codegen::array_index` (arch/aarch64/compile.rs); here we set up the index
     /// register (Rsi/x3) and the negative-index normalization.
     #[cfg(target_arch = "aarch64")]
     pub(crate) fn array_integer_index(
@@ -215,7 +215,7 @@ impl AbstractState {
     }
 
     /// aarch64 twin of `array_integer_index_assign`. The hot-path + generic
-    /// C-call asm lives in `Codegen::array_index_assign` (compile_stub.rs);
+    /// C-call asm lives in `Codegen::array_index_assign` (arch/aarch64/compile.rs);
     /// here we set up the index (Rsi/x3) + source (Rdx/x2) and normalize a
     /// negative index.
     #[cfg(target_arch = "aarch64")]

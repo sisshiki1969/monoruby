@@ -9,6 +9,9 @@
 //! grows one variant at a time. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
+use crate::codegen::jitgen::asmir::compile_shared::{
+    extend_ivar, set_array_integer_index, set_ivar, unreachable,
+};
 use monoasm_macro::monoasm_arm64;
 
 /// Signed aarch64 condition for a fixnum comparison. `BrIf` gives the
@@ -4749,38 +4752,3 @@ impl Codegen {
     }
 }
 
-/// `set_ivar(base, id, val)` runtime helper for the StoreIVarHeap cold path
-/// (grows the var-table as needed). The x86 twin lives in
-/// `compile/variables.rs`; that module is x86-only, so aarch64 carries
-/// its own copy (the two are never compiled together).
-extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
-    base.set_ivar_by_ivarid(id, val)
-}
-
-/// Grow `rvalue`'s heap ivar var-table to at least `heap_len` slots. Cold path
-/// of `emit_preparation`. The x86 twin lives in the x86-only `compile.rs`.
-extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
-    rvalue.extend_ivar(heap_len);
-}
-
-/// Trap target for the `Unreachable` AsmInst. The x86 twin lives in
-/// `compile.rs` (an x86-only module), so aarch64 carries its own copy.
-extern "C" fn unreachable() {
-    unreachable!("reached unreachable code");
-}
-
-/// Generic `Array#[]=` fallback (out-of-fast-path index). Returns `None` and
-/// sets the error on failure (negative index past the start). The x86 twin
-/// lives in the x86-only `asmir/compile/index.rs`.
-extern "C" fn set_array_integer_index(
-    base: Value,
-    index: i64,
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    src: Value,
-) -> Option<Value> {
-    base.as_array()
-        .set_index(index, src)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}

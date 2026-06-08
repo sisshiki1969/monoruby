@@ -10,13 +10,7 @@ mod init_method;
 mod method_call;
 mod variables;
 
-extern "C" fn extend_ivar(rvalue: &mut RValue, heap_len: usize) {
-    rvalue.extend_ivar(heap_len);
-}
-
-extern "C" fn unreachable() {
-    unreachable!("reached unreachable code");
-}
+use super::compile_shared::{extend_ivar, unreachable};
 
 impl Codegen {
     ///
@@ -203,7 +197,7 @@ impl Codegen {
 
     // ---- emission primitives (x86-64) -------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
-    // calls. The aarch64 twins live in `compile_stub.rs`.
+    // calls. The aarch64 twins live in `arch/aarch64/compile.rs`.
 
     /// Trap for statically-unreachable code: call the panicking helper.
     pub(in crate::codegen::jitgen) fn emit_unreachable(&mut self) {

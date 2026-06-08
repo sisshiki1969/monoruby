@@ -2,7 +2,7 @@
 //!
 //! Counterpart of the x86 `guard.rs`. Only the guards the aarch64 port
 //! currently emits live here; the set grows as the lowering in
-//! `asmir/compile_stub.rs` covers more `AsmInst` variants.
+//! `arch/aarch64/compile.rs` covers more `AsmInst` variants.
 
 use super::*;
 use monoasm_macro::monoasm_arm64;

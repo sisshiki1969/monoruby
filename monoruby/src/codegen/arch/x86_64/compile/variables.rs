@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::asmir::compile_shared::set_ivar;
 
 impl Codegen {
     ///
@@ -282,10 +283,6 @@ impl Codegen {
             jle  fail;
         }
     }
-}
-
-extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
-    base.set_ivar_by_ivarid(id, val)
 }
 
 impl Codegen {

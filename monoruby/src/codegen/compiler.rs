@@ -482,7 +482,7 @@ extern "C" fn jit_recompile_specialized(
 
 /// aarch64 specialized recompile entry, called from the
 /// `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` lowering
-/// (`compile_stub.rs`). Unlike x86 this catches a recompile-time panic so it
+/// (`arch/aarch64/compile.rs`). Unlike x86 this catches a recompile-time panic so it
 /// cannot abort across the `extern "C"` boundary (aarch64 can panic emitting a
 /// large body); on panic it re-arms the JIT region as executable (mirrors
 /// `jit_compile_loop`) and returns — the generated code then just deopts to the
@@ -575,7 +575,7 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
 }
 
 /// aarch64 counterpart, called from the `RecompileDeopt` lowering
-/// (`compile_stub.rs`). Recompiles the current method and overwrites its
+/// (`arch/aarch64/compile.rs`). Recompiles the current method and overwrites its
 /// dispatch slot via [`Codegen::recompile_method`].
 ///
 /// Returns `Option<Value>`: `Some(nil)` on success, `None` if recompilation
@@ -609,7 +609,7 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
 }
 
 /// aarch64 loop recompile, called from the `RecompileDeopt` lowering
-/// (`compile_stub.rs`) when `position` is the loop pc. Re-runs `compile_partial`
+/// (`arch/aarch64/compile.rs`) when `position` is the loop pc. Re-runs `compile_partial`
 /// for the loop body and rewrites the loop's codeptr at `[pc + 8]`, so the next
 /// `loop_start` enters the freshly specialized loop.
 ///
