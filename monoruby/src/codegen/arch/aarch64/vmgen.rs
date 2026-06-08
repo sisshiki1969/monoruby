@@ -7,7 +7,7 @@ use super::*;
 use monoasm_macro::monoasm_arm64;
 
 impl Codegen {
-    pub(in crate::codegen) fn construct_vm(&mut self) {
+    pub(in crate::codegen) fn gen_vm_handlers(&mut self) -> VmHandlers {
         self.a64_gen_entry_raise();
         self.a64_gen_stack_overflow();
         self.a64_gen_exec_gc();
@@ -36,49 +36,29 @@ impl Codegen {
         let sub_rr = self.a64_op_iadd(true);
         let mul_rr = self.a64_op_muldiv(mul_values);
         let div_rr = self.a64_op_muldiv(div_values);
-        self.dispatch[6] = immediate;
-        self.dispatch[7] = literal;
-        self.dispatch[178] = mov;
-        self.dispatch[80] = ret;
-        self.dispatch[172] = init_method;
-        self.dispatch[160] = add_rr;
-        self.dispatch[161] = sub_rr;
-        self.dispatch[162] = mul_rr;
-        self.dispatch[163] = div_rr;
 
         // loop_end (15): just advance to the next instruction.
         // loop_start (14): drives the loop (partial) JIT under `jit` and polls
         // GC/signals on the back-edge (see `a64_op_loop_start`); without it
         // (no-jit build) it just advances like loop_end.
-        self.dispatch[15] = self.a64_op_loop();
+        let loop_end = self.a64_op_loop();
         #[cfg(jit)]
-        {
-            self.dispatch[14] = self.a64_op_loop_start();
-        }
+        let loop_start = self.a64_op_loop_start();
         #[cfg(not(jit))]
-        {
-            self.dispatch[14] = self.a64_op_loop();
-        }
+        let loop_start = self.a64_op_loop();
 
         // branches (the shared `branch` target lives inside `br_inst`).
         let (br_inst, branch) = self.a64_op_br();
         let condbr = self.a64_op_condbr(&branch, false);
         let condnotbr = self.a64_op_condbr(&branch, true);
-        self.dispatch[3] = br_inst;
-        self.dispatch[4] = condbr;
-        self.dispatch[5] = condnotbr;
-        self.dispatch[12] = condbr;
-        self.dispatch[13] = condnotbr;
         let check_local = self.a64_op_check_local(&branch);
-        self.dispatch[20] = check_local;
         let nilbr = self.a64_op_nilbr(&branch);
-        self.dispatch[37] = nilbr;
         let optcase = self.a64_op_optcase(&branch);
-        self.dispatch[36] = optcase;
         let lambda = self.a64_op_lambda();
-        self.dispatch[38] = lambda;
 
-        // integer comparisons (fixnum fast path; generic runtime fallback)
+        // integer comparisons (fixnum fast path; generic runtime fallback).
+        // ops 140-146 and 150-156 share these single copies (the latter range
+        // is emitted when the result feeds a branch).
         let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as *const () as u64);
         let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as *const () as u64);
         let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as *const () as u64);
@@ -86,26 +66,11 @@ impl Codegen {
         let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as *const () as u64);
         let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as *const () as u64);
         let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as *const () as u64);
-        self.dispatch[140] = eq;
-        self.dispatch[141] = ne;
-        self.dispatch[142] = lt;
-        self.dispatch[143] = le;
-        self.dispatch[144] = gt;
-        self.dispatch[145] = ge;
-        self.dispatch[146] = teq; // teq
-        // 150-156: same comparisons, emitted when the result feeds a branch.
         let method_def = self.a64_op_method_def();
-        self.dispatch[2] = method_def;
         let send_simple = self.a64_op_send(true);
         let send = self.a64_op_send(false);
-        self.dispatch[30] = send_simple;
-        self.dispatch[31] = send;
-        self.dispatch[32] = send_simple;
-        self.dispatch[33] = send;
 
         let yield_op = self.a64_op_yield();
-        self.dispatch[34] = yield_op;
-        self.dispatch[35] = yield_op;
 
         // break / raise / retry / redo / ensure-end: set an error and route
         // through entry_raise, which handle_error turns into the right control
@@ -116,39 +81,17 @@ impl Codegen {
         let retry_op = self.a64_op_err1(runtime::err_retry as *const () as u64, false);
         let redo_op = self.a64_op_err1(runtime::err_redo as *const () as u64, false);
         let ensure_end = self.a64_op_ensure_end();
-        self.dispatch[81] = method_ret;
-        self.dispatch[82] = block_break;
-        self.dispatch[83] = raise_err;
-        self.dispatch[84] = retry_op;
-        self.dispatch[85] = ensure_end;
-        self.dispatch[87] = redo_op;
-
-        self.dispatch[150] = eq;
-        self.dispatch[151] = ne;
-        self.dispatch[152] = lt;
-        self.dispatch[153] = le;
-        self.dispatch[154] = gt;
-        self.dispatch[155] = ge;
-        self.dispatch[156] = teq; // teq
 
         let class_def = self.a64_op_class_def(false);
         let module_def = self.a64_op_class_def(true);
         let singleton_class_def = self.a64_op_singleton_class_def();
-        self.dispatch[70] = class_def;
-        self.dispatch[71] = module_def;
-        self.dispatch[22] = singleton_class_def;
 
         let load_const = self.a64_op_load_const(runtime::vm_get_constant as *const () as u64);
         let check_const = self.a64_op_load_const(runtime::vm_check_constant as *const () as u64);
         let store_const = self.a64_op_store_const();
-        self.dispatch[10] = load_const;
-        self.dispatch[18] = check_const;
-        self.dispatch[11] = store_const;
 
         let load_ivar = self.a64_op_load_ivar();
         let store_ivar = self.a64_op_store_ivar();
-        self.dispatch[16] = load_ivar;
-        self.dispatch[17] = store_ivar;
 
         // `defined?` family (ops 64-69): each computes a truthy/nil result.
         // const/method/ivar write through a *mut Value (dst address);
@@ -160,13 +103,6 @@ impl Codegen {
         let defined_gvar = self.a64_op_defined_gvar();
         let defined_ivar = self.a64_op_defined_ivar();
         let defined_cvar = self.a64_op_defined_cvar();
-        self.dispatch[64] = defined_yield;
-        self.dispatch[65] = defined_const;
-        self.dispatch[66] = defined_method;
-        self.dispatch[67] = defined_gvar;
-        self.dispatch[68] = defined_ivar;
-        self.dispatch[69] = defined_super;
-        self.dispatch[88] = defined_cvar;
 
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
@@ -177,56 +113,31 @@ impl Codegen {
         let range_incl = self.a64_op_range(false);
         let range_excl = self.a64_op_range(true);
         let expand_array = self.a64_op_expand_array();
-        self.dispatch[39] = array;
-        self.dispatch[40] = array_teq;
-        self.dispatch[176] = hash;
-        self.dispatch[181] = concat;
-        self.dispatch[86] = concat_regexp;
-        self.dispatch[179] = range_incl;
-        self.dispatch[180] = range_excl;
-        self.dispatch[173] = expand_array;
 
         let index = self.a64_op_index();
         let index_assign = self.a64_op_index_assign();
-        self.dispatch[132] = index;
-        self.dispatch[133] = index_assign;
 
         let singleton_method_def = self.a64_op_singleton_method_def();
-        self.dispatch[1] = singleton_method_def;
 
         let alias_method = self.a64_op_alias_method();
         let undef_method = self.a64_op_undef_method();
-        self.dispatch[175] = alias_method;
-        self.dispatch[174] = undef_method;
 
         let load_gvar = self.a64_op_load_gvar();
         let store_gvar = self.a64_op_store_var(runtime::set_global_var as *const () as u64);
         let load_cvar = self.a64_op_load_cvar();
         let store_cvar = self.a64_op_store_var(runtime::set_class_var as *const () as u64);
         let alias_gvar = self.a64_op_alias_gvar();
-        self.dispatch[25] = load_gvar;
-        self.dispatch[26] = store_gvar;
-        self.dispatch[27] = load_cvar;
-        self.dispatch[28] = alias_gvar;
-        self.dispatch[29] = store_cvar;
 
         let block_arg = self.a64_op_block_arg();
         let check_cvar = self.a64_op_check_cvar();
         let check_kw_rest = self.a64_op_check_kw_rest();
-        self.dispatch[23] = block_arg;
-        self.dispatch[24] = check_cvar;
-        self.dispatch[19] = check_kw_rest;
 
         let load_dvar = self.a64_op_load_dvar();
         let store_dvar = self.a64_op_store_dvar();
-        self.dispatch[148] = load_dvar;
-        self.dispatch[149] = store_dvar;
 
         let block_arg_proxy = self.a64_op_block_arg_proxy();
-        self.dispatch[21] = block_arg_proxy;
 
         let to_a = self.a64_op_to_a();
-        self.dispatch[177] = to_a;
 
         // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
         // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
@@ -237,23 +148,102 @@ impl Codegen {
         let pow = self.a64_op_binop(pow_values);
         let shl = self.a64_op_binop(shl_values);
         let shr = self.a64_op_binop(shr_values);
-        self.dispatch[164] = bitor;
-        self.dispatch[165] = bitand;
-        self.dispatch[166] = bitxor;
-        self.dispatch[167] = rem;
-        self.dispatch[168] = pow;
-        self.dispatch[169] = shl;
-        self.dispatch[170] = shr;
 
         // unary operators (ops 121-124): pos, neg, bitnot, not
         let pos = self.a64_op_unop(pos_value as *const () as u64);
         let neg = self.a64_op_unop(neg_value as *const () as u64);
         let bitnot = self.a64_op_unop(bitnot_value as *const () as u64);
         let not = self.a64_op_unop(not_value as *const () as u64);
-        self.dispatch[121] = pos;
-        self.dispatch[122] = neg;
-        self.dispatch[123] = bitnot;
-        self.dispatch[124] = not;
+
+        VmHandlers {
+            singleton_method_def,
+            method_def,
+            br_inst,
+            condbr,
+            condnotbr,
+            immediate,
+            literal,
+            load_const,
+            store_const,
+            loop_start,
+            loop_end,
+            load_ivar,
+            store_ivar,
+            check_const,
+            check_kw_rest,
+            check_local,
+            block_arg_proxy,
+            singleton_class_def,
+            block_arg,
+            check_cvar,
+            load_gvar,
+            store_gvar,
+            load_cvar,
+            alias_gvar,
+            store_cvar,
+            send_simple,
+            send,
+            yield_: yield_op,
+            yield2: yield_op,
+            optcase,
+            nilbr,
+            lambda,
+            array,
+            array_teq,
+            defined_yield,
+            defined_const,
+            defined_method,
+            defined_gvar,
+            defined_ivar,
+            defined_super,
+            class_def,
+            module_def,
+            ret,
+            method_ret,
+            block_break,
+            raise_err,
+            retry: retry_op,
+            ensure_end,
+            concat_regexp,
+            redo: redo_op,
+            defined_cvar,
+            pos,
+            neg,
+            bitnot,
+            not,
+            index,
+            index_assign,
+            eq,
+            ne,
+            lt,
+            le,
+            gt,
+            ge,
+            teq,
+            load_dvar,
+            store_dvar,
+            add: add_rr,
+            sub: sub_rr,
+            mul: mul_rr,
+            div: div_rr,
+            bitor,
+            bitand,
+            bitxor,
+            rem,
+            pow,
+            shl,
+            shr,
+            init: init_method,
+            expand_array,
+            undef_method,
+            alias_method,
+            hash,
+            to_a,
+            mov,
+            range_incl,
+            range_excl,
+            concat,
+        }
     }
 
     /// ops 121-124 `UnOp` (pos/neg/bitnot/not): fn(vm, globals, src `[pc+2]`)

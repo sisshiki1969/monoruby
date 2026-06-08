@@ -61,9 +61,11 @@ impl Codegen {
     vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq);
 
     ///
-    /// Generate interpreter.
+    /// Emit the VM entry and every bytecode-opcode handler, returning their
+    /// entry points. The arch-neutral [`Codegen::construct_vm`] lays the
+    /// returned [`VmHandlers`] into the `dispatch` table.
     ///
-    pub(in crate::codegen) fn construct_vm(&mut self) {
+    pub(in crate::codegen) fn gen_vm_handlers(&mut self) -> VmHandlers {
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
 
@@ -237,113 +239,99 @@ impl Codegen {
         let vm_send_simple = self.vm_send(true);
         let vm_send = self.vm_send(false);
 
-        self.dispatch[1] = self.vm_singleton_method_def();
-        self.dispatch[2] = self.vm_method_def();
-        self.dispatch[3] = br_inst;
-        self.dispatch[4] = self.vm_condbr(&branch);
-        self.dispatch[5] = self.vm_condnotbr(&branch);
-        self.dispatch[6] = self.vm_immediate();
-        self.dispatch[7] = self.vm_literal();
-        self.dispatch[10] = self.vm_load_const();
-        self.dispatch[11] = self.vm_store_const();
-        self.dispatch[12] = self.vm_condbr(&branch);
-        self.dispatch[13] = self.vm_condnotbr(&branch);
-        self.dispatch[14] = self.vm_loop_start();
-        self.dispatch[15] = self.vm_loop_end();
-        self.dispatch[16] = self.vm_load_ivar();
-        self.dispatch[17] = self.vm_store_ivar();
-        self.dispatch[18] = self.vm_check_const();
-        self.dispatch[19] = self.vm_check_kw_rest();
-        self.dispatch[20] = self.vm_check_local(&branch);
-        self.dispatch[21] = self.vm_block_arg_proxy();
-        self.dispatch[22] = self.vm_singleton_class_def();
-        self.dispatch[23] = self.vm_block_arg();
-        self.dispatch[24] = self.vm_check_cvar();
-        self.dispatch[25] = self.vm_load_gvar();
-        self.dispatch[26] = self.vm_store_gvar();
-        self.dispatch[27] = self.vm_load_cvar();
-        self.dispatch[28] = self.vm_alias_gvar();
-        self.dispatch[29] = self.vm_store_cvar();
-        self.dispatch[30] = vm_send_simple;
-        self.dispatch[31] = vm_send;
-        self.dispatch[32] = vm_send_simple;
-        self.dispatch[33] = vm_send;
-        self.dispatch[34] = self.vm_yield(true);
-        self.dispatch[35] = self.vm_yield(false);
-
-        self.dispatch[36] = self.vm_optcase(&branch);
-        self.dispatch[37] = self.vm_nilbr(&branch);
-        self.dispatch[38] = self.vm_lambda();
-        self.dispatch[39] = self.vm_array();
-        self.dispatch[40] = self.vm_array_teq();
-
-        self.dispatch[64] = self.vm_defined_yield();
-        self.dispatch[65] = self.vm_defined_const();
-        self.dispatch[66] = self.vm_defined_method();
-        self.dispatch[67] = self.vm_defined_gvar();
-        self.dispatch[68] = self.vm_defined_ivar();
-        self.dispatch[69] = self.vm_defined_super();
-        self.dispatch[88] = self.vm_defined_cvar();
-        self.dispatch[70] = self.vm_class_def(false);
-        self.dispatch[71] = self.vm_class_def(true);
-        self.dispatch[80] = ret;
-        self.dispatch[81] = method_ret;
-        self.dispatch[82] = block_break;
-        self.dispatch[83] = raise_err;
-        self.dispatch[84] = retry;
-        self.dispatch[85] = ensure_end;
-        self.dispatch[87] = redo;
-        self.dispatch[86] = self.vm_concat_regexp();
-
-        self.dispatch[121] = self.vm_pos();
-        self.dispatch[122] = self.vm_neg();
-        self.dispatch[123] = self.vm_bitnot();
-        self.dispatch[124] = self.vm_not();
-
-        self.dispatch[132] = self.vm_index();
-        self.dispatch[133] = self.vm_index_assign();
-
-        self.dispatch[140] = self.vm_eq_opt_rr();
-        self.dispatch[141] = self.vm_ne_opt_rr();
-        self.dispatch[142] = self.vm_lt_opt_rr();
-        self.dispatch[143] = self.vm_le_opt_rr();
-        self.dispatch[144] = self.vm_gt_opt_rr();
-        self.dispatch[145] = self.vm_ge_opt_rr();
-        self.dispatch[146] = self.vm_teq_opt_rr();
-
-        self.dispatch[148] = self.vm_load_dvar();
-        self.dispatch[149] = self.vm_store_dvar();
-
-        self.dispatch[150] = self.vm_eq_opt_rr();
-        self.dispatch[151] = self.vm_ne_opt_rr();
-        self.dispatch[152] = self.vm_lt_opt_rr();
-        self.dispatch[153] = self.vm_le_opt_rr();
-        self.dispatch[154] = self.vm_gt_opt_rr();
-        self.dispatch[155] = self.vm_ge_opt_rr();
-        self.dispatch[156] = self.vm_teq_opt_rr();
-
-        self.dispatch[160] = add_rr;
-        self.dispatch[161] = sub_rr;
-        self.dispatch[162] = mul_rr;
-        self.dispatch[163] = div_rr;
-        self.dispatch[164] = or_rr;
-        self.dispatch[165] = and_rr;
-        self.dispatch[166] = xor_rr;
-        self.dispatch[167] = rem_rr;
-        self.dispatch[168] = pow_rr;
-        self.dispatch[169] = shl_rr;
-        self.dispatch[170] = shr_rr;
-
-        self.dispatch[172] = self.vm_init();
-        self.dispatch[173] = self.vm_expand_array();
-        self.dispatch[174] = self.vm_undef_method();
-        self.dispatch[175] = self.vm_alias_method();
-        self.dispatch[176] = self.vm_hash();
-        self.dispatch[177] = toa;
-        self.dispatch[178] = mov;
-        self.dispatch[179] = self.vm_range(false);
-        self.dispatch[180] = self.vm_range(true);
-        self.dispatch[181] = self.vm_concat();
+        // x86 emits a distinct copy of condbr/condnotbr (ops 4/12, 5/13) and of
+        // each comparison (ops 140-146, 150-156) per opcode; the unified
+        // dispatch mapping points both opcodes of each pair at the single copy
+        // emitted here (as aarch64 already does).
+        VmHandlers {
+            singleton_method_def: self.vm_singleton_method_def(),
+            method_def: self.vm_method_def(),
+            br_inst,
+            condbr: self.vm_condbr(&branch),
+            condnotbr: self.vm_condnotbr(&branch),
+            immediate: self.vm_immediate(),
+            literal: self.vm_literal(),
+            load_const: self.vm_load_const(),
+            store_const: self.vm_store_const(),
+            loop_start: self.vm_loop_start(),
+            loop_end: self.vm_loop_end(),
+            load_ivar: self.vm_load_ivar(),
+            store_ivar: self.vm_store_ivar(),
+            check_const: self.vm_check_const(),
+            check_kw_rest: self.vm_check_kw_rest(),
+            check_local: self.vm_check_local(&branch),
+            block_arg_proxy: self.vm_block_arg_proxy(),
+            singleton_class_def: self.vm_singleton_class_def(),
+            block_arg: self.vm_block_arg(),
+            check_cvar: self.vm_check_cvar(),
+            load_gvar: self.vm_load_gvar(),
+            store_gvar: self.vm_store_gvar(),
+            load_cvar: self.vm_load_cvar(),
+            alias_gvar: self.vm_alias_gvar(),
+            store_cvar: self.vm_store_cvar(),
+            send_simple: vm_send_simple,
+            send: vm_send,
+            yield_: self.vm_yield(true),
+            yield2: self.vm_yield(false),
+            optcase: self.vm_optcase(&branch),
+            nilbr: self.vm_nilbr(&branch),
+            lambda: self.vm_lambda(),
+            array: self.vm_array(),
+            array_teq: self.vm_array_teq(),
+            defined_yield: self.vm_defined_yield(),
+            defined_const: self.vm_defined_const(),
+            defined_method: self.vm_defined_method(),
+            defined_gvar: self.vm_defined_gvar(),
+            defined_ivar: self.vm_defined_ivar(),
+            defined_super: self.vm_defined_super(),
+            defined_cvar: self.vm_defined_cvar(),
+            class_def: self.vm_class_def(false),
+            module_def: self.vm_class_def(true),
+            ret,
+            method_ret,
+            block_break,
+            raise_err,
+            retry,
+            ensure_end,
+            redo,
+            concat_regexp: self.vm_concat_regexp(),
+            pos: self.vm_pos(),
+            neg: self.vm_neg(),
+            bitnot: self.vm_bitnot(),
+            not: self.vm_not(),
+            index: self.vm_index(),
+            index_assign: self.vm_index_assign(),
+            eq: self.vm_eq_opt_rr(),
+            ne: self.vm_ne_opt_rr(),
+            lt: self.vm_lt_opt_rr(),
+            le: self.vm_le_opt_rr(),
+            gt: self.vm_gt_opt_rr(),
+            ge: self.vm_ge_opt_rr(),
+            teq: self.vm_teq_opt_rr(),
+            load_dvar: self.vm_load_dvar(),
+            store_dvar: self.vm_store_dvar(),
+            add: add_rr,
+            sub: sub_rr,
+            mul: mul_rr,
+            div: div_rr,
+            bitor: or_rr,
+            bitand: and_rr,
+            bitxor: xor_rr,
+            rem: rem_rr,
+            pow: pow_rr,
+            shl: shl_rr,
+            shr: shr_rr,
+            init: self.vm_init(),
+            expand_array: self.vm_expand_array(),
+            undef_method: self.vm_undef_method(),
+            alias_method: self.vm_alias_method(),
+            hash: self.vm_hash(),
+            to_a: toa,
+            mov,
+            range_incl: self.vm_range(false),
+            range_excl: self.vm_range(true),
+            concat: self.vm_concat(),
+        }
     }
 
     ///
