@@ -30,12 +30,13 @@ mod context;
 mod definition;
 #[cfg(target_arch = "x86_64")]
 mod deoptimize;
-// Type / class guards, split per arch (mirrors asmir compile/compile_stub):
-// x86 emits via `guard.rs`; the aarch64 lowering uses `guard_stub.rs`.
+// Type / class guards, split per arch (mirrors the asmir `compile` backend):
+// each arch's lowering lives under `arch/<arch>/guard.rs`.
 #[cfg(target_arch = "x86_64")]
+#[path = "arch/x86_64/guard.rs"]
 mod guard;
 #[cfg(target_arch = "aarch64")]
-#[path = "jitgen/guard_stub.rs"]
+#[path = "arch/aarch64/guard.rs"]
 mod guard;
 mod merge;
 mod state;

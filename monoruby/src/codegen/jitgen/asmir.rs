@@ -9,9 +9,10 @@ use super::*;
 // and bails (→ deopt to VM) on a not-yet-ported instruction (see
 // doc/aarch64-jitgen-plan.md).
 #[cfg(target_arch = "x86_64")]
+#[path = "../arch/x86_64/compile/mod.rs"]
 mod compile;
 #[cfg(target_arch = "aarch64")]
-#[path = "asmir/compile_stub.rs"]
+#[path = "../arch/aarch64/compile.rs"]
 mod compile;
 mod compile_shared;
 

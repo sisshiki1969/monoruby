@@ -2,7 +2,7 @@
 //! emission sharing).
 //!
 //! The AsmIR→machine-code lowering used to be two fully parallel matches —
-//! `asmir/compile/*.rs` (x86, `monoasm!`) and `asmir/compile_stub.rs`
+//! `arch/x86_64/compile/*.rs` (x86, `monoasm!`) and `arch/aarch64/compile.rs`
 //! (aarch64, `monoasm_arm64!`). Instructions whose lowering is identical in
 //! *structure* (only the emitted bytes differ) are handled here ONCE and call
 //! tiny per-arch **emission primitives** (`emit_reg_move`, `emit_reg_to_stack`,
@@ -458,7 +458,7 @@ impl Codegen {
             // ---- Specialized inlined-frame family ------------------------------
             // These lower an inlined callee / block frame. Each arm is identical
             // on both arches and dispatches to a per-arch method of the same name
-            // (defined in `compile.rs` for x86, `compile_stub.rs` for aarch64).
+            // (defined in `arch/x86_64/compile/` for x86, `arch/aarch64/compile.rs` for aarch64).
             // Clean return / block-break out of an inlined frame.
             AsmInst::MethodRetSpecialized { rbp_offset }
             | AsmInst::BlockBreakSpecialized { rbp_offset } => {
@@ -551,7 +551,7 @@ impl Codegen {
 // Arch-neutral runtime helpers called (as function pointers) from both
 // backends' emission primitives. The asm that loads and calls them differs per
 // arch, but the Rust bodies are identical, so they live here once rather than
-// being duplicated in `compile/*.rs` (x86) and `compile_stub.rs` (aarch64).
+// being duplicated in `arch/x86_64/compile/*.rs` (x86) and `arch/aarch64/compile.rs` (aarch64).
 
 /// `self.@ivar = val` cold path (StoreIVarHeap): set via IvarId, growing the
 /// var-table as needed.

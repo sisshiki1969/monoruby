@@ -197,7 +197,7 @@ impl Codegen {
 
     // ---- emission primitives (x86-64) -------------------------------------
     // Tiny arch-specific helpers the arch-neutral `compile_asmir` dispatcher
-    // calls. The aarch64 twins live in `compile_stub.rs`.
+    // calls. The aarch64 twins live in `arch/aarch64/compile.rs`.
 
     /// Trap for statically-unreachable code: call the panicking helper.
     pub(in crate::codegen::jitgen) fn emit_unreachable(&mut self) {

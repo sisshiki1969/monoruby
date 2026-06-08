@@ -44,15 +44,17 @@ monoruby/                   # Workspace root
 │   │   │   ├── compiler.rs # JIT compilation entry point
 │   │   │   ├── jit_module.rs # Arch-neutral: handle_error, ErrorReturn, …
 │   │   │   ├── arch.rs     # target_arch switch (x86_64 / aarch64)
-│   │   │   ├── arch/       # Per-arch VM-tier backends (mirrored layout)
-│   │   │   │   ├── x86_64/ # {codegen,jit_module,invoker,wrapper,vmgen}(+vmgen/)
-│   │   │   │   └── aarch64/# {codegen,jit_module,invoker,wrapper,vmgen}
+│   │   │   ├── arch/       # Per-arch backends (VM-tier + JIT emission), mirrored
+│   │   │   │   ├── x86_64/ # {codegen,jit_module,invoker,wrapper,vmgen(+vmgen/),
+│   │   │   │   │           #  compile(+compile/),guard}  ← JIT lowering: compile,guard
+│   │   │   │   └── aarch64/# {codegen,jit_module,invoker,wrapper,vmgen,compile,guard}
 │   │   │   ├── runtime/    # JIT runtime helpers
-│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR → x86-64 (x86-only, cfg(jit))
+│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR (arch-neutral front-end)
 │   │   │       ├── trace_ir.rs
 │   │   │       ├── state/  # Abstract interpreter state
-│   │   │       ├── asmir/  # Assembly IR definitions & lowering
-│   │   │       └── compile.rs
+│   │   │       ├── asmir/  # AsmIR defs + arch-neutral lowering dispatch (compile_shared)
+│   │   │       └── compile.rs # TraceIR → AsmIR (the per-arch AsmIR→machine-code
+│   │   │                      # backend lives in arch/<arch>/compile, guard)
 │   │   ├── globals/        # Global interpreter state
 │   │   │   ├── globals.rs  # Globals struct (main_object, Store, …)
 │   │   │   ├── store/      # Function, class, and call-site tables
