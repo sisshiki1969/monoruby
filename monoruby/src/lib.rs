@@ -3,54 +3,38 @@
 #![feature(iter_next_chunk)]
 #![feature(step_trait)]
 #![feature(coverage_attribute)]
-// VM-only builds (aarch64 / `--features no-jit`, i.e. `not(jit)`) still carry
-// the JIT subsystem's pure-Rust support code (threshold constants, FP-register
-// allocation types, JIT runtime arg-handling helpers, etc.). Its asm-emitting
-// parts are `#[cfg(jit)]`-excluded, leaving these helpers unreferenced. Allow
-// that here rather than `#[cfg(jit)]`-gating each one individually.
-#![cfg_attr(not(jit_x86), allow(dead_code, unused_mut))]
+// The aarch64 backend carries the JIT subsystem's pure-Rust support code
+// (threshold constants, FP-register allocation types, JIT runtime arg-handling
+// helpers, etc.) but not all of the x86-only asm-emitting parts, leaving some
+// of these helpers unreferenced there. Allow that here rather than
+// arch-gating each one individually.
+#![cfg_attr(target_arch = "aarch64", allow(dead_code, unused_mut))]
 
 /// Wrap a JIT inline-method generator for the `define_builtin_inline_*`
-/// registrars. On JIT builds it boxes the generator; on VM-only builds
-/// (`not(jit)`: aarch64 / `--features no-jit`) it expands to `()`, dropping
-/// the (JIT-only, `#[cfg(jit)]`) generator fn/closure so it is never named or
-/// compiled. The matching `#[cfg(not(jit))]` registrar twins take `()`.
-#[cfg(jit_x86)]
+/// registrars. On x86-64 it boxes the generator. The inline asm of these
+/// generators has not been ported to aarch64, so there it registers the
+/// universal `noinline_gen` instead — it declines to inline, falling back to a
+/// normal method call, without ever naming `$f`.
+#[cfg(target_arch = "x86_64")]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new($f)
     };
 }
-// aarch64 JIT: the generator `$f` is still x86-only (its inline asm has not
-// been ported), so register the universal `noinline_gen` instead — it declines
-// to inline, falling back to a normal method call, without ever naming `$f`.
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new(crate::globals::noinline_gen)
     };
 }
-#[cfg(not(jit))]
-macro_rules! inline_gen {
-    ($f:expr) => {
-        ()
-    };
-}
 
 /// Like [`inline_gen!`], but for generators whose inline asm has been ported to
-/// every JIT arch (`$f` exists and is valid on both x86 and aarch64). Use this
-/// when registering a builtin whose generator is `#[cfg(jit)]` with
-/// arch-switched asm; `inline_gen!` stays for the x86-only ones.
-#[cfg(jit)]
+/// every arch (`$f` exists and is valid on both x86 and aarch64). Use this when
+/// registering a builtin with arch-switched asm; `inline_gen!` stays for the
+/// x86-only ones.
 macro_rules! inline_gen2 {
     ($f:expr) => {
         Box::new($f)
-    };
-}
-#[cfg(not(jit))]
-macro_rules! inline_gen2 {
-    ($f:expr) => {
-        ()
     };
 }
 
@@ -73,7 +57,7 @@ mod watchdog;
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
 pub use bytecodegen::bytecode_compile_script;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 pub(crate) use codegen::jitgen::JitContext;
 pub use executor::Executor;
 pub use executor::frame_leak_stats;

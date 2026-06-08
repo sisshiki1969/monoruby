@@ -24,7 +24,6 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
-#[cfg(jit)]
 pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
@@ -41,7 +40,6 @@ pub(crate) type InlineGen = dyn Fn(
 /// registration goes through the same path on both arches, but un-ported
 /// generators register this instead of arch-specific codegen (see the
 /// `inline_gen!` macro). x86 never uses it.
-#[cfg(jit)]
 pub(crate) fn noinline_gen(
     _: &mut jitgen::AbstractState,
     _: &mut jitgen::asmir::AsmIr,

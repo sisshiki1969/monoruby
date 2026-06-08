@@ -38,14 +38,10 @@ impl Codegen {
         let div_rr = self.a64_op_muldiv(div_values);
 
         // loop_end (15): just advance to the next instruction.
-        // loop_start (14): drives the loop (partial) JIT under `jit` and polls
-        // GC/signals on the back-edge (see `a64_op_loop_start`); without it
-        // (no-jit build) it just advances like loop_end.
+        // loop_start (14): drives the loop (partial) JIT and polls GC/signals
+        // on the back-edge (see `a64_op_loop_start`).
         let loop_end = self.a64_op_loop();
-        #[cfg(jit)]
         let loop_start = self.a64_op_loop_start();
-        #[cfg(not(jit))]
-        let loop_start = self.a64_op_loop();
 
         // branches (the shared `branch` target lives inside `br_inst`).
         let (br_inst, branch) = self.a64_op_br();
@@ -1730,7 +1726,7 @@ impl Codegen {
         p
     }
 
-    /// loop_start / loop_end (ops 14/15): advance + dispatch (VM-only).
+    /// loop_end (op 15): plain advance + dispatch.
     pub(in crate::codegen) fn a64_op_loop(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         monoasm_arm64!(&mut self.jit,
@@ -1762,7 +1758,6 @@ impl Codegen {
     /// non-trivial) compile every time the counter crosses the threshold —
     /// thousands of times per call — which is far slower than just interpreting
     /// it. aarch64-only; x86 effectively never bails so it does not need this.
-    #[cfg(jit)]
     pub(in crate::codegen) fn a64_op_loop_start(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let compile = self.jit.label();
@@ -1774,7 +1769,7 @@ impl Codegen {
         // `vm_execute_gc` first). A tight loop that never calls a method would
         // otherwise never reach a safepoint, so a pending Signal.trap callback
         // (or the GC the signal handler requested) could not run. The non-opt
-        // loop_start (`a64_op_loop`, also used for loop_end and `not(jit)`)
+        // loop_start (`a64_op_loop`, also used for loop_end)
         // omits this, mirroring x86 `vm_loop_start_no_opt`.
         self.a64_vm_execute_gc();
         monoasm_arm64!(&mut self.jit,

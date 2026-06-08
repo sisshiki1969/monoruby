@@ -15,9 +15,10 @@
 //! └── aarch64/  {codegen, jit_module, invoker, wrapper, vmgen}
 //! ```
 //!
-//! Exactly one is compiled, chosen by `target_arch`. The x86-64 backend
-//! additionally hosts the JIT (`crate::codegen::jitgen`, gated by `cfg(jit)`);
-//! the aarch64 backend is VM-only.
+//! Exactly one is compiled, chosen by `target_arch`. Both share the
+//! arch-neutral JIT front-end (`crate::codegen::jitgen`): x86-64 emits full
+//! machine code, while aarch64 uses its own AsmIR→A64 lowering that deopts to
+//! the VM on not-yet-ported instructions.
 use super::*;
 
 #[cfg(target_arch = "x86_64")]

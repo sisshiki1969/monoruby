@@ -1,9 +1,9 @@
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use std::collections::HashSet;
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 use paste::paste;
 
 use crate::ast::CmpKind;
@@ -28,13 +28,13 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 mod deoptimize;
 // Type / class guards, split per arch (mirrors asmir compile/compile_stub):
 // x86 emits via `guard.rs`; the aarch64 lowering uses `guard_stub.rs`.
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 mod guard;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 #[path = "jitgen/guard_stub.rs"]
 mod guard;
 mod merge;
@@ -305,7 +305,6 @@ impl SpecializedCodeInfo {
     }
 }
 
-#[cfg(jit)]
 impl Codegen {
     pub(super) fn jit_compile(
         &mut self,
@@ -357,7 +356,7 @@ impl Codegen {
         // did this internally); aarch64's outer caller (`compile` /
         // `compile_partial` / `compile_patch`) finalizes after any trailing
         // emission (e.g. the class-guard stub).
-        #[cfg(jit_x86)]
+        #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
         if ok {
             Ok((inline_cache, specialized_info, class_version_label))
@@ -367,7 +366,6 @@ impl Codegen {
     }
 }
 
-#[cfg(jit)]
 impl Codegen {
     /// Arch-neutral driver: emit machine code for a whole method and its
     /// inlined specialized callees (recursively), calling the per-arch
@@ -432,7 +430,7 @@ impl Codegen {
         // arches agree.
         frame.start_codepos = self.jit.get_current();
 
-        #[cfg(all(feature = "perf", jit_x86))]
+        #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         let pair = self.get_address_pair();
 
         let ir_vec = frame.detach_ir();
@@ -494,7 +492,7 @@ impl Codegen {
             // Resolve branch displacements so the listing shows real targets
             // (the real `finalize` happens in `jit_compile` / the outer caller).
             self.jit.finalize();
-            #[cfg(not(jit_x86))]
+            #[cfg(target_arch = "aarch64")]
             {
                 let fid = store[frame.iseq_id].func_id();
                 eprintln!("  >>> JIT (aarch64) <{}>", store.func_description(fid));
@@ -504,7 +502,7 @@ impl Codegen {
             eprintln!("  <<<");
         }
 
-        #[cfg(all(feature = "perf", jit_x86))]
+        #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         {
             let iseq_id = frame.iseq_id;
             let fid = store[iseq_id].func_id();
@@ -516,7 +514,7 @@ impl Codegen {
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -546,7 +544,7 @@ macro_rules! load_store {
     };
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 impl JitModule {
     load_store!(rax);
     load_store!(rdi);
@@ -877,7 +875,7 @@ impl JitModule {
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
@@ -1039,7 +1037,7 @@ impl Codegen {
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn float_test() {
     let r#gen = Codegen::new();
@@ -1070,7 +1068,7 @@ fn float_test() {
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn float_test2() {
     let mut r#gen = Codegen::new();

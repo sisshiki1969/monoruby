@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -72,7 +72,6 @@ fn fiber_yield(
     vm.yield_fiber(val)
 }
 
-#[cfg(jit)]
 fn fiber_yield_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -91,7 +90,7 @@ fn fiber_yield_inline(
     } = *callsite;
     // aarch64 reaches the args via `sub x0, lfp, #conv(args)` (bounded
     // immediate); bail to the slow path on an out-of-range frame.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     if pos_num > 1 && jitgen::conv(args) as u32 > 4095 {
         return false;
     }

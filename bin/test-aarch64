@@ -2,15 +2,14 @@
 #
 # test-aarch64 — bin/test の AArch64 派生。
 #
-# bin/test は host (x86-64) 向けの cargo 呼び出し前提で、かつ JIT-only feature
-# (stress-spill-pool) を有効化する。aarch64 バックエンドは現状 VM-only (no-jit)
-# で、テストは qemu-user / binfmt_misc 経由で走る。本スクリプトは bin/test と
-# 同じ範囲のチェック (cargo test + benchmark 差分 + optcarrot + ruby/spec) を
-# AArch64 向けに走らせる。
+# bin/test は host (x86-64) 向けの cargo 呼び出し前提。aarch64 バックエンドは
+# JIT 込み (front-end + A64 lowering) で、テストは qemu-user / binfmt_misc 経由
+# で走る。本スクリプトは bin/test と同じ範囲のチェック (cargo test + benchmark
+# 差分 + optcarrot + ruby/spec) を AArch64 向けに走らせる。
 #
 # 既定動作:
-#   - `--target aarch64-unknown-linux-gnu --no-default-features --features no-jit`
-#     を全 cargo コマンドに付与
+#   - `--target aarch64-unknown-linux-gnu` を全 cargo コマンドに付与 (既定
+#     feature = [] でビルド; JIT は常時コンパイルされ、実行時 `--no-jit` で無効化)
 #   - cargo-llvm-cov / cargo-nextest が無ければ自動インストール
 #   - QEMU_LD_PREFIX / binfmt_misc は bin/setup-aarch64-cross が貼る
 #   - ../optcarrot, ../spec, ../mspec は無ければスキップ
@@ -20,7 +19,7 @@
 #                 optcarrot) と ruby/spec をスキップ
 #   SKIP_COV=1    cargo llvm-cov を経由せず素の cargo test/nextest を使う
 #                 (CI でカバレッジを集めないとき)
-#   STRESS=1      gc-stress / (host JIT 用) stress-spill-pool も付ける。
+#   STRESS=1      gc-stress / stress-spill-pool も付ける。
 #                 qemu-user では unit test だけで 4 時間級になるので注意。
 #   THREADS=N     `cargo test -- --test-threads=N` (既定: テストごとに既定)
 #
@@ -34,14 +33,14 @@ TARGET="aarch64-unknown-linux-gnu"
 TARGET_DIR="target/${TARGET}"
 SYSROOT="/usr/aarch64-linux-gnu"
 
-# Feature 構成。既定は no-jit のみ — gc-stress / stress-spill-pool は
-# STRESS=1 のときだけ。qemu-user で gc-stress を有効にすると unit test だけで
-# 4 時間級になるため、対話的に走らせるときは外したいことが多い。
-FEATURES_BASE="no-jit"
+# Feature 構成。既定 (default features = []) でビルドする — JIT は常に
+# コンパイルされ、aarch64 では front-end + A64 lowering が有効になる。
+# gc-stress / stress-spill-pool は STRESS=1 のときだけ付与。qemu-user で
+# gc-stress を有効にすると unit test だけで 4 時間級になるため、対話的に
+# 走らせるときは外したいことが多い。
+FEATURE_ARGS=()
 if [ "${STRESS:-0}" = "1" ]; then
-  FEATURES="${FEATURES_BASE},gc-stress,stress-spill-pool"
-else
-  FEATURES="${FEATURES_BASE}"
+  FEATURE_ARGS=(--features gc-stress,stress-spill-pool)
 fi
 
 say() { printf '\033[1;36m[test-aarch64]\033[0m %s\n' "$*"; }
@@ -81,30 +80,30 @@ if [ -n "${THREADS:-}" ]; then
   TEST_EXTRA_ARGS+=(--test-threads="$THREADS")
 fi
 
-say "cargo test (target=$TARGET, features=$FEATURES, stress=${STRESS:-0})"
+say "cargo test (target=$TARGET, stress=${STRESS:-0})"
 if [ "${SKIP_COV:-0}" != "1" ]; then
   # llvm-cov nextest は内部で RUSTFLAGS=-Cinstrument-coverage を付け profraw を
   # target/llvm-cov-target/ に書く。qemu-user 経由でもバイナリ側の profraw 出力は
   # 機能する (パスはホスト fs)。--target 経由のため、テストランナーは
   # .cargo/config.toml の `runner =` 設定を介して qemu-aarch64 になる。
-  cargo llvm-cov --target "$TARGET" --no-default-features --features "$FEATURES" clean --workspace
-  cargo llvm-cov nextest --target "$TARGET" --no-default-features --features "$FEATURES" --no-report ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
-  MONORUBY_PARSER=ruruby cargo llvm-cov nextest --target "$TARGET" --no-default-features --features "$FEATURES" --no-report ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+  cargo llvm-cov --target "$TARGET" "${FEATURE_ARGS[@]}" clean --workspace
+  cargo llvm-cov nextest --target "$TARGET" "${FEATURE_ARGS[@]}" --no-report ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+  MONORUBY_PARSER=ruruby cargo llvm-cov nextest --target "$TARGET" "${FEATURE_ARGS[@]}" --no-report ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
 else
   # nextest が無ければ素の cargo test にフォールバック。
   if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --target "$TARGET" --no-default-features --features "$FEATURES" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
-    MONORUBY_PARSER=ruruby cargo nextest run --target "$TARGET" --no-default-features --features "$FEATURES" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+    cargo nextest run --target "$TARGET" "${FEATURE_ARGS[@]}" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+    MONORUBY_PARSER=ruruby cargo nextest run --target "$TARGET" "${FEATURE_ARGS[@]}" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
   else
-    cargo test --target "$TARGET" --no-default-features --features "$FEATURES" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
-    MONORUBY_PARSER=ruruby cargo test --target "$TARGET" --no-default-features --features "$FEATURES" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+    cargo test --target "$TARGET" "${FEATURE_ARGS[@]}" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
+    MONORUBY_PARSER=ruruby cargo test --target "$TARGET" "${FEATURE_ARGS[@]}" ${TEST_EXTRA_ARGS:+-- "${TEST_EXTRA_ARGS[@]}"}
   fi
 fi
 
 # ---- 3. ベンチマーク差分 -----------------------------------------------------
 
 say "building release binary for benchmark diffs"
-cargo build --target "$TARGET" --no-default-features --features "$FEATURES_BASE" --release --bin monoruby
+cargo build --target "$TARGET" --release --bin monoruby
 
 MONORUBY="$PWD/${TARGET_DIR}/release/monoruby"
 
@@ -131,7 +130,6 @@ else
   run_diff plb2/bedcov   benchmark/plb2/bedcov.rb
 
   # mandelbrot は --no-jit と通常の両方を host Ruby と diff (bin/test と同じ).
-  # aarch64 では JIT 自体存在しないので両者は同一だが、bin/test の動作を残す.
   echo "=== so_mandelbrot ==="
   "$MONORUBY" benchmark/so_mandelbrot.rb >/tmp/m1.ppm
   "$MONORUBY" --no-jit benchmark/so_mandelbrot.rb >/tmp/m2.ppm
@@ -176,7 +174,7 @@ fi
 # ---- 6. coverage report ----------------------------------------------------
 
 if [ "${SKIP_COV:-0}" != "1" ]; then
-  cargo llvm-cov --target "$TARGET" --no-default-features --features "$FEATURES" report --lcov --output-path lcov.info
+  cargo llvm-cov --target "$TARGET" "${FEATURE_ARGS[@]}" report --lcov --output-path lcov.info
   rm -f *.profraw
   say "coverage written to lcov.info"
 fi

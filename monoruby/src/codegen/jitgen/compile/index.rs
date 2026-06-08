@@ -1,5 +1,5 @@
 use super::*;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 use monoasm_macro::monoasm_arm64;
 
 impl<'a> JitContext<'a> {
@@ -58,7 +58,7 @@ impl<'a> JitContext<'a> {
 }
 
 impl AbstractState {
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
     pub(crate) fn array_integer_index(
         &mut self,
         ir: &mut AsmIr,
@@ -109,7 +109,7 @@ impl AbstractState {
     /// aarch64 twin of `array_integer_index`. The hot-path asm lives in
     /// `Codegen::array_index` (compile_stub.rs); here we set up the index
     /// register (Rsi/x3) and the negative-index normalization.
-    #[cfg(all(jit, not(jit_x86)))]
+    #[cfg(target_arch = "aarch64")]
     pub(crate) fn array_integer_index(
         &mut self,
         ir: &mut AsmIr,
@@ -163,7 +163,7 @@ impl AbstractState {
     /// ### destroy
     /// - caller save registers except xmm's
     ///
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
     pub(crate) fn array_integer_index_assign(
         &mut self,
         ir: &mut AsmIr,
@@ -218,7 +218,7 @@ impl AbstractState {
     /// C-call asm lives in `Codegen::array_index_assign` (compile_stub.rs);
     /// here we set up the index (Rsi/x3) + source (Rdx/x2) and normalize a
     /// negative index.
-    #[cfg(all(jit, not(jit_x86)))]
+    #[cfg(target_arch = "aarch64")]
     pub(crate) fn array_integer_index_assign(
         &mut self,
         ir: &mut AsmIr,

@@ -737,11 +737,9 @@ impl Codegen {
 
     fn vm_loop_start(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        #[cfg(jit)]
         let compile = self.jit.label();
         let cont = self.jit.label();
         self.vm_execute_gc();
-        #[cfg(jit)]
         {
             let count = self.jit.label();
             self.jit.branch_if_captured(&cont);
@@ -758,7 +756,6 @@ impl Codegen {
         };
         self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
-        #[cfg(jit)]
         self.gen_compile_loop(&compile, &cont);
         label
     }

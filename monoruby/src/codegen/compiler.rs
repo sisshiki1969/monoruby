@@ -24,7 +24,7 @@ impl Codegen {
         )
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_compile_patch(
         &mut self,
         no_compile_exit: &DestLabel,
@@ -67,7 +67,7 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_recompile(
         &mut self,
         position: Option<BytecodePtr>,
@@ -112,7 +112,7 @@ impl Codegen {
         }
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_recompile_specialized(
         &mut self,
         idx: usize,
@@ -131,7 +131,7 @@ impl Codegen {
         self.jit.restore_registers();
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_compile_loop(&mut self, entry: &DestLabel, cont: &DestLabel) {
         monoasm!( &mut self.jit,
         entry:
@@ -277,7 +277,7 @@ impl Codegen {
         }
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -321,7 +321,7 @@ impl Codegen {
     /// via the indirect slot recorded at `compile_patch`, not x86 branch
     /// patching). Bails (leaving the old code) if the slot is unknown or the
     /// method was JIT-invalidated.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -359,7 +359,6 @@ impl Codegen {
         Some(())
     }
 
-    #[cfg(jit)]
     fn compile_partial(
         &mut self,
         globals: &mut Globals,
@@ -400,7 +399,7 @@ impl Codegen {
         ret
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     fn recompile_specialized(
         &mut self,
         globals: &mut Globals,
@@ -431,7 +430,7 @@ impl Codegen {
     /// (aarch64 has no `apply_jmp_patch_address`, but it can patch a single
     /// branch instruction — see [`Codegen::patch_call_to_entry`]). Bails
     /// (leaving the old specialized body in place) if the lowering bails.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     fn recompile_specialized(
         &mut self,
         globals: &mut Globals,
@@ -468,7 +467,7 @@ impl Codegen {
 // JIT Compiler API for asm codes.
 //
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_specialized(
     globals: &mut Globals,
     idx: usize,
@@ -490,7 +489,7 @@ extern "C" fn jit_recompile_specialized(
 /// interpreter (the old specialized body stays installed). No `Option<Value>`
 /// is returned: there is no FatalError path here, matching x86's recompile
 /// behavior (which is best-effort and falls back to deopt on failure).
-#[cfg(not(jit_x86))]
+#[cfg(target_arch = "aarch64")]
 pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
     globals: &mut Globals,
     idx: usize,
@@ -562,7 +561,7 @@ pub(in crate::codegen) extern "C" fn jit_profile_patch(
     }
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
     //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     CODEGEN.with(|codegen| {
@@ -587,7 +586,7 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
 /// and set a Ruby `FatalError` on `vm`. The caller (`emit_recompile_deopt`)
 /// checks the `None` return and branches to the error side-exit so the
 /// `FatalError` is raised (it is uncatchable by `rescue` and propagates up).
-#[cfg(not(jit_x86))]
+#[cfg(target_arch = "aarch64")]
 pub(in crate::codegen) extern "C" fn jit_recompile_method(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -619,7 +618,7 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
 /// `FatalError`: aarch64 can panic while emitting a large loop body (an
 /// out-of-range branch to a far deopt), exactly the case `jit_compile_loop`
 /// already catches for the initial loop JIT.
-#[cfg(not(jit_x86))]
+#[cfg(target_arch = "aarch64")]
 pub(in crate::codegen) extern "C" fn jit_recompile_loop(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -644,7 +643,7 @@ pub(in crate::codegen) extern "C" fn jit_recompile_loop(
     Some(Value::nil())
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_method_with_recovery(
     globals: &mut Globals,
     lfp: Lfp,
@@ -669,12 +668,11 @@ extern "C" fn jit_recompile_method_with_recovery(
 /// Compile the loop.
 ///
 /// Loop (partial) JIT is arch-neutral: `compile_partial` drives the shared
-/// front-end and the per-arch `*_gen_machine_code` lowering, so this is
-/// enabled on every JIT-capable arch (`jit`), not just x86 (`jit_x86`). On
+/// front-end and the per-arch `*_gen_machine_code` lowering, so this runs on
+/// every arch, not just x86. On
 /// aarch64 the lowering bails (and `compile_partial` writes no codeptr) for a
 /// loop body that still contains an unported AsmInst; the VM stub parks the
 /// loop counter so it does not retry the failed compile every iteration.
-#[cfg(jit)]
 pub(in crate::codegen) extern "C" fn jit_compile_loop(
     globals: &mut Globals,
     lfp: Lfp,
@@ -701,7 +699,7 @@ pub(in crate::codegen) extern "C" fn jit_compile_loop(
 ///
 /// Recompile the loop.
 ///
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_loop(
     globals: &mut Globals,
     lfp: Lfp,
@@ -711,7 +709,6 @@ extern "C" fn jit_recompile_loop(
     compile_loop(globals, lfp, pc, Some(reason));
 }
 
-#[cfg(jit)]
 fn compile_loop(
     globals: &mut Globals,
     lfp: Lfp,

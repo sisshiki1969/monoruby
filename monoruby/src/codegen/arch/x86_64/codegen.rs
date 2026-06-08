@@ -12,8 +12,8 @@ use paste::paste;
 /// Integer comparison helpers (`icmp_eq` … `icmp_ge`): set `rax` to the Ruby
 /// boolean `Value` for `rdi <cond> rsi`. These are VM-tier — emitted by the
 /// bytecode handlers (`vmgen`'s `vm_*_opt_rr`) as well as the JIT — so they
-/// live here rather than in `codegen::jitgen` (which is JIT-only and gets
-/// `#[cfg]`-excluded from the aarch64 / no-jit VM build).
+/// live here (the x86 VM-tier backend) rather than in the arch-neutral JIT
+/// front-end `codegen::jitgen`.
 macro_rules! icmp_main {
     ($op:ident) => {
         paste! {

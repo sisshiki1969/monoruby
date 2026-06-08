@@ -29,7 +29,7 @@ impl Codegen {
     /// branches to the JIT code on the next call. If the lowering bails on an
     /// unported AsmInst the slot stays 0 and the method stays VM-interpreted.
     /// See `doc/aarch64-jitgen-plan.md`.
-    #[cfg(not(jit_x86))]
+    #[cfg(target_arch = "aarch64")]
     pub(super) fn compile_patch(
         &mut self,
         globals: &mut Globals,
@@ -75,7 +75,7 @@ impl Codegen {
         Some(())
     }
 
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn compile_patch(
         &mut self,
         globals: &mut Globals,
@@ -140,7 +140,7 @@ impl Codegen {
     ///
     /// ~~~
     ///
-    #[cfg(jit_x86)]
+    #[cfg(target_arch = "x86_64")]
     fn class_guard_stub(
         &mut self,
         self_class: ClassId,

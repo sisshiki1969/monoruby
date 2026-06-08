@@ -5,15 +5,14 @@ use super::*;
 // AsmIR→machine-code lowering. The per-arch backend (`compile`) provides the
 // emission primitives + `compile_asmir_arch`; the arch-neutral dispatcher
 // (`compile_shared`) owns the shared instruction arms and forwards the rest.
-// x86 emits via `monoasm!`; the JIT front-end build (jit && !jit_x86, i.e.
-// aarch64) emits what it can via `monoasm_arm64!` and bails (→ deopt to VM)
-// on a not-yet-ported instruction (see doc/aarch64-jitgen-plan.md).
-#[cfg(jit_x86)]
+// x86 emits via `monoasm!`; aarch64 emits what it can via `monoasm_arm64!`
+// and bails (→ deopt to VM) on a not-yet-ported instruction (see
+// doc/aarch64-jitgen-plan.md).
+#[cfg(target_arch = "x86_64")]
 mod compile;
-#[cfg(all(jit, not(jit_x86)))]
+#[cfg(target_arch = "aarch64")]
 #[path = "asmir/compile_stub.rs"]
 mod compile;
-#[cfg(jit)]
 mod compile_shared;
 
 pub(super) struct InlineProcedure {
@@ -1955,7 +1954,7 @@ pub enum SideExit {
     Error(BytecodePtr, WriteBack),
 }
 
-#[cfg(jit_x86)]
+#[cfg(target_arch = "x86_64")]
 impl Codegen {
     ///
     /// Generate machine code for *ir*.

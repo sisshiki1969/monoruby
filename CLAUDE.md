@@ -388,7 +388,6 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 | `emit-cfg`     | Emit CFG in DOT format                                                 |
 | `jit-log`      | Log JIT compilation events                                             |
 | `jit-debug`    | Detailed JIT debug output                                              |
-| `no-jit`       | Disable JIT (interpreter only)                                         |
 | `deopt`        | Log deoptimizations                                                    |
 | `gc-log`       | Log GC statistics at exit                                              |
 | `gc-debug`     | GC debug assertions                                                    |
