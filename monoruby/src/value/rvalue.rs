@@ -873,13 +873,12 @@ impl alloc::GCBox for RValue {
             // `set_ivar`, and the JIT inline/heap stores via the emitted
             // barrier (`emit_write_barrier_rdi`). So they are promotable
             // in both modes.
-            ObjTy::OBJECT | ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => true,
-            // Array elements are barriered on the Rust side (Array wrapper)
-            // but its JIT inline element stores are not yet, so promote it
-            // only under no-jit. HASH/STRUCT are deferred (hash-default
-            // getter / struct barrier pending). See generational_gc_plan.md.
-            #[cfg(feature = "no-jit")]
-            ObjTy::ARRAY => true,
+            // Array element stores are barriered both in the interpreter
+            // (Array wrapper) and in the JIT (array_index_assign emits the
+            // barrier), so Array is promotable in both modes.
+            ObjTy::OBJECT | ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT | ObjTy::ARRAY => true,
+            // HASH/STRUCT are deferred (hash-default getter / struct barrier
+            // pending). See generational_gc_plan.md.
             _ => false,
         }
     }
