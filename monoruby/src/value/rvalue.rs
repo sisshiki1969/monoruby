@@ -898,6 +898,10 @@ impl alloc::GCBox for RValue {
         self.header.set_remembered();
     }
 
+    fn clear_remembered(&mut self) {
+        self.header.clear_remembered();
+    }
+
     fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
         fn is_young(v: Value, alloc: &alloc::Allocator<RValue>) -> bool {
             v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv))

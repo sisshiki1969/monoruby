@@ -109,6 +109,12 @@ pub trait GCBox: PartialEq {
     fn set_remembered(&mut self);
 
     ///
+    /// Clear this object's `REMEMBERED` header flag (it has been dropped
+    /// from the remembered set because it no longer references young).
+    ///
+    fn clear_remembered(&mut self);
+
+    ///
     /// Whether this object currently references any *young* (non-old) heap
     /// object. Used at promotion time (`remember-on-promote`): a freshly
     /// promoted object that still points into the young generation must be
@@ -685,6 +691,12 @@ impl<T: GCBox> Allocator<T> {
     ///
     fn apply_aging(&mut self) {
         let aging = std::mem::take(&mut self.aging);
+        // Pass 1: age every survivor and promote (set old_bits + header
+        // OLD) those that reached the threshold. Collect them so the
+        // remember-on-promote check runs only *after* all of this cycle's
+        // promotions are visible — otherwise an object promoted before its
+        // (same-cycle) children would be needlessly remembered.
+        let mut promoted = Vec::new();
         for p in aging {
             // SAFETY: `p` was marked (hence live) this cycle and sweep
             // has not run, so the cell is valid and unaliased here.
@@ -694,14 +706,17 @@ impl<T: GCBox> Allocator<T> {
                 let bit_mask = 1 << (index % 64);
                 unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
                 unsafe { (*p).promote_to_old() };
-                // remember-on-promote: if the just-promoted object still
-                // references the young generation, record it so a minor GC
-                // scans it (those old→young edges predate the barrier).
-                if unsafe { (*p).young_child_exists(self) } {
-                    unsafe { (*p).set_remembered() };
-                    self.remembered
-                        .push(unsafe { std::ptr::NonNull::new_unchecked(p) });
-                }
+                promoted.push(p);
+            }
+        }
+        // Pass 2: remember-on-promote. A freshly promoted object that
+        // still references the young generation is added to the remembered
+        // set, covering old→young edges that predate the write barrier.
+        for p in promoted {
+            if unsafe { (*p).young_child_exists(self) } {
+                unsafe { (*p).set_remembered() };
+                self.remembered
+                    .push(unsafe { std::ptr::NonNull::new_unchecked(p) });
             }
         }
     }
@@ -771,13 +786,25 @@ impl<T: GCBox> Allocator<T> {
         // mutably; marking never mutates the remembered set (the write
         // barrier is not invoked during GC), so a snapshot is sound.
         let remembered = std::mem::take(&mut self.remembered);
-        for ptr in remembered.iter() {
+        let mut kept = Vec::with_capacity(remembered.len());
+        for ptr in remembered {
             // SAFETY: remembered entries are live old objects (kept
             // marked across the cycle; dead ones are dropped in
             // `filter_remembered` before sweep frees them).
             unsafe { ptr.as_ref().mark_children(self) };
+            // Self-clean: keep the entry only while it still references a
+            // young object. Once all its children have themselves been
+            // promoted, it no longer needs scanning — dropping it keeps
+            // the remembered set (and thus minor GC cost) proportional to
+            // the live old→young edges, not to every object ever promoted
+            // with a then-young child. See `doc/generational_gc_plan.md`.
+            if unsafe { ptr.as_ref().young_child_exists(self) } {
+                kept.push(ptr);
+            } else {
+                unsafe { (*ptr.as_ptr()).clear_remembered() };
+            }
         }
-        self.remembered = remembered;
+        self.remembered = kept;
     }
 
     ///
