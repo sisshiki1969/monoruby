@@ -374,11 +374,26 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
      gc-verify,gc-stress で object_stress/promo_stress が CRuby 一致（取りこぼし 0・
      クラッシュ無し）、gc-verify で object/method/string/struct/range green。
 
-8. **残作業**：Array/Struct の JIT inline 要素・スロットストアへのバリア発行
-   （`asmir/compile/index.rs` の `array_index_assign`、`store_struct_slot_*`）→
-   Array/Struct を JIT 下でも昇格可能に。HASH は default 取得 getter を足して
-   `young_child_exists` を精緻化のうえ昇格対象に。minor/major 閾値・`RGENGC_OLD_AGE`
-   の最適化、optcarrot 等でのベンチ。
+8. **WB_PENDING で fast-path を1命令化**：「old かつ未 remember＝バリア必要」を
+   単一ヘッダビット `WB_PENDING`（bit6）で表し、JIT/Rust バリアの fast-path を
+   1テストに。young も old-remembered も WB_PENDING=0 で即 skip。`arm_barrier`／
+   `enter_remembered` で `REMEMBERED` と排他維持、major は set をクリアし
+   `apply_aging` が再構築。→ ivar ストア回帰 33%→13%。
+
+9. **Array/Struct/Hash の昇格を JIT 下でも有効化**：
+   - **Array**：`array_index_assign`（inline/heap）にバリア発行。generic は
+     `Array#set_index`（ラッパ）経由で既済。
+   - **Struct**：JIT `store_struct_slot_inline/heap` にバリア発行＋Rust 側を
+     `Value::set_struct_slot`（バリア付き）に統一（7 箇所）。
+   - **Hash**：`Hash#[]=` は JIT inline されず `Hashmap::insert`（ラッパ＝バリア
+     済み）経由。`HashmapInner::young_child_exists`（k/v＋default）を追加。
+   - heap パスは rdi が heap バッファに張り替わる前にバリアを打つ。
+   - `young_child_exists` を ARRAY/STRUCT/HASH で精緻化。**これで OBJECT/String/
+     Bignum/Float/Array/Struct/Hash の全主要型が両モードで昇格可能**。
+
+10. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
+    並行マーキング、コンパクション（断片化対策）、optcarrot 等の実アプリでの
+    継続ベンチ。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。
