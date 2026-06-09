@@ -95,6 +95,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], R(src as _);
         );
+        self.emit_write_barrier_rdi(src);
     }
 
     ///
@@ -240,6 +241,12 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdx, [rdx + (MONOVEC_PTR)]; // ptr
             movq [rdx + (idx as i32 * 8)], R(src as _);
+        }
+        // Fast-path store: emit the write barrier (rdi still holds the
+        // parent &RValue). The generic path below goes through `set_ivar`,
+        // which already barriers, so it jumps straight to `exit`.
+        self.emit_write_barrier_rdi(src);
+        monoasm! { &mut self.jit,
         exit:
         }
 
@@ -286,6 +293,65 @@ impl Codegen {
 
 extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
     base.set_ivar_by_ivarid(id, val)
+}
+
+///
+/// Generational GC write barrier slow path, called from JIT inline stores.
+///
+/// The inline fast path has already verified that `parent` is old, not yet
+/// remembered, and that the stored child is a heap object; this records
+/// `parent` in the remembered set. See `doc/generational_gc_plan.md`.
+///
+extern "C" fn jit_write_barrier(parent: *mut RValue) {
+    // SAFETY: `parent` is the live `&RValue` the store wrote into.
+    let parent = unsafe { &mut *parent };
+    parent.set_remembered();
+    crate::alloc::ALLOC.with(|alloc| {
+        alloc
+            .borrow_mut()
+            .remember(std::ptr::NonNull::from(&*parent))
+    });
+}
+
+impl Codegen {
+    ///
+    /// Emit the generational GC write barrier after a JIT inline store
+    /// whose parent object is in `rdi` and whose stored child value is in
+    /// `child`.
+    ///
+    /// Fast path — a young parent (the common case), an already-remembered
+    /// parent, or an immediate child — is three flag/immediate tests with
+    /// no scratch register and no allocator access. The rare slow path
+    /// saves *all* caller-saved registers (so it is fully transparent to
+    /// the surrounding code, needing no liveness information) and calls
+    /// `jit_write_barrier`. See `doc/generational_gc_plan.md`.
+    ///
+    pub(super) fn emit_write_barrier_rdi(&mut self, child: GP) {
+        let skip = self.jit.label();
+        monoasm! { &mut self.jit,
+            // parent.is_old()?  (header OLD = flag bit 3)
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x08;
+            jz   skip;
+            // parent.is_remembered()?  (header REMEMBERED = flag bit 5)
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x20;
+            jnz  skip;
+            // child immediate?  (heap pointers have the low 3 bits clear)
+            testq R(child as _), 0b111;
+            jnz  skip;
+        }
+        // Slow path: rdi already holds the parent (the call's argument).
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq [rsp + 176], rax;          // save rax (save_registers skips it)
+            movq rax, (jit_write_barrier);
+            call rax;
+            movq rax, [rsp + 176];
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+        skip:
+        }
+    }
 }
 
 impl Codegen {

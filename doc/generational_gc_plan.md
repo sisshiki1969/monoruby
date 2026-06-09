@@ -354,10 +354,31 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
    - 検証：default 全テスト green（既知 inspect 2 件除く）、gc-verify,gc-stress で
      promo_stress が CRuby と一致、gc-verify で string/array/gc green。
 
-7. **JIT バリア発行（次フェーズ）**：ivar inline / ivar heap 高速パス / 配列・
-   Struct inline ストアにヘッダ `OLD` テスト＋remember slow path を発行。これと
-   §5 の remember-on-promote（昇格時に young 子があれば remember）を組み合わせる
-   ことで、OBJECT／コンテナを JIT 下で安全に昇格可能になる。
+7. **remember-on-promote ＋ JIT ivar バリア → OBJECT を JIT 下で昇格**：
+   - **remember-on-promote**：`GCBox::young_child_exists`（ivar＝var_table ＋
+     型別の子〔OBJECT inline ivar / Array 要素〕を走査し young heap 参照の有無を
+     判定。再追加した `Allocator::is_old`〔old_bits〕を使用）。`apply_aging` で
+     昇格時に young 子があれば `REMEMBERED` を立て remembered set に登録。これで
+     **昇格前から存在する old→young エッジ**（バリア成立前に生成）を救済。新規
+     ストアはバリアが担当。
+   - **JIT ivar write barrier**：`emit_write_barrier_rdi` を ivar inline ストア
+     （`store_ivar_object_inline`）と ivar heap 高速パス（`store_ivar_heap_inner`）
+     の直後に発行。fast path は `testb [rdi+FLAG], OLD/REMEMBERED` ＋ child の
+     即値判定のみ（スクラッチ不要・borrow なし）、rare な slow path は
+     `save_registers`/`restore_registers` で全 caller-saved を退避して
+     `jit_write_barrier` を呼ぶ完全透過方式（生存解析不要）。
+   - **昇格対象に OBJECT＋leaf を JIT 下でも追加**（`is_promotable`）。ivar ストア
+     は Rust（`set_ivar`）も JIT（inline/heap）も全てバリア済みのため安全。Array は
+     JIT 要素ストアのバリア未実装ゆえ no-jit 限定のまま。HASH/Struct も deferred。
+   - 検証：default 全テスト green（既知 inspect 2 件除く）、**JIT** の
+     gc-verify,gc-stress で object_stress/promo_stress が CRuby 一致（取りこぼし 0・
+     クラッシュ無し）、gc-verify で object/method/string/struct/range green。
+
+8. **残作業**：Array/Struct の JIT inline 要素・スロットストアへのバリア発行
+   （`asmir/compile/index.rs` の `array_index_assign`、`store_struct_slot_*`）→
+   Array/Struct を JIT 下でも昇格可能に。HASH は default 取得 getter を足して
+   `young_child_exists` を精緻化のうえ昇格対象に。minor/major 閾値・`RGENGC_OLD_AGE`
+   の最適化、optcarrot 等でのベンチ。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。

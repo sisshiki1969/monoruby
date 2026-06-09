@@ -868,19 +868,18 @@ impl alloc::GCBox for RValue {
         // barrier. An object kind is therefore promotable once *every*
         // Value-storing path on it is barrier protected.
         match self.ty() {
-            ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => {
-                // Leaves only store Values via ivars. Under no-jit every
-                // ivar store is barriered; under JIT only the first store
-                // (var_table None→Some) is, so restrict to ivar-free.
-                cfg!(feature = "no-jit") || self.var_table.is_none()
-            }
-            // OBJECT (ivars) and ARRAY (elements) have all their Rust
-            // mutators barriered (set_ivar / Array wrapper). Their JIT
-            // inline stores still bypass the barrier, so promote them only
-            // under no-jit; JIT barriers are a later phase. HASH/STRUCT
-            // are deferred (hash default getter / struct barrier pending).
+            // OBJECT and the leaves only store Values through ivars, and
+            // every ivar store is now barriered — the interpreter via
+            // `set_ivar`, and the JIT inline/heap stores via the emitted
+            // barrier (`emit_write_barrier_rdi`). So they are promotable
+            // in both modes.
+            ObjTy::OBJECT | ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => true,
+            // Array elements are barriered on the Rust side (Array wrapper)
+            // but its JIT inline element stores are not yet, so promote it
+            // only under no-jit. HASH/STRUCT are deferred (hash-default
+            // getter / struct barrier pending). See generational_gc_plan.md.
             #[cfg(feature = "no-jit")]
-            ObjTy::OBJECT | ObjTy::ARRAY => true,
+            ObjTy::ARRAY => true,
             _ => false,
         }
     }
