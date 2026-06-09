@@ -324,14 +324,12 @@ impl Codegen {
             mov x3, x(PC.0);  // call-site pc
             mov x9, (runtime::gen_lambda as *const () as u64);
             blr x9;
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x(LFP.0), [x10];  // restore (possibly heap-promoted) LFP
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // restore (possibly heap-promoted) LFP
             ldrh x10, [x(PC.0), #(4)];  // dst slot
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -414,8 +412,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             loop_exit:
         // block handler = [outer - LFP_BLOCK]
-            sub x12, x10, #(LFP_BLOCK as u32);
-            ldr x10, [x12];
+            ldur x10, [x10, #(-(LFP_BLOCK as i32))];
             cbnz x10, notzero;
             mov x10, (NIL_VALUE);  // no block -> nil
             notzero:
@@ -431,8 +428,7 @@ impl Codegen {
             cbz x11, skip;
             neg x11, x11;
             add x12, x(LFP.0), x11, lsl #(3);
-            sub x12, x12, #(LFP_SELF as u32);
-            str x10, [x12];
+            stur x10, [x12, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -463,15 +459,13 @@ impl Codegen {
             ldrh x12, [x(PC.0), #(2)];  // src slot in outer frame
             neg x12, x12;
             add x13, x10, x12, lsl #(3);
-            sub x13, x13, #(LFP_SELF as u32);
-            ldr x14, [x13];  // value
+            ldur x14, [x13, #(-(LFP_SELF as i32))];  // value
         // store to dst [pc+4]
             ldrh x12, [x(PC.0), #(4)];
             cbz x12, skip;
             neg x12, x12;
             add x13, x(LFP.0), x12, lsl #(3);
-            sub x13, x13, #(LFP_SELF as u32);
-            str x14, [x13];
+            stur x14, [x13, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -500,14 +494,12 @@ impl Codegen {
             ldrh x12, [x(PC.0)];
             neg x12, x12;
             add x13, x(LFP.0), x12, lsl #(3);
-            sub x13, x13, #(LFP_SELF as u32);
-            ldr x14, [x13];
+            ldur x14, [x13, #(-(LFP_SELF as i32))];
         // store to dst slot [pc+4] in the outer frame
             ldrh x12, [x(PC.0), #(4)];
             neg x12, x12;
             add x13, x10, x12, lsl #(3);
-            sub x13, x13, #(LFP_SELF as u32);
-            str x14, [x13];
+            stur x14, [x13, #(-(LFP_SELF as i32))];
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();
@@ -762,8 +754,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -813,8 +804,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -915,8 +905,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -1036,8 +1025,7 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit,
-            sub x0, x(LFP.0), #(LFP_SELF as u32);
-            ldr x0, [x0];  // base = self
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // base = self
             ldr w1, [x(PC.0)];  // name
             mov x2, x(GLOBALS.0);
             add x3, x(PC.0), #(8);  // &cache
@@ -1047,8 +1035,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -1064,8 +1051,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            sub x2, x(LFP.0), #(LFP_SELF as u32);
-            ldr x2, [x2];  // base = self
+            ldur x2, [x(LFP.0), #(-(LFP_SELF as i32))];  // base = self
             ldr w3, [x(PC.0)];  // name
             ldrh x10, [x(PC.0), #(4)];  // src slot
         );
@@ -1103,8 +1089,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -1232,36 +1217,27 @@ impl Codegen {
             str x(ACC.0), [sp, #(8)];
         // frame setup: zero outer/svar/cme/block; self = class; meta.
             mov x12, (0);
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            str x25, [x11];  // self = class
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
+            stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];  // self = class
             ldr x10, [x26, #(FUNCDATA_META as u32)];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
-            str x10, [x11];
+            stur x10, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
         // call_funcdata: push frame, set lfp, pc, blr codeptr, restore cfp
             ldr x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
             sub x11, sp, #(RSP_CFP as u32);
             str x10, [x11];
             str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
             sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x(LFP.0), [x10];
+            stur x(LFP.0), [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
             ldr x(PC.0), [x26, #(FUNCDATA_PC as u32)];
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;  // x0 = class body result
-            sub x11, sp, #(RSP_CFP as u32);
-            ldr x10, [x11];
+            ldur x10, [sp, #(-(RSP_CFP as i32))];
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // restore caller LFP from its own frame (x29-relative)
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x(LFP.0), [x10];
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
             mov x25, x0;  // save result across exit_classdef
         // exit_classdef(vm, globals)
             mov x0, x(EXEC.0);
@@ -1286,8 +1262,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -1358,8 +1333,7 @@ impl Codegen {
         self.a64_load_slot(X10, X4, X11); // X4 = recv
         // callee self slot
         monoasm_arm64!(&mut self.jit,
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            str x4, [x11];
+            stur x4, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
         // Monomorphic inline-cache fast path (mirrors x86 `vm_send`): compute
         // the receiver class and compare it against the cached (class,
         // class_version); on a hit, use the cached FuncId directly instead of
@@ -1394,15 +1368,11 @@ impl Codegen {
             add x15, x10, #(FUNCINFO_DATA as u32);
         // set_method_outer: zero outer/svar/cme; set meta (kept in X14).
             mov x12, (0);
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
-            str x12, [x11];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             ldr x14, [x15, #(FUNCDATA_META as u32)];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
-            str x14, [x11];
+            stur x14, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
         // Simple-send opcodes (no block/splat/kw at the call site) may take
         // the fast positional-copy path when the callee is also simple and
         // arity matches. The full-send opcodes always go generic so that
@@ -1424,8 +1394,7 @@ impl Codegen {
         }
         // --- simple path: zero block + copy positional args directly ---
         monoasm_arm64!(&mut self.jit,
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-            str x12, [x11];  // block = 0
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];  // block = 0
             ldrh x10, [x(PC.0), #(10)];  // arg slot
             neg x10, x10;
             add x10, x(LFP.0), x10, lsl #(3);
@@ -1475,8 +1444,7 @@ impl Codegen {
             str x10, [x11];
             str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
             sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x(LFP.0), [x10];
+            stur x(LFP.0), [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
         // 4th arg (X3) = call-site BytecodePtr, for with-pc builtins (x86
         // sets `rcx = r13 - 16`); aarch64 PC is already the call site.
             mov x3, x(PC.0);
@@ -1495,8 +1463,7 @@ impl Codegen {
         // restore caller LFP from its own frame (x86 `restore_lfp`):
         // LFP = [x29 - (BP_CFP + CFP_LFP)]. The callee clobbers LFP, so we
         // reload it from the caller's stable frame pointer (x29 == x86 rbp).
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x(LFP.0), [x10];
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         // pop_cont_frame: restore PC, advance past the 32-byte send
             after_call:
             ldr x(PC.0), [sp];
@@ -1507,8 +1474,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
         );
         self.a64_fetch_and_dispatch();
@@ -1558,8 +1524,7 @@ impl Codegen {
             ldr w2, [x(PC.0)];  // callid
         // reload recv from the callee self slot (get_class/find_method clobber
         // the caller-saved receiver register; recv was stored there above).
-            sub x3, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            ldr x3, [x3];
+            ldur x3, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
             mov x9, (runtime::find_method as *const () as u64);
             blr x9;  // x0 = Option<FuncId> (0 = method_missing)
         );
@@ -1658,21 +1623,14 @@ impl Codegen {
             add x15, x10, #(FUNCINFO_DATA as u32);
         // block frame setup: outer = X25, self = outer.self, svar/cme/block 0.
             mov x12, (0);
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
-            str x25, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-            str x12, [x11];
-            sub x10, x25, #(LFP_SELF as u32);
-            ldr x10, [x10];  // self = outer.self
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            str x10, [x11];
+            stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
+            ldur x10, [x25, #(-(LFP_SELF as i32))];  // self = outer.self
+            stur x10, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
             ldr x14, [x15, #(FUNCDATA_META as u32)];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
-            str x14, [x11];
+            stur x14, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
         // generic arg setup: vm_handle_arguments(vm, globals, caller_lfp,
         // callee_lfp, callid). Reserve scratch; preserve SP/funcdata.
             sub x3, sp, #(RSP_LOCAL_FRAME as u32);  // callee_lfp
@@ -1698,17 +1656,14 @@ impl Codegen {
             str x10, [x11];
             str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
             sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x(LFP.0), [x10];
+            stur x(LFP.0), [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
             mov x3, x(PC.0);  // call-site pc for with-pc builtins
             ldr x(PC.0), [x15, #(FUNCDATA_PC as u32)];
             ldr x10, [x15, #(FUNCDATA_CODEPTR as u32)];
             blr x10;
-            sub x11, sp, #(RSP_CFP as u32);
-            ldr x10, [x11];
+            ldur x10, [sp, #(-(RSP_CFP as i32))];
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x(LFP.0), [x10];  // restore caller LFP
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // restore caller LFP
         // pop_cont_frame + store result to ret slot [pc+4]
             ldr x(PC.0), [sp];
             add sp, sp, #(16);
@@ -1718,8 +1673,7 @@ impl Codegen {
             cbz x10, skip;
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            str x0, [x11];
+            stur x0, [x11, #(-(LFP_SELF as i32))];
             skip:
         );
         self.a64_fetch_and_dispatch();
@@ -1889,8 +1843,7 @@ impl Codegen {
             cbz x12, skip;
             neg x12, x12;
             add x10, x(LFP.0), x12, lsl #(3);
-            sub x10, x10, #(LFP_SELF as u32);
-            str x13, [x10];
+            stur x13, [x10, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -2124,8 +2077,7 @@ impl Codegen {
             cbz x12, skip;
             neg x12, x12;
             add x10, x(LFP.0), x12, lsl #(3);
-            sub x10, x10, #(LFP_SELF as u32);
-            str x9, [x10];
+            stur x9, [x10, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -2199,8 +2151,7 @@ impl Codegen {
             cbz x10, skip;  // slot 0 => discard
             neg x10, x10;
             add x12, x(LFP.0), x10, lsl #(3);
-            sub x12, x12, #(LFP_SELF as u32);
-            str x11, [x12];
+            stur x11, [x12, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -2222,8 +2173,7 @@ impl Codegen {
             cbz x10, skip;  // slot 0 => discard
             neg x10, x10;
             add x12, x(LFP.0), x10, lsl #(3);
-            sub x12, x12, #(LFP_SELF as u32);
-            str x0, [x12];
+            stur x0, [x12, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -2245,8 +2195,7 @@ impl Codegen {
             cbz x11, skip;
             neg x11, x11;
             add x12, x(LFP.0), x11, lsl #(3);
-            sub x12, x12, #(LFP_SELF as u32);
-            str x10, [x12];
+            stur x10, [x12, #(-(LFP_SELF as i32))];
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
@@ -2262,8 +2211,7 @@ impl Codegen {
             ldrh x10, [x(PC.0), #(4)];  // slot index
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);
-            sub x11, x11, #(LFP_SELF as u32);
-            ldr x0, [x11];  // return value
+            ldur x0, [x11, #(-(LFP_SELF as i32))];  // return value
         // epilogue (x86 `leave; ret`): restore the frame pointer and return.
             mov sp, x29;
             ldp x29, x30, [sp], #(16);

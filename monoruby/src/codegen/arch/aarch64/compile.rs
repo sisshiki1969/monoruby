@@ -701,10 +701,10 @@ impl Codegen {
     /// `[sp - off] <- x9`. The callee frame is built at negative offsets from
     /// the current sp (mirrors x86 `[rsp - off]`).
     fn a64_store_x9_below_sp(&mut self, off: u32) {
-        monoasm_arm64!(&mut self.jit,
-            sub x10, sp, #(off);
-            str x9, [x10];
-        );
+        // Callers pass frame-field offsets (RSP_LOCAL_FRAME + LFP_*), all well
+        // within the unscaled 9-bit range, so a single `stur` always suffices.
+        debug_assert!(off <= 256, "store-below-sp offset out of stur range");
+        monoasm_arm64!(&mut self.jit, stur x9, [sp, #(-(off as i32))];);
     }
 
     /// Lower `SetupMethodFrame`: write the callee frame's outer/meta/svar/cme
@@ -849,8 +849,7 @@ impl Codegen {
             str x10, [x11];                          // new_cfp.prev = prev
             str x11, [x19, #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x22, [x10];                          // new_cfp.lfp = LFP
+            stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];  // new_cfp.lfp = LFP
         );
         if is_iseq {
             // iseq: PC <- callee pc (read by the VM tier / prologue).
@@ -874,8 +873,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             sub x10, x29, #(BP_CFP as u32);
             str x10, [x19, #(EXECUTOR_CFP as u32)];
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x22, [x10];
+            ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
     }
 
@@ -1098,8 +1096,7 @@ impl Codegen {
             str x10, [x11];                          // new_cfp.prev = prev
             str x11, [x19, #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x22, [x10];                          // new_cfp.lfp = LFP
+            stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];  // new_cfp.lfp = LFP
         );
         if let Some(patch) = patch_point {
             self.jit.bind_label(patch);
@@ -1110,8 +1107,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             sub x10, x29, #(BP_CFP as u32);
             str x10, [x19, #(EXECUTOR_CFP as u32)];
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x22, [x10];
+            ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
         return_addr
     }
@@ -1120,8 +1116,9 @@ impl Codegen {
     /// `yield` before `SpecializedYield` branches into it. Walks `outer - 1`
     /// outer-LFP links to the block's defining frame, then writes the callee
     /// frame's outer/meta/svar/cme/block/self slots. A literal translation of
-    /// x86 `setup_yield_frame` (x29-free; uses x9 = outer LFP, x10 = address
-    /// scratch, x11 = value scratch — none of which are GP-mapped). The cfp
+    /// x86 `setup_yield_frame` (x29-free; uses x9 = outer LFP, x11 = value
+    /// scratch — neither of which is GP-mapped; `stur`/`ldur` address the
+    /// frame fields directly off sp/x9 with no address-scratch register). The cfp
     /// prev/lfp it also writes are immediately overwritten by the following
     /// `SpecializedYield`'s push_frame, exactly as on x86.
     pub(super) fn setup_yield_frame(&mut self, meta: Meta, outer: usize) {
@@ -1131,37 +1128,27 @@ impl Codegen {
             monoasm_arm64!(&mut self.jit, ldr x9, [x9];);
         }
         monoasm_arm64!(&mut self.jit,
-            sub x10, x9, #(CFP_LFP as u32);
-            ldr x9, [x10];                                    // x9 <- outer LFP
+            ldur x9, [x9, #(-(CFP_LFP as i32))];              // x9 <- outer LFP
             // new_cfp.prev = exec.cfp
             ldr x11, [x19, #(EXECUTOR_CFP as u32)];
-            sub x10, sp, #(RSP_CFP as u32);
-            str x11, [x10];
+            stur x11, [sp, #(-(RSP_CFP as i32))];
             // new_cfp.lfp = rsp + (24 - RSP_LOCAL_FRAME) = sp - 16
             sub x11, sp, #(16u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x11, [x10];
+            stur x11, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
             // frame.outer = outer LFP
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
-            str x9, [x10];
+            stur x9, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
             // frame.meta
             mov x11, (meta.get());
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
-            str x11, [x10];
+            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
             // svar / cme / block = 0 (block callee resolves via outer chain;
             // zeroed so the GC mark walker stays sound)
             mov x11, (0u64);
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x11, [x10];
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
-            str x11, [x10];
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-            str x11, [x10];
+            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
+            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
+            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             // frame.self = [outer LFP - LFP_SELF]
-            sub x10, x9, #(LFP_SELF as u32);
-            ldr x11, [x10];
-            sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            str x11, [x10];
+            ldur x11, [x9, #(-(LFP_SELF as i32))];
+            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
         );
     }
 
@@ -1220,36 +1207,27 @@ impl Codegen {
             // callee block/method frame fields below sp.
             mov x12, (0u64);
             ldr x10, [x26, #(FUNCDATA_META as u32)];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
-            str x10, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            str x25, [x11];
+            stur x10, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
+            stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
             // set_method_outer: outer/svar/cme = 0
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
-            str x12, [x11];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
+            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             // call_funcdata (fdata in x26): push frame, set callee LFP/PC, call.
             ldr x10, [x19, #(EXECUTOR_CFP as u32)];
             sub x11, sp, #(RSP_CFP as u32);
             str x10, [x11];
             str x11, [x19, #(EXECUTOR_CFP as u32)];
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x22, [x10];
+            stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
             sub x3, x21, #(16u32);                        // with-pc call-site bc ptr
             ldr x21, [x26, #(FUNCDATA_PC as u32)];
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;                                       // x0 = body result
-            sub x11, sp, #(RSP_CFP as u32);
-            ldr x10, [x11];
+            ldur x10, [sp, #(-(RSP_CFP as i32))];
             str x10, [x19, #(EXECUTOR_CFP as u32)];
-            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
-            ldr x22, [x10];
+            ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
         // store_rax(dst)
         if let Some(off) = dst_off {

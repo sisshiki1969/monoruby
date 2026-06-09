@@ -169,15 +169,13 @@ impl JitModule {
             str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];  // exec.cfp = new cfp
         // set_lfp
             sub x(LFP.0), sp, #(RSP_LOCAL_FRAME as u32);
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x(LFP.0), [x10];
+            stur x(LFP.0), [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
         // pc = funcdata.pc; call funcdata.codeptr
             ldr x(PC.0), [x(fdata.0), #(FUNCDATA_PC as u32)];
             ldr x10, [x(fdata.0), #(FUNCDATA_CODEPTR as u32)];
             blr x10;
         // restore exec.cfp = [sp - RSP_CFP] (the prev cfp saved above)
-            sub x11, sp, #(RSP_CFP as u32);
-            ldr x10, [x11];
+            ldur x10, [sp, #(-(RSP_CFP as i32))];
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         // Converge with the result (or 0 on error) in x0; the caller emits
         // its own epilogue (standard restore for method/block invokers, or a
@@ -300,8 +298,7 @@ impl JitModule {
             // No caller-supplied block is forwarded in this variant — the
             // LFP_BLOCK slot is zeroed below.
             monoasm_arm64!(&mut self.jit,
-                sub x10, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-                str x3, [x10];
+                stur x3, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
             );
         } else {
             // X3 = block_val (block_invoker ABI: 4th AAPCS64 arg). Stash it
@@ -311,8 +308,7 @@ impl JitModule {
             // `(one >> two).call { |x| ... }` ran with `&arg == nil` in the
             // inner procs.
             monoasm_arm64!(&mut self.jit,
-                sub x10, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
-                str x3, [x10];
+                stur x3, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             );
         }
         // outer = [&ProcData + PROCDATA_OUTER]; func_id = [+ PROCDATA_FUNCID]
@@ -329,8 +325,7 @@ impl JitModule {
         if !with_self {
             // self = outer.self = [outer - LFP_SELF]
             monoasm_arm64!(&mut self.jit,
-                sub x10, x3, #(LFP_SELF as u32);
-                ldr x10, [x10];
+                ldur x10, [x3, #(-(LFP_SELF as i32))];
                 str x10, [x(fb.0)];  // LFP_SELF
             // LFP_BLOCK was already populated above with X3 (block_val).
             );
@@ -413,8 +408,7 @@ impl JitModule {
         self.a64_invoker_prologue();
         monoasm_arm64!(&mut self.jit,
             mov x(LFP.0), x2;  // reuse the binding's frame as LFP
-            sub x2, x(LFP.0), #(LFP_FUNCID as u32);
-            ldr w2, [x2];  // funcid = [lfp - LFP_FUNCID]
+            ldur w2, [x(LFP.0), #(-(LFP_FUNCID as i32))];  // funcid = [lfp - LFP_FUNCID]
         );
         self.a64_get_func_data_x2(); // X9 = fdata
         // push_frame; cfp.lfp = LFP (the captured frame)
@@ -423,13 +417,11 @@ impl JitModule {
             sub x11, sp, #(RSP_CFP as u32);
             str x10, [x11];
             str x11, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
-            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
-            str x(LFP.0), [x10];
+            stur x(LFP.0), [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
             ldr x(PC.0), [x9, #(FUNCDATA_PC as u32)];
             ldr x10, [x9, #(FUNCDATA_CODEPTR as u32)];
             blr x10;
-            sub x11, sp, #(RSP_CFP as u32);
-            ldr x10, [x11];
+            ldur x10, [sp, #(-(RSP_CFP as i32))];
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
         );
         // epilogue (restores D8-D15 + the saved GPRs, then ret)

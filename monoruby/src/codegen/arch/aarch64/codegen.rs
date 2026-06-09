@@ -18,8 +18,7 @@ impl Codegen {
             raise:
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            sub x2, x(LFP.0), #(LFP_META as u32);
-            ldr x2, [x2];  // meta = [LFP - LFP_META]
+            ldur x2, [x(LFP.0), #(-(LFP_META as i32))];  // meta = [LFP - LFP_META]
             mov x3, x(PC.0);  // pc = current instruction
             mov x9, (crate::codegen::jit_module::handle_error as *const () as u64);
             blr x9;

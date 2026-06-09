@@ -133,8 +133,7 @@ impl Codegen {
                     ldr x10, [x9, #(FUNCDATA_META as u32)];
                     mov x11, (Meta::PROC_METHOD_MASK);
                     orr x10, x10, x11;
-                    sub x13, x(LFP.0), #(LFP_META as u32);
-                    str x10, [x13];
+                    stur x10, [x(LFP.0), #(-(LFP_META as i32))];
                 // PC = funcdata.pc; tail-call funcdata.codeptr (preserve lr so
                 // the proc body returns to the original caller).
                     ldr x(PC.0), [x9, #(FUNCDATA_PC as u32)];
@@ -182,8 +181,7 @@ impl Codegen {
         let next_counter = Box::into_raw(Box::new(COUNT_RECOMPILE_ARECV_CLASS)) as u64;
         monoasm_arm64!(&mut self.jit,
             guard:
-            sub x0, x(LFP.0), #(LFP_SELF as u32);
-            ldr x0, [x0];            // self (GP::Rax == x0; a64_guard_class uses x9/x10)
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self (GP::Rax == x0; a64_guard_class uses x9/x10)
         );
         // self.class != self_class -> miss
         self.a64_guard_class(GP::Rax, self_class, &miss);
@@ -229,8 +227,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
             mov x29, sp;
-            sub x0, x(LFP.0), #(LFP_SELF as u32);
-            ldr x0, [x0];  // self
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self
             mov x1, (ivar_name.get() as u64);  // name
             mov x2, x(GLOBALS.0);
             mov x3, (cache_addr);  // &cache
@@ -250,11 +247,9 @@ impl Codegen {
             mov x29, sp;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            sub x2, x(LFP.0), #(LFP_SELF as u32);
-            ldr x2, [x2];  // self
+            ldur x2, [x(LFP.0), #(-(LFP_SELF as i32))];  // self
             mov x3, (ivar_name.get() as u64);  // name
-            sub x4, x(LFP.0), #(LFP_ARG0 as u32);
-            ldr x4, [x4];  // val
+            ldur x4, [x(LFP.0), #(-(LFP_ARG0 as i32))];  // val
             mov x5, (cache_addr);  // &cache
             mov x9, (set_instance_var_with_cache as *const () as u64);
             blr x9;
@@ -267,8 +262,7 @@ impl Codegen {
     /// Struct member reader: read inline slot or heap slot directly (no call).
     pub(in crate::codegen) fn a64_gen_struct_reader(&mut self, slot_index: u16, inline: bool) {
         monoasm_arm64!(&mut self.jit,
-            sub x0, x(LFP.0), #(LFP_SELF as u32);
-            ldr x0, [x0];  // self
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self
         );
         if inline {
             monoasm_arm64!(&mut self.jit,
@@ -292,10 +286,8 @@ impl Codegen {
             mov x29, sp;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            sub x2, x(LFP.0), #(LFP_SELF as u32);
-            ldr x2, [x2];  // self
-            sub x3, x(LFP.0), #(LFP_ARG0 as u32);
-            ldr x3, [x3];  // val
+            ldur x2, [x(LFP.0), #(-(LFP_SELF as i32))];  // self
+            ldur x3, [x(LFP.0), #(-(LFP_ARG0 as i32))];  // val
             mov x4, (slot_index as u64);
         );
         self.jit.mov_imm(

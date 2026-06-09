@@ -16,10 +16,9 @@ impl JitModule {
     /// Fetch the opcode and dispatch through the 256-entry table.
     ///
     /// x86: `movq r15,(table); movzxb rax,[r13+OPECODE]; addq r13,16;
-    /// jmp [r15+rax*8]`. On aarch64 the pc is *not* pre-advanced (A64 has no
-    /// LDUR-style negative-displacement scaled load in the builder yet), so
-    /// handlers read operands at positive offsets and advance the pc
-    /// themselves before re-dispatching.
+    /// jmp [r15+rax*8]`. On aarch64 the pc is *not* pre-advanced, so handlers
+    /// read operands at positive offsets and advance the pc themselves before
+    /// re-dispatching.
     ///
     /// ### in
     /// - x21 (PC): bytecode pointer
