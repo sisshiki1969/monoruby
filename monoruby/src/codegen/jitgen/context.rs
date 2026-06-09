@@ -1175,6 +1175,16 @@ impl<'a> JitContext<'a> {
     /// positional count, `rest_local` `f`'s synthetic rest local slot.
     ///
     pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
+        // The aarch64 AsmIR lowering does not implement the deferred-rest
+        // optimization (the side-exit `forward_rest` materialize and the
+        // `SetArgumentsForwarded` inline fast path), so it never defers: the
+        // `...` rest array is built the normal way and forwarding goes through
+        // the generic helper. Correct, just unoptimized — and it keeps the
+        // aarch64 lowering bail-free (no `forward_rest` / `deferred_src` ever
+        // reach codegen). x86 keeps the optimization.
+        if cfg!(target_arch = "aarch64") {
+            return None;
+        }
         if !self.is_specialized() || self.specialize_level() != 1 {
             return None;
         }

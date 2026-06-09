@@ -73,9 +73,10 @@ impl Codegen {
 
     /// Lower one block's `AsmIr`. `entry` (if any) is bound first; `exit` (if
     /// any) appends an unconditional branch to that basic block at the end.
-    /// Returns `false` (bail) on any unsupported instruction or side exit.
-    /// (aarch64 half of the per-arch `gen_asm` the shared `gen_machine_code`
-    /// driver calls; the x86 half is in `asmir.rs`.)
+    /// Always succeeds (returns `true`): every `AsmInst` and side exit lowers,
+    /// so aarch64 never bails out of JIT compilation. The `bool` is kept only to
+    /// match the x86 `gen_asm` signature the shared `gen_machine_code` driver
+    /// calls (the x86 half is in `asmir.rs`).
     pub(in crate::codegen::jitgen) fn gen_asm(
         &mut self,
         ir: AsmIr,
@@ -108,9 +109,7 @@ impl Codegen {
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -119,9 +118,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        if !self.a64_gen_deopt(key.0, &key.1, label.clone(), bump, frame.base_stack_offset) {
-                            return false;
-                        }
+                        self.a64_gen_deopt(key.0, &key.1, label.clone(), bump, frame.base_stack_offset);
                         deopt_table.insert(key, label.clone());
                         label
                     }
@@ -131,16 +128,12 @@ impl Codegen {
                 // correct, just not yet self-optimizing).
                 SideExit::RecompileDeoptimize(pc, wb, _reason, _position) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_handle_error(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_handle_error(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
                 // Evict(None) is a placeholder always overwritten with
@@ -158,9 +151,7 @@ impl Codegen {
             self.jit.bind_label(entry.clone());
         }
         for inst in ir.inst {
-            if !self.compile_asmir(store, frame, &labels, inst, class_version.clone()) {
-                return false;
-            }
+            self.compile_asmir(store, frame, &labels, inst, class_version.clone());
         }
         if let Some(exit) = exit {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
@@ -186,7 +177,6 @@ impl Codegen {
     /// Deopt handler: write all live Ruby values back to the LFP (so the frame
     /// is GC-consistent and the interpreter can resume), set PC, and jump to
     /// the VM fetch loop. Mirrors x86 `side_exit_with_label` (deopt path).
-    /// Returns `false` (bail) if the write-back needs an unsupported feature.
     fn a64_gen_deopt(
         &mut self,
         pc: BytecodePtr,
@@ -194,12 +184,10 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-    ) -> bool {
+    ) {
         self.jit.bind_label(entry);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        if !self.a64_gen_write_back_for_deopt(wb, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(wb, base);
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
         // PC == x21.
@@ -207,7 +195,6 @@ impl Codegen {
             mov x21, (pc_ptr);
             b fetch;
         );
-        true
     }
 
     /// Error handler: write back, set PC to *this* instruction, and jump to
@@ -227,48 +214,41 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-    ) -> bool {
+    ) {
         self.jit.bind_label(entry);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        if !self.a64_gen_write_back_for_deopt(wb, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(wb, base);
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc0);
             b raise;
         );
-        true
     }
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
     /// (the local frame may be on the heap after a call returns). Mirrors x86
-    /// `gen_write_back_for_deopt`. Bails on FP / forwarding-rest write-backs,
-    /// which need machinery not yet ported.
-    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) -> bool {
-        if !wb.forward_rest.is_empty() {
-            return false;
-        }
+    /// `gen_write_back_for_deopt`. The deferred forwarding-rest write-back never
+    /// occurs on aarch64 (the deferral is disabled in `forward_rest_deferral`),
+    /// so every write-back lowers.
+    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
+        debug_assert!(
+            wb.forward_rest.is_empty(),
+            "aarch64 disables forward-rest deferral, so a deopt write-back never carries one",
+        );
         // Spill each live FP-pool register to its slot(s) as a boxed Float
         // Value, so the interpreter sees the up-to-date float after the deopt.
         for (fpr, slots) in &wb.fpr {
             for slot in slots {
-                if !self.emit_fpr_to_stack(*fpr, *slot, base) {
-                    return false;
-                }
+                self.emit_fpr_to_stack(*fpr, *slot, base);
             }
         }
         let lfp = GP::R14.a64().0; // x22
         for (v, slot) in &wb.literal {
-            if !self.a64_store_imm_to_slot(v.id(), *slot, lfp) {
-                return false;
-            }
+            self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
         for slot in &wb.void {
-            if !self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp) {
-                return false;
-            }
+            self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
         }
         if let Some(slot) = wb.r15 {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -276,7 +256,6 @@ impl Codegen {
             self.a64_addr_sub(10, lfp, off);
             monoasm_arm64!(&mut self.jit, str x(acc), [x10];);
         }
-        true
     }
 
     /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
@@ -775,13 +754,12 @@ impl Codegen {
     }
 
     /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
-    /// fast path). aarch64 does not yet emit the inline element-copy fast path,
-    /// so the non-deferred shape falls back to the generic
-    /// `jit_generic_set_arguments` — the x86 fast path's own miss target, so
-    /// correct, just unoptimized. The `deferred_src` (D1) shape skipped building
-    /// `f`'s `...` rest array on the JIT path, so it cannot use the generic
-    /// helper and bails (the method stays VM-interpreted, where the array is
-    /// built normally).
+    /// fast path). aarch64 does not emit the inline element-copy fast path, so it
+    /// always falls back to the generic `jit_generic_set_arguments` — the x86
+    /// fast path's own miss target, so correct, just unoptimized. The deferred
+    /// `...`-rest (`deferred_src`) shape never occurs because aarch64 disables
+    /// the deferral (`forward_rest_deferral`), so the rest array is always built
+    /// normally and forwarding goes through the generic helper.
     fn a64_set_arguments_forwarded(
         &mut self,
         callid: CallSiteId,
@@ -789,9 +767,11 @@ impl Codegen {
         offset: usize,
         deferred_src: Option<(SlotId, u16)>,
     ) -> bool {
-        if deferred_src.is_some() {
-            return false;
-        }
+        debug_assert!(
+            deferred_src.is_none(),
+            "aarch64 disables forward-rest deferral, so SetArgumentsForwarded never carries deferred_src",
+        );
+        let _ = deferred_src;
         self.a64_set_arguments(callid, fid, offset)
     }
 
@@ -922,12 +902,11 @@ impl Codegen {
     }
 
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
-    fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
+    fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
         monoasm_arm64!(&mut self.jit, mov x9, (imm););
         self.a64_addr_sub(10, lfp, off);
         monoasm_arm64!(&mut self.jit, str x9, [x10];);
-        true
     }
 
     /// Walk `outer` outer-LFP links, leaving the target outer LFP in `dst`.
@@ -1558,9 +1537,7 @@ impl Codegen {
             cmp x10, x11;
         );
         self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
-        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::codegen::stack_overflow as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
@@ -1597,9 +1574,7 @@ impl Codegen {
             cmp x9, #(8u32);
         );
         self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
-        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
