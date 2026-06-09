@@ -880,6 +880,12 @@ impl alloc::GCBox for RValue {
     fn promote_to_old(&mut self) {
         self.set_old();
     }
+
+    fn age_and_check_promote(&mut self) -> bool {
+        let age = self.header.age().saturating_add(1);
+        self.header.set_age(age);
+        age >= alloc::RGENGC_OLD_AGE
+    }
 }
 
 impl RValue {
@@ -2178,7 +2184,11 @@ union Header {
 struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
-    _padding: u8,
+    /// Generational GC age: number of collections this object has
+    /// survived. Promoted to the old generation once it reaches
+    /// `RGENGC_OLD_AGE`. Zeroed by `Header::new`, so a freshly allocated
+    /// (or recycled) object starts at age 0. See generational_gc_plan.md.
+    age: u8,
     class: Option<ClassId>,
 }
 
@@ -2194,7 +2204,7 @@ impl Header {
             meta: Metadata {
                 flag: 1,
                 ty: Some(ty),
-                _padding: 0,
+                age: 0,
                 class: Some(class),
             },
         }
@@ -2279,6 +2289,14 @@ impl Header {
     #[allow(dead_code)]
     fn clear_remembered(&mut self) {
         unsafe { self.meta.flag &= !0b10_0000 }
+    }
+
+    fn age(&self) -> u8 {
+        unsafe { self.meta.age }
+    }
+
+    fn set_age(&mut self, age: u8) {
+        self.meta.age = age;
     }
 
     fn class(&self) -> ClassId {

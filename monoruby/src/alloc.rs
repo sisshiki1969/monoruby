@@ -41,6 +41,14 @@ const MAX_PAGES: usize = 8192;
 /// rebuilds generation state; see `doc/generational_gc_plan.md`.
 const MINORS_PER_MAJOR: usize = 64;
 
+/// Number of collections an object must survive before it is promoted to
+/// the old generation. Aging (rather than promoting on first survival)
+/// avoids promoting short-lived objects that merely happened to be live
+/// at a collection, which would otherwise accumulate as floating garbage
+/// in the old generation until the next major GC. See
+/// `doc/generational_gc_plan.md`.
+pub(crate) const RGENGC_OLD_AGE: u8 = 3;
+
 pub trait GC<T: GCBox> {
     fn mark(&self, alloc: &mut Allocator<T>);
 }
@@ -87,6 +95,13 @@ pub trait GCBox: PartialEq {
     /// the `&mut` is sound. See `doc/generational_gc_plan.md`.
     ///
     fn promote_to_old(&mut self);
+
+    ///
+    /// Increment this object's survival age and return whether it has now
+    /// reached `RGENGC_OLD_AGE` and should be promoted. Called from the
+    /// post-mark aging pass (no `&self` from marking is live).
+    ///
+    fn age_and_check_promote(&mut self) -> bool;
 }
 
 ///
@@ -147,11 +162,12 @@ pub struct Allocator<T> {
     /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
     /// no promotion side effects.
     promoting: bool,
-    /// Objects promoted (had `old_bits` set) during the current mark
-    /// phase, pending their header `OLD` flag being set. Applied in
-    /// `apply_promotions` after marking, so the header write never
-    /// aliases a `&self` held by the mark traversal.
-    newly_promoted: Vec<*mut T>,
+    /// Promotable objects marked (survived) this cycle. Their age is
+    /// incremented in the post-mark `apply_aging` pass, and those
+    /// reaching `RGENGC_OLD_AGE` are promoted there (old_bits + header
+    /// OLD). Deferred so the header writes never alias a `&self` held by
+    /// the mark traversal.
+    aging: Vec<*mut T>,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -257,7 +273,7 @@ impl<T: GCBox> Allocator<T> {
             major_gc_count: 0,
             minors_since_major: 0,
             promoting: false,
-            newly_promoted: Vec::new(),
+            aging: Vec::new(),
             remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
@@ -567,9 +583,10 @@ impl<T: GCBox> Allocator<T> {
             self.mark_remembered();
         }
         self.promoting = false;
-        // Set header OLD flags for this cycle's promotions (deferred from
-        // the mark phase to avoid aliasing). Safe: marking is complete.
-        self.apply_promotions();
+        // Age this cycle's promotable survivors and promote those old
+        // enough (deferred from the mark phase to avoid aliasing). Safe:
+        // marking is complete.
+        self.apply_aging();
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
@@ -632,31 +649,36 @@ impl<T: GCBox> Allocator<T> {
         *bitmap |= bit_mask;
         if !is_marked {
             self.mark_counter += 1;
-            // Promote a surviving object to the old generation by setting
-            // its `old_bits`. Next minor GC seeds `mark_bits` from
-            // `old_bits`, so it is then skipped. Only promotable objects
-            // (no outgoing references) qualify; see generational_gc_plan.md.
-            // The header `OLD` flag (read by the write barrier) is set
-            // later in `apply_promotions`, to avoid aliasing the `&self`
-            // the mark traversal holds.
+            // Collect promotable survivors; their age is bumped (and the
+            // ones old enough are promoted) after marking, in
+            // `apply_aging`, to avoid aliasing the `&self` the mark
+            // traversal holds. Already-old objects never reach here in a
+            // minor GC (they are seeded-marked and return early above).
             if self.promoting && ptr.is_promotable() {
-                unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
-                self.newly_promoted.push(p as *mut T);
+                self.aging.push(p as *mut T);
             }
         }
         is_marked
     }
 
     ///
-    /// Set the header `OLD` flag of every object promoted this cycle.
-    /// Runs after marking, so no `&self` from the mark traversal is live
-    /// and the `&mut` writes are sound.
+    /// Post-mark aging pass: bump each promotable survivor's age and
+    /// promote (set `old_bits` + header `OLD`) those reaching
+    /// `RGENGC_OLD_AGE`. Runs after marking, so no `&self` from the mark
+    /// traversal is live and the `&mut` writes are sound.
     ///
-    fn apply_promotions(&mut self) {
-        for p in self.newly_promoted.drain(..) {
+    fn apply_aging(&mut self) {
+        let aging = std::mem::take(&mut self.aging);
+        for p in aging {
             // SAFETY: `p` was marked (hence live) this cycle and sweep
             // has not run, so the cell is valid and unaliased here.
-            unsafe { (*p).promote_to_old() };
+            if unsafe { (*p).age_and_check_promote() } {
+                let page_ptr = self.get_page(p);
+                let index = unsafe { (*page_ptr).get_index(p) };
+                let bit_mask = 1 << (index % 64);
+                unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
+                unsafe { (*p).promote_to_old() };
+            }
         }
     }
 }

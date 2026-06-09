@@ -340,9 +340,24 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
      gc-verify で array/hash/string/object/gc green、gc-verify,gc-stress で leaf
      昇格ストレス（promo_stress）が CRuby と一致。
 
-6. **JIT バリア発行（次フェーズ）**：ivar inline / ivar heap 高速パス / 配列・
-   Struct inline ストアにヘッダ `OLD` テスト＋remember slow path を発行。これで
-   OBJECT も昇格可能になり、コンテナ昇格（age ベース）も JIT 下で安全化できる。
+6. **age ベース昇格（floating garbage 削減）**：
+   - ヘッダの未使用 `_padding: u8` を **`age: u8`** に転用（`Header::new` で 0 →
+     alloc/再利用時に自然リセット）。`RGENGC_OLD_AGE = 3`。
+   - gc_check_and_mark は promotable survivor を `aging` Vec に収集するだけ
+     （即昇格しない）。マーク後の **`apply_aging`** で age を +1 し、閾値到達で
+     `old_bits`＋ヘッダ `OLD` を設定して昇格（遅延パスなのでマーク中の `&self`
+     エイリアス無し）。既に old の object は minor で seeded-marked のため
+     gc_check_and_mark を早期 return し aging に入らない。
+   - 効果：promo_stress で old-gen が **13401 → 10641** に減少し、old-gen ≤ live
+     の健全な比率に（以前は old > live で過剰昇格を示唆）。「初回生存で即昇格」で
+     短命オブジェクトを誤って old に積む floating garbage を抑制。
+   - 検証：default 全テスト green（既知 inspect 2 件除く）、gc-verify,gc-stress で
+     promo_stress が CRuby と一致、gc-verify で string/array/gc green。
+
+7. **JIT バリア発行（次フェーズ）**：ivar inline / ivar heap 高速パス / 配列・
+   Struct inline ストアにヘッダ `OLD` テスト＋remember slow path を発行。これと
+   §5 の remember-on-promote（昇格時に young 子があれば remember）を組み合わせる
+   ことで、OBJECT／コンテナを JIT 下で安全に昇格可能になる。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。
