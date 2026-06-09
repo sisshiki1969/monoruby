@@ -1601,6 +1601,15 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
+        // Stack check + GC/signal poll before building the block frame, mirroring
+        // x86 `vm_yield` (and `a64_op_send`). The signal handler nudges alloc_flag
+        // by 10, so a pending Signal.trap callback / Interrupt is observed at this
+        // safepoint. Without it, a Ruby `while … yield … end` driver like
+        // `Integer#times` had no per-iteration safepoint once the block body
+        // inlined its only call (e.g. `Object.new` -> inlined `Class#new`), so a
+        // pending SIGINT could be missed until the whole loop finished.
+        self.a64_check_stack();
+        self.a64_vm_execute_gc();
         // push_cont_frame: save caller PC
         monoasm_arm64!(&mut self.jit,
             sub sp, sp, #(16);
