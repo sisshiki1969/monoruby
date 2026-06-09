@@ -102,6 +102,22 @@ pub trait GCBox: PartialEq {
     /// post-mark aging pass (no `&self` from marking is live).
     ///
     fn age_and_check_promote(&mut self) -> bool;
+
+    ///
+    /// Set this object's `REMEMBERED` header flag (remembered-set dedup).
+    ///
+    fn set_remembered(&mut self);
+
+    ///
+    /// Whether this object currently references any *young* (non-old) heap
+    /// object. Used at promotion time (`remember-on-promote`): a freshly
+    /// promoted object that still points into the young generation must be
+    /// added to the remembered set, because those old→young edges predate
+    /// the write barrier. See `doc/generational_gc_plan.md`.
+    ///
+    fn young_child_exists(&self, alloc: &Allocator<Self>) -> bool
+    where
+        Self: Sized;
 }
 
 ///
@@ -678,8 +694,28 @@ impl<T: GCBox> Allocator<T> {
                 let bit_mask = 1 << (index % 64);
                 unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
                 unsafe { (*p).promote_to_old() };
+                // remember-on-promote: if the just-promoted object still
+                // references the young generation, record it so a minor GC
+                // scans it (those old→young edges predate the barrier).
+                if unsafe { (*p).young_child_exists(self) } {
+                    unsafe { (*p).set_remembered() };
+                    self.remembered
+                        .push(unsafe { std::ptr::NonNull::new_unchecked(p) });
+                }
             }
         }
+    }
+
+    ///
+    /// Whether `ptr` belongs to the old generation (its `old_bits` is set).
+    /// Used by `young_child_exists` for the remember-on-promote check.
+    ///
+    pub(crate) fn is_old(&self, ptr: &T) -> bool {
+        let ptr = ptr as *const T;
+        let page_ptr = self.get_page(ptr);
+        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let bit_mask = 1 << (index % 64);
+        unsafe { (*page_ptr).old_bits[index / 64] & bit_mask != 0 }
     }
 }
 

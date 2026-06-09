@@ -862,19 +862,27 @@ impl alloc::GCBox for RValue {
     /// `doc/generational_gc_plan.md`.
     ///
     fn is_promotable(&self) -> bool {
-        // Only reference-free leaves are promoted: with `var_table` empty
-        // they have *no* outgoing Value references at promotion time, so a
-        // minor GC skipping them can never miss a live young object.
-        //
-        // Containers (Array/Hash/Struct) are NOT promoted here even though
-        // their Rust mutators are now write-barrier protected: a container
-        // promoted while it still references young elements would lose
-        // them (those old→young edges predate the barrier and are not
-        // remembered). Promoting them safely needs age-based promotion
-        // (promote only once all children are old) or remember-on-promote,
-        // a later phase. See `doc/generational_gc_plan.md`.
-        self.var_table.is_none()
-            && matches!(self.ty(), ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT)
+        // Pre-existing old→young edges (references the object held before
+        // promotion) are handled by remember-on-promote (see
+        // `young_child_exists`); new stores are handled by the write
+        // barrier. An object kind is therefore promotable once *every*
+        // Value-storing path on it is barrier protected.
+        match self.ty() {
+            ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => {
+                // Leaves only store Values via ivars. Under no-jit every
+                // ivar store is barriered; under JIT only the first store
+                // (var_table None→Some) is, so restrict to ivar-free.
+                cfg!(feature = "no-jit") || self.var_table.is_none()
+            }
+            // OBJECT (ivars) and ARRAY (elements) have all their Rust
+            // mutators barriered (set_ivar / Array wrapper). Their JIT
+            // inline stores still bypass the barrier, so promote them only
+            // under no-jit; JIT barriers are a later phase. HASH/STRUCT
+            // are deferred (hash default getter / struct barrier pending).
+            #[cfg(feature = "no-jit")]
+            ObjTy::OBJECT | ObjTy::ARRAY => true,
+            _ => false,
+        }
     }
 
     fn promote_to_old(&mut self) {
@@ -885,6 +893,37 @@ impl alloc::GCBox for RValue {
         let age = self.header.age().saturating_add(1);
         self.header.set_age(age);
         age >= alloc::RGENGC_OLD_AGE
+    }
+
+    fn set_remembered(&mut self) {
+        self.header.set_remembered();
+    }
+
+    fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
+        fn is_young(v: Value, alloc: &alloc::Allocator<RValue>) -> bool {
+            v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv))
+        }
+        if let Some(vt) = &self.var_table
+            && vt.iter().filter_map(|o| *o).any(|v| is_young(v, alloc))
+        {
+            return true;
+        }
+        // SAFETY: only the promotable kinds below are ever passed here
+        // (see `is_promotable`); each accesses its matching union field.
+        unsafe {
+            match self.ty() {
+                ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => false,
+                ObjTy::OBJECT => self
+                    .as_object()
+                    .iter()
+                    .filter_map(|o| *o)
+                    .any(|v| is_young(v, alloc)),
+                ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
+                // Any other (currently non-promoted) kind: conservatively
+                // assume it points at young, so it is always remembered.
+                _ => true,
+            }
+        }
     }
 }
 
