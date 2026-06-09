@@ -341,12 +341,12 @@ impl Codegen {
 
         // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
         // shared `gen_machine_code` driver then drives the per-arch `gen_asm`
-        // lowering. It returns `false` only on aarch64, when the lowering bails
-        // on a not-yet-ported `AsmInst`; we turn that into `Err` and the method
-        // stays VM-interpreted (x86 always succeeds).
+        // lowering, which lowers every `AsmInst` on both arches — so machine-code
+        // generation never bails (the front-end's `?` above is the only way to
+        // fall back to the interpreter).
         self.jit.finalize();
         let class_version_label = self.jit.const_i32(class_version as _);
-        let ok = self.gen_machine_code(
+        self.gen_machine_code(
             frame.asm_info,
             store,
             entry_label,
@@ -359,22 +359,16 @@ impl Codegen {
         // emission (e.g. the class-guard stub).
         #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
-        if ok {
-            Ok((inline_cache, specialized_info, class_version_label))
-        } else {
-            Err(CompileError)
-        }
+        Ok((inline_cache, specialized_info, class_version_label))
     }
 }
 
 impl Codegen {
     /// Arch-neutral driver: emit machine code for a whole method and its
     /// inlined specialized callees (recursively), calling the per-arch
-    /// `gen_asm` per basic block / bridge. Returns `false` if the lowering
-    /// bailed on a not-yet-ported instruction (aarch64 only; x86 always returns
-    /// `true`) — the caller then keeps the method VM-interpreted. Does not
-    /// `finalize`; `jit_compile` does that (x86) or the outer caller does
-    /// (aarch64).
+    /// `gen_asm` per basic block / bridge. Both arches lower every `AsmInst`,
+    /// so this never bails. Does not `finalize`; `jit_compile` does that (x86)
+    /// or the outer caller does (aarch64).
     fn gen_machine_code(
         &mut self,
         mut frame: AsmInfo,
@@ -382,7 +376,7 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
         class_version: DestLabel,
-    ) -> bool {
+    ) {
         for context::SpecializeInfo {
             entry: specialized_entry,
             info: specialized_info,
@@ -398,15 +392,13 @@ impl Codegen {
                 ));
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
-            if !self.gen_machine_code(
+            self.gen_machine_code(
                 specialized_info,
                 store,
                 entry,
                 level + 1,
                 class_version.clone(),
-            ) {
-                return false;
-            }
+            );
         }
 
         self.jit.bind_label(entry_label);
@@ -447,9 +439,7 @@ impl Codegen {
 
         // generate machine code for a main context and inlined bridges.
         for (bbid, ir) in ir_vec.into_iter() {
-            if !self.gen_asm(ir, store, &mut frame, None, None, class_version.clone()) {
-                return false;
-            }
+            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone());
             // generate machine code for the inlined bridge
             if let Some((ir, exit)) = frame.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
@@ -463,25 +453,21 @@ impl Codegen {
                 } else {
                     None
                 };
-                if !self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone()) {
-                    return false;
-                }
+                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone());
             }
         }
 
         // generate machine code for outlined bridges
         for (ir, entry, exit) in frame.detach_outline_bridges() {
             let entry = frame.resolve_label(&mut self.jit, entry);
-            if !self.gen_asm(
+            self.gen_asm(
                 ir,
                 store,
                 &mut frame,
                 Some(entry),
                 Some(exit),
                 class_version.clone(),
-            ) {
-                return false;
-            }
+            );
         }
 
         if !frame.is_specialized() {
@@ -510,8 +496,6 @@ impl Codegen {
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);
         }
-
-        true
     }
 }
 

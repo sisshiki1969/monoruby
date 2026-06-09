@@ -1,12 +1,12 @@
-//! aarch64 AsmIR→machine-code lowering (Phase 3b, incremental).
+//! aarch64 AsmIR→machine-code lowering.
 //!
 //! The arch-neutral front-end builds `AsmIr`; this drives the lowering on
-//! aarch64. `compile_asmir` returns `true` if it emitted code for the
-//! instruction and `false` if the instruction is not yet ported — in which
-//! case the driver returns `false`, `jit_compile` returns `Err`, and the
-//! method stays VM-interpreted (the existing `compile() -> None` bail). So
-//! only methods whose every `AsmInst` is supported actually JIT; coverage
-//! grows one variant at a time. See `doc/aarch64-jitgen-plan.md`.
+//! aarch64. Every `AsmInst` and side exit is lowered: large frame/field/sp
+//! offsets are materialized through scratch registers rather than bailing, and
+//! the `...`-forwarding deferral — the one shape that needed unported
+//! caller-relative codegen — is disabled for aarch64 in `forward_rest_deferral`.
+//! So aarch64 never bails out of JIT compilation; `compile_asmir`'s `bool` is
+//! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
@@ -73,10 +73,9 @@ impl Codegen {
 
     /// Lower one block's `AsmIr`. `entry` (if any) is bound first; `exit` (if
     /// any) appends an unconditional branch to that basic block at the end.
-    /// Always succeeds (returns `true`): every `AsmInst` and side exit lowers,
-    /// so aarch64 never bails out of JIT compilation. The `bool` is kept only to
-    /// match the x86 `gen_asm` signature the shared `gen_machine_code` driver
-    /// calls (the x86 half is in `asmir.rs`).
+    /// Every `AsmInst` and side exit lowers, so aarch64 never bails out of JIT
+    /// compilation. (aarch64 half of the per-arch `gen_asm` the shared
+    /// `gen_machine_code` driver calls; the x86 half is in `asmir.rs`.)
     pub(in crate::codegen::jitgen) fn gen_asm(
         &mut self,
         ir: AsmIr,
@@ -85,7 +84,7 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
-    ) -> bool {
+    ) {
         // Generate the block's side-exit (deopt/evict/error) handlers. They are
         // cold, so we lay them out here but jump over them (`b skip`); guards in
         // the main body branch *back* to them (short-range b.cond). aarch64 has
@@ -157,7 +156,6 @@ impl Codegen {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm_arm64!(&mut self.jit, b exit;);
         }
-        true
     }
 
     /// Undo the loop-JIT entry sp-bump (`emit_loop_jit_rsp_bump`) before

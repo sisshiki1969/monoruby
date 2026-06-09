@@ -16,9 +16,11 @@ impl Codegen {
     ///
     /// Lower one `AsmInst`. The single entry point both backends' drivers call.
     ///
-    /// Returns `true` if the instruction was emitted, `false` to bail (only the
-    /// aarch64 backend bails today, on a not-yet-ported instruction; the x86
-    /// backend always returns `true`). The shared arms never bail.
+    /// Both backends lower every `AsmInst`, so this never bails — the `bool`
+    /// it (and the per-arch emission primitives) returns is always `true` and
+    /// is ignored by the callers. It is kept only because flipping ~80 dispatch
+    /// arms and ~100 leaf emitters to `()` is pure churn; the driver chain
+    /// (`gen_asm` / `gen_machine_code` / `jit_compile`) no longer acts on it.
     ///
     pub(in crate::codegen::jitgen) fn compile_asmir(
         &mut self,
