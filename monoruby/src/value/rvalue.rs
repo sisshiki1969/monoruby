@@ -873,12 +873,18 @@ impl alloc::GCBox for RValue {
             // `set_ivar`, and the JIT inline/heap stores via the emitted
             // barrier (`emit_write_barrier_rdi`). So they are promotable
             // in both modes.
-            // Array element stores are barriered both in the interpreter
-            // (Array wrapper) and in the JIT (array_index_assign emits the
-            // barrier), so Array is promotable in both modes.
-            ObjTy::OBJECT | ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT | ObjTy::ARRAY => true,
-            // HASH/STRUCT are deferred (hash-default getter / struct barrier
-            // pending). See generational_gc_plan.md.
+            // Array/Struct element stores are barriered both in the
+            // interpreter (Array wrapper / Value::set_struct_slot) and in
+            // the JIT (array_index_assign / store_struct_slot_* emit the
+            // barrier), so they are promotable in both modes.
+            ObjTy::OBJECT
+            | ObjTy::STRING
+            | ObjTy::BIGNUM
+            | ObjTy::FLOAT
+            | ObjTy::ARRAY
+            | ObjTy::STRUCT => true,
+            // HASH is deferred (its default value/proc has no getter for the
+            // young_child_exists check yet). See generational_gc_plan.md.
             _ => false,
         }
     }
@@ -921,6 +927,7 @@ impl alloc::GCBox for RValue {
                     .filter_map(|o| *o)
                     .any(|v| is_young(v, alloc)),
                 ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
+                ObjTy::STRUCT => self.as_struct_inner().iter().any(|v| is_young(*v, alloc)),
                 // Any other (currently non-promoted) kind: conservatively
                 // assume it points at young, so it is always remembered.
                 _ => true,

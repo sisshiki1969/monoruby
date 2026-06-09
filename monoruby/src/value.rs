@@ -1910,6 +1910,16 @@ impl Value {
     }
 
     ///
+    /// Store `value` into struct slot `index` of `self`, then run the
+    /// generational GC write barrier. The single Rust mutation point for
+    /// `Struct` members (there is no `Struct` Value wrapper to intercept).
+    ///
+    pub(crate) fn set_struct_slot(&mut self, index: usize, value: Value) {
+        self.as_struct_mut().set(index, value);
+        self.write_barrier(value);
+    }
+
+    ///
     /// Check if `self` is a fixnum.
     ///
     pub(crate) fn is_fixnum(&self) -> bool {

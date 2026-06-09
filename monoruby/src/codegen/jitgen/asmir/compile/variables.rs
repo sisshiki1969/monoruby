@@ -147,6 +147,10 @@ impl Codegen {
     pub(super) fn store_struct_slot_inline(&mut self, src: GP, slot_index: u16) {
         monoasm! {&mut self.jit,
             movq [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)], R(src as _);
+        }
+        // Write barrier: rdi = the struct (parent), src = stored value.
+        self.emit_write_barrier_rdi(src);
+        monoasm! {&mut self.jit,
             movq rax, R(src as _);
         }
     }
@@ -163,6 +167,9 @@ impl Codegen {
     /// #### destroy
     /// - rdi
     pub(super) fn store_struct_slot_heap(&mut self, src: GP, slot_index: u16) {
+        // Write barrier before `rdi` is repointed at the heap buffer:
+        // rdi = the struct (parent), src = stored value.
+        self.emit_write_barrier_rdi(src);
         monoasm! {&mut self.jit,
             movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
             movq [rdi + ((slot_index as i32) * 8)], R(src as _);
