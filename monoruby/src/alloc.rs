@@ -104,15 +104,18 @@ pub trait GCBox: PartialEq {
     fn age_and_check_promote(&mut self) -> bool;
 
     ///
-    /// Set this object's `REMEMBERED` header flag (remembered-set dedup).
+    /// Mark this object as old-but-not-remembered ("barrier armed"): a
+    /// young store to it must take the barrier slow path. Used at
+    /// promotion (no young children) and when dropping it from the
+    /// remembered set.
     ///
-    fn set_remembered(&mut self);
+    fn arm_barrier(&mut self);
 
     ///
-    /// Clear this object's `REMEMBERED` header flag (it has been dropped
-    /// from the remembered set because it no longer references young).
+    /// Mark this object as recorded in the remembered set (clears the
+    /// armed flag). Used when it is added to the set.
     ///
-    fn clear_remembered(&mut self);
+    fn enter_remembered(&mut self);
 
     ///
     /// Whether this object currently references any *young* (non-old) heap
@@ -584,6 +587,12 @@ impl<T: GCBox> Allocator<T> {
             GcKind::Major => {
                 self.clear_mark();
                 self.clear_old();
+                // Every object is demoted and re-aged from scratch, so the
+                // remembered set is rebuilt by this cycle's `apply_aging`.
+                // (Demoted objects are young again — fully scanned — so
+                // their now-stale armed/remembered header bits are
+                // harmless until re-promotion resets them.)
+                self.remembered.clear();
             }
             GcKind::Minor => self.seed_marks(),
         }
@@ -711,12 +720,16 @@ impl<T: GCBox> Allocator<T> {
         }
         // Pass 2: remember-on-promote. A freshly promoted object that
         // still references the young generation is added to the remembered
-        // set, covering old→young edges that predate the write barrier.
+        // set (covering old→young edges that predate the write barrier);
+        // one with only old children is left "armed" so a future young
+        // store takes the barrier.
         for p in promoted {
             if unsafe { (*p).young_child_exists(self) } {
-                unsafe { (*p).set_remembered() };
+                unsafe { (*p).enter_remembered() };
                 self.remembered
                     .push(unsafe { std::ptr::NonNull::new_unchecked(p) });
+            } else {
+                unsafe { (*p).arm_barrier() };
             }
         }
     }
@@ -801,7 +814,9 @@ impl<T: GCBox> Allocator<T> {
             if unsafe { ptr.as_ref().young_child_exists(self) } {
                 kept.push(ptr);
             } else {
-                unsafe { (*ptr.as_ptr()).clear_remembered() };
+                // No young children left: drop from the set and re-arm, so
+                // a future young store takes the barrier again.
+                unsafe { (*ptr.as_ptr()).arm_barrier() };
             }
         }
         self.remembered = kept;

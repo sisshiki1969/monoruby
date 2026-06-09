@@ -303,14 +303,10 @@ extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
 /// `parent` in the remembered set. See `doc/generational_gc_plan.md`.
 ///
 extern "C" fn jit_write_barrier(parent: *mut RValue) {
-    // SAFETY: `parent` is the live `&RValue` the store wrote into.
-    let parent = unsafe { &mut *parent };
-    parent.set_remembered();
-    crate::alloc::ALLOC.with(|alloc| {
-        alloc
-            .borrow_mut()
-            .remember(std::ptr::NonNull::from(&*parent))
-    });
+    // SAFETY: `parent` is the live `&RValue` the store wrote into. The
+    // inline fast path has already checked it is `wb_pending` with a heap
+    // child, so `write_barrier_bulk` records it in the remembered set.
+    unsafe { (*parent).write_barrier_bulk() };
 }
 
 impl Codegen {
@@ -329,12 +325,11 @@ impl Codegen {
     pub(super) fn emit_write_barrier_rdi(&mut self, child: GP) {
         let skip = self.jit.label();
         monoasm! { &mut self.jit,
-            // parent.is_old()?  (header OLD = flag bit 3)
-            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x08;
+            // barrier armed?  (WB_PENDING = flag bit 6 = old & not remembered)
+            // Young objects and already-remembered old objects both have it
+            // clear, so the common case skips after this single test.
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x40;
             jz   skip;
-            // parent.is_remembered()?  (header REMEMBERED = flag bit 5)
-            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x20;
-            jnz  skip;
             // child immediate?  (heap pointers have the low 3 bits clear)
             testq R(child as _), 0b111;
             jnz  skip;

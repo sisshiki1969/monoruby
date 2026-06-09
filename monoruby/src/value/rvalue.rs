@@ -894,12 +894,12 @@ impl alloc::GCBox for RValue {
         age >= alloc::RGENGC_OLD_AGE
     }
 
-    fn set_remembered(&mut self) {
-        self.header.set_remembered();
+    fn arm_barrier(&mut self) {
+        self.header.arm_barrier();
     }
 
-    fn clear_remembered(&mut self) {
-        self.header.clear_remembered();
+    fn enter_remembered(&mut self) {
+        self.header.enter_remembered();
     }
 
     fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
@@ -994,20 +994,18 @@ impl RValue {
         self.header.set_wb_unprotected()
     }
 
-    /// Old object currently registered in the remembered set.
-    #[allow(dead_code)]
-    pub(crate) fn is_remembered(&self) -> bool {
-        self.header.is_remembered()
+    /// Old object that is not (yet) in the remembered set — a young store
+    /// to it must take the barrier slow path.
+    pub(crate) fn is_wb_pending(&self) -> bool {
+        self.header.is_wb_pending()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn set_remembered(&mut self) {
-        self.header.set_remembered()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn clear_remembered(&mut self) {
-        self.header.clear_remembered()
+    /// Record `self` in the remembered set: flip its state to "remembered"
+    /// (clears the armed flag) and append it to the allocator's set.
+    fn enter_remembered_set(&mut self) {
+        self.header.enter_remembered();
+        crate::alloc::ALLOC
+            .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
     }
 
     ///
@@ -1015,46 +1013,35 @@ impl RValue {
     ///
     /// Call *after* storing `child` into a reference-typed field of
     /// `self` (an ivar, an array/hash element, a struct slot, …). If
-    /// `self` belongs to the old generation and `child` is a young heap
-    /// object, `self` is recorded in the remembered set so a subsequent
-    /// minor GC can still reach `child` without scanning the whole old
-    /// generation.
+    /// `self` is old and not yet remembered (`is_wb_pending`) and `child`
+    /// is a heap object, `self` is recorded in the remembered set so a
+    /// subsequent minor GC can still reach `child` without scanning the
+    /// whole old generation.
     ///
-    /// Fast path: the parent's old-ness is a single header-bit test
-    /// (`is_old`), so a young parent — the overwhelmingly common case —
-    /// returns immediately without touching the allocator. Only an old,
-    /// not-yet-remembered parent receiving a heap child does the (rarer)
-    /// allocator borrow to record it.
-    ///
-    /// We deliberately do *not* check the child's generation: remembering
-    /// an old→old edge is merely redundant (harmless over-approximation),
-    /// and it lets us avoid an allocator lookup for the child. This also
-    /// makes a stale header `OLD` bit (left after a major GC demotes an
-    /// object) safe — at worst it over-remembers. Immediates are skipped
-    /// via `is_packed_value`. See `doc/generational_gc_plan.md`.
+    /// Fast path is a single header-bit test (`is_wb_pending`): young
+    /// objects *and* already-remembered old objects both return
+    /// immediately without touching the allocator. We do not check the
+    /// child's generation (remembering an old→old edge is a harmless
+    /// over-approximation); immediates are skipped via `is_packed_value`.
+    /// See `doc/generational_gc_plan.md`.
     ///
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
-        if self.is_old() && !self.is_remembered() && !child.is_packed_value() {
-            self.set_remembered();
-            crate::alloc::ALLOC
-                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+        if self.is_wb_pending() && !child.is_packed_value() {
+            self.enter_remembered_set();
         }
     }
 
     ///
     /// Write barrier for bulk / multi-element stores (e.g. `Array#concat`,
     /// `Hash#[]=`), where checking each stored child individually is not
-    /// worthwhile. Records `self` if it is old, regardless of what was
-    /// stored — a safe over-approximation. Fast path is the same single
-    /// header-bit test. See `doc/generational_gc_plan.md`.
+    /// worthwhile. Records `self` if armed, regardless of what was stored
+    /// — a safe over-approximation. Same single-bit fast path.
     ///
     #[inline]
     pub(crate) fn write_barrier_bulk(&mut self) {
-        if self.is_old() && !self.is_remembered() {
-            self.set_remembered();
-            crate::alloc::ALLOC
-                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+        if self.is_wb_pending() {
+            self.enter_remembered_set();
         }
     }
 
@@ -2331,6 +2318,29 @@ impl Header {
     #[allow(dead_code)]
     fn clear_remembered(&mut self) {
         unsafe { self.meta.flag &= !0b10_0000 }
+    }
+
+    ///
+    /// Generational GC write-barrier "armed" flag (bit 6): set iff the
+    /// object is old and *not* in the remembered set, i.e. a young store
+    /// to it must take the barrier slow path. Testing this single bit is
+    /// what makes the JIT/Rust barrier fast path one instruction — young
+    /// objects and already-remembered old objects both have it clear.
+    /// `arm_barrier` / `enter_remembered` keep it mutually exclusive with
+    /// `REMEMBERED`. See `doc/generational_gc_plan.md`.
+    ///
+    fn is_wb_pending(&self) -> bool {
+        unsafe { self.meta.flag & 0b100_0000 != 0 }
+    }
+
+    /// Old, not remembered: arm the barrier (WB_PENDING set, REMEMBERED clear).
+    fn arm_barrier(&mut self) {
+        unsafe { self.meta.flag = (self.meta.flag | 0b100_0000) & !0b10_0000 }
+    }
+
+    /// Recorded in the remembered set (REMEMBERED set, WB_PENDING clear).
+    fn enter_remembered(&mut self) {
+        unsafe { self.meta.flag = (self.meta.flag | 0b10_0000) & !0b100_0000 }
     }
 
     fn age(&self) -> u8 {
