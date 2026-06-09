@@ -545,6 +545,7 @@ impl Globals {
                 eprintln!("total gc executed count: {}", alloc.total_gc_counter());
                 eprintln!("  minor gc count:        {}", alloc.minor_gc_count());
                 eprintln!("  major gc count:        {}", alloc.major_gc_count());
+                eprintln!("old-gen objects:         {}", alloc.old_count());
                 eprintln!("live objects (last gc):  {}", alloc.live_count());
                 eprintln!("free list (last gc):     {}", alloc.free_count());
                 eprintln!("active pages:            {}", alloc.pages_len());

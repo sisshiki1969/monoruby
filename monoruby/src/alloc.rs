@@ -71,6 +71,15 @@ pub trait GCBox: PartialEq {
     fn mark_children(&self, alloc: &mut Allocator<Self>)
     where
         Self: Sized;
+
+    ///
+    /// Whether this object may be promoted to the old generation when it
+    /// survives a collection. Only objects that are provably safe to
+    /// skip in a minor GC should return `true` — currently those with no
+    /// outgoing references at promotion time. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    fn is_promotable(&self) -> bool;
 }
 
 ///
@@ -126,6 +135,11 @@ pub struct Allocator<T> {
     /// Minor GCs performed since the last major GC. Drives the
     /// minor/major choice in `decide_gc_kind`.
     minors_since_major: usize,
+    /// Whether the current mark phase should promote surviving
+    /// promotable objects to the old generation. Set only during the
+    /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
+    /// no promotion side effects.
+    promoting: bool,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -230,6 +244,7 @@ impl<T: GCBox> Allocator<T> {
             minor_gc_count: 0,
             major_gc_count: 0,
             minors_since_major: 0,
+            promoting: false,
             remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
@@ -390,6 +405,22 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Returns the number of old-generation objects (popcount of every
+    /// page's `old_bits`). Confirms that promotion is taking effect.
+    ///
+    #[cfg(feature = "gc-log")]
+    pub fn old_count(&self) -> usize {
+        let mut c = 0;
+        unsafe {
+            c += self.current_page.as_ref().old_count();
+            for p in self.pages.iter() {
+                c += p.as_ref().old_count();
+            }
+        }
+        c
+    }
+
+    ///
     /// Returns total active pages.
     ///
     #[allow(unused)]
@@ -514,13 +545,15 @@ impl<T: GCBox> Allocator<T> {
         if has_heap_frames {
             self.clear_frame_marks();
         }
+        // Surviving objects may be promoted during the real mark.
+        self.promoting = true;
         root.mark(self);
         // A minor GC must also reach young objects referenced only from
-        // old (already-marked) objects, via the remembered set. (Empty
-        // until promotion is enabled.)
+        // old (already-marked) objects, via the remembered set.
         if kind == GcKind::Minor {
             self.mark_remembered();
         }
+        self.promoting = false;
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
@@ -532,6 +565,16 @@ impl<T: GCBox> Allocator<T> {
         self.sweep();
         if has_heap_frames {
             self.sweep_heap_frames();
+        }
+        // gc-verify: after a minor GC, independently re-mark the whole
+        // live graph from the roots (no seeding, no promotion). If the
+        // minor GC freed anything still reachable — a missed write
+        // barrier / remembered-set entry — this traversal reaches a freed
+        // slot and the `is_live` assertion in `RValue::mark` fires.
+        #[cfg(feature = "gc-verify")]
+        if kind == GcKind::Minor {
+            self.clear_mark();
+            root.mark(self);
         }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -561,10 +604,10 @@ impl<T: GCBox> Allocator<T> {
     /// If object is already marked, return true.
     /// If not yet, mark it and return false.
     pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
-        let ptr = ptr as *const T;
-        let page_ptr = self.get_page(ptr);
+        let p = ptr as *const T;
+        let page_ptr = self.get_page(p);
 
-        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let index = unsafe { (*page_ptr).get_index(p) };
         assert!(index < DATA_LEN);
         let bit_mask = 1 << (index % 64);
         let bitmap = unsafe { &mut (*page_ptr).mark_bits[index / 64] };
@@ -573,8 +616,27 @@ impl<T: GCBox> Allocator<T> {
         *bitmap |= bit_mask;
         if !is_marked {
             self.mark_counter += 1;
+            // Promote a surviving object to the old generation by setting
+            // its `old_bits`. Next minor GC seeds `mark_bits` from
+            // `old_bits`, so it is then skipped. Only promotable objects
+            // (no outgoing references) qualify; see generational_gc_plan.md.
+            if self.promoting && ptr.is_promotable() {
+                unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
+            }
         }
         is_marked
+    }
+
+    ///
+    /// Whether `ptr` belongs to the old generation (its `old_bits` is set).
+    /// Single source of truth for old-ness, used by the write barrier.
+    ///
+    pub(crate) fn is_old_obj(&self, ptr: &T) -> bool {
+        let ptr = ptr as *const T;
+        let page_ptr = self.get_page(ptr);
+        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let bit_mask = 1 << (index % 64);
+        unsafe { (*page_ptr).old_bits[index / 64] & bit_mask != 0 }
     }
 }
 
@@ -895,6 +957,14 @@ impl<T: GCBox> Page<T> {
     ///
     fn seed_mark_from_old(&mut self) {
         self.mark_bits.copy_from_slice(&self.old_bits);
+    }
+
+    ///
+    /// Number of old-generation cells in this page (popcount of `old_bits`).
+    ///
+    #[cfg(feature = "gc-log")]
+    fn old_count(&self) -> usize {
+        self.old_bits.iter().map(|w| w.count_ones() as usize).sum()
     }
 
     ///

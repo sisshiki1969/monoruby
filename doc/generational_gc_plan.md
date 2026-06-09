@@ -286,15 +286,34 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
      （sweep 前に死んだ entry を除去）、`RValue::mark` を `mark`＋`mark_children`
      に分割（GCBox に `mark_children` 追加）、ページ投入時の `old_bits` ゼロ化
      （arena は未初期化のため）、gc-log の minor/major カウンタ。
-   - **昇格は無効（`old_bits` 常に空）**：JIT の ivar 高速パス（§6.2 重要）が
-     バリア未保護のため、ivar を持ち得る型を安全に昇格できない。よって現状
-     **minor ≡ major**（同一結果）で、機構のみを安全に稼働。
    - 検証：default 全テスト green（既知の Ruby4.0 inspect 差 2 件を除く）、
      gc-stress で array/hash/gc green、gc-debug でフリーリスト整合 assert 成立。
-   - 次段（昇格有効化）の安全な最小集合候補：`var_table` が `None` の
-     reference-free leaf 型（STRING/BIGNUM/FLOAT）。初回 ivar ストアが必ず
-     バリアを通る性質を使えば JIT バリア（Phase 6）前でも安全に昇格可能
-     （別途 gc-verify で検証予定）。
+
+4b. **昇格の有効化（安全な最小集合）＋ gc-verify**：
+   - 昇格条件 `RValue::is_promotable`：`var_table.is_none()` かつ
+     `ty ∈ {STRING, BIGNUM, FLOAT}`（reference-free leaf）。昇格時に外向き
+     Value 参照が皆無なので、minor で skip しても生存オブジェクトを取りこぼさ
+     ない。後から ivar を得ても**初回ストアは必ずバリアを通る**（`var_table`
+     None→Some / resize は JIT slow path = `set_ivar`）ため恒久的に remembered。
+   - 昇格は `gc_check_and_mark` 内で「生存（新規マーク）した promotable」に
+     `old_bits` を立てる（`self.promoting` が真のときのみ）。
+   - **old-ness の単一の真実は `old_bits` ビットマップ**。書き込みバリアは
+     `Allocator::is_old_obj`（bitmap）で判定する。ヘッダ `OLD` ビットは major
+     降格後に stale になり得るため**使わない**（特に child 側を stale-old と
+     誤判定すると remember 漏れ＝dangling になる）。`REMEMBERED` は生存
+     オブジェクトでは stale しないのでヘッダビットで dedup。
+   - **`gc-verify` フィーチャ**：minor GC の sweep 後に root から独立にフル
+     再マーク。minor が到達可能オブジェクトを誤って解放していれば、その
+     dangling 参照を辿った時点で `RValue::mark` の `is_live` assert が発火し
+     バグを即検出（`self.promoting=false` で副作用なし）。
+   - 検証：`gc-verify,gc-stress` で昇格ストレス（promoted string に young ivar
+     を付与）が CRuby と一致（ivar ターゲット無傷）。`gc-verify` 下で
+     string/array/hash/object/struct/gc green（取りこぼし 0）。gc-debug の
+     フリーリスト整合 assert も昇格下で成立。gc-log に old-gen 数を追加し
+     昇格の発生を確認（promoted ≫ 0）。
+   - **既知のトレードオフ**：現状は「初回 minor 生存で即昇格」（aggressive）
+     のため、major 間で短命 old（floating garbage）が溜まる。CRuby 同様に
+     `age` カウンタ（survive N 回で昇格）を入れれば緩和できる（今後の調整）。
 5. **型ごとに WB-protected 化**：OBJECT(ivar)→ARRAY→HASH→STRUCT の順に Rust／
    JIT 両方のバリアを完成させ、昇格対象に加える。各型で gc-stress 回帰必須。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。

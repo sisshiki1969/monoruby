@@ -846,6 +846,25 @@ impl alloc::GCBox for RValue {
             }
         }
     }
+
+    ///
+    /// An object is safe to promote to the old generation only if it has
+    /// **no outgoing `Value` references** at promotion time, so that a
+    /// minor GC skipping it can never miss a live young object:
+    ///
+    /// - `var_table.is_none()` — no instance variables, and
+    /// - a reference-free union kind (String bytes / Bignum / heap Float).
+    ///
+    /// Such an object can only gain a reference later via an instance
+    /// variable, and the *first* ivar store always goes through the
+    /// write barrier (`set_ivar_by_ivarid` / the JIT slow path that calls
+    /// `set_ivar`), which then remembers it permanently. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    fn is_promotable(&self) -> bool {
+        self.var_table.is_none()
+            && matches!(self.ty(), ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT)
+    }
 }
 
 impl RValue {
@@ -938,22 +957,28 @@ impl RValue {
     /// minor GC can still reach `child` without scanning the whole old
     /// generation.
     ///
-    /// Inert until promotion is enabled in a later phase: no object
-    /// carries the `OLD` flag yet, so `is_old()` is always false and the
-    /// body never runs (a single, well-predicted, never-taken branch).
+    /// Old-ness is read from the GC's `old_bits` bitmap (the single
+    /// source of truth — the header `OLD` bit would go stale after a
+    /// major GC demotes an object). The `REMEMBERED` header bit, which
+    /// has no such staleness for live objects, short-circuits objects
+    /// already in the set without touching the allocator.
     /// See `doc/generational_gc_plan.md`.
     ///
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
-        if self.is_old()
-            && !self.is_remembered()
-            && let Some(c) = child.try_rvalue()
-            && !c.is_old()
-        {
-            self.set_remembered();
-            crate::alloc::ALLOC
-                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+        if self.is_remembered() {
+            return;
         }
+        crate::alloc::ALLOC.with(|alloc| {
+            let mut alloc = alloc.borrow_mut();
+            if alloc.is_old_obj(self)
+                && let Some(c) = child.try_rvalue()
+                && !alloc.is_old_obj(c)
+            {
+                self.set_remembered();
+                alloc.remember(std::ptr::NonNull::from(&*self));
+            }
+        });
     }
 
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
