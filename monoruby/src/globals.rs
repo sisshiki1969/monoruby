@@ -539,15 +539,15 @@ impl Globals {
         #[cfg(feature = "gc-log")]
         {
             alloc::ALLOC.with(|alloc| {
+                let alloc = alloc.borrow();
                 eprintln!("garbage collector profile:");
-                eprintln!(
-                    "total allocated objects: {}",
-                    alloc.borrow().total_allocated()
-                );
-                eprintln!(
-                    "total gc executed count: {}",
-                    alloc.borrow().total_gc_counter()
-                );
+                eprintln!("total allocated objects: {}", alloc.total_allocated());
+                eprintln!("total gc executed count: {}", alloc.total_gc_counter());
+                eprintln!("  minor gc count:        {}", alloc.minor_gc_count());
+                eprintln!("  major gc count:        {}", alloc.major_gc_count());
+                eprintln!("live objects (last gc):  {}", alloc.live_count());
+                eprintln!("free list (last gc):     {}", alloc.free_count());
+                eprintln!("active pages:            {}", alloc.pages_len());
             });
         }
         res

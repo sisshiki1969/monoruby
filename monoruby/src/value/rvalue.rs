@@ -873,6 +873,57 @@ impl RValue {
         self.header.clear_chilled()
     }
 
+    // --- Generational GC flags ---
+    //
+    // Reserved accessors for the generational collector. They are wired
+    // into the GC mark/sweep, promotion, and write-barrier paths in a
+    // later phase; see `doc/generational_gc_plan.md`. Kept `dead_code`
+    // until then so the header layout and API are stable up front.
+
+    /// Object has been promoted to the old generation.
+    #[allow(dead_code)]
+    pub(crate) fn is_old(&self) -> bool {
+        self.header.is_old()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_old(&mut self) {
+        self.header.set_old()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn clear_old(&mut self) {
+        self.header.clear_old()
+    }
+
+    /// Object whose mutation sites are not (yet) write-barrier protected
+    /// ("shady"): never promoted, always scanned by minor GC.
+    #[allow(dead_code)]
+    pub(crate) fn is_wb_unprotected(&self) -> bool {
+        self.header.is_wb_unprotected()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_wb_unprotected(&mut self) {
+        self.header.set_wb_unprotected()
+    }
+
+    /// Old object currently registered in the remembered set.
+    #[allow(dead_code)]
+    pub(crate) fn is_remembered(&self) -> bool {
+        self.header.is_remembered()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_remembered(&mut self) {
+        self.header.set_remembered()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn clear_remembered(&mut self) {
+        self.header.clear_remembered()
+    }
+
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
         unsafe { self.header.meta.ty }
     }
@@ -2090,6 +2141,56 @@ impl Header {
 
     fn clear_chilled(&mut self) {
         unsafe { self.meta.flag &= !0b100 }
+    }
+
+    // --- Generational GC flags (flag bits 3..5) ---
+    //
+    // bit3 `0b0_1000`  = OLD            (promoted to old generation)
+    // bit4 `0b1_0000`  = WB_UNPROTECTED (shady; never promoted)
+    // bit5 `0b10_0000` = REMEMBERED     (in the remembered set)
+    //
+    // A freshly allocated object has `flag == 1`, so all three bits
+    // start clear (young, barrier-untracked, not remembered). See
+    // `doc/generational_gc_plan.md`.
+
+    #[allow(dead_code)]
+    fn is_old(&self) -> bool {
+        unsafe { self.meta.flag & 0b0_1000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_old(&mut self) {
+        unsafe { self.meta.flag |= 0b0_1000 }
+    }
+
+    #[allow(dead_code)]
+    fn clear_old(&mut self) {
+        unsafe { self.meta.flag &= !0b0_1000 }
+    }
+
+    #[allow(dead_code)]
+    fn is_wb_unprotected(&self) -> bool {
+        unsafe { self.meta.flag & 0b1_0000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_wb_unprotected(&mut self) {
+        unsafe { self.meta.flag |= 0b1_0000 }
+    }
+
+    #[allow(dead_code)]
+    fn is_remembered(&self) -> bool {
+        unsafe { self.meta.flag & 0b10_0000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_remembered(&mut self) {
+        unsafe { self.meta.flag |= 0b10_0000 }
+    }
+
+    #[allow(dead_code)]
+    fn clear_remembered(&mut self) {
+        unsafe { self.meta.flag &= !0b10_0000 }
     }
 
     fn class(&self) -> ClassId {

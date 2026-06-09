@@ -78,6 +78,14 @@ pub struct Allocator<T> {
     free_pages: VecDeque<PageRef<T>>,
     /// Counter of GC execution.
     total_gc_counter: usize,
+    /// Counter of minor (young-generation) GC executions. Always 0 until
+    /// minor GC lands; see `doc/generational_gc_plan.md`.
+    #[allow(dead_code)]
+    minor_gc_count: usize,
+    /// Counter of major (full-heap) GC executions. Currently equal to
+    /// `total_gc_counter`, since every collection is still a full GC.
+    #[allow(dead_code)]
+    major_gc_count: usize,
     /// Flag for GC timing.
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
@@ -163,6 +171,8 @@ impl<T: GCBox> Allocator<T> {
             free: None,
             free_pages: VecDeque::new(),
             total_gc_counter: 0,
+            minor_gc_count: 0,
+            major_gc_count: 0,
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
@@ -306,6 +316,22 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Returns the number of minor (young-generation) GC executions.
+    ///
+    #[cfg(feature = "gc-log")]
+    pub fn minor_gc_count(&self) -> usize {
+        self.minor_gc_count
+    }
+
+    ///
+    /// Returns the number of major (full-heap) GC executions.
+    ///
+    #[cfg(feature = "gc-log")]
+    pub fn major_gc_count(&self) -> usize {
+        self.major_gc_count
+    }
+
+    ///
     /// Returns total active pages.
     ///
     #[allow(unused)]
@@ -363,6 +389,9 @@ impl<T: GCBox> Allocator<T> {
             return;
         }
         self.total_gc_counter += 1;
+        // Every collection is currently a full (major) GC. Minor GC is
+        // introduced in a later phase; see `doc/generational_gc_plan.md`.
+        self.major_gc_count += 1;
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("#### GC start");
@@ -602,6 +631,12 @@ impl<T: GCBox> Allocator<T> {
 struct Page<T> {
     data: [T; DATA_LEN],
     mark_bits: [u64; SIZE - 1],
+    /// Generational GC: bitmap of old-generation cells, parallel to
+    /// `mark_bits`. Reserved here so the page layout is fixed up front;
+    /// it is populated and consulted once minor GC lands (see
+    /// `doc/generational_gc_plan.md`). Adding it must keep
+    /// `size_of::<Page<T>>() <= ALLOC_SIZE` (asserted in `Allocator::new`).
+    old_bits: [u64; SIZE - 1],
 }
 
 impl<T: GCBox> std::fmt::Debug for Page<T> {
@@ -647,6 +682,16 @@ impl<T: GCBox> Page<T> {
     ///
     fn clear_bits(&mut self) {
         self.mark_bits.iter_mut().for_each(|e| *e = 0)
+    }
+
+    ///
+    /// Clear old-generation bitmap. Used by a major GC, which demotes
+    /// every object back to a collection candidate. Reserved for the
+    /// generational GC phases; see `doc/generational_gc_plan.md`.
+    ///
+    #[allow(dead_code)]
+    fn clear_old_bits(&mut self) {
+        self.old_bits.iter_mut().for_each(|e| *e = 0)
     }
 
     ///
