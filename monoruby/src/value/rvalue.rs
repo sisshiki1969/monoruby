@@ -924,6 +924,34 @@ impl RValue {
         self.header.clear_remembered()
     }
 
+    ///
+    /// Generational GC write barrier.
+    ///
+    /// Call *after* storing `child` into a reference-typed field of
+    /// `self` (an ivar, an array/hash element, a struct slot, …). If
+    /// `self` belongs to the old generation and `child` is a young heap
+    /// object, `self` is recorded in the remembered set so a subsequent
+    /// minor GC can still reach `child` without scanning the whole old
+    /// generation.
+    ///
+    /// Inert until promotion is enabled in a later phase: no object
+    /// carries the `OLD` flag yet, so `is_old()` is always false and the
+    /// body never runs (a single, well-predicted, never-taken branch).
+    /// See `doc/generational_gc_plan.md`.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier(&mut self, child: Value) {
+        if self.is_old()
+            && !self.is_remembered()
+            && let Some(c) = child.try_rvalue()
+            && !c.is_old()
+        {
+            self.set_remembered();
+            crate::alloc::ALLOC
+                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+        }
+    }
+
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
         unsafe { self.header.meta.ty }
     }
@@ -996,6 +1024,7 @@ impl RValue {
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 self.as_object_mut()[i] = Some(val);
+                self.write_barrier(val);
                 return;
             } else {
                 i -= OBJECT_INLINE_IVAR;
@@ -1015,6 +1044,7 @@ impl RValue {
                 self.var_table = Some(Box::new(v));
             }
         }
+        self.write_barrier(val);
     }
 
     pub(crate) fn extend_ivar(&mut self, heap_len: usize) {

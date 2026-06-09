@@ -1880,6 +1880,26 @@ impl Value {
     }
 
     ///
+    /// Generational GC write barrier (see `RValue::write_barrier`).
+    ///
+    /// Convenience for call sites that hold the container as a `Value`
+    /// (e.g. an `Array`/`Hashmap`/`Struct` wrapper's backing value).
+    /// Call *after* storing `child` into one of `self`'s fields. A no-op
+    /// when `self` is an immediate. Inert until promotion is enabled in
+    /// a later phase. See `doc/generational_gc_plan.md`.
+    ///
+    /// Used by the container barriers wired in a later phase (Array /
+    /// Hash / Struct call sites); `allow(dead_code)` until then.
+    ///
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn write_barrier(&mut self, child: Value) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.write_barrier(child);
+        }
+    }
+
+    ///
     /// Check if `self` is a fixnum.
     ///
     pub(crate) fn is_fixnum(&self) -> bool {

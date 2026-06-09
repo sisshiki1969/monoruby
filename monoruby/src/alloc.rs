@@ -86,6 +86,14 @@ pub struct Allocator<T> {
     /// `total_gc_counter`, since every collection is still a full GC.
     #[allow(dead_code)]
     major_gc_count: usize,
+    /// Generational GC: remembered set — old-generation objects that
+    /// hold a reference into the young generation, recorded by the write
+    /// barrier (`RValue::write_barrier`). A minor GC scans these as
+    /// extra roots; a major GC rebuilds generation state and clears it.
+    /// Empty until promotion is enabled in a later phase (no object is
+    /// `OLD` yet), so the barrier is currently inert. See
+    /// `doc/generational_gc_plan.md`.
+    remembered: Vec<std::ptr::NonNull<T>>,
     /// Flag for GC timing.
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
@@ -173,6 +181,7 @@ impl<T: GCBox> Allocator<T> {
             total_gc_counter: 0,
             minor_gc_count: 0,
             major_gc_count: 0,
+            remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
@@ -422,6 +431,10 @@ impl<T: GCBox> Allocator<T> {
         if has_heap_frames {
             self.sweep_heap_frames();
         }
+        // A full (major) GC rebuilds generation state from scratch, so
+        // the remembered set is reset. (Currently always empty: nothing
+        // is promoted yet — see `doc/generational_gc_plan.md`.)
+        self.remembered.clear();
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             assert_eq!(self.free_list_count, self.check_free_list());
@@ -434,6 +447,16 @@ impl<T: GCBox> Allocator<T> {
         if root.startup_flag() {
             eprintln!("#### GC End");
         }
+    }
+
+    ///
+    /// Generational GC: record `ptr` (an old-generation object that now
+    /// references the young generation) in the remembered set. The
+    /// caller — `RValue::write_barrier` — owns the `is_old` / dedup
+    /// checks, so this just appends. See `doc/generational_gc_plan.md`.
+    ///
+    pub(crate) fn remember(&mut self, ptr: std::ptr::NonNull<T>) {
+        self.remembered.push(ptr);
     }
 
     /// Mark object.

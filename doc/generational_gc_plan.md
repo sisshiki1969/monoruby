@@ -212,6 +212,25 @@ JIT は ivar / Struct スロットへ **生の `movq [rdi+offset], src`** を直
 → **(B) で正しさを担保したまま導入 → (A) を型ごとに実装して WB-protected へ
 昇格**、という順序を推奨。CRuby も WB-protected/unprotected の混在で漸進導入した。
 
+### 6.2.1 Rust 側 mutation site マップ（調査結果）
+
+書き込みバリアを要する「heap オブジェクトの参照フィールドへの Value ストア」箇所
+の全体像（Phase 3 で調査・確定）：
+
+| 種別 | 直接の mutator | 親 RValue の取得 | バリア配線フェーズ |
+|------|----------------|------------------|--------------------|
+| **ivar** | `RValue::set_ivar_by_ivarid`（`rvalue.rs`）| `self` が RValue（clean な choke point）| **Phase 3 済** |
+| **Array 要素** | `ArrayInner::{push,insert,insert_many,fill,resize,extend,extend_from_slice,set_index,set_index2,replace}`（`rvalue/array.rs`）| 内部型に後方ポインタ無し。`Array(Value)` ラッパ／builtin 呼び出し側に Value あり | Phase 5（Rust）＋ Phase 6（JIT）|
+| **Hash 要素** | `HashmapInner::{insert,set_defalut_value,set_defalut_proc}`（`rvalue/hash.rs`）| 同上（`Hashmap(Value)`）| Phase 5 |
+| **Struct スロット** | `StructInner::set`（`rvalue/struct_inner.rs`）| 呼び出し側に `self_val: Value` | Phase 5（Rust）＋ Phase 6（JIT）|
+| Range / Rational / Proc / Binding / MatchData / Exception / ArithmeticSequence | — | 構築時 write-once（生成直後は young）| **不要** |
+
+重要：Array/Hash/Struct の mutator は後方ポインタを持たない**内部型**（`ArrayInner`
+等）上にあり、`Array`/`Hashmap` ラッパは `DerefMut` で内部型へ委譲する。したがって
+Rust レベルに単一の choke point は無く、バリアは**呼び出し側（builtin）に
+`Value::write_barrier(child)` を挿入**する形になる（Phase 5 の型ごと作業）。JIT が
+直接発行する inline ストア（`asmir/compile/{variables,index}.rs`）は Phase 6。
+
 ### 6.3 C 拡張・FFI
 外部 C コードからのフィールド変更も WB を通らない。現状 monoruby の C 拡張
 表面積は限定的だが、公開する書き込み API は WB-unprotected として扱うか、
@@ -240,8 +259,14 @@ JIT は ivar / Struct スロットへ **生の `movq [rdi+offset], src`** を直
    `old_bits` ビットマップ、`is_old`/`set_old` 等のアクセサを追加（挙動は不変、
    ビットは未使用のまま）。
 3. **remembered set ＋ Rust バリア**：`remember()` と `write_barrier()` を実装し、
-   Rust 側の全変更点に挿入。ただしこの段階では昇格は行わない（全 young）。
-   → バリアの網羅性検証（gc-stress でフル GC 結果と差異が出ないこと）。
+   Rust 側の変更点に挿入。ただしこの段階では昇格は行わない（全 young）ので
+   バリアは inert（`is_old()` が常に false）。
+   - 実装済：remembered set（`Allocator::{remembered,remember}`、major GC で
+     クリア）、`RValue::write_barrier` / `Value::write_barrier`、**ivar choke
+     point**（`set_ivar_by_ivarid`）への配線。§6.2.1 のマップを確定。
+   - Array/Hash/Struct は内部型に後方ポインタが無く呼び出し側が分散するため
+     Phase 5 で型ごとに配線（JIT は Phase 6）。
+   → バリアは inert なので gc-stress でフル GC 結果と差異が出ないことを確認。
 4. **マイナー GC 有効化（全型 WB_UNPROTECTED）**：昇格を「WB-protected な型のみ
    （初期は空 or 不変オブジェクトのみ）」に限定。`clear_mark` のシード化・
    minor/major 切替・remembered 走査を実装。安全側（ほぼフル GC 相当）で稼働確認。
