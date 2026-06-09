@@ -80,6 +80,13 @@ pub trait GCBox: PartialEq {
     /// `doc/generational_gc_plan.md`.
     ///
     fn is_promotable(&self) -> bool;
+
+    ///
+    /// Set this object's old-generation header flag. Called only after
+    /// the mark phase (never while a `&self` from marking is live), so
+    /// the `&mut` is sound. See `doc/generational_gc_plan.md`.
+    ///
+    fn promote_to_old(&mut self);
 }
 
 ///
@@ -140,6 +147,11 @@ pub struct Allocator<T> {
     /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
     /// no promotion side effects.
     promoting: bool,
+    /// Objects promoted (had `old_bits` set) during the current mark
+    /// phase, pending their header `OLD` flag being set. Applied in
+    /// `apply_promotions` after marking, so the header write never
+    /// aliases a `&self` held by the mark traversal.
+    newly_promoted: Vec<*mut T>,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -245,6 +257,7 @@ impl<T: GCBox> Allocator<T> {
             major_gc_count: 0,
             minors_since_major: 0,
             promoting: false,
+            newly_promoted: Vec::new(),
             remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
@@ -554,6 +567,9 @@ impl<T: GCBox> Allocator<T> {
             self.mark_remembered();
         }
         self.promoting = false;
+        // Set header OLD flags for this cycle's promotions (deferred from
+        // the mark phase to avoid aliasing). Safe: marking is complete.
+        self.apply_promotions();
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
@@ -620,23 +636,28 @@ impl<T: GCBox> Allocator<T> {
             // its `old_bits`. Next minor GC seeds `mark_bits` from
             // `old_bits`, so it is then skipped. Only promotable objects
             // (no outgoing references) qualify; see generational_gc_plan.md.
+            // The header `OLD` flag (read by the write barrier) is set
+            // later in `apply_promotions`, to avoid aliasing the `&self`
+            // the mark traversal holds.
             if self.promoting && ptr.is_promotable() {
                 unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
+                self.newly_promoted.push(p as *mut T);
             }
         }
         is_marked
     }
 
     ///
-    /// Whether `ptr` belongs to the old generation (its `old_bits` is set).
-    /// Single source of truth for old-ness, used by the write barrier.
+    /// Set the header `OLD` flag of every object promoted this cycle.
+    /// Runs after marking, so no `&self` from the mark traversal is live
+    /// and the `&mut` writes are sound.
     ///
-    pub(crate) fn is_old_obj(&self, ptr: &T) -> bool {
-        let ptr = ptr as *const T;
-        let page_ptr = self.get_page(ptr);
-        let index = unsafe { (*page_ptr).get_index(ptr) };
-        let bit_mask = 1 << (index % 64);
-        unsafe { (*page_ptr).old_bits[index / 64] & bit_mask != 0 }
+    fn apply_promotions(&mut self) {
+        for p in self.newly_promoted.drain(..) {
+            // SAFETY: `p` was marked (hence live) this cycle and sweep
+            // has not run, so the cell is valid and unaliased here.
+            unsafe { (*p).promote_to_old() };
+        }
     }
 }
 

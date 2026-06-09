@@ -27,6 +27,32 @@ impl Hashmap {
             }
         }
     }
+
+    // Write-barrier-protected stores (shadow the `HashmapInner` methods
+    // reached via `Deref`, so existing call sites go through the
+    // generational write barrier). See `doc/generational_gc_plan.md`.
+
+    pub fn insert(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.0.as_hashmap_inner_mut().insert(k, v, vm, globals)?;
+        self.0.write_barrier_bulk();
+        Ok(())
+    }
+
+    pub fn set_defalut_value(&mut self, default: Value) {
+        self.0.as_hashmap_inner_mut().set_defalut_value(default);
+        self.0.write_barrier(default);
+    }
+
+    pub fn set_defalut_proc(&mut self, default_proc: Proc) {
+        self.0.as_hashmap_inner_mut().set_defalut_proc(default_proc);
+        self.0.write_barrier_bulk();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

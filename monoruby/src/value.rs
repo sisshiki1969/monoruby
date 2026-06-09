@@ -1891,11 +1891,21 @@ impl Value {
     /// Used by the container barriers wired in a later phase (Array /
     /// Hash / Struct call sites); `allow(dead_code)` until then.
     ///
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.write_barrier(child);
+        }
+    }
+
+    ///
+    /// Bulk write barrier for a container `Value` (see
+    /// `RValue::write_barrier_bulk`). No-op for immediates.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier_bulk(&mut self) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.write_barrier_bulk();
         }
     }
 

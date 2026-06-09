@@ -862,8 +862,23 @@ impl alloc::GCBox for RValue {
     /// `doc/generational_gc_plan.md`.
     ///
     fn is_promotable(&self) -> bool {
+        // Only reference-free leaves are promoted: with `var_table` empty
+        // they have *no* outgoing Value references at promotion time, so a
+        // minor GC skipping them can never miss a live young object.
+        //
+        // Containers (Array/Hash/Struct) are NOT promoted here even though
+        // their Rust mutators are now write-barrier protected: a container
+        // promoted while it still references young elements would lose
+        // them (those old→young edges predate the barrier and are not
+        // remembered). Promoting them safely needs age-based promotion
+        // (promote only once all children are old) or remember-on-promote,
+        // a later phase. See `doc/generational_gc_plan.md`.
         self.var_table.is_none()
             && matches!(self.ty(), ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT)
+    }
+
+    fn promote_to_old(&mut self) {
+        self.set_old();
     }
 }
 
@@ -957,28 +972,42 @@ impl RValue {
     /// minor GC can still reach `child` without scanning the whole old
     /// generation.
     ///
-    /// Old-ness is read from the GC's `old_bits` bitmap (the single
-    /// source of truth — the header `OLD` bit would go stale after a
-    /// major GC demotes an object). The `REMEMBERED` header bit, which
-    /// has no such staleness for live objects, short-circuits objects
-    /// already in the set without touching the allocator.
-    /// See `doc/generational_gc_plan.md`.
+    /// Fast path: the parent's old-ness is a single header-bit test
+    /// (`is_old`), so a young parent — the overwhelmingly common case —
+    /// returns immediately without touching the allocator. Only an old,
+    /// not-yet-remembered parent receiving a heap child does the (rarer)
+    /// allocator borrow to record it.
+    ///
+    /// We deliberately do *not* check the child's generation: remembering
+    /// an old→old edge is merely redundant (harmless over-approximation),
+    /// and it lets us avoid an allocator lookup for the child. This also
+    /// makes a stale header `OLD` bit (left after a major GC demotes an
+    /// object) safe — at worst it over-remembers. Immediates are skipped
+    /// via `is_packed_value`. See `doc/generational_gc_plan.md`.
     ///
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
-        if self.is_remembered() {
-            return;
+        if self.is_old() && !self.is_remembered() && !child.is_packed_value() {
+            self.set_remembered();
+            crate::alloc::ALLOC
+                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
         }
-        crate::alloc::ALLOC.with(|alloc| {
-            let mut alloc = alloc.borrow_mut();
-            if alloc.is_old_obj(self)
-                && let Some(c) = child.try_rvalue()
-                && !alloc.is_old_obj(c)
-            {
-                self.set_remembered();
-                alloc.remember(std::ptr::NonNull::from(&*self));
-            }
-        });
+    }
+
+    ///
+    /// Write barrier for bulk / multi-element stores (e.g. `Array#concat`,
+    /// `Hash#[]=`), where checking each stored child individually is not
+    /// worthwhile. Records `self` if it is old, regardless of what was
+    /// stored — a safe over-approximation. Fast path is the same single
+    /// header-bit test. See `doc/generational_gc_plan.md`.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier_bulk(&mut self) {
+        if self.is_old() && !self.is_remembered() {
+            self.set_remembered();
+            crate::alloc::ALLOC
+                .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+        }
     }
 
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {

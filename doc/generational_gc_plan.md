@@ -314,8 +314,35 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
    - **既知のトレードオフ**：現状は「初回 minor 生存で即昇格」（aggressive）
      のため、major 間で短命 old（floating garbage）が溜まる。CRuby 同様に
      `age` カウンタ（survive N 回で昇格）を入れれば緩和できる（今後の調整）。
-5. **型ごとに WB-protected 化**：OBJECT(ivar)→ARRAY→HASH→STRUCT の順に Rust／
-   JIT 両方のバリアを完成させ、昇格対象に加える。各型で gc-stress 回帰必須。
+5. **コンテナの Rust バリア配線 ＋ バリア高速化**：
+   - **バリア高速化（必須前提）**：旧バリアは young 親でも `old_bits` 参照のため
+     ALLOC を borrow していた。これをホットな配列 push 等に入れると劣化するため、
+     **ヘッダ `OLD` ビット参照に変更**（young 親は 1 命令で return、borrow なし）。
+     子の世代は見ず「親が old なら remember」（over-approx・安全）＋即値スキップ。
+     ヘッダ `OLD` はマーク中の `&self` エイリアスを避けるため**マーク後の
+     `apply_promotions` で設定**（`newly_promoted` に収集 → 後でヘッダ書き込み）。
+     major 降格後の stale-old は no-child-check により安全（最悪 over-remember）。
+   - **Array / Hash の Rust バリア配線**：`Array`/`Hashmap` ラッパに barrier 付き
+     inherent メソッド（push/insert/insert_many/fill/resize/extend/
+     extend_from_slice/set_index/set_index2/replace、insert/set_defalut_*）を追加。
+     deref より inherent が優先されるため既存呼び出しを自動的に横取り。要素を
+     **格納**する操作のみ（pop/remove/clear 等は不要）。`write_barrier_bulk`
+     （複数要素用、親が old なら remember）も追加。builtins の配列/Hash 変更は
+     全てラッパ経由（`as_array_inner_mut` 直叩き 0 件）で網羅。
+   - **コンテナ昇格は依然 無効**：`is_promotable` は leaf 限定のまま。**重要な
+     発見**：`var_table.is_none()` は leaf（参照ゼロ）には十分だが、**コンテナは
+     要素という外向き参照を常に持つ**。昇格前から young 要素を指していた場合、
+     その old→young エッジはバリア成立前に生成済み＝remembered されず、minor で
+     取りこぼす（gc-verify が検出）。安全なコンテナ昇格には **age ベース昇格
+     （子が全て old になってから昇格）or remember-on-promote** が必要（次フェーズ）。
+     配線済みバリアはその前提として機能する。
+   - 検証：default 全テスト green（既知 inspect 2 件除く）、default/no-jit ともに
+     gc-verify で array/hash/string/object/gc green、gc-verify,gc-stress で leaf
+     昇格ストレス（promo_stress）が CRuby と一致。
+
+6. **JIT バリア発行（次フェーズ）**：ivar inline / ivar heap 高速パス / 配列・
+   Struct inline ストアにヘッダ `OLD` テスト＋remember slow path を発行。これで
+   OBJECT も昇格可能になり、コンテナ昇格（age ベース）も JIT 下で安全化できる。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。

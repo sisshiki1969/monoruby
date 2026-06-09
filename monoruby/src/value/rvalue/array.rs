@@ -73,6 +73,68 @@ impl Array {
     }
 }
 
+// Write-barrier-protected element stores.
+//
+// These inherent methods on the `Array` *wrapper* shadow the same-named
+// `ArrayInner` methods reached through `Deref`, so existing call sites
+// (`ary.push(v)`, `ary.set_index(..)`, …) automatically go through the
+// generational write barrier. Only operations that *store* a `Value` need
+// a barrier; removers (`pop`, `remove`, `truncate`, `clear`, `drain`) do
+// not. See `doc/generational_gc_plan.md`.
+impl Array {
+    pub fn push(&mut self, value: Value) {
+        self.0.as_array_inner_mut().push(value);
+        self.0.write_barrier(value);
+    }
+
+    pub fn insert(&mut self, index: usize, element: Value) {
+        self.0.as_array_inner_mut().insert(index, element);
+        self.0.write_barrier(element);
+    }
+
+    pub fn fill(&mut self, value: Value) {
+        self.0.as_array_inner_mut().fill(value);
+        self.0.write_barrier(value);
+    }
+
+    pub fn resize(&mut self, new_len: usize, value: Value) {
+        self.0.as_array_inner_mut().resize(new_len, value);
+        self.0.write_barrier(value);
+    }
+
+    pub fn insert_many(&mut self, index: usize, iterable: impl IntoIterator<Item = Value>) {
+        self.0.as_array_inner_mut().insert_many(index, iterable);
+        self.0.write_barrier_bulk();
+    }
+
+    pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
+        self.0.as_array_inner_mut().extend(iter);
+        self.0.write_barrier_bulk();
+    }
+
+    pub fn extend_from_slice(&mut self, slice: &[Value]) {
+        self.0.as_array_inner_mut().extend_from_slice(slice);
+        self.0.write_barrier_bulk();
+    }
+
+    pub fn replace(&mut self, v: Vec<Value>) {
+        self.0.as_array_inner_mut().replace(v);
+        self.0.write_barrier_bulk();
+    }
+
+    pub(crate) fn set_index(&mut self, idx: i64, src: Value) -> Result<Value> {
+        let r = self.0.as_array_inner_mut().set_index(idx, src)?;
+        self.0.write_barrier(src);
+        Ok(r)
+    }
+
+    pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
+        let r = self.0.as_array_inner_mut().set_index2(index, length, val)?;
+        self.0.write_barrier(val);
+        Ok(r)
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct ArrayInner(SmallVec<[Value; ARRAY_INLINE_CAPA]>);
