@@ -727,50 +727,7 @@ impl alloc::GC<RValue> for RValue {
         if alloc.gc_check_and_mark(self) {
             return;
         }
-        if let Some(v) = &self.var_table {
-            v.iter().for_each(|v| {
-                v.map(|v| {
-                    v.mark(alloc);
-                });
-            });
-        }
-        // SAFETY: Type is checked via ty() match, ensuring we only access union variants that
-        // match the actual object type. Each as_* method accesses the correct union field.
-        unsafe {
-            match self.ty() {
-                ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
-                ObjTy::OBJECT => {
-                    self.as_object().iter().for_each(|v| {
-                        v.map(|v| {
-                            v.mark(alloc);
-                        });
-                    });
-                }
-                ObjTy::BIGNUM => {}
-                ObjTy::FLOAT => {}
-                ObjTy::COMPLEX => self.as_complex().mark(alloc),
-                ObjTy::RATIONAL => self.as_rational().mark(alloc),
-                ObjTy::STRING => {}
-                ObjTy::TIME => {}
-                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
-                ObjTy::RANGE => self.as_range().mark(alloc),
-                ObjTy::PROC => self.as_proc().mark(alloc),
-                ObjTy::HASH => self.as_hashmap().mark(alloc),
-                ObjTy::REGEXP => {}
-                ObjTy::IO => {}
-                ObjTy::EXCEPTION => self.as_exception().mark(alloc),
-                ObjTy::METHOD => self.as_method().mark(alloc),
-                ObjTy::FIBER => self.as_fiber().mark(alloc),
-                ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
-                ObjTy::GENERATOR => self.as_generator().mark(alloc),
-                ObjTy::BINDING => self.as_binding().mark(alloc),
-                ObjTy::UMETHOD => {}
-                ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
-                ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
-                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
-                _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
-            }
-        }
+        alloc::GCBox::mark_children(self, alloc);
     }
 }
 
@@ -840,6 +797,53 @@ impl alloc::GCBox for RValue {
             header: Header { next: None },
             kind: ObjKind::invalid(),
             var_table: None,
+        }
+    }
+
+    fn mark_children(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(v) = &self.var_table {
+            v.iter().for_each(|v| {
+                v.map(|v| {
+                    v.mark(alloc);
+                });
+            });
+        }
+        // SAFETY: Type is checked via ty() match, ensuring we only access union variants that
+        // match the actual object type. Each as_* method accesses the correct union field.
+        unsafe {
+            match self.ty() {
+                ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
+                ObjTy::OBJECT => {
+                    self.as_object().iter().for_each(|v| {
+                        v.map(|v| {
+                            v.mark(alloc);
+                        });
+                    });
+                }
+                ObjTy::BIGNUM => {}
+                ObjTy::FLOAT => {}
+                ObjTy::COMPLEX => self.as_complex().mark(alloc),
+                ObjTy::RATIONAL => self.as_rational().mark(alloc),
+                ObjTy::STRING => {}
+                ObjTy::TIME => {}
+                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
+                ObjTy::RANGE => self.as_range().mark(alloc),
+                ObjTy::PROC => self.as_proc().mark(alloc),
+                ObjTy::HASH => self.as_hashmap().mark(alloc),
+                ObjTy::REGEXP => {}
+                ObjTy::IO => {}
+                ObjTy::EXCEPTION => self.as_exception().mark(alloc),
+                ObjTy::METHOD => self.as_method().mark(alloc),
+                ObjTy::FIBER => self.as_fiber().mark(alloc),
+                ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
+                ObjTy::GENERATOR => self.as_generator().mark(alloc),
+                ObjTy::BINDING => self.as_binding().mark(alloc),
+                ObjTy::UMETHOD => {}
+                ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
+                ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
+                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
+                _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
+            }
         }
     }
 }

@@ -36,6 +36,11 @@ const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
 
+/// Number of minor (young-generation) collections allowed between two
+/// major (full-heap) collections. A major GC demotes every object and
+/// rebuilds generation state; see `doc/generational_gc_plan.md`.
+const MINORS_PER_MAJOR: usize = 64;
+
 pub trait GC<T: GCBox> {
     fn mark(&self, alloc: &mut Allocator<T>);
 }
@@ -55,6 +60,39 @@ pub trait GCBox: PartialEq {
     fn set_next(&mut self, next: *mut Self);
 
     fn new_invalid() -> Self;
+
+    ///
+    /// Mark the objects directly referenced by `self` (its children),
+    /// *without* marking `self` itself. Used to scan remembered-set
+    /// entries during a minor GC, where `self` is an old object that is
+    /// already (seed-)marked but whose young children must still be
+    /// reached. See `doc/generational_gc_plan.md`.
+    ///
+    fn mark_children(&self, alloc: &mut Allocator<Self>)
+    where
+        Self: Sized;
+}
+
+///
+/// Kind of a garbage collection cycle.
+///
+/// - `Major`: a full-heap collection. Both bitmaps are cleared, every
+///   object (old and young) is re-marked from the roots, and the whole
+///   heap is swept.
+/// - `Minor`: a young-generation collection. `mark_bits` is seeded from
+///   `old_bits` so old-generation objects start out "already marked" —
+///   they are neither swept nor re-traversed; young objects reachable
+///   only from old ones are reached via the remembered set.
+///
+/// Promotion is not enabled yet (no object carries the `OLD` flag), so
+/// `old_bits` is always empty and a `Minor` cycle currently produces
+/// exactly the same result as a `Major` one. See
+/// `doc/generational_gc_plan.md`.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GcKind {
+    Minor,
+    Major,
 }
 
 pub struct Allocator<T> {
@@ -82,10 +120,12 @@ pub struct Allocator<T> {
     /// minor GC lands; see `doc/generational_gc_plan.md`.
     #[allow(dead_code)]
     minor_gc_count: usize,
-    /// Counter of major (full-heap) GC executions. Currently equal to
-    /// `total_gc_counter`, since every collection is still a full GC.
+    /// Counter of major (full-heap) GC executions.
     #[allow(dead_code)]
     major_gc_count: usize,
+    /// Minor GCs performed since the last major GC. Drives the
+    /// minor/major choice in `decide_gc_kind`.
+    minors_since_major: usize,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -167,7 +207,15 @@ impl<T: GCBox> Allocator<T> {
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
         let layout = Layout::from_size_align(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE).unwrap();
         let ptr = unsafe { System.alloc(layout) };
-        let ptr = std::ptr::NonNull::new(ptr as _).unwrap();
+        let ptr: PageRef<T> = std::ptr::NonNull::new(ptr as _).unwrap();
+        // The arena is freshly `System.alloc`'d (uninitialised). Zero the
+        // first page's old-generation bitmap so the first minor GC seeds
+        // `mark_bits` from zeros rather than arena garbage. (`mark_bits`
+        // is always written by a major clear / minor seed before it is
+        // read, so it needs no such pre-zeroing.)
+        // SAFETY: `ptr` points at `ALLOC_SIZE` bytes of owned arena; only
+        // the `old_bits` field is written here.
+        unsafe { (*ptr.as_ptr()).clear_old_bits() };
         Allocator {
             current_page: ptr,
             head_page: ptr,
@@ -181,6 +229,7 @@ impl<T: GCBox> Allocator<T> {
             total_gc_counter: 0,
             minor_gc_count: 0,
             major_gc_count: 0,
+            minors_since_major: 0,
             remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
@@ -373,6 +422,13 @@ impl<T: GCBox> Allocator<T> {
                 .free_pages
                 .pop_front()
                 .unwrap_or_else(|| self.new_page());
+            // A page entering service must start with a zeroed
+            // old-generation bitmap: fresh arena pages are uninitialised,
+            // and salvaged pages may carry stale old bits. This keeps a
+            // later minor GC's seed correct. (`mark_bits` is reset by the
+            // next major clear / minor seed.)
+            // SAFETY: `current_page` is a live, owned page.
+            unsafe { self.current_page.as_mut().clear_old_bits() };
             unsafe { self.current_page.as_ref().get_first_cell() }
         } else {
             // Bump allocation.
@@ -393,17 +449,41 @@ impl<T: GCBox> Allocator<T> {
         gcbox
     }
 
+    ///
+    /// Decide whether the next collection is a minor or a major GC.
+    ///
+    /// A major GC is forced once `MINORS_PER_MAJOR` minor GCs have run
+    /// since the last major one, so the old generation is eventually
+    /// reclaimed and the remembered set rebuilt. (With promotion not yet
+    /// enabled this only affects which counter advances.)
+    ///
+    fn decide_gc_kind(&self) -> GcKind {
+        if self.minors_since_major >= MINORS_PER_MAJOR {
+            GcKind::Major
+        } else {
+            GcKind::Minor
+        }
+    }
+
     pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
             return;
         }
+        let kind = self.decide_gc_kind();
         self.total_gc_counter += 1;
-        // Every collection is currently a full (major) GC. Minor GC is
-        // introduced in a later phase; see `doc/generational_gc_plan.md`.
-        self.major_gc_count += 1;
+        match kind {
+            GcKind::Minor => {
+                self.minor_gc_count += 1;
+                self.minors_since_major += 1;
+            }
+            GcKind::Major => {
+                self.major_gc_count += 1;
+                self.minors_since_major = 0;
+            }
+        }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
-            eprintln!("#### GC start");
+            eprintln!("#### GC start ({kind:?})");
             eprintln!(
                 "allocated: {}  used in current page: {}  allocated pages: {}",
                 self.total_allocated_objects,
@@ -411,7 +491,20 @@ impl<T: GCBox> Allocator<T> {
                 self.pages.len()
             );
         }
-        self.clear_mark();
+        // Prepare the mark bitmaps:
+        // - Major: zero `mark_bits` and `old_bits`; every object becomes
+        //   a collection candidate and is re-marked from the roots.
+        // - Minor: seed `mark_bits` from `old_bits`, so old objects start
+        //   "already marked" and are skipped by mark and sweep.
+        // (Currently `old_bits` is always empty — nothing is promoted —
+        // so the two paths are equivalent. See generational_gc_plan.md.)
+        match kind {
+            GcKind::Major => {
+                self.clear_mark();
+                self.clear_old();
+            }
+            GcKind::Minor => self.seed_marks(),
+        }
         // Skip all heap-frame bookkeeping entirely when nothing has
         // been promoted. The common case (optcarrot and most
         // benchmarks promote few or no frames) then pays exactly zero
@@ -422,19 +515,24 @@ impl<T: GCBox> Allocator<T> {
             self.clear_frame_marks();
         }
         root.mark(self);
+        // A minor GC must also reach young objects referenced only from
+        // old (already-marked) objects, via the remembered set. (Empty
+        // until promotion is enabled.)
+        if kind == GcKind::Minor {
+            self.mark_remembered();
+        }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
         }
+        // Drop dead entries from the remembered set before sweep frees
+        // them: keep only objects still marked this cycle.
+        self.filter_remembered();
         self.salvage_empty_pages();
         self.sweep();
         if has_heap_frames {
             self.sweep_heap_frames();
         }
-        // A full (major) GC rebuilds generation state from scratch, so
-        // the remembered set is reset. (Currently always empty: nothing
-        // is promoted yet — see `doc/generational_gc_plan.md`.)
-        self.remembered.clear();
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             assert_eq!(self.free_list_count, self.check_free_list());
@@ -492,6 +590,81 @@ impl<T: GCBox> Allocator<T> {
                 .for_each(|heap| heap.as_mut().clear_bits());
         }
         self.mark_counter = 0;
+    }
+
+    ///
+    /// Clear all old-generation bitmaps (major GC demotes every object
+    /// to a collection candidate). See `doc/generational_gc_plan.md`.
+    ///
+    fn clear_old(&mut self) {
+        unsafe {
+            self.current_page.as_mut().clear_old_bits();
+            self.pages
+                .iter_mut()
+                .for_each(|heap| heap.as_mut().clear_old_bits());
+        }
+    }
+
+    ///
+    /// Seed `mark_bits` from `old_bits` on every page (minor GC): old
+    /// objects start out marked, so they are neither re-traversed nor
+    /// swept. See `doc/generational_gc_plan.md`.
+    ///
+    fn seed_marks(&mut self) {
+        unsafe {
+            self.current_page.as_mut().seed_mark_from_old();
+            self.pages
+                .iter_mut()
+                .for_each(|heap| heap.as_mut().seed_mark_from_old());
+        }
+        self.mark_counter = 0;
+    }
+
+    ///
+    /// Minor GC: mark the young children of every remembered (old)
+    /// object. The old objects are already (seed-)marked, so we must
+    /// reach their children explicitly. (Empty until promotion lands.)
+    ///
+    fn mark_remembered(&mut self) {
+        // Take the set out so the marking closure can borrow `self`
+        // mutably; marking never mutates the remembered set (the write
+        // barrier is not invoked during GC), so a snapshot is sound.
+        let remembered = std::mem::take(&mut self.remembered);
+        for ptr in remembered.iter() {
+            // SAFETY: remembered entries are live old objects (kept
+            // marked across the cycle; dead ones are dropped in
+            // `filter_remembered` before sweep frees them).
+            unsafe { ptr.as_ref().mark_children(self) };
+        }
+        self.remembered = remembered;
+    }
+
+    ///
+    /// Drop remembered-set entries that are not marked this cycle (they
+    /// are about to be swept). Surviving entries are retained. Must run
+    /// after marking and before sweep.
+    ///
+    fn filter_remembered(&mut self) {
+        if self.remembered.is_empty() {
+            return;
+        }
+        let mut remembered = std::mem::take(&mut self.remembered);
+        // SAFETY: every entry still points at a valid (not-yet-swept)
+        // cell at this point in the cycle.
+        remembered.retain(|ptr| self.is_marked(unsafe { ptr.as_ref() }));
+        self.remembered = remembered;
+    }
+
+    ///
+    /// Test whether `ptr` is marked in the current cycle (read-only;
+    /// does not set the bit).
+    ///
+    fn is_marked(&self, ptr: &T) -> bool {
+        let ptr = ptr as *const T;
+        let page_ptr = self.get_page(ptr);
+        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let bit_mask = 1 << (index % 64);
+        unsafe { (*page_ptr).mark_bits[index / 64] & bit_mask != 0 }
     }
 
     ///
@@ -712,9 +885,16 @@ impl<T: GCBox> Page<T> {
     /// every object back to a collection candidate. Reserved for the
     /// generational GC phases; see `doc/generational_gc_plan.md`.
     ///
-    #[allow(dead_code)]
     fn clear_old_bits(&mut self) {
         self.old_bits.iter_mut().for_each(|e| *e = 0)
+    }
+
+    ///
+    /// Seed the mark bitmap from the old-generation bitmap (minor GC):
+    /// every old cell starts out marked. See `doc/generational_gc_plan.md`.
+    ///
+    fn seed_mark_from_old(&mut self) {
+        self.mark_bits.copy_from_slice(&self.old_bits);
     }
 
     ///

@@ -202,6 +202,18 @@ JIT は ivar / Struct スロットへ **生の `movq [rdi+offset], src`** を直
   `parent.is_old()` を 1 命令でテスト（ヘッダの flag を読む `testw`）し、
   old なら slow path（remember 関数呼び出し）へ。young が圧倒的多数なので
   分岐予測でほぼゼロコスト。**最終的にはこれが本筋**。
+
+  > **重要（Phase 4 調査）**：JIT の **ヒープ ivar ストア**
+  > （`asmir/compile/variables.rs` `store_ivar_heap_inner`）には、スロットが
+  > 既に存在する場合の **高速パス（生 `movq [rdx+idx*8], src`、バリアなし）**
+  > がある。`var_table` が `None`／容量不足のときだけ slow path で
+  > `set_ivar`（= バリア保護の Rust 経路）を呼ぶ。つまり**ある ivar スロットの
+  > 初回作成（None→Some / resize）は必ずバリアを通る**が、既存スロットへの
+  > 上書きはバリアを通らない。
+  > OBJECT 型の **inline ivar** ストア（`store_ivar_inline`）は常に生 `movq` で
+  > バリアを通らない。
+  > → これらに old 判定＋remember を発行するのが Phase 6。それまでは
+  > ivar を持ち得る型を old に昇格させない（後述 Phase 4 の昇格ポリシー）。
 - **(B) 暫定：当該型を WB_UNPROTECTED 扱い**：JIT インラインストアの対象になり
   得る型（OBJECT＝ivar 持ち、STRUCT、ARRAY 等）を当面 **WB-unprotected** とし、
   - 昇格させない（常に young 扱い）、
@@ -267,9 +279,22 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
    - Array/Hash/Struct は内部型に後方ポインタが無く呼び出し側が分散するため
      Phase 5 で型ごとに配線（JIT は Phase 6）。
    → バリアは inert なので gc-stress でフル GC 結果と差異が出ないことを確認。
-4. **マイナー GC 有効化（全型 WB_UNPROTECTED）**：昇格を「WB-protected な型のみ
-   （初期は空 or 不変オブジェクトのみ）」に限定。`clear_mark` のシード化・
-   minor/major 切替・remembered 走査を実装。安全側（ほぼフル GC 相当）で稼働確認。
+4. **マイナー GC 機構の実装（昇格は空）**：minor/major の二経路を実装。
+   - 実装済：`GcKind`＋`decide_gc_kind`（`MINORS_PER_MAJOR` ごとに major）、
+     minor の `seed_marks`（`mark_bits = old_bits`）、major の `clear_mark`＋
+     `clear_old`、`mark_remembered`（old の子を走査）、`filter_remembered`
+     （sweep 前に死んだ entry を除去）、`RValue::mark` を `mark`＋`mark_children`
+     に分割（GCBox に `mark_children` 追加）、ページ投入時の `old_bits` ゼロ化
+     （arena は未初期化のため）、gc-log の minor/major カウンタ。
+   - **昇格は無効（`old_bits` 常に空）**：JIT の ivar 高速パス（§6.2 重要）が
+     バリア未保護のため、ivar を持ち得る型を安全に昇格できない。よって現状
+     **minor ≡ major**（同一結果）で、機構のみを安全に稼働。
+   - 検証：default 全テスト green（既知の Ruby4.0 inspect 差 2 件を除く）、
+     gc-stress で array/hash/gc green、gc-debug でフリーリスト整合 assert 成立。
+   - 次段（昇格有効化）の安全な最小集合候補：`var_table` が `None` の
+     reference-free leaf 型（STRING/BIGNUM/FLOAT）。初回 ivar ストアが必ず
+     バリアを通る性質を使えば JIT バリア（Phase 6）前でも安全に昇格可能
+     （別途 gc-verify で検証予定）。
 5. **型ごとに WB-protected 化**：OBJECT(ivar)→ARRAY→HASH→STRUCT の順に Rust／
    JIT 両方のバリアを完成させ、昇格対象に加える。各型で gc-stress 回帰必須。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
