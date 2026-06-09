@@ -877,14 +877,16 @@ impl alloc::GCBox for RValue {
             // interpreter (Array wrapper / Value::set_struct_slot) and in
             // the JIT (array_index_assign / store_struct_slot_* emit the
             // barrier), so they are promotable in both modes.
+            // Hash stores go through Hashmap::insert (the barriered wrapper)
+            // in the interpreter, and Hash#[]= is not JIT-inlined (it calls
+            // that builtin), so every Hash store is barriered too.
             ObjTy::OBJECT
             | ObjTy::STRING
             | ObjTy::BIGNUM
             | ObjTy::FLOAT
             | ObjTy::ARRAY
-            | ObjTy::STRUCT => true,
-            // HASH is deferred (its default value/proc has no getter for the
-            // young_child_exists check yet). See generational_gc_plan.md.
+            | ObjTy::STRUCT
+            | ObjTy::HASH => true,
             _ => false,
         }
     }
@@ -928,6 +930,7 @@ impl alloc::GCBox for RValue {
                     .any(|v| is_young(v, alloc)),
                 ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
                 ObjTy::STRUCT => self.as_struct_inner().iter().any(|v| is_young(*v, alloc)),
+                ObjTy::HASH => self.as_hashmap().young_child_exists(alloc),
                 // Any other (currently non-promoted) kind: conservatively
                 // assume it points at young, so it is always remembered.
                 _ => true,
