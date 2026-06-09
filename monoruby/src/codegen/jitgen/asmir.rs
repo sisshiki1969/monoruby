@@ -5,9 +5,8 @@ use super::*;
 // AsmIR→machine-code lowering. The per-arch backend (`compile`) provides the
 // emission primitives + `compile_asmir_arch`; the arch-neutral dispatcher
 // (`compile_shared`) owns the shared instruction arms and forwards the rest.
-// x86 emits via `monoasm!`; aarch64 emits what it can via `monoasm_arm64!`
-// and bails (→ deopt to VM) on a not-yet-ported instruction (see
-// doc/aarch64-jitgen-plan.md).
+// x86 emits via `monoasm!`, aarch64 via `monoasm_arm64!`; both lower every
+// `AsmInst`, so neither bails (see doc/aarch64-jitgen-plan.md).
 #[cfg(target_arch = "x86_64")]
 #[path = "../arch/x86_64/compile/mod.rs"]
 mod compile;
@@ -1968,7 +1967,7 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
-    ) -> bool {
+    ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
@@ -2045,9 +2044,6 @@ impl Codegen {
         if entry.is_some() && exit.is_some() {
             self.jit.select_page(0);
         }
-        // x86 never bails (every `AsmInst` is lowered); the `bool` return exists
-        // only to share the driver (`gen_machine_code`) with aarch64.
-        true
     }
 
     ///

@@ -1,12 +1,12 @@
-//! aarch64 AsmIR→machine-code lowering (Phase 3b, incremental).
+//! aarch64 AsmIR→machine-code lowering.
 //!
 //! The arch-neutral front-end builds `AsmIr`; this drives the lowering on
-//! aarch64. `compile_asmir` returns `true` if it emitted code for the
-//! instruction and `false` if the instruction is not yet ported — in which
-//! case the driver returns `false`, `jit_compile` returns `Err`, and the
-//! method stays VM-interpreted (the existing `compile() -> None` bail). So
-//! only methods whose every `AsmInst` is supported actually JIT; coverage
-//! grows one variant at a time. See `doc/aarch64-jitgen-plan.md`.
+//! aarch64. Every `AsmInst` and side exit is lowered: large frame/field/sp
+//! offsets are materialized through scratch registers rather than bailing, and
+//! the `...`-forwarding deferral — the one shape that needed unported
+//! caller-relative codegen — is disabled for aarch64 in `forward_rest_deferral`.
+//! So aarch64 never bails out of JIT compilation; `compile_asmir`'s `bool` is
+//! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
@@ -73,9 +73,9 @@ impl Codegen {
 
     /// Lower one block's `AsmIr`. `entry` (if any) is bound first; `exit` (if
     /// any) appends an unconditional branch to that basic block at the end.
-    /// Returns `false` (bail) on any unsupported instruction or side exit.
-    /// (aarch64 half of the per-arch `gen_asm` the shared `gen_machine_code`
-    /// driver calls; the x86 half is in `asmir.rs`.)
+    /// Every `AsmInst` and side exit lowers, so aarch64 never bails out of JIT
+    /// compilation. (aarch64 half of the per-arch `gen_asm` the shared
+    /// `gen_machine_code` driver calls; the x86 half is in `asmir.rs`.)
     pub(in crate::codegen::jitgen) fn gen_asm(
         &mut self,
         ir: AsmIr,
@@ -84,7 +84,7 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
-    ) -> bool {
+    ) {
         // Generate the block's side-exit (deopt/evict/error) handlers. They are
         // cold, so we lay them out here but jump over them (`b skip`); guards in
         // the main body branch *back* to them (short-range b.cond). aarch64 has
@@ -108,9 +108,7 @@ impl Codegen {
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -119,9 +117,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        if !self.a64_gen_deopt(key.0, &key.1, label.clone(), bump, frame.base_stack_offset) {
-                            return false;
-                        }
+                        self.a64_gen_deopt(key.0, &key.1, label.clone(), bump, frame.base_stack_offset);
                         deopt_table.insert(key, label.clone());
                         label
                     }
@@ -131,20 +127,18 @@ impl Codegen {
                 // correct, just not yet self-optimizing).
                 SideExit::RecompileDeoptimize(pc, wb, _reason, _position) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    if !self.a64_gen_handle_error(pc, &wb, label.clone(), bump, frame.base_stack_offset) {
-                        return false;
-                    }
+                    self.a64_gen_handle_error(pc, &wb, label.clone(), bump, frame.base_stack_offset);
                     label
                 }
-                // Evict(None) is not expected here.
-                _ => return false,
+                // Evict(None) is a placeholder always overwritten with
+                // Evict(Some(..)) before codegen (mirrors x86 gen_asm's
+                // `_ => unreachable!()`).
+                _ => unreachable!("unexpected {side_exit:?}"),
             };
             labels.push(label);
         }
@@ -156,15 +150,12 @@ impl Codegen {
             self.jit.bind_label(entry.clone());
         }
         for inst in ir.inst {
-            if !self.compile_asmir(store, frame, &labels, inst, class_version.clone()) {
-                return false;
-            }
+            self.compile_asmir(store, frame, &labels, inst, class_version.clone());
         }
         if let Some(exit) = exit {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm_arm64!(&mut self.jit, b exit;);
         }
-        true
     }
 
     /// Undo the loop-JIT entry sp-bump (`emit_loop_jit_rsp_bump`) before
@@ -173,18 +164,17 @@ impl Codegen {
     /// sp-relative, so every loop-JIT exit that resumes the VM (deopt, error,
     /// raise, retry, redo) must restore sp first. `bytes` is
     /// `frame.loop_jit_spill_bytes` (0 for a non-loop frame or a loop without
-    /// spill); the entry bump bailed if it exceeded 4095, so it fits `add`'s
-    /// 12-bit immediate here.
+    /// spill); large bumps go through `a64_sp_add` (mirroring the entry
+    /// `a64_sp_sub`).
     fn a64_undo_loop_rsp_bump(&mut self, bytes: usize) {
         if bytes > 0 {
-            monoasm_arm64!(&mut self.jit, add sp, sp, #(bytes as u32););
+            self.a64_sp_add(bytes as u32);
         }
     }
 
     /// Deopt handler: write all live Ruby values back to the LFP (so the frame
     /// is GC-consistent and the interpreter can resume), set PC, and jump to
     /// the VM fetch loop. Mirrors x86 `side_exit_with_label` (deopt path).
-    /// Returns `false` (bail) if the write-back needs an unsupported feature.
     fn a64_gen_deopt(
         &mut self,
         pc: BytecodePtr,
@@ -192,12 +182,10 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-    ) -> bool {
+    ) {
         self.jit.bind_label(entry);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        if !self.a64_gen_write_back_for_deopt(wb, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(wb, base);
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
         // PC == x21.
@@ -205,7 +193,6 @@ impl Codegen {
             mov x21, (pc_ptr);
             b fetch;
         );
-        true
     }
 
     /// Error handler: write back, set PC to *this* instruction, and jump to
@@ -225,61 +212,47 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-    ) -> bool {
+    ) {
         self.jit.bind_label(entry);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        if !self.a64_gen_write_back_for_deopt(wb, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(wb, base);
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc0);
             b raise;
         );
-        true
     }
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
     /// (the local frame may be on the heap after a call returns). Mirrors x86
-    /// `gen_write_back_for_deopt`. Bails on FP / forwarding-rest write-backs,
-    /// which need machinery not yet ported.
-    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) -> bool {
-        if !wb.forward_rest.is_empty() {
-            return false;
-        }
+    /// `gen_write_back_for_deopt`. The deferred forwarding-rest write-back never
+    /// occurs on aarch64 (the deferral is disabled in `forward_rest_deferral`),
+    /// so every write-back lowers.
+    fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
+        debug_assert!(
+            wb.forward_rest.is_empty(),
+            "aarch64 disables forward-rest deferral, so a deopt write-back never carries one",
+        );
         // Spill each live FP-pool register to its slot(s) as a boxed Float
         // Value, so the interpreter sees the up-to-date float after the deopt.
         for (fpr, slots) in &wb.fpr {
             for slot in slots {
-                if !self.emit_fpr_to_stack(*fpr, *slot, base) {
-                    return false;
-                }
+                self.emit_fpr_to_stack(*fpr, *slot, base);
             }
         }
         let lfp = GP::R14.a64().0; // x22
         for (v, slot) in &wb.literal {
-            if !self.a64_store_imm_to_slot(v.id(), *slot, lfp) {
-                return false;
-            }
+            self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
         for slot in &wb.void {
-            if !self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp) {
-                return false;
-            }
+            self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
         }
         if let Some(slot) = wb.r15 {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-            if off > 4095 {
-                return false;
-            }
             let acc = GP::R15.a64().0; // x23
-            monoasm_arm64!(&mut self.jit,
-                sub x10, x(lfp), #(off);
-                str x(acc), [x10];
-            );
+            self.a64_frame_store(acc, lfp, off);
         }
-        true
     }
 
     /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
@@ -392,8 +365,9 @@ impl Codegen {
                     add x(rax), x(rax), #(1u32); // 2q+1 (tagged)
                 );
             }
-            // Rem/bit-ops are compiled as method calls, never IntegerBinOp.
-            _ => return false,
+            // Rem/bit-ops are compiled as method calls, never IntegerBinOp
+            // (mirrors x86 `integer_binop`'s `_ => unreachable!()`).
+            _ => unreachable!(),
         }
         true
     }
@@ -742,10 +716,7 @@ impl Codegen {
         } else if let Some(block) = block_arg {
             let lfp = GP::R14.a64().0;
             let off = block.0 as u32 * 8 + LFP_SELF as u32;
-            monoasm_arm64!(&mut self.jit,
-                sub x10, x(lfp), #(off);
-                ldr x9, [x10];
-            );
+            self.a64_frame_load(9, lfp, off);
         } else {
             monoasm_arm64!(&mut self.jit, mov x9, (0u64););
         }
@@ -756,11 +727,8 @@ impl Codegen {
     /// globals, callid, callee_lfp, fid)` which massages the caller's args into
     /// the callee frame. Returns rax==0 (None) on error (followed by a
     /// HandleError in the IR). `offset` (callee frame size, 16-aligned) is
-    /// reserved below sp around the call. Bails if it exceeds a 12-bit imm.
+    /// reserved below sp around the call (large frames go through `a64_sp_*`).
     fn a64_set_arguments(&mut self, callid: CallSiteId, fid: FuncId, offset: usize) -> bool {
-        if offset > 4080 {
-            return false;
-        }
         let f = crate::runtime::jit_generic_set_arguments as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                       // vm
@@ -769,23 +737,26 @@ impl Codegen {
             sub x3, sp, #(RSP_LOCAL_FRAME as u32); // callee_lfp (call-site sp)
             mov x4, (fid.get() as u64);        // callee fid
             str x30, [sp, #-16]!;              // save LR
-            sub sp, sp, #(offset as u32);      // reserve callee scratch
+        );
+        self.a64_sp_sub(offset as u32);        // reserve callee scratch
+        monoasm_arm64!(&mut self.jit,
             mov x9, (f);
             blr x9;
-            add sp, sp, #(offset as u32);
+        );
+        self.a64_sp_add(offset as u32);
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;                // restore LR
         );
         true
     }
 
     /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
-    /// fast path). aarch64 does not yet emit the inline element-copy fast path,
-    /// so the non-deferred shape falls back to the generic
-    /// `jit_generic_set_arguments` — the x86 fast path's own miss target, so
-    /// correct, just unoptimized. The `deferred_src` (D1) shape skipped building
-    /// `f`'s `...` rest array on the JIT path, so it cannot use the generic
-    /// helper and bails (the method stays VM-interpreted, where the array is
-    /// built normally).
+    /// fast path). aarch64 does not emit the inline element-copy fast path, so it
+    /// always falls back to the generic `jit_generic_set_arguments` — the x86
+    /// fast path's own miss target, so correct, just unoptimized. The deferred
+    /// `...`-rest (`deferred_src`) shape never occurs because aarch64 disables
+    /// the deferral (`forward_rest_deferral`), so the rest array is always built
+    /// normally and forwarding goes through the generic helper.
     fn a64_set_arguments_forwarded(
         &mut self,
         callid: CallSiteId,
@@ -793,26 +764,25 @@ impl Codegen {
         offset: usize,
         deferred_src: Option<(SlotId, u16)>,
     ) -> bool {
-        if deferred_src.is_some() {
-            return false;
-        }
+        debug_assert!(
+            deferred_src.is_none(),
+            "aarch64 disables forward-rest deferral, so SetArgumentsForwarded never carries deferred_src",
+        );
+        let _ = deferred_src;
         self.a64_set_arguments(callid, fid, offset)
     }
 
     /// Lower `SetArgumentsForwardedHelper`: same asm shape as
     /// `a64_set_arguments`, but dispatches to the specialized
     /// `jit_forwarded_set_arguments` runtime helper (forwarding `g(x.., ...)`
-    /// into a no-keyword iseq with opt/post/rest). Bails if the callee frame
-    /// size exceeds a 12-bit immediate.
+    /// into a no-keyword iseq with opt/post/rest). Large callee frames go
+    /// through `a64_sp_*`.
     pub(in crate::codegen::jitgen) fn jit_set_arguments_forwarded_helper(
         &mut self,
         callid: CallSiteId,
         fid: FuncId,
         offset: usize,
     ) -> bool {
-        if offset > 4080 {
-            return false;
-        }
         let f = crate::runtime::jit_forwarded_set_arguments as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                       // vm
@@ -821,10 +791,14 @@ impl Codegen {
             sub x3, sp, #(RSP_LOCAL_FRAME as u32); // callee_lfp (call-site sp)
             mov x4, (fid.get() as u64);        // callee fid
             str x30, [sp, #-16]!;              // save LR
-            sub sp, sp, #(offset as u32);      // reserve callee scratch
+        );
+        self.a64_sp_sub(offset as u32);        // reserve callee scratch
+        monoasm_arm64!(&mut self.jit,
             mov x9, (f);
             blr x9;
-            add sp, sp, #(offset as u32);
+        );
+        self.a64_sp_add(offset as u32);
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;                // restore LR
         );
         true
@@ -925,17 +899,10 @@ impl Codegen {
     }
 
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
-    fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) -> bool {
+    fn a64_store_imm_to_slot(&mut self, imm: u64, slot: SlotId, lfp: u32) {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (imm);
-            sub x10, x(lfp), #(off);
-            str x9, [x10];
-        );
-        true
+        monoasm_arm64!(&mut self.jit, mov x9, (imm););
+        self.a64_frame_store(9, lfp, off);
     }
 
     /// Walk `outer` outer-LFP links, leaving the target outer LFP in `dst`.
@@ -1231,10 +1198,7 @@ impl Codegen {
         );
         // store_rax(dst)
         if let Some(off) = dst_off {
-            monoasm_arm64!(&mut self.jit,
-                sub x10, x(lfp), #(off);
-                str x0, [x10];
-            );
+            self.a64_frame_store(0, lfp, off);
         }
         // pop class context: exit_classdef(vm, globals), preserving the result.
         monoasm_arm64!(&mut self.jit,
@@ -1256,8 +1220,7 @@ impl Codegen {
     /// `ClassDef`: define (or reopen) a class/module, then run its body. The
     /// live FP pool is saved once for the whole sequence (the define/enter/exit
     /// C calls and the class body all clobber d2..) and reloaded into the pool
-    /// registers before each HandleError branch; bails only on an out-of-range
-    /// frame slot.
+    /// registers before each HandleError branch.
     pub(in crate::codegen::jitgen) fn class_def(
         &mut self,
         base: Option<SlotId>,
@@ -1269,28 +1232,9 @@ impl Codegen {
         using_xmm: UsingXmm,
         error: &DestLabel,
     ) -> bool {
-        // Range-check every frame slot up front (so we never bail mid-emit).
-        let sc_off = match superclass {
-            Some(s) => match (conv(s) as u32 <= 4095).then(|| conv(s) as u32) {
-                Some(o) => Some(o),
-                None => return false,
-            },
-            None => None,
-        };
-        let base_off = match base {
-            Some(b) => match (conv(b) as u32 <= 4095).then(|| conv(b) as u32) {
-                Some(o) => Some(o),
-                None => return false,
-            },
-            None => None,
-        };
-        let dst_off = match dst {
-            Some(d) => match (conv(d) as u32 <= 4095).then(|| conv(d) as u32) {
-                Some(o) => Some(o),
-                None => return false,
-            },
-            None => None,
-        };
+        let sc_off = superclass.map(|s| conv(s) as u32);
+        let base_off = base.map(|b| conv(b) as u32);
+        let dst_off = dst.map(|d| conv(d) as u32);
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_class as *const () as u64;
         // Save the live FP pool for the whole ClassDef sequence; it persists
@@ -1299,11 +1243,11 @@ impl Codegen {
         self.emit_xmm_save(using_xmm, false);
         // superclass -> x3, base -> x5 (Option<Value>; 0 == None)
         match sc_off {
-            Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x3, [x10];),
+            Some(off) => self.a64_frame_load(3, lfp, off),
             None => monoasm_arm64!(&mut self.jit, mov x3, (0u64);),
         }
         match base_off {
-            Some(off) => monoasm_arm64!(&mut self.jit, sub x10, x(lfp), #(off); ldr x5, [x10];),
+            Some(off) => self.a64_frame_load(5, lfp, off),
             None => monoasm_arm64!(&mut self.jit, mov x5, (0u64);),
         }
         // define_class(vm, globals, name, superclass, is_module, base)
@@ -1334,20 +1278,13 @@ impl Codegen {
         error: &DestLabel,
     ) -> bool {
         let base_off = conv(base) as u32;
-        let dst_off = match dst {
-            Some(d) => Some(conv(d) as u32),
-            None => None,
-        };
-        if base_off > 4095 || dst_off.is_some_and(|o| o > 4095) {
-            return false;
-        }
+        let dst_off = dst.map(|d| conv(d) as u32);
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_singleton_class as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         // define_singleton_class(vm, globals, base)
+        self.a64_frame_load(2, lfp, base_off);             // x2 = base (receiver Value)
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(base_off);
-            ldr x2, [x10];                                 // base (receiver Value)
             mov x0, x19;
             mov x1, x20;
             str x30, [sp, #-16]!;
@@ -1383,26 +1320,129 @@ impl Codegen {
         }
     }
 
+    /// Emit `addr <- base - off` (a byte offset into a frame).
+    ///
+    /// `sub`'s 12-bit immediate caps a direct subtract at `off <= 4095`; above
+    /// that the offset is materialized into `addr` first and a register subtract
+    /// is used, so *any* frame offset is addressable (no bail). `addr` doubles
+    /// as the materialization scratch, so it must differ from `base`.
+    fn a64_addr_sub(&mut self, addr: u32, base: u32, off: u32) {
+        debug_assert_ne!(addr, base, "a64_addr_sub: addr must differ from base");
+        if off <= 4095 {
+            monoasm_arm64!(&mut self.jit, sub x(addr), x(base), #(off););
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x(addr), (off as u64);
+                sub x(addr), x(base), x(addr);
+            );
+        }
+    }
+
+    /// `x(dst) <- [lfp - off]`: load the value of a frame slot. Slots sit at a
+    /// *negative* displacement from the LFP, which the scaled `ldr` immediate
+    /// cannot encode; `ldur`'s signed 9-bit offset can, so a small frame folds
+    /// to one instruction. A larger offset forms the address in scratch x10
+    /// (so `dst` must not be x10).
+    fn a64_frame_load(&mut self, dst: u32, lfp: u32, off: u32) {
+        if off <= 256 {
+            let neg = -(off as i32);
+            monoasm_arm64!(&mut self.jit, ldur x(dst), [x(lfp), #(neg)];);
+        } else {
+            self.a64_addr_sub(10, lfp, off);
+            monoasm_arm64!(&mut self.jit, ldr x(dst), [x10];);
+        }
+    }
+
+    /// `[lfp - off] <- x(src)`: store into a frame slot. `stur`'s signed 9-bit
+    /// offset folds a small (negative) frame displacement to one instruction;
+    /// a larger offset forms the address in scratch x10 (so `src` must not be
+    /// x10).
+    fn a64_frame_store(&mut self, src: u32, lfp: u32, off: u32) {
+        if off <= 256 {
+            let neg = -(off as i32);
+            monoasm_arm64!(&mut self.jit, stur x(src), [x(lfp), #(neg)];);
+        } else {
+            self.a64_addr_sub(10, lfp, off);
+            monoasm_arm64!(&mut self.jit, str x(src), [x10];);
+        }
+    }
+
+    /// `x(dst) <- [x(base) + off]`: load an object field. The scaled `ldr`
+    /// immediate covers `off <= 32760` (8-aligned); a larger/unaligned offset
+    /// goes through a register-offset load (byte offset materialized in scratch
+    /// x10, so `dst`/`base` must not be x10).
+    fn a64_field_load(&mut self, dst: u32, base: u32, off: u32) {
+        if Self::a64_field_off_ok(off) {
+            monoasm_arm64!(&mut self.jit, ldr x(dst), [x(base), #(off)];);
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x10, (off as u64);
+                ldr x(dst), [x(base), x10];
+            );
+        }
+    }
+
+    /// `[x(base) + off] <- x(src)`: store an object field. Large-offset safe
+    /// like `a64_field_load` (`src`/`base` must not be x10).
+    fn a64_field_store(&mut self, src: u32, base: u32, off: u32) {
+        if Self::a64_field_off_ok(off) {
+            monoasm_arm64!(&mut self.jit, str x(src), [x(base), #(off)];);
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x10, (off as u64);
+                str x(src), [x(base), x10];
+            );
+        }
+    }
+
+    /// `sp <- sp - off`, materializing offsets beyond the 12-bit `sub sp`
+    /// immediate. The register form addresses sp via a GP temp (x9/x10) because
+    /// reg 31 decodes as XZR — not SP — in the shifted-register add/sub.
+    fn a64_sp_sub(&mut self, off: u32) {
+        if off == 0 {
+            return;
+        }
+        if off <= 4095 {
+            monoasm_arm64!(&mut self.jit, sub sp, sp, #(off););
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (off as u64);
+                mov x10, sp;
+                sub x10, x10, x9;
+                mov sp, x10;
+            );
+        }
+    }
+
+    /// `sp <- sp + off`, the inverse of `a64_sp_sub` (same sp-via-temp caveat).
+    fn a64_sp_add(&mut self, off: u32) {
+        if off == 0 {
+            return;
+        }
+        if off <= 4095 {
+            monoasm_arm64!(&mut self.jit, add sp, sp, #(off););
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (off as u64);
+                mov x10, sp;
+                add x10, x10, x9;
+                mov sp, x10;
+            );
+        }
+    }
+
     /// [lfp - slot*8 - LFP_SELF] <- reg
     pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
         let lfp = GP::R14.a64().0;
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        let src = r.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            str x(src), [x10];
-        );
+        self.a64_frame_store(r.a64().0, lfp, off);
     }
 
     /// reg <- [lfp - slot*8 - LFP_SELF]
     pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
         let lfp = GP::R14.a64().0;
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        let dst = r.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            ldr x(dst), [x10];
-        );
+        self.a64_frame_load(r.a64().0, lfp, off);
     }
 
     /// reg <- literal Value (immediate)
@@ -1414,20 +1454,13 @@ impl Codegen {
 
     /// [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
     /// materialized in a scratch reg (aarch64 has no store-immediate), so no GP
-    /// register is clobbered. Bails (`false`) if the frame offset exceeds the
-    /// 12-bit immediate range. Mirrors x86 `literal_to_stack`.
+    /// register is clobbered. Mirrors x86 `literal_to_stack`.
     pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
         let lfp = GP::R14.a64().0;
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let imm = v.id();
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (imm);
-            sub x10, x(lfp), #(off);
-            str x9, [x10];
-        );
+        monoasm_arm64!(&mut self.jit, mov x9, (imm););
+        self.a64_frame_store(9, lfp, off);
         true
     }
 
@@ -1510,9 +1543,7 @@ impl Codegen {
             cmp x10, x11;
         );
         self.jit.bcond_label(monoasm::Cond::Gt, &ok); // sp > limit -> ok
-        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::codegen::stack_overflow as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
@@ -1549,9 +1580,7 @@ impl Codegen {
             cmp x9, #(8u32);
         );
         self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
-        if !self.a64_gen_write_back_for_deopt(&write_back, base) {
-            return false;
-        }
+        self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
@@ -1678,17 +1707,15 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::set_global_var as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
-            sub x10, x(lfp), #(off);
-            ldr x3, [x10];                // val (from slot)
+        );
+        self.a64_frame_load(3, lfp, off); // x3 = val (from slot)
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -1725,15 +1752,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_dyn_var(&mut self, src: DynVar) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.reg.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let rax = GP::Rax.a64().0;
         self.a64_get_outer(src.outer, lfp, rax);
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(rax), #(off);
-            ldr x(rax), [x10];
-        );
+        self.a64_frame_load(rax, rax, off);
         true
     }
 
@@ -1741,21 +1762,13 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_dyn_var(&mut self, dst: DynVar, src: GP) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.reg.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
-        // walk to the outer LFP in `outer` (avoid clobbering `src`).
-        let outer = GP::Rcx.a64().0;
         let s = src.a64().0;
-        if s == outer || s == 10 {
-            // src would be clobbered by the walk/scratch; bail (rare).
-            return false;
-        }
-        self.a64_get_outer(dst.outer, lfp, outer);
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(outer), #(off);
-            str x(s), [x10];
-        );
+        // Walk to the outer LFP in x9 and form the address in x10 — both pure
+        // lowering scratch (x9..x15 never alias a GP value register, which map
+        // only to x0..x8 / x20..x23), so `src` is never clobbered whatever
+        // register it is.
+        self.a64_get_outer(dst.outer, lfp, 9);
+        self.a64_frame_store(s, 9, off);
         true
     }
 
@@ -1768,12 +1781,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::create_array as *const () as u64;
+        self.a64_addr_sub(0, lfp, off); // x0 = &slot[src]
         monoasm_arm64!(&mut self.jit,
-            sub x0, x(lfp), #(off);   // &slot[src]
             mov x1, (len as u64);
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -1815,15 +1825,14 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = args.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::gen_hash as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
-            sub x2, x(lfp), #(off);   // &slot[args]
+        );
+        self.a64_addr_sub(2, lfp, off); // x2 = &slot[args]
+        monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -1845,16 +1854,11 @@ impl Codegen {
         let lfp = GP::R14.a64().0;
         let soff = start.0 as u32 * 8 + LFP_SELF as u32;
         let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
-        if soff > 4095 || eoff > 4095 {
-            return false;
-        }
         let f = runtime::gen_range as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
+        self.a64_frame_load(0, lfp, soff); // x0 = start value
+        self.a64_frame_load(1, lfp, eoff); // x1 = end value
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(soff);
-            ldr x0, [x10];            // start value
-            sub x10, x(lfp), #(eoff);
-            ldr x1, [x10];            // end value
             mov x2, x19;              // vm
             mov x3, x20;              // globals
             mov x4, (exclude_end as u64);
@@ -1878,15 +1882,14 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::concatenate_string as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
-            sub x2, x(lfp), #(off);   // &slot[arg]
+        );
+        self.a64_addr_sub(2, lfp, off); // x2 = &slot[arg]
+        monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -1902,19 +1905,13 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let toa = self.jit.label();
         let exit = self.jit.label();
         // Reserve the FP-pool save area for the whole sequence; both the
         // already-Array fast path and the to_a C call fall through to the
         // matching restore, so sp stays balanced either way.
         self.emit_xmm_save(using_xmm, false);
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            ldr x0, [x10];          // val (rax)
-        );
+        self.a64_frame_load(0, lfp, off); // val (rax)
         self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
         monoasm_arm64!(&mut self.jit, b exit;); // already Array
         let f = runtime::to_a as *const () as u64;
@@ -2061,11 +2058,8 @@ impl Codegen {
         let f64_to_val = self.f64_to_val.clone();
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
         self.a64_fpr_load(x, 0, base); // value -> d0 (pool fmov or spill load)
-        monoasm_arm64!(&mut self.jit,
-            bl f64_to_val;          // x0 = Value(f64)
-            sub x10, x(lfp), #(off);
-            str x0, [x10];
-        );
+        monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+        self.a64_frame_store(0, lfp, off);
         true
     }
 
@@ -2180,10 +2174,9 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let (l, r) = binary_xmm;
-        // Reject an unsupported op before emitting any operand loads.
-        if !matches!(kind, BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div) {
-            return false;
-        }
+        // Only the four arithmetic ops are emitted as FloatBinOp (Rem/pow/etc.
+        // are method calls); the `_ => unreachable!()` in the op match below
+        // mirrors x86 `float_binop`.
         // Operands resolve to their pool register, or load a spill into d0/d1;
         // the result writes its pool register or scratch d0 (committed below).
         let ld = self.a64_fpr_read(l, 0, base);
@@ -2217,7 +2210,8 @@ impl Codegen {
                 self.a64_fpr_commit(dst, 0, base);
             }
             UnOpK::Pos => {}
-            _ => return false,
+            // Float unary ops are only Neg/Pos (BitNot is integer-only).
+            _ => unreachable!(),
         }
         true
     }
@@ -2231,10 +2225,9 @@ impl Codegen {
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
         let id = Value::integer(i).id();
         let bits = (i as f64).to_bits();
+        monoasm_arm64!(&mut self.jit, mov x9, (id););
+        self.a64_frame_store(9, lfp, off);
         monoasm_arm64!(&mut self.jit,
-            mov x9, (id);
-            sub x10, x(lfp), #(off);
-            str x9, [x10];
             mov x9, (bits);
             fmov d(p), x9;
         );
@@ -2569,27 +2562,17 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let prologue_bytes = prologue_offset.unwrap_concrete();
-        if prologue_bytes > 4095 {
-            return false;
-        }
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #-16]!;
             mov x29, sp;
         );
-        if prologue_bytes > 0 {
-            monoasm_arm64!(&mut self.jit,
-                sub sp, sp, #(prologue_bytes as u32);
-            );
-        }
+        self.a64_sp_sub(prologue_bytes as u32);
         let clear_len = info.reg_num - info.arg_num;
         if clear_len > 0 {
             monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
             for i in 0..clear_len {
                 let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
-                monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
-                    str x9, [x10];
-                );
+                self.a64_frame_store(9, lfp, off);
             }
         }
         true
@@ -2618,8 +2601,7 @@ impl Codegen {
         // so they are set up *before* the var-table checks (which may branch to
         // `extend` straight away on a None table).
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(LFP_SELF as u32);
-            ldr x0, [x10];                              // self
+            ldur x0, [x(lfp), #(-(LFP_SELF as i32))];   // self
             mov x1, (heap_len as u64);                  // heap_len
             ldr x9, [x0, #(RVALUE_OFFSET_VAR as u32)];  // var_table ptr
             cbz x9, extend;                             // None -> grow
@@ -2703,13 +2685,10 @@ impl Codegen {
     /// offset is out of the load immediate's range.
     pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
         let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let r15 = GP::R15.a64().0;
+        self.a64_field_load(r15, rdi, off);
         monoasm_arm64!(&mut self.jit,
-            ldr x(r15), [x(rdi), #(off)];
             mov x9, (NIL_VALUE);
             cmp x(r15), #(0u32);
             csel x(r15), x(r15), x9, ne;   // unset slot (0) -> nil
@@ -2720,40 +2699,29 @@ impl Codegen {
     /// Store the accumulator-side `src` into an inline instance-variable slot.
     pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
         let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
-        monoasm_arm64!(&mut self.jit, str x(s), [x(rdi), #(off)];);
+        self.a64_field_store(s, rdi, off);
         true
     }
 
     /// Load an inline Struct member slot into the accumulator (x23).
     pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
         let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let r15 = GP::R15.a64().0;
-        monoasm_arm64!(&mut self.jit, ldr x(r15), [x(rdi), #(off)];);
+        self.a64_field_load(r15, rdi, off);
         true
     }
 
     /// Store `src` into an inline Struct member slot (also returned in rax/x0).
     pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
         let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
         let rax = GP::Rax.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            str x(s), [x(rdi), #(off)];
-            mov x(rax), x(s);
-        );
+        self.a64_field_store(s, rdi, off);
+        monoasm_arm64!(&mut self.jit, mov x(rax), x(s););
         true
     }
 
@@ -2761,15 +2729,12 @@ impl Codegen {
     /// then load the slot into the accumulator (x23).
     pub(in crate::codegen::jitgen) fn emit_load_struct_slot_heap(&mut self, slot_index: u16) -> bool {
         let off = slot_index as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let r15 = GP::R15.a64().0;
         monoasm_arm64!(&mut self.jit,
             ldr x(rdi), [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
-            ldr x(r15), [x(rdi), #(off)];
         );
+        self.a64_field_load(r15, rdi, off);
         true
     }
 
@@ -2777,17 +2742,14 @@ impl Codegen {
     /// rax/x0). Derefs the heap pointer first (clobbering rdi, like x86).
     pub(in crate::codegen::jitgen) fn emit_store_struct_slot_heap(&mut self, src: GP, slot_index: u16) -> bool {
         let off = slot_index as u32 * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
         let rax = GP::Rax.a64().0;
         monoasm_arm64!(&mut self.jit,
             ldr x(rdi), [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
-            str x(s), [x(rdi), #(off)];
-            mov x(rax), x(s);
         );
+        self.a64_field_store(s, rdi, off);
+        monoasm_arm64!(&mut self.jit, mov x(rax), x(s););
         true
     }
 
@@ -2836,17 +2798,10 @@ impl Codegen {
         }
     }
 
-    /// Loop-JIT entry stack bump. Bails if the byte count exceeds the 12-bit
-    /// `sub sp, sp, #imm` immediate.
+    /// Loop-JIT entry stack bump (large bumps go through `a64_sp_sub`).
     pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
         let bytes = offset.unwrap_concrete();
-        if bytes == 0 {
-            return true;
-        }
-        if bytes > 4095 {
-            return false;
-        }
-        monoasm_arm64!(&mut self.jit, sub sp, sp, #(bytes as u32););
+        self.a64_sp_sub(bytes as u32);
         true
     }
 
@@ -2866,16 +2821,13 @@ impl Codegen {
             ivar
         };
         let off = idx * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
         monoasm_arm64!(&mut self.jit,
             ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];
             ldr x9, [x9, #(MONOVEC_PTR as u32)];
-            str x(s), [x9, #(off)];
         );
+        self.a64_field_store(s, 9, off);
         true
     }
 
@@ -2900,9 +2852,6 @@ impl Codegen {
             ivar
         };
         let off = idx * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0; // object (&RValue)
         let s = src.a64().0;
         let generic = self.jit.label();
@@ -2918,11 +2867,9 @@ impl Codegen {
         );
         self.jit.bcond_label(monoasm::Cond::Le, &generic); // len <= idx -> grow
         // fast path: write straight into the table slot.
-        monoasm_arm64!(&mut self.jit,
-            ldr x9, [x9, #(MONOVEC_PTR as u32)];
-            str x(s), [x9, #(off)];
-            b exit;
-        );
+        monoasm_arm64!(&mut self.jit, ldr x9, [x9, #(MONOVEC_PTR as u32)];);
+        self.a64_field_store(s, 9, off);
+        monoasm_arm64!(&mut self.jit, b exit;);
         // cold path: set_ivar(obj, ivarid, src), preserving the FP pool. src (s)
         // and rdi survive emit_xmm_save (it only touches d-regs / sp) and are
         // read into the C-arg regs just before the call.
@@ -2960,9 +2907,6 @@ impl Codegen {
             ivar
         };
         let off = idx * 8;
-        if !Self::a64_field_off_ok(off) {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0;
         let r15 = GP::R15.a64().0;
         let nil = self.jit.label();
@@ -2980,9 +2924,9 @@ impl Codegen {
             );
             self.jit.bcond_label(monoasm::Cond::Le, &nil);   // len <= idx -> nil
         }
+        monoasm_arm64!(&mut self.jit, ldr x9, [x9, #(MONOVEC_PTR as u32)];); // data ptr
+        self.a64_field_load(r15, 9, off);                    // value
         monoasm_arm64!(&mut self.jit,
-            ldr x9, [x9, #(MONOVEC_PTR as u32)];             // data ptr
-            ldr x(r15), [x9, #(off)];                        // value
             cbnz x(r15), exit;                               // set -> exit
         nil:
             mov x(r15), (NIL_VALUE);
@@ -3063,17 +3007,15 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::set_class_var as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
-            sub x10, x(lfp), #(off);
-            ldr x3, [x10];               // val (from slot)
+        );
+        self.a64_frame_load(3, lfp, off); // x3 = val (from slot)
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -3097,18 +3039,15 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let off_old = old.0 as u32 * 8 + LFP_SELF as u32;
         let off_new = new.0 as u32 * 8 + LFP_SELF as u32;
-        if off_old > 4095 || off_new > 4095 {
-            return false;
-        }
         let f = runtime::alias_method as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm (Executor)
             mov x1, x20;                 // globals
-            sub x10, x(lfp), #(off_old);
-            ldr x2, [x10];              // old (slot value)
-            sub x10, x(lfp), #(off_new);
-            ldr x3, [x10];             // new (slot value)
+        );
+        self.a64_frame_load(2, lfp, off_old); // x2 = old (slot value)
+        self.a64_frame_load(3, lfp, off_new); // x3 = new (slot value)
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -3135,9 +3074,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_yield as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
@@ -3147,9 +3083,8 @@ impl Codegen {
             mov x9, (f);
             blr x9;                      // result in x0
             ldr x30, [sp], #16;
-            sub x10, x(lfp), #(off);
-            str x0, [x10];               // -> dst
         );
+        self.a64_frame_store(0, lfp, off); // -> dst
         self.emit_xmm_restore(using_xmm, false);
         true
     }
@@ -3162,9 +3097,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_super as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
@@ -3174,9 +3106,8 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
-            sub x10, x(lfp), #(off);
-            str x0, [x10];
         );
+        self.a64_frame_store(0, lfp, off);
         self.emit_xmm_restore(using_xmm, false);
         true
     }
@@ -3190,9 +3121,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_gvar as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
@@ -3203,9 +3131,8 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
-            sub x10, x(lfp), #(off);
-            str x0, [x10];
         );
+        self.a64_frame_store(0, lfp, off);
         self.emit_xmm_restore(using_xmm, false);
         true
     }
@@ -3219,9 +3146,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_cvar as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
@@ -3232,9 +3156,8 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
-            sub x10, x(lfp), #(off);
-            str x0, [x10];
         );
+        self.a64_frame_store(0, lfp, off);
         self.emit_xmm_restore(using_xmm, false);
         true
     }
@@ -3248,15 +3171,14 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_const as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
-            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+        );
+        self.a64_addr_sub(2, lfp, off);  // x2 = &dst (out-pointer)
+        monoasm_arm64!(&mut self.jit,
             mov x3, (siteid.0 as u64);   // ConstSiteId
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3278,17 +3200,15 @@ impl Codegen {
         let lfp = GP::R14.a64().0;
         let off_dst = dst.0 as u32 * 8 + LFP_SELF as u32;
         let off_recv = recv.0 as u32 * 8 + LFP_SELF as u32;
-        if off_dst > 4095 || off_recv > 4095 {
-            return false;
-        }
         let f = runtime::defined_method as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
-            sub x2, x(lfp), #(off_dst);  // &dst (out-pointer)
-            sub x10, x(lfp), #(off_recv);
-            ldr x3, [x10];               // recv (slot value)
+        );
+        self.a64_addr_sub(2, lfp, off_dst);   // x2 = &dst (out-pointer)
+        self.a64_frame_load(3, lfp, off_recv); // x3 = recv (slot value)
+        monoasm_arm64!(&mut self.jit,
             mov x4, (name.get() as u64); // name
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3308,15 +3228,14 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::defined_ivar as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
-            sub x2, x(lfp), #(off);      // &dst (out-pointer)
+        );
+        self.a64_addr_sub(2, lfp, off);  // x2 = &dst (out-pointer)
+        monoasm_arm64!(&mut self.jit,
             mov x3, (name.get() as u64); // name
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3340,18 +3259,15 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
-        if off_l > 4095 || off_r > 4095 {
-            return false;
-        }
         let f = func as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
-            sub x10, x(lfp), #(off_l);
-            ldr x2, [x10];               // lhs
-            sub x10, x(lfp), #(off_r);
-            ldr x3, [x10];               // rhs
+        );
+        self.a64_frame_load(2, lfp, off_l); // x2 = lhs
+        self.a64_frame_load(3, lfp, off_r); // x3 = rhs
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -3372,18 +3288,15 @@ impl Codegen {
         let lfp = GP::R14.a64().0;
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
-        if off_l > 4095 || off_r > 4095 {
-            return false;
-        }
         let f = runtime::array_teq as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
-            sub x10, x(lfp), #(off_l);
-            ldr x2, [x10];               // lhs
-            sub x10, x(lfp), #(off_r);
-            ldr x3, [x10];               // rhs
+        );
+        self.a64_frame_load(2, lfp, off_l); // x2 = lhs
+        self.a64_frame_load(3, lfp, off_r); // x3 = rhs
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -3406,15 +3319,14 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::concatenate_regexp as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
-            sub x2, x(lfp), #(off);      // &arg (slot address)
+        );
+        self.a64_addr_sub(2, lfp, off);  // x2 = &arg (slot address)
+        monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);        // len
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3432,14 +3344,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let exit = self.jit.label();
         let f = runtime::empty_hash as *const () as u64;
+        self.a64_frame_load(11, lfp, off);
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            ldr x11, [x10];
             cmp x11, #(NIL_VALUE);       // slot == nil ?
         );
         self.jit.bcond_label(monoasm::Cond::Ne, &exit); // not nil -> keep
@@ -3448,8 +3356,9 @@ impl Codegen {
             mov x9, (f);
             blr x9;                      // x0 = {}
             ldr x30, [sp], #16;
-            sub x10, x(lfp), #(off);     // x10 clobbered by the call; recompute
-            str x0, [x10];               // slot = {}
+        );
+        self.a64_frame_store(0, lfp, off); // slot = {}
+        monoasm_arm64!(&mut self.jit,
         exit:
         );
         true
@@ -3474,15 +3383,12 @@ impl Codegen {
         };
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let rdi = GP::Rdi.a64().0; // x4 holds src
         let f = runtime::expand_array as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit, mov x0, x(rdi);); // src (from GP::Rdi)
+        self.a64_addr_sub(1, lfp, off);  // x1 = &dst (descending base)
         monoasm_arm64!(&mut self.jit,
-            mov x0, x(rdi);              // src (from GP::Rdi)
-            sub x1, x(lfp), #(off);      // &dst (descending base)
             mov x2, (len as u64);        // len
             mov x3, (rest);              // rest (0 = none)
             str x30, [sp, #-16]!;
@@ -3514,20 +3420,15 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
-        if off_l > 4095 || off_r > 4095 {
-            return false;
-        }
         let f = func as u64;
         let slow = self.jit.label();
         let done = self.jit.label();
         // Load operands into the C-arg registers (reused by the slow path).
         // Heap iff (bits & 0b111) == 0; Flonum iff (bits & 0b011) == 0b010.
         // Either operand heap/flonum -> generic C-call.
+        self.a64_frame_load(2, lfp, off_l); // lhs
+        self.a64_frame_load(3, lfp, off_r); // rhs
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off_l);
-            ldr x2, [x10];               // lhs
-            sub x10, x(lfp), #(off_r);
-            ldr x3, [x10];               // rhs
             mov x14, (7u64);
             and x9, x2, x14;
             cbz x9, slow;                // lhs heap -> slow
@@ -4246,9 +4147,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = obj.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let f = runtime::singleton_define_method as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
         monoasm_arm64!(&mut self.jit,
@@ -4256,8 +4154,9 @@ impl Codegen {
             mov x1, x20;                     // globals
             mov x2, (name.get() as u64);     // name (IdentId)
             mov x3, (func_id.get() as u64);  // func_id (FuncId)
-            sub x10, x(lfp), #(off);
-            ldr x4, [x10];                   // obj (receiver Value)
+        );
+        self.a64_frame_load(4, lfp, off);    // x4 = obj (receiver Value)
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                          // x0 = Option<Value>
@@ -4493,33 +4392,43 @@ impl Codegen {
 
     /// `dst <- sp + (ofs - RSP_LOCAL_FRAME)` (the absolute callee-slot address).
     /// The displacement is usually negative (the callee frame sits below sp).
-    /// Returns `false` if it exceeds the 12-bit add/sub immediate.
-    fn a64_rsp_slot_addr(&mut self, ofs: i32, dst: u32) -> bool {
+    /// Large displacements go through a GP temp (x9): reg 31 decodes as XZR, not
+    /// SP, in the shifted-register add/sub, so sp is read via an sp-aware `mov`.
+    /// `dst` must not be x9.
+    fn a64_rsp_slot_addr(&mut self, ofs: i32, dst: u32) {
+        debug_assert_ne!(dst, 9);
         let signed = ofs - RSP_LOCAL_FRAME;
         if signed >= 0 {
-            if signed > 4095 {
-                return false;
+            let n = signed as u32;
+            if n <= 4095 {
+                monoasm_arm64!(&mut self.jit, add x(dst), sp, #(n););
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x(dst), sp;
+                    mov x9, (n as u64);
+                    add x(dst), x(dst), x9;
+                );
             }
-            monoasm_arm64!(&mut self.jit, add x(dst), sp, #(signed as u32););
         } else {
             let n = (-signed) as u32;
-            if n > 4095 {
-                return false;
+            if n <= 4095 {
+                monoasm_arm64!(&mut self.jit, sub x(dst), sp, #(n););
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x(dst), sp;
+                    mov x9, (n as u64);
+                    sub x(dst), x(dst), x9;
+                );
             }
-            monoasm_arm64!(&mut self.jit, sub x(dst), sp, #(n););
         }
-        true
     }
 
     // ---- callee-frame argument stores ([sp + (ofs - RSP_LOCAL_FRAME)]) ------
-    // Used by the inline argument-setup fast path (fetch_for_callee). Bail on an
-    // out-of-range slot offset.
+    // Used by the inline argument-setup fast path (fetch_for_callee).
 
     /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- reg`
     pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
-        if !self.a64_rsp_slot_addr(ofs, 10) {
-            return false;
-        }
+        self.a64_rsp_slot_addr(ofs, 10);
         let r = r.a64().0;
         monoasm_arm64!(&mut self.jit, str x(r), [x10];);
         true
@@ -4527,9 +4436,7 @@ impl Codegen {
 
     /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- 0`
     pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
-        if !self.a64_rsp_slot_addr(ofs, 10) {
-            return false;
-        }
+        self.a64_rsp_slot_addr(ofs, 10);
         monoasm_arm64!(&mut self.jit,
             mov x9, (0u64);
             str x9, [x10];
@@ -4539,9 +4446,7 @@ impl Codegen {
 
     /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- imm`
     pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
-        if !self.a64_rsp_slot_addr(ofs, 10) {
-            return false;
-        }
+        self.a64_rsp_slot_addr(ofs, 10);
         monoasm_arm64!(&mut self.jit,
             mov x9, (i);
             str x9, [x10];
@@ -4564,9 +4469,6 @@ impl Codegen {
         let rax = GP::Rax.a64().0; // x0
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
         let tag = ((outer << 2) + 2) as u32;
-        if off > 4095 || tag > 4095 {
-            return false;
-        }
         // get_method_lfp(outer): x0 <- method LFP (walk `outer` outer links).
         if outer == 0 {
             monoasm_arm64!(&mut self.jit, mov x(rax), x(lfp););
@@ -4579,21 +4481,19 @@ impl Codegen {
         // block_arg_proxy(outer): x0 <- [x0 - LFP_BLOCK]; if (x0 & 1) bump tag.
         let exit = self.jit.label();
         monoasm_arm64!(&mut self.jit,
-            sub x10, x(rax), #(LFP_BLOCK as u32);
-            ldr x(rax), [x10];
+            ldur x(rax), [x(rax), #(-(LFP_BLOCK as i32))];
             mov x11, (1u64);
             tst x(rax), x11;             // Z = ((x0 & 1) == 0)
         );
         self.jit.bcond_label(monoasm::Cond::Eq, &exit);
-        monoasm_arm64!(&mut self.jit,
-            add x(rax), x(rax), #(tag);
-            exit:
-        );
+        if tag <= 4095 {
+            monoasm_arm64!(&mut self.jit, add x(rax), x(rax), #(tag););
+        } else {
+            monoasm_arm64!(&mut self.jit, mov x11, (tag as u64); add x(rax), x(rax), x11;);
+        }
+        monoasm_arm64!(&mut self.jit, exit:);
         // store_rax(ret): [lfp - off] <- x0
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            str x(rax), [x10];
-        );
+        self.a64_frame_store(rax, lfp, off);
         true
     }
 
@@ -4613,9 +4513,6 @@ impl Codegen {
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
-        if off > 4095 {
-            return false;
-        }
         let cs = call_site_bc_ptr.as_ptr() as u64;
         let f = runtime::block_arg as *const () as u64;
         self.emit_xmm_save(using_xmm, false);
@@ -4632,10 +4529,7 @@ impl Codegen {
         self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         let rax = GP::Rax.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            str x(rax), [x10];    // ret <- Proc
-        );
+        self.a64_frame_store(rax, lfp, off); // ret <- Proc
         true
     }
 
@@ -4724,7 +4618,10 @@ impl Codegen {
                 let offset = store[callee_fid].get_offset();
                 return self.a64_set_arguments_forwarded(callid, callee_fid, offset, deferred_src);
             }
-            _ => return false,
+            // Every other AsmInst variant is handled by the shared
+            // `compile_asmir` dispatcher before reaching here, so the wildcard
+            // is unreachable (mirrors x86 `compile_asmir_arch`'s wildcard).
+            _ => unreachable!("handled by the shared compile_asmir dispatcher"),
         }
         true
     }
