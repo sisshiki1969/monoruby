@@ -205,7 +205,7 @@ fn set_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val
         .as_hash_mut(&globals.store)?
         .insert(val, Value::bool(true), vm, globals)?;
@@ -221,7 +221,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let already = self_val.as_hashmap_inner().contains_key(val, vm, globals)?;
     if already {
@@ -282,9 +282,9 @@ fn empty_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/clear.html]
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
-    self_val.as_hashmap_inner_mut().clear()?;
+    self_val.as_hash().clear()?;
     Ok(self_val)
 }
 
@@ -297,9 +297,9 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
-    self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+    self_val.as_hash().remove(val, vm, globals)?;
     Ok(self_val)
 }
 
@@ -312,9 +312,9 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn delete_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
-    let removed = self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+    let removed = self_val.as_hash().remove(val, vm, globals)?;
     if removed.is_some() {
         Ok(self_val)
     } else {
@@ -410,7 +410,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/merge.html]
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let args = lfp.arg(0).as_array();
     for arg in args.iter().copied() {
@@ -431,11 +431,11 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/subtract.html]
 #[monoruby_builtin]
 fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     for elem in elems {
-        self_val.as_hashmap_inner_mut().remove(elem, vm, globals)?;
+        self_val.as_hash().remove(elem, vm, globals)?;
     }
     Ok(self_val)
 }
@@ -448,10 +448,10 @@ fn subtract(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/replace.html]
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let elems = enum_to_vec(vm, globals, lfp.arg(0))?;
-    self_val.as_hashmap_inner_mut().clear()?;
+    self_val.as_hash().clear()?;
     for elem in elems {
         self_val
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
@@ -477,13 +477,13 @@ fn intersection(
     let self_inner = self_val.as_hashmap_inner();
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     // Build a temp hash for the other side
-    let mut other = new_empty_set();
+    let other = new_empty_set();
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    let mut result = new_empty_set();
+    let result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if other_inner.contains_key(k, vm, globals)? {
             result
@@ -505,7 +505,7 @@ fn intersection(
 fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_keys = set_keys(lfp.self_val());
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
-    let mut result = new_empty_set();
+    let result = new_empty_set();
     for k in self_keys {
         result
             .as_hash().insert(k, Value::bool(true), vm, globals)?;
@@ -529,13 +529,13 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
-    let mut other = new_empty_set();
+    let other = new_empty_set();
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    let mut result = new_empty_set();
+    let result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
@@ -561,13 +561,13 @@ fn symmetric_difference(
     let self_val = lfp.self_val();
     let self_inner = self_val.as_hashmap_inner();
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
-    let mut other = new_empty_set();
+    let other = new_empty_set();
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    let mut result = new_empty_set();
+    let result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
@@ -887,9 +887,9 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
             to_delete.push(val);
         }
     }
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     for val in to_delete {
-        self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+        self_val.as_hash().remove(val, vm, globals)?;
     }
     Ok(self_val)
 }
@@ -920,9 +920,9 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             to_delete.push(val);
         }
     }
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     for val in to_delete {
-        self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+        self_val.as_hash().remove(val, vm, globals)?;
     }
     Ok(self_val)
 }
@@ -958,9 +958,9 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     if to_delete.is_empty() {
         return Ok(Value::nil());
     }
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     for val in to_delete {
-        self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+        self_val.as_hash().remove(val, vm, globals)?;
     }
     Ok(self_val)
 }
@@ -994,9 +994,9 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     if to_delete.is_empty() {
         return Ok(Value::nil());
     }
-    let mut self_val = lfp.self_val();
+    let self_val = lfp.self_val();
     for val in to_delete {
-        self_val.as_hashmap_inner_mut().remove(val, vm, globals)?;
+        self_val.as_hash().remove(val, vm, globals)?;
     }
     Ok(self_val)
 }
@@ -1032,8 +1032,8 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             vm.temp_array_push(mapped);
         }
         let new_elems_idx = vm.temp_len() - 1;
-        let mut self_val = lfp.self_val();
-        self_val.as_hashmap_inner_mut().clear()?;
+        let self_val = lfp.self_val();
+        self_val.as_hash().clear()?;
         let n = vm.temp_at(new_elems_idx).as_array().len();
         for i in 0..n {
             let elem = vm.temp_at(new_elems_idx).as_array()[i];
@@ -1105,8 +1105,8 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     seen.insert(self_val.id());
     flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
     // Replace self's contents
-    let mut self_val = lfp.self_val();
-    self_val.as_hashmap_inner_mut().clear()?;
+    let self_val = lfp.self_val();
+    self_val.as_hash().clear()?;
     let new_keys = set_keys(result);
     for k in new_keys {
         self_val
@@ -1167,14 +1167,14 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     let data = vm.get_block_data(globals, bh)?;
     let keys = set_keys(lfp.self_val());
     // Result is a Hash mapping classification → Set
-    let mut result_hash = Value::hash_from_inner(Default::default());
+    let result_hash = Value::hash_from_inner(Default::default());
     for k in keys {
         let classification = vm.invoke_block(globals, &data, &[k])?;
         let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
-        if let Some(mut set) = existing {
+        if let Some(set) = existing {
             set.as_hash().insert(k, Value::bool(true), vm, globals)?;
         } else {
-            let mut new_set = new_empty_set();
+            let new_set = new_empty_set();
             new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
             result_hash.as_hash().insert(classification, new_set, vm, globals)?;
         }
@@ -1294,7 +1294,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
                 }
             }
         }
-        let mut result_set = new_empty_set();
+        let result_set = new_empty_set();
         for comp in sccs {
             let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
             let subset = set_from_iter(elems.into_iter(), vm, globals)?;
@@ -1313,7 +1313,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             }
             groups.entry(key).or_default().push(*k);
         }
-        let mut result_set = new_empty_set();
+        let result_set = new_empty_set();
         for key in group_order {
             if let Some(elems) = groups.remove(&key) {
                 let subset = set_from_iter(elems.into_iter(), vm, globals)?;

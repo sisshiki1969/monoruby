@@ -6,7 +6,7 @@ use smallvec::smallvec;
 
 pub const ARRAY_INLINE_CAPA: usize = 5;
 
-#[monoruby_object]
+#[monoruby_object(write_barrier)]
 pub struct Array(Value);
 
 impl Default for Array {

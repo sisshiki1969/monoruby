@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
 
-#[monoruby_object]
+#[monoruby_object(write_barrier)]
 pub struct Hashmap(Value);
 
 impl Hashmap {

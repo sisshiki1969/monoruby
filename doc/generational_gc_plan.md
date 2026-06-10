@@ -407,7 +407,21 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
    - 検証：default 全テスト green、gc-verify,gc-stress で set/hash/array/object
      ストレス＋frozen 挙動が CRuby 一致、optcarrot 正常。
 
-11. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
+11. **ラッパ経由の型レベル強制**：バリア迂回を「コードレビュー事項」から
+    「コンパイルエラー」に格上げ。
+    - `#[monoruby_object(write_barrier)]`：Array/Hashmap の `DerefMut` が
+      `&mut Inner` を渡す**前に** `write_barrier_bulk` を実行（pre-store barrier。
+      remembered set は次回 minor まで保持・走査されるため conservative かつ健全。
+      young なら 1 ビットテストのみ）。`ary[i]=v` や非シャドウ mutator も自動で
+      バリア経由に。シャドウ済みの精密バリアメソッド（push 等）は private
+      アクセサ直叩きなので二重バリアなし・高速のまま。
+    - `Value::as_hashmap_inner_mut` / `as_struct_mut` を **private 化**
+      （`as_array_inner_mut` は既に private）。builtins から `&mut Inner` を
+      得る経路はバリア付きラッパのみ＝**privacy error で迂回不能**（ネガティブ
+      コンパイルテストで実証）。set.rs の残り生 inner 利用（削除系）もラッパ
+      deref に移行。
+
+12. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
     並行マーキング、コンパクション（断片化対策）、optcarrot 等の実アプリでの
     継続ベンチ。chilled 対応の `as_string_mut`（`ensure_string_mutable` 融合）。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。

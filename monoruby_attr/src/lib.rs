@@ -52,8 +52,20 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
     r#gen.into()
 }
 
+/// Generate a Value-wrapper object type deref-ing to its `*Inner`.
+///
+/// `#[monoruby_object(write_barrier)]` makes the generated `DerefMut`
+/// run the generational GC bulk write barrier *before* handing out
+/// `&mut Inner`. Recording the (old) parent in the remembered set ahead
+/// of the stores is conservative and sound: the entry is kept until the
+/// next minor GC scans it. This gives a type-level guarantee that a
+/// mutable inner reference cannot be obtained through the wrapper
+/// without the barrier; only the wrapper's own inherent methods (same
+/// module as the private raw accessor) can store with the cheaper
+/// precise barrier.
 #[proc_macro_attribute]
-pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn monoruby_object(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let barrier = attr.to_string().trim() == "write_barrier";
     let ast = parse_macro_input!(item as ItemStruct);
     let base = ast.ident.clone();
     let inner = Ident::new(&format!("{base}Inner"), Span::call_site());
@@ -76,13 +88,27 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     );
 
-    let auto_deref_mut: ItemImpl = parse_quote!(
-        impl std::ops::DerefMut for #base {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                unsafe { self.0.#as_ref_mut() }
+    let auto_deref_mut: ItemImpl = if barrier {
+        parse_quote!(
+            impl std::ops::DerefMut for #base {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    // Conservative pre-store barrier: any mutable access
+                    // through the wrapper records an old parent in the
+                    // remembered set (single header-bit test when young).
+                    self.0.write_barrier_bulk();
+                    unsafe { self.0.#as_ref_mut() }
+                }
             }
-        }
-    );
+        )
+    } else {
+        parse_quote!(
+            impl std::ops::DerefMut for #base {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    unsafe { self.0.#as_ref_mut() }
+                }
+            }
+        )
+    };
 
     /*let auto_from: ItemImpl = parse_quote!(
         impl std::convert::From<Value> for #base {

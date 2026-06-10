@@ -2198,7 +2198,11 @@ impl Value {
     }
 
     /// Mutable access to the slot array of a `Struct` subclass instance.
-    pub(crate) fn as_struct_mut(&mut self) -> &mut StructInner {
+    ///
+    /// Private on purpose: the only store path is the barriered
+    /// `Value::set_struct_slot`, so a raw `&mut StructInner` (which could
+    /// bypass the generational write barrier) cannot leak to builtins.
+    fn as_struct_mut(&mut self) -> &mut StructInner {
         assert_eq!(ObjTy::STRUCT, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue is a Struct instance.
         unsafe { self.rvalue_mut().as_struct_inner_mut() }
@@ -2215,7 +2219,12 @@ impl Value {
         None
     }
 
-    pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
+    /// Private on purpose (like `as_array_inner_mut`): outside this
+    /// module tree, a mutable hash inner is only reachable through the
+    /// `Hashmap` wrapper, whose `DerefMut`/inherent methods run the
+    /// generational write barrier. This makes barrier bypass a type
+    /// error rather than a code-review concern.
+    fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue_mut().as_hashmap_mut() }
