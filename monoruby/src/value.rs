@@ -2136,6 +2136,23 @@ impl Value {
         unsafe { self.rvalue_mut().as_rstring_mut() }
     }
 
+    ///
+    /// Mutation-checked acquisition of the `RString` wrapper (the String
+    /// counterpart of `as_array_mut` / `as_hash_mut`).
+    ///
+    /// Runs `ensure_string_mutable` — emit the one-shot deprecation
+    /// warning and clear the flag for a *chilled* string (`Symbol#to_s`),
+    /// or raise `FrozenError` for a truly frozen one — then returns the
+    /// `RString` wrapper for in-place mutation. A String's bytes are not
+    /// `Value` references, so no write barrier is needed; this fuses only
+    /// the chilled + frozen preconditions with acquisition. The wrapper is
+    /// owned (not a borrow), so it can be mutated across several branches.
+    ///
+    pub(crate) fn as_string_mut(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<RString> {
+        self.ensure_string_mutable(vm, globals)?;
+        Ok(RString::new_unchecked(*self))
+    }
+
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
         // SAFETY: The type check ensures this RValue contains an exception.

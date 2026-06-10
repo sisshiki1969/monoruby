@@ -643,12 +643,9 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let mut self_ = lfp.self_val();
+    let mut self_ = lfp.self_val().as_string_mut(vm, globals)?;
     if let Some(other) = lfp.arg(0).is_rstring() {
-        self_
-            .as_rstring_inner_mut()
-            .extend(&other, &globals.store)?;
+        self_.extend(&other, &globals.store)?;
     } else if lfp.arg(0).try_fixnum().is_none() && lfp.arg(0).is_integer() {
         // `String#<<` / `#concat` treat any Integer as a codepoint; a
         // Bignum can never be a valid codepoint, so it is always out
@@ -660,17 +657,16 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             Ok(ch) => ch,
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
         };
-        let bytes = self_.as_rstring_inner_mut();
-        if bytes.encoding().is_utf8_compatible() {
+        if self_.encoding().is_utf8_compatible() {
             let c = char::from_u32(ch)
                 .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)))?;
             let mut buf = [0u8; 4];
             let encoded = c.encode_utf8(&mut buf);
-            bytes.extend_from_slice_checked(encoded.as_bytes())?;
+            self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
             // ASCII-8BIT: append raw byte(s)
             if let Ok(b) = u8::try_from(ch) {
-                bytes.extend_from_slice_checked(&[b])?;
+                self_.extend_from_slice_checked(&[b])?;
             } else {
                 return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)));
             }
@@ -678,11 +674,9 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         // Try to_str coercion
         let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-        self_
-            .as_rstring_inner_mut()
-            .extend(&coerced, &globals.store)?;
+        self_.extend(&coerced, &globals.store)?;
     }
-    Ok(self_)
+    Ok(self_.into())
 }
 
 ///

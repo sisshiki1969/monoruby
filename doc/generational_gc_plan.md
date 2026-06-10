@@ -421,9 +421,17 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
       コンパイルテストで実証）。set.rs の残り生 inner 利用（削除系）もラッパ
       deref に移行。
 
-12. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
+12. **`as_string_mut`（chilled 対応の mutation 融合）**：String 版の融合アクセサ。
+    `ensure_string_mutable`（chilled なら一度きりの deprecation 警告＋フラグ解除、
+    真の frozen なら FrozenError）を実行し `RString` ラッパを返す。String の中身は
+    バイト列で Value 参照を持たない＝**バリア不要**ゆえ chilled＋frozen の前提のみ
+    融合。返り値は所有型で複数分岐で保持・mutate 可（`shl` を移行してデモ、CRuby
+    一致）。生 `as_rstring_inner_mut` は fresh string 構築でも使うため private 化せず
+    併存。
+
+13. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
     並行マーキング、コンパクション（断片化対策）、optcarrot 等の実アプリでの
-    継続ベンチ。chilled 対応の `as_string_mut`（`ensure_string_mutable` 融合）。
+    継続ベンチ。残り String mutation サイトの `as_string_mut` への漸進移行。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。
