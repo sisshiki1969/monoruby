@@ -2222,11 +2222,11 @@ union Header {
 struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
-    /// Generational GC age: number of collections this object has
-    /// survived. Promoted to the old generation once it reaches
-    /// `RGENGC_OLD_AGE`. Zeroed by `Header::new`, so a freshly allocated
-    /// (or recycled) object starts at age 0. See generational_gc_plan.md.
-    age: u8,
+    /// MUST stay zero: the JIT compares the type with a 2-byte `cmpw
+    /// [ty]` that also reads this adjacent byte (e.g. the Array check in
+    /// `object_send_splat_arg0`). The generational GC age therefore lives
+    /// in the high byte of `flag`, not here. See generational_gc_plan.md.
+    _padding: u8,
     class: Option<ClassId>,
 }
 
@@ -2242,7 +2242,7 @@ impl Header {
             meta: Metadata {
                 flag: 1,
                 ty: Some(ty),
-                age: 0,
+                _padding: 0,
                 class: Some(class),
             },
         }
@@ -2352,12 +2352,18 @@ impl Header {
         unsafe { self.meta.flag = (self.meta.flag | 0b10_0000) & !0b100_0000 }
     }
 
+    /// Generational GC age (number of collections survived), stored in
+    /// the high byte of `flag` so the type byte's neighbour stays zero
+    /// (see `Metadata::_padding`). The low byte holds the live/frozen/
+    /// chilled/OLD/REMEMBERED/WB_PENDING flags and is read by the write
+    /// barrier; age occupies bits 8..15, untouched by those byte-wide
+    /// flag tests.
     fn age(&self) -> u8 {
-        unsafe { self.meta.age }
+        unsafe { (self.meta.flag >> 8) as u8 }
     }
 
     fn set_age(&mut self, age: u8) {
-        self.meta.age = age;
+        unsafe { self.meta.flag = (self.meta.flag & 0x00ff) | ((age as u16) << 8) }
     }
 
     fn class(&self) -> ClassId {
