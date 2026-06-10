@@ -180,8 +180,7 @@ fn initialize(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut hash = lfp.self_val().as_hash();
+    let mut hash = lfp.self_val().as_hash_mut(&globals.store)?;
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::argumenterr(
@@ -834,8 +833,7 @@ extern "C" fn hashindex(
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
 #[monoruby_builtin]
 fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    lfp.self_val().as_hash().clear()?;
+    lfp.self_val().as_hash_mut(&globals.store)?.clear()?;
     Ok(lfp.self_val())
 }
 
@@ -847,11 +845,9 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/replace.html]
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut self_ = lfp.self_val();
+    let mut self_ = lfp.self_val().as_hash_mut(&globals.store)?;
     let arg = lfp.arg(0).coerce_to_hash(vm, globals)?;
-    let h = self_.as_hashmap_inner_mut();
-    *h = arg.inner().clone();
+    self_.replace_inner(arg.inner().clone());
 
     Ok(lfp.self_val())
 }
@@ -909,8 +905,7 @@ fn clone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/delete.html]
 #[monoruby_builtin]
 fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut h = lfp.self_val().as_hash();
+    let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
     let key = lfp.arg(0);
     let removed_value = h.remove(key, vm, globals)?;
     if removed_value.is_none()
@@ -1452,8 +1447,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge=21.html]
 #[monoruby_builtin]
 fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut h = lfp.self_val().as_hash();
+    let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
@@ -2252,8 +2246,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/shift.html]
 #[monoruby_builtin]
 fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut h = lfp.self_val().as_hash();
+    let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
     match h.shift(vm, globals)? {
         Some((k, v)) => Ok(Value::array2(k, v)),
         None => Ok(Value::nil()),

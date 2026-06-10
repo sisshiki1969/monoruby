@@ -391,9 +391,25 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
    - `young_child_exists` を ARRAY/STRUCT/HASH で精緻化。**これで OBJECT/String/
      Bignum/Float/Array/Struct/Hash の全主要型が両モードで昇格可能**。
 
-10. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
+10. **frozen チェック融合 API ＋ Set/Hash バリア漏れ修正**：
+   - `Value::as_array_mut(store)` / `as_hash_mut(store)`：mutate 用ラッパ取得に
+     frozen チェックを融合（`Result<Array>`/`Result<Hashmap>`）。取得時に
+     FrozenError、返るラッパの mutator がバリアを実行 → 両関心事を 1 呼び出しに。
+     ivar（`Store::set_ivar`）/Struct（`set_struct_slot_with_check`）は既に融合済み
+     で、これにより Array/Hash も統一。隣接ペア（check 直後に取得）21 箇所を移行。
+     チェックと mutate の間に引数/ブロック処理を挟む箇所は、エラー発生順序の
+     意味論を保つため明示チェックのまま（削除系 `clear`/`remove` はバリア不要）。
+   - **バリア漏れ修正**：Set は `ObjTy::HASH`（昇格対象）なのに要素追加 21 箇所が
+     `as_hashmap_inner_mut().insert()`（生 inner、バリア非経由）だった →
+     `as_hash().insert()`（バリア付きラッパ）へ。`Hash#replace` の全内容置換も
+     生 inner だった → `Hashmap::replace_inner`（bulk バリア付き）を追加して経由。
+     昇格済み Set/Hash が young 参照を得ると minor で取りこぼす潜在バグを解消。
+   - 検証：default 全テスト green、gc-verify,gc-stress で set/hash/array/object
+     ストレス＋frozen 挙動が CRuby 一致、optcarrot 正常。
+
+11. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
     並行マーキング、コンパクション（断片化対策）、optcarrot 等の実アプリでの
-    継続ベンチ。
+    継続ベンチ。chilled 対応の `as_string_mut`（`ensure_string_mutable` 融合）。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。

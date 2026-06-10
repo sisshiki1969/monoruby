@@ -53,6 +53,13 @@ impl Hashmap {
         self.0.as_hashmap_inner_mut().set_defalut_proc(default_proc);
         self.0.write_barrier_bulk();
     }
+
+    /// Replace the whole content (`Hash#replace`). Bulk barrier: the new
+    /// content may reference young objects.
+    pub fn replace_inner(&mut self, inner: HashmapInner) {
+        *self.0.as_hashmap_inner_mut() = inner;
+        self.0.write_barrier_bulk();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

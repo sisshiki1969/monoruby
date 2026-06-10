@@ -107,10 +107,10 @@ fn set_from_iter(
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<Value> {
-    let mut set = new_empty_set();
-    let inner = set.as_hashmap_inner_mut();
+    let set = new_empty_set();
+    let mut h = set.as_hash();
     for v in iter {
-        inner.insert(v, Value::bool(true), vm, globals)?;
+        h.insert(v, Value::bool(true), vm, globals)?;
     }
     Ok(set)
 }
@@ -206,9 +206,8 @@ fn set_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let mut self_val = lfp.self_val();
-    self_val.ensure_not_frozen(&globals.store)?;
     self_val
-        .as_hashmap_inner_mut()
+        .as_hash_mut(&globals.store)?
         .insert(val, Value::bool(true), vm, globals)?;
     Ok(self_val)
 }
@@ -229,8 +228,7 @@ fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Ok(Value::nil())
     } else {
         self_val
-            .as_hashmap_inner_mut()
-            .insert(val, Value::bool(true), vm, globals)?;
+            .as_hash().insert(val, Value::bool(true), vm, globals)?;
         Ok(self_val)
     }
 }
@@ -419,8 +417,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let elems = enum_to_vec(vm, globals, arg)?;
         for elem in elems {
             self_val
-                .as_hashmap_inner_mut()
-                .insert(elem, Value::bool(true), vm, globals)?;
+                .as_hash().insert(elem, Value::bool(true), vm, globals)?;
         }
     }
     Ok(self_val)
@@ -457,8 +454,7 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     self_val.as_hashmap_inner_mut().clear()?;
     for elem in elems {
         self_val
-            .as_hashmap_inner_mut()
-            .insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     Ok(self_val)
 }
@@ -484,16 +480,14 @@ fn intersection(
     let mut other = new_empty_set();
     for elem in other_elems {
         other
-            .as_hashmap_inner_mut()
-            .insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     let mut result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hashmap_inner_mut()
-                .insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().insert(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -514,13 +508,11 @@ fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut result = new_empty_set();
     for k in self_keys {
         result
-            .as_hashmap_inner_mut()
-            .insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().insert(k, Value::bool(true), vm, globals)?;
     }
     for k in other_elems {
         result
-            .as_hashmap_inner_mut()
-            .insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().insert(k, Value::bool(true), vm, globals)?;
     }
     Ok(result)
 }
@@ -540,16 +532,14 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let mut other = new_empty_set();
     for elem in other_elems {
         other
-            .as_hashmap_inner_mut()
-            .insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     let mut result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hashmap_inner_mut()
-                .insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().insert(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -574,23 +564,20 @@ fn symmetric_difference(
     let mut other = new_empty_set();
     for elem in other_elems {
         other
-            .as_hashmap_inner_mut()
-            .insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     let mut result = new_empty_set();
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hashmap_inner_mut()
-                .insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().insert(k, Value::bool(true), vm, globals)?;
         }
     }
     for (k, _) in other_inner.iter() {
         if !self_inner.contains_key(k, vm, globals)? {
             result
-                .as_hashmap_inner_mut()
-                .insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().insert(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -1051,8 +1038,7 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         for i in 0..n {
             let elem = vm.temp_at(new_elems_idx).as_array()[i];
             self_val
-                .as_hashmap_inner_mut()
-                .insert(elem, Value::bool(true), vm, globals)?;
+                .as_hash().insert(elem, Value::bool(true), vm, globals)?;
         }
         Ok(self_val)
     })
@@ -1093,8 +1079,7 @@ fn flatten_set_into(
             seen.remove(&val.id());
         } else {
             result
-                .as_hashmap_inner_mut()
-                .insert(val, Value::bool(true), vm, globals)?;
+                .as_hash().insert(val, Value::bool(true), vm, globals)?;
         }
     }
     Ok(())
@@ -1125,8 +1110,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let new_keys = set_keys(result);
     for k in new_keys {
         self_val
-            .as_hashmap_inner_mut()
-            .insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().insert(k, Value::bool(true), vm, globals)?;
     }
     Ok(self_val)
 }
@@ -1188,11 +1172,11 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         let classification = vm.invoke_block(globals, &data, &[k])?;
         let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
         if let Some(mut set) = existing {
-            set.as_hashmap_inner_mut().insert(k, Value::bool(true), vm, globals)?;
+            set.as_hash().insert(k, Value::bool(true), vm, globals)?;
         } else {
             let mut new_set = new_empty_set();
-            new_set.as_hashmap_inner_mut().insert(k, Value::bool(true), vm, globals)?;
-            result_hash.as_hashmap_inner_mut().insert(classification, new_set, vm, globals)?;
+            new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
+            result_hash.as_hash().insert(classification, new_set, vm, globals)?;
         }
     }
     Ok(result_hash)
@@ -1314,7 +1298,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         for comp in sccs {
             let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
             let subset = set_from_iter(elems.into_iter(), vm, globals)?;
-            result_set.as_hashmap_inner_mut().insert(subset, Value::bool(true), vm, globals)?;
+            result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
         }
         Ok(result_set)
     } else {
@@ -1333,7 +1317,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         for key in group_order {
             if let Some(elems) = groups.remove(&key) {
                 let subset = set_from_iter(elems.into_iter(), vm, globals)?;
-                result_set.as_hashmap_inner_mut().insert(subset, Value::bool(true), vm, globals)?;
+                result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
             }
         }
         Ok(result_set)
