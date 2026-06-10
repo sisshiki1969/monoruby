@@ -720,7 +720,6 @@ fn index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let mut key = lfp.arg(0);
     let val = lfp.arg(1);
     // CRuby: when storing into a Hash with a fresh String key, the key
@@ -740,7 +739,9 @@ fn index_assign(
         dup.set_frozen();
         key = dup;
     }
-    lfp.self_val().as_hash().insert(key, val, vm, globals)?;
+    lfp.self_val()
+        .as_hash_mut(&globals.store)?
+        .insert(key, val, vm, globals)?;
     Ok(val)
 }
 

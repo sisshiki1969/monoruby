@@ -906,8 +906,7 @@ fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
+    let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
     ary.push(lfp.arg(0));
     Ok(ary.into())
 }
@@ -957,8 +956,7 @@ fn array_shl(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/append.html]
 #[monoruby_builtin]
 fn push(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let mut ary = lfp.self_val().as_array();
+    let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
     ary.extend(lfp.arg(0).as_array().iter().cloned());
     Ok(ary.into())
 }

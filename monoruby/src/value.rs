@@ -2081,6 +2081,23 @@ impl Value {
     }
 
     ///
+    /// Frozen-checked acquisition of the `Array` wrapper for mutation.
+    ///
+    /// Fuses the two preconditions of mutating a container — it must not
+    /// be frozen, and its mutations must run the generational write
+    /// barrier — into a single call: the frozen check happens here, and
+    /// the returned `Array` wrapper's methods (`push`, `set_index`, …)
+    /// run the write barrier. So a mutating builtin is just
+    /// `lfp.self_val().as_array_mut(&globals.store)?.push(v)`, and neither
+    /// concern can be forgotten or drift apart. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    pub(crate) fn as_array_mut(self, store: &Store) -> Result<Array> {
+        self.ensure_not_frozen(store)?;
+        Ok(self.as_array())
+    }
+
+    ///
     /// Get a reference of underlying array from `self`.
     ///
     pub(crate) fn as_array_inner(&self) -> &ArrayInner {
@@ -2153,6 +2170,16 @@ impl Value {
             "Value expected to be a hash but was {:?}",
             self.ty()
         ))
+    }
+
+    ///
+    /// Frozen-checked acquisition of the `Hashmap` wrapper for mutation
+    /// (see `as_array_mut`): the frozen check runs here, the returned
+    /// wrapper's `insert` / `set_defalut_*` run the write barrier.
+    ///
+    pub(crate) fn as_hash_mut(self, store: &Store) -> Result<Hashmap> {
+        self.ensure_not_frozen(store)?;
+        Ok(self.as_hash())
     }
 
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
