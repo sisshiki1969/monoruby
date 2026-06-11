@@ -30,7 +30,8 @@ pub(super) fn init(globals: &mut Globals) {
     // `method_missing`, breaking the `actual.should === expected` idiom.
     globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen2!(object_not), 0);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
+    let neq_fid = globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
+    globals.store.set_default_neq(neq_fid);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
         "instance_eval",
@@ -205,8 +206,12 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    let res = vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)?;
-    Ok(Value::bool(!res.as_bool()))
+    // `eq_values_bool` is the optimized `==` dispatch (builtin fast paths
+    // first, full `invoke_eq` dispatch otherwise) — the same policy
+    // `ne_values_bool` applies when `!=` resolves to this default. Going
+    // through it avoids a global method-cache probe of `==` per call.
+    let res = vm.eq_values_bool(globals, self_val, other)?;
+    Ok(Value::bool(!res))
 }
 
 /// Default `Object#===` — delegates to `==` so that subclasses which
@@ -363,6 +368,28 @@ fn instance_eval_inner(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn neq_custom_redefinition() {
+        // Exercises the version-stamped `custom_neq` memo: `!=` on a class
+        // computes `!(a == b)` while it resolves to the default, and a
+        // later `!=` redefinition must be picked up.
+        run_test_once(
+            r##"
+        res = []
+        class FooNeq
+          def ==(o); true; end
+        end
+        f = FooNeq.new
+        30.times { res << (f != 1) << (f != nil) }
+        class FooNeq
+          def !=(o); o == 99; end
+        end
+        res << (f != 99) << (f != 1)
+        res
+        "##,
+        );
+    }
 
     #[test]
     fn cmp() {

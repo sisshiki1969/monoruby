@@ -282,6 +282,20 @@ pub struct ClassInfo {
     /// definition time; `None` means "allocator undefined" (raise TypeError).
     ///
     alloc_func: Option<AllocFunc>,
+    ///
+    /// Version-stamped memo: as of class_version `v`, this class (its whole
+    /// ancestor chain) defines no `to_str`. Consulted by hot coercion checks
+    /// (`String#==` reverse-dispatch) instead of probing the method table on
+    /// every comparison; any method (re)definition bumps class_version and
+    /// implicitly invalidates the memo.
+    ///
+    no_to_str_at: std::cell::Cell<Option<u32>>,
+    ///
+    /// Version-stamped memo: as of class_version `v`, `!=` on this class
+    /// resolves to a basic op (`String#!=` / the default `BasicObject#!=`),
+    /// so `a != b` can be computed as `!(a == b)` without dispatch.
+    ///
+    neq_basic_at: std::cell::Cell<Option<u32>>,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -372,6 +386,8 @@ impl ClassInfo {
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
             alloc_func: None,
+            no_to_str_at: std::cell::Cell::new(None),
+            neq_basic_at: std::cell::Cell::new(None),
         }
     }
 
@@ -390,11 +406,29 @@ impl ClassInfo {
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
             alloc_func: self.alloc_func,
+            no_to_str_at: std::cell::Cell::new(None),
+            neq_basic_at: std::cell::Cell::new(None),
         }
     }
 
     pub(crate) fn alloc_func(&self) -> Option<AllocFunc> {
         self.alloc_func
+    }
+
+    pub(super) fn no_to_str_at(&self) -> Option<u32> {
+        self.no_to_str_at.get()
+    }
+
+    pub(super) fn set_no_to_str_at(&self, version: u32) {
+        self.no_to_str_at.set(Some(version));
+    }
+
+    pub(super) fn neq_basic_at(&self) -> Option<u32> {
+        self.neq_basic_at.get()
+    }
+
+    pub(super) fn set_neq_basic_at(&self, version: u32) {
+        self.neq_basic_at.set(Some(version));
     }
 
     pub(crate) fn set_alloc_func(&mut self, f: AllocFunc) {

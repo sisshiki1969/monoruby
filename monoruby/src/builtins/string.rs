@@ -29,11 +29,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "hash", hash, 0);
-    globals.define_builtin_funcs(STRING_CLASS, "==", &["===", "eql?"], eq, 1);
+    globals.define_builtin_inline_funcs(
+        STRING_CLASS,
+        "==",
+        &["===", "eql?"],
+        eq,
+        inline_gen2!(string_eq_gen),
+        1,
+    );
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp", casecmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp?", casecmp_p, 1);
-    globals.define_basic_op(STRING_CLASS, "!=", ne, 1);
+    let ne_fid = globals.define_basic_op(STRING_CLASS, "!=", ne, 1);
+    globals.store.inline_info.add_inline(
+        ne_fid,
+        crate::executor::inline::InlineFuncInfo::new_inline_gen(inline_gen2!(string_ne_gen)),
+    );
     globals.define_builtin_func(STRING_CLASS, ">=", ge, 1);
     globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
@@ -351,6 +362,82 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(Value::integer_from_u64(h))
 }
 
+
+/// JIT inliner for `String#==` (and its aliases `===` / `eql?`): when the
+/// rhs class is known at JIT-compile time, the reverse-dispatch question
+/// the builtin would ask at runtime — "does the rhs respond to `to_str`?" —
+/// can be answered at compile time as well; the class-version guard the
+/// inline dispatch already emits re-validates the answer after any method
+/// (re)definition. A non-String rhs without `to_str` folds the whole
+/// comparison to constant `false` (e.g. the ubiquitous `str == nil`).
+fn string_eq_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    arg_class: Option<ClassId>,
+) -> bool {
+    string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
+}
+
+/// JIT inliner for the basic-op `String#!=`: same compile-time analysis as
+/// `string_eq_gen`, folding to constant `true`.
+fn string_ne_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    arg_class: Option<ClassId>,
+) -> bool {
+    string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, true)
+}
+
+fn string_cmp_const_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    arg_class: Option<ClassId>,
+    result: bool,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo {
+        args, pos_num, dst, ..
+    } = *callsite;
+    if pos_num != 1 {
+        return false;
+    }
+
+    let Some(rhs_class) = arg_class else {
+        return false;
+    };
+    if rhs_class == STRING_CLASS || !store.no_to_str(rhs_class, ctx.class_version()) {
+        return false;
+    }
+    // The rhs class may be speculative (observed by the binop inline cache
+    // rather than proven by the abstract state), so emit a class guard;
+    // `guard_class` is a no-op when the state already knows the class.
+    let deopt = ir.new_deopt(state);
+    state.load(ir, args, GP::Rdi);
+    state.guard_class(ir, args, GP::Rdi, rhs_class, deopt);
+    // Materialize the result as a *runtime* value in the accumulator (not
+    // a compile-time LinkMode::C constant): the result is only constant
+    // relative to the guards above, and it must flow through CFG merges
+    // (`a == nil || a.empty?`) and fused compare-and-branch sites exactly
+    // like a real call result would.
+    ir.lit2reg(Value::bool(result), GP::Rax);
+    state.def_rax2acc(ir, dst);
+    true
+}
+
 ///
 /// ### String#==
 ///
@@ -379,7 +466,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     // user-defined `==` decide. (Note: `to_str` is *not* actually
     // called.) This lets a mock that defines both `to_str` and a
     // custom `==` exercise the fallback branch.
-    if globals.check_method(rhs, IdentId::TO_STR).is_some() {
+    if !globals.store.no_to_str(rhs.class(), Globals::class_version()) {
         let result =
             vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
         return Ok(Value::bool(result.as_bool()));
@@ -7367,6 +7454,27 @@ mod tests {
             // Hash#eql? uses #eql? on values; string values must compare by content.
             r##"{1.0 => "x"}.eql?({1.0 => "x"})"##,
         ]);
+    }
+
+    #[test]
+    fn string_eq_nil_fold_and_redefinition() {
+        // Exercises the JIT constant-fold of `String == nil` / `!= nil`
+        // (string_eq_gen / string_ne_gen) and the version-stamped
+        // `no_to_str` memo: after `NilClass#to_str` is defined, the
+        // reverse-dispatch path must take over.
+        run_test_once(
+            r##"
+        res = []
+        s = "abc"
+        30.times { res << (s == nil) << (s != nil) << (s == :sym) }
+        class NilClass
+          def to_str; "abc"; end
+          def ==(other); other == "abc"; end
+        end
+        res << (s == nil)
+        res
+        "##,
+        );
     }
 
     #[test]

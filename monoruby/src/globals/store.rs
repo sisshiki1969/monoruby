@@ -82,6 +82,9 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+    /// FuncId of the default `BasicObject#!=`, used to recognize that an
+    /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
+    default_neq: Option<FuncId>,
 }
 
 impl std::ops::Deref for Store {
@@ -194,6 +197,7 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
+            default_neq: None,
         }
     }
 
@@ -714,6 +718,73 @@ impl Store {
     ) -> Option<MethodTableEntry> {
         let class_version = Globals::class_version();
         self.check_method_for_class_with_version(class_id, name, class_version)
+    }
+
+    ///
+    /// `class_id` (its whole ancestor chain) defines no `to_str`.
+    ///
+    /// Memoized per class_version on the ClassInfo, so hot coercion checks
+    /// (e.g. the reverse-dispatch test in `String#==` against a nil rhs)
+    /// cost a load + compare instead of a method-table probe. Defining
+    /// `to_str` later bumps class_version, which invalidates the memo.
+    ///
+    /// `version` must be the current class_version; it is taken as a
+    /// parameter because `Globals::class_version()` borrows the CODEGEN
+    /// RefCell, which is unavailable when this is called from JIT
+    /// compilation (use `JitContext::class_version()` there).
+    pub(crate) fn no_to_str(&self, class_id: ClassId, version: u32) -> bool {
+        if self[class_id].no_to_str_at() == Some(version) {
+            return true;
+        }
+        // Resolve via the uncached ancestor walk rather than
+        // GLOBAL_METHOD_CACHE: this runs at most once per class per
+        // class_version (the memo covers repeats), and it must also be
+        // callable from JIT compilation, where the global cache's RefCell
+        // may already be borrowed.
+        if self
+            .search_method_by_class_id(class_id, IdentId::TO_STR)
+            .is_none()
+        {
+            self[class_id].set_no_to_str_at(version);
+            true
+        } else {
+            false
+        }
+    }
+
+    ///
+    /// `!=` on `class_id` resolves to a basic op (`String#!=` or the
+    /// default `BasicObject#!=`), i.e. `a != b` may be computed as
+    /// `!(a == b)` without dispatching `!=`. Memoized per class_version.
+    ///
+    /// Returns `None` when basic; otherwise the custom entry the caller
+    /// must dispatch.
+    ///
+    pub(crate) fn set_default_neq(&mut self, fid: FuncId) {
+        self.default_neq = Some(fid);
+    }
+
+    pub(crate) fn custom_neq(&self, class_id: ClassId, version: u32) -> Option<MethodTableEntry> {
+        if self[class_id].neq_basic_at() == Some(version) {
+            return None;
+        }
+        // Uncached walk for the same reason as `no_to_str`. `!=` counts
+        // as default when it is a basic op (`String#!=`) or resolves to
+        // `BasicObject#!=` itself. (The latter is deliberately NOT
+        // registered as a basic op: overwriting a basic-op entry trips
+        // the global BOP-redefine slow mode, and `BasicObject#!=` gets
+        // legitimately shadowed during startup, e.g. by Comparable.)
+        match self.search_method_by_class_id(class_id, IdentId::_NEQ) {
+            Some(entry)
+                if entry.is_basic_op()
+                    || (entry.func_id().is_some() && entry.func_id() == self.default_neq) =>
+            {
+                self[class_id].set_neq_basic_at(version);
+                None
+            }
+            Some(entry) => Some(entry),
+            None => None,
+        }
     }
 
     pub(crate) fn check_method_for_class_with_version(
