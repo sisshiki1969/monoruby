@@ -14,6 +14,20 @@ use crate::codegen::jitgen::asmir::compile_shared::{
 };
 use monoasm_macro::monoasm_arm64;
 
+///
+/// Generational GC write barrier slow path, called from JIT inline stores.
+///
+/// The inline fast path has already verified that `parent` is old, not yet
+/// remembered, and that the stored child is a heap object; this records
+/// `parent` in the remembered set. See `doc/generational_gc_plan.md`.
+///
+extern "C" fn jit_write_barrier(parent: *mut RValue) {
+    // SAFETY: `parent` is the live `&RValue` the store wrote into. The
+    // inline fast path has already checked it is `wb_pending` with a heap
+    // child, so `write_barrier_bulk` records it in the remembered set.
+    unsafe { (*parent).write_barrier_bulk() };
+}
+
 /// Signed aarch64 condition for a fixnum comparison. `BrIf` gives the
 /// "taken-when-true" condition; `BrIfNot` gives its inverse (so a CmpBr lands
 /// on the fall-through case). TEq behaves like Eq for integers.
@@ -2675,6 +2689,82 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Emit the generational GC write barrier after a JIT inline store whose
+    /// parent object is in `parent` and whose stored child value is in `child`.
+    ///
+    /// Fast path — a young parent (the common case), an already-remembered
+    /// parent, or an immediate child — is one flag-bit test plus an
+    /// immediate-tag test, with no call. The rare slow path saves the
+    /// caller-saved registers the JIT may have live (the abstract scratch GPs
+    /// `x0..x8` and the caller-saved FP regs `d0..d7`), so it is fully
+    /// transparent to the surrounding code and needs no liveness information,
+    /// then calls `jit_write_barrier`. aarch64 twin of x86
+    /// `emit_write_barrier_rdi`. See `doc/generational_gc_plan.md`.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_write_barrier(&mut self, parent: GP, child: GP) {
+        let skip = self.jit.label();
+        let p = parent.a64().0;
+        let c = child.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            // barrier armed?  (WB_PENDING = flag bit 6 = old & not remembered)
+            ldrb w9, [x(p), #(RVALUE_OFFSET_FLAG as u32)];
+            tbz x9, #(6), skip;        // WB_PENDING clear -> skip
+            // child immediate?  (heap pointers have the low 3 bits clear)
+            mov x9, (0b111);
+            and x9, x(c), x9;
+            cbnz x9, skip;             // immediate child -> skip
+        );
+        // Slow path: save the caller-saved regs the JIT may have live, pass the
+        // parent in the C-ABI arg0 (x0), and call. `x(p)` is untouched by the
+        // saves, so it still holds the parent when read into x0.
+        let f = jit_write_barrier as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(144);
+            str x0, [sp, #(0)];
+            str x1, [sp, #(8)];
+            str x2, [sp, #(16)];
+            str x3, [sp, #(24)];
+            str x4, [sp, #(32)];
+            str x5, [sp, #(40)];
+            str x6, [sp, #(48)];
+            str x7, [sp, #(56)];
+            str x8, [sp, #(64)];
+            str d0, [sp, #(72)];
+            str d1, [sp, #(80)];
+            str d2, [sp, #(88)];
+            str d3, [sp, #(96)];
+            str d4, [sp, #(104)];
+            str d5, [sp, #(112)];
+            str d6, [sp, #(120)];
+            str d7, [sp, #(128)];
+            str x30, [sp, #(136)];
+            mov x0, x(p);              // parent -> arg0
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp, #(136)];
+            ldr d7, [sp, #(128)];
+            ldr d6, [sp, #(120)];
+            ldr d5, [sp, #(112)];
+            ldr d4, [sp, #(104)];
+            ldr d3, [sp, #(96)];
+            ldr d2, [sp, #(88)];
+            ldr d1, [sp, #(80)];
+            ldr d0, [sp, #(72)];
+            ldr x8, [sp, #(64)];
+            ldr x7, [sp, #(56)];
+            ldr x6, [sp, #(48)];
+            ldr x5, [sp, #(40)];
+            ldr x4, [sp, #(32)];
+            ldr x3, [sp, #(24)];
+            ldr x2, [sp, #(16)];
+            ldr x1, [sp, #(8)];
+            ldr x0, [sp, #(0)];
+            add sp, sp, #(144);
+        );
+        self.jit.bind_label(skip);
+    }
+
     /// `ldr`/`str` use a 12-bit scaled (×8) immediate offset; bail above that.
     fn a64_field_off_ok(off: u32) -> bool {
         off <= 32760 && off % 8 == 0
@@ -2702,6 +2792,8 @@ impl Codegen {
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
         self.a64_field_store(s, rdi, off);
+        // Write barrier: rdi = the object (parent), src = stored value.
+        self.emit_write_barrier(GP::Rdi, src);
         true
     }
 
@@ -2721,6 +2813,8 @@ impl Codegen {
         let s = src.a64().0;
         let rax = GP::Rax.a64().0;
         self.a64_field_store(s, rdi, off);
+        // Write barrier: rdi = the struct (parent), src = stored value.
+        self.emit_write_barrier(GP::Rdi, src);
         monoasm_arm64!(&mut self.jit, mov x(rax), x(s););
         true
     }
@@ -2745,6 +2839,9 @@ impl Codegen {
         let rdi = GP::Rdi.a64().0;
         let s = src.a64().0;
         let rax = GP::Rax.a64().0;
+        // Write barrier before `rdi` is repointed at the heap buffer:
+        // rdi = the struct (parent), src = stored value.
+        self.emit_write_barrier(GP::Rdi, src);
         monoasm_arm64!(&mut self.jit,
             ldr x(rdi), [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
         );
@@ -2828,6 +2925,8 @@ impl Codegen {
             ldr x9, [x9, #(MONOVEC_PTR as u32)];
         );
         self.a64_field_store(s, 9, off);
+        // Write barrier: rdi = self (parent), src = stored value.
+        self.emit_write_barrier(GP::Rdi, src);
         true
     }
 
@@ -2869,6 +2968,10 @@ impl Codegen {
         // fast path: write straight into the table slot.
         monoasm_arm64!(&mut self.jit, ldr x9, [x9, #(MONOVEC_PTR as u32)];);
         self.a64_field_store(s, 9, off);
+        // Write barrier (rdi still holds the parent &RValue). The cold path
+        // below goes through `set_ivar`, which already barriers, so it jumps
+        // straight to `exit`.
+        self.emit_write_barrier(GP::Rdi, src);
         monoasm_arm64!(&mut self.jit, b exit;);
         // cold path: set_ivar(obj, ivarid, src), preserving the FP pool. src (s)
         // and rdi survive emit_xmm_save (it only touches d-regs / sp) and are
@@ -3886,13 +3989,20 @@ impl Codegen {
             b.le generic;                            // index >= capa -> generic
             add x9, x4, x3, lsl #3;
             str x2, [x9, #(RVALUE_OFFSET_INLINE as u32)];  // src (Rdx) -> slot
-            b exit;
         }
+        // Write barrier: x4 (Rdi) = the array (parent), x2 (Rdx) = stored value.
+        self.emit_write_barrier(GP::Rdi, GP::Rdx);
+        monoasm_arm64! { &mut self.jit, b exit; }
         self.jit.bind_label(heap);
         monoasm_arm64! { &mut self.jit,
             ldr x0, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
             cmp x0, x3;
             b.le generic;
+        }
+        // Write barrier before `x4` (Rdi) is repointed at the heap buffer:
+        // x4 = the array (parent), x2 (Rdx) = stored value.
+        self.emit_write_barrier(GP::Rdi, GP::Rdx);
+        monoasm_arm64! { &mut self.jit,
             ldr x4, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
             add x9, x4, x3, lsl #3;
             str x2, [x9];
