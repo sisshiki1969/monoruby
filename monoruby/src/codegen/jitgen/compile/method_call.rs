@@ -14,7 +14,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        cache: Option<MethodCacheEntry>,
+        cache: MethodCache,
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let recv_class = state.class(callsite.recv);
@@ -27,23 +27,39 @@ impl<'a> JitContext<'a> {
             }
         } else {
             // here, recv_class is none.
-            if let Some(cache) = cache {
-                if cache.version != self.class_version() {
-                    // the inline method cache is invalid.
-                    let recv_class = cache.recv_class;
-                    let func_id = if let Some(fid) = self.jit_check_call(recv_class, callsite.name)
-                    {
-                        fid
+            match cache {
+                MethodCache::Cached(cache) => {
+                    if cache.version != self.class_version() {
+                        // the inline method cache is invalid.
+                        let recv_class = cache.recv_class;
+                        let func_id =
+                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
+                                fid
+                            } else {
+                                return Ok(CompileResult::Recompile(
+                                    RecompileReason::MethodNotFound,
+                                ));
+                            };
+                        (recv_class, func_id)
                     } else {
-                        return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
-                    };
-                    (recv_class, func_id)
-                } else {
-                    // the inline method cache is valid.
-                    (cache.recv_class, cache.func_id)
+                        // the inline method cache is valid.
+                        (cache.recv_class, cache.func_id)
+                    }
                 }
-            } else {
-                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                // The VM resolved this call to `method_missing` and the cached
+                // class version is still current. The JIT has no lowering for a
+                // method_missing dispatch, so plain-deopt to the VM here instead
+                // of requesting a recompile. A recompile would re-read the null
+                // fid → `NotCached` → recompile again, never stabilizing — the
+                // recompile-thrash that makes method_missing-heavy hot loops
+                // ~100x slower than the interpreter.
+                MethodCache::MethodMissing { version, .. } if version == self.class_version() => {
+                    return Ok(CompileResult::Deopt);
+                }
+                // No cache, or a stale method_missing cache (the resolution may
+                // have changed): fall back to the recompile-once path, which
+                // re-reads the cache after the VM warms it.
+                _ => return Ok(CompileResult::Recompile(RecompileReason::NotCached)),
             }
         };
         self.compile_method_call(state, ir, recv_class, None, func_id, callid, false)
@@ -52,6 +68,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Compile TraceIr::MethodCall with inline method cache info.
     ///
+    #[cfg_attr(target_arch = "aarch64", allow(unused_variables))]
     pub(super) fn compile_method_call(
         &mut self,
         state: &mut AbstractState,
@@ -282,7 +299,10 @@ impl<'a> JitContext<'a> {
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
 
-                if iseq_block.is_some() || (specializable && self.specialize_level() < 5)
+                // Method specialization (inlining a callee iseq) and block-
+                // argument inlining (`iseq_block`, which drives specialized
+                // `yield`) are both lowered on x86 and aarch64 now.
+                if (specializable && self.specialize_level() < 5) || iseq_block.is_some()
                 /*name == Some(IdentId::NEW)*/
                 {
                     return self.specialized_iseq(

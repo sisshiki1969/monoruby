@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Class class
@@ -55,13 +57,7 @@ pub(super) fn gen_class_allocate_inline(
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
     ir.inline(move |r#gen, _, _, _| {
-        monoasm!( &mut r#gen.jit,
-            // alloc_func(class_id, &mut Globals) -> Value
-            movl rdi, (class_id.u32());
-            movq rsi, r12;
-            movq rax, (alloc_func);
-            call rax;
-        );
+        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
     });
     ir.xmm_restore(using_xmm);
     // The allocator produces an instance of exactly `class_id`. Record
@@ -99,7 +95,7 @@ pub(super) fn init(globals: &mut Globals) {
         CLASS_CLASS,
         "__builtin_allocate__",
         allocate,
-        gen_class_allocate(),
+        inline_gen2!(gen_class_allocate()),
         0,
     );
     globals.add_method(
@@ -113,7 +109,7 @@ pub(super) fn init(globals: &mut Globals) {
         "new",
         &[],
         new,
-        gen_class_new_object(),
+        inline_gen2!(gen_class_new_object()),
         0,
         0,
         true,
@@ -367,6 +363,7 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
 ///
 /// Bails to the slow path (Rust `new`, which raises `TypeError`) when the
 /// class has no allocator, mirroring `call_alloc_func`.
+#[cfg(target_arch = "x86_64")]
 pub(super) fn gen_class_new_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -460,6 +457,63 @@ pub(super) fn gen_class_new_inline(
             jmp  checked;
         );
         r#gen.jit.select_page(0);
+    });
+    ir.xmm_restore(using_xmm);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, dst);
+    true
+}
+
+/// aarch64 twin of `gen_class_new_inline`. The hot-path asm (allocate + resolve
+/// + invoke `initialize` via `method_invoker2`) lives in `Codegen::a64_class_new`;
+/// here we resolve the allocator at JIT-compile time and write back the
+/// receiver/args so the invoker can read them from the frame.
+#[cfg(target_arch = "aarch64")]
+pub(super) fn gen_class_new_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    self_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let mut self_module = store[self_class].get_module();
+    if let Some(origin) = self_module.is_singleton() {
+        self_module = origin.as_class();
+    }
+    let class_id = self_module.id();
+    let alloc_func = match store[class_id].alloc_func() {
+        Some(f) => f,
+        None => return false,
+    };
+    let CallSiteInfo {
+        recv,
+        args,
+        pos_num,
+        dst,
+        ..
+    } = *callsite;
+    // `a64_class_new` reaches the args via `sub x4, lfp, #conv(args)`, whose
+    // immediate is bounded; bail to the slow path on an out-of-range frame.
+    let args_off = crate::executor::jitgen::conv(args);
+    if args_off > 4095 {
+        return false;
+    }
+    state.writeback_acc(ir);
+    state.load(ir, recv, GP::Rdi);
+    state.write_back_recv_and_callargs(ir, callsite);
+    let using_xmm = state.get_using_xmm();
+    let error = ir.new_error(state);
+    ir.xmm_save(using_xmm);
+    let alloc_func = alloc_func as *const () as u64;
+    let ci = check_initializer as *const () as u64;
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.emit_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
     });
     ir.xmm_restore(using_xmm);
     ir.handle_error(error);

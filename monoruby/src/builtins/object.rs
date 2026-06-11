@@ -1,5 +1,8 @@
 use super::*;
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // BasicObject class and Object class
@@ -13,17 +16,20 @@ pub(super) fn init(globals: &mut Globals) {
         BASIC_OBJECT_CLASS,
         "__id__",
         object_id,
-        Box::new(object_object_id),
+        inline_gen2!(object_object_id),
         0,
     );
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(BASIC_OBJECT_CLASS, "equal?", eq, 1);
+    // `equal?` is an alias of `==` on BasicObject (they share one method
+    // entry/FuncId), so `BasicObject.instance_method(:equal?) ==
+    // BasicObject.instance_method(:==)` holds — see ruby/spec
+    // core/basicobject/equal_spec.rb.
+    globals.define_builtin_funcs(BASIC_OBJECT_CLASS, "==", &["equal?"], eq, 1);
     // CRuby defines `===` on Kernel/Object, NOT on BasicObject. Keeping
     // it on BasicObject would trap `===` for BasicObject subclasses (like
     // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
     // `method_missing`, breaking the `actual.should === expected` idiom.
     globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
-    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, Box::new(object_not), 0);
+    globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen2!(object_not), 0);
     globals.define_builtin_func(BASIC_OBJECT_CLASS, "!=", ne, 1);
     globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
@@ -51,7 +57,7 @@ pub(super) fn init(globals: &mut Globals) {
         "__send__",
         &[],
         crate::builtins::send,
-        Box::new(crate::builtins::object_send),
+        inline_gen!(crate::builtins::object_send),
         0,
         0,
         true,
@@ -184,15 +190,7 @@ fn object_not(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| {
-            monoasm! { &mut r#gen.jit,
-                orq  rdi, (0x10);
-                movq rax, (TRUE_VALUE);
-                movq rsi, (FALSE_VALUE);
-                cmpq rdi, (FALSE_VALUE);
-                cmovneq rax, rsi;
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_object_not());
         state.def_rax2acc(ir, dst);
     }
     true
@@ -253,12 +251,7 @@ pub(super) fn object_object_id(
     state.load(ir, recv, GP::Rdi);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! {&mut r#gen.jit,
-            movq rax, (crate::executor::op::i64_to_value);
-            call rax;
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_object_id());
     ir.xmm_restore(using_xmm);
     state.def_rax2acc(ir, ret);
     true
@@ -416,6 +409,14 @@ mod tests {
     }
 
     #[test]
+    fn basicobject_equal_is_alias_of_eq() {
+        // ruby/spec core/basicobject/equal_spec.rb: `equal?` must be the same
+        // method entry as `==` on BasicObject.
+        run_test("BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)");
+        run_test("BasicObject.public_instance_methods(false).include?(:equal?)");
+    }
+
+    #[test]
     fn case_eq() {
         run_test(
             r#"
@@ -465,7 +466,10 @@ mod tests {
         "#,
         );
         // constant lookup in instance_eval with string (caller's lexical scope)
-        run_test(
+        run_test_with_prelude(
+            r#"
+        A.new.test
+        "#,
             r#"
         class A
           X = 100
@@ -473,7 +477,6 @@ mod tests {
             instance_eval("X")
           end
         end
-        A.new.test
         "#,
         );
     }

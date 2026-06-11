@@ -52,5 +52,10 @@
   "rust-analyzer.cargo.buildScripts.overrideCommand": null,
   "editor.formatOnSave": true,
   "editor.formatOnPaste": true,
-  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.cargo.features": [],
+  "rust-analyzer.cargo.cfgs": [
+    "debug_assertions",
+    "jit",
+    "jit_x86"
+  ]
 }

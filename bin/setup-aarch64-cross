@@ -1,0 +1,103 @@
+#!/bin/bash
+#
+# setup-aarch64-cross — provision the AArch64 cross-test environment.
+#
+# monoruby targets x86-64, but the in-progress aarch64 backend is developed and
+# tested on an x86-64 host by cross-compiling to aarch64-unknown-linux-gnu and
+# running the resulting binaries (incl. `cargo test` harnesses) under qemu
+# user-mode emulation. The cargo linker/runner wiring lives in
+# `.cargo/config.toml`; this script installs the three pieces of host tooling
+# that wiring depends on:
+#
+#   1. qemu-aarch64           (qemu-user)            — runs aarch64 ELF binaries
+#   2. aarch64-linux-gnu-gcc  (gcc-aarch64-linux-gnu) — cross linker + sysroot
+#   3. rust std for aarch64   (rustup target)        — cross-compiled libstd
+#
+# It is idempotent: already-present components are skipped, so it is cheap to
+# re-run at the start of an ephemeral web session.
+#
+# Usage:  bin/setup-aarch64-cross
+#
+set -euo pipefail
+
+TARGET="aarch64-unknown-linux-gnu"
+SYSROOT="/usr/aarch64-linux-gnu"
+
+say() { printf '\033[1;34m[aarch64-setup]\033[0m %s\n' "$*"; }
+
+# 1 & 2. Host packages (qemu + cross gcc). Install only what is missing.
+need_pkgs=()
+command -v qemu-aarch64        >/dev/null 2>&1 || need_pkgs+=(qemu-user qemu-user-static)
+command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || need_pkgs+=(gcc-aarch64-linux-gnu)
+
+if [ "${#need_pkgs[@]}" -gt 0 ]; then
+  say "installing apt packages: ${need_pkgs[*]}"
+  SUDO=""
+  [ "$(id -u)" -eq 0 ] || SUDO="sudo"
+  # A direct install uses the already-cached package lists. Only fall back to
+  # `apt-get update` if that fails, and tolerate broken third-party PPAs
+  # (deadsnakes / ondrej-php) that may 403 — they are irrelevant here.
+  if ! $SUDO apt-get install -y "${need_pkgs[@]}" 2>/dev/null; then
+    say "cached lists insufficient; refreshing apt (ignoring PPA errors)"
+    $SUDO apt-get update || true
+    $SUDO apt-get install -y "${need_pkgs[@]}"
+  fi
+else
+  say "qemu-aarch64 and aarch64-linux-gnu-gcc already present"
+fi
+
+# 2.5. binfmt_misc registration so aarch64 ELF binaries execute transparently
+# on the x86 host. The cargo `runner =` wiring above covers `cargo test`'s
+# top-level invocations, but a handful of tests (watchdog, signal_trap) spawn
+# the freshly-built monoruby binary directly via
+# `Command::new(env!("CARGO_BIN_EXE_monoruby"))` — those bypass the runner and
+# need the kernel itself to know how to launch an aarch64 ELF. Skip silently
+# if the binfmt_misc fs is unavailable or already has a handler.
+if [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+  # Try to mount the binfmt_misc pseudo-fs if it's compiled in but not mounted.
+  mountpoint -q /proc/sys/fs/binfmt_misc 2>/dev/null \
+    || mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null \
+    || true
+  if [ -w /proc/sys/fs/binfmt_misc/register ] 2>/dev/null; then
+    say "registering binfmt_misc handler for qemu-aarch64-static"
+    echo ':qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xfe\xfe\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:OCF' \
+      > /proc/sys/fs/binfmt_misc/register
+  else
+    say "skip binfmt_misc registration (no write access)"
+  fi
+else
+  say "binfmt_misc handler for qemu-aarch64 already registered"
+fi
+
+# 3. Rust target std.
+if rustup target list --installed | grep -qx "$TARGET"; then
+  say "rust target $TARGET already installed"
+else
+  say "adding rust target $TARGET"
+  rustup target add "$TARGET"
+fi
+
+# Smoke test: compile a trivial program for aarch64 and run it under qemu.
+say "running smoke test"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/smoke.rs" <<'RS'
+fn main() { println!("{}", std::env::consts::ARCH); }
+RS
+rustc --target "$TARGET" -C linker=aarch64-linux-gnu-gcc -o "$tmp/smoke" "$tmp/smoke.rs"
+out="$(qemu-aarch64 -L "$SYSROOT" "$tmp/smoke")"
+if [ "$out" = "aarch64" ]; then
+  say "OK — aarch64 binary ran under qemu (reported arch: $out)"
+else
+  say "FAIL — expected 'aarch64', got '$out'" >&2
+  exit 1
+fi
+
+cat <<EOF
+
+aarch64 cross-test environment ready.
+
+  Build : cargo build --target $TARGET ...
+  Test  : cargo test  --target $TARGET -p <crate>
+          (binaries run under qemu automatically via .cargo/config.toml)
+EOF

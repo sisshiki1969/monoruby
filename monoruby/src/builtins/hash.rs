@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Hash class
@@ -24,7 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
     globals.define_builtin_func(HASH_CLASS, ">=", ge, 1);
-    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, Box::new(hash_index), 1);
+    globals.define_builtin_inline_func(HASH_CLASS, "[]", index, inline_gen2!(hash_index), 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
@@ -794,14 +796,7 @@ fn hash_index(
     state.load(ir, callsite.recv, GP::Rdx);
     let using_xmm = state.get_using_xmm();
     ir.xmm_save(using_xmm);
-    ir.inline(|r#gen, _, _, _| {
-        monoasm! {&mut r#gen.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (hashindex);
-            call rax;
-        }
-    });
+    ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashindex as *const () as u64));
     ir.xmm_restore(using_xmm);
     let error = ir.new_error(state);
     ir.handle_error(error);
@@ -3507,11 +3502,7 @@ mod tests {
     #[test]
     fn hash_bracket_kwarg_form() {
         // `Recv[k => v]` / `Recv[**h]` — the trailing keywords form an
-        // implicit positional Hash; previously dropped. This `[]`-call
-        // lowering is Prism-only (ruruby-parse lowers it differently).
-        if parser_is_ruruby() {
-            return;
-        }
+        // implicit positional Hash; previously dropped.
         run_tests(&[
             r#"Hash[5 => 6]"#,
             r#"Hash["a" => 1, "b" => 2]"#,

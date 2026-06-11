@@ -108,3 +108,53 @@ fn yield_in_detached_context() {
     "#,
     );
 }
+
+#[test]
+fn block_arg_with_live_float() {
+    // Regression: materializing the block parameter into a Proc (`p = blk`,
+    // a BlockArg) while a float accumulator is live in the JIT's FP pool must
+    // preserve the float across the runtime call (the pool is saved/restored
+    // around it). Before that, the method bailed out of JIT compilation.
+    run_test(
+        r#"
+        def with_block(&blk)
+          acc = 0.0
+          j = 0
+          while j < 200
+            acc += j.to_f * 1.25
+            p = blk
+            acc += 2.0 if p.nil?
+            j += 1
+          end
+          acc
+        end
+        with_block
+        "#,
+    );
+}
+
+#[test]
+fn opt_eq_cmp_with_live_float() {
+    // Regression: a polymorphic `==` (receiver class varies -> the inline
+    // opt_eq_cmp with a generic C-call slow path) must preserve a live FP pool
+    // across the slow-path call.
+    run_test(
+        r#"
+        def calc(n, vals)
+          a = 0.0; b = 1.0; c = 2.0; d = 3.0
+          i = 0
+          while i < n
+            a += i.to_f * 0.5
+            b += a * 0.25
+            c += b * 0.125
+            d += c * 0.0625
+            v = vals[i % 5]
+            a -= 1.0 if (v == nil)
+            i += 1
+          end
+          a + b + c + d
+        end
+        calc(200, [1, nil, :s, "x", 2.0])
+        "#,
+    );
+}

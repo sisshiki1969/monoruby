@@ -49,11 +49,19 @@ pub enum RusageWho {
 }
 
 pub fn getrusage(who: RusageWho, usage: &mut Rusage) {
+    // `RUSAGE_THREAD` is a Linux extension (no equivalent on macOS /
+    // BSDs). On non-Linux hosts we fall back to `RUSAGE_SELF` so the
+    // file compiles for parser / bytecodegen work; this only matters
+    // when `Process.times`-style code is exercised on a non-Linux build,
+    // which monoruby doesn't officially support anyway.
     unsafe {
         let who = match who {
             RusageWho::Self_ => libc::RUSAGE_SELF,
             RusageWho::Children => libc::RUSAGE_CHILDREN,
+            #[cfg(target_os = "linux")]
             RusageWho::Thread => libc::RUSAGE_THREAD,
+            #[cfg(not(target_os = "linux"))]
+            RusageWho::Thread => libc::RUSAGE_SELF,
         };
         let res = libc::getrusage(who as libc::c_int, usage as *mut _ as *mut libc::rusage);
         assert!(res == 0);

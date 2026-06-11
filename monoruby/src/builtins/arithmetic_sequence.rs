@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::{AbstractState, JitContext};
 
 use num::{BigInt, ToPrimitive, Zero};
 
@@ -43,28 +44,28 @@ pub(super) fn init(globals: &mut Globals) {
         ARITHMETIC_SEQUENCE_CLASS,
         "begin",
         begin,
-        Box::new(as_begin_inline),
+        inline_gen2!(as_begin_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "end",
         end,
-        Box::new(as_end_inline),
+        inline_gen2!(as_end_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "step",
         step,
-        Box::new(as_step_inline),
+        inline_gen2!(as_step_inline),
         0,
     );
     globals.define_builtin_inline_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "exclude_end?",
         exclude_end,
-        Box::new(as_exclude_end_inline),
+        inline_gen2!(as_exclude_end_inline),
         0,
     );
     // `each` is intentionally NOT registered here — it's defined in
@@ -200,13 +201,7 @@ fn as_exclude_end_inline(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_as_exclude_end());
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -228,11 +223,7 @@ fn inline_field_load(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (offset as i32)];
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_load_value_field(offset));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }

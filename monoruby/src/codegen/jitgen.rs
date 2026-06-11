@@ -1,6 +1,9 @@
+#[cfg(target_arch = "x86_64")]
 use std::collections::HashSet;
 
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
+#[cfg(target_arch = "x86_64")]
 use paste::paste;
 
 use crate::ast::CmpKind;
@@ -10,7 +13,7 @@ use crate::{
     codegen::jitgen::context::{AsmInfo, JitStackFrame},
 };
 
-pub(crate) use self::basic_block::{BasicBlockId, BasicBlockInfo, BasicBlockInfoEntry};
+pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 use state::{LinkMode, ReturnState};
@@ -22,11 +25,18 @@ use state::{Liveness, SlotState};
 use trace_ir::*;
 
 pub mod asmir;
-mod basic_block;
 mod compile;
 mod context;
 mod definition;
+#[cfg(target_arch = "x86_64")]
 mod deoptimize;
+// Type / class guards, split per arch (mirrors the asmir `compile` backend):
+// each arch's lowering lives under `arch/<arch>/guard.rs`.
+#[cfg(target_arch = "x86_64")]
+#[path = "arch/x86_64/guard.rs"]
+mod guard;
+#[cfg(target_arch = "aarch64")]
+#[path = "arch/aarch64/guard.rs"]
 mod guard;
 mod merge;
 mod state;
@@ -61,6 +71,10 @@ enum CompileResult {
     Break(ReturnState),
     /// deoptimize and recompile.
     Recompile(RecompileReason),
+    /// deoptimize to the VM without recompiling (e.g. a `method_missing`
+    /// dispatch site, which the JIT cannot lower but the VM handles — recompiling
+    /// would loop forever on `NotCached`).
+    Deopt,
     /// internal error.
     #[allow(dead_code)]
     Abort,
@@ -325,6 +339,11 @@ impl Codegen {
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
 
+        // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
+        // shared `gen_machine_code` driver then drives the per-arch `gen_asm`
+        // lowering, which lowers every `AsmInst` on both arches — so machine-code
+        // generation never bails (the front-end's `?` above is the only way to
+        // fall back to the interpreter).
         self.jit.finalize();
         let class_version_label = self.jit.const_i32(class_version as _);
         self.gen_machine_code(
@@ -334,10 +353,22 @@ impl Codegen {
             0,
             class_version_label.clone(),
         );
-
+        // x86 finalizes the freshly emitted code here (the old `gen_machine_code`
+        // did this internally); aarch64's outer caller (`compile` /
+        // `compile_partial` / `compile_patch`) finalizes after any trailing
+        // emission (e.g. the class-guard stub).
+        #[cfg(target_arch = "x86_64")]
+        self.jit.finalize();
         Ok((inline_cache, specialized_info, class_version_label))
     }
+}
 
+impl Codegen {
+    /// Arch-neutral driver: emit machine code for a whole method and its
+    /// inlined specialized callees (recursively), calling the per-arch
+    /// `gen_asm` per basic block / bridge. Both arches lower every `AsmInst`,
+    /// so this never bails. Does not `finalize`; `jit_compile` does that (x86)
+    /// or the outer caller does (aarch64).
     fn gen_machine_code(
         &mut self,
         mut frame: AsmInfo,
@@ -387,12 +418,12 @@ impl Codegen {
             }
         }
 
-        #[cfg(feature = "emit-asm")]
-        {
-            frame.start_codepos = self.jit.get_current();
-        }
+        // Sourcemap base for the shared `BcIndex` lowering (emit-asm/perf
+        // disassembly only; correctness-neutral). Set unconditionally so both
+        // arches agree.
+        frame.start_codepos = self.jit.get_current();
 
-        #[cfg(feature = "perf")]
+        #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         let pair = self.get_address_pair();
 
         let ir_vec = frame.detach_ir();
@@ -442,16 +473,23 @@ impl Codegen {
         if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();
         }
-        self.jit.finalize();
 
         #[cfg(feature = "emit-asm")]
         if self.startup_flag {
+            // Resolve branch displacements so the listing shows real targets
+            // (the real `finalize` happens in `jit_compile` / the outer caller).
+            self.jit.finalize();
+            #[cfg(target_arch = "aarch64")]
+            {
+                let fid = store[frame.iseq_id].func_id();
+                eprintln!("  >>> JIT (aarch64) <{}>", store.func_description(fid));
+            }
             let iseq_id = frame.iseq_id;
             self.dump_disas(store, &frame.sourcemap, iseq_id);
             eprintln!("  <<<");
         }
 
-        #[cfg(feature = "perf")]
+        #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         {
             let iseq_id = frame.iseq_id;
             let fid = store[iseq_id].func_id();
@@ -461,6 +499,7 @@ impl Codegen {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 macro_rules! load_store {
     ($reg: ident) => {
         paste! {
@@ -490,6 +529,7 @@ macro_rules! load_store {
     };
 }
 
+#[cfg(target_arch = "x86_64")]
 impl JitModule {
     load_store!(rax);
     load_store!(rdi);
@@ -820,6 +860,7 @@ impl JitModule {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 impl Codegen {
     fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
         let raise = self.entry_raise();
@@ -981,6 +1022,7 @@ impl Codegen {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn float_test() {
     let r#gen = Codegen::new();
@@ -1011,6 +1053,7 @@ fn float_test() {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn float_test2() {
     let mut r#gen = Codegen::new();

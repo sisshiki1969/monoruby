@@ -1889,17 +1889,23 @@ impl Store {
             let mut codegen = codegen.borrow_mut();
             codegen.set_bop_redefine();
             self.invalidate_jit_code();
-            let vm_entry = codegen.vm_entry();
-            for func in self.functions.functions() {
-                if let Some(iseq) = func.is_iseq() {
-                    // Skip trivial methods (ConstReturn/SelfReturn) — their
-                    // wrappers don't execute bytecode and contain no BOP usage,
-                    // so patching them to vm_entry would break execution.
-                    if self[iseq].hint != ISeqHint::Normal {
-                        continue;
+            // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
+            // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite
+            // the entry jumps in place.
+            #[cfg(target_arch = "x86_64")]
+            {
+                let vm_entry = codegen.vm_entry();
+                for func in self.functions.functions() {
+                    if let Some(iseq) = func.is_iseq() {
+                        // Skip trivial methods (ConstReturn/SelfReturn) — their
+                        // wrappers don't execute bytecode and contain no BOP
+                        // usage, so patching them to vm_entry would break it.
+                        if self[iseq].hint != ISeqHint::Normal {
+                            continue;
+                        }
+                        let entry = codegen.jit.get_label_address(&func.entry_label());
+                        codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                     }
-                    let entry = codegen.jit.get_label_address(&func.entry_label());
-                    codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                 }
             }
         });

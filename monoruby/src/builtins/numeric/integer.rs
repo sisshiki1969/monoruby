@@ -1,5 +1,5 @@
 use super::*;
-use jitgen::JitContext;
+use jitgen::{AbstractState, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 
@@ -11,26 +11,34 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.store[INTEGER_CLASS].clear_alloc_func();
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
-    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, Box::new(integer_succ), 0);
+    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, inline_gen!(integer_succ), 0);
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, Box::new(integer_tof), 0);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen2!(integer_tof), 0);
     globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
     globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
     globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "%", int_rem, Box::new(integer_rem), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, Box::new(integer_pow), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, Box::new(integer_bitand), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, Box::new(integer_bitor), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, Box::new(integer_bitxor), 1);
+    // `modulo` is a true alias of `%` (ruby/spec core/integer/modulo_spec.rb).
+    globals.define_builtin_inline_funcs(
+        INTEGER_CLASS,
+        "%",
+        &["modulo"],
+        int_rem,
+        inline_gen2!(integer_rem),
+        1,
+    );
+    globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen2!(integer_pow), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen2!(integer_bitand), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen2!(integer_bitor), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen2!(integer_bitxor), 1);
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, Box::new(integer_shr), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, Box::new(integer_shl), 1);
-    globals.define_builtin_func(INTEGER_CLASS, "==", eq, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "===", eq, 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen2!(integer_shr), 1);
+    globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen2!(integer_shl), 1);
+    // `===` is a true alias of `==` (ruby/spec core/integer/case_compare_spec.rb).
+    globals.define_builtin_funcs(INTEGER_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);
     globals.define_builtin_func(INTEGER_CLASS, ">", gt, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=", le, 1);
@@ -44,11 +52,13 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
-    globals.define_builtin_func_with(INTEGER_CLASS, "to_s", to_s, 0, 1, false);
-    globals.define_builtin_func_with(INTEGER_CLASS, "inspect", to_s, 0, 1, false);
+    // `inspect` is a true alias of `to_s` (shares one FuncId), so
+    // `Integer.instance_method(:inspect) == Integer.instance_method(:to_s)`
+    // holds — see ruby/spec core/integer/inspect_spec.rb.
+    globals.define_builtin_funcs_with(INTEGER_CLASS, "to_s", &["inspect"], to_s, 0, 1, false);
     globals.define_builtin_func(INTEGER_CLASS, "eql?", eql_, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "abs", abs, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "magnitude", abs, 0);
+    // `magnitude` is a true alias of `abs` (ruby/spec core/integer/magnitude_spec.rb).
+    globals.define_builtin_funcs(INTEGER_CLASS, "abs", &["magnitude"], abs, 0);
     globals.define_builtin_func_with(INTEGER_CLASS, "pow", pow, 1, 2, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "floor", int_floor, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "ceil", int_ceil, 0, 1, false);
@@ -517,6 +527,8 @@ fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })
 }
 
+#[cfg(target_arch = "x86_64")]
+
 fn integer_succ(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -589,14 +601,7 @@ fn integer_tof(
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
         let fret = state.def_F(ret);
-        ir.inline(move |r#gen, _, _, base| {
-            // Convert into xmm0, then store into fret (pool or spill).
-            monoasm! { &mut r#gen.jit,
-                sarq  rdi, 1;
-                cvtsi2sdq xmm0, rdi;
-            }
-            r#gen.store_fpr_into_xmm(fret, base);
-        });
+        ir.inline(move |r#gen, _, _, base| r#gen.emit_int_to_float(fret, base));
     }
     true
 }
@@ -846,8 +851,13 @@ fn fold_shl_pos(lhs: i64, k: u64) -> Option<i64> {
         // when k > u32::MAX (handled by safe_int_shl as RangeError).
         return None;
     }
-    let result = lhs.checked_shl(k as u32)?;
-    if Value::is_i63(result) {
+    // `checked_shl` only guards the shift amount (k >= 64), not the value
+    // overflow `lhs << k` silently drops the high bits (e.g. `3 << 62`).
+    // Confirm the shift is lossless by shifting back before trusting it, then
+    // require the result to fit an i63 fixnum; otherwise fold is not possible.
+    let k = k as u32;
+    let result = lhs.wrapping_shl(k);
+    if result.wrapping_shr(k) == lhs && Value::is_i63(result) {
         Some(result)
     } else {
         None
@@ -898,25 +908,26 @@ fn integer_shr(
                     r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
                 });
             } else {
-                // shift too large for inline, deopt
+                // shift too large for inline: only 0 stays 0, else deopt.
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels, _| {
-                    let deopt = &labels[deopt];
-                    monoasm!( &mut r#gen.jit,
-                        cmpq rdi, (Value::i32(0).id());
-                        jne deopt;
-                        movq rdi, (Value::i32(0).id());
-                    );
-                });
+                ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
             }
         }
     } else {
+        // Variable shift amount.
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
         ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+/// Inline body for `n << k` / `n >> -k` with `k >= 64`: a non-zero `n`
+/// overflows (deopt); `0` shifts to `0`. Shared by `integer_shl`/`integer_shr`.
+fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
+    let z = Value::i32(0).id() as i64;
+    r#gen.emit_shl_overflow_zero(z, deopt);
 }
 
 ///
@@ -971,24 +982,25 @@ fn integer_shl(
             let k = (-rhs) as u64;
             ir.inline(move |r#gen, _, _, _| r#gen.gen_shr_imm(k.min(64) as u8));
         } else {
-            // rhs >= 64: deopt (overflow for non-zero lhs)
+            // rhs >= 64: non-zero lhs overflows (deopt); 0 stays 0.
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels, _| {
-                let deopt = &labels[deopt];
-                monoasm!( &mut r#gen.jit,
-                    cmpq rdi, (Value::i32(0).id());
-                    jne deopt;
-                    movq rdi, (Value::i32(0).id());
-                );
-            });
+            ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
         }
-    } else if let Some(lhs) = state.is_fixnum_literal(recv) {
-        state.load_fixnum(ir, args, GP::Rcx);
-        let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
     } else {
+        // Variable shift amount.
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
+        // x86 has a literal-lhs fast path (`gen_shl_lhs_imm`) that folds the
+        // overflow guard to a constant `lzcnt`; aarch64's shift-back overflow
+        // check gains nothing from a constant lhs (recv is already in Rdi), so
+        // it uses `gen_shl` for both cases.
+        #[cfg(target_arch = "x86_64")]
+        if let Some(lhs) = state.is_fixnum_literal(recv) {
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
+        } else {
+            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
+        }
+        #[cfg(target_arch = "aarch64")]
         ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -1059,19 +1071,8 @@ fn integer_rem_int_rhs(
         if rhs_val > 0 && (rhs_val as u64).is_power_of_two() {
             state.load_fixnum(ir, recv, GP::Rdi);
             let mask = rhs_val * 2 - 1;
-            ir.inline(move |r#gen, _, _, _| {
-                if let Ok(imm32) = i32::try_from(mask) {
-                    let imm = imm32 as i64;
-                    monoasm!( &mut r#gen.jit,
-                        andq rdi, (imm);
-                    );
-                } else {
-                    monoasm!( &mut r#gen.jit,
-                        movq rax, (mask);
-                        andq rdi, rax;
-                    );
-                }
-            });
+            // lhs % 2^k == lhs & mask, applied to the tagged fixnum.
+            ir.inline(move |r#gen, _, _, _| r#gen.emit_int_rem_pow2_mask(mask));
             state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
             return true;
         }
@@ -1206,7 +1207,9 @@ fn integer_pow_float_rhs(
     let lhs_xmm = state.load_xmm_fixnum(ir, recv);
     let rhs_xmm = state.load_xmm(ir, args);
     let using_xmm = state.get_using_xmm();
-    ir.inline(move |r#gen, _, _, base| r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base));
+    ir.inline(move |r#gen, _, _, base| {
+        r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
+    });
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -1291,9 +1294,7 @@ fn emit_bitop_imm(
         ir.inline(move |r#gen, _, _, _| emit_imm(r#gen, tagged));
     } else {
         ir.inline(move |r#gen, _, _, _| {
-            monoasm!( &mut r#gen.jit,
-                movq rsi, (tagged);
-            );
+            r#gen.emit_load_tagged_rsi(tagged);
             emit_rr(r#gen);
         });
     }
@@ -1315,16 +1316,8 @@ fn integer_bitor(
         callid,
         rhs_class,
         |a, b| a | b,
-        |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                orq rdi, (imm);
-            );
-        },
-        |r#gen| {
-            monoasm!( &mut r#gen.jit,
-                orq rdi, rsi;
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitor_imm(imm),
+        |r#gen| r#gen.emit_bitor_rr(),
     )
 }
 
@@ -1344,16 +1337,8 @@ fn integer_bitand(
         callid,
         rhs_class,
         |a, b| a & b,
-        |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                andq rdi, (imm);
-            );
-        },
-        |r#gen| {
-            monoasm!( &mut r#gen.jit,
-                andq rdi, rsi;
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitand_imm(imm),
+        |r#gen| r#gen.emit_bitand_rr(),
     )
 }
 
@@ -1376,17 +1361,8 @@ fn integer_bitxor(
         callid,
         rhs_class,
         |a, b| a ^ b,
-        |r#gen, imm| {
-            monoasm!( &mut r#gen.jit,
-                xorq rdi, (imm - 1);
-            );
-        },
-        |r#gen| {
-            monoasm!( &mut r#gen.jit,
-                xorq rdi, rsi;
-                addq rdi, 1;
-            );
-        },
+        |r#gen, imm| r#gen.emit_bitxor_imm(imm),
+        |r#gen| r#gen.emit_bitxor_rr(),
     )
 }
 
@@ -1985,6 +1961,13 @@ r##"
         [chained(v), literal]
         "##
         );
+    }
+
+    #[test]
+    fn inspect_is_alias_of_to_s() {
+        // ruby/spec core/integer/inspect_spec.rb: inspect is an alias of to_s
+        // (same method entry / FuncId).
+        run_test("Integer.instance_method(:inspect) == Integer.instance_method(:to_s)");
     }
 
     #[test]
@@ -2937,11 +2920,44 @@ r##"
             def shl_g; -1 << -100; end
             def shl_h; 1 << 62; end
             def shl_i; 1 << 100; end
+            # Regression (#687): the fold guard used `checked_shl`, which only
+            # catches a shift amount >= 64, so a value overflow wrapped into a
+            # bogus fixnum instead of promoting to Bignum.
+            def shl_ov_a; 3 << 62; end
+            def shl_ov_b; 4 << 62; end
+            def shl_ov_c; 5 << 62; end
+            def shl_ov_d; 7 << 62; end
+            def shl_ov_e; -5 << 62; end
+            def shl_ov_f; -256 << 62; end
+            def shl_ov_g; 16 << 60; end
+            def shl_ov_h; 8 << 61; end
+            def shl_ov_i; 123456789 << 40; end
         ";
         run_test_with_prelude(
             "[shr_a, shr_b, shr_c, shr_d, shr_e, shr_f, shr_g, shr_h, shr_i,
-              shl_a, shl_b, shl_c, shl_d, shl_e, shl_f, shl_g, shl_h, shl_i]",
+              shl_a, shl_b, shl_c, shl_d, shl_e, shl_f, shl_g, shl_h, shl_i,
+              shl_ov_a, shl_ov_b, shl_ov_c, shl_ov_d, shl_ov_e, shl_ov_f,
+              shl_ov_g, shl_ov_h, shl_ov_i]",
             prelude,
+        );
+    }
+
+    #[test]
+    fn integer_shl_overflow_promotes_to_bignum() {
+        // Regression (#687): `safe_int_shl` used `checked_shl` + a sign-preserve
+        // guard, which let a value overflow (shift amount < 64) wrap into i64
+        // instead of promoting to Bignum. The amounts are non-literal here so
+        // the runtime helper is exercised rather than constant folding.
+        run_test(
+            "
+            r = []
+            [0, 1, 2, 3, 4, 5, 7, 16, 100, 123456789,
+             -1, -4, -5, -256, 4611686018427387903, -4611686018427387904].each do |v|
+              [40, 60, 61, 62, 63, 64, 100].each do |s|
+                r << (v << s)
+              end
+            end
+            r",
         );
     }
 

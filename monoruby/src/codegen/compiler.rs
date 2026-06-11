@@ -24,6 +24,7 @@ impl Codegen {
         )
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_compile_patch(
         &mut self,
         no_compile_exit: &DestLabel,
@@ -40,11 +41,16 @@ impl Codegen {
             subl [rip + counter], 1;
             jne no_compile_exit;
 
+            // hot enough overall: profile this self-class and compile only if
+            // *it* (not just any class) is hot. jit_profile_patch re-arms the
+            // counter (rcx) when the class isn't hot yet, so the stub keeps
+            // interpreting and samples again later.
             movq rdi, r12;
             movq rsi, r14;
             movq rdx, (patch_point_addr.as_ptr());
+            lea  rcx, [rip + counter];
             subq rsp, 4088;
-            movq rax, (jit_compile_patch as *const ());
+            movq rax, (jit_profile_patch as *const ());
             call rax;
             addq rsp, 4088;
             jmp entry;
@@ -61,6 +67,7 @@ impl Codegen {
     /// ### destroy
     /// - rax
     ///
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_recompile(
         &mut self,
         position: Option<BytecodePtr>,
@@ -105,6 +112,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_recompile_specialized(
         &mut self,
         idx: usize,
@@ -123,6 +131,7 @@ impl Codegen {
         self.jit.restore_registers();
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_compile_loop(&mut self, entry: &DestLabel, cont: &DestLabel) {
         monoasm!( &mut self.jit,
         entry:
@@ -268,6 +277,7 @@ impl Codegen {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -306,6 +316,49 @@ impl Codegen {
         Some(())
     }
 
+    /// aarch64 whole-method recompile: re-run the front-end + A64 lowering and
+    /// overwrite the method's dispatch slot in place (aarch64 installs JIT code
+    /// via the indirect slot recorded at `compile_patch`, not x86 branch
+    /// patching). Bails (leaving the old code) if the slot is unknown or the
+    /// method was JIT-invalidated.
+    #[cfg(target_arch = "aarch64")]
+    fn recompile_method(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        reason: RecompileReason,
+    ) -> Option<()> {
+        let self_class = lfp.self_val().class();
+        let func_id = lfp.func_id();
+        let iseq_id = globals.store[func_id].as_iseq();
+        if globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
+        let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
+        let jit_entry = self.jit.label();
+        let class_version = self.class_version();
+        let compiled = self
+            .compile_method(
+                globals,
+                iseq_id,
+                self_class,
+                jit_entry.clone(),
+                class_version,
+                Some(reason),
+            )
+            .is_some();
+        if !compiled {
+            self.jit.finalize();
+            return None;
+        }
+        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        self.jit.finalize();
+        let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
+        // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
+        unsafe { *(slot as *mut u64) = guard_addr };
+        Some(())
+    }
+
     fn compile_partial(
         &mut self,
         globals: &mut Globals,
@@ -319,20 +372,34 @@ impl Codegen {
         let iseq_id = globals.store[func_id].as_iseq();
         let class_version = self.class_version();
 
-        self.compile(
-            globals,
-            iseq_id,
-            self_class,
-            Some(pc),
-            entry_label.clone(),
-            class_version,
-            is_recompile,
-        )?;
-        let codeptr = self.jit.get_label_address(&entry_label);
-        pc.write2(codeptr.as_ptr() as u64);
-        Some(())
+        let ret = if self
+            .compile(
+                globals,
+                iseq_id,
+                self_class,
+                Some(pc),
+                entry_label.clone(),
+                class_version,
+                is_recompile,
+            )
+            .is_some()
+        {
+            let codeptr = self.jit.get_label_address(&entry_label);
+            pc.write2(codeptr.as_ptr() as u64);
+            Some(())
+        } else {
+            None
+        };
+        // Re-arm executable permission (and flush the icache) on the JIT
+        // region: `compile` toggled it writable to emit the loop body, and the
+        // VM/JIT code we return into lives in that same region — without this
+        // it would fault on the next instruction (W^X on Apple Silicon). A
+        // no-op on x86. Mirrors `compile_patch`.
+        self.jit.finalize();
+        ret
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn recompile_specialized(
         &mut self,
         globals: &mut Globals,
@@ -357,12 +424,50 @@ impl Codegen {
         self.jit.apply_jmp_patch_address(patch_point, &entry);
         Some(())
     }
+
+    /// aarch64 specialized recompile. Mirrors the x86 variant, but installs the
+    /// recompiled body by rewriting the `SpecializedCall` site's `bl` to it
+    /// (aarch64 has no `apply_jmp_patch_address`, but it can patch a single
+    /// branch instruction — see [`Codegen::patch_call_to_entry`]). Bails
+    /// (leaving the old specialized body in place) if the lowering bails.
+    #[cfg(target_arch = "aarch64")]
+    fn recompile_specialized(
+        &mut self,
+        globals: &mut Globals,
+        idx: usize,
+        reason: RecompileReason,
+    ) -> Option<()> {
+        let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
+        let entry = self.jit.label();
+        let class_version = self.class_version();
+        let compiled = self
+            .compile(
+                globals,
+                iseq_id,
+                self_class,
+                None,
+                entry.clone(),
+                class_version,
+                Some(reason),
+            )
+            .is_some();
+        // Re-arm executable permission / flush the I-cache for the freshly
+        // emitted body (and resolve `entry`'s address) before patching.
+        self.jit.finalize();
+        if !compiled {
+            return None;
+        }
+        let patch_point = self.jit.get_label_address(&patch_point);
+        self.patch_call_to_entry(patch_point, &entry);
+        Some(())
+    }
 }
 
 //
 // JIT Compiler API for asm codes.
 //
 
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_specialized(
     globals: &mut Globals,
     idx: usize,
@@ -375,7 +480,34 @@ extern "C" fn jit_recompile_specialized(
     });
 }
 
-extern "C" fn jit_compile_patch(
+/// aarch64 specialized recompile entry, called from the
+/// `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` lowering
+/// (`arch/aarch64/compile.rs`). Unlike x86 this catches a recompile-time panic so it
+/// cannot abort across the `extern "C"` boundary (aarch64 can panic emitting a
+/// large body); on panic it re-arms the JIT region as executable (mirrors
+/// `jit_compile_loop`) and returns — the generated code then just deopts to the
+/// interpreter (the old specialized body stays installed). No `Option<Value>`
+/// is returned: there is no FatalError path here, matching x86's recompile
+/// behavior (which is best-effort and falls back to deopt on failure).
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
+    globals: &mut Globals,
+    idx: usize,
+    reason: RecompileReason,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .recompile_specialized(globals, idx, reason);
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    }
+}
+
+pub(in crate::codegen) extern "C" fn jit_compile_patch(
     globals: &mut Globals,
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
@@ -393,6 +525,43 @@ extern "C" fn jit_compile_patch(
     //}
 }
 
+/// Warm-up profiler hook: called from the JIT stub when its per-stub warm-up
+/// counter expires. Instead of unconditionally compiling for whatever receiver
+/// class happens to be current (which thrashes the compiler when each call has
+/// a fresh receiver class — e.g. `Class.new.foo` in a loop), it samples the
+/// current `self`'s class and only compiles once that class is hot.
+///
+/// If the class is not hot yet, it re-arms the stub's counter (`counter_addr`)
+/// so the stub keeps interpreting and samples again after another interval.
+///
+/// `entry_patch_point` is the stub's patch/slot pointer, forwarded verbatim to
+/// `compile_patch` (an entry to branch-patch on x86; an indirect-dispatch slot
+/// on aarch64).
+pub(in crate::codegen) extern "C" fn jit_profile_patch(
+    globals: &mut Globals,
+    lfp: Lfp,
+    entry_patch_point: monoasm::CodePtr,
+    counter_addr: *mut i32,
+) {
+    let self_class = lfp.self_val().class();
+    let func_id = lfp.func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
+    if globals.store[iseq_id].profile_self_class(self_class) {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_patch(globals, lfp, entry_patch_point);
+        });
+    } else {
+        // Not hot yet — keep interpreting and sample again later.
+        // SAFETY: `counter_addr` is the address of the calling stub's own i32
+        // warm-up counter (a heap-leaked word on aarch64, a JIT data slot on
+        // x86); the stub passes its own counter's address.
+        unsafe { *counter_addr = COUNT_START_COMPILE };
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
     //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     CODEGEN.with(|codegen| {
@@ -405,6 +574,76 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
     //}
 }
 
+/// aarch64 counterpart, called from the `RecompileDeopt` lowering
+/// (`arch/aarch64/compile.rs`). Recompiles the current method and overwrites its
+/// dispatch slot via [`Codegen::recompile_method`].
+///
+/// Returns `Option<Value>`: `Some(nil)` on success, `None` if recompilation
+/// panicked. A panic must not cross this `extern "C"` boundary and abort the
+/// process — aarch64 can panic while emitting a large method body (e.g. an
+/// out-of-range branch to a far deopt). We catch it, re-arm the JIT region as
+/// executable (the aborted emit left it writable, mirroring `jit_compile_loop`),
+/// and set a Ruby `FatalError` on `vm`. The caller (`emit_recompile_deopt`)
+/// checks the `None` return and branches to the error side-exit so the
+/// `FatalError` is raised (it is uncatchable by `rescue` and propagates up).
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) extern "C" fn jit_recompile_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) -> Option<Value> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: JIT method recompilation panicked.",
+        ));
+        return None;
+    }
+    Some(Value::nil())
+}
+
+/// aarch64 loop recompile, called from the `RecompileDeopt` lowering
+/// (`arch/aarch64/compile.rs`) when `position` is the loop pc. Re-runs `compile_partial`
+/// for the loop body and rewrites the loop's codeptr at `[pc + 8]`, so the next
+/// `loop_start` enters the freshly specialized loop.
+///
+/// Like [`jit_recompile_method`] it returns `Option<Value>` (`Some(nil)` on
+/// success, `None` on a recompile-time panic) and surfaces a panic as a Ruby
+/// `FatalError`: aarch64 can panic while emitting a large loop body (an
+/// out-of-range branch to a far deopt), exactly the case `jit_compile_loop`
+/// already catches for the initial loop JIT.
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) extern "C" fn jit_recompile_loop(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reason: RecompileReason,
+) -> Option<Value> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_partial(globals, lfp, pc, Some(reason));
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: JIT loop recompilation panicked.",
+        ));
+        return None;
+    }
+    Some(Value::nil())
+}
+
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_method_with_recovery(
     globals: &mut Globals,
     lfp: Lfp,
@@ -428,16 +667,39 @@ extern "C" fn jit_recompile_method_with_recovery(
 ///
 /// Compile the loop.
 ///
-extern "C" fn jit_compile_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) {
+/// Loop (partial) JIT is arch-neutral: `compile_partial` drives the shared
+/// front-end and the per-arch `*_gen_machine_code` lowering, so this runs on
+/// every arch, not just x86. On
+/// aarch64 the lowering bails (and `compile_partial` writes no codeptr) for a
+/// loop body that still contains an unported AsmInst; the VM stub parks the
+/// loop counter so it does not retry the failed compile every iteration.
+pub(in crate::codegen) extern "C" fn jit_compile_loop(
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) {
     if globals.no_jit {
         return;
     }
-    compile_loop(globals, lfp, pc, None);
+    // A panic during loop compilation must not abort the process across this
+    // `extern "C"` boundary. The aarch64 backend can still panic on a large
+    // loop body (e.g. an out-of-range `TBZ`/`TBNZ` to a far deopt — imm14 is
+    // only ±32 KiB); catch it, leave the codeptr unpublished (the VM keeps
+    // interpreting and parks the loop counter), and re-arm the JIT region as
+    // executable since the aborted emit left it writable. A no-op on x86,
+    // whose branches reach far enough never to overflow.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_loop(globals, lfp, pc, None);
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    }
 }
 
 ///
 /// Recompile the loop.
 ///
+#[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_loop(
     globals: &mut Globals,
     lfp: Lfp,

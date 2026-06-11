@@ -11,6 +11,16 @@
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 
+// monoruby's signal name↔number mapping is host-derived (process.rs
+// `SIGNAL_TABLE`, built from `libc::SIG*`), so USR1/USR2 resolve to the
+// running OS's numbers — 10/12 on Linux, 30/31 on macOS — matching the
+// kernel's `sigaction`/`kill` (and CRuby on the same OS). The `SIGUSR1`
+// const below tracks that per-platform number for the delivery assertions.
+#[cfg(target_os = "linux")]
+const SIGUSR1: i32 = 10;
+#[cfg(not(target_os = "linux"))]
+const SIGUSR1: i32 = 30;
+
 fn monoruby() -> Command {
     Command::new(env!("CARGO_BIN_EXE_monoruby"))
 }
@@ -56,7 +66,7 @@ fn trap_handler_receives_signo() {
     assert!(output.status.success(), "status: {:?}", output.status);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "10" // SIGUSR1 on x86-64 Linux
+        SIGUSR1.to_string().as_str()
     );
 }
 
@@ -101,7 +111,7 @@ fn trap_default_restores_termination() {
     );
     assert_eq!(
         output.status.signal(),
-        Some(10), // SIGUSR1 on x86-64 Linux
+        Some(SIGUSR1),
         "expected death by SIGUSR1, status: {:?}",
         output.status
     );
@@ -128,7 +138,7 @@ fn trap_method_handler_runs() {
     assert!(output.status.success(), "status: {:?}", output.status);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "10" // SIGUSR1 on x86-64 Linux
+        SIGUSR1.to_string().as_str()
     );
 }
 

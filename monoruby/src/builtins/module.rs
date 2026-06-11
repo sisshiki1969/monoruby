@@ -806,10 +806,17 @@ fn autoload_resolution_candidates(
             vec![rb, so]
         }
     };
+    // Normalise candidates with `path::absolute` (expand `.`/`..`, no
+    // symlink resolution) — NOT `canonicalize`. `require_lib_file`
+    // registers `$LOADED_FEATURES` entries and `Executor::loading_paths`
+    // in the `path::absolute` form, so the already-loaded / currently-
+    // loading probes below must use the same representation or they miss
+    // on macOS where `/tmp`→`/private/tmp` (and `/var/folders`→
+    // `/private/var/folders`) symlinks make the two diverge.
+    let norm = |p: PathBuf| std::path::absolute(&p).unwrap_or(p);
     if feature.starts_with('/') {
         for c in with_ext(&raw) {
-            let canon = c.canonicalize().unwrap_or(c);
-            push(&mut out, canon);
+            push(&mut out, norm(c));
         }
         return out;
     }
@@ -817,8 +824,7 @@ fn autoload_resolution_candidates(
         if let Ok(cwd) = std::env::current_dir() {
             let resolved = cwd.join(&raw);
             for c in with_ext(&resolved) {
-                let canon = c.canonicalize().unwrap_or(c);
-                push(&mut out, canon);
+                push(&mut out, norm(c));
             }
         }
         return out;
@@ -831,8 +837,7 @@ fn autoload_resolution_candidates(
         };
         let joined = PathBuf::from(lib).join(&raw);
         for c in with_ext(&joined) {
-            let canon = c.canonicalize().unwrap_or(c);
-            push(&mut out, canon);
+            push(&mut out, norm(c));
         }
     }
     out
@@ -3758,7 +3763,10 @@ mod tests {
 
     #[test]
     fn prepend() {
-        run_test(
+        run_test_with_prelude(
+            r##"
+        Recorder::RECORDS
+        "##,
             r##"
         class Recorder
           RECORDS = []
@@ -3781,8 +3789,6 @@ mod tests {
         class C
           prepend X
         end
-
-        Recorder::RECORDS
         "##,
         );
         run_test_with_prelude(
@@ -4043,8 +4049,12 @@ mod tests {
 
     #[test]
     fn const_set() {
-        run_test_with_prelude(
+        // `run_test_once` (not a warmup loop): each `const_set` re-defines
+        // `Foo::FOO`/`Foo::BAR`, so re-running would emit "already
+        // initialized constant" warnings on every iteration.
+        run_test_once(
             r#"
+            module Foo; end
             res = []
             res << Foo.const_set(:FOO, 123)
             res << Foo::FOO
@@ -4053,9 +4063,6 @@ mod tests {
             res << Foo.const_set('BAR', '123')
             res
             "#,
-            r#"
-            module Foo; end
-        "#,
         );
     }
 
@@ -4558,7 +4565,10 @@ mod tests {
 
     #[test]
     fn const_added_hook() {
-        run_test(
+        run_test_with_prelude(
+            r##"
+            $res
+            "##,
             r##"
             $res = []
             class C
@@ -4568,14 +4578,16 @@ mod tests {
               FOO = 1
               BAR = 2
             end
-            $res
             "##,
         );
     }
 
     #[test]
     fn const_added_const_set() {
-        run_test(
+        run_test_with_prelude(
+            r##"
+            $res
+            "##,
             r##"
             $res = []
             class C
@@ -4584,7 +4596,6 @@ mod tests {
               end
             end
             C.const_set(:FOO, 1)
-            $res
             "##,
         );
     }
@@ -4627,7 +4638,10 @@ mod tests {
 
     #[test]
     fn scope_const_with_do_block() {
-        run_test(
+        run_test_with_prelude(
+            r##"
+        baz Foo::BAR do end
+        "##,
             r##"
         module Foo
           BAR = 42
@@ -4635,10 +4649,12 @@ mod tests {
         def baz(x)
           [x, block_given?]
         end
-        baz Foo::BAR do end
         "##,
         );
-        run_test(
+        run_test_with_prelude(
+            r##"
+        baz Foo::BAR do 10 end
+        "##,
             r##"
         module Foo
           BAR = 42
@@ -4646,10 +4662,12 @@ mod tests {
         def baz(x)
           x + yield
         end
-        baz Foo::BAR do 10 end
         "##,
         );
-        run_test(
+        run_test_with_prelude(
+            r##"
+        f A::B::C do end
+        "##,
             r##"
         module A
           module B
@@ -4659,7 +4677,6 @@ mod tests {
         def f(x)
           [x, block_given?]
         end
-        f A::B::C do end
         "##,
         );
         run_test(
@@ -5010,14 +5027,16 @@ mod tests {
     fn const_defined_scoped_path() {
         // String path "A::B::C" walks scopes; leading "::" rebinds to
         // toplevel.
-        run_test(
+        run_test_with_prelude(
             r#"
-            module M; class N; CONST = 1; end; end
             [
               M.const_defined?("N::CONST"),
               Object.const_defined?("M::N::CONST"),
               M.const_defined?("::M"),
             ]
+            "#,
+            r#"
+            module M; class N; CONST = 1; end; end
             "#,
         );
     }
@@ -5035,24 +5054,12 @@ mod tests {
 
     #[test]
     fn const_get_scoped_path_resolves() {
-        run_test(
-            r#"
+        let prelude = r#"
             module M; class N; CONST = 99; end; end
-            M.const_get("N::CONST")
-            "#,
-        );
-        run_test(
-            r#"
-            module M; class N; CONST = 99; end; end
-            Object.const_get("M::N::CONST")
-            "#,
-        );
-        run_test(
-            r#"
-            module M; class N; CONST = 99; end; end
-            M.const_get("::M::N::CONST")
-            "#,
-        );
+            "#;
+        run_test_with_prelude(r#"M.const_get("N::CONST")"#, prelude);
+        run_test_with_prelude(r#"Object.const_get("M::N::CONST")"#, prelude);
+        run_test_with_prelude(r#"M.const_get("::M::N::CONST")"#, prelude);
     }
 
     #[test]
@@ -5404,13 +5411,15 @@ mod tests {
     fn const_source_location_records_file_and_line() {
         // Basic shape: returns `[file, line]` for an ordinary
         // user-defined constant.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            loc = CSrcLocBasic.const_source_location(:MY_CONST)
+            [loc.is_a?(Array), loc.size, loc[1].is_a?(Integer)]
+            "#,
             r#"
             class CSrcLocBasic
               MY_CONST = 1
             end
-            loc = CSrcLocBasic.const_source_location(:MY_CONST)
-            [loc.is_a?(Array), loc.size, loc[1].is_a?(Integer)]
             "#,
         );
     }
@@ -5454,15 +5463,17 @@ mod tests {
         // `"A::B"` and `"::A::B"` qualified paths resolve and report
         // the inner constant's recorded location. Rejects malformed
         // paths with NameError.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            loc = CSrcLocScopeOuter.const_source_location("Inner::INNER_CONST")
+            [loc.is_a?(Array), loc.size == 2]
+            "#,
             r#"
             class CSrcLocScopeOuter
               class Inner
                 INNER_CONST = 42
               end
             end
-            loc = CSrcLocScopeOuter.const_source_location("Inner::INNER_CONST")
-            [loc.is_a?(Array), loc.size == 2]
             "#,
         );
     }
@@ -6360,13 +6371,15 @@ mod tests {
         // a leaf name "N" but with an anonymous parent. Binding it to
         // a permanent constant must replace the anon parent with the
         // new owner, so `Module#name` renders the full path.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            m::N.name
+            "#,
             r#"
             module ModuleSpecs2; module Anonymous2; end; end
             m = Module.new
             module m::N; end
             ModuleSpecs2::Anonymous2::WasAnnon2 = m::N
-            m::N.name
             "#,
         );
     }
@@ -6376,13 +6389,15 @@ mod tests {
         // Promoting `m` to a permanent constant should also flip its
         // descendant `m::N` to permanent — the qualified rendering
         // walks through `m`'s new permanent name.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            m::N.name
+            "#,
             r#"
             module ModuleSpecs3; end
             m = Module.new
             module m::N; end
             ModuleSpecs3::Mod3 = m
-            m::N.name
             "#,
         );
     }
@@ -6392,14 +6407,16 @@ mod tests {
         // A descendant that explicitly chose a temporary name (via
         // `set_temporary_name`) gets the constant-bound leaf restored
         // when an ancestor is promoted to permanent.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            m::N.name
+            "#,
             r#"
             module ModuleSpecs4; end
             m = Module.new
             module m::N; end
             m::N.set_temporary_name("fake")
             ModuleSpecs4::Mod4 = m
-            m::N.name
             "#,
         );
     }
@@ -6425,13 +6442,15 @@ mod tests {
     fn name_promotion_does_not_replace_already_permanent() {
         // Once a module has a permanent constant binding, a *second*
         // binding under a different parent must not silently move it.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            ModuleSpecsP1::Inner.name
+            "#,
             r#"
             module ModuleSpecsP1; end
             module ModuleSpecsP2; end
             module ModuleSpecsP1::Inner; end
             ModuleSpecsP2::Alias = ModuleSpecsP1::Inner
-            ModuleSpecsP1::Inner.name
             "#,
         );
     }
@@ -6774,11 +6793,13 @@ mod tests {
     #[test]
     fn module_constants_inherits_dedups() {
         // Inheritance through multiple includes is deduped.
-        run_test(
+        run_test_with_prelude(
+            r#"
+            c.constants.count(:CONST_DEDUP)
+            "#,
             r#"
             m = Module.new { CONST_DEDUP = 1 }
             c = Class.new { include m }
-            c.constants.count(:CONST_DEDUP)
             "#,
         );
     }

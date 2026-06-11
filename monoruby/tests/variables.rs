@@ -186,7 +186,6 @@ fn class_variables5() {
 fn constant1() {
     run_test_with_prelude(
         r#"
-          C::D::E = 100
           C::D.e
           "#,
         r#"
@@ -198,12 +197,15 @@ fn constant1() {
               end
             end
           end
+          C::D::E = 100
       "#,
     );
-    run_test(
+    run_test_with_prelude(
+        r#"
+          Object::E
+            "#,
         r#"
           ::E = 100
-          Object::E
             "#,
     );
     run_test(
@@ -218,12 +220,14 @@ fn constant1() {
 
 #[test]
 fn constant2() {
-    run_test(
+    run_test_with_prelude(
+        r#"
+            Const
+        "#,
         r#"
             Const=4
             Const+=100
             a = Const
-            Const
         "#,
     );
 }
@@ -275,12 +279,14 @@ fn constant4() {
 #[test]
 fn constant_basicobject_own() {
     // A class inheriting from BasicObject can reference its own constants.
-    run_test(
+    run_test_with_prelude(
+        r#"
+            Foo::C
+        "#,
         r#"
             class Foo < BasicObject
               C = 123
             end
-            Foo::C
         "#,
     );
 }

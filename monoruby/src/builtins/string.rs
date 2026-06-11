@@ -3,7 +3,10 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // String class
@@ -70,7 +73,7 @@ pub(super) fn init(globals: &mut Globals) {
         "bytesize",
         &[],
         bytesize,
-        Box::new(string_bytesize),
+        inline_gen2!(string_bytesize),
         0,
     );
     globals.define_builtin_func(STRING_CLASS, "ord", ord, 0);
@@ -3394,15 +3397,7 @@ fn string_bytesize(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-            cmpq rax, (STRING_INLINE_CAP);
-            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            salq rax, 1;
-            orq  rax, 1;
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_string_bytesize());
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }

@@ -25,7 +25,6 @@ emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
 emit-bc = ["dump-bc", "dump-traceir"]
 jit-log = []
 jit-debug = ["dump-traceir"]
-no-jit = []
 deopt = ["jit-log", "dump-bc", "dump-traceir"]
 gc-log = []
 gc-debug = []
@@ -44,15 +43,15 @@ dump-require = []
 clap = { version = "4.6.1", features = ["derive"] }
 rustyline = "18.0.0"
 paste = "1.0.15"
-monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
-monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "rc" }
+monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
+monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
-ruruby-parse = { path = "../ruruby-parse" }
 ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", branch = "monoruby-vendored" }
 monoruby-attr = { path = "../monoruby_attr" }
 rubymap = { path = "../rubymap" }
 indexmap = "2.14.0"
 num = "0.4.3"
+console = "0.15.11"
 fxhash = "0.2.1"
 tempfile = "3.27.0"
 dtoa = "1.0.11"
@@ -79,9 +78,19 @@ unicode-segmentation = "1.13.2"
 signal-hook = "0.4.4"
 divrem = "1.0.0"
 libffi = "5.1.0"
+# Digest builtins (`builtins/digest.rs`) — used on every platform, so these
+# must stay in the cross-platform `[dependencies]`, not a target block.
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
+
+# macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
+# link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build
+# into the static archive), so fall back to Homebrew's system libffi via
+# pkg-config. Linux / x86_64 darwin keep the bundled build, matching the
+# CI configuration. Install with `brew install libffi pkg-config`.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+libffi = { version = "5.1.0", features = ["system"] }
 
 [build-dependencies]
 dirs = "6.0.0"

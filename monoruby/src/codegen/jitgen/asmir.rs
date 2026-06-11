@@ -2,7 +2,18 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+// AsmIR→machine-code lowering. The per-arch backend (`compile`) provides the
+// emission primitives + `compile_asmir_arch`; the arch-neutral dispatcher
+// (`compile_shared`) owns the shared instruction arms and forwards the rest.
+// x86 emits via `monoasm!`, aarch64 via `monoasm_arm64!`; both lower every
+// `AsmInst`, so neither bails (see doc/aarch64-jitgen-plan.md).
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/x86_64/compile/mod.rs"]
 mod compile;
+#[cfg(target_arch = "aarch64")]
+#[path = "../arch/aarch64/compile.rs"]
+mod compile;
+mod compile_shared;
 
 pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,
@@ -1117,6 +1128,11 @@ pub(super) enum AsmInst {
     RecompileDeopt {
         position: Option<BytecodePtr>,
         deopt: AsmDeopt,
+        /// Error side-exit reached when the recompile itself raises (a Rust
+        /// `panic!` during recompilation, caught at the `extern "C"` boundary
+        /// and turned into a Ruby `FatalError`). `None` on x86, which
+        /// recompiles in place and never returns an error here.
+        error: Option<AsmError>,
         reason: RecompileReason,
     },
     RecompileDeoptSpecialized {
@@ -1905,6 +1921,7 @@ impl AsmInst {
             Self::RecompileDeopt {
                 position,
                 deopt: _,
+                error: _,
                 reason,
             } => {
                 format!("recompile_deopt {:?} {:?}", position, reason)
@@ -1937,6 +1954,7 @@ pub enum SideExit {
     Error(BytecodePtr, WriteBack),
 }
 
+#[cfg(target_arch = "x86_64")]
 impl Codegen {
     ///
     /// Generate machine code for *ir*.

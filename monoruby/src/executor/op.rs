@@ -583,7 +583,18 @@ pub(crate) extern "C" fn neg_value(
         },
         RV::BigInt(lhs) => Value::bigint(-lhs),
         RV::Float(lhs) => Value::float(-lhs),
-        RV::Complex(lhs) => Value::complex(-lhs.re, -lhs.im),
+        RV::Complex(c) => {
+            let (re, im) = (c.re, c.im);
+            let is_builtin_real =
+                |v: Value| matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_));
+            if is_builtin_real(re.get()) && is_builtin_real(im.get()) {
+                Value::complex(-re, -im)
+            } else {
+                // Custom Numeric components: dispatch `-@` to each part via
+                // `Complex#-@` (`neg_op`, not `neg_value`), so no recursion.
+                return vm.invoke_method_simple(globals, IdentId::_UMINUS, lhs, &[]);
+            }
+        }
         _ => {
             return vm.invoke_method_simple(globals, IdentId::_UMINUS, lhs, &[]);
         }

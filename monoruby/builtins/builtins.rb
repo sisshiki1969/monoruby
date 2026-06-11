@@ -43,13 +43,11 @@ end
 # which boolean was observed first.
 
 class NilClass
-  def ^(other)
-    !!other
-  end
-
   def |(other)
     !!other
   end
+  # ruby/spec core/nil/xor_spec.rb: ^ is an alias of |.
+  alias ^ |
 
   def &(other)
     false
@@ -651,4 +649,91 @@ module FileTest
   def self.empty?(path)
     File.zero?(path)
   end
+end
+
+# True aliases required by ruby/spec's "Move <Class> to rely less on shared
+# examples" refactoring wave (2026-06; e.g. ruby/spec d714c5a84 for Integer and
+# its siblings for Float/Symbol/Set/...), which replaced behavioral shared
+# examples with strict `Klass.instance_method(:a) == Klass.instance_method(:b)`
+# identity checks. monoruby had registered several of these as separate builtins
+# sharing one Rust fn (distinct FuncId), so the identity checks failed. Redefine
+# them as real aliases, matching CRuby. (Integer's are handled in
+# `builtins/numeric/integer.rs`.) This file loads after every class .rb, so the
+# aliased originals are all defined by now.
+class Float
+  alias === ==
+  alias modulo %
+  alias quo fdiv
+end
+class Symbol
+  alias === ==
+  alias id2name to_s
+  alias intern to_sym
+  alias size length
+end
+class Rational
+  alias magnitude abs
+end
+class Hash
+  alias store []=
+end
+class Set
+  alias < proper_subset?
+  alias > proper_superset?
+  alias << add
+  alias eql? ==
+end
+class Time
+  alias asctime ctime
+end
+class Encoding
+  alias to_s name
+end
+class MatchData
+  alias deconstruct captures
+end
+class Struct
+  alias inspect to_s
+end
+class TrueClass
+  # core/true/inspect_spec.rb: inspect is an alias of to_s (to_s on TrueClass).
+  alias inspect to_s
+end
+class FalseClass
+  # core/false/inspect_spec.rb: inspect is an alias of to_s (to_s on FalseClass).
+  alias inspect to_s
+  # core/false/xor_spec.rb: ^ is an alias of |. Both `|` and `^` are rooted
+  # directly on FalseClass (registered by bool_class.rs on FALSE_CLASS, not an
+  # inherited parent), so just re-point `^` at the existing `|`. For false,
+  # `false ^ x` and `false | x` are both `!!x`, so behaviour is unchanged.
+  # (`true` keeps distinct `^`/`|` on the shared Boolean, where they differ.)
+  alias ^ |
+end
+
+# The remaining aliases need their *original* defined on the class, because
+# CRuby keeps the original there too (the strict identity check compares the
+# owner). monoruby inherits them, so we re-root the original on the class (a
+# `super`-forwarding stub preserves behaviour) and then alias.
+#
+# NOT done here: Complex#quo == Complex#/. CRuby keeps both on Complex as one
+# method; in monoruby `quo` (Rational-component result) and the inherited
+# Numeric#/ (and the `/` *operator*, which has a separate fast path that is
+# itself buggy — e.g. `Complex(1,2) / 2` => `(0+1i)`) are genuinely different
+# implementations, so aliasing them changes results. Tracked as an issue.
+class Enumerator
+  # identical to with_object; re-root on Enumerator (overrides Enumerable's).
+  alias each_with_object with_object
+end
+class Thread
+  alias exit kill
+  # inherited Kernel#inspect dumps Thread's ivars; use the short Kernel#to_s
+  # form for both (matches CRuby's `inspect`==`to_s`).
+  def to_s = super
+  alias inspect to_s
+end
+class Proc
+  def ==(other) = super
+  alias eql? ==
+  def to_s = super
+  alias inspect to_s
 end

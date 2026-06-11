@@ -1988,9 +1988,6 @@ fn method_missing_hook_via_singleton_class() {
 fn forwarding_specialized_inline() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // required-only callee, pure `...` forwarding: hits the
     // SetArgumentsForwarded fast path, inline-array branch (<=5 args).
     run_test_with_prelude(
@@ -2011,9 +2008,6 @@ fn forwarding_specialized_inline() {
 fn forwarding_specialized_heap() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // 7 required params > ARRAY_INLINE_CAPA(5): exercises the heap
     // (RVALUE_OFFSET_HEAP_PTR/HEAP_LEN) branch of the copy.
     run_test_with_prelude(
@@ -2033,9 +2027,6 @@ fn forwarding_specialized_heap() {
 fn forwarding_specialized_zero_arity() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // g_arity == 0: empty forwarded array, copy loop skipped.
     run_test_with_prelude(
         r#"
@@ -2054,9 +2045,6 @@ fn forwarding_specialized_zero_arity() {
 fn forwarding_specialized_arity_mismatch_falls_back() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Length guard miss must fall back to the generic path and raise
     // ArgumentError exactly like CRuby (no crash / no silent accept).
     run_test_with_prelude(
@@ -2082,9 +2070,6 @@ fn forwarding_specialized_arity_mismatch_falls_back() {
 fn forwarding_specialized_kwargs_falls_back() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Non-nil forwarded kw-rest must take the fallback; CRuby raises
     // ArgumentError because `g` accepts no keywords.
     run_test_with_prelude(
@@ -2111,9 +2096,6 @@ fn forwarding_specialized_kwargs_falls_back() {
 fn forwarding_specialized_block_passthrough() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Forwarded block must still reach the callee on the fast path.
     run_test_with_prelude(
         r#"
@@ -2132,9 +2114,6 @@ fn forwarding_specialized_block_passthrough() {
 fn forwarding_leading_arg() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // `g(x, ...)` with required-only `g`: trailing single splat
     // (`splat_pos == [pos_num-1]`); hits the specialized path with
     // lead_num == 1.
@@ -2155,9 +2134,6 @@ fn forwarding_leading_arg() {
 fn forwarding_leading_args_multi_and_heap() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // 3 leading args + a 7-element `...` (> ARRAY_INLINE_CAPA(5), so the
     // heap branch of the rest copy is taken); g has 10 required params
     // (3 + 7 == 10).
@@ -2178,9 +2154,6 @@ fn forwarding_leading_args_multi_and_heap() {
 fn forwarding_leading_args_empty_rest() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // All required slots come from leading args; the `...` array is
     // empty (expected_len == 0, copy loop skipped).
     run_test_with_prelude(
@@ -2200,9 +2173,6 @@ fn forwarding_leading_args_empty_rest() {
 fn forwarding_leading_args_too_many_falls_back() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // More leading args than `g`'s arity (req_num+1 < pos_num): gate
     // must reject; CRuby raises ArgumentError, generic path must match.
     run_test_with_prelude(
@@ -2228,9 +2198,6 @@ fn forwarding_leading_args_too_many_falls_back() {
 fn forwarding_leading_args_block_and_mismatch() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Leading arg + forwarded block on the fast path, plus a
     // length-guard miss (wrong rest count) that must fall back and
     // raise ArgumentError exactly like CRuby.
@@ -2258,9 +2225,6 @@ fn forwarding_leading_args_block_and_mismatch() {
 fn forwarding_specialized_chain_and_mutation() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Deep forwarding chain + ensure the forwarded array elements are
     // copied by value (callee mutation must not corrupt the caller).
     run_test_with_prelude(
@@ -2288,9 +2252,6 @@ fn forwarding_specialized_chain_and_mutation() {
 fn forwarding_rest_pure() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // `def g(a, *r)` via pure `g(...)`: rest-array alloc unavoidable,
     // handled by the specialized runtime helper.
     run_test_with_prelude(
@@ -2311,9 +2272,6 @@ fn forwarding_rest_pure() {
 fn forwarding_rest_only_and_leading() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // `def g(*r)` (no required) and leading-arg `k(100, 200, ...)`.
     run_test_with_prelude(
         r##"
@@ -2334,9 +2292,6 @@ fn forwarding_rest_only_and_leading() {
 fn forwarding_opt_post_rest() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Opt + post + rest callee through forwarding (fill_positional_args
     // generic shape, driven by the helper's direct buffer).
     run_test_with_prelude(
@@ -2362,9 +2317,6 @@ fn forwarding_opt_post_rest() {
 fn forwarding_rest_kwargs_delegates() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Keywords actually forwarded into a `*rest` callee: the helper
     // delegates to the proven generic path; must match CRuby (kw hash
     // becomes a trailing rest element).
@@ -2388,9 +2340,6 @@ fn forwarding_rest_kwargs_delegates() {
 fn forwarding_rest_block_passthrough() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Forwarded block must still reach a rest-bearing callee on the
     // helper path.
     run_test_with_prelude(
@@ -2410,9 +2359,6 @@ fn forwarding_rest_block_passthrough() {
 fn forwarding_rest_chain_and_mutation() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Deep chain + callee mutates its rest array; the forwarded source
     // array must be unaffected.
     run_test_with_prelude(
@@ -2440,9 +2386,6 @@ fn forwarding_rest_chain_and_mutation() {
 fn forwarding_super_rest_post() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Implicit `super` of `def m(a, *r, z)`: single splat *before* a
     // post param (splat_pos == [rest_pos], not trailing). Previously
     // fell to the generic path; now the single-splat helper handles it.
@@ -2469,9 +2412,6 @@ fn forwarding_super_rest_post() {
 fn forwarding_super_rest_last() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Implicit `super` of `def m(a, *r)` (rest is the last positional):
     // trailing single splat, already specialized — regression guard.
     run_test_with_prelude(
@@ -2497,9 +2437,6 @@ fn forwarding_super_rest_last() {
 fn forwarding_super_opt_rest_post() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Implicit `super` of `def m(a, b=10, *r, y, z)`: opt + rest + post,
     // single splat in the middle, exercised at several arities.
     run_test_with_prelude(
@@ -2527,9 +2464,6 @@ fn forwarding_super_opt_rest_post() {
 fn forwarding_super_no_rest_passthrough() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // Implicit `super` of a fixed-arity method (no splat) must keep
     // working (is_simple path) — regression guard.
     run_test_with_prelude(
@@ -2554,9 +2488,6 @@ fn forwarding_super_no_rest_passthrough() {
 fn forwarding_super_block_passthrough() {
     // ruruby-parse rejects the endless method def
     // (`def f(...) = g(...)`) these use; Prism-only.
-    if parser_is_ruruby() {
-        return;
-    }
     // A block given to the subclass method must reach `super`.
     run_test_with_prelude(
         r##"
@@ -2571,6 +2502,54 @@ fn forwarding_super_block_passthrough() {
         end
         class B < A
           def m(a, *r) = super
+        end
+        "##,
+    );
+}
+
+#[test]
+fn method_missing_in_hot_loop() {
+    // A call site that dispatches via `method_missing` caches the receiver
+    // class with a null func_id. The JIT must plain-deopt such a site (the VM
+    // handles method_missing) rather than request a recompile — otherwise the
+    // hot method recompiles on every warm-up cycle (`NotCached`) forever and
+    // never stabilizes. This drives the call through a BasicObject proxy's
+    // method_missing 100×, well past the JIT threshold, then checks the result.
+    run_test_with_prelude(
+        r##"
+        res = 0
+        d = Proxy.new(Target.new)
+        200.times { res += d.value_plus(40) }
+        res
+        "##,
+        r##"
+        class Target
+          def value_plus(n) = 2 + n
+        end
+        class Proxy < BasicObject
+          def initialize(t) = @t = t
+          def method_missing(name, *args) = @t.__send__(name, *args)
+        end
+        "##,
+    );
+}
+
+#[test]
+fn method_call_on_fresh_class_each_iteration() {
+    // Calling an (inherited) instance method on a freshly created class object
+    // every iteration: the receiver's self-class is a brand-new singleton class
+    // each time. The JIT must not compile a specialization per singleton class
+    // (the per-class warm-up profiler keeps these one-shot classes out of the
+    // compiler). Correctness must be unaffected regardless.
+    run_test_with_prelude(
+        r##"
+        res = 0
+        300.times { res += Class.new.tag }
+        res
+        "##,
+        r##"
+        class Object
+          def tag = 7
         end
         "##,
     );

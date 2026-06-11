@@ -1,4 +1,4 @@
-use crate::jitgen::BasicBlockInfo;
+use crate::basic_block::BasicBlockInfo;
 
 use super::*;
 

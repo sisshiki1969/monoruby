@@ -13,7 +13,12 @@ require "ffi"
 module Gosu
   module SDL2
     extend FFI::Library
-    ffi_lib "libSDL2-2.0.so.0"
+    # Pass a candidate list so the first name that loads wins: the
+    # unprefixed "SDL2" lets FFI.map_library_name pick the right
+    # extension per host (libSDL2.dylib on macOS, libSDL2.so on Linux),
+    # while the explicit Linux soname covers runtime-only installs that
+    # ship only the versioned `.so.0`.
+    ffi_lib ["SDL2", "libSDL2-2.0.so.0"]
 
     # --- SDL_Init flags -------------------------------------------------
     INIT_TIMER          = 0x00000001
@@ -235,7 +240,7 @@ module Gosu
   # ----------------------------------------------------------------------
   module SDL2_image
     extend FFI::Library
-    ffi_lib "libSDL2_image-2.0.so.0"
+    ffi_lib ["SDL2_image", "libSDL2_image-2.0.so.0"]
 
     INIT_JPG  = 0x01
     INIT_PNG  = 0x02
@@ -262,7 +267,7 @@ module Gosu
   # ----------------------------------------------------------------------
   module SDL2_mixer
     extend FFI::Library
-    ffi_lib "libSDL2_mixer-2.0.so.0"
+    ffi_lib ["SDL2_mixer", "libSDL2_mixer-2.0.so.0"]
 
     INIT_FLAC = 0x01
     INIT_MOD  = 0x02
@@ -336,7 +341,7 @@ module Gosu
   # ----------------------------------------------------------------------
   module SDL2_ttf
     extend FFI::Library
-    ffi_lib "libSDL2_ttf-2.0.so.0"
+    ffi_lib ["SDL2_ttf", "libSDL2_ttf-2.0.so.0"]
 
     # SDL_Color in big-endian order: r, g, b, a.
     class Color < FFI::Struct
