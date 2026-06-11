@@ -1175,7 +1175,11 @@ extern "C" fn stack_overflow(executor: &mut Executor) -> Option<Value> {
 #[cfg(feature = "profile")]
 extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
     let func_id = vm.cfp().lfp().func_id();
-    globals.jit_class_guard_failed(func_id, self_val.class());
+    // A failing guard may be probing a slot whose heap object has already
+    // been freed; record stats only for live values instead of panicking.
+    if let Some(class) = self_val.debug_class() {
+        globals.jit_class_guard_failed(func_id, class);
+    }
 }
 
 #[cfg(test)]
