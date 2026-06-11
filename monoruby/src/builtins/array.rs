@@ -3911,28 +3911,32 @@ mod tests {
     #[test]
     fn array_literal_chunked() {
         // An Array literal longer than LITERAL_CHUNK_LEN (256 elements) is
-        // built in chunks (issue #706). Cover ordering across the chunk
-        // boundary and splats in chunked literals.
+        // built in chunks (issue #706). Elements must be non-constant: a
+        // constant-only Array literal is folded into a single deep-copied
+        // Literal and never reaches the chunked construction path. Cover
+        // ordering across the chunk boundary and splats in chunked literals;
+        // `run_test`'s warm-up loop exercises the JIT lowering (ArrayConcat).
         let elems = (0..600)
-            .map(|i| i.to_string())
+            .map(|i| format!("n + {i}"))
             .collect::<Vec<_>>()
             .join(", ");
         run_test(&format!(
-            "a = [{elems}]; [a.size, a[0], a[255], a[256], a[-1]]"
+            "n = 1; a = [{elems}]; [a.size, a[0], a[255], a[256], a[-1]]"
         ));
         run_test_once(&format!(
-            "x = [-1, -2]; a = [*x, {elems}, *x]; [a.size, a[0], a[1], a[2], a[-1]]"
+            "n = 1; x = [-1, -2]; a = [*x, {elems}, *x]; [a.size, a[0], a[1], a[2], a[-1]]"
         ));
     }
 
     #[test]
     fn array_literal_huge() {
         // issue #706: keep frame register usage bounded for huge literals.
-        let elems = (0..4000)
-            .map(|i| i.to_string())
+        // The leading `n` keeps the literal non-constant (see above).
+        let elems = std::iter::once("n".to_string())
+            .chain((1..4000).map(|i| i.to_string()))
             .collect::<Vec<_>>()
             .join(", ");
-        run_test_once(&format!("a = [{elems}]; [a.size, a[3999]]"));
+        run_test_once(&format!("n = 0; a = [{elems}]; [a.size, a[3999]]"));
     }
 
     #[test]
