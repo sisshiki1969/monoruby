@@ -1,5 +1,15 @@
 use super::*;
 
+///
+/// Maximum number of elements (Array) / entries (Hash) of a collection
+/// literal that are evaluated into consecutive temporary registers at once.
+/// Longer literals are built in chunks of this size, re-using the same
+/// registers for every chunk (see `gen_array` / `gen_hash`), so that the
+/// frame's register count — frames live on the native machine stack — stays
+/// bounded no matter how large the literal is (issue #706).
+///
+const LITERAL_CHUNK_LEN: usize = 256;
+
 impl<'a> BytecodeGen<'a> {
     ///
     /// Evaluate *expr*, push the result, and return the register.
@@ -1004,9 +1014,48 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
-        let (src, len, splat) = self.ordinary_args(nodes)?;
-        self.popn(len);
-        self.emit_array(ret, src, len, splat, loc);
+        if nodes.len() <= LITERAL_CHUNK_LEN {
+            let (src, len, splat) = self.ordinary_args(nodes)?;
+            self.popn(len);
+            self.emit_array(ret, src, len, splat, loc);
+            return Ok(());
+        }
+        // Build a large Array literal in bounded chunks so the number of
+        // temporary registers does not grow with the literal's length: emit
+        // the first chunk with an ordinary Array instruction, then build each
+        // following chunk into a scratch register (re-using the same element
+        // registers) and concatenate it. Construct into a temporary so `ret`
+        // (which may be a local variable) never holds a half-built array.
+        let old_reg = self.temp;
+        let tmp: BcReg = self.push().into();
+        let base = self.temp;
+        let mut first = true;
+        let mut iter = nodes.into_iter().peekable();
+        while iter.peek().is_some() {
+            let chunk: Vec<Node> = iter.by_ref().take(LITERAL_CHUNK_LEN).collect();
+            if first {
+                let (src, len, splat) = self.ordinary_args(chunk)?;
+                self.popn(len);
+                self.emit_array(tmp, src, len, splat, loc);
+                first = false;
+            } else {
+                let chunk_dst: BcReg = self.push().into();
+                let (src, len, splat) = self.ordinary_args(chunk)?;
+                self.popn(len);
+                self.emit_array(chunk_dst, src, len, splat, loc);
+                self.pop();
+                self.emit(
+                    BytecodeInst::ArrayConcat {
+                        dst: tmp,
+                        src: chunk_dst,
+                    },
+                    loc,
+                );
+            }
+            debug_assert_eq!(base, self.temp);
+        }
+        self.temp = old_reg;
+        self.emit_mov(ret, tmp);
         Ok(())
     }
 
@@ -1017,15 +1066,53 @@ impl<'a> BytecodeGen<'a> {
         splat: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
-        let len = nodes.len();
-        let old_reg = self.temp;
-        let args = self.sp();
-        for (k, v) in nodes {
-            self.push_expr(k)?;
-            self.push_expr(v)?;
+        if nodes.len() <= LITERAL_CHUNK_LEN {
+            let len = nodes.len();
+            let old_reg = self.temp;
+            let args = self.sp();
+            for (k, v) in nodes {
+                self.push_expr(k)?;
+                self.push_expr(v)?;
+            }
+            self.temp = old_reg;
+            self.emit_hash(ret, args.into(), len, loc);
+        } else {
+            // Chunked construction for large Hash literals (see `gen_array`):
+            // the first chunk becomes an ordinary Hash instruction; each
+            // following chunk evaluates its key/value pairs into the same
+            // temporary registers and merges them with HashInsert, keeping
+            // register usage bounded regardless of the literal's size.
+            let old_reg = self.temp;
+            let tmp: BcReg = self.push().into();
+            let base = self.temp;
+            let mut first = true;
+            let mut iter = nodes.into_iter().peekable();
+            while iter.peek().is_some() {
+                let args = self.sp();
+                let mut len = 0;
+                for (k, v) in iter.by_ref().take(LITERAL_CHUNK_LEN) {
+                    self.push_expr(k)?;
+                    self.push_expr(v)?;
+                    len += 1;
+                }
+                self.temp = base;
+                if first {
+                    self.emit_hash(tmp, args.into(), len, loc);
+                    first = false;
+                } else {
+                    self.emit(
+                        BytecodeInst::HashInsert {
+                            hash: tmp,
+                            args: args.into(),
+                            len: len as u16,
+                        },
+                        loc,
+                    );
+                }
+            }
+            self.temp = old_reg;
+            self.emit_mov(ret, tmp);
         }
-        self.temp = old_reg;
-        self.emit_hash(ret, args.into(), len, loc);
         if !splat.is_empty() {
             // For each splat, call merge! on the hash
             let merge_id = IdentId::get_id("merge!");

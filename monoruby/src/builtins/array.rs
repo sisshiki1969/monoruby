@@ -3909,6 +3909,33 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn array_literal_chunked() {
+        // An Array literal longer than LITERAL_CHUNK_LEN (256 elements) is
+        // built in chunks (issue #706). Cover ordering across the chunk
+        // boundary and splats in chunked literals.
+        let elems = (0..600)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        run_test(&format!(
+            "a = [{elems}]; [a.size, a[0], a[255], a[256], a[-1]]"
+        ));
+        run_test_once(&format!(
+            "x = [-1, -2]; a = [*x, {elems}, *x]; [a.size, a[0], a[1], a[2], a[-1]]"
+        ));
+    }
+
+    #[test]
+    fn array_literal_huge() {
+        // issue #706: keep frame register usage bounded for huge literals.
+        let elems = (0..4000)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        run_test_once(&format!("a = [{elems}]; [a.size, a[3999]]"));
+    }
+
+    #[test]
     fn array_new() {
         run_test_with_prelude(
             r##"

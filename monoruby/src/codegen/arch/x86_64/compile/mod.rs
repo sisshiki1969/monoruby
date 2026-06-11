@@ -59,6 +59,8 @@ impl Codegen {
             | AsmInst::CreateArray { .. }
             | AsmInst::NewArray { .. }
             | AsmInst::NewHash(..)
+            | AsmInst::HashInsert { .. }
+            | AsmInst::ArrayConcat { .. }
             | AsmInst::NewRange { .. }
             | AsmInst::ConcatStr { .. }
             | AsmInst::ToA { .. }
@@ -455,6 +457,50 @@ impl Codegen {
         using_xmm: UsingXmm,
     ) -> bool {
         self.new_hash(args, len, using_xmm);
+        true
+    }
+
+    /// rax <- the Hash in `hash` after inserting the `len` key/value pairs
+    /// at `args` (chunked Hash literal).
+    pub(in crate::codegen::jitgen) fn emit_hash_insert(
+        &mut self,
+        hash: SlotId,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [rbp - (rbp_local(args))];
+            movq rcx, (len);
+            movq r8, [rbp - (rbp_local(hash))];
+            movq rax, (runtime::hash_insert);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
+        true
+    }
+
+    /// rax <- the Array in `dst` after concatenating the Array in `src`
+    /// (chunked Array literal).
+    pub(in crate::codegen::jitgen) fn emit_array_concat(
+        &mut self,
+        dst: SlotId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        self.xmm_save(using_xmm);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [rbp - (rbp_local(dst))];
+            movq rcx, [rbp - (rbp_local(src))];
+            movq rax, (runtime::array_concat);
+            call rax;
+        );
+        self.xmm_restore(using_xmm);
         true
     }
 

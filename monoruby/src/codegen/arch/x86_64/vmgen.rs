@@ -278,6 +278,8 @@ impl Codegen {
             lambda: self.vm_lambda(),
             array: self.vm_array(),
             array_teq: self.vm_array_teq(),
+            array_concat: self.vm_array_concat(),
+            hash_insert: self.vm_hash_insert(),
             defined_yield: self.vm_defined_yield(),
             defined_const: self.vm_defined_const(),
             defined_method: self.vm_defined_method(),
@@ -868,6 +870,54 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::gen_hash);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// op 42 `HashInsert`: hash_insert(vm, globals, src, len, hash). The
+    /// hash slot (:1) doubles as the destination (the runtime returns the
+    /// same hash).
+    fn vm_hash_insert(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch3();
+        self.vm_get_slot_addr(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;      // src: *const Value
+            movzxw rcx, rsi;    // len: usize
+            // r8 <- hash value (from slot r15, keeping r15 for the store)
+            movq r8, r15;
+            negq r8;
+            movq r8, [r14 + r8 * 8 - (LFP_SELF)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::hash_insert);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// op 41 `ArrayConcat`: array_concat(vm, globals, dst, src). The dst
+    /// slot (:1) doubles as the destination (the runtime returns dst).
+    fn vm_array_concat(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq rcx, rdi;      // src: Value
+            // rdx <- dst value (from slot r15, keeping r15 for the store)
+            movq rdx, r15;
+            negq rdx;
+            movq rdx, [r14 + rdx * 8 - (LFP_SELF)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::array_concat);
             call rax;
         };
         self.vm_handle_error();

@@ -135,6 +135,12 @@ impl Codegen {
             AsmInst::NewHash(args, len, using_xmm) => {
                 return self.emit_new_hash(args, len, using_xmm);
             }
+            AsmInst::HashInsert { hash, args, len, using_xmm } => {
+                return self.emit_hash_insert(hash, args, len, using_xmm);
+            }
+            AsmInst::ArrayConcat { dst, src, using_xmm } => {
+                return self.emit_array_concat(dst, src, using_xmm);
+            }
             AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
                 return self.emit_new_range(start, end, exclude_end, using_xmm);
             }

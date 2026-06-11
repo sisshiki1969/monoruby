@@ -750,6 +750,23 @@ impl AsmIr {
         self.push(AsmInst::NewHash(args, len, using_xmm));
     }
 
+    pub(super) fn hash_insert(&mut self, using_xmm: UsingXmm, hash: SlotId, args: SlotId, len: usize) {
+        self.push(AsmInst::HashInsert {
+            hash,
+            args,
+            len,
+            using_xmm,
+        });
+    }
+
+    pub(super) fn array_concat(&mut self, using_xmm: UsingXmm, dst: SlotId, src: SlotId) {
+        self.push(AsmInst::ArrayConcat {
+            dst,
+            src,
+            using_xmm,
+        });
+    }
+
     pub(super) fn new_range(
         &mut self,
         start: SlotId,
@@ -1496,6 +1513,25 @@ pub(super) enum AsmInst {
     /// Create a new Hash object and store it to *rax*
     ///
     NewHash(SlotId, usize, UsingXmm),
+    ///
+    /// Insert `len` key/value pairs at `args` into the Hash in `hash`
+    /// (chunked Hash literal); the hash is returned in *rax*.
+    ///
+    HashInsert {
+        hash: SlotId,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    },
+    ///
+    /// Concatenate the Array in `src` onto the Array in `dst` (chunked
+    /// Array literal); dst is returned in *rax*.
+    ///
+    ArrayConcat {
+        dst: SlotId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    },
     ///
     /// Create a new Range object and store it to *rax*
     ///

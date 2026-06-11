@@ -55,8 +55,21 @@ pub(super) enum BytecodeInst {
     /// Heap object (not frozen)
     Literal(BcReg, Value),
     Array(BcReg, Box<CallSite>),
+    /// Concatenate the Array in `src` onto the Array in `dst` (used for the
+    /// 2nd and later chunks of a chunked Array literal).
+    ArrayConcat {
+        dst: BcReg,
+        src: BcReg,
+    },
     Hash {
         ret: BcReg,
+        args: BcReg,
+        len: u16,
+    },
+    /// Insert `len` key/value pairs starting at `args` into the Hash in
+    /// `hash` (used for the 2nd and later chunks of a chunked Hash literal).
+    HashInsert {
+        hash: BcReg,
         args: BcReg,
         len: u16,
     },

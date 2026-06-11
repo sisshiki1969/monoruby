@@ -1857,6 +1857,67 @@ impl Codegen {
         true
     }
 
+    /// rax <- the Hash in `hash` after inserting the `len` key/value pairs
+    /// at `args`, via hash_insert(vm, globals, &slot[args], len, hash)
+    /// (chunked Hash literal).
+    pub(in crate::codegen::jitgen) fn emit_hash_insert(
+        &mut self,
+        hash: SlotId,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let args_off = args.0 as u32 * 8 + LFP_SELF as u32;
+        let hash_off = hash.0 as u32 * 8 + LFP_SELF as u32;
+        let f = runtime::hash_insert as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+        );
+        self.a64_addr_sub(2, lfp, args_off); // x2 = &slot[args]
+        self.a64_frame_load(4, lfp, hash_off); // x4 = hash value
+        monoasm_arm64!(&mut self.jit,
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        true
+    }
+
+    /// rax <- the Array in `dst` after concatenating the Array in `src`,
+    /// via array_concat(vm, globals, dst, src) (chunked Array literal).
+    pub(in crate::codegen::jitgen) fn emit_array_concat(
+        &mut self,
+        dst: SlotId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let dst_off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        let src_off = src.0 as u32 * 8 + LFP_SELF as u32;
+        let f = runtime::array_concat as *const () as u64;
+        self.emit_xmm_save(using_xmm, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+        );
+        self.a64_frame_load(2, lfp, dst_off); // x2 = dst value
+        self.a64_frame_load(3, lfp, src_off); // x3 = src value
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_xmm_restore(using_xmm, false);
+        true
+    }
+
     /// rax <- Range via gen_range(start, end, vm, globals, exclude_end).
     pub(in crate::codegen::jitgen) fn emit_new_range(
         &mut self,
