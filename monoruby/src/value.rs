@@ -2183,10 +2183,8 @@ impl Value {
     }
 
     pub(crate) fn as_hash(self) -> Hashmap {
-        self.try_hash_ty().expect(&format!(
-            "Value expected to be a hash but was {:?}",
-            self.ty()
-        ))
+        self.try_hash_ty()
+            .unwrap_or_else(|| panic!("Value expected to be a hash but was {:?}", self.ty()))
     }
 
     ///
