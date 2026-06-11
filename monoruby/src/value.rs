@@ -888,6 +888,12 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
+    /// Like `object`, but pre-allocates the spilled ivar table with
+    /// room for `spill` entries (ivars beyond `OBJECT_INLINE_IVAR`).
+    pub fn object_with_ivar_capacity(class_id: ClassId, spill: usize) -> Self {
+        RValue::new_object_with_ivar_capacity(class_id, spill).pack()
+    }
+
     /// Create a `Struct` subclass instance with `len` slots all set to
     /// nil. The class id determines which `Struct.new(...)`-derived
     /// class this instance belongs to.
@@ -2183,10 +2189,8 @@ impl Value {
     }
 
     pub(crate) fn as_hash(self) -> Hashmap {
-        self.try_hash_ty().expect(&format!(
-            "Value expected to be a hash but was {:?}",
-            self.ty()
-        ))
+        self.try_hash_ty()
+            .unwrap_or_else(|| panic!("Value expected to be a hash but was {:?}", self.ty()))
     }
 
     ///

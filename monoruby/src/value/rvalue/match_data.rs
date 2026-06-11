@@ -1,11 +1,48 @@
 use super::*;
+use smallvec::SmallVec;
 
+/// Byte span of one capture group, `(start, end)`.
+///
+/// `NO_MATCH` (the all-ones span) marks a group that did not
+/// participate in the match. Real spans never reach `u32::MAX`
+/// because match subjects are limited to < 4 GiB (asserted at
+/// construction).
+type Span = (u32, u32);
+const NO_MATCH: Span = (u32::MAX, u32::MAX);
+
+#[inline]
+fn encode_span(m: Option<(usize, usize)>) -> Span {
+    match m {
+        Some((start, end)) => (start as u32, end as u32),
+        None => NO_MATCH,
+    }
+}
+
+#[inline]
+fn decode_span(span: Span) -> Option<(usize, usize)> {
+    if span == NO_MATCH {
+        None
+    } else {
+        Some((span.0 as usize, span.1 as usize))
+    }
+}
+
+///
+/// MatchData payload.
+///
+/// `$~` is materialized on every successful regexp match, so this
+/// struct is sized to keep that as cheap as possible while fitting
+/// RValue's 48-byte payload: 8 (regex) + 16 (`Box<str>`) + 24
+/// (SmallVec) = 48. The inline capacity of 2 covers the most common
+/// match shapes (whole match only, or one capture group) without a
+/// positions heap allocation.
+///
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct MatchDataInner {
     regex: Option<Regexp>,
-    heystack: String,
-    matches: Box<Vec<Option<(usize, usize)>>>,
+    heystack: Box<str>,
+    matches: SmallVec<[Span; 2]>,
 }
 
 impl GC<RValue> for MatchDataInner {
@@ -17,11 +54,33 @@ impl GC<RValue> for MatchDataInner {
 }
 
 impl MatchDataInner {
-    pub fn new(heystack: String, matches: Vec<Option<(usize, usize)>>) -> Self {
+    pub fn new(heystack: &str, matches: Vec<Option<(usize, usize)>>) -> Self {
+        assert!(
+            heystack.len() < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
         MatchDataInner {
             regex: None,
-            heystack,
-            matches: Box::new(matches),
+            heystack: Box::from(heystack),
+            matches: matches.into_iter().map(encode_span).collect(),
+        }
+    }
+
+    /// Build directly from onigmo `Captures` without intermediate
+    /// position vectors (hot path: `$~` save on every match).
+    pub fn from_captures(captures: &Captures, heystack: &str) -> Self {
+        assert!(
+            heystack.len() < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
+        let matches = captures
+            .iter()
+            .map(|m| encode_span(m.as_ref().map(|m| (m.start(), m.end()))))
+            .collect();
+        MatchDataInner {
+            regex: None,
+            heystack: Box::from(heystack),
+            matches,
         }
     }
 
@@ -35,20 +94,8 @@ impl MatchDataInner {
         self
     }
 
-    pub fn from_capture(captures: Captures, heystack: String, regex: Regexp) -> Self {
-        let matches = captures
-            .iter()
-            .map(|m| {
-                if let Some(m) = m {
-                    Some((m.start(), m.end()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let mut md = MatchDataInner::new(heystack, matches);
-        md.regex = Some(regex);
-        md
+    pub fn from_capture(captures: Captures, heystack: &str, regex: Regexp) -> Self {
+        Self::from_captures(&captures, heystack).with_regex(regex)
     }
 
     pub fn regexp(&self) -> Option<Regexp> {
@@ -60,7 +107,7 @@ impl MatchDataInner {
     }
 
     pub fn pos(&self, pos: usize) -> Option<(usize, usize)> {
-        self.matches[pos]
+        decode_span(self.matches[pos])
     }
 
     /// Matched bytes for capture `pos`. Slices the haystack on
@@ -71,7 +118,8 @@ impl MatchDataInner {
     /// (which is a `panic_nounwind` ⇒ process abort across the
     /// `#[monoruby_builtin]` extern "C" boundary).
     pub fn at(&self, pos: usize) -> Option<&[u8]> {
-        self.matches[pos].map(|(start, end)| &self.heystack.as_bytes()[start..end])
+        self.pos(pos)
+            .map(|(start, end)| &self.heystack.as_bytes()[start..end])
     }
 
     pub fn len(&self) -> usize {
@@ -81,7 +129,7 @@ impl MatchDataInner {
     pub fn captures(&self) -> impl Iterator<Item = Option<&[u8]>> {
         self.matches
             .iter()
-            .map(|m| m.map(|(start, end)| &self.heystack.as_bytes()[start..end]))
+            .map(|m| decode_span(*m).map(|(start, end)| &self.heystack.as_bytes()[start..end]))
     }
 
     pub fn to_s(&self) -> String {

@@ -374,7 +374,10 @@ pub(super) fn gen_class_new_inline(
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() {
+    // Positional and plain keyword callsites are supported; bail on
+    // splat / hash-splat / block-arg shapes (a literal block never
+    // reaches an inline gen).
+    if callsite.has_splat() || callsite.has_hash_splat() || callsite.block_arg.is_some() {
         return false;
     }
     // When `Class#new` is called on a class object, the receiver's class is
@@ -398,6 +401,11 @@ pub(super) fn gen_class_new_inline(
         dst,
         ..
     } = *callsite;
+    let kw_callid = if callsite.kw_args.is_empty() {
+        None
+    } else {
+        Some(callid)
+    };
     state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
@@ -431,21 +439,43 @@ pub(super) fn gen_class_new_inline(
         );
 
         r#gen.jit.select_page(1);
+        if let Some(callid) = kw_callid {
+            monoasm!( &mut r#gen.jit,
+            initialize:
+                // class_new_initialize_kw(vm, globals, FuncId, receiver,
+                //                         CallSiteId, caller_lfp)
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, rax;
+                movq rcx, r15;
+                movl r8, (callid.0);
+                movq r9, r14;
+                movq rax, (class_new_initialize_kw);
+                call rax;
+                testq rax, rax;
+                jne  exit;
+                xorq r15, r15;
+                jmp  exit;
+            );
+        } else {
+            monoasm!( &mut r#gen.jit,
+            initialize:
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, rax;
+                movq rcx, r15;
+                lea r8, [r14 - (crate::executor::jitgen::conv(args))];
+                movl r9, (pos_num);
+                // TODO: Currently inline call does not support calling with block arguments.
+                movq rax, (r#gen.method_invoker2);
+                call rax;
+                testq rax, rax;
+                jne  exit;
+                xorq r15, r15;
+                jmp  exit;
+            );
+        }
         monoasm!( &mut r#gen.jit,
-        initialize:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, rax;
-            movq rcx, r15;
-            lea r8, [r14 - (crate::executor::jitgen::conv(args))];
-            movl r9, (pos_num);
-            // TODO: Currently inline call does not support calling with block or keyword arguments.
-            movq rax, (r#gen.method_invoker2);
-            call rax;
-            testq rax, rax;
-            jne  exit;
-            xorq r15, r15;
-            jmp  exit;
         slow_path:
             movq rdi, r12;
             movq rsi, r15;
@@ -462,6 +492,52 @@ pub(super) fn gen_class_new_inline(
     ir.handle_error(error);
     state.def_rax2acc(ir, dst);
     true
+}
+
+/// Runtime arm of the inlined `Class#new` for callsites with keyword
+/// arguments: collect the keywords from the caller's frame into a Hash
+/// (`Class#new` forwards them to `initialize` as **kw) and invoke the
+/// cached `initialize`. Returns `None` with the error set on the
+/// executor on failure (the standard native calling convention).
+#[cfg(target_arch = "x86_64")]
+extern "C" fn class_new_initialize_kw(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    func_id: FuncId,
+    receiver: Value,
+    callid: CallSiteId,
+    caller_lfp: Lfp,
+) -> Option<Value> {
+    // The freshly allocated receiver lives only in registers / Rust
+    // locals here (the caller's dst slot is written after this call
+    // returns), so root it — and the kw hash — across the allocations
+    // below. The positional/keyword argument values stay rooted via
+    // the caller's frame slots.
+    let temp_len = vm.temp_len();
+    vm.temp_push(receiver);
+    let (pos_args, kw) = {
+        let callsite = &globals.store[callid];
+        let pos_args: Vec<Value> = (0..callsite.pos_num)
+            .map(|i| caller_lfp.register(callsite.args + i).unwrap())
+            .collect();
+        let mut h = rubymap::RubyMap::default();
+        for (k, id) in callsite.kw_args.iter() {
+            let v = caller_lfp.register(callsite.kw_pos + *id).unwrap();
+            h.insert_sym(crate::value::RubySymbol::new(*k), v);
+        }
+        (pos_args, Value::hash(h))
+    };
+    vm.temp_push(kw);
+    let res = vm.invoke_func(
+        globals,
+        func_id,
+        receiver,
+        &pos_args,
+        None,
+        kw.try_hash_ty(),
+    );
+    vm.temp_clear(temp_len);
+    res
 }
 
 /// aarch64 twin of `gen_class_new_inline`. The hot-path asm (allocate + resolve

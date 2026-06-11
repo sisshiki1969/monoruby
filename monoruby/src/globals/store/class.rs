@@ -296,8 +296,16 @@ pub type AllocFunc = extern "C" fn(ClassId, &mut crate::Globals) -> Value;
 /// Default allocator used by `BasicObject` and inherited by any class that
 /// does not override it. Produces a plain `RValue::Object` tagged with the
 /// given class id.
-pub extern "C" fn default_alloc_func(class_id: ClassId, _: &mut crate::Globals) -> Value {
-    Value::object(class_id)
+///
+/// The spilled ivar table is pre-sized to the class's known ivar count
+/// so constructors that initialize many ivars (more than
+/// `OBJECT_INLINE_IVAR`) allocate it once instead of regrowing it on
+/// every store past the inline slots.
+pub extern "C" fn default_alloc_func(class_id: ClassId, globals: &mut crate::Globals) -> Value {
+    let spill = globals.store[class_id]
+        .ivar_len()
+        .saturating_sub(crate::value::rvalue::OBJECT_INLINE_IVAR);
+    Value::object_with_ivar_capacity(class_id, spill)
 }
 
 /// Allocator for `Struct.new(:a, :b, ...)`-derived classes. Reads

@@ -2405,11 +2405,7 @@ impl Executor {
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
     ) {
-        let positions: Vec<Option<(usize, usize)>> = captures
-            .iter()
-            .map(|m| m.as_ref().map(|m| (m.start(), m.end())))
-            .collect();
-        let mut md = MatchDataInner::new(haystack.to_string(), positions);
+        let mut md = MatchDataInner::from_captures(captures, haystack);
         if let Some(regex_val) = self.sp_match_regex
             && let Some(regex) = regex_val.is_regex()
         {
