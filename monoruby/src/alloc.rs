@@ -36,10 +36,27 @@ const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
 
-/// Number of minor (young-generation) collections allowed between two
-/// major (full-heap) collections. A major GC demotes every object and
-/// rebuilds generation state; see `doc/generational_gc_plan.md`.
-const MINORS_PER_MAJOR: usize = 64;
+/// Hard cap on the number of minor (young-generation) collections between
+/// two major (full-heap) collections. This is only a safety bound — to
+/// rebuild the remembered set and bound floating old garbage even if the
+/// adaptive trigger (`old_major_threshold`) never fires. The usual major
+/// trigger is old-generation growth; see `decide_gc_kind`.
+const MAX_MINORS_PER_MAJOR: usize = 64;
+
+/// Adaptive major-GC trigger: a major GC is forced once the old generation
+/// has grown to this multiple of its size right after the previous major.
+/// Mirrors CRuby's `old_objects_limit` (RGENGC_OLD_OBJECT_LIMIT_FACTOR).
+/// A stable old generation (e.g. a long-lived data structure) then majors
+/// rarely — preserving the generational win — while a workload that keeps
+/// promoting short-lived "floating" garbage majors often, reclaiming it
+/// and keeping RSS down. See `doc/generational_gc_plan.md`.
+const OLD_GROWTH_FACTOR: usize = 2;
+
+/// Floor for the adaptive trigger: never force a major purely on old-gen
+/// growth until the old generation reaches this many objects (~a handful
+/// of pages). Below this, full-heap marking is cheap, so majoring eagerly
+/// would only add overhead.
+const OLD_OBJECT_FLOOR: usize = 16384;
 
 /// Number of collections an object must survive before it is promoted to
 /// the old generation. Aging (rather than promoting on first survival)
@@ -182,6 +199,15 @@ pub struct Allocator<T> {
     /// Minor GCs performed since the last major GC. Drives the
     /// minor/major choice in `decide_gc_kind`.
     minors_since_major: usize,
+    /// Live count of old-generation objects, maintained incrementally:
+    /// `+1` per promotion in `apply_aging`, reset to 0 by `clear_old` at a
+    /// major GC (which then re-promotes survivors). Drives the adaptive
+    /// major trigger; avoids an O(pages) popcount per GC.
+    old_count: usize,
+    /// Adaptive major-GC threshold: when `old_count` reaches this, the next
+    /// GC is a major. Recomputed at the end of each major as
+    /// `max(old_count * OLD_GROWTH_FACTOR, OLD_OBJECT_FLOOR)`.
+    old_major_threshold: usize,
     /// Whether the current mark phase should promote surviving
     /// promotable objects to the old generation. Set only during the
     /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
@@ -297,6 +323,8 @@ impl<T: GCBox> Allocator<T> {
             minor_gc_count: 0,
             major_gc_count: 0,
             minors_since_major: 0,
+            old_count: 0,
+            old_major_threshold: OLD_OBJECT_FLOOR,
             promoting: false,
             aging: Vec::new(),
             remembered: Vec::new(),
@@ -460,10 +488,11 @@ impl<T: GCBox> Allocator<T> {
 
     ///
     /// Returns the number of old-generation objects (popcount of every
-    /// page's `old_bits`). Confirms that promotion is taking effect.
+    /// page's `old_bits`). Confirms that promotion is taking effect, and
+    /// cross-checks the incrementally maintained `old_count` field.
     ///
-    #[cfg(feature = "gc-log")]
-    pub fn old_count(&self) -> usize {
+    #[cfg(any(feature = "gc-log", feature = "gc-debug"))]
+    pub(crate) fn old_count_popcount(&self) -> usize {
         let mut c = 0;
         unsafe {
             c += self.current_page.as_ref().old_count();
@@ -537,13 +566,19 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Decide whether the next collection is a minor or a major GC.
     ///
-    /// A major GC is forced once `MINORS_PER_MAJOR` minor GCs have run
-    /// since the last major one, so the old generation is eventually
-    /// reclaimed and the remembered set rebuilt. (With promotion not yet
-    /// enabled this only affects which counter advances.)
+    /// Primary (adaptive) trigger: the old generation has grown to
+    /// `old_major_threshold` (= `OLD_GROWTH_FACTOR`× its size right after
+    /// the previous major, floored at `OLD_OBJECT_FLOOR`). A stable old
+    /// generation majors rarely (keeping the generational win); one that
+    /// keeps promoting floating garbage majors often (reclaiming it,
+    /// bounding RSS). `MAX_MINORS_PER_MAJOR` is a hard safety cap so the
+    /// remembered set is rebuilt and old garbage reclaimed even if the
+    /// adaptive trigger never fires.
     ///
     fn decide_gc_kind(&self) -> GcKind {
-        if self.minors_since_major >= MINORS_PER_MAJOR {
+        if self.old_count >= self.old_major_threshold
+            || self.minors_since_major >= MAX_MINORS_PER_MAJOR
+        {
             GcKind::Major
         } else {
             GcKind::Minor
@@ -618,6 +653,17 @@ impl<T: GCBox> Allocator<T> {
         // enough (deferred from the mark phase to avoid aliasing). Safe:
         // marking is complete.
         self.apply_aging();
+        // After a major rebuilds the old generation, re-arm the adaptive
+        // trigger relative to this baseline: major again once the old gen
+        // has grown by `OLD_GROWTH_FACTOR` (floored).
+        if kind == GcKind::Major {
+            self.old_major_threshold =
+                (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
+        }
+        // The incrementally maintained `old_count` must equal the actual
+        // number of old cells (popcount of `old_bits`).
+        #[cfg(feature = "gc-debug")]
+        debug_assert_eq!(self.old_count, self.old_count_popcount());
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
@@ -715,6 +761,7 @@ impl<T: GCBox> Allocator<T> {
                 let bit_mask = 1 << (index % 64);
                 unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
                 unsafe { (*p).promote_to_old() };
+                self.old_count += 1;
                 promoted.push(p);
             }
         }
@@ -772,6 +819,9 @@ impl<T: GCBox> Allocator<T> {
                 .iter_mut()
                 .for_each(|heap| heap.as_mut().clear_old_bits());
         }
+        // Every object is demoted; `apply_aging` re-promotes the survivors
+        // this cycle and counts them back up.
+        self.old_count = 0;
     }
 
     ///
@@ -1083,7 +1133,7 @@ impl<T: GCBox> Page<T> {
     ///
     /// Number of old-generation cells in this page (popcount of `old_bits`).
     ///
-    #[cfg(feature = "gc-log")]
+    #[cfg(any(feature = "gc-log", feature = "gc-debug"))]
     fn old_count(&self) -> usize {
         self.old_bits.iter().map(|w| w.count_ones() as usize).sum()
     }

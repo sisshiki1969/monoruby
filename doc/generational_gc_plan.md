@@ -429,9 +429,25 @@ Rust レベルに単一の choke point は無く、バリアは**呼び出し側
     一致）。生 `as_rstring_inner_mut` は fresh string 構築でも使うため private 化せず
     併存。
 
-13. **残作業（今後）**：`RGENGC_OLD_AGE`・minor/major 閾値の最適化、incremental/
-    並行マーキング、コンパクション（断片化対策）、optcarrot 等の実アプリでの
-    継続ベンチ。残り String mutation サイトの `as_string_mut` への漸進移行。
+13. **適応的 major GC トリガ（floating garbage 対策）**：固定回数（旧
+    `MINORS_PER_MAJOR=64`）を **old 世代の成長率ベース**に変更（CRuby の
+    `old_objects_limit` 相当）。
+    - old 世代数を**増分カウンタ `old_count`** で追跡（昇格で +1、major の
+      `clear_old` で 0、popcount を毎 GC 走らせない）。`decide_gc_kind` は
+      `old_count >= old_major_threshold` で major。閾値は各 major 直後に
+      `max(old_count * OLD_GROWTH_FACTOR(=2), OLD_OBJECT_FLOOR(=16384))` に再設定。
+      `MAX_MINORS_PER_MAJOR=64` は remembered set 再構築の安全弁として残す。
+    - 効果：**安定した old 世代（gcbench, optcarrot）は major 稀＝利得最大**、
+      **短命を昇格し続けるワークロード（binarytrees）は old が急成長 → major 頻発
+      → 浮遊ごみ回収で RSS 抑制＆minor の sweep 軽量化**。binarytrees は
+      master 比 −7%（旧固定64 では同等〜劣）、RSS 76→43MiB。gcbench は固定64
+      比でさらに高速（1020→902ms）かつ RSS 99→64MiB。compute は固定64 と同等
+      （バリアコストのみ）。gc-debug で `old_count == popcount` を debug_assert。
+
+14. **残作業（今後）**：配列/struct ストアバリアの軽量化（fannkuch/matmul で
+    ~10% の既存コスト。escape/freshness 解析で fresh young へのストアを省略等）、
+    `RGENGC_OLD_AGE` 調整、incremental/並行マーキング、コンパクション（断片化）、
+    残り String mutation サイトの `as_string_mut` 移行。
 6. **JIT バリア最適化（6.2 A）**：インラインストアに old 判定＋slow path を発行。
 7. **ヒューリスティクス調整**：minor/major しきい値、`RGENGC_OLD_AGE`、
    remembered set 肥大時のメジャー昇格を最適化。optcarrot 等でベンチ。
