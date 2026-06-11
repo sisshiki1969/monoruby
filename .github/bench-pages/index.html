@@ -378,24 +378,13 @@ function parseCsv(text) {
     const labels  = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
 
-    let yAxisOpts;
-    if (showRatio) {
-      yAxisOpts = {
-        beginAtZero: false,
-        title: { display: true, text: "relative speed (× YJIT, higher = monoruby faster)" },
-      };
-    } else {
-      // Compute explicit bounds so the axis always has a valid, readable range.
-      const allMs = points.flatMap(p => [p.monoruby_ms, p.yjit_ms]);
-      const minMs = Math.min(...allMs);
-      const maxMs = Math.max(...allMs);
-      const pad = Math.max((maxMs - minMs) * 0.15, 1);
-      yAxisOpts = {
-        min: Math.max(0, minMs - pad),
-        max: maxMs + pad,
-        title: { display: true, text: "time (ms, lower is better)" },
-      };
-    }
+    const yTitle = showRatio
+      ? "relative speed (× YJIT, higher = monoruby faster)"
+      : "time (ms, lower is better)";
+    const yAxisOpts = {
+      min: 0,
+      title: { display: true, text: yTitle },
+    };
 
     const datasets = showRatio
       ? [{
