@@ -508,6 +508,8 @@ pub(crate) struct VmHandlers {
     pub lambda: CodePtr,              // 38
     pub array: CodePtr,               // 39
     pub array_teq: CodePtr,           // 40
+    pub array_concat: CodePtr,        // 41
+    pub hash_insert: CodePtr,         // 42
     pub defined_yield: CodePtr,       // 64
     pub defined_const: CodePtr,       // 65
     pub defined_method: CodePtr,      // 66
@@ -614,6 +616,8 @@ impl Codegen {
         self.dispatch[38] = h.lambda;
         self.dispatch[39] = h.array;
         self.dispatch[40] = h.array_teq;
+        self.dispatch[41] = h.array_concat;
+        self.dispatch[42] = h.hash_insert;
 
         self.dispatch[64] = h.defined_yield;
         self.dispatch[65] = h.defined_const;

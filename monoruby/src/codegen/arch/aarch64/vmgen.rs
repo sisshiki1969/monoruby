@@ -103,7 +103,9 @@ impl Codegen {
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
         let array_teq = self.a64_op_array_teq();
+        let array_concat = self.a64_op_array_concat();
         let hash = self.a64_op_hash();
+        let hash_insert = self.a64_op_hash_insert();
         let concat = self.a64_op_concat(runtime::concatenate_string as *const () as u64);
         let concat_regexp = self.a64_op_concat(runtime::concatenate_regexp as *const () as u64);
         let range_incl = self.a64_op_range(false);
@@ -186,6 +188,8 @@ impl Codegen {
             lambda,
             array,
             array_teq,
+            array_concat,
+            hash_insert,
             defined_yield,
             defined_const,
             defined_method,
@@ -825,6 +829,53 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             ldrh x3, [x(PC.0)];  // len
             mov x9, (runtime::gen_hash as *const () as u64);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 42 `HashInsert`: hash_insert(vm, globals, src `[pc+2]`,
+    /// len `[pc+0]`, hash `[pc+4]`). The hash slot doubles as the
+    /// destination (the runtime returns the same hash).
+    pub(in crate::codegen) fn a64_op_hash_insert(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];
+        );
+        self.a64_slot_addr(X2); // src
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0)];      // len
+            ldrh x10, [x(PC.0), #(4)];  // hash slot
+        );
+        self.a64_load_slot(X10, X4, X11); // x4 = hash value
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (runtime::hash_insert as *const () as u64);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 41 `ArrayConcat`: array_concat(vm, globals, dst `[pc+4]`,
+    /// src `[pc+2]`). The dst slot doubles as the destination (the runtime
+    /// returns dst).
+    pub(in crate::codegen) fn a64_op_array_concat(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];  // dst slot
+            ldrh x11, [x(PC.0), #(2)];  // src slot
+        );
+        self.a64_load_slot(X10, X2, X12); // x2 = dst value
+        self.a64_load_slot(X11, X3, X12); // x3 = src value
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::array_concat as *const () as u64);
             blr x9;
         );
         self.a64_checked_store_next(&raise);

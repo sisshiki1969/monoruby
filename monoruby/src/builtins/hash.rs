@@ -3108,6 +3108,40 @@ mod tests {
     }
 
     #[test]
+    fn hash_literal_chunked() {
+        // A Hash literal longer than LITERAL_CHUNK_LEN (256 entries) is
+        // built in chunks (issue #706). Cover insertion order, duplicate
+        // keys across chunk boundaries (last wins), and a `**` splat
+        // following the chunked part.
+        let mut entries = String::new();
+        for i in 0..600 {
+            entries += &format!("{} => {}, ", i % 300, i);
+        }
+        run_test(&format!(
+            "h = {{ {entries} }}; [h.size, h[0], h[299], h.keys[0], h.keys[-1]]"
+        ));
+        let mut entries = String::new();
+        for i in 0..300 {
+            entries += &format!("{i} => {i}, ");
+        }
+        run_test_once(&format!(
+            "s = {{ 9999 => 1 }}; h = {{ {entries} **s }}; [h.size, h[9999], h.keys[-1]]"
+        ));
+    }
+
+    #[test]
+    fn hash_literal_huge() {
+        // issue #706: a Hash literal with thousands of entries used to
+        // allocate ~2 temporary registers per entry in a single frame and
+        // overflow the native stack (frames live on the machine stack).
+        let mut entries = String::new();
+        for i in 0..4000 {
+            entries += &format!("{i} => [0, 0, nil, nil, nil, {i}, nil], ");
+        }
+        run_test_once(&format!("h = {{ {entries} }}; [h.size, h[3999]]"));
+    }
+
+    #[test]
     fn hash_literal_error_propagation() {
         run_test_error(
             r##"

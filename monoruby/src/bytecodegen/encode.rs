@@ -505,6 +505,18 @@ impl<'a> BytecodeGen<'a> {
                 let callid = self.new_callsite(callsite, bc_pos)?;
                 Bytecode::from(enc_wl(39, op1.0, callid.get()))
             }
+            BytecodeInst::ArrayConcat { dst, src } => {
+                // 41
+                let op1 = self.slot_id(&dst);
+                let op2 = self.slot_id(&src);
+                Bytecode::from(enc_ww(41, op1.0, op2.0))
+            }
+            BytecodeInst::HashInsert { hash, args, len } => {
+                // 42
+                let op1 = self.slot_id(&hash);
+                let op2 = self.slot_id(&args);
+                Bytecode::from(enc_www(42, op1.0, op2.0, len))
+            }
             BytecodeInst::DefinedYield { dst } => {
                 // 64
                 let op1 = self.slot_id(&dst);

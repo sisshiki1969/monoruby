@@ -258,6 +258,52 @@ fn gen_hash_inner(
     Ok(map)
 }
 
+///
+/// Insert `len` key/value pairs (the `len * 2` slots ending at `src`) into
+/// the Hash `hash`. Used for the 2nd and later chunks of a chunked Hash
+/// literal (op 42); duplicate keys overwrite, like `gen_hash`.
+///
+pub(super) extern "C" fn hash_insert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+    hash: Value,
+) -> Option<Value> {
+    let mut h = hash.as_hash();
+    if len > 0 {
+        // SAFETY: the bytecode compiler guarantees `len * 2` consecutive
+        // value slots ending at `src` (same layout as `gen_hash`).
+        let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
+            .iter()
+            .copied()
+            .rev();
+        while let Ok(chunk) = iter.next_chunk::<2>() {
+            if let Err(err) = h.insert(chunk[0], chunk[1], vm, globals) {
+                vm.set_error(err);
+                return None;
+            }
+        }
+    }
+    Some(hash)
+}
+
+///
+/// Concatenate the Array `src` onto the Array `dst`. Used for the 2nd and
+/// later chunks of a chunked Array literal (op 41).
+///
+pub(super) extern "C" fn array_concat(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    dst: Value,
+    src: Value,
+) -> Option<Value> {
+    let mut d = dst.as_array();
+    let s = src.as_array();
+    d.extend_from_slice(&s);
+    Some(dst)
+}
+
 pub(super) extern "C" fn empty_hash() -> Value {
     let map = RubyMap::default();
     Value::hash(map)

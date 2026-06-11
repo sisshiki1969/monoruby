@@ -106,9 +106,22 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         callid: CallSiteId,
     },
+    /// Concatenate the Array in `src` onto the Array in `dst` (2nd and later
+    /// chunks of a chunked Array literal).
+    ArrayConcat {
+        dst: SlotId,
+        src: SlotId,
+    },
     Lambda,
     Hash {
         dst: SlotId,
+        args: SlotId,
+        len: u16,
+    },
+    /// Insert `len` key/value pairs starting at `args` into the Hash in
+    /// `hash` (2nd and later chunks of a chunked Hash literal).
+    HashInsert {
+        hash: SlotId,
         args: SlotId,
         len: u16,
     },
@@ -472,6 +485,21 @@ impl TraceIr {
                     TraceIr::ArrayTEq {
                         lhs: SlotId::new(op1_w2),
                         rhs: SlotId::new(op1_w3),
+                    }
+                }
+                41 => {
+                    let (op1_w1, op1_w2, _) = dec_www(op1);
+                    TraceIr::ArrayConcat {
+                        dst: SlotId::new(op1_w1),
+                        src: SlotId::new(op1_w2),
+                    }
+                }
+                42 => {
+                    let (op1_w1, op1_w2, op1_w3) = dec_www(op1);
+                    TraceIr::HashInsert {
+                        hash: SlotId::new(op1_w1),
+                        args: SlotId::new(op1_w2),
+                        len: op1_w3,
                     }
                 }
                 _ => unreachable!("{:016x}", op1),
@@ -851,6 +879,12 @@ impl TraceIr {
             }
             TraceIr::Hash { dst, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", dst, args, len)
+            }
+            TraceIr::HashInsert { hash, args, len } => {
+                format!("{:?}.insert[{:?}; {}]", hash, args, len)
+            }
+            TraceIr::ArrayConcat { dst, src } => {
+                format!("{:?}.concat({:?})", dst, src)
             }
             TraceIr::Index {
                 _dst: dst,
