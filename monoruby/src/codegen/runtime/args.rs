@@ -399,7 +399,8 @@ fn fill_positional_args(
     // Only an *explicit* `*rest`/`*` lifts the upper bound.
     if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_explicit_rest()))
     {
-        return Err(MonorubyErr::wrong_number_of_arg_range(
+        return Err(wrong_number_of_arg_with_kw(
+            callee,
             buf_len,
             min_args..=max_args,
         ));
@@ -505,7 +506,8 @@ fn handle_keyword(
     caller_lfp: Lfp,
 ) -> Result<()> {
     ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
-    hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)
+    hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)?;
+    check_missing_keyword(&globals.store[callee], callee_lfp)
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
@@ -519,7 +521,83 @@ fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
     if let Some(rest) = callee.kw_rest() {
         unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
     }
-    Ok(())
+    check_missing_keyword(callee, callee_lfp)
+}
+
+///
+/// Raise ArgumentError if a required keyword parameter (one with no
+/// default expression) was left unbound (None) after keyword binding.
+/// Must run after *all* keyword sources (ordinary keyword arguments and
+/// hash splats) have been applied. An unbound optional keyword slot is
+/// left as None on purpose — the method prologue fills in the default.
+///
+fn check_missing_keyword(callee: &FuncInfo, callee_lfp: Lfp) -> Result<()> {
+    let kw_pos = callee.kw_reg_pos();
+    let mut missing = vec![];
+    for (i, name) in callee.kw_names().iter().enumerate() {
+        if callee.kw_is_required(i) && callee_lfp.register(kw_pos + i).is_none() {
+            missing.push(*name);
+        }
+    }
+    missing_keyword_err(&missing)
+}
+
+///
+/// Positional-arity ArgumentError. When the callee also has required
+/// keyword parameters, CRuby appends them to the message:
+/// `wrong number of arguments (given 0, expected 1; required keyword: x)`.
+///
+fn wrong_number_of_arg_with_kw(
+    callee: &FuncInfo,
+    given: usize,
+    range: std::ops::RangeInclusive<usize>,
+) -> MonorubyErr {
+    let required: Vec<_> = callee
+        .kw_names()
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| callee.kw_is_required(*i))
+        .map(|(_, name)| name.to_string())
+        .collect();
+    if required.is_empty() {
+        return MonorubyErr::wrong_number_of_arg_range(given, range);
+    }
+    let expected = if range.start() == range.end() {
+        format!("{}", range.start())
+    } else {
+        format!("{}..{}", range.start(), range.end())
+    };
+    let suffix = if required.len() == 1 {
+        format!("; required keyword: {}", required[0])
+    } else {
+        format!("; required keywords: {}", required.join(", "))
+    };
+    MonorubyErr::argumenterr(format!(
+        "wrong number of arguments (given {given}, expected {expected}{suffix})"
+    ))
+}
+
+///
+/// Build CRuby-compatible `missing keyword(s)` ArgumentError (no-op for
+/// an empty list): `missing keyword: :x` / `missing keywords: :x, :y`.
+///
+fn missing_keyword_err(missing: &[IdentId]) -> Result<()> {
+    match missing {
+        [] => Ok(()),
+        [name] => Err(MonorubyErr::argumenterr(format!(
+            "missing keyword: :{name}"
+        ))),
+        _ => {
+            let names = missing
+                .iter()
+                .map(|name| format!(":{name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(MonorubyErr::argumenterr(format!(
+                "missing keywords: {names}"
+            )))
+        }
+    }
 }
 
 fn ordinary_keyword(
@@ -777,6 +855,10 @@ fn invoker_arguments_inner(
     // required + optional + post + rest
     positional_invoker(info, callee_lfp, args, arg_num, upward, ex)?;
 
+    // After the positional check, so a call that is wrong in both ways
+    // reports the positional arity error first, like CRuby.
+    check_missing_keyword(info, callee_lfp)?;
+
     Ok(Value::nil())
 }
 
@@ -811,6 +893,42 @@ mod tests {
             B3.new.a(1, 2)
             "#,
         );
+    }
+
+    #[test]
+    fn missing_required_keyword() {
+        // issue #707: a call without one of the required keyword
+        // arguments must raise ArgumentError (`missing keyword: :x`)
+        // instead of silently binding nil. Compare the exact message
+        // with CRuby via the rescue idiom; `run_test`'s warm-up loop
+        // also exercises the JIT path.
+        let msg = "def msg; yield; \"no error\"; rescue ArgumentError => e; e.message; end;";
+        run_test(&format!("{msg} def m(x:, y: 10) = [x, y]; msg {{ m(y: 1) }}"));
+        run_test(&format!("{msg} def m(x:, y:) = [x, y]; msg {{ m() }}"));
+        run_test(&format!("{msg} def m(x:, **r) = [x, r]; msg {{ m(a: 1) }}"));
+        run_test(&format!("{msg} def m(x:) = x; msg {{ m(**{{}}) }}"));
+        // A hash splat *can* supply the required keyword.
+        run_test(&format!("{msg} def m(x:) = x; h = {{x: 5}}; [msg {{ m(**h) }}, m(**h)]"));
+        // Positional arity errors win and mention the required keywords.
+        run_test(&format!("{msg} def m(a, x:) = [a, x]; msg {{ m() }}"));
+        run_test(&format!("{msg} msg {{ lambda {{ |a, x:, y:| }}.call }}"));
+        // Native forwarding (Class#new), send, Method#call, procs,
+        // blocks, and define_method all take the invoker/blocks paths.
+        run_test(&format!(
+            "{msg} class KwOnly; def initialize(x:, y: 10) = @x = x; end; msg {{ KwOnly.new(y: 1) }}"
+        ));
+        run_test(&format!("{msg} def m(x:) = x; msg {{ send(:m) }}"));
+        run_test(&format!("{msg} def m(x:) = x; msg {{ method(:m).call }}"));
+        run_test(&format!("{msg} msg {{ proc {{ |x:| x }}.call }}"));
+        run_test(&format!("{msg} msg {{ [1].each {{ |x:| x }} }}"));
+        run_test(&format!(
+            "{msg} define_method(:dm) {{ |x:| x }}; msg {{ dm }}"
+        ));
+        run_test(&format!(
+            "{msg} def m(x:, y: 10) = [x, y]; def fw(...) = m(...); [msg {{ fw(y: 2) }}, fw(x: 9)]"
+        ));
+        // Optional-only keywords still default without error.
+        run_test("def m(y: 10) = y; [m, m(y: 1)]");
     }
 
     #[test]

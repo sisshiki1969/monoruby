@@ -1073,6 +1073,12 @@ impl FuncInfo {
         &self.ext.params.kw_names
     }
 
+    /// Whether the keyword parameter at `idx` in `kw_names` is required
+    /// (has no default expression).
+    pub(crate) fn kw_is_required(&self, idx: usize) -> bool {
+        self.ext.params.kw_is_required(idx)
+    }
+
     pub(crate) fn kw_rest(&self) -> Option<SlotId> {
         self.ext.params.kw_rest
     }
@@ -1317,6 +1323,16 @@ impl Store {
         if info.no_keyword() && callsite.kw_may_exists() {
             return false;
         };
+        // A callsite that statically lacks a required keyword must take
+        // the generic runtime path, which raises the `missing keyword`
+        // ArgumentError; the inline argument setup would silently bind
+        // None. (A hash splat could still supply it, but hash-splat
+        // callsites are rejected below anyway.)
+        for (i, name) in info.kw_names().iter().enumerate() {
+            if info.kw_is_required(i) && !callsite.kw_args.contains_key(name) {
+                return false;
+            }
+        }
         !callsite.has_splat()
             && !callsite.has_hash_splat()
             && (info.is_block_style()
