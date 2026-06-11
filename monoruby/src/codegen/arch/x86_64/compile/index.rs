@@ -77,6 +77,10 @@ impl Codegen {
             // upper bound check
             jle  generic;
             movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rdx;
+        };
+        // Write barrier: rdi = the array (parent), rdx = stored value.
+        self.emit_write_barrier_rdi(GP::Rdx);
+        monoasm! { &mut self.jit,
         exit:
         };
 
@@ -87,6 +91,11 @@ impl Codegen {
             // upper range check
             cmpq rax, rsi;
             jle generic;
+        };
+        // Write barrier before `rdi` is repointed at the heap buffer:
+        // rdi = the array (parent), rdx = stored value.
+        self.emit_write_barrier_rdi(GP::Rdx);
+        monoasm! { &mut self.jit,
             movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
             movq [rdi + rsi * 8], rdx;
             jmp  exit;

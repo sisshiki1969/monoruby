@@ -354,11 +354,11 @@ fn initialize(
                 let sym = m.try_symbol().unwrap();
                 let key = Value::symbol(sym);
                 let v = hash.get(key, vm, globals)?.unwrap_or(Value::nil());
-                self_val.as_struct_mut().set(i, v);
+                self_val.set_struct_slot(i, v);
             }
         } else {
             for i in 0..members.len() {
-                self_val.as_struct_mut().set(i, Value::nil());
+                self_val.set_struct_slot(i, Value::nil());
             }
         }
         return Ok(Value::nil());
@@ -389,7 +389,7 @@ fn initialize(
                 let v = kw_hash
                     .get(Value::symbol(sym), vm, globals)?
                     .unwrap_or(Value::nil());
-                self_val.as_struct_mut().set(i, v);
+                self_val.set_struct_slot(i, v);
             }
             return Ok(Value::nil());
         } else {
@@ -408,7 +408,7 @@ fn initialize(
                 } else {
                     Value::nil()
                 };
-                self_val.as_struct_mut().set(i, val);
+                self_val.set_struct_slot(i, val);
             }
             return Ok(Value::nil());
         }
@@ -424,7 +424,7 @@ fn initialize(
     // `S.new(1).a == 1`, matching CRuby's `RStruct` semantics.
     for i in 0..members.len() {
         let val = pos_args.get(i).copied().unwrap_or(Value::nil());
-        self_val.as_struct_mut().set(i, val);
+        self_val.set_struct_slot(i, val);
     }
     Ok(Value::nil())
 }
@@ -706,7 +706,7 @@ pub(crate) extern "C" fn set_struct_slot_with_check(
         vm.set_error(err);
         return None;
     }
-    self_val.as_struct_mut().set(slot_index as usize, val);
+    self_val.set_struct_slot(slot_index as usize, val);
     Some(val)
 }
 

@@ -727,50 +727,7 @@ impl alloc::GC<RValue> for RValue {
         if alloc.gc_check_and_mark(self) {
             return;
         }
-        if let Some(v) = &self.var_table {
-            v.iter().for_each(|v| {
-                v.map(|v| {
-                    v.mark(alloc);
-                });
-            });
-        }
-        // SAFETY: Type is checked via ty() match, ensuring we only access union variants that
-        // match the actual object type. Each as_* method accesses the correct union field.
-        unsafe {
-            match self.ty() {
-                ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
-                ObjTy::OBJECT => {
-                    self.as_object().iter().for_each(|v| {
-                        v.map(|v| {
-                            v.mark(alloc);
-                        });
-                    });
-                }
-                ObjTy::BIGNUM => {}
-                ObjTy::FLOAT => {}
-                ObjTy::COMPLEX => self.as_complex().mark(alloc),
-                ObjTy::RATIONAL => self.as_rational().mark(alloc),
-                ObjTy::STRING => {}
-                ObjTy::TIME => {}
-                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
-                ObjTy::RANGE => self.as_range().mark(alloc),
-                ObjTy::PROC => self.as_proc().mark(alloc),
-                ObjTy::HASH => self.as_hashmap().mark(alloc),
-                ObjTy::REGEXP => {}
-                ObjTy::IO => {}
-                ObjTy::EXCEPTION => self.as_exception().mark(alloc),
-                ObjTy::METHOD => self.as_method().mark(alloc),
-                ObjTy::FIBER => self.as_fiber().mark(alloc),
-                ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
-                ObjTy::GENERATOR => self.as_generator().mark(alloc),
-                ObjTy::BINDING => self.as_binding().mark(alloc),
-                ObjTy::UMETHOD => {}
-                ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
-                ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
-                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
-                _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
-            }
-        }
+        alloc::GCBox::mark_children(self, alloc);
     }
 }
 
@@ -842,6 +799,144 @@ impl alloc::GCBox for RValue {
             var_table: None,
         }
     }
+
+    fn mark_children(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(v) = &self.var_table {
+            v.iter().for_each(|v| {
+                v.map(|v| {
+                    v.mark(alloc);
+                });
+            });
+        }
+        // SAFETY: Type is checked via ty() match, ensuring we only access union variants that
+        // match the actual object type. Each as_* method accesses the correct union field.
+        unsafe {
+            match self.ty() {
+                ObjTy::CLASS | ObjTy::MODULE => self.as_module().mark(alloc),
+                ObjTy::OBJECT => {
+                    self.as_object().iter().for_each(|v| {
+                        v.map(|v| {
+                            v.mark(alloc);
+                        });
+                    });
+                }
+                ObjTy::BIGNUM => {}
+                ObjTy::FLOAT => {}
+                ObjTy::COMPLEX => self.as_complex().mark(alloc),
+                ObjTy::RATIONAL => self.as_rational().mark(alloc),
+                ObjTy::STRING => {}
+                ObjTy::TIME => {}
+                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
+                ObjTy::RANGE => self.as_range().mark(alloc),
+                ObjTy::PROC => self.as_proc().mark(alloc),
+                ObjTy::HASH => self.as_hashmap().mark(alloc),
+                ObjTy::REGEXP => {}
+                ObjTy::IO => {}
+                ObjTy::EXCEPTION => self.as_exception().mark(alloc),
+                ObjTy::METHOD => self.as_method().mark(alloc),
+                ObjTy::FIBER => self.as_fiber().mark(alloc),
+                ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
+                ObjTy::GENERATOR => self.as_generator().mark(alloc),
+                ObjTy::BINDING => self.as_binding().mark(alloc),
+                ObjTy::UMETHOD => {}
+                ObjTy::MATCHDATA => self.as_matchdata().mark(alloc),
+                ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
+                ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
+                _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
+            }
+        }
+    }
+
+    ///
+    /// An object is safe to promote to the old generation only if it has
+    /// **no outgoing `Value` references** at promotion time, so that a
+    /// minor GC skipping it can never miss a live young object:
+    ///
+    /// - `var_table.is_none()` — no instance variables, and
+    /// - a reference-free union kind (String bytes / Bignum / heap Float).
+    ///
+    /// Such an object can only gain a reference later via an instance
+    /// variable, and the *first* ivar store always goes through the
+    /// write barrier (`set_ivar_by_ivarid` / the JIT slow path that calls
+    /// `set_ivar`), which then remembers it permanently. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    fn is_promotable(&self) -> bool {
+        // Pre-existing old→young edges (references the object held before
+        // promotion) are handled by remember-on-promote (see
+        // `young_child_exists`); new stores are handled by the write
+        // barrier. An object kind is therefore promotable once *every*
+        // Value-storing path on it is barrier protected.
+        match self.ty() {
+            // OBJECT and the leaves only store Values through ivars, and
+            // every ivar store is now barriered — the interpreter via
+            // `set_ivar`, and the JIT inline/heap stores via the emitted
+            // barrier (`emit_write_barrier_rdi`). So they are promotable
+            // in both modes.
+            // Array/Struct element stores are barriered both in the
+            // interpreter (Array wrapper / Value::set_struct_slot) and in
+            // the JIT (array_index_assign / store_struct_slot_* emit the
+            // barrier), so they are promotable in both modes.
+            // Hash stores go through Hashmap::insert (the barriered wrapper)
+            // in the interpreter, and Hash#[]= is not JIT-inlined (it calls
+            // that builtin), so every Hash store is barriered too.
+            ObjTy::OBJECT
+            | ObjTy::STRING
+            | ObjTy::BIGNUM
+            | ObjTy::FLOAT
+            | ObjTy::ARRAY
+            | ObjTy::STRUCT
+            | ObjTy::HASH => true,
+            _ => false,
+        }
+    }
+
+    fn promote_to_old(&mut self) {
+        self.set_old();
+    }
+
+    fn age_and_check_promote(&mut self) -> bool {
+        let age = self.header.age().saturating_add(1);
+        self.header.set_age(age);
+        age >= alloc::RGENGC_OLD_AGE
+    }
+
+    fn arm_barrier(&mut self) {
+        self.header.arm_barrier();
+    }
+
+    fn enter_remembered(&mut self) {
+        self.header.enter_remembered();
+    }
+
+    fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
+        fn is_young(v: Value, alloc: &alloc::Allocator<RValue>) -> bool {
+            v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv))
+        }
+        if let Some(vt) = &self.var_table
+            && vt.iter().filter_map(|o| *o).any(|v| is_young(v, alloc))
+        {
+            return true;
+        }
+        // SAFETY: only the promotable kinds below are ever passed here
+        // (see `is_promotable`); each accesses its matching union field.
+        unsafe {
+            match self.ty() {
+                ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => false,
+                ObjTy::OBJECT => self
+                    .as_object()
+                    .iter()
+                    .filter_map(|o| *o)
+                    .any(|v| is_young(v, alloc)),
+                ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
+                ObjTy::STRUCT => self.as_struct_inner().iter().any(|v| is_young(*v, alloc)),
+                ObjTy::HASH => self.as_hashmap().young_child_exists(alloc),
+                // Any other (currently non-promoted) kind: conservatively
+                // assume it points at young, so it is always remembered.
+                _ => true,
+            }
+        }
+    }
 }
 
 impl RValue {
@@ -871,6 +966,92 @@ impl RValue {
 
     pub(crate) fn clear_chilled(&mut self) {
         self.header.clear_chilled()
+    }
+
+    // --- Generational GC flags ---
+    //
+    // Reserved accessors for the generational collector. They are wired
+    // into the GC mark/sweep, promotion, and write-barrier paths in a
+    // later phase; see `doc/generational_gc_plan.md`. Kept `dead_code`
+    // until then so the header layout and API are stable up front.
+
+    /// Object has been promoted to the old generation.
+    #[allow(dead_code)]
+    pub(crate) fn is_old(&self) -> bool {
+        self.header.is_old()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_old(&mut self) {
+        self.header.set_old()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn clear_old(&mut self) {
+        self.header.clear_old()
+    }
+
+    /// Object whose mutation sites are not (yet) write-barrier protected
+    /// ("shady"): never promoted, always scanned by minor GC.
+    #[allow(dead_code)]
+    pub(crate) fn is_wb_unprotected(&self) -> bool {
+        self.header.is_wb_unprotected()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_wb_unprotected(&mut self) {
+        self.header.set_wb_unprotected()
+    }
+
+    /// Old object that is not (yet) in the remembered set — a young store
+    /// to it must take the barrier slow path.
+    pub(crate) fn is_wb_pending(&self) -> bool {
+        self.header.is_wb_pending()
+    }
+
+    /// Record `self` in the remembered set: flip its state to "remembered"
+    /// (clears the armed flag) and append it to the allocator's set.
+    fn enter_remembered_set(&mut self) {
+        self.header.enter_remembered();
+        crate::alloc::ALLOC
+            .with(|alloc| alloc.borrow_mut().remember(std::ptr::NonNull::from(&*self)));
+    }
+
+    ///
+    /// Generational GC write barrier.
+    ///
+    /// Call *after* storing `child` into a reference-typed field of
+    /// `self` (an ivar, an array/hash element, a struct slot, …). If
+    /// `self` is old and not yet remembered (`is_wb_pending`) and `child`
+    /// is a heap object, `self` is recorded in the remembered set so a
+    /// subsequent minor GC can still reach `child` without scanning the
+    /// whole old generation.
+    ///
+    /// Fast path is a single header-bit test (`is_wb_pending`): young
+    /// objects *and* already-remembered old objects both return
+    /// immediately without touching the allocator. We do not check the
+    /// child's generation (remembering an old→old edge is a harmless
+    /// over-approximation); immediates are skipped via `is_packed_value`.
+    /// See `doc/generational_gc_plan.md`.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier(&mut self, child: Value) {
+        if self.is_wb_pending() && !child.is_packed_value() {
+            self.enter_remembered_set();
+        }
+    }
+
+    ///
+    /// Write barrier for bulk / multi-element stores (e.g. `Array#concat`,
+    /// `Hash#[]=`), where checking each stored child individually is not
+    /// worthwhile. Records `self` if armed, regardless of what was stored
+    /// — a safe over-approximation. Same single-bit fast path.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier_bulk(&mut self) {
+        if self.is_wb_pending() {
+            self.enter_remembered_set();
+        }
     }
 
     pub(crate) unsafe fn try_ty(&self) -> Option<ObjTy> {
@@ -945,6 +1126,7 @@ impl RValue {
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 self.as_object_mut()[i] = Some(val);
+                self.write_barrier(val);
                 return;
             } else {
                 i -= OBJECT_INLINE_IVAR;
@@ -964,6 +1146,7 @@ impl RValue {
                 self.var_table = Some(Box::new(v));
             }
         }
+        self.write_barrier(val);
     }
 
     pub(crate) fn extend_ivar(&mut self, heap_len: usize) {
@@ -2039,6 +2222,10 @@ union Header {
 struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
+    /// MUST stay zero: the JIT compares the type with a 2-byte `cmpw
+    /// [ty]` that also reads this adjacent byte (e.g. the Array check in
+    /// `object_send_splat_arg0`). The generational GC age therefore lives
+    /// in the high byte of `flag`, not here. See generational_gc_plan.md.
     _padding: u8,
     class: Option<ClassId>,
 }
@@ -2090,6 +2277,93 @@ impl Header {
 
     fn clear_chilled(&mut self) {
         unsafe { self.meta.flag &= !0b100 }
+    }
+
+    // --- Generational GC flags (flag bits 3..5) ---
+    //
+    // bit3 `0b0_1000`  = OLD            (promoted to old generation)
+    // bit4 `0b1_0000`  = WB_UNPROTECTED (shady; never promoted)
+    // bit5 `0b10_0000` = REMEMBERED     (in the remembered set)
+    //
+    // A freshly allocated object has `flag == 1`, so all three bits
+    // start clear (young, barrier-untracked, not remembered). See
+    // `doc/generational_gc_plan.md`.
+
+    #[allow(dead_code)]
+    fn is_old(&self) -> bool {
+        unsafe { self.meta.flag & 0b0_1000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_old(&mut self) {
+        unsafe { self.meta.flag |= 0b0_1000 }
+    }
+
+    #[allow(dead_code)]
+    fn clear_old(&mut self) {
+        unsafe { self.meta.flag &= !0b0_1000 }
+    }
+
+    #[allow(dead_code)]
+    fn is_wb_unprotected(&self) -> bool {
+        unsafe { self.meta.flag & 0b1_0000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_wb_unprotected(&mut self) {
+        unsafe { self.meta.flag |= 0b1_0000 }
+    }
+
+    #[allow(dead_code)]
+    fn is_remembered(&self) -> bool {
+        unsafe { self.meta.flag & 0b10_0000 != 0 }
+    }
+
+    #[allow(dead_code)]
+    fn set_remembered(&mut self) {
+        unsafe { self.meta.flag |= 0b10_0000 }
+    }
+
+    #[allow(dead_code)]
+    fn clear_remembered(&mut self) {
+        unsafe { self.meta.flag &= !0b10_0000 }
+    }
+
+    ///
+    /// Generational GC write-barrier "armed" flag (bit 6): set iff the
+    /// object is old and *not* in the remembered set, i.e. a young store
+    /// to it must take the barrier slow path. Testing this single bit is
+    /// what makes the JIT/Rust barrier fast path one instruction — young
+    /// objects and already-remembered old objects both have it clear.
+    /// `arm_barrier` / `enter_remembered` keep it mutually exclusive with
+    /// `REMEMBERED`. See `doc/generational_gc_plan.md`.
+    ///
+    fn is_wb_pending(&self) -> bool {
+        unsafe { self.meta.flag & 0b100_0000 != 0 }
+    }
+
+    /// Old, not remembered: arm the barrier (WB_PENDING set, REMEMBERED clear).
+    fn arm_barrier(&mut self) {
+        unsafe { self.meta.flag = (self.meta.flag | 0b100_0000) & !0b10_0000 }
+    }
+
+    /// Recorded in the remembered set (REMEMBERED set, WB_PENDING clear).
+    fn enter_remembered(&mut self) {
+        unsafe { self.meta.flag = (self.meta.flag | 0b10_0000) & !0b100_0000 }
+    }
+
+    /// Generational GC age (number of collections survived), stored in
+    /// the high byte of `flag` so the type byte's neighbour stays zero
+    /// (see `Metadata::_padding`). The low byte holds the live/frozen/
+    /// chilled/OLD/REMEMBERED/WB_PENDING flags and is read by the write
+    /// barrier; age occupies bits 8..15, untouched by those byte-wide
+    /// flag tests.
+    fn age(&self) -> u8 {
+        unsafe { (self.meta.flag >> 8) as u8 }
+    }
+
+    fn set_age(&mut self, age: u8) {
+        unsafe { self.meta.flag = (self.meta.flag & 0x00ff) | ((age as u16) << 8) }
     }
 
     fn class(&self) -> ClassId {

@@ -812,7 +812,7 @@ impl<'a> MarshalReader<'a> {
                     expected_sym.get_name(),
                 )));
             }
-            instance.as_struct_mut().set(i, val);
+            instance.set_struct_slot(i, val);
         }
         self.objects[obj_idx] = instance;
         Ok(instance)

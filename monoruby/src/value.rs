@@ -1880,6 +1880,46 @@ impl Value {
     }
 
     ///
+    /// Generational GC write barrier (see `RValue::write_barrier`).
+    ///
+    /// Convenience for call sites that hold the container as a `Value`
+    /// (e.g. an `Array`/`Hashmap`/`Struct` wrapper's backing value).
+    /// Call *after* storing `child` into one of `self`'s fields. A no-op
+    /// when `self` is an immediate. Inert until promotion is enabled in
+    /// a later phase. See `doc/generational_gc_plan.md`.
+    ///
+    /// Used by the container barriers wired in a later phase (Array /
+    /// Hash / Struct call sites); `allow(dead_code)` until then.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier(&mut self, child: Value) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.write_barrier(child);
+        }
+    }
+
+    ///
+    /// Bulk write barrier for a container `Value` (see
+    /// `RValue::write_barrier_bulk`). No-op for immediates.
+    ///
+    #[inline]
+    pub(crate) fn write_barrier_bulk(&mut self) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.write_barrier_bulk();
+        }
+    }
+
+    ///
+    /// Store `value` into struct slot `index` of `self`, then run the
+    /// generational GC write barrier. The single Rust mutation point for
+    /// `Struct` members (there is no `Struct` Value wrapper to intercept).
+    ///
+    pub(crate) fn set_struct_slot(&mut self, index: usize, value: Value) {
+        self.as_struct_mut().set(index, value);
+        self.write_barrier(value);
+    }
+
+    ///
     /// Check if `self` is a fixnum.
     ///
     pub(crate) fn is_fixnum(&self) -> bool {
@@ -2041,6 +2081,23 @@ impl Value {
     }
 
     ///
+    /// Frozen-checked acquisition of the `Array` wrapper for mutation.
+    ///
+    /// Fuses the two preconditions of mutating a container — it must not
+    /// be frozen, and its mutations must run the generational write
+    /// barrier — into a single call: the frozen check happens here, and
+    /// the returned `Array` wrapper's methods (`push`, `set_index`, …)
+    /// run the write barrier. So a mutating builtin is just
+    /// `lfp.self_val().as_array_mut(&globals.store)?.push(v)`, and neither
+    /// concern can be forgotten or drift apart. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    pub(crate) fn as_array_mut(self, store: &Store) -> Result<Array> {
+        self.ensure_not_frozen(store)?;
+        Ok(self.as_array())
+    }
+
+    ///
     /// Get a reference of underlying array from `self`.
     ///
     pub(crate) fn as_array_inner(&self) -> &ArrayInner {
@@ -2079,6 +2136,23 @@ impl Value {
         unsafe { self.rvalue_mut().as_rstring_mut() }
     }
 
+    ///
+    /// Mutation-checked acquisition of the `RString` wrapper (the String
+    /// counterpart of `as_array_mut` / `as_hash_mut`).
+    ///
+    /// Runs `ensure_string_mutable` — emit the one-shot deprecation
+    /// warning and clear the flag for a *chilled* string (`Symbol#to_s`),
+    /// or raise `FrozenError` for a truly frozen one — then returns the
+    /// `RString` wrapper for in-place mutation. A String's bytes are not
+    /// `Value` references, so no write barrier is needed; this fuses only
+    /// the chilled + frozen preconditions with acquisition. The wrapper is
+    /// owned (not a borrow), so it can be mutated across several branches.
+    ///
+    pub(crate) fn as_string_mut(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<RString> {
+        self.ensure_string_mutable(vm, globals)?;
+        Ok(RString::new_unchecked(*self))
+    }
+
     pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
         let rv = self.try_rvalue()?;
         // SAFETY: The type check ensures this RValue contains an exception.
@@ -2115,6 +2189,16 @@ impl Value {
         ))
     }
 
+    ///
+    /// Frozen-checked acquisition of the `Hashmap` wrapper for mutation
+    /// (see `as_array_mut`): the frozen check runs here, the returned
+    /// wrapper's `insert` / `set_defalut_*` run the write barrier.
+    ///
+    pub(crate) fn as_hash_mut(self, store: &Store) -> Result<Hashmap> {
+        self.ensure_not_frozen(store)?;
+        Ok(self.as_hash())
+    }
+
     pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
@@ -2131,7 +2215,11 @@ impl Value {
     }
 
     /// Mutable access to the slot array of a `Struct` subclass instance.
-    pub(crate) fn as_struct_mut(&mut self) -> &mut StructInner {
+    ///
+    /// Private on purpose: the only store path is the barriered
+    /// `Value::set_struct_slot`, so a raw `&mut StructInner` (which could
+    /// bypass the generational write barrier) cannot leak to builtins.
+    fn as_struct_mut(&mut self) -> &mut StructInner {
         assert_eq!(ObjTy::STRUCT, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue is a Struct instance.
         unsafe { self.rvalue_mut().as_struct_inner_mut() }
@@ -2148,7 +2236,12 @@ impl Value {
         None
     }
 
-    pub(crate) fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
+    /// Private on purpose (like `as_array_inner_mut`): outside this
+    /// module tree, a mutable hash inner is only reachable through the
+    /// `Hashmap` wrapper, whose `DerefMut`/inherent methods run the
+    /// generational write barrier. This makes barrier bypass a type
+    /// error rather than a code-review concern.
+    fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue_mut().as_hashmap_mut() }

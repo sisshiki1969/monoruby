@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
 
-#[monoruby_object]
+#[monoruby_object(write_barrier)]
 pub struct Hashmap(Value);
 
 impl Hashmap {
@@ -26,6 +26,39 @@ impl Hashmap {
                 HashDefault::Value(v) => Ok(v),
             }
         }
+    }
+
+    // Write-barrier-protected stores (shadow the `HashmapInner` methods
+    // reached via `Deref`, so existing call sites go through the
+    // generational write barrier). See `doc/generational_gc_plan.md`.
+
+    pub fn insert(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.0.as_hashmap_inner_mut().insert(k, v, vm, globals)?;
+        self.0.write_barrier_bulk();
+        Ok(())
+    }
+
+    pub fn set_defalut_value(&mut self, default: Value) {
+        self.0.as_hashmap_inner_mut().set_defalut_value(default);
+        self.0.write_barrier(default);
+    }
+
+    pub fn set_defalut_proc(&mut self, default_proc: Proc) {
+        self.0.as_hashmap_inner_mut().set_defalut_proc(default_proc);
+        self.0.write_barrier_bulk();
+    }
+
+    /// Replace the whole content (`Hash#replace`). Bulk barrier: the new
+    /// content may reference young objects.
+    pub fn replace_inner(&mut self, inner: HashmapInner) {
+        *self.0.as_hashmap_inner_mut() = inner;
+        self.0.write_barrier_bulk();
     }
 }
 
@@ -88,6 +121,35 @@ impl std::ops::Deref for HashmapInner {
 impl std::ops::DerefMut for HashmapInner {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.content
+    }
+}
+
+impl HashmapInner {
+    ///
+    /// Generational GC: does this hash reference any young (non-old) heap
+    /// object — among its keys, values, or default value/proc? Used for
+    /// the remember-on-promote decision (the `default` field is private to
+    /// this module, hence this helper). See `doc/generational_gc_plan.md`.
+    ///
+    pub(crate) fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
+        fn is_young(v: Value, alloc: &alloc::Allocator<RValue>) -> bool {
+            v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv))
+        }
+        match self.default {
+            HashDefault::Proc(p) => {
+                if is_young(p.into(), alloc) {
+                    return true;
+                }
+            }
+            HashDefault::Value(v) => {
+                if is_young(v, alloc) {
+                    return true;
+                }
+            }
+        }
+        self.content
+            .iter()
+            .any(|(k, v)| is_young(k, alloc) || is_young(v, alloc))
     }
 }
 

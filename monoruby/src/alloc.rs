@@ -36,6 +36,36 @@ const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
 
+/// Hard cap on the number of minor (young-generation) collections between
+/// two major (full-heap) collections. This is only a safety bound — to
+/// rebuild the remembered set and bound floating old garbage even if the
+/// adaptive trigger (`old_major_threshold`) never fires. The usual major
+/// trigger is old-generation growth; see `decide_gc_kind`.
+const MAX_MINORS_PER_MAJOR: usize = 64;
+
+/// Adaptive major-GC trigger: a major GC is forced once the old generation
+/// has grown to this multiple of its size right after the previous major.
+/// Mirrors CRuby's `old_objects_limit` (RGENGC_OLD_OBJECT_LIMIT_FACTOR).
+/// A stable old generation (e.g. a long-lived data structure) then majors
+/// rarely — preserving the generational win — while a workload that keeps
+/// promoting short-lived "floating" garbage majors often, reclaiming it
+/// and keeping RSS down. See `doc/generational_gc_plan.md`.
+const OLD_GROWTH_FACTOR: usize = 2;
+
+/// Floor for the adaptive trigger: never force a major purely on old-gen
+/// growth until the old generation reaches this many objects (~a handful
+/// of pages). Below this, full-heap marking is cheap, so majoring eagerly
+/// would only add overhead.
+const OLD_OBJECT_FLOOR: usize = 16384;
+
+/// Number of collections an object must survive before it is promoted to
+/// the old generation. Aging (rather than promoting on first survival)
+/// avoids promoting short-lived objects that merely happened to be live
+/// at a collection, which would otherwise accumulate as floating garbage
+/// in the old generation until the next major GC. See
+/// `doc/generational_gc_plan.md`.
+pub(crate) const RGENGC_OLD_AGE: u8 = 3;
+
 pub trait GC<T: GCBox> {
     fn mark(&self, alloc: &mut Allocator<T>);
 }
@@ -55,6 +85,87 @@ pub trait GCBox: PartialEq {
     fn set_next(&mut self, next: *mut Self);
 
     fn new_invalid() -> Self;
+
+    ///
+    /// Mark the objects directly referenced by `self` (its children),
+    /// *without* marking `self` itself. Used to scan remembered-set
+    /// entries during a minor GC, where `self` is an old object that is
+    /// already (seed-)marked but whose young children must still be
+    /// reached. See `doc/generational_gc_plan.md`.
+    ///
+    fn mark_children(&self, alloc: &mut Allocator<Self>)
+    where
+        Self: Sized;
+
+    ///
+    /// Whether this object may be promoted to the old generation when it
+    /// survives a collection. Only objects that are provably safe to
+    /// skip in a minor GC should return `true` — currently those with no
+    /// outgoing references at promotion time. See
+    /// `doc/generational_gc_plan.md`.
+    ///
+    fn is_promotable(&self) -> bool;
+
+    ///
+    /// Set this object's old-generation header flag. Called only after
+    /// the mark phase (never while a `&self` from marking is live), so
+    /// the `&mut` is sound. See `doc/generational_gc_plan.md`.
+    ///
+    fn promote_to_old(&mut self);
+
+    ///
+    /// Increment this object's survival age and return whether it has now
+    /// reached `RGENGC_OLD_AGE` and should be promoted. Called from the
+    /// post-mark aging pass (no `&self` from marking is live).
+    ///
+    fn age_and_check_promote(&mut self) -> bool;
+
+    ///
+    /// Mark this object as old-but-not-remembered ("barrier armed"): a
+    /// young store to it must take the barrier slow path. Used at
+    /// promotion (no young children) and when dropping it from the
+    /// remembered set.
+    ///
+    fn arm_barrier(&mut self);
+
+    ///
+    /// Mark this object as recorded in the remembered set (clears the
+    /// armed flag). Used when it is added to the set.
+    ///
+    fn enter_remembered(&mut self);
+
+    ///
+    /// Whether this object currently references any *young* (non-old) heap
+    /// object. Used at promotion time (`remember-on-promote`): a freshly
+    /// promoted object that still points into the young generation must be
+    /// added to the remembered set, because those old→young edges predate
+    /// the write barrier. See `doc/generational_gc_plan.md`.
+    ///
+    fn young_child_exists(&self, alloc: &Allocator<Self>) -> bool
+    where
+        Self: Sized;
+}
+
+///
+/// Kind of a garbage collection cycle.
+///
+/// - `Major`: a full-heap collection. Both bitmaps are cleared, every
+///   object (old and young) is re-marked from the roots, and the whole
+///   heap is swept.
+/// - `Minor`: a young-generation collection. `mark_bits` is seeded from
+///   `old_bits` so old-generation objects start out "already marked" —
+///   they are neither swept nor re-traversed; young objects reachable
+///   only from old ones are reached via the remembered set.
+///
+/// Promotion is not enabled yet (no object carries the `OLD` flag), so
+/// `old_bits` is always empty and a `Minor` cycle currently produces
+/// exactly the same result as a `Major` one. See
+/// `doc/generational_gc_plan.md`.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GcKind {
+    Minor,
+    Major,
 }
 
 pub struct Allocator<T> {
@@ -78,6 +189,44 @@ pub struct Allocator<T> {
     free_pages: VecDeque<PageRef<T>>,
     /// Counter of GC execution.
     total_gc_counter: usize,
+    /// Counter of minor (young-generation) GC executions. Always 0 until
+    /// minor GC lands; see `doc/generational_gc_plan.md`.
+    #[allow(dead_code)]
+    minor_gc_count: usize,
+    /// Counter of major (full-heap) GC executions.
+    #[allow(dead_code)]
+    major_gc_count: usize,
+    /// Minor GCs performed since the last major GC. Drives the
+    /// minor/major choice in `decide_gc_kind`.
+    minors_since_major: usize,
+    /// Live count of old-generation objects, maintained incrementally:
+    /// `+1` per promotion in `apply_aging`, reset to 0 by `clear_old` at a
+    /// major GC (which then re-promotes survivors). Drives the adaptive
+    /// major trigger; avoids an O(pages) popcount per GC.
+    old_count: usize,
+    /// Adaptive major-GC threshold: when `old_count` reaches this, the next
+    /// GC is a major. Recomputed at the end of each major as
+    /// `max(old_count * OLD_GROWTH_FACTOR, OLD_OBJECT_FLOOR)`.
+    old_major_threshold: usize,
+    /// Whether the current mark phase should promote surviving
+    /// promotable objects to the old generation. Set only during the
+    /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
+    /// no promotion side effects.
+    promoting: bool,
+    /// Promotable objects marked (survived) this cycle. Their age is
+    /// incremented in the post-mark `apply_aging` pass, and those
+    /// reaching `RGENGC_OLD_AGE` are promoted there (old_bits + header
+    /// OLD). Deferred so the header writes never alias a `&self` held by
+    /// the mark traversal.
+    aging: Vec<*mut T>,
+    /// Generational GC: remembered set — old-generation objects that
+    /// hold a reference into the young generation, recorded by the write
+    /// barrier (`RValue::write_barrier`). A minor GC scans these as
+    /// extra roots; a major GC rebuilds generation state and clears it.
+    /// Empty until promotion is enabled in a later phase (no object is
+    /// `OLD` yet), so the barrier is currently inert. See
+    /// `doc/generational_gc_plan.md`.
+    remembered: Vec<std::ptr::NonNull<T>>,
     /// Flag for GC timing.
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
@@ -151,7 +300,15 @@ impl<T: GCBox> Allocator<T> {
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
         let layout = Layout::from_size_align(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE).unwrap();
         let ptr = unsafe { System.alloc(layout) };
-        let ptr = std::ptr::NonNull::new(ptr as _).unwrap();
+        let ptr: PageRef<T> = std::ptr::NonNull::new(ptr as _).unwrap();
+        // The arena is freshly `System.alloc`'d (uninitialised). Zero the
+        // first page's old-generation bitmap so the first minor GC seeds
+        // `mark_bits` from zeros rather than arena garbage. (`mark_bits`
+        // is always written by a major clear / minor seed before it is
+        // read, so it needs no such pre-zeroing.)
+        // SAFETY: `ptr` points at `ALLOC_SIZE` bytes of owned arena; only
+        // the `old_bits` field is written here.
+        unsafe { (*ptr.as_ptr()).clear_old_bits() };
         Allocator {
             current_page: ptr,
             head_page: ptr,
@@ -163,6 +320,14 @@ impl<T: GCBox> Allocator<T> {
             free: None,
             free_pages: VecDeque::new(),
             total_gc_counter: 0,
+            minor_gc_count: 0,
+            major_gc_count: 0,
+            minors_since_major: 0,
+            old_count: 0,
+            old_major_threshold: OLD_OBJECT_FLOOR,
+            promoting: false,
+            aging: Vec::new(),
+            remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
             malloc_threshold: MALLOC_THRESHOLD,
@@ -306,6 +471,39 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Returns the number of minor (young-generation) GC executions.
+    ///
+    #[cfg(feature = "gc-log")]
+    pub fn minor_gc_count(&self) -> usize {
+        self.minor_gc_count
+    }
+
+    ///
+    /// Returns the number of major (full-heap) GC executions.
+    ///
+    #[cfg(feature = "gc-log")]
+    pub fn major_gc_count(&self) -> usize {
+        self.major_gc_count
+    }
+
+    ///
+    /// Returns the number of old-generation objects (popcount of every
+    /// page's `old_bits`). Confirms that promotion is taking effect, and
+    /// cross-checks the incrementally maintained `old_count` field.
+    ///
+    #[cfg(any(feature = "gc-log", feature = "gc-debug"))]
+    pub(crate) fn old_count_popcount(&self) -> usize {
+        let mut c = 0;
+        unsafe {
+            c += self.current_page.as_ref().old_count();
+            for p in self.pages.iter() {
+                c += p.as_ref().old_count();
+            }
+        }
+        c
+    }
+
+    ///
     /// Returns total active pages.
     ///
     #[allow(unused)]
@@ -338,6 +536,13 @@ impl<T: GCBox> Allocator<T> {
                 .free_pages
                 .pop_front()
                 .unwrap_or_else(|| self.new_page());
+            // A page entering service must start with a zeroed
+            // old-generation bitmap: fresh arena pages are uninitialised,
+            // and salvaged pages may carry stale old bits. This keeps a
+            // later minor GC's seed correct. (`mark_bits` is reset by the
+            // next major clear / minor seed.)
+            // SAFETY: `current_page` is a live, owned page.
+            unsafe { self.current_page.as_mut().clear_old_bits() };
             unsafe { self.current_page.as_ref().get_first_cell() }
         } else {
             // Bump allocation.
@@ -358,14 +563,47 @@ impl<T: GCBox> Allocator<T> {
         gcbox
     }
 
+    ///
+    /// Decide whether the next collection is a minor or a major GC.
+    ///
+    /// Primary (adaptive) trigger: the old generation has grown to
+    /// `old_major_threshold` (= `OLD_GROWTH_FACTOR`× its size right after
+    /// the previous major, floored at `OLD_OBJECT_FLOOR`). A stable old
+    /// generation majors rarely (keeping the generational win); one that
+    /// keeps promoting floating garbage majors often (reclaiming it,
+    /// bounding RSS). `MAX_MINORS_PER_MAJOR` is a hard safety cap so the
+    /// remembered set is rebuilt and old garbage reclaimed even if the
+    /// adaptive trigger never fires.
+    ///
+    fn decide_gc_kind(&self) -> GcKind {
+        if self.old_count >= self.old_major_threshold
+            || self.minors_since_major >= MAX_MINORS_PER_MAJOR
+        {
+            GcKind::Major
+        } else {
+            GcKind::Minor
+        }
+    }
+
     pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
             return;
         }
+        let kind = self.decide_gc_kind();
         self.total_gc_counter += 1;
+        match kind {
+            GcKind::Minor => {
+                self.minor_gc_count += 1;
+                self.minors_since_major += 1;
+            }
+            GcKind::Major => {
+                self.major_gc_count += 1;
+                self.minors_since_major = 0;
+            }
+        }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
-            eprintln!("#### GC start");
+            eprintln!("#### GC start ({kind:?})");
             eprintln!(
                 "allocated: {}  used in current page: {}  allocated pages: {}",
                 self.total_allocated_objects,
@@ -373,7 +611,26 @@ impl<T: GCBox> Allocator<T> {
                 self.pages.len()
             );
         }
-        self.clear_mark();
+        // Prepare the mark bitmaps:
+        // - Major: zero `mark_bits` and `old_bits`; every object becomes
+        //   a collection candidate and is re-marked from the roots.
+        // - Minor: seed `mark_bits` from `old_bits`, so old objects start
+        //   "already marked" and are skipped by mark and sweep.
+        // (Currently `old_bits` is always empty — nothing is promoted —
+        // so the two paths are equivalent. See generational_gc_plan.md.)
+        match kind {
+            GcKind::Major => {
+                self.clear_mark();
+                self.clear_old();
+                // Every object is demoted and re-aged from scratch, so the
+                // remembered set is rebuilt by this cycle's `apply_aging`.
+                // (Demoted objects are young again — fully scanned — so
+                // their now-stale armed/remembered header bits are
+                // harmless until re-promotion resets them.)
+                self.remembered.clear();
+            }
+            GcKind::Minor => self.seed_marks(),
+        }
         // Skip all heap-frame bookkeeping entirely when nothing has
         // been promoted. The common case (optcarrot and most
         // benchmarks promote few or no frames) then pays exactly zero
@@ -383,15 +640,51 @@ impl<T: GCBox> Allocator<T> {
         if has_heap_frames {
             self.clear_frame_marks();
         }
+        // Surviving objects may be promoted during the real mark.
+        self.promoting = true;
         root.mark(self);
+        // A minor GC must also reach young objects referenced only from
+        // old (already-marked) objects, via the remembered set.
+        if kind == GcKind::Minor {
+            self.mark_remembered();
+        }
+        self.promoting = false;
+        // Age this cycle's promotable survivors and promote those old
+        // enough (deferred from the mark phase to avoid aliasing). Safe:
+        // marking is complete.
+        self.apply_aging();
+        // After a major rebuilds the old generation, re-arm the adaptive
+        // trigger relative to this baseline: major again once the old gen
+        // has grown by `OLD_GROWTH_FACTOR` (floored).
+        if kind == GcKind::Major {
+            self.old_major_threshold =
+                (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
+        }
+        // The incrementally maintained `old_count` must equal the actual
+        // number of old cells (popcount of `old_bits`).
+        #[cfg(feature = "gc-debug")]
+        debug_assert_eq!(self.old_count, self.old_count_popcount());
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
         }
+        // Drop dead entries from the remembered set before sweep frees
+        // them: keep only objects still marked this cycle.
+        self.filter_remembered();
         self.salvage_empty_pages();
         self.sweep();
         if has_heap_frames {
             self.sweep_heap_frames();
+        }
+        // gc-verify: after a minor GC, independently re-mark the whole
+        // live graph from the roots (no seeding, no promotion). If the
+        // minor GC freed anything still reachable — a missed write
+        // barrier / remembered-set entry — this traversal reaches a freed
+        // slot and the `is_live` assertion in `RValue::mark` fires.
+        #[cfg(feature = "gc-verify")]
+        if kind == GcKind::Minor {
+            self.clear_mark();
+            root.mark(self);
         }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -407,14 +700,24 @@ impl<T: GCBox> Allocator<T> {
         }
     }
 
+    ///
+    /// Generational GC: record `ptr` (an old-generation object that now
+    /// references the young generation) in the remembered set. The
+    /// caller — `RValue::write_barrier` — owns the `is_old` / dedup
+    /// checks, so this just appends. See `doc/generational_gc_plan.md`.
+    ///
+    pub(crate) fn remember(&mut self, ptr: std::ptr::NonNull<T>) {
+        self.remembered.push(ptr);
+    }
+
     /// Mark object.
     /// If object is already marked, return true.
     /// If not yet, mark it and return false.
     pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
-        let ptr = ptr as *const T;
-        let page_ptr = self.get_page(ptr);
+        let p = ptr as *const T;
+        let page_ptr = self.get_page(p);
 
-        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let index = unsafe { (*page_ptr).get_index(p) };
         assert!(index < DATA_LEN);
         let bit_mask = 1 << (index % 64);
         let bitmap = unsafe { &mut (*page_ptr).mark_bits[index / 64] };
@@ -423,8 +726,71 @@ impl<T: GCBox> Allocator<T> {
         *bitmap |= bit_mask;
         if !is_marked {
             self.mark_counter += 1;
+            // Collect promotable survivors; their age is bumped (and the
+            // ones old enough are promoted) after marking, in
+            // `apply_aging`, to avoid aliasing the `&self` the mark
+            // traversal holds. Already-old objects never reach here in a
+            // minor GC (they are seeded-marked and return early above).
+            if self.promoting && ptr.is_promotable() {
+                self.aging.push(p as *mut T);
+            }
         }
         is_marked
+    }
+
+    ///
+    /// Post-mark aging pass: bump each promotable survivor's age and
+    /// promote (set `old_bits` + header `OLD`) those reaching
+    /// `RGENGC_OLD_AGE`. Runs after marking, so no `&self` from the mark
+    /// traversal is live and the `&mut` writes are sound.
+    ///
+    fn apply_aging(&mut self) {
+        let aging = std::mem::take(&mut self.aging);
+        // Pass 1: age every survivor and promote (set old_bits + header
+        // OLD) those that reached the threshold. Collect them so the
+        // remember-on-promote check runs only *after* all of this cycle's
+        // promotions are visible — otherwise an object promoted before its
+        // (same-cycle) children would be needlessly remembered.
+        let mut promoted = Vec::new();
+        for p in aging {
+            // SAFETY: `p` was marked (hence live) this cycle and sweep
+            // has not run, so the cell is valid and unaliased here.
+            if unsafe { (*p).age_and_check_promote() } {
+                let page_ptr = self.get_page(p);
+                let index = unsafe { (*page_ptr).get_index(p) };
+                let bit_mask = 1 << (index % 64);
+                unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
+                unsafe { (*p).promote_to_old() };
+                self.old_count += 1;
+                promoted.push(p);
+            }
+        }
+        // Pass 2: remember-on-promote. A freshly promoted object that
+        // still references the young generation is added to the remembered
+        // set (covering old→young edges that predate the write barrier);
+        // one with only old children is left "armed" so a future young
+        // store takes the barrier.
+        for p in promoted {
+            if unsafe { (*p).young_child_exists(self) } {
+                unsafe { (*p).enter_remembered() };
+                self.remembered
+                    .push(unsafe { std::ptr::NonNull::new_unchecked(p) });
+            } else {
+                unsafe { (*p).arm_barrier() };
+            }
+        }
+    }
+
+    ///
+    /// Whether `ptr` belongs to the old generation (its `old_bits` is set).
+    /// Used by `young_child_exists` for the remember-on-promote check.
+    ///
+    pub(crate) fn is_old(&self, ptr: &T) -> bool {
+        let ptr = ptr as *const T;
+        let page_ptr = self.get_page(ptr);
+        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let bit_mask = 1 << (index % 64);
+        unsafe { (*page_ptr).old_bits[index / 64] & bit_mask != 0 }
     }
 }
 
@@ -440,6 +806,98 @@ impl<T: GCBox> Allocator<T> {
                 .for_each(|heap| heap.as_mut().clear_bits());
         }
         self.mark_counter = 0;
+    }
+
+    ///
+    /// Clear all old-generation bitmaps (major GC demotes every object
+    /// to a collection candidate). See `doc/generational_gc_plan.md`.
+    ///
+    fn clear_old(&mut self) {
+        unsafe {
+            self.current_page.as_mut().clear_old_bits();
+            self.pages
+                .iter_mut()
+                .for_each(|heap| heap.as_mut().clear_old_bits());
+        }
+        // Every object is demoted; `apply_aging` re-promotes the survivors
+        // this cycle and counts them back up.
+        self.old_count = 0;
+    }
+
+    ///
+    /// Seed `mark_bits` from `old_bits` on every page (minor GC): old
+    /// objects start out marked, so they are neither re-traversed nor
+    /// swept. See `doc/generational_gc_plan.md`.
+    ///
+    fn seed_marks(&mut self) {
+        unsafe {
+            self.current_page.as_mut().seed_mark_from_old();
+            self.pages
+                .iter_mut()
+                .for_each(|heap| heap.as_mut().seed_mark_from_old());
+        }
+        self.mark_counter = 0;
+    }
+
+    ///
+    /// Minor GC: mark the young children of every remembered (old)
+    /// object. The old objects are already (seed-)marked, so we must
+    /// reach their children explicitly. (Empty until promotion lands.)
+    ///
+    fn mark_remembered(&mut self) {
+        // Take the set out so the marking closure can borrow `self`
+        // mutably; marking never mutates the remembered set (the write
+        // barrier is not invoked during GC), so a snapshot is sound.
+        let remembered = std::mem::take(&mut self.remembered);
+        let mut kept = Vec::with_capacity(remembered.len());
+        for ptr in remembered {
+            // SAFETY: remembered entries are live old objects (kept
+            // marked across the cycle; dead ones are dropped in
+            // `filter_remembered` before sweep frees them).
+            unsafe { ptr.as_ref().mark_children(self) };
+            // Self-clean: keep the entry only while it still references a
+            // young object. Once all its children have themselves been
+            // promoted, it no longer needs scanning — dropping it keeps
+            // the remembered set (and thus minor GC cost) proportional to
+            // the live old→young edges, not to every object ever promoted
+            // with a then-young child. See `doc/generational_gc_plan.md`.
+            if unsafe { ptr.as_ref().young_child_exists(self) } {
+                kept.push(ptr);
+            } else {
+                // No young children left: drop from the set and re-arm, so
+                // a future young store takes the barrier again.
+                unsafe { (*ptr.as_ptr()).arm_barrier() };
+            }
+        }
+        self.remembered = kept;
+    }
+
+    ///
+    /// Drop remembered-set entries that are not marked this cycle (they
+    /// are about to be swept). Surviving entries are retained. Must run
+    /// after marking and before sweep.
+    ///
+    fn filter_remembered(&mut self) {
+        if self.remembered.is_empty() {
+            return;
+        }
+        let mut remembered = std::mem::take(&mut self.remembered);
+        // SAFETY: every entry still points at a valid (not-yet-swept)
+        // cell at this point in the cycle.
+        remembered.retain(|ptr| self.is_marked(unsafe { ptr.as_ref() }));
+        self.remembered = remembered;
+    }
+
+    ///
+    /// Test whether `ptr` is marked in the current cycle (read-only;
+    /// does not set the bit).
+    ///
+    fn is_marked(&self, ptr: &T) -> bool {
+        let ptr = ptr as *const T;
+        let page_ptr = self.get_page(ptr);
+        let index = unsafe { (*page_ptr).get_index(ptr) };
+        let bit_mask = 1 << (index % 64);
+        unsafe { (*page_ptr).mark_bits[index / 64] & bit_mask != 0 }
     }
 
     ///
@@ -602,6 +1060,12 @@ impl<T: GCBox> Allocator<T> {
 struct Page<T> {
     data: [T; DATA_LEN],
     mark_bits: [u64; SIZE - 1],
+    /// Generational GC: bitmap of old-generation cells, parallel to
+    /// `mark_bits`. Reserved here so the page layout is fixed up front;
+    /// it is populated and consulted once minor GC lands (see
+    /// `doc/generational_gc_plan.md`). Adding it must keep
+    /// `size_of::<Page<T>>() <= ALLOC_SIZE` (asserted in `Allocator::new`).
+    old_bits: [u64; SIZE - 1],
 }
 
 impl<T: GCBox> std::fmt::Debug for Page<T> {
@@ -647,6 +1111,31 @@ impl<T: GCBox> Page<T> {
     ///
     fn clear_bits(&mut self) {
         self.mark_bits.iter_mut().for_each(|e| *e = 0)
+    }
+
+    ///
+    /// Clear old-generation bitmap. Used by a major GC, which demotes
+    /// every object back to a collection candidate. Reserved for the
+    /// generational GC phases; see `doc/generational_gc_plan.md`.
+    ///
+    fn clear_old_bits(&mut self) {
+        self.old_bits.iter_mut().for_each(|e| *e = 0)
+    }
+
+    ///
+    /// Seed the mark bitmap from the old-generation bitmap (minor GC):
+    /// every old cell starts out marked. See `doc/generational_gc_plan.md`.
+    ///
+    fn seed_mark_from_old(&mut self) {
+        self.mark_bits.copy_from_slice(&self.old_bits);
+    }
+
+    ///
+    /// Number of old-generation cells in this page (popcount of `old_bits`).
+    ///
+    #[cfg(any(feature = "gc-log", feature = "gc-debug"))]
+    fn old_count(&self) -> usize {
+        self.old_bits.iter().map(|w| w.count_ones() as usize).sum()
     }
 
     ///

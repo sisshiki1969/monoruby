@@ -29,6 +29,12 @@ deopt = ["jit-log", "dump-bc", "dump-traceir"]
 gc-log = []
 gc-debug = []
 gc-stress = []
+# After every minor GC, independently re-mark the whole live graph from
+# the roots. If the minor collection freed anything still reachable
+# (a missed write barrier / remembered-set entry), the traversal hits a
+# freed slot and the is_live assertion in RValue::mark fires. Debug-only;
+# very slow. See doc/generational_gc_plan.md.
+gc-verify = []
 # Force PHYS_XMM_POOL down to 2 so almost every Float-resident slot
 # becomes a spilled VirtFPReg. Used in CI to stress-test the spill
 # code paths (LoadSpill / StoreSpill, spill-aware AsmInst lowerings,
