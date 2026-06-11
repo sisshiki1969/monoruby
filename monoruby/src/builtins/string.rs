@@ -428,13 +428,14 @@ fn string_cmp_const_gen(
     let deopt = ir.new_deopt(state);
     state.load(ir, args, GP::Rdi);
     state.guard_class(ir, args, GP::Rdi, rhs_class, deopt);
-    // Materialize the result as a *runtime* value in the accumulator (not
-    // a compile-time LinkMode::C constant): the result is only constant
-    // relative to the guards above, and it must flow through CFG merges
-    // (`a == nil || a.empty?`) and fused compare-and-branch sites exactly
-    // like a real call result would.
-    ir.lit2reg(Value::bool(result), GP::Rax);
-    state.def_rax2acc(ir, dst);
+    // Register the result as a compile-time constant (valid under the
+    // guards above; any later (re)definition is caught by the class-
+    // version guard the inline dispatch emits). Value uses read it from
+    // the abstract state, and branch uses are resolved statically: a
+    // bare CondBr by its own truthiness check, a fused BinCmpBr by
+    // `binary_cmp_br`, which checks the callsite dst for a state-known
+    // truthiness before emitting the branch.
+    state.def_C(dst, Immediate::bool(result));
     true
 }
 
@@ -7473,6 +7474,36 @@ mod tests {
         end
         res << (s == nil)
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn string_eq_nil_fused_branch_fold() {
+        // `if a == nil` compiles to a fused BinCmpBr; the inline gen's
+        // constant fold must statically resolve that branch (and dead-
+        // eliminate the then-block) instead of leaving the CondBr to read
+        // a result no code produced. Mirrors the addressable URI#validate
+        // shape that originally miscompiled.
+        run_test_once(
+            r##"
+        class VTest
+          def initialize; @host = "example.com"; @port = "8080"; end
+          def host; @host; end
+          def port; @port; end
+          def validate
+            if self.host == nil
+              if self.port != nil
+                raise "hostname not supplied"
+              end
+            end
+            :ok
+          end
+        end
+        v = VTest.new
+        r = []
+        100.times { r << v.validate }
+        r.uniq
         "##,
         );
     }
