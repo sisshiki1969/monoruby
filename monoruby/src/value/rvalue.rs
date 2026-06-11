@@ -432,7 +432,7 @@ impl ObjKind {
         }
     }
 
-    fn matchdata(captures: Captures, heystack: String, regex: Regexp) -> Self {
+    fn matchdata(captures: Captures, heystack: &str, regex: Regexp) -> Self {
         Self {
             matchdata: ManuallyDrop::new(MatchDataInner::from_capture(captures, heystack, regex)),
         }
@@ -1530,6 +1530,21 @@ impl RValue {
         }
     }
 
+    /// Like `new_object`, but pre-sizes the spilled ivar table for
+    /// classes known to use more than `OBJECT_INLINE_IVAR` ivars, so
+    /// constructor ivar stores don't regrow it write by write.
+    pub(super) fn new_object_with_ivar_capacity(class_id: ClassId, spill: usize) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::OBJECT),
+            kind: ObjKind::object(),
+            var_table: if spill == 0 {
+                None
+            } else {
+                Some(Box::new(MonoVec::with_capacity(spill)))
+            },
+        }
+    }
+
     /// Create a `Struct` subclass instance with `len` slots, all
     /// initialised to nil. Used by `struct_alloc_func`.
     pub(super) fn new_struct_obj(class_id: ClassId, len: usize) -> Self {
@@ -1921,7 +1936,7 @@ impl RValue {
     pub(super) fn new_match_data(captures: Captures, heystack: &str, regex: Regexp) -> Self {
         RValue {
             header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
-            kind: ObjKind::matchdata(captures, heystack.to_string(), regex),
+            kind: ObjKind::matchdata(captures, heystack, regex),
             var_table: None,
         }
     }
