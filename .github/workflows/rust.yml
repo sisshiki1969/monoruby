@@ -2,12 +2,12 @@ name: Rust
 
 on:
   push:
-    branches: [master]
+    branches: [master, "darwin*"]
   pull_request:
-    branches: [master]
+    branches: [master, "darwin*"]
 
 jobs:
-  coverage:
+  amd64:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -25,10 +25,21 @@ jobs:
 
       - name: Clone optcarrot
         run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec
+      - name: Clone ruby/spec and mspec (pinned)
+        # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
+        # `bin/test` runs these specs under `set -e`, so a single newly added
+        # upstream spec that monoruby doesn't pass yet would fail the whole run.
+        # Bump these SHAs deliberately when adopting newer specs.
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
-          git clone --depth 1 https://github.com/ruby/spec.git ../spec
-          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
       - name: Clone ruby-bench
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
       - name: Install ruby-bench gem dependencies
@@ -40,7 +51,77 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
+        # Coverage upload is a non-essential, externally-dependent step: the
+        # Codecov CLI download/GPG-signature verification fails intermittently
+        # on Codecov's side (e.g. "Could not verify signature. No public key"),
+        # which must not fail the whole CI run when the tests themselves pass.
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
+
+  darwin:
+    # Native Apple Silicon (arm64-apple-darwin) runner. build.rs sets the `jit`
+    # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
+    # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
+    # yet ported bail to the VM. It runs the same `bin/test` as the Linux
+    # `amd64` job (portable head/yjit handling makes it BSD/macOS-safe), so
+    # the arm64 VM + JIT get the full check scope (unit tests, benchmark diffs,
+    # optcarrot, ruby-bench, ruby/spec).
+    #
+    # SKIP_COV=1: this job does NOT collect coverage. On the GitHub M1 runner,
+    # llvm-cov coverage instrumentation itself trips a latent VM-layer memory
+    # bug (a value is freed mid-flight -> String INVALID(255) -> SIGABRT). It is
+    # independent of the JIT (`--no-jit` crashes the same way) and does not
+    # reproduce on x86-64, qemu-aarch64, or a local Apple Silicon Mac — so it is
+    # specific to native-M1 + coverage instrumentation and is tracked
+    # separately. The Linux `amd64` job owns the Codecov upload.
+    runs-on: macos-latest
+    env:
+      CARGO_TERM_COLOR: always
+      SKIP_COV: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
+        run: gem install bigdecimal --no-document
+      - name: Install ruby-bench gem dependencies
+        # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
+        run: gem install erubi --no-document
+      - name: Install libffi + pkg-config
+        # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
+        # with the `system` feature; libffi is keg-only so pkg-config needs its
+        # prefix on PKG_CONFIG_PATH to find it.
+        run: |
+          brew install libffi pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@nextest
+
+      - name: Clone optcarrot
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec and mspec (pinned)
+        # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
+        # Keep these SHAs in sync with the `amd64` job above; bump deliberately.
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
+        run: |
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+
+      - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
+        run: bin/test
+

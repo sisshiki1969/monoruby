@@ -670,6 +670,116 @@ fn hash_splat_and_kw_rest(
     Ok(())
 }
 
+///
+/// Argument setup for the method/block invokers (`invoke_func` path).
+///
+/// In an invoker call there is no `CallSiteInfo`: arguments arrive as a
+/// flat `*const Value` slice with no splat/hash-splat. `upward` selects
+/// the slice direction (`true` for the forward `&[Value]` method path,
+/// `false` for the reversed block-arg layout). Shared by the x86 and
+/// aarch64 invokers.
+pub(crate) extern "C" fn handle_invoker_arguments(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callee_lfp: Lfp,
+    arg_num: usize,
+    args: *const Value,
+    kw_arg: Option<Hashmap>,
+) -> Option<Value> {
+    match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+pub(crate) extern "C" fn handle_invoker_arguments2(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callee_lfp: Lfp,
+    arg_num: usize,
+    args: *const Value,
+    kw_arg: Option<Hashmap>,
+) -> Option<Value> {
+    match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+fn invoker_arguments_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut callee_lfp: Lfp,
+    arg_num: usize,
+    args: *const Value,
+    upward: bool,
+    mut kw_arg: Option<Hashmap>,
+) -> Result<Value> {
+    let callee_fid = callee_lfp.func_id();
+    let info = &globals.store[callee_fid];
+
+    // keyword
+    let callee_kw_pos = info.kw_reg_pos();
+    for (id, name) in info.kw_names().to_vec().into_iter().enumerate() {
+        let v = match &mut kw_arg {
+            Some(map) => map.remove(Value::symbol(name), vm, globals)?,
+            None => None,
+        };
+        unsafe {
+            callee_lfp.set_register(callee_kw_pos + id, v);
+        }
+    }
+
+    let info = &globals.store[callee_fid];
+    let kw_arg = if let Some(kw_arg) = kw_arg
+        && !kw_arg.is_empty()
+    {
+        Some(kw_arg)
+    } else {
+        None
+    };
+
+    // keyword rest
+    let ex = if let Some(kw_rest) = info.kw_rest() {
+        let v = if let Some(kw_arg) = kw_arg {
+            kw_arg.into()
+        } else {
+            Value::nil()
+        };
+        unsafe {
+            callee_lfp.set_register(kw_rest, Some(v));
+        }
+        None
+    } else if info.kw_names().is_empty()
+        && let Some(kw_arg) = kw_arg
+    {
+        Some(kw_arg.into())
+    } else if let Some(kw_arg) = kw_arg {
+        let mut s = "unknown keywords: ".to_string();
+        for (i, (name, _)) in kw_arg.iter().enumerate() {
+            if i == 0 {
+                s.push_str(&format!(":{name}"));
+            } else {
+                s.push_str(&format!(", :{name}"));
+            }
+        }
+        return Err(MonorubyErr::argumenterr(s));
+    } else {
+        None
+    };
+
+    // required + optional + post + rest
+    positional_invoker(info, callee_lfp, args, arg_num, upward, ex)?;
+
+    Ok(Value::nil())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;

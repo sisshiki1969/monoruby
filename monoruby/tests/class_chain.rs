@@ -77,3 +77,49 @@ fn class_chain2() {
     "##,
     );
 }
+
+#[test]
+fn classdef_with_live_float() {
+    // Regression: a ClassDef reached while a float accumulator is live in the
+    // JIT's FP pool must preserve the float (the pool is saved once across the
+    // define/enter/body/exit sequence and reloaded into the pool registers
+    // before each HandleError). The harness runs this 25x, so the top-level
+    // method gets JIT-compiled and exercises the ClassDef emit.
+    run_test(
+        r##"
+        acc = 0.0
+        i = 0
+        while i < 30
+          acc += i.to_f * 0.5
+          class Foo
+            def bar; 2; end
+          end
+          acc += Foo.new.bar
+          i += 1
+        end
+        acc
+        "##,
+    );
+}
+
+#[test]
+fn singleton_classdef_with_live_float() {
+    // Regression: same as classdef_with_live_float for `class << obj`.
+    run_test(
+        r##"
+        obj = Object.new
+        acc = 0.0
+        i = 0
+        while i < 30
+          acc += i.to_f * 0.25
+          class << obj
+            def greet; 7; end
+          end
+          acc += obj.greet
+          i += 1
+        end
+        acc
+        "##,
+    );
+}
+

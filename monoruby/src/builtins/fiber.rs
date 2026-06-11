@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Fiber class
@@ -18,7 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
         FIBER_CLASS,
         "yield",
         fiber_yield,
-        Box::new(fiber_yield_inline),
+        inline_gen2!(fiber_yield_inline),
     );
     globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
 }
@@ -86,38 +88,28 @@ fn fiber_yield_inline(
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
+    // aarch64 reaches the args via `sub x0, lfp, #conv(args)` (bounded
+    // immediate); bail to the slow path on an out-of-range frame.
+    #[cfg(target_arch = "aarch64")]
+    if pos_num > 1 && jitgen::conv(args) as u32 > 4095 {
+        return false;
+    }
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
+    // TODO: we must check if the parent fiber exits.
     if pos_num == 0 {
-        ir.inline(move |r#gen, _, _, _| {
-            // TODO: we must check if the parent fiber exits.
-            monoasm! { &mut r#gen.jit,
-                movq rsi, (Value::nil().id());
-            }
-        });
+        ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_nil());
     } else if pos_num == 1 {
         state.load(ir, args, GP::Rsi);
     } else {
         state.write_back_recv_and_callargs(ir, callsite);
-        ir.inline(move |r#gen, _, _, _| {
-            // TODO: we must check if the parent fiber exits.
-            monoasm! { &mut r#gen.jit,
-                lea rdi, [r14 - (jitgen::conv(args))];
-                movq rsi, (pos_num);
-                movq rax, (crate::runtime::create_array);
-                call rax;
-                movq rsi, rax;
-            }
-        });
+        let args_off = jitgen::conv(args) as usize;
+        ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_array(args_off, pos_num));
     }
     ir.inline(move |r#gen, _, _, _| {
-        let fiber_yield = r#gen.yield_fiber;
-        monoasm! { &mut r#gen.jit,
-            movq rdi, rbx;
-            movq rax, (fiber_yield);
-            call rax;
-        }
+        let yield_fiber = r#gen.yield_fiber as *const () as u64;
+        r#gen.emit_fiber_yield_call(yield_fiber)
     });
     ir.xmm_restore(using_xmm);
     ir.handle_error(error);

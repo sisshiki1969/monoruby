@@ -118,6 +118,11 @@ impl<'a> JitContext<'a> {
                     self.recompile_and_deopt(&mut state, &mut ir, reason);
                     return Ok(ir);
                 }
+                CompileResult::Deopt => {
+                    self.new_return(ReturnState::default());
+                    ir.deopt(&mut state);
+                    return Ok(ir);
+                }
                 CompileResult::Abort => {
                     #[cfg(feature = "emit-bc")]
                     self.dump_iseq();
@@ -465,6 +470,7 @@ impl<'a> JitContext<'a> {
                 cache,
             } => return self.method_call(state, ir, callid, cache),
             TraceIr::Yield { callid } => {
+                // Specialized (inlined) yield is lowered on both x86 and aarch64.
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
                 {
@@ -919,11 +925,22 @@ impl<'a> JitContext<'a> {
                 deopt,
                 reason,
             }),
-            _ => ir.push(AsmInst::RecompileDeopt {
-                position: self.position(),
-                deopt,
-                reason,
-            }),
+            _ => {
+                // aarch64 surfaces a recompile-time panic as a Ruby FatalError,
+                // so it needs an error side-exit (write-back + raise) to branch
+                // into when `jit_recompile_method` returns None. x86 recompiles
+                // in place and never returns an error here.
+                #[cfg(target_arch = "aarch64")]
+                let error = Some(ir.new_error(state));
+                #[cfg(target_arch = "x86_64")]
+                let error = None;
+                ir.push(AsmInst::RecompileDeopt {
+                    position: self.position(),
+                    deopt,
+                    error,
+                    reason,
+                })
+            }
         }
     }
 }

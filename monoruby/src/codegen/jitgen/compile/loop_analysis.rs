@@ -124,6 +124,7 @@ impl<'a> JitContext<'a> {
                 | CompileResult::Break(_)
                 | CompileResult::MethodReturn(_)
                 | CompileResult::Recompile(_)
+                | CompileResult::Deopt
                 | CompileResult::ExitLoop => {
                     liveness.join(&state);
                     return Ok(());

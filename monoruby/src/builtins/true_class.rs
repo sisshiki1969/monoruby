@@ -66,4 +66,15 @@ mod tests {
             r##"true.equal?(true)"##,
         ]);
     }
+
+    #[test]
+    fn alias_identities() {
+        // ruby/spec core/true/inspect_spec.rb: inspect aliases to_s on TrueClass.
+        // (Unlike false/nil, true's ^ and | genuinely differ, so they are NOT
+        // aliases — assert that too.)
+        run_tests(&[
+            r##"true.method(:inspect) == true.method(:to_s)"##,
+            r##"true.method(:^) == true.method(:|)"##,
+        ]);
+    }
 }

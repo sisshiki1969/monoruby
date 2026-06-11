@@ -827,9 +827,21 @@ impl IoInner {
     pub fn fsync(&mut self, data_only: bool) -> Result<i32> {
         self.flush()?;
         let fd = self.fileno()?;
+        // `fdatasync(2)` is Linux/POSIX-realtime; macOS doesn't ship it
+        // (the closest equivalent is `fcntl(fd, F_FULLFSYNC)`, which is
+        // stronger than fsync). For build-portability on non-Linux hosts
+        // we fall back to plain `fsync` — same semantics on the "skip
+        // metadata flush" optimization is just not available.
         let ret = unsafe {
             if data_only {
-                libc::fdatasync(fd)
+                #[cfg(target_os = "linux")]
+                {
+                    libc::fdatasync(fd)
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    libc::fsync(fd)
+                }
             } else {
                 libc::fsync(fd)
             }

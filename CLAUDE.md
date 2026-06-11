@@ -4,9 +4,10 @@ A comprehensive guide for AI assistants working on this repository.
 
 ## Project Overview
 
-**monoruby** is a Ruby implementation written from scratch in Rust, featuring a hand-written parser, a register-based bytecode VM, and a just-in-time (JIT) compiler targeting x86-64 Linux. It is performance-focused and is comparable to ruby 3.4+YJIT on the optcarrot benchmark.
+**monoruby** is a Ruby implementation written from scratch in Rust, featuring a register-based bytecode VM and a just-in-time (JIT) compiler. It is performance-focused and is comparable to ruby 3.4+YJIT on the optcarrot benchmark.
 
-- **Platform**: x86-64 Linux **only** (assembly-level VM and JIT)
+- **Parser**: Ruby source is parsed by **prism** (the official Ruby parser, consumed as the `ruby-prism` crate); monoruby converts prism's tree into its own AST (`monoruby/src/ast/`, `monoruby/src/parser/`). The old hand-written `ruruby-parse` crate has been removed.
+- **Platform**: x86-64 **and** aarch64. The VM-tier backend (bytecode VM, invokers, native-function wrappers) and the JIT emit machine code directly via `monoasm`, with a per-`target_arch` backend under `codegen/arch/`. x86-64 emits full JIT machine code; aarch64 uses an AsmIR→A64 lowering that deopts to the VM on not-yet-ported instructions. Tested on Linux/x86-64 and macOS Apple Silicon (arm64-apple-darwin).
 - **Rust channel**: Nightly (`nightly-2026-05-18`, pinned in `rust-toolchain.toml`)
 - **No dependency on CRuby** or any other Ruby runtime
 
@@ -20,6 +21,10 @@ monoruby/                   # Workspace root
 │   ├── src/
 │   │   ├── main.rs         # CLI entry point (monoruby binary)
 │   │   ├── lib.rs          # Library root; re-exports public API
+│   │   ├── parser/         # prism → monoruby-AST bridge
+│   │   │   ├── mod.rs
+│   │   │   └── prism_backend.rs # Drives the `ruby-prism` crate
+│   │   ├── ast/            # monoruby AST (node, lvar_collector, source_info, error)
 │   │   ├── alloc.rs        # Custom GC allocator (mark-and-sweep)
 │   │   ├── id_table.rs     # Interned identifier table (IdentId)
 │   │   ├── value.rs        # Value type (tagged-union, 64-bit, NonZeroU64)
@@ -39,18 +44,22 @@ monoruby/                   # Workspace root
 │   │   │   ├── op/         # Operator dispatch
 │   │   │   ├── inline.rs   # Inline method dispatch table
 │   │   │   └── constants.rs
-│   │   ├── codegen/        # JIT compiler
-│   │   │   ├── codegen.rs  # Thread-local CODEGEN singleton
+│   │   ├── codegen/        # JIT compiler + arch-neutral codegen glue
+│   │   │   ├── codegen.rs  # Thread-local CODEGEN singleton; arch-neutral types
 │   │   │   ├── compiler.rs # JIT compilation entry point
-│   │   │   ├── jit_module.rs
-│   │   │   ├── invoker.rs  # Method/block/fiber invokers
-│   │   │   ├── vmgen/      # x86-64 VM dispatch code generation
+│   │   │   ├── jit_module.rs # Arch-neutral: handle_error, ErrorReturn, …
+│   │   │   ├── arch.rs     # target_arch switch (x86_64 / aarch64)
+│   │   │   ├── arch/       # Per-arch backends (VM-tier + JIT emission), mirrored
+│   │   │   │   ├── x86_64/ # {codegen,jit_module,invoker,wrapper,vmgen(+vmgen/),
+│   │   │   │   │           #  compile(+compile/),guard}  ← JIT lowering: compile,guard
+│   │   │   │   └── aarch64/# {codegen,jit_module,invoker,wrapper,vmgen,compile,guard}
 │   │   │   ├── runtime/    # JIT runtime helpers
-│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR → x86-64
+│   │   │   └── jitgen/     # Bytecode → TraceIR → AsmIR (arch-neutral front-end)
 │   │   │       ├── trace_ir.rs
 │   │   │       ├── state/  # Abstract interpreter state
-│   │   │       ├── asmir/  # Assembly IR definitions & lowering
-│   │   │       └── compile.rs
+│   │   │       ├── asmir/  # AsmIR defs + arch-neutral lowering dispatch (compile_shared)
+│   │   │       └── compile.rs # TraceIR → AsmIR (the per-arch AsmIR→machine-code
+│   │   │                      # backend lives in arch/<arch>/compile, guard)
 │   │   ├── globals/        # Global interpreter state
 │   │   │   ├── globals.rs  # Globals struct (main_object, Store, …)
 │   │   │   ├── store/      # Function, class, and call-site tables
@@ -64,24 +73,25 @@ monoruby/                   # Workspace root
 │   │   └── tests.rs        # Test harness helpers
 │   └── build.rs            # Build script (sets up library path file)
 │
-├── ruruby-parse/           # Hand-written Ruby parser (produces AST)
 ├── monoruby_attr/          # Proc-macro crate (#[monoruby_builtin], etc.)
 ├── rubymap/                # Order-preserving hash map for Ruby Hash
 ├── hashbrown/              # Vendored hashbrown (local fork)
 ├── ruby_traits/            # Shared trait definitions
-├── rust-smallvec/          # Vendored SmallVec (local fork)
 │
 ├── benchmark/              # Ruby benchmark scripts + YAML configs
 ├── bin/                    # Shell helper scripts
 │   ├── test                # Full test + coverage run (used in CI)
+│   ├── test-aarch64        # aarch64 test run (qemu / cross)
+│   ├── setup-aarch64-cross # Set up the aarch64 cross-build toolchain
 │   ├── bench               # Benchmark runner
+│   ├── refresh-prism-vendored # Rebuild/force-push the prism vendored branch
 │   └── irm                 # Launch REPL (cargo run --bin irm)
 ├── doc/                    # Architecture documentation
-│   ├── jit_architecture.md # Detailed JIT pipeline doc
 │   ├── jit.md              # JIT stub code details
-│   └── method_args.md      # Method argument handling
+│   ├── method_args.md      # Method argument handling
+│   └── progress_2025-2026.md # Progress notes
 ├── Cargo.toml              # Workspace manifest
-└── rust-toolchain.toml     # Pins nightly-2025-10-15
+└── rust-toolchain.toml     # Pins nightly-2026-05-18
 ```
 
 ---
@@ -170,7 +180,10 @@ bin/spec
 Ruby source
     │
     ▼
-ruruby-parse          (AST)
+prism (ruby-prism)    (prism syntax tree)
+    │
+    ▼
+parser/ + ast/        (monoruby AST)
     │
     ▼
 bytecodegen           (register-based bytecode)
@@ -182,13 +195,16 @@ Executor (VM)         (interpreted execution)
 JIT: TraceIR          (type-annotated IR from inline caches)
     │
     ▼
-JIT: AsmIR            (register-allocated assembly IR)
+JIT: AsmIR            (register-allocated, arch-neutral assembly IR)
     │
     ▼
-monoasm               (dynamic x86-64 assembler, external crate)
+codegen/arch/<arch>   (AsmIR → machine code; x86-64 full, aarch64 partial+deopt)
     │
     ▼
-Native x86-64 code
+monoasm               (dynamic assembler, external crate)
+    │
+    ▼
+Native machine code   (x86-64 / aarch64)
 ```
 
 ### Value Representation (`value.rs`)
@@ -242,7 +258,8 @@ Stack frame offsets (from `executor.rs`):
 
 - `LFP_OUTER` (`+0`), `LFP_META` (`+8`), `LFP_BLOCK` (`+16`), `LFP_SELF` (`+24`), `LFP_ARG0` (`+32`)
 
-Global registers in JIT-compiled code:
+Global registers in JIT-compiled code (x86-64; the aarch64 backend uses an
+equivalent fixed register assignment in `codegen/arch/aarch64/`):
 | Register | Holds |
 |----------|-------|
 | `rbx` | `&mut Executor` |
@@ -292,20 +309,22 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`.
+
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
-| `monoruby`      | Main interpreter + JIT                                   |
-| `ruruby-parse`  | Hand-written Ruby parser → AST                           |
+| `monoruby`      | Main interpreter + JIT (includes the prism→AST bridge)   |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
-| `rust-smallvec` | Vendored SmallVec with const-generics (local fork)       |
 
 External crates (fetched from git):
 
-- `monoasm` / `monoasm_macro` — dynamic x86-64 assembler
+- `monoasm` / `monoasm_macro` — dynamic assembler (`aarch` branch; x86-64 + aarch64)
 - `onigmo-regex` — Onigmo regular expression engine
+- `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
+- `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
 
 ---
 
@@ -377,22 +396,27 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 
 ### Cargo Features
 
-| Feature        | Effect                                                                 |
-| -------------- | ---------------------------------------------------------------------- |
-| `dump-bc`      | Dump bytecode to stderr                                                |
-| `dump-traceir` | Dump TraceIR to stderr                                                 |
-| `emit-asm`     | Dump generated assembly (implies `dump-bc`, `dump-traceir`, `jit-log`) |
-| `emit-bc`      | Emit bytecode (implies `dump-bc`, `dump-traceir`)                      |
-| `emit-cfg`     | Emit CFG in DOT format                                                 |
-| `jit-log`      | Log JIT compilation events                                             |
-| `jit-debug`    | Detailed JIT debug output                                              |
-| `no-jit`       | Disable JIT (interpreter only)                                         |
-| `deopt`        | Log deoptimizations                                                    |
-| `gc-log`       | Log GC statistics at exit                                              |
-| `gc-debug`     | GC debug assertions                                                    |
-| `gc-stress`    | GC on every allocation (stress test)                                   |
-| `profile`      | Collect deopt/recompile statistics                                     |
-| `perf`         | Emit perf-compatible symbol maps                                       |
+| Feature             | Effect                                                                 |
+| ------------------- | ---------------------------------------------------------------------- |
+| `dump-bc`           | Dump bytecode to stderr                                                |
+| `dump-traceir`      | Dump TraceIR to stderr                                                 |
+| `emit-asm`          | Dump generated assembly (implies `dump-bc`, `dump-traceir`, `jit-log`) |
+| `emit-bc`           | Emit bytecode (implies `dump-bc`, `dump-traceir`)                      |
+| `emit-cfg`          | Emit CFG in DOT format (implies `dump-bc`, `dump-traceir`)             |
+| `jit-log`           | Log JIT compilation events                                             |
+| `jit-debug`         | Detailed JIT debug output (implies `dump-traceir`)                     |
+| `deopt`             | Log deoptimizations (implies `jit-log`, `dump-bc`, `dump-traceir`)     |
+| `gc-log`            | Log GC statistics at exit                                              |
+| `gc-debug`          | GC debug assertions                                                    |
+| `gc-stress`         | GC on every allocation (stress test)                                   |
+| `stress-spill-pool` | Shrink `PHYS_XMM_POOL` to 2 to stress the FP-register spill paths      |
+| `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
+| `perf`              | Emit perf-compatible symbol maps                                       |
+| `dump-require`      | Log `require`/`load` file resolution                                   |
+
+The JIT is always compiled in regardless of features; it is disabled at runtime
+with the `--no-jit` flag. The old `jit`/`jit_x86` build cfgs and the `no-jit`
+feature have been removed — backend selection is purely by `target_arch`.
 
 ### Cargo Config
 
@@ -444,11 +468,9 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 The following nightly features are enabled in `monoruby/src/lib.rs`:
 
 - `box_patterns`
-- `int_roundings`
 - `iter_next_chunk`
 - `step_trait`
-- `iter_array_chunks`
-- `let_chains` (used in proc-macro)
+- `coverage_attribute`
 
 Do not add new nightly features without necessity; prefer stable alternatives when available.
 
@@ -458,14 +480,15 @@ Do not add new nightly features without necessity; prefer stable alternatives wh
 
 File: `.github/workflows/rust.yml`
 
-Triggered on push/PR to `master`. Steps:
+Triggered on push/PR to `master`. Two jobs run:
 
-1. Install Ruby 4.0.0+ (used to validate monoruby output)
-2. Install Rust nightly via `dtolnay/rust-toolchain@nightly`
-3. Install `cargo-llvm-cov` and `cargo-nextest`
-4. Clone optcarrot benchmark
-5. Run `bin/test` (full test + coverage)
-6. Upload `lcov.info` to Codecov
+- **Linux/x86-64** (`ubuntu-latest`): install Ruby 4.0+, Rust nightly,
+  `cargo-llvm-cov` + `cargo-nextest`, clone optcarrot / ruby-bench / ruby-spec,
+  run `bin/test` (full test + coverage), upload `lcov.info` to Codecov.
+- **macOS Apple Silicon** (`darwin`, `macos-latest`): native arm64-apple-darwin
+  runner exercising the VM + AArch64 JIT. Installs `bigdecimal`, `libffi` +
+  `pkg-config` (Homebrew libffi is required on aarch64 macOS — see the
+  target-specific dep block in `monoruby/Cargo.toml`), then runs the test scope.
 
 ---
 
@@ -490,11 +513,11 @@ Benchmark scripts live in `benchmark/`. YAML files (`*.yaml`, `*.yml`) contain b
 
 ## Vendored Dependencies
 
-The repository vendors several dependencies as local paths rather than crates.io:
-
-- `hashbrown/` — local fork
-- `rust-smallvec/` — local fork with const-generics feature
-- `ruruby-parse/` — developed in tandem with monoruby
+The repository vendors `hashbrown/` as a local-path fork (a workspace member).
+`smallvec` is a local fork too, but is now consumed as a **git** dependency
+(`sisshiki1969/rust-smallvec`, `const_generics` feature) rather than an in-tree
+path. The old in-tree `rust-smallvec/` and `ruruby-parse/` directories have been
+removed.
 
 The `ruby-prism` Rust wrapper is consumed as a `git` dependency against the
 `monoruby-vendored` branch of [`sisshiki1969/prism`](https://github.com/sisshiki1969/prism).
@@ -517,7 +540,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 ## Common Gotchas
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
-2. **x86-64 Linux only**: The VM interpreter and JIT emit x86-64 assembly directly. No other architecture is supported.
+2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). x86-64 has the full JIT; aarch64 emits an A64 subset and deopts to the VM on unported instructions. Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary (3.4.1). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Library path**: `build.rs` writes `~/.monoruby/library_path` and `~/.monoruby/ruby_version` by running the system `ruby` binary at build time. At runtime, monoruby reads these files to configure `$LOAD_PATH` and `RUBY_VERSION`. If `ruby` was absent at build time, these files will be missing and a warning is printed at startup.

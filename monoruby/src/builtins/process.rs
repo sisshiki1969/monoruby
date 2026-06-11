@@ -32,36 +32,42 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "setrlimit", process_setrlimit, 2, 3, false);
 
     // Process::RLIMIT_* constants for getrlimit / setrlimit (POSIX
-    // `<sys/resource.h>` values).
-    let rlim_consts: &[(&str, i64)] = &[
-        ("RLIMIT_AS",         libc::RLIMIT_AS         as i64),
-        ("RLIMIT_CORE",       libc::RLIMIT_CORE       as i64),
-        ("RLIMIT_CPU",        libc::RLIMIT_CPU        as i64),
-        ("RLIMIT_DATA",       libc::RLIMIT_DATA       as i64),
-        ("RLIMIT_FSIZE",      libc::RLIMIT_FSIZE      as i64),
-        ("RLIMIT_MEMLOCK",    libc::RLIMIT_MEMLOCK    as i64),
-        ("RLIMIT_MSGQUEUE",   libc::RLIMIT_MSGQUEUE   as i64),
-        ("RLIMIT_NICE",       libc::RLIMIT_NICE       as i64),
-        ("RLIMIT_NOFILE",     libc::RLIMIT_NOFILE     as i64),
-        ("RLIMIT_NPROC",      libc::RLIMIT_NPROC      as i64),
-        ("RLIMIT_RSS",        libc::RLIMIT_RSS        as i64),
-        ("RLIMIT_RTPRIO",     libc::RLIMIT_RTPRIO     as i64),
-        ("RLIMIT_RTTIME",     libc::RLIMIT_RTTIME     as i64),
-        ("RLIMIT_SIGPENDING", libc::RLIMIT_SIGPENDING as i64),
-        ("RLIMIT_STACK",      libc::RLIMIT_STACK      as i64),
-    ];
-    for (name, val) in rlim_consts {
-        globals.set_constant_by_str(klass, name, Value::integer(*val));
+    // `<sys/resource.h>` values). MSGQUEUE / NICE / RTPRIO / RTTIME /
+    // SIGPENDING and RLIM_SAVED_{CUR,MAX} are Linux extensions and the
+    // libc crate only exposes them on Linux targets; they're cfg-gated
+    // so the file builds on macOS / BSDs (intended Ruby behaviour stays
+    // Linux-only, but the rest of the interpreter compiles for parser /
+    // bytecodegen work on non-Linux hosts).
+    macro_rules! set_rlim_const {
+        ($name:literal, $val:expr) => {
+            globals.set_constant_by_str(klass, $name, Value::integer($val as i64));
+        };
     }
-    globals.set_constant_by_str(
-        klass, "RLIM_INFINITY", Value::integer(libc::RLIM_INFINITY as i64),
-    );
-    globals.set_constant_by_str(
-        klass, "RLIM_SAVED_CUR", Value::integer(libc::RLIM_SAVED_CUR as i64),
-    );
-    globals.set_constant_by_str(
-        klass, "RLIM_SAVED_MAX", Value::integer(libc::RLIM_SAVED_MAX as i64),
-    );
+    set_rlim_const!("RLIMIT_AS", libc::RLIMIT_AS);
+    set_rlim_const!("RLIMIT_CORE", libc::RLIMIT_CORE);
+    set_rlim_const!("RLIMIT_CPU", libc::RLIMIT_CPU);
+    set_rlim_const!("RLIMIT_DATA", libc::RLIMIT_DATA);
+    set_rlim_const!("RLIMIT_FSIZE", libc::RLIMIT_FSIZE);
+    set_rlim_const!("RLIMIT_MEMLOCK", libc::RLIMIT_MEMLOCK);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_MSGQUEUE", libc::RLIMIT_MSGQUEUE);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_NICE", libc::RLIMIT_NICE);
+    set_rlim_const!("RLIMIT_NOFILE", libc::RLIMIT_NOFILE);
+    set_rlim_const!("RLIMIT_NPROC", libc::RLIMIT_NPROC);
+    set_rlim_const!("RLIMIT_RSS", libc::RLIMIT_RSS);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_RTPRIO", libc::RLIMIT_RTPRIO);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_RTTIME", libc::RLIMIT_RTTIME);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIMIT_SIGPENDING", libc::RLIMIT_SIGPENDING);
+    set_rlim_const!("RLIMIT_STACK", libc::RLIMIT_STACK);
+    set_rlim_const!("RLIM_INFINITY", libc::RLIM_INFINITY);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIM_SAVED_CUR", libc::RLIM_SAVED_CUR);
+    #[cfg(target_os = "linux")]
+    set_rlim_const!("RLIM_SAVED_MAX", libc::RLIM_SAVED_MAX);
     // POSIX identity / process-group / session wrappers. Thin libc
     // passthroughs; each one is a single syscall + Integer wrap.
     // None touches the fork / exec / scheduler machinery.
@@ -186,6 +192,10 @@ fn coerce_rlimit_resource(
 }
 
 fn rlim_resource_from_name(name: &str) -> Result<i64> {
+    // RLIMIT_MSGQUEUE / NICE / RTPRIO / RTTIME / SIGPENDING are Linux
+    // extensions; on macOS / BSDs the resource id doesn't exist, so the
+    // arms are cfg-gated. The build target stays "Linux x86_64 only" but
+    // this lets the file compile on macOS for parser/lexer work.
     let n = match name {
         "AS" => libc::RLIMIT_AS,
         "CORE" => libc::RLIMIT_CORE,
@@ -193,13 +203,18 @@ fn rlim_resource_from_name(name: &str) -> Result<i64> {
         "DATA" => libc::RLIMIT_DATA,
         "FSIZE" => libc::RLIMIT_FSIZE,
         "MEMLOCK" => libc::RLIMIT_MEMLOCK,
+        #[cfg(target_os = "linux")]
         "MSGQUEUE" => libc::RLIMIT_MSGQUEUE,
+        #[cfg(target_os = "linux")]
         "NICE" => libc::RLIMIT_NICE,
         "NOFILE" => libc::RLIMIT_NOFILE,
         "NPROC" => libc::RLIMIT_NPROC,
         "RSS" => libc::RLIMIT_RSS,
+        #[cfg(target_os = "linux")]
         "RTPRIO" => libc::RLIMIT_RTPRIO,
+        #[cfg(target_os = "linux")]
         "RTTIME" => libc::RLIMIT_RTTIME,
+        #[cfg(target_os = "linux")]
         "SIGPENDING" => libc::RLIMIT_SIGPENDING,
         "STACK" => libc::RLIMIT_STACK,
         other => {
@@ -221,7 +236,10 @@ fn process_getrlimit(
 ) -> Result<Value> {
     let resource = coerce_rlimit_resource(lfp.arg(0), vm, globals)?;
     let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::getrlimit(resource as u32, &mut rlim) };
+    // `getrlimit`'s resource argument type differs by libc target:
+    // glibc uses `__rlimit_resource_t` (u32), macOS uses `c_int`. `as _`
+    // defers to the function signature so both targets compile.
+    let rc = unsafe { libc::getrlimit(resource as _, &mut rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(
@@ -260,7 +278,7 @@ fn process_setrlimit(
         cur
     };
     let rlim = libc::rlimit { rlim_cur: cur, rlim_max: max };
-    let rc = unsafe { libc::setrlimit(resource as u32, &rlim) };
+    let rc = unsafe { libc::setrlimit(resource as _, &rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(
@@ -511,17 +529,40 @@ fn process_getpriority(
 ) -> Result<Value> {
     let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
-    // getpriority may legitimately return -1, so errno must be
-    // cleared first and re-checked to distinguish that from an error.
+    // getpriority may legitimately return -1, so we must clear errno
+    // first and re-read it to distinguish that from an error. `as _` for
+    // the `which` arg defers to the libc signature (`__priority_which_t`
+    // on glibc, `c_int` on macOS). errno is cleared portably by writing
+    // back through `set_errno` (libc::set_errno is unstable, so we go via
+    // a direct write to the per-platform location).
     unsafe {
-        *libc::__errno_location() = 0;
-        let prio = libc::getpriority(which as libc::__priority_which_t, who);
-        let errno = *libc::__errno_location();
+        clear_errno();
+        let prio = libc::getpriority(which as _, who);
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if prio == -1 && errno != 0 {
             let err = std::io::Error::from_raw_os_error(errno);
             return Err(MonorubyErr::from_io_err(&globals.store, &err, "getpriority".to_string()));
         }
         Ok(Value::integer(prio as i64))
+    }
+}
+
+/// Reset the calling thread's `errno` to 0. Needed before functions like
+/// `getpriority(2)` that overload `-1` as both a legitimate return value
+/// and an error indicator: callers must observe `errno` to disambiguate.
+///
+/// glibc exposes `__errno_location()`; macOS / BSDs use `__error()`. The
+/// `libc` crate exposes both as `extern "C"` shims under those names, so
+/// we cfg-gate the call.
+#[inline]
+unsafe fn clear_errno() {
+    #[cfg(target_os = "linux")]
+    {
+        unsafe { *libc::__errno_location() = 0 };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        unsafe { *libc::__error() = 0 };
     }
 }
 
@@ -541,7 +582,7 @@ fn process_setpriority(
     let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
     let prio = lfp.arg(2).coerce_to_int_i64(vm, globals)? as i32;
-    let res = unsafe { libc::setpriority(which as libc::__priority_which_t, who, prio) };
+    let res = unsafe { libc::setpriority(which as _, who, prio) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::from_io_err(&globals.store, &err, "setpriority".to_string()));
@@ -674,44 +715,68 @@ fn last_status(
     Ok(val.unwrap_or_default())
 }
 
-/// - list -> Hash
-/// Map a signal name (with optional "SIG" prefix) to its numeric value.
+/// Canonical signal name ↔ host signo table, built from the running
+/// platform's `libc` constants so the numbers match the OS — and therefore
+/// CRuby on the same OS. `Signal.list`, `Signal.signame`, `Signal.trap`, and
+/// `Process.kill` all derive from this single source of truth, so a name like
+/// "USR1" resolves to 10 on Linux and 30 on macOS, exactly what the kernel's
+/// `sigaction`/`kill` (and the host-keyed `signal_table`) expect.
+///
+/// Aliases (IOT=ABRT, CLD=CHLD, POLL=IO) and platform-specific names
+/// (Linux-only PWR; macOS/BSD-only EMT/INFO) are cfg-gated to mirror each
+/// platform's CRuby `Signal.list`. Canonical names precede their aliases so
+/// `signal_number_to_name` reports the name CRuby uses. SIGSTKFLT is
+/// deliberately omitted (CRuby 4.0 does not expose it; see
+/// `signal_list_no_stkflt`).
+const SIGNAL_TABLE: &[(&str, i32)] = &[
+    ("EXIT", 0),
+    ("HUP", libc::SIGHUP),
+    ("INT", libc::SIGINT),
+    ("QUIT", libc::SIGQUIT),
+    ("ILL", libc::SIGILL),
+    ("TRAP", libc::SIGTRAP),
+    ("ABRT", libc::SIGABRT),
+    ("IOT", libc::SIGABRT),
+    ("FPE", libc::SIGFPE),
+    ("KILL", libc::SIGKILL),
+    ("BUS", libc::SIGBUS),
+    ("SEGV", libc::SIGSEGV),
+    ("SYS", libc::SIGSYS),
+    ("PIPE", libc::SIGPIPE),
+    ("ALRM", libc::SIGALRM),
+    ("TERM", libc::SIGTERM),
+    ("URG", libc::SIGURG),
+    ("STOP", libc::SIGSTOP),
+    ("TSTP", libc::SIGTSTP),
+    ("CONT", libc::SIGCONT),
+    ("CHLD", libc::SIGCHLD),
+    ("CLD", libc::SIGCHLD),
+    ("TTIN", libc::SIGTTIN),
+    ("TTOU", libc::SIGTTOU),
+    ("XCPU", libc::SIGXCPU),
+    ("XFSZ", libc::SIGXFSZ),
+    ("VTALRM", libc::SIGVTALRM),
+    ("PROF", libc::SIGPROF),
+    ("WINCH", libc::SIGWINCH),
+    ("USR1", libc::SIGUSR1),
+    ("USR2", libc::SIGUSR2),
+    ("IO", libc::SIGIO),
+    #[cfg(target_os = "linux")]
+    ("POLL", libc::SIGIO),
+    #[cfg(target_os = "linux")]
+    ("PWR", libc::SIGPWR),
+    #[cfg(not(target_os = "linux"))]
+    ("EMT", libc::SIGEMT),
+    #[cfg(not(target_os = "linux"))]
+    ("INFO", libc::SIGINFO),
+];
+
+/// Map a signal name (with optional "SIG" prefix) to its host signo.
 fn signal_name_to_number(name: &str) -> Option<i32> {
     let n = name.strip_prefix("SIG").unwrap_or(name);
-    Some(match n {
-        "EXIT" => 0,
-        "HUP" => 1,
-        "INT" => 2,
-        "QUIT" => 3,
-        "ILL" => 4,
-        "TRAP" => 5,
-        "ABRT" | "IOT" => 6,
-        "BUS" => 7,
-        "FPE" => 8,
-        "KILL" => 9,
-        "USR1" => 10,
-        "SEGV" => 11,
-        "USR2" => 12,
-        "PIPE" => 13,
-        "ALRM" => 14,
-        "TERM" => 15,
-        "CLD" | "CHLD" => 17,
-        "CONT" => 18,
-        "STOP" => 19,
-        "TSTP" => 20,
-        "TTIN" => 21,
-        "TTOU" => 22,
-        "URG" => 23,
-        "XCPU" => 24,
-        "XFSZ" => 25,
-        "VTALRM" => 26,
-        "PROF" => 27,
-        "WINCH" => 28,
-        "IO" | "POLL" => 29,
-        "PWR" => 30,
-        "SYS" => 31,
-        _ => return None,
-    })
+    SIGNAL_TABLE
+        .iter()
+        .find_map(|(sig, num)| (*sig == n).then_some(*num))
 }
 
 ///
@@ -774,47 +839,11 @@ fn signal_list(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let signals: &[(&str, i64)] = &[
-        ("EXIT", 0),
-        ("HUP", 1),
-        ("INT", 2),
-        ("QUIT", 3),
-        ("ILL", 4),
-        ("TRAP", 5),
-        ("ABRT", 6),
-        ("IOT", 6),
-        ("BUS", 7),
-        ("FPE", 8),
-        ("KILL", 9),
-        ("USR1", 10),
-        ("SEGV", 11),
-        ("USR2", 12),
-        ("PIPE", 13),
-        ("ALRM", 14),
-        ("TERM", 15),
-        ("CLD", 17),
-        ("CHLD", 17),
-        ("CONT", 18),
-        ("STOP", 19),
-        ("TSTP", 20),
-        ("TTIN", 21),
-        ("TTOU", 22),
-        ("URG", 23),
-        ("XCPU", 24),
-        ("XFSZ", 25),
-        ("VTALRM", 26),
-        ("PROF", 27),
-        ("WINCH", 28),
-        ("IO", 29),
-        ("POLL", 29),
-        ("PWR", 30),
-        ("SYS", 31),
-    ];
     let mut map = RubyMap::default();
-    for (name, num) in signals {
+    for (name, num) in SIGNAL_TABLE {
         map.insert(
             Value::string_from_str(name),
-            Value::integer(*num),
+            Value::integer(*num as i64),
             vm,
             globals,
         )?;
@@ -827,40 +856,13 @@ fn signal_list(
 /// multiple aliases share a number, the value returned is what CRuby uses
 /// (e.g. 6 -> "ABRT", 17 -> "CHLD", 29 -> "IO").
 fn signal_number_to_name(num: i64) -> Option<&'static str> {
-    Some(match num {
-        0 => "EXIT",
-        1 => "HUP",
-        2 => "INT",
-        3 => "QUIT",
-        4 => "ILL",
-        5 => "TRAP",
-        6 => "ABRT",
-        7 => "BUS",
-        8 => "FPE",
-        9 => "KILL",
-        10 => "USR1",
-        11 => "SEGV",
-        12 => "USR2",
-        13 => "PIPE",
-        14 => "ALRM",
-        15 => "TERM",
-        17 => "CHLD",
-        18 => "CONT",
-        19 => "STOP",
-        20 => "TSTP",
-        21 => "TTIN",
-        22 => "TTOU",
-        23 => "URG",
-        24 => "XCPU",
-        25 => "XFSZ",
-        26 => "VTALRM",
-        27 => "PROF",
-        28 => "WINCH",
-        29 => "IO",
-        30 => "PWR",
-        31 => "SYS",
-        _ => return None,
-    })
+    if num < 0 || num > i32::MAX as i64 {
+        return None;
+    }
+    let num = num as i32;
+    SIGNAL_TABLE
+        .iter()
+        .find_map(|(sig, n)| (*n == num).then_some(*sig))
 }
 
 ///
@@ -1042,9 +1044,18 @@ mod tests {
         run_test_error("Process.clock_gettime(-1)");
     }
 
+    // The fork/spawn/Open3/kill tests below use `run_test_once` rather than
+    // `run_test` because `run_test`'s `for __i in 0..24` JIT-warmup wrapper
+    // would spawn 25× as many child processes per test. The body exercises
+    // Rust-side `libc::fork` / `posix_spawn` / Open3 plumbing, not the JIT,
+    // so the iteration adds no coverage but pushes the suite's wall time
+    // past minutes when default 8-thread parallelism oversubscribes the
+    // process table (`io_popen_*` in io.rs is converted for the same reason).
+    // CRuby comparison still runs once.
+
     #[test]
     fn process_fork() {
-        run_test(
+        run_test_once(
             r#"
             pid = Process.fork { exit 0 }
             pid.is_a?(Integer)
@@ -1054,15 +1065,15 @@ mod tests {
 
     #[test]
     fn process_euid() {
-        run_test("Process.euid");
+        run_test_once("Process.euid");
     }
 
     #[test]
     fn process_spawn_detach() {
         // spawn returns a pid; detach(pid).value yields the Process::Status.
-        run_test("Process.detach(spawn(\"true\")).value.success?");
-        run_test("Process.detach(spawn(\"false\")).value.exitstatus");
-        run_test("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+        run_test_once("Process.detach(spawn(\"true\")).value.success?");
+        run_test_once("Process.detach(spawn(\"false\")).value.exitstatus");
+        run_test_once("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
     }
 
     #[test]
@@ -1077,12 +1088,12 @@ mod tests {
     fn open3_capture_via_spawn() {
         // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
         // drain them — the path bundler uses to run git for git-source gems.
-        run_test(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
-        run_test(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
-        run_test(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
-        run_test(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
+        run_test_once(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
+        run_test_once(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
+        run_test_once(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
+        run_test_once(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
         // capture2e merges stdout+stderr onto one pipe.
-        run_test(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
+        run_test_once(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
     }
 
     #[test]
@@ -1090,13 +1101,13 @@ mod tests {
         // The reason Open3 is reimplemented thread-free (IO.select) in
         // monoruby: a child writing more than a pipe buffer (~64KB) on BOTH
         // stdout and stderr would deadlock the cooperative-Thread approach.
-        run_test(
+        run_test_once(
             r#"require "open3"
             out, err, st = Open3.capture3("sh", "-c", "yes A | head -c 200000; yes B | head -c 200000 1>&2")
             [out.bytesize, err.bytesize, st.success?]"#,
         );
         // Large stdin streamed while large stdout is read back concurrently.
-        run_test(
+        run_test_once(
             r#"require "open3"
             data = "x" * 300000
             out, _, st = Open3.capture3("cat", stdin_data: data)
@@ -1167,19 +1178,19 @@ mod tests {
 
     #[test]
     fn process_exit_bang() {
-        run_test("Process.respond_to?(:exit!)");
+        run_test_once("Process.respond_to?(:exit!)");
     }
 
     #[test]
     fn process_wait() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             ret = Process.wait(pid)
             [ret == pid, $?.exitstatus]
             "#,
         );
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             ret, status = Process.wait2(pid)
@@ -1190,7 +1201,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_string() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             count = Process.kill("TERM", pid)
@@ -1202,7 +1213,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_sig_prefix() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill("SIGKILL", pid)
@@ -1214,7 +1225,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_integer() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill(9, pid)
@@ -1226,7 +1237,7 @@ mod tests {
 
     #[test]
     fn process_kill_with_symbol() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill(:KILL, pid)
@@ -1324,7 +1335,7 @@ mod tests {
     fn process_status_exit_cases() {
         // Bundle all non-fork-heavy exit-path checks into one fork so the
         // test process doesn't spawn 25*N children under parallel cargo test.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 5 }
             Process.wait(pid)
@@ -1354,7 +1365,7 @@ mod tests {
 
     #[test]
     fn process_status_success_case() {
-        run_test(
+        run_test_once(
             r#"
             pid = fork { exit 0 }
             Process.wait(pid)
@@ -1367,7 +1378,7 @@ mod tests {
     #[test]
     fn process_status_signaled_case() {
         // One fork + kill covers the signaled branch end-to-end.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             Process.kill("TERM", pid)
@@ -1389,7 +1400,7 @@ mod tests {
     fn process_status_after_popen_block() {
         // popen path is exercised here rather than under fork to avoid doubling
         // up with the fork-heavy tests above.
-        run_test(
+        run_test_once(
             r#"
             IO.popen(["true"]) { |io| io.read }
             a = [$?.exited?, $?.exitstatus, $?.signaled?]
@@ -1402,7 +1413,7 @@ mod tests {
     #[test]
     fn process_kill_signal_zero_checks_existence() {
         // Signal 0 does not deliver but returns success if pid exists.
-        run_test(
+        run_test_once(
             r#"
             pid = fork { sleep 5 }
             count = Process.kill(0, pid)
@@ -1415,7 +1426,7 @@ mod tests {
 
     #[test]
     fn process_kill_multiple_pids_returns_count() {
-        run_test(
+        run_test_once(
             r#"
             pids = [fork { sleep 5 }, fork { sleep 5 }, fork { sleep 5 }]
             count = Process.kill("KILL", *pids)

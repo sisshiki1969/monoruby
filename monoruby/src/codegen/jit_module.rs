@@ -1,270 +1,9 @@
 use super::*;
+#[cfg(target_arch = "x86_64")]
+use monoasm_macro::monoasm;
 
 impl JitModule {
-    pub(super) fn new() -> Self {
-        let mut jit = JitMemory::new();
-        let class_version = jit.data_i32(1);
-        let bop_redefined_flags = jit.data_i32(0);
-        let const_version = jit.data_i64(1);
-        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let pending_signals = jit.data_i32(0);
-        let entry_raise = jit.label();
-        let entry_panic = jit.label();
-        let exec_gc = jit.label();
-        let f64_to_val = jit.label();
-        let stack_overflow = jit.label();
-
-        // dispatch table.
-        let entry_unimpl = jit.get_current_address();
-        monoasm! { &mut jit,
-                movq rdi, rbx;
-                movq rsi, r12;
-                movzxw rdx, [r13 - 10];
-                movq rax, (unimplemented_inst);
-                call rax;
-                leave;
-                ret;
-        }
-        let dispatch = vec![entry_unimpl; 256];
-        let mut j = Self {
-            jit,
-            class_version,
-            const_version,
-            alloc_flag,
-            pending_signals,
-            entry_raise,
-            exec_gc,
-            f64_to_val,
-            vm_stack_overflow: stack_overflow,
-            entry_panic,
-            dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
-            bop_redefined_flags,
-        };
-        j.init();
-        j.jit.finalize();
-        j
-    }
-
-    ///
-    /// Generate code for GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### out
-    /// - rax: None if Interrupt is thrown.
-    ///
-    /// ### destroy
-    /// - stack
-    ///
-    fn init(&mut self) {
-        let raise = self.entry_raise.clone();
-        let overflow = self.vm_stack_overflow.clone();
-        let goto = self.jit.label();
-        monoasm! { &mut self.jit,
-        raise:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (LFP_META)];
-            movq rcx, r13;
-            subq rcx, 16;
-            movq rax, (handle_error);
-            call rax;
-            // rax: Option<Value>
-            // rdx: Option<BytecodePtr>
-            testq rdx, rdx;
-            jne  goto;
-            leave;
-            ret;
-        goto:
-            movq r13, rdx;
-        }
-        self.fetch_and_dispatch();
-
-        let label = self.entry_panic.clone();
-        self.gen_entry_panic(label);
-
-        let label = self.f64_to_val.clone();
-        self.gen_f64_to_val(label);
-
-        monoasm! { &mut self.jit,
-        overflow:
-            movq rdi, rbx;
-            movq rax, (stack_overflow);
-            call rax;
-            jmp raise;
-        };
-
-        let label = self.exec_gc.clone();
-        monoasm! { &mut self.jit,
-        label:
-            subq rsp, 8;
-        }
-        self.save_registers();
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (executor::execute_gc);
-            call rax;
-        }
-        self.restore_registers();
-        monoasm! { &mut self.jit,
-            addq rsp, 8;
-            ret;
-        }
-    }
-
-    ///
-    /// Dump stack trace and go panic.
-    ///
-    /// #### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    fn gen_entry_panic(&mut self, label: DestLabel) {
-        monoasm! {&mut self.jit,
-        label:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::_dump_stacktrace);
-            call rax;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::panic);
-            jmp rax;
-            leave;
-            ret;
-        }
-    }
-
-    ///
-    /// Convert f64 to Value.
-    ///
-    /// ### in
-    /// - xmm0: f64
-    ///
-    /// ### out
-    /// - rax: Value
-    ///
-    /// ### destroy
-    /// - rcx
-    ///
-    fn gen_f64_to_val(&mut self, label: DestLabel) {
-        let normal = self.label();
-        let heap_alloc = self.label();
-        monoasm! {&mut self.jit,
-        label:
-            xorps xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jne normal;
-            jp normal;
-            movq rax, (FLOAT_ZERO);
-            ret;
-        normal:
-            movq rax, xmm0;
-            movq rcx, rax;
-            shrq rcx, 60;
-            addl rcx, 1;
-            andl rcx, 6;
-            cmpl rcx, 4;
-            jne heap_alloc;
-            rolq rax, 3;
-            andq rax, (-4);
-            orq rax, 2;
-            ret;
-        heap_alloc:
-        // we must save rdi for log_deoptimize.
-            subq rsp, 152;
-            movq [rsp + 144], r9;
-            movq [rsp + 136], r8;
-            movq [rsp + 128], rdx;
-            movq [rsp + 120], rsi;
-            movq [rsp + 112], rdi;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-            movq rax, (Value::float_heap);
-            call rax;
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            movq rdi, [rsp + 112];
-            movq rsi, [rsp + 120];
-            movq rdx, [rsp + 128];
-            movq r8, [rsp + 136];
-            movq r9, [rsp + 144];
-            addq rsp, 152;
-            ret;
-        }
-    }
-
-    ///
-    /// Execute GC.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    ///
-    /// ### out
-    /// - rax: None if Interrupt is thrown.
-    ///
-    /// ### destroy
-    /// - rax, rcx
-    /// - stack
-    ///
-    pub(super) fn execute_gc_inner(
-        &mut self,
-        wb: Option<&jitgen::WriteBack>,
-        error: &DestLabel,
-        base: usize,
-    ) {
-        let alloc_flag = self.alloc_flag.clone();
-        let gc = self.jit.label();
-        let exit = self.jit.label();
-        let exec_gc = self.exec_gc.clone();
-        assert_eq!(0, self.jit.get_page());
-        monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 8;
-            jge  gc;
-        exit:
-        };
-        self.jit.select_page(1);
-        self.jit.bind_label(gc);
-        if let Some(wb) = wb {
-            self.gen_write_back(wb, base);
-        }
-        monoasm! { &mut self.jit,
-            call exec_gc;
-            testq rax, rax;
-            jne  exit;
-            jmp  error;
-        }
-        self.jit.select_page(0);
-    }
-
+    #[cfg(target_arch = "x86_64")]
     pub fn jit_check_stack(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
         let overflow = self.jit.label();
         assert_eq!(0, self.jit.get_page());
@@ -285,7 +24,11 @@ impl JitModule {
     }
 }
 
-extern "C" fn unimplemented_inst(vm: &mut Executor, _: &mut Globals, opcode: u16) -> Option<Value> {
+pub(in crate::codegen) extern "C" fn unimplemented_inst(
+    vm: &mut Executor,
+    _: &mut Globals,
+    opcode: u16,
+) -> Option<Value> {
     vm.set_error(MonorubyErr::fatal(format!(
         "internal error: unimplemented instruction. {:04x}",
         opcode
@@ -354,26 +97,40 @@ pub(super) extern "C" fn handle_error(
             let info = &globals.store[*info];
             // check exception table.
             // First, we check method_return.
-            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.exception().unwrap().kind() {
+            let method_return = match vm.exception().unwrap().kind() {
+                MonorubyErrKind::MethodReturn(val, target_lfp) => Some((*val, *target_lfp)),
+                _ => None,
+            };
+            if let Some((val, target_lfp)) = method_return {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    // Suspend the non-local return across the ensure body so
+                    // the body can `raise` (set_error) without tripping the
+                    // empty-exception guard; `EnsureEnd` restores it.
+                    vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
-                } else if lfp == *target_lfp || meta.is_proc_method() {
+                } else if lfp == target_lfp || meta.is_proc_method() {
                     // Stop unwinding either at the matching target LFP
                     // or at a `define_method` proc-method boundary, so
                     // that `return` inside a wrapped block exits the
                     // method rather than escaping to the block's
                     // lexical enclosing scope.
-                    let val = *val;
                     vm.take_error();
+                    // This frame returns now; abandon any deferral it owns.
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_normal(val)
                 } else {
+                    // Propagating past this frame; its deferral (if any) can
+                    // no longer reach its `EnsureEnd`.
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_err()
                 };
             }
             if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
                 } else {
+                    vm.discard_deferred_unwind(lfp);
                     ErrorReturn::return_err()
                 };
             }
@@ -386,6 +143,7 @@ pub(super) extern "C" fn handle_error(
             // since the interpreter/VM state may be inconsistent after a
             // panic. Propagate straight up to the top.
             if vm.exception().unwrap().is_fatal() {
+                vm.discard_deferred_unwind(lfp);
                 return ErrorReturn::return_err();
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
@@ -416,5 +174,9 @@ pub(super) extern "C" fn handle_error(
         }
         _ => unreachable!(),
     }
+    // A normal exception is propagating out of this frame: its `EnsureEnd`
+    // (if any) will not run, so drop a deferral it may still own.
+    let lfp = vm.cfp().lfp();
+    vm.discard_deferred_unwind(lfp);
     ErrorReturn::return_err()
 }

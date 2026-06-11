@@ -1,18 +1,28 @@
 use std::hash::Hash;
 
 use monoasm::*;
+// Provides the `monoasm!` macro to the JIT subtree (`compiler`, `jitgen`,
+// `patch`) via descendant visibility. The arch backends under `arch/` import
+// it directly instead.
+#[cfg(target_arch = "x86_64")]
 use monoasm_macro::monoasm;
 use std::time::Duration;
 
 mod compiler;
-mod invoker;
 mod jit_module;
 pub mod jitgen;
-pub(crate) mod signal_table;
 mod patch;
 pub mod runtime;
-mod vmgen;
-mod wrapper;
+pub(crate) mod signal_table;
+
+// Architecture-specific VM-tier backend. The asm-level VM construction,
+// frame setup, invokers, native-function wrappers, bytecode dispatch, and
+// the small asm helpers have separate x86-64 and aarch64 implementations,
+// selected here by `target_arch`. Both live under `arch/` with a mirrored
+// file layout (`codegen.rs`, `jit_module.rs`, `invoker.rs`, `wrapper.rs`,
+// `vmgen.rs`); only the inherent `impl Codegen` / `impl JitModule` methods
+// they provide differ per arch — the types themselves stay arch-neutral.
+mod arch;
 
 use self::jitgen::asmir::AsmEvict;
 
@@ -114,9 +124,42 @@ pub(crate) enum GP {
     R15 = 15,
 }
 
-/// Number of physical xmm registers in the JIT allocator pool
-/// (xmm2..xmm15 — xmm0/xmm1 are reserved as codegen scratch). A
-/// `VirtFPReg` whose `id < PHYS_XMM_POOL` resolves directly to
+/// aarch64 mapping of the (x86-named) abstract JIT register enum to physical
+/// A64 registers, used by the aarch64 AsmIR→machine-code lowering (Phase 3b).
+///
+/// The **global** roles must match the aarch64 VM's global registers so that
+/// JIT↔VM transitions agree: `R12`(Globals)→x20, `R13`(PC)→x21, `R14`(LFP)→x22,
+/// `R15`(accumulator)→x23 (and the executor `rbx`→x19 is implicit, not in this
+/// enum). The **scratch** set maps to distinct caller-saved `x0..=x8`; `x9..=x15`
+/// are left free for per-`AsmInst` lowering temps. `Rsp`→`sp`.
+///
+/// Note: the x86 and aarch64 C-call ABIs differ (x86 passes args in
+/// rdi/rsi/rdx/rcx/r8/r9 and returns in rax; aarch64 uses x0..x7 / x0), so
+/// call-argument lowering shuffles into x0..x7 explicitly rather than relying
+/// on this 1:1 map.
+#[cfg(target_arch = "aarch64")]
+impl GP {
+    pub(in crate::codegen) fn a64(self) -> monoasm::GReg {
+        let n: u32 = match self {
+            GP::Rax => 0,
+            GP::Rcx => 1,
+            GP::Rdx => 2,
+            GP::Rsi => 3,
+            GP::Rdi => 4,
+            GP::R8 => 5,
+            GP::R9 => 6,
+            GP::R10 => 7,
+            GP::R11 => 8,
+            GP::R12 => 20,
+            GP::R13 => 21,
+            GP::R14 => 22,
+            GP::R15 => 23,
+            GP::Rsp => 31,
+        };
+        monoasm::GReg(n)
+    }
+}
+
 /// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
 ///
 /// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
@@ -250,31 +293,6 @@ impl std::ops::DerefMut for JitModule {
 }
 
 impl JitModule {
-    /// Emit a per-signal asm stub. Each stub OR-sets its own bit into
-    /// `pending_signals` and nudges `alloc_flag` so the next GC poll
-    /// in `execute_gc` notices the signal and converts it to a Ruby
-    /// exception. `signo` is the POSIX signal number (1..32).
-    ///
-    /// The handler runs in async-signal context; the only operations
-    /// performed are a memory OR and an ADD, both of which are
-    /// async-signal-safe on x86-64. No call into Rust.
-    pub(crate) fn signal_handler_for(
-        &mut self,
-        alloc_flag: DestLabel,
-        pending_signals: DestLabel,
-        signo: i32,
-    ) -> CodePtr {
-        debug_assert!((1..=32).contains(&signo));
-        let bit: i32 = 1 << (signo - 1);
-        let codeptr = self.jit.get_current_address();
-        monoasm! { &mut self.jit,
-            addl [rip + alloc_flag], 10;
-            orl  [rip + pending_signals], (bit);
-            ret;
-        }
-        codeptr
-    }
-
     pub(crate) fn get_address_pair(&mut self) -> (CodePtr, CodePtr) {
         assert_eq!(0, self.jit.get_page());
         let ptr0 = self.jit.get_current_address();
@@ -319,438 +337,9 @@ impl JitModule {
         let info = self.get_wrapper_info(pair);
         Self::perf_write(info, func_name);
     }
-
-    ///
-    /// Save caller-save registers (except rax) in stack.
-    ///
-    fn save_registers(&mut self) {
-        monoasm! { &mut self.jit,
-            subq rsp, 192;
-            //movq [rsp + 176], rax;
-            movq [rsp + 168], r11;
-            movq [rsp + 160], r10;
-            movq [rsp + 152], r9;
-            movq [rsp + 144], r8;
-            movq [rsp + 136], rcx;
-            movq [rsp + 128], rdx;
-            movq [rsp + 120], rsi;
-            movq [rsp + 112], rdi;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-        }
-    }
-
-    ///
-    /// Restore caller-save registers (except rax) from stack.
-    ///
-    fn restore_registers(&mut self) {
-        monoasm! { &mut self.jit,
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            movq rdi, [rsp + 112];
-            movq rsi, [rsp + 120];
-            movq rdx, [rsp + 128];
-            movq rcx, [rsp + 136];
-            movq r8, [rsp + 144];
-            movq r9, [rsp + 152];
-            movq r10, [rsp + 160];
-            movq r11, [rsp + 168];
-            //movq rax, [rsp + 176];
-            addq rsp, 192;
-        }
-    }
-
-    ///
-    /// Test whether the current local frame has been "captured" —
-    /// either already promoted to heap (bit 7 `on_heap`) or still at
-    /// its stack address but content has been moved to heap with a
-    /// tombstone (bit 3 `invalidated`). Both cases violate the JIT's
-    /// stack-layout assumptions for register-cached locals / the
-    /// specialised rbp-relative outer access and require a deopt.
-    ///
-    /// The `invalidated` case arises when a method call (often an
-    /// inlined wrapper like the Ruby `Integer#downto`) promotes an
-    /// ancestor frame via `move_frame_to_heap` but JIT-inlined code
-    /// never does a `pop_frame` to reload r14 from the updated
-    /// `cfp.lfp` slot. The tombstone bit lets the guard catch that
-    /// case too.
-    ///
-    /// if the frame is captured, jump to *label*.
-    ///
-    fn branch_if_captured(&mut self, label: &DestLabel) {
-        monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
-            jnz label;
-        }
-    }
 }
 
 impl JitModule {
-    ///
-    /// Fetch instruction and dispatch.
-    ///
-    /// ### in
-    /// - r13: BcPc
-    ///
-    /// ### destroy
-    /// - rax, r15
-    ///
-    fn fetch_and_dispatch(&mut self) {
-        monoasm! { &mut self.jit,
-            movq r15, (self.dispatch.as_ptr());
-            movzxb rax, [r13 + (OPECODE)]; // rax <- :0
-            addq r13, 16;
-            jmp [r15 + rax * 8];
-        };
-    }
-    /// Set outer and self for block.
-    ///
-    /// ### in
-    /// - rax: outer_lfp
-    ///
-    /// ### destroy
-    /// - rsi
-    ///
-    fn set_block_self_outer(&mut self) {
-        self.set_block_outer();
-        monoasm! { &mut self.jit,
-            // set self
-            movq rsi, [rax - (LFP_SELF)];
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rsi;
-        };
-    }
-
-    /// Set outer for block.
-    ///
-    /// ### in
-    /// - rax: outer_lfp
-    ///
-    fn set_block_outer(&mut self) {
-        monoasm! { &mut self.jit,
-            // set outer
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rax;
-            // SVAR / CME are unused by block frames (they walk the
-            // outer chain to the LEP for `$~`); zero them so any stray
-            // reader sees a clean "absent" sentinel and so the GC
-            // doesn't follow uninitialised stack memory.
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
-        };
-    }
-
-    /// Set outer.
-    fn set_method_outer(&mut self) {
-        monoasm! { &mut self.jit,
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
-            // Method-introducing frame: own SVAR slot starts unset
-            // (zero = "no MatchData captured"). CME also zero for
-            // now — reserved for a future migration.
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
-        };
-    }
-
-    ///
-    /// Set lfp(r14) for callee.
-    ///
-    /// the local frame MUST BE on the stack.
-    fn set_lfp(&mut self) {
-        monoasm!( &mut self.jit,
-            // set lfp
-            lea  r14, [rsp - (RSP_LOCAL_FRAME)];
-            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
-        );
-    }
-
-    /// Push control frame and set outer.
-    ///
-    /// ### destroy
-    /// - rdi, rsi
-    ///
-    fn push_frame(&mut self) {
-        monoasm!( &mut self.jit,
-            // push cfp
-            movq rdi, [rbx + (EXECUTOR_CFP)];
-            lea  rsi, [rsp - (RSP_CFP)];
-            movq [rsi], rdi;
-            movq [rbx + (EXECUTOR_CFP)], rsi;
-        );
-    }
-
-    fn restore_lfp(&mut self) {
-        monoasm!( &mut self.jit,
-            // restore lfp
-            movq r14, [rbp - (BP_CFP + CFP_LFP)];
-        );
-    }
-
-    /// Pop control frame
-    fn pop_frame(&mut self) {
-        monoasm!( &mut self.jit,
-            // pop cfp
-            lea  r14, [rbp - (BP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], r14;
-        );
-        self.restore_lfp();
-    }
-
-    ///
-    /// Get FuncData.
-    ///
-    /// ### in
-    /// - r12: &Globals
-    /// - rdx: FuncId
-    ///
-    /// ### out
-    /// - r15: &FuncData
-    ///
-    fn get_func_data(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rdx, rdx;
-            // assumes size_of::<FuncInfo>() is 64,
-            shlq rdx, 6;
-            addq rdx, [r12 + (GLOBALS_FUNCINFO)];
-            lea  r15, [rdx + (FUNCINFO_DATA)];
-        };
-    }
-
-    ///
-    /// Get ProcData.
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &Globals
-    ///
-    /// ### out
-    /// - rax: outer_lfp: Option<LFP>
-    /// - rdx: func_id: Option<FuncId>
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn get_proc_data(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::get_yield_data);
-            call rax;
-        }
-        self.resolve_invalidated_outer(GP::Rax);
-    }
-
-    ///
-    /// If the outer LFP in `R(reg)` points at a stack frame whose
-    /// content has already been copied to heap by `move_frame_to_heap`
-    /// (flagged `invalidated` on the tombstone), forward the pointer
-    /// to the live heap copy via the owning CFP's LFP slot.
-    ///
-    /// - `invalidated` bit = bit 3 of the `kind` byte in Meta; `kind`
-    ///   lives at `lfp - (LFP_META - META_KIND)` = `lfp - 1`.
-    /// - the LFP's CFP is at `lfp + 16`, and `cfp.lfp` slot is at
-    ///   `cfp - 8` = `lfp + 8`. Reading 8 bytes there gives the heap
-    ///   pointer that `cfp.set_lfp(heap)` stored at promotion time.
-    ///
-    /// Emits 3 instructions + 1 conditional branch on the happy
-    /// (not-invalidated) path.
-    fn resolve_invalidated_outer(&mut self, reg: GP) {
-        let skip = self.jit.label();
-        monoasm! { &mut self.jit,
-            // Skip if outer is NULL (e.g. `get_yield_data` returned
-            // the default ProcData on a no-block-given error). The
-            // ASM callers handle that via a subsequent error check,
-            // but we must not dereference a null lfp here.
-            testq R(reg as _), R(reg as _);
-            jz   skip;
-            testb [R(reg as _) - 1], (0b0000_1000_u8 as i8);
-            jz   skip;
-            movq R(reg as _), [R(reg as _) + 8];
-        skip:
-        }
-    }
-
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    fn call_funcdata(&mut self) -> CodePtr {
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // set call site bc ptr in rcx for with_pc builtins (r13 = InlineCache = call_site + 16)
-            lea  rcx, [r13 - 16];
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-        }
-        let return_addr = self.jit.get_current_address();
-        self.pop_frame();
-        return_addr
-    }
-
-    ///
-    /// Invoke the function.
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    /// ### out
-    /// - rax: return value
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn call_invoker(&mut self) {
-        self.push_frame();
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            // r15 : &FuncData
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-            movq rdi, [rsp - (RSP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-        };
-    }
-
-    ///
-    /// Invoke the function.
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    /// - r14: callee's Lfp
-    ///
-    /// ### out
-    /// - rax: return value
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn call_invoker_with_binding(&mut self) {
-        self.push_frame();
-        monoasm! { &mut self.jit,
-            // set lfp
-            movq [rsp - (RSP_CFP + CFP_LFP)], r14;
-            // r15 : &FuncData
-            // set pc
-            movq r13, [r15 + (FUNCDATA_PC)];
-            call [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
-            movq rdi, [rsp - (RSP_CFP)];
-            movq [rbx + (EXECUTOR_CFP)], rdi;
-        };
-    }
-
-    fn push_callee_save(&mut self) {
-        monoasm! { &mut self.jit,
-            pushq r15;
-            pushq r14;
-            pushq r13;
-            pushq r12;
-            pushq rbx;
-            pushq rbp;
-        };
-    }
-
-    fn pop_callee_save(&mut self) {
-        monoasm! { &mut self.jit,
-            popq rbp;
-            popq rbx;
-            popq r12;
-            popq r13;
-            popq r14;
-            popq r15;
-        };
-    }
-
-    ///
-    /// Push stack offset for callee.
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    ///
-    /// ### destoroy
-    /// - rdi
-    ///
-    fn push_stack_offset(&mut self) {
-        monoasm! { &mut self.jit,
-            movzxw rdi, [r15 + (FUNCDATA_OFS)];
-            shlq rdi, 4;
-            addq rdi, 8;
-            subq rsp, rdi;
-            pushq rdi;
-        }
-    }
-
-    ///
-    /// Pop stack offset for callee.
-    ///
-    /// ### destoroy
-    /// - rdi
-    ///
-    fn pop_stack_offset(&mut self) {
-        monoasm! { &mut self.jit,
-            popq rdi;
-            addq rsp, rdi;
-        }
-    }
-
-    ///
-    /// Execute GC. (for interpreter)
-    ///
-    /// ### in
-    /// - rbx: &mut Executor
-    /// - r12: &mut Globals
-    /// - r13: PC + 1
-    /// - r14: LFP
-    ///
-    /// ### out
-    /// - rax: None if Interrupt is thrown.
-    ///
-    /// ### destroy
-    /// - rax
-    /// - stack
-    ///
-    fn vm_execute_gc(&mut self) {
-        let raise = self.entry_raise.clone();
-        self.execute_gc_inner(None, &raise, 0);
-    }
-
-    ///
-    /// Check stack overflow.
-    ///
-    /// raise StackOverFlow error if the stack pointer is below the stack limit.
-    ///
-    fn vm_check_stack(&mut self) {
-        let overflow = self.vm_stack_overflow.clone();
-        monoasm! { &mut self.jit,
-            cmpq rsp, [rbx + (EXECUTOR_STACK_LIMIT)];
-            jle overflow;
-        };
-    }
-
     ///
     /// Execute GC. (for JIT code)
     ///
@@ -765,8 +354,9 @@ impl JitModule {
     /// - rax, rcx
     /// - stack
     ///
+    #[cfg(target_arch = "x86_64")]
     fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
-        self.execute_gc_inner(Some(wb), error, base);
+        self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
     }
 }
 
@@ -871,7 +461,229 @@ impl std::ops::DerefMut for Codegen {
     }
 }
 
+/// Entry points (`CodePtr`s) of every VM bytecode-opcode handler, produced
+/// by the per-arch [`Codegen::gen_vm_handlers`] and consumed by the
+/// arch-neutral [`Codegen::construct_vm`], which lays them out into the
+/// `dispatch` table. Keeping the opcode-number → handler mapping in a single
+/// place means the two architecture backends (x86-64 / aarch64) can only emit
+/// the handlers; they cannot drift on *which* opcode each one serves.
+///
+/// Field names mirror the bytecode opcodes (see `bytecodegen::inst`); each is
+/// generated by both backends with identical semantics. The two handlers that
+/// genuinely differ are `yield_`/`yield2` (x86 specializes the simple vs.
+/// general yield path; aarch64 uses one handler for both) — modelled as two
+/// fields so the shared mapping is arch-agnostic.
+pub(crate) struct VmHandlers {
+    pub singleton_method_def: CodePtr, // 1
+    pub method_def: CodePtr,           // 2
+    pub br_inst: CodePtr,              // 3
+    pub condbr: CodePtr,              // 4, 12
+    pub condnotbr: CodePtr,          // 5, 13
+    pub immediate: CodePtr,           // 6
+    pub literal: CodePtr,             // 7
+    pub load_const: CodePtr,          // 10
+    pub store_const: CodePtr,         // 11
+    pub loop_start: CodePtr,          // 14
+    pub loop_end: CodePtr,            // 15
+    pub load_ivar: CodePtr,           // 16
+    pub store_ivar: CodePtr,          // 17
+    pub check_const: CodePtr,         // 18
+    pub check_kw_rest: CodePtr,       // 19
+    pub check_local: CodePtr,         // 20
+    pub block_arg_proxy: CodePtr,     // 21
+    pub singleton_class_def: CodePtr, // 22
+    pub block_arg: CodePtr,           // 23
+    pub check_cvar: CodePtr,          // 24
+    pub load_gvar: CodePtr,           // 25
+    pub store_gvar: CodePtr,          // 26
+    pub load_cvar: CodePtr,           // 27
+    pub alias_gvar: CodePtr,          // 28
+    pub store_cvar: CodePtr,          // 29
+    pub send_simple: CodePtr,         // 30, 32
+    pub send: CodePtr,                // 31, 33
+    pub yield_: CodePtr,              // 34
+    pub yield2: CodePtr,             // 35
+    pub optcase: CodePtr,             // 36
+    pub nilbr: CodePtr,               // 37
+    pub lambda: CodePtr,              // 38
+    pub array: CodePtr,               // 39
+    pub array_teq: CodePtr,           // 40
+    pub defined_yield: CodePtr,       // 64
+    pub defined_const: CodePtr,       // 65
+    pub defined_method: CodePtr,      // 66
+    pub defined_gvar: CodePtr,        // 67
+    pub defined_ivar: CodePtr,        // 68
+    pub defined_super: CodePtr,       // 69
+    pub class_def: CodePtr,           // 70
+    pub module_def: CodePtr,          // 71
+    pub ret: CodePtr,                 // 80
+    pub method_ret: CodePtr,          // 81
+    pub block_break: CodePtr,         // 82
+    pub raise_err: CodePtr,           // 83
+    pub retry: CodePtr,               // 84
+    pub ensure_end: CodePtr,          // 85
+    pub concat_regexp: CodePtr,       // 86
+    pub redo: CodePtr,                // 87
+    pub defined_cvar: CodePtr,        // 88
+    pub pos: CodePtr,                 // 121
+    pub neg: CodePtr,                 // 122
+    pub bitnot: CodePtr,              // 123
+    pub not: CodePtr,                 // 124
+    pub index: CodePtr,               // 132
+    pub index_assign: CodePtr,        // 133
+    pub eq: CodePtr,                  // 140, 150
+    pub ne: CodePtr,                  // 141, 151
+    pub lt: CodePtr,                  // 142, 152
+    pub le: CodePtr,                  // 143, 153
+    pub gt: CodePtr,                  // 144, 154
+    pub ge: CodePtr,                  // 145, 155
+    pub teq: CodePtr,                 // 146, 156
+    pub load_dvar: CodePtr,           // 148
+    pub store_dvar: CodePtr,          // 149
+    pub add: CodePtr,                 // 160
+    pub sub: CodePtr,                 // 161
+    pub mul: CodePtr,                 // 162
+    pub div: CodePtr,                 // 163
+    pub bitor: CodePtr,               // 164
+    pub bitand: CodePtr,              // 165
+    pub bitxor: CodePtr,              // 166
+    pub rem: CodePtr,                 // 167
+    pub pow: CodePtr,                 // 168
+    pub shl: CodePtr,                 // 169
+    pub shr: CodePtr,                 // 170
+    pub init: CodePtr,                // 172
+    pub expand_array: CodePtr,        // 173
+    pub undef_method: CodePtr,        // 174
+    pub alias_method: CodePtr,        // 175
+    pub hash: CodePtr,                // 176
+    pub to_a: CodePtr,                // 177
+    pub mov: CodePtr,                 // 178
+    pub range_incl: CodePtr,          // 179
+    pub range_excl: CodePtr,          // 180
+    pub concat: CodePtr,              // 181
+}
+
 impl Codegen {
+    ///
+    /// Build the bytecode interpreter (the `dispatch` table).
+    ///
+    /// Arch-neutral: the per-arch [`Codegen::gen_vm_handlers`] emits the actual
+    /// machine code for the VM entry and every opcode handler (and sets the
+    /// entry labels `vm_entry` / `vm_fetch`, plus the arch-specific raise / GC /
+    /// div-by-zero stubs); this routine only wires the resulting `CodePtr`s into
+    /// their opcode slots — the single source of truth for the opcode → handler
+    /// mapping shared by both backends.
+    ///
+    pub(in crate::codegen) fn construct_vm(&mut self) {
+        let h = self.gen_vm_handlers();
+        self.dispatch[1] = h.singleton_method_def;
+        self.dispatch[2] = h.method_def;
+        self.dispatch[3] = h.br_inst;
+        self.dispatch[4] = h.condbr;
+        self.dispatch[5] = h.condnotbr;
+        self.dispatch[6] = h.immediate;
+        self.dispatch[7] = h.literal;
+        self.dispatch[10] = h.load_const;
+        self.dispatch[11] = h.store_const;
+        self.dispatch[12] = h.condbr;
+        self.dispatch[13] = h.condnotbr;
+        self.dispatch[14] = h.loop_start;
+        self.dispatch[15] = h.loop_end;
+        self.dispatch[16] = h.load_ivar;
+        self.dispatch[17] = h.store_ivar;
+        self.dispatch[18] = h.check_const;
+        self.dispatch[19] = h.check_kw_rest;
+        self.dispatch[20] = h.check_local;
+        self.dispatch[21] = h.block_arg_proxy;
+        self.dispatch[22] = h.singleton_class_def;
+        self.dispatch[23] = h.block_arg;
+        self.dispatch[24] = h.check_cvar;
+        self.dispatch[25] = h.load_gvar;
+        self.dispatch[26] = h.store_gvar;
+        self.dispatch[27] = h.load_cvar;
+        self.dispatch[28] = h.alias_gvar;
+        self.dispatch[29] = h.store_cvar;
+        self.dispatch[30] = h.send_simple;
+        self.dispatch[31] = h.send;
+        self.dispatch[32] = h.send_simple;
+        self.dispatch[33] = h.send;
+        self.dispatch[34] = h.yield_;
+        self.dispatch[35] = h.yield2;
+        self.dispatch[36] = h.optcase;
+        self.dispatch[37] = h.nilbr;
+        self.dispatch[38] = h.lambda;
+        self.dispatch[39] = h.array;
+        self.dispatch[40] = h.array_teq;
+
+        self.dispatch[64] = h.defined_yield;
+        self.dispatch[65] = h.defined_const;
+        self.dispatch[66] = h.defined_method;
+        self.dispatch[67] = h.defined_gvar;
+        self.dispatch[68] = h.defined_ivar;
+        self.dispatch[69] = h.defined_super;
+        self.dispatch[70] = h.class_def;
+        self.dispatch[71] = h.module_def;
+        self.dispatch[80] = h.ret;
+        self.dispatch[81] = h.method_ret;
+        self.dispatch[82] = h.block_break;
+        self.dispatch[83] = h.raise_err;
+        self.dispatch[84] = h.retry;
+        self.dispatch[85] = h.ensure_end;
+        self.dispatch[86] = h.concat_regexp;
+        self.dispatch[87] = h.redo;
+        self.dispatch[88] = h.defined_cvar;
+
+        self.dispatch[121] = h.pos;
+        self.dispatch[122] = h.neg;
+        self.dispatch[123] = h.bitnot;
+        self.dispatch[124] = h.not;
+
+        self.dispatch[132] = h.index;
+        self.dispatch[133] = h.index_assign;
+
+        self.dispatch[140] = h.eq;
+        self.dispatch[141] = h.ne;
+        self.dispatch[142] = h.lt;
+        self.dispatch[143] = h.le;
+        self.dispatch[144] = h.gt;
+        self.dispatch[145] = h.ge;
+        self.dispatch[146] = h.teq;
+
+        self.dispatch[148] = h.load_dvar;
+        self.dispatch[149] = h.store_dvar;
+
+        self.dispatch[150] = h.eq;
+        self.dispatch[151] = h.ne;
+        self.dispatch[152] = h.lt;
+        self.dispatch[153] = h.le;
+        self.dispatch[154] = h.gt;
+        self.dispatch[155] = h.ge;
+        self.dispatch[156] = h.teq;
+
+        self.dispatch[160] = h.add;
+        self.dispatch[161] = h.sub;
+        self.dispatch[162] = h.mul;
+        self.dispatch[163] = h.div;
+        self.dispatch[164] = h.bitor;
+        self.dispatch[165] = h.bitand;
+        self.dispatch[166] = h.bitxor;
+        self.dispatch[167] = h.rem;
+        self.dispatch[168] = h.pow;
+        self.dispatch[169] = h.shl;
+        self.dispatch[170] = h.shr;
+
+        self.dispatch[172] = h.init;
+        self.dispatch[173] = h.expand_array;
+        self.dispatch[174] = h.undef_method;
+        self.dispatch[175] = h.alias_method;
+        self.dispatch[176] = h.hash;
+        self.dispatch[177] = h.to_a;
+        self.dispatch[178] = h.mov;
+        self.dispatch[179] = h.range_incl;
+        self.dispatch[180] = h.range_excl;
+        self.dispatch[181] = h.concat;
+    }
+
     pub fn new() -> Self {
         let mut jit = JitModule::new();
         let pair = jit.get_address_pair();
@@ -998,10 +810,7 @@ impl Codegen {
     /// next poll. Use of `*mut u32` is fine here because the signal
     /// handler runs on the same thread as the poll.
     pub(crate) fn take_pending_signals(&self) -> u32 {
-        let ptr = self
-            .jit
-            .get_label_address(&self.pending_signals)
-            .as_ptr() as *mut u32;
+        let ptr = self.jit.get_label_address(&self.pending_signals).as_ptr() as *mut u32;
         unsafe {
             let v = std::ptr::read_volatile(ptr);
             if v != 0 {
@@ -1042,7 +851,13 @@ impl Codegen {
         };
         // SAFETY: codeptr is a stable pointer into the finalized JIT
         // buffer; SA_RESTART matches the startup install.
-        unsafe { Self::sigaction_to(signo, codeptr.as_ptr() as libc::sighandler_t, libc::SA_RESTART) }
+        unsafe {
+            Self::sigaction_to(
+                signo,
+                codeptr.as_ptr() as libc::sighandler_t,
+                libc::SA_RESTART,
+            )
+        }
     }
 
     /// Set `signo` to `SIG_IGN` (silently discard).
@@ -1122,194 +937,6 @@ impl Codegen {
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
     }
 
-    fn icmp_teq(&mut self) {
-        self.icmp_eq()
-    }
-
-    /*///
-    /// Compare(<=>) Fixnums.
-    ///
-    /// ### in
-    /// - rdi: lhs (must be Fixnum)
-    /// - rsi: rhs (must be Fixnum)
-    ///
-    /// ### out
-    /// - rax: result(Value)
-    ///
-    /// ### destroy
-    /// - rdx
-    ///
-    fn icmp_cmp(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, (Value::from_ord(std::cmp::Ordering::Equal).id());
-            movq rdx, (Value::from_ord(std::cmp::Ordering::Greater).id());
-            cmpq rdi, rsi;
-            cmovgtq rax, rdx;
-            movq rdx, (Value::from_ord(std::cmp::Ordering::Less).id());
-            cmovltq rax, rdx;
-        };
-    }*/
-
-    ///
-    /// check whether lhs and rhs are fixnum.
-    ///
-    fn guard_rdi_rsi_fixnum(&mut self, generic: &DestLabel) {
-        self.guard_rdi_fixnum(generic);
-        self.guard_rsi_fixnum(generic);
-    }
-
-    ///
-    /// check whether lhs is fixnum.
-    ///
-    fn guard_rdi_fixnum(&mut self, generic: &DestLabel) {
-        monoasm!( &mut self.jit,
-            testq rdi, 0x1;
-            jz generic;
-        );
-    }
-
-    ///
-    /// check whether rhs is fixnum.
-    ///
-    fn guard_rsi_fixnum(&mut self, generic: &DestLabel) {
-        monoasm!( &mut self.jit,
-            testq rsi, 0x1;
-            jz generic;
-        );
-    }
-
-    ///
-    /// Call unary operator function.
-    ///
-    /// ### in
-    /// - rdi: receiver
-    ///
-    /// ### out
-    /// - rax: result
-    ///
-    fn call_unop(&mut self, func: UnaryOpFn) {
-        monoasm!( &mut self.jit,
-            movq rdx, rdi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (func as usize);
-            call rax;
-        );
-    }
-
-    fn call_binop(&mut self, func: BinaryOpFn) {
-        monoasm!( &mut self.jit,
-            movq rdx, rdi;
-            movq rcx, rsi;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (func);
-            call rax;
-        );
-    }
-
-    fn epilogue(&mut self) {
-        monoasm!( &mut self.jit,
-            leave;
-            ret;
-        );
-    }
-
-    ///
-    /// Gen code for break in block.
-    ///
-    /// rbp <- bp for a context of the outer of the block.
-    ///
-    fn block_break(&mut self) {
-        let raise = self.entry_raise();
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, rax;
-            movq rax, (runtime::err_block_break);
-            call rax;
-            jmp  raise;
-        }
-    }
-
-    ///
-    /// Gen code for return in block.
-    ///
-    /// #### in
-    /// - rax: return value
-    /// - r13: pc + 1
-    ///
-    fn method_return(&mut self) {
-        let raise = self.entry_raise();
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, rax;
-            movq rax, (runtime::err_method_return);
-            call rax;
-            jmp  raise;
-        }
-    }
-
-    fn method_return_specialized(&mut self, rbp_offset: usize) {
-        monoasm! { &mut self.jit,
-            lea  rbp, [rbp + (rbp_offset)];
-            leave;
-            ret;
-        }
-    }
-
-    ///
-    /// Convert Fixnum to f64.
-    ///
-    /// ### in
-    /// - R(*reg*): Value
-    ///
-    /// ### out
-    /// - xmm(*dst*)
-    ///
-    /// ### destroy
-    /// - R(*reg*)
-    ///
-    fn integer_val_to_f64(&mut self, reg: GP, dst: u64) {
-        monoasm!(&mut self.jit,
-            sarq R(reg as _), 1;
-            cvtsi2sdq xmm(dst), R(reg as _);
-        );
-    }
-
-    ///
-    /// ### in
-    /// - r15: &FuncData
-    /// - r8: CallsiteId
-    ///
-    /// ### destroy
-    /// - caller save registers
-    ///
-    fn generic_handle_arguments(
-        &mut self,
-        f: extern "C" fn(&mut Executor, &mut Globals, Lfp, Lfp, CallSiteId) -> Option<Value>,
-    ) {
-        monoasm! { &mut self.jit,
-            // rcx <- callee LFP
-            lea  rcx, [rsp - (RSP_LOCAL_FRAME)];
-        }
-        self.push_stack_offset();
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            // rdi: &mut Executor
-            // rsi: &mut Globals
-            // rdx: caller LFP
-            // rcx: callee LFP
-            // r8: CallsiteId
-            movq rax, (f);
-            movq rdx, r14;
-            call rax;
-        }
-        self.pop_stack_offset();
-    }
-
     #[cfg(feature = "emit-asm")]
     pub(crate) fn dump_disas(
         &mut self,
@@ -1326,6 +953,12 @@ impl Codegen {
         );
         self.jit.select_page(0);
         let dump = self.jit.dump_code().unwrap();
+        // x86-64 objdump pads the hex-bytes column to a fixed width, so the
+        // mnemonic starts a fixed `i + 24` chars past the `:`. aarch64
+        // instructions are always 4 bytes (`xxxxxxxx `), a much narrower
+        // column, so parse its objdump output by tab field instead:
+        // `<off>:\t<bytes>\t<mnemonic>\t<operands>`.
+        #[cfg(target_arch = "x86_64")]
         let dump: Vec<(usize, String)> = dump
             .split('\n')
             .filter(|s| s.len() >= 29)
@@ -1340,6 +973,16 @@ impl Codegen {
                     },
                     x[i + 24..].to_string(),
                 )
+            })
+            .collect();
+        #[cfg(target_arch = "aarch64")]
+        let dump: Vec<(usize, String)> = dump
+            .split('\n')
+            .filter_map(|x| {
+                let i = x.find(':')?;
+                let off = usize::from_str_radix(x[0..i].trim(), 16).ok()?;
+                let text = x[i + 1..].splitn(3, '\t').nth(2)?.to_string();
+                Some((off, text))
             })
             .collect();
         let iseq = &store[iseq_id];
@@ -1397,8 +1040,7 @@ impl Codegen {
             if !self.check_vm_address(ret) {
                 if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
                     let patch_point = patch_point.unwrap();
-                    self.jit.apply_jmp_patch_address(patch_point, &deopt);
-                    unsafe { patch_point.as_ptr().write(0xe9) };
+                    self.patch_return_to_deopt(patch_point, &deopt);
                 }
             }
             cfp = prev_cfp;
@@ -1406,11 +1048,62 @@ impl Codegen {
         }
     }
 
+    /// Overwrite the instruction(s) at a specialized call's return continuation
+    /// (`patch_point`) so the now-stale frame deopts when control returns to it.
+    /// x86 has a coherent I-cache and RWX pages, so it just writes the
+    /// `jmp deopt` in place.
+    #[cfg(target_arch = "x86_64")]
+    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
+        self.jit.apply_jmp_patch_address(patch_point, deopt);
+        unsafe { patch_point.as_ptr().write(0xe9) };
+    }
+
+    /// aarch64 twin: overwrite the single 4-byte instruction at `patch_point`
+    /// with an unconditional `B deopt` (`0x14000000 | imm26`). Unlike x86 this
+    /// must (a) make the page writable and (b) synchronize the I-cache, since
+    /// AArch64 does not keep I/D caches coherent across self-modifying code —
+    /// `set_writable`/`set_executable` handle both (the latter invalidates the
+    /// I-cache; both are no-ops on Linux's RWX pages except that invalidation).
+    #[cfg(target_arch = "aarch64")]
+    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
+        self.jit.set_writable();
+        let dest = self.jit.get_label_address(deopt);
+        // Byte displacement from the patch point to the deopt handler; both are
+        // 4-byte aligned, so imm26 = disp / 4 (B's range is ±128 MiB).
+        let disp = dest - patch_point;
+        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
+        let word = 0x1400_0000u32 | imm26;
+        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
+        self.jit.set_executable();
+    }
+
     fn get_deopt_with_return_addr(
         &self,
         return_addr: CodePtr,
     ) -> Option<(Option<CodePtr>, DestLabel)> {
         self.return_addr_table.get(&return_addr).cloned()
+    }
+
+    /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
+    /// instruction at `patch_point` (the `SpecializedCall` site, bound just
+    /// before the `bl` in `do_specialized_call`) so it now branches into
+    /// the freshly compiled body at `entry`. The twin of
+    /// [`Self::patch_return_to_deopt`] but writing a `BL` (`0x9400_0000 |
+    /// imm26`) instead of a `B`: same ±128 MiB range and the same
+    /// writable / I-cache-synchronize dance (AArch64 has no I/D coherence for
+    /// self-modifying code). The new `bl` keeps the same return continuation
+    /// (the next instruction), so the post-call frame teardown is unchanged.
+    #[cfg(target_arch = "aarch64")]
+    fn patch_call_to_entry(&mut self, patch_point: CodePtr, entry: &DestLabel) {
+        self.jit.set_writable();
+        let dest = self.jit.get_label_address(entry);
+        let disp = dest - patch_point;
+        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
+        let word = 0x9400_0000u32 | imm26;
+        // SAFETY: `patch_point` is the 4-byte-aligned address of the `bl`
+        // emitted by `do_specialized_call`.
+        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
+        self.jit.set_executable();
     }
 }
 
@@ -1520,6 +1213,12 @@ mod tests {
         }
     }
 
+    // `f64_to_val` is a JIT-tier helper emitted only by the x86-64
+    // `gen_f64_to_val` (`#[cfg(target_arch = "x86_64")]`); the aarch64
+    // backend installs a `brk` trap stub for the label and never
+    // calls it at runtime. Invoking the stub from this test would fault,
+    // so the test is x86-64-only, matching the code it exercises.
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_f64_to_val() {
         let mut r#gen = Codegen::new();

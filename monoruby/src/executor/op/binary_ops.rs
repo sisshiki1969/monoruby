@@ -6,7 +6,7 @@ use super::*;
 
 use num::{BigInt, Signed, ToPrimitive, Zero};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Rem, Shl, Shr, Sub};
 
 /// Try the `coerce` protocol: call `rhs.coerce(lhs)` and if it returns
 /// a 2-element array, call `ary[0].op(ary[1])`.  Returns `None` if
@@ -43,6 +43,87 @@ pub(crate) fn try_coerce_and_apply(
             None
         }
     }
+}
+
+/// Is `rhs` a real number for the purpose of `Complex#+/-/*`? Mirrors CRuby's
+/// `k_numeric_p(rhs) && f_real_p(rhs)`: built-in Integer/Float/Rational, or a
+/// Numeric subclass whose `real?` returns true. Errors from `real?` propagate.
+fn rhs_is_real_numeric(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    rhs: Value,
+) -> Result<bool> {
+    match rhs.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => return Ok(true),
+        _ => {}
+    }
+    if rhs.try_rational().is_some() {
+        return Ok(true);
+    }
+    let numeric = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Numeric"))
+    {
+        Some(v) => v.as_class_id(),
+        None => return Ok(false),
+    };
+    if !rhs.is_kind_of(&globals.store, numeric) {
+        return Ok(false);
+    }
+    let real_q_id = IdentId::get_id("real?");
+    if globals.check_method(rhs, real_q_id).is_none() {
+        return Ok(false);
+    }
+    Ok(vm
+        .invoke_method_inner(globals, real_q_id, rhs, &[], None, None)?
+        .as_bool())
+}
+
+/// CRuby's `Complex#+/-/*` for a RHS that is not a built-in Integer/Float/
+/// BigInt/Complex (i.e. Rational, a Numeric subclass, or an object needing
+/// coercion). A real numeric RHS is applied component-wise — only the real
+/// part for `+`/`-`, both parts for `*` — exactly as CRuby's `f_addsub` /
+/// `rb_complex_mul`. Everything else goes through the coerce protocol.
+fn complex_real_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let is_real = match rhs_is_real_numeric(vm, globals, rhs) {
+        Ok(b) => b,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    if !is_real {
+        return try_coerce_and_apply(vm, globals, op, lhs, rhs, "Complex");
+    }
+    let c = lhs.try_complex().unwrap();
+    let (re, im) = (c.re().get(), c.im().get());
+    let new_re = vm.invoke_method_simple(globals, op, re, &[rhs])?;
+    let new_im = if op == IdentId::_MUL {
+        vm.invoke_method_simple(globals, op, im, &[rhs])?
+    } else {
+        im
+    };
+    let re_r = match Real::try_from(globals, new_re) {
+        Ok(r) => r,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    let im_r = match Real::try_from(globals, new_im) {
+        Ok(r) => r,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    Some(Value::complex(re_r, im_r))
 }
 
 /// CRuby-compatible coerce for bitwise operations (Integer#&, |, ^).
@@ -148,7 +229,7 @@ macro_rules! binop_values {
                         Value::complex_from(lhs.$op(rhs))
                     }
                     (RV::Complex(_), _) => {
-                        return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Complex");
+                        return complex_real_op(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
                         return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
@@ -206,72 +287,18 @@ pub(crate) extern "C" fn div_values(
         }
         _ => {}
     }
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Fixnum(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::BigInt(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Float(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Float");
-        }
-        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from((*lhs).div(rhs))
-        }
-        (RV::Complex(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Float(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(lhs), RV::Complex(rhs)) => {
-            if rhs.is_zero() {
-                vm.err_divide_by_zero();
-                return None;
-            }
-            Value::complex_from(lhs.div(rhs))
-        }
-        (RV::Complex(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Complex");
-        }
+    match (lhs.unpack(), rhs.unpack()) {
+        // Complex on the left: dispatch to `Complex#/` (handles Complex/Complex,
+        // Complex/real, and the coerce fallback with exact Rational arithmetic).
+        (RV::Complex(_), _) => vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]),
+        // real / Complex (and real / non-real): use the coerce protocol, which
+        // wraps the real operand into a Complex and re-dispatches to `Complex#/`.
+        (RV::Float(_), _) => try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Float"),
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer");
+            try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer")
         }
-        _ => {
-            return vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]);
-        }
-    };
-    Some(v)
+        _ => vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]),
+    }
 }
 
 pub(crate) extern "C" fn rem_values(
@@ -705,10 +732,17 @@ fn safe_int_shl(lhs: i64, rhs: u64, vm: &mut Executor) -> Option<Value> {
         }
     } else {
         let rhs = rhs as u32;
-        Some(match lhs.checked_shl(rhs) {
-            Some(res) if lhs.is_positive() == res.is_positive() => Value::integer(res),
-            _ => bigint_shl(&BigInt::from(lhs), rhs),
-        })
+        // `checked_shl` only fails when `rhs >= 64`; it silently drops the high
+        // bits on an i64 value overflow (e.g. `5 << 62`). Detect lost bits by
+        // shifting back: if `(lhs << rhs) >> rhs == lhs`, the result is exact and
+        // fits in i64; otherwise promote to Bignum.
+        if rhs < i64::BITS {
+            let res = lhs.wrapping_shl(rhs);
+            if res.wrapping_shr(rhs) == lhs {
+                return Some(Value::integer(res));
+            }
+        }
+        Some(bigint_shl(&BigInt::from(lhs), rhs))
     }
 }
 

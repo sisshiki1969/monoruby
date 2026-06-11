@@ -1,5 +1,8 @@
 use super::*;
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use num::Zero;
 use std::{io::Write, mem::transmute};
@@ -11,7 +14,7 @@ use std::{io::Write, mem::transmute};
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, Box::new(kernel_nil), 0);
+    globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen2!(kernel_nil), 0);
     globals.define_builtin_func(kernel_class, "!~", not_match, 1);
     //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
@@ -71,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "block_given?",
         block_given,
-        Box::new(kernel_block_given),
+        inline_gen2!(kernel_block_given),
         0,
     );
     //globals.define_builtin_module_func_rest(kernel_class, "p", p);
@@ -186,8 +189,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "___memcpyv", memcpyv, 3);
     globals.define_builtin_module_func(kernel_class, "___read_memory", read_memory, 2);
 
-    //globals.define_builtin_inline_func(kernel_class, "____max", max, Box::new(inline_max), 2);
-    //globals.define_builtin_inline_func(kernel_class, "____min", min, Box::new(inline_min), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____max", max, inline_gen!(inline_max), 2);
+    //globals.define_builtin_inline_func(kernel_class, "____min", min, inline_gen!(inline_min), 2);
 
     // Kernel methods (matching CRuby: these are defined on Kernel, not Object)
     globals.define_builtin_func(kernel_class, "class", class, 0);
@@ -204,14 +207,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         kernel_class,
         "object_id",
         super::object::object_id,
-        Box::new(super::object::object_object_id),
+        inline_gen2!(super::object::object_object_id),
         0,
     );
     globals.define_builtin_inline_func_with(
         kernel_class,
         "respond_to?",
         respond_to,
-        Box::new(object_respond_to),
+        inline_gen2!(object_respond_to),
         1,
         2,
         false,
@@ -230,7 +233,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "is_a?",
         &["kind_of?"],
         is_a,
-        Box::new(kernel_is_a),
+        inline_gen2!(kernel_is_a),
         1,
     );
     globals.define_builtin_inline_funcs_with_kw(
@@ -238,7 +241,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "send",
         &["__send__"],
         crate::builtins::send,
-        Box::new(crate::builtins::object_send),
+        inline_gen!(crate::builtins::object_send),
         0,
         0,
         true,
@@ -331,14 +334,7 @@ fn kernel_nil(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| {
-            monoasm! { &mut r#gen.jit,
-                movq rax, (FALSE_VALUE);
-                movq rsi, (TRUE_VALUE);
-                cmpq rdi, (NIL_VALUE);
-                cmoveqq rax, rsi;
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_kernel_nil());
         state.def_rax2acc(ir, dst);
     }
     true
@@ -378,19 +374,7 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _, _| {
-            let exit = r#gen.jit.label();
-            monoasm! { &mut r#gen.jit,
-                movq rax, (FALSE_VALUE);
-                movq rdi, [r14 - (LFP_BLOCK)];
-                testq rdi, rdi;
-                jz exit;
-                cmpq rdi, (NIL_VALUE);
-                jeq exit;
-                movq rax, (TRUE_VALUE);
-            exit:
-            }
-        });
+        ir.inline(|r#gen, _, _, _| r#gen.emit_block_given());
         state.def_rax2acc(ir, dst);
     }
 
@@ -2548,22 +2532,20 @@ fn dlopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         )
     };
     if handle.is_null() {
-        let err = unsafe { libc::dlerror() };
-        if err.is_null() {
-            return Err(MonorubyErr::argumenterr(format!(
-                "both of dlopen() and dlerror() returned NULL. {:?}",
-                lib
-            )));
-        }
-        let message = { unsafe { std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned() } };
-        let path = match lib {
-            Some(lib) => lib.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
-        return Err(MonorubyErr::loaderr(
-            message,
-            std::path::PathBuf::from(path),
-        ));
+        // Drain dlerror() so subsequent dlopen() calls see a fresh
+        // error state. The Ruby wrappers
+        // (`Fiddle::Handle#initialize`, `FFI::DynamicLibrary#initialize`)
+        // check for a nil return and raise their own
+        // `Fiddle::DLError` / `LoadError` with a message they
+        // construct themselves, so returning nil is what they expect.
+        // Raising directly from here breaks the ffi gem's
+        // per-candidate fallback loop in
+        // `FFI::DynamicLibrary.try_load`: each rescued LoadError
+        // would leave `Executor::exception` populated and trip the
+        // `assert_eq!(self.exception, None)` double-set guard in
+        // `Executor::set_error` on the next dlopen attempt.
+        unsafe { libc::dlerror() };
+        return Ok(Value::nil());
     }
     Ok(Value::integer(handle as usize as i64))
 }
@@ -2876,6 +2858,8 @@ pub(crate) fn send(
         },
     )
 }
+
+#[cfg(target_arch = "x86_64")]
 
 pub fn object_send(
     state: &mut AbstractState,
@@ -3943,11 +3927,7 @@ mod tests {
 
     #[test]
     fn eval_begin_block() {
-        // `BEGIN { ... }` (PreExecutionNode), incl. `return`, is only
-        // lowered by the Prism backend; ruruby-parse rejects it.
-        if parser_is_ruruby() {
-            return;
-        }
+        // `BEGIN { ... }` (PreExecutionNode), incl. `return`.
         run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
     }
 
@@ -3968,12 +3948,151 @@ mod tests {
     }
 
     #[test]
+    fn ensure_defers_nonlocal_unwind() {
+        // A non-local `return` / `throw` in flight is suspended across the
+        // `ensure` body so the body can itself raise / return / throw
+        // without tripping the empty-exception guard in `set_error`.
+        // Regression for the `assert_eq!(self.exception, None)` panic.
+        run_tests(&[
+            // return from block honored when the ensure body is clean
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                :ignored
+              end
+              :fell_through
+            end
+            m
+            "##,
+            // a raise in the ensure body overrides the pending return
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                raise "boom"
+              end
+            rescue => e
+              "overridden:#{e.message}"
+            end
+            m
+            "##,
+            // a builtin-originated error (NoMethodError) in the ensure body
+            r##"
+            def m
+              begin
+                [1].each { return :returned }
+              ensure
+                nil.no_such_method
+              end
+            rescue NoMethodError
+              :rescued_nomethod
+            end
+            m
+            "##,
+            // a return in the ensure body overrides the body's return
+            r##"
+            def m
+              begin
+                [1].each { return :body }
+              ensure
+                [1].each { return :ensure_ret }
+              end
+            end
+            m
+            "##,
+            // throw honored across a clean ensure
+            r##"
+            def m
+              catch(:t) do
+                begin
+                  throw :t, :thrown
+                ensure
+                  :clean
+                end
+              end
+            end
+            m
+            "##,
+            // throw overridden by a raise in the ensure body
+            r##"
+            def m
+              catch(:t) do
+                begin
+                  throw :t, :thrown
+                ensure
+                  raise "boom"
+                end
+              end
+            rescue => e
+              "overridden:#{e.message}"
+            end
+            m
+            "##,
+            // nested method deferrals: foo's ensure calls baz, which also
+            // does return-from-block + ensure. Both must restore correctly.
+            r##"
+            def baz
+              begin
+                [1].each { return :baz_ret }
+              ensure
+                :baz_clean
+              end
+            end
+            def foo
+              begin
+                [1].each { return :foo_ret }
+              ensure
+                $baz_result = baz
+              end
+            end
+            [foo, $baz_result]
+            "##,
+            // a callee's own clean ensure must not steal the caller's
+            // pending deferred return
+            r##"
+            def inner
+              begin
+                :ran
+              ensure
+                :ensured
+              end
+            end
+            def outer
+              begin
+                [1].each { return :outer_ret }
+              ensure
+                inner
+              end
+            end
+            outer
+            "##,
+            // nested ensures in the same method both run; return honored.
+            // ($log is reset each run since run_test executes 25x in one
+            // process while the CRuby reference runs once.)
+            r##"
+            def m
+              begin
+                begin
+                  [1].each { return :v }
+                ensure
+                  $log << :inner
+                end
+              ensure
+                $log << :outer
+              end
+            end
+            $log = []
+            [m, $log]
+            "##,
+        ]);
+    }
+
+    #[test]
     fn block_shadow_locals() {
-        // Block-local shadow vars (`|x; a|`) are only lowered by the
-        // Prism backend; ruruby-parse raises a SyntaxError.
-        if parser_is_ruruby() {
-            return;
-        }
+        // Block-local shadow vars (`|x; a|`).
         run_test(
             r##"
         x = 10

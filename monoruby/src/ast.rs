@@ -1,21 +1,78 @@
-//! Public AST surface used by monoruby's bytecode compiler and runtime.
+//! monoruby's own Ruby AST.
 //!
-//! For the duration of the Prism migration this module simply re-exports
-//! the AST types that monoruby currently consumes from `ruruby-parse`,
-//! so that the rest of the crate depends on `crate::ast::*` rather than
-//! reaching into the parser crate directly. Phase 2 will replace the
-//! underlying types with monoruby-owned equivalents produced by a Prism
-//! lowerer; consumers that already import through `crate::ast` will not
-//! need their `use` statements rewritten again.
+//! These node types were originally defined in the `ruruby-parse` crate and
+//! re-exported here. With the migration to the Prism parser complete,
+//! `ruruby-parse` is gone and the AST is owned by monoruby: the Prism lowerer
+//! (`crate::parser::prism_backend`) builds these nodes directly, and the
+//! bytecode compiler consumes them through `crate::ast::*`.
 //!
-//! Anything ruruby-parse-specific that we don't intend to keep across
-//! the migration (for example, the `Parser` entry points themselves)
-//! should NOT be re-exported here — callers of those should still go
-//! through `ruruby_parse::Parser` directly so that the parser-vs-AST
-//! boundary stays visible.
+//! The node-construction helpers (`Node::new_*`, etc.) are retained as the
+//! AST's API even though the lowerer mostly builds nodes via struct literals;
+//! `allow(dead_code)` keeps the unused ones from warning.
+#![allow(dead_code)]
 
-pub use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LocalsContext, LvarCollector, NReal,
-    Node, NodeKind, ParamKind, ParseErr, ParseErrKind, ParseResult, RescueEntry, SourceInfoRef,
-    UnOp,
-};
+mod error;
+mod lvar_collector;
+mod node;
+mod source_info;
+
+pub use error::*;
+pub use lvar_collector::*;
+pub use node::*;
+pub use source_info::*;
+
+use num::BigInt;
+
+/// A value annotated with its source location. `Node` is `Annot<NodeKind>`
+/// and `FormalParam` is `Annot<ParamKind>`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Annot<T: PartialEq + Default> {
+    pub kind: T,
+    pub loc: Loc,
+}
+
+impl<T: PartialEq + Default> Annot<T> {
+    pub fn new(kind: T, loc: Loc) -> Self {
+        Annot { kind, loc }
+    }
+
+    pub fn loc(&self) -> Loc {
+        self.loc
+    }
+}
+
+/// Surrounding local-variable scope supplied to `eval` / `binding.eval`
+/// parses so outer locals resolve. Implemented by the runtime's
+/// `ExternalContext` (see `globals.rs`).
+pub trait LocalsContext: Sized {
+    fn find_lvar(&self, id: &str) -> Option<usize>;
+}
+
+/// A parsed program: the root node plus the top-level local-variable table
+/// and the source map used for error reporting.
+#[derive(Debug)]
+pub struct ParseResult {
+    pub node: Node,
+    pub lvar_collector: LvarCollector,
+    pub source_info: SourceInfoRef,
+}
+
+/// One `rescue` clause of a `begin`/`rescue` (or modifier `rescue`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RescueEntry {
+    /// The exception classes for this rescue clause.
+    pub exception_list: Vec<Node>,
+    /// Assignment destination for the error value in the rescue clause.
+    pub assign: Option<Box<Node>>,
+    /// The body of this rescue clause.
+    pub body: Box<Node>,
+}
+
+/// A numeric real literal as produced by the lowerer (the imaginary part of
+/// a `Complex`, before it is turned into a runtime value).
+#[derive(Debug, Clone, PartialEq)]
+pub enum NReal {
+    Integer(i64),
+    Bignum(BigInt),
+    Float(f64),
+}

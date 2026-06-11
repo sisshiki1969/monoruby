@@ -1074,6 +1074,9 @@ impl<'a> JitContext<'a> {
     /// [`Self::outer_specialized_ids`] for the rationale.
     ///
     pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+        // Method specialization is lowered on both arches now, so the caller
+        // chain is encoded for `MethodRetSpecialized` on aarch64 too. (Block
+        // inlining stays x86-only — see `iter_caller_specialized_ids`.)
         let caller = self.method_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
@@ -1095,6 +1098,8 @@ impl<'a> JitContext<'a> {
     /// [`Self::method_caller_specialized_ids`].
     ///
     pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+        // Block inlining is lowered on aarch64 now, so `break` out of an inlined
+        // block can encode its caller chain for `BlockBreakSpecialized` too.
         let caller = self.iter_caller_pos()?;
         let begin = caller + 1;
         let end = self.stack_frame.len() - 1;
@@ -1170,6 +1175,16 @@ impl<'a> JitContext<'a> {
     /// positional count, `rest_local` `f`'s synthetic rest local slot.
     ///
     pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
+        // The aarch64 AsmIR lowering does not implement the deferred-rest
+        // optimization (the side-exit `forward_rest` materialize and the
+        // `SetArgumentsForwarded` inline fast path), so it never defers: the
+        // `...` rest array is built the normal way and forwarding goes through
+        // the generic helper. Correct, just unoptimized — and it keeps the
+        // aarch64 lowering bail-free (no `forward_rest` / `deferred_src` ever
+        // reach codegen). x86 keeps the optimization.
+        if cfg!(target_arch = "aarch64") {
+            return None;
+        }
         if !self.is_specialized() || self.specialize_level() != 1 {
             return None;
         }

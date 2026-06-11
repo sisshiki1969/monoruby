@@ -2,7 +2,10 @@ use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 use crate::executor::Visibility;
+#[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Float class
@@ -31,7 +34,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         "to_i",
         &["to_int"],
         toi,
-        Box::new(float_toi),
+        inline_gen2!(float_toi),
         0,
     );
     globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
@@ -207,15 +210,7 @@ fn float_toi(
     let deopt = ir.new_deopt(state);
     if let Some(dst) = dst {
         ir.inline(move |r#gen, _, labels, base| {
-            let deopt = &labels[deopt];
-            // Load fsrc into xmm0 (handles both pool and spill).
-            r#gen.load_fpr_into_xmm0(fsrc, base);
-            monoasm! { &mut r#gen.jit,
-                cvttsd2siq rdi, xmm0;
-                addq  rdi, rdi;
-                jo    deopt;
-                orq   rdi, 1;
-            }
+            r#gen.emit_float_to_int(fsrc, &labels[deopt], base)
         });
         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     }

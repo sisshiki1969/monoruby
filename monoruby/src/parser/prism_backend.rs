@@ -1,8 +1,8 @@
 //! Prism-backed parser entry points.
 //!
 //! Calls `ruby_prism::parse(...)` and lowers the borrowed Prism
-//! `Node<'pr>` tree into the owned `ruruby_parse` AST shape that the
-//! rest of monoruby consumes via [`crate::ast::Node`].
+//! `Node<'pr>` tree into monoruby's owned [`crate::ast::Node`] shape that
+//! the rest of monoruby consumes.
 //!
 //! Prism failures fall into two cases:
 //!
@@ -153,14 +153,14 @@ fn try_prism_inner(
         .and_then(|c| std::str::from_utf8(c.value()).ok().map(str::to_owned));
 
     let source_info: SourceInfoRef = std::rc::Rc::new(
-        ruruby_parse::SourceInfo::new_eval(path, code.to_owned(), line_offset)
+        crate::ast::SourceInfo::new_eval(path, code.to_owned(), line_offset)
             .with_source_encoding(source_encoding),
     );
 
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
-        return Err(MonorubyErr::parse(ruruby_parse::ParseErr {
-            kind: ruruby_parse::ParseErrKind::SyntaxError(format!("prism: {}", diag.message())),
+        return Err(MonorubyErr::parse(crate::ast::ParseErr {
+            kind: crate::ast::ParseErrKind::SyntaxError(format!("prism: {}", diag.message())),
             loc,
             source_info,
         }));
@@ -490,7 +490,7 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::MethodCall {
                         receiver: Box::new(inner),
                         method: "to_sym".to_owned(),
-                        arglist: Box::new(ruruby_parse::ArgList::default()),
+                        arglist: Box::new(crate::ast::ArgList::default()),
                         safe_nav: false,
                     },
                     loc,
@@ -820,7 +820,7 @@ impl<'pr> Lowerer<'pr> {
                     }
                 }
                 let has_splat = args.iter().any(|a| matches!(a.kind, NodeKind::Splat(_)));
-                let mut arglist = ruruby_parse::ArgList::default();
+                let mut arglist = crate::ast::ArgList::default();
                 arglist.args = args;
                 arglist.kw_args = kw_args;
                 arglist.hash_splat = hash_splat;
@@ -857,7 +857,7 @@ impl<'pr> Lowerer<'pr> {
                         // SuperNode path. So we can hand it
                         // straight to `lower_block`.
                         let body = self.lower_block(&block_node)?;
-                        let mut arglist = ruruby_parse::ArgList::default();
+                        let mut arglist = crate::ast::ArgList::default();
                         arglist.block = Some(Box::new(body));
                         NodeKind::Super(Some(Box::new(arglist)))
                     }
@@ -866,7 +866,7 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::YieldNode { .. } => {
                 let n = node.as_yield_node().unwrap();
-                let mut arglist = ruruby_parse::ArgList::default();
+                let mut arglist = crate::ast::ArgList::default();
                 let mut args: Vec<Node> = vec![];
                 let mut kw_args: Vec<(String, Node)> = vec![];
                 let mut hash_splat: Vec<Node> = vec![];
@@ -1052,7 +1052,7 @@ impl<'pr> Lowerer<'pr> {
                     Some(p) => Some(Box::new(self.lower_node(&p)?)),
                     None => None,
                 };
-                let mut when_branches: Vec<ruruby_parse::CaseBranch> = Vec::new();
+                let mut when_branches: Vec<crate::ast::CaseBranch> = Vec::new();
                 for w in n.conditions().iter() {
                     match w {
                         prism::Node::WhenNode { .. } => {
@@ -1072,7 +1072,7 @@ impl<'pr> Lowerer<'pr> {
                                     loc: body_loc,
                                 },
                             };
-                            when_branches.push(ruruby_parse::CaseBranch {
+                            when_branches.push(crate::ast::CaseBranch {
                                 when: conds,
                                 body: Box::new(body),
                             });
@@ -1210,7 +1210,7 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_rescue_modifier_node().unwrap();
                 let body = self.lower_node(&n.expression())?;
                 let rescue_body = self.lower_node(&n.rescue_expression())?;
-                let entry = ruruby_parse::RescueEntry {
+                let entry = crate::ast::RescueEntry {
                     exception_list: vec![],
                     assign: None,
                     body: Box::new(rescue_body),
@@ -2194,7 +2194,7 @@ impl<'pr> Lowerer<'pr> {
             kind: NodeKind::MethodCall {
                 receiver: Box::new(receiver_node),
                 method,
-                arglist: Box::new(ruruby_parse::ArgList::default()),
+                arglist: Box::new(crate::ast::ArgList::default()),
                 safe_nav,
             },
             loc,
@@ -2500,7 +2500,7 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::MethodCall {
                         receiver: Box::new(receiver),
                         method,
-                        arglist: Box::new(ruruby_parse::ArgList::default()),
+                        arglist: Box::new(crate::ast::ArgList::default()),
                         safe_nav: n.is_safe_navigation(),
                     },
                     loc,
@@ -2526,7 +2526,7 @@ impl<'pr> Lowerer<'pr> {
             },
         };
 
-        let mut rescue_entries: Vec<ruruby_parse::RescueEntry> = Vec::new();
+        let mut rescue_entries: Vec<crate::ast::RescueEntry> = Vec::new();
         if let Some(first) = node.rescue_clause() {
             let mut current = first;
             loop {
@@ -2573,7 +2573,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_rescue_entry(
         &mut self,
         node: &RescueNode<'pr>,
-    ) -> Result<ruruby_parse::RescueEntry, MonorubyErr> {
+    ) -> Result<crate::ast::RescueEntry, MonorubyErr> {
         let mut exception_list: Vec<Node> = Vec::new();
         for ex in node.exceptions().iter() {
             exception_list.push(self.lower_node(&ex)?);
@@ -2593,7 +2593,7 @@ impl<'pr> Lowerer<'pr> {
                 loc: body_loc,
             },
         };
-        Ok(ruruby_parse::RescueEntry {
+        Ok(crate::ast::RescueEntry {
             exception_list,
             assign,
             body: Box::new(body),
@@ -2850,7 +2850,7 @@ impl<'pr> Lowerer<'pr> {
 
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
+            (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first so the LvarCollector's special
                 // fields (kw / kwrest / block / forwarding_param) get
                 // populated through the proper insert helpers; then
@@ -2917,7 +2917,7 @@ impl<'pr> Lowerer<'pr> {
         let loc = location_to_loc(&node.location());
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
+            (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 let params = match node.parameters() {
                     None => Vec::new(),
                     Some(p) => match p {
@@ -2945,7 +2945,7 @@ impl<'pr> Lowerer<'pr> {
                             let ip = p.as_it_parameters_node().unwrap();
                             let ip_loc = location_to_loc(&ip.location());
                             this.lvars.insert("it");
-                            vec![ruruby_parse::FormalParam {
+                            vec![crate::ast::FormalParam {
                                 kind: ParamKind::Param("it".to_string()),
                                 loc: ip_loc,
                             }]
@@ -2992,7 +2992,7 @@ impl<'pr> Lowerer<'pr> {
         // partially-built block scope into the outer lowerer.
         let saved = std::mem::take(&mut self.lvars);
         let result =
-            (|this: &mut Self| -> Result<(Vec<ruruby_parse::FormalParam>, Node), MonorubyErr> {
+            (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first (see comment on the def-node lowerer for
                 // why), then top up the rest from `node.locals()`.
                 let params = match node.parameters() {
@@ -3023,7 +3023,7 @@ impl<'pr> Lowerer<'pr> {
                             for i in 1..=max {
                                 let name = format!("_{i}");
                                 this.lvars.insert(&name);
-                                out.push(ruruby_parse::FormalParam {
+                                out.push(crate::ast::FormalParam {
                                     kind: ParamKind::Param(name),
                                     loc: np_loc,
                                 });
@@ -3047,7 +3047,7 @@ impl<'pr> Lowerer<'pr> {
                             let ip = p.as_it_parameters_node().unwrap();
                             let ip_loc = location_to_loc(&ip.location());
                             this.lvars.insert("it");
-                            vec![ruruby_parse::FormalParam {
+                            vec![crate::ast::FormalParam {
                                 kind: ParamKind::Param("it".to_string()),
                                 loc: ip_loc,
                             }]
@@ -3098,8 +3098,8 @@ impl<'pr> Lowerer<'pr> {
     fn lower_parameters(
         &mut self,
         params: &ParametersNode<'pr>,
-    ) -> Result<Vec<ruruby_parse::FormalParam>, MonorubyErr> {
-        let mut out: Vec<ruruby_parse::FormalParam> = Vec::new();
+    ) -> Result<Vec<crate::ast::FormalParam>, MonorubyErr> {
+        let mut out: Vec<crate::ast::FormalParam> = Vec::new();
 
         // Required positional: `def f(a, b)` -> Param("a"), Param("b")
         for n in params.requireds().iter() {
@@ -3108,7 +3108,7 @@ impl<'pr> Lowerer<'pr> {
                     let inner = n.as_required_parameter_node().unwrap();
                     let name = constant_name(&inner.name())?;
                     self.lvars.insert(&name);
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Param(name),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3155,7 +3155,7 @@ impl<'pr> Lowerer<'pr> {
                         .map(|(_, l)| *l)
                         .reduce(|a, b| a.merge(b))
                         .unwrap();
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Destruct(destruct),
                         loc: merged,
                     });
@@ -3172,7 +3172,7 @@ impl<'pr> Lowerer<'pr> {
                     let name = constant_name(&inner.name())?;
                     self.lvars.insert(&name);
                     let default = self.lower_node(&inner.value())?;
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Optional(name, Box::new(default)),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3193,7 +3193,7 @@ impl<'pr> Lowerer<'pr> {
                     if let Some(n) = &name {
                         self.lvars.insert(n);
                     }
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Rest(name),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3208,7 +3208,7 @@ impl<'pr> Lowerer<'pr> {
                     // `ParamKind::ImplicitRest` carries that two-faced
                     // semantic; it lowers to a `rest`-slot in
                     // `ParamsInfo` with `rest_is_implicit = true`.
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::ImplicitRest,
                         loc: location_to_loc(&rest.location()),
                     });
@@ -3224,7 +3224,7 @@ impl<'pr> Lowerer<'pr> {
                     let inner = n.as_required_parameter_node().unwrap();
                     let name = constant_name(&inner.name())?;
                     self.lvars.insert(&name);
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Post(Some(name)),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3241,7 +3241,7 @@ impl<'pr> Lowerer<'pr> {
                     let name = constant_name(&inner.name())?;
                     let lid = self.lvars.insert(&name);
                     self.lvars.kw.push(lid);
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Keyword(name, None),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3252,7 +3252,7 @@ impl<'pr> Lowerer<'pr> {
                     let lid = self.lvars.insert(&name);
                     self.lvars.kw.push(lid);
                     let default = self.lower_node(&inner.value())?;
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Keyword(name, Some(Box::new(default))),
                         loc: location_to_loc(&inner.location()),
                     });
@@ -3274,7 +3274,7 @@ impl<'pr> Lowerer<'pr> {
                     if let Some(n) = &name_opt {
                         self.lvars.insert_kwrest_param(n.clone());
                     }
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::KWRest(name_opt),
                         loc,
                     });
@@ -3282,7 +3282,7 @@ impl<'pr> Lowerer<'pr> {
                 prism::Node::ForwardingParameterNode { .. } => {
                     let loc = location_to_loc(&kr.location());
                     self.lvars.insert_delegate_param();
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::Forwarding,
                         loc,
                     });
@@ -3298,7 +3298,7 @@ impl<'pr> Lowerer<'pr> {
                     // shape.
                     let loc = location_to_loc(&kr.location());
                     self.lvars.insert_kwrest_param("nil".to_owned());
-                    out.push(ruruby_parse::FormalParam {
+                    out.push(crate::ast::FormalParam {
                         kind: ParamKind::KWRest(Some("nil".to_owned())),
                         loc,
                     });
@@ -3317,7 +3317,7 @@ impl<'pr> Lowerer<'pr> {
             if let Some(n) = &name {
                 self.lvars.insert_block_param(n.clone());
             }
-            out.push(ruruby_parse::FormalParam {
+            out.push(crate::ast::FormalParam {
                 kind: ParamKind::Block(name),
                 loc,
             });
@@ -3392,7 +3392,7 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 });
             }
-            let mut arglist = ruruby_parse::ArgList::default();
+            let mut arglist = crate::ast::ArgList::default();
             arglist.args = args;
             arglist.kw_args = kw_args;
             arglist.hash_splat = hash_splat;
@@ -3434,7 +3434,7 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             } else {
-                let mut arglist = ruruby_parse::ArgList::default();
+                let mut arglist = crate::ast::ArgList::default();
                 arglist.args = args;
                 Node {
                     kind: NodeKind::MethodCall {
@@ -3483,7 +3483,7 @@ impl<'pr> Lowerer<'pr> {
             });
         }
 
-        let mut arglist = ruruby_parse::ArgList::default();
+        let mut arglist = crate::ast::ArgList::default();
         arglist.args = args;
         arglist.kw_args = kw_args;
         arglist.hash_splat = hash_splat;
@@ -4181,25 +4181,19 @@ $1
     // test honest: it would notice if any layer (parser, bytecodegen,
     // value constructors) lost the encoding on the way through.
     //
-    // We force the prism backend explicitly rather than going through
-    // `Globals::run` (which routes via `MONORUBY_PARSER`): magic-comment
-    // handling is prism-only, and `bin/test` runs the suite a second
-    // time with `MONORUBY_PARSER=ruruby` for coverage of the legacy
-    // backend — every test in this module is prism-specific by design.
+    // These go through the full parse → bytecode → eval pipeline; prism
+    // is monoruby's only parser, so `crate::parser::parse_program` is the
+    // backend under test.
 
-    /// Drive a short Ruby script through the prism backend explicitly,
+    /// Drive a short Ruby script through the parser explicitly,
     /// returning the final `Value` and the `Globals` it ran against.
     /// Callers inspect the value with the returned `Globals` (needed
     /// for `Value::inspect`).
     fn run_prism_source(source: &str) -> (crate::Globals, crate::Value) {
         let path = std::path::Path::new("(test)");
         let mut globals = crate::Globals::new_test();
-        let parsed = crate::parser::parse_program_with(
-            crate::parser::Backend::Prism,
-            source.to_owned(),
-            path,
-        )
-        .expect("parse_program_with(Prism)");
+        let parsed = crate::parser::parse_program(source.to_owned(), path)
+            .expect("parse_program");
         let fid = crate::bytecodegen::bytecode_compile_script(&mut globals, parsed)
             .expect("bytecode_compile_script");
         let mut executor = crate::executor::Executor::init(&mut globals, "(test)")

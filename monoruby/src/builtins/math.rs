@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use std::os::raw::c_int;
 
@@ -86,7 +87,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class("DomainError", standarderr, klass);
     globals.set_constant_by_str(klass, "PI", Value::float(std::f64::consts::PI));
     globals.set_constant_by_str(klass, "E", Value::float(std::f64::consts::E));
-    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, Box::new(math_sqrt), 1);
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, inline_gen2!(math_sqrt), 1);
 
     globals.define_builtin_module_cfunc_f_f(klass, "cos", cos, extern_cos, 1);
     globals.define_builtin_module_cfunc_f_f(klass, "sin", sin, extern_sin, 1);
@@ -537,6 +538,13 @@ fn lgamma(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             Value::integer(1),
         ));
     }
+    // Pole at zero: log|gamma| is +Infinity, and the sign of gamma is +1 for
+    // +0.0 and -1 for -0.0. Some libm `lgamma_r` (e.g. macOS) report sign 0
+    // here; normalize to match CRuby (and glibc) explicitly.
+    if f == 0.0 {
+        let sign = if f.is_sign_negative() { -1 } else { 1 };
+        return Ok(Value::array2(Value::float(f64::INFINITY), Value::integer(sign)));
+    }
     // SAFETY: lgamma_r is a standard C math function; sign is a valid pointer to a local variable.
     let mut sign: c_int = 0;
     let result = unsafe { c_lgamma_r(f, &mut sign) };
@@ -697,27 +705,10 @@ fn math_sqrt(
     let deopt = ir.new_deopt(state);
     let fret = dst.map(|dst| state.def_F(dst));
     ir.inline(move |r#gen, _, labels, base| {
-        let deopt_label = &labels[deopt];
-        let do_sqrt = r#gen.jit.label();
-        // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
-        // NaN passes through (sqrt(NaN) = NaN); negative values deopt.
-        // -0.0 compares equal to 0.0, so it skips the deopt and sqrtsd
-        // yields -0.0 as CRuby does.
-        // Load the source into xmm0 (works for either pool or spill).
-        r#gen.load_fpr_into_xmm0(fsrc, base);
-        monoasm!( &mut r#gen.jit,
-            xorpd xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jp do_sqrt;
-            jb deopt_label;
-        do_sqrt:
-        );
-        if let Some(fret) = fret {
-            monoasm!( &mut r#gen.jit,
-                sqrtsd xmm0, xmm0;
-            );
-            r#gen.store_fpr_into_xmm(fret, base);
-        }
+        // NaN passes through (sqrt(NaN) = NaN); negative values deopt (the
+        // interpreter re-runs and raises DomainError). -0.0 compares equal to
+        // 0.0, so it skips the deopt and yields -0.0 as CRuby does.
+        r#gen.emit_math_sqrt(fsrc, fret, &labels[deopt], base)
     });
     true
 }
@@ -868,6 +859,22 @@ mod tests {
             "Math.gamma(10)",
         ]);
         run_test_error("Math.gamma(-Float::INFINITY)");
+    }
+
+    #[test]
+    fn math_lgamma_pole() {
+        // At the zero pole log|gamma| is +Infinity; the sign element is +1 for
+        // +0.0 and -1 for -0.0. Guards the platform-independent pole handling
+        // (some libm `lgamma_r`, e.g. macOS, report sign 0 here). Compare the
+        // sign element and infinite?-ness rather than the raw Infinity float
+        // (the test harness's float compare can't equate two infinities).
+        run_tests(&[
+            "Math.lgamma(0)[1]",
+            "Math.lgamma(0.0)[1]",
+            "Math.lgamma(-0.0)[1]",
+            "Math.lgamma(0)[0].infinite?",
+            "Math.lgamma(-0.0)[0].infinite?",
+        ]);
     }
 
     #[test]

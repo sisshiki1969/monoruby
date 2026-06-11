@@ -497,6 +497,99 @@ pub(super) extern "C" fn correct_rest_kw(mut ptr: *const RestKwData, lfp: Lfp) -
     Value::hash(map)
 }
 
+/// Diagnostic for the aarch64 VM bring-up: the unimplemented-opcode
+/// dispatch slot calls this (with the opcode in x0) before trapping, so a
+/// missing handler reports *which* opcode rather than a bare `brk`.
+#[cfg(target_arch = "aarch64")]
+pub extern "C" fn report_unimpl_op(op: u64) {
+    eprintln!("[aarch64 VM] unimplemented opcode: {}", op);
+}
+
+/// Like `vm_get_constant`, but returns `nil` instead of raising when the
+/// constant is undefined (the `CheckConst` op, used for conditional const
+/// definition such as `X ||= ...`).
+pub(crate) extern "C" fn opt_case(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    callid: OptCaseId,
+    idx: Value,
+) -> u32 {
+    globals.store[callid].find(idx)
+}
+
+pub(crate) extern "C" fn invoke_method_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    lfp: Lfp,
+    callsite: CallSiteId,
+) -> Option<Value> {
+    if globals[callsite].name.is_none() {
+        // A super call: CRuby never falls through to method_missing when no
+        // superclass method is found. The error is already set; return None.
+        return None;
+    }
+    vm.discard_error();
+    vm.invoke_method_missing(globals, receiver, lfp, callsite)
+}
+
+pub(crate) extern "C" fn vm_check_constant(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+    const_version: usize,
+) -> Option<Value> {
+    if let Some(cache) = &globals.store[site_id].cache {
+        let base_class = globals.store[site_id]
+            .base
+            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+        if cache.version == const_version && cache.base_class == base_class {
+            return Some(cache.value);
+        };
+    }
+    match vm.find_constant(globals, site_id) {
+        Ok((value, base_class)) => {
+            globals.store[site_id].cache = Some(ConstCache {
+                version: const_version,
+                base_class,
+                value,
+            });
+            Some(value)
+        }
+        Err(_) => Some(Value::nil()),
+    }
+}
+
+pub(crate) extern "C" fn vm_get_constant(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+    const_version: usize,
+) -> Option<Value> {
+    if let Some(cache) = &globals.store[site_id].cache {
+        let base_class = globals.store[site_id]
+            .base
+            .map(|base| unsafe { vm.get_slot(base) }.unwrap());
+        if cache.version == const_version && cache.base_class == base_class {
+            return Some(cache.value);
+        };
+    }
+    match vm.find_constant(globals, site_id) {
+        Ok((value, base_class)) => {
+            globals.store[site_id].cache = Some(ConstCache {
+                version: const_version,
+                base_class,
+                value,
+            });
+            Some(value)
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1219,6 +1312,18 @@ pub(super) extern "C" fn err_redo(vm: &mut Executor) {
 
 pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
+}
+
+///
+/// `EnsureEnd` opcode helper: the `ensure` body for the current frame has
+/// just finished. Restore a deferred `MethodReturn` / `Throw` (suspended
+/// in [`Executor::defer_unwind`] while the body ran) unless the body
+/// raised its own error, which takes precedence. Returns non-zero when an
+/// error is pending and the caller must re-enter `entry_raise`.
+///
+pub(super) extern "C" fn ensure_end(vm: &mut Executor) -> usize {
+    let lfp = vm.cfp().lfp();
+    vm.finish_ensure(lfp).into()
 }
 
 pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {

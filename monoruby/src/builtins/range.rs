@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::{AbstractState, JitContext};
 
 //
 // Range class
@@ -8,15 +9,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
     globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
     globals.store[RANGE_CLASS].set_alloc_func(range_alloc_func);
-    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, Box::new(range_begin), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, inline_gen2!(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
-    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, Box::new(range_end), 0);
+    globals.define_builtin_inline_func(RANGE_CLASS, "end", end, inline_gen2!(range_end), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_inline_func(
         RANGE_CLASS,
         "exclude_end?",
         exclude_end,
-        Box::new(range_exclude_end),
+        inline_gen2!(range_exclude_end),
         0,
     );
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
@@ -103,11 +104,7 @@ fn range_begin(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (crate::rvalue::RANGE_START_OFFSET as i32)];
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_begin());
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
@@ -145,11 +142,7 @@ fn range_end(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movq rax, [rdi + (crate::rvalue::RANGE_END_OFFSET as i32)];
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_end());
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
@@ -257,13 +250,7 @@ fn range_exclude_end(
         return true;
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| {
-        monoasm! { &mut r#gen.jit,
-            movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_exclude_end());
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
