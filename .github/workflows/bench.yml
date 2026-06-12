@@ -492,25 +492,12 @@ jobs:
                 > "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
             fi
 
-            PORTAL_JSON="$RESULTS/portal.json" \
-            ruby -rjson <<'RUBY' >> "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
-            data = JSON.parse(File.read(ENV['PORTAL_JSON']))
-            ts  = data['timestamp']
-            sha = data['commit']
-            q   = ->(s) { s.nil? ? '' : '"' + s.to_s.gsub('"', '""') + '"' }
-            data['benchmarks'].each do |b|
-              mr   = b['monoruby_failed'] ? '' : '%.4f' % b['monoruby_ms']
-              yj   = b['yjit_failed']     ? '' : '%.4f' % b['yjit_ms']
-              ra   = b['ratio']           ? '%.4f' % b['ratio'] : ''
-              mr_r = q.call(b['monoruby_reason'])
-              yj_r = q.call(b['yjit_reason'])
-              puts [ts, sha, b['name'], mr, yj, ra, b['monoruby_failed'], b['yjit_failed'], mr_r, yj_r].join(',')
-            end
-            RUBY
+            ruby "$GITHUB_WORKSPACE/.github/scripts/append_history.rb" \
+              "$RESULTS/portal.json" >> "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
 
             cp "$RESULTS/portal.json" "$GH_PAGES_DIR/$SUBDIR/latest.json"
             cp "$GITHUB_WORKSPACE/.github/bench-pages/index.html" "$GH_PAGES_DIR/$SUBDIR/index.html"
-            echo "published $SUBDIR @ $(ruby -rjson -e 'puts JSON.parse(File.read(ENV["PORTAL_JSON"]))["timestamp"]' PORTAL_JSON="$RESULTS/portal.json")"
+            echo "published $SUBDIR @ $(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0]))["timestamp"]' "$RESULTS/portal.json")"
           }
 
           publish_arch "$GITHUB_WORKSPACE/bench-results-amd64" "bench"
