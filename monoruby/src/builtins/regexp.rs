@@ -890,7 +890,22 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
     }
-    let heystack = arg0.expect_symbol_or_string(globals)?.to_string();
+    // Borrow the subject's bytes directly (and stash the Value for
+    // the zero-copy MatchData snapshot) when it is a UTF-8 String;
+    // Symbols and non-UTF-8 subjects fall back to the owned
+    // conversion as before.
+    let heystack_owned;
+    let heystack: &str = match arg0.is_rstring() {
+        Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
+            vm.set_match_haystack(arg0);
+            // SAFETY: just validated as UTF-8.
+            unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
+        }
+        _ => {
+            heystack_owned = arg0.expect_symbol_or_string(globals)?.to_string();
+            &heystack_owned
+        }
+    };
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(
             pos.coerce_to_int_i64(vm, globals)?,
@@ -910,8 +925,8 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => 0, //return Ok(Value::bool(false)),
     };
     vm.set_match_regex(self_);
-    let md = if let Some(captures) = regex.captures_from_pos(&heystack, byte_pos, vm)? {
-        Value::new_matchdata(captures, &heystack, regex)
+    let md = if let Some(captures) = regex.captures_from_pos(heystack, byte_pos, vm)? {
+        Value::new_matchdata_snap(captures, heystack, vm.resolve_haystack(heystack), regex)
     } else {
         Value::nil()
     };

@@ -884,6 +884,42 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 mod tests {
     use crate::tests::*;
 
+    // The haystack is snapshotted at match time (zero-copy shared
+    // substring + CoW): mutating the subject afterwards must not
+    // change the MatchData or `$~`.
+    #[test]
+    fn match_data_haystack_snapshot() {
+        run_test(
+            r##"
+        s = "hello world foo bar baz " * 10
+        m = s.match(/world (\w+)/)
+        before = [m[0], m[1], m.pre_match.bytesize, m.string.dup]
+        s << "tail"
+        s.setbyte(6, 33)
+        after = [m[0], m[1], m.pre_match.bytesize, m.string]
+        [before == after, m.string.include?("world"), s.getbyte(6)]
+        "##,
+        );
+        run_test(
+            r##"
+        big = "x" * 100 + "needle" + "y" * 100
+        rest = big.byteslice(50..)
+        mt = rest.match(/needle/)
+        big.setbyte(150, 33)
+        [mt[0], mt.pre_match.bytesize, mt.post_match.bytesize]
+        "##,
+        );
+        // Subjects that die before the MatchData does (the snapshot
+        // must keep the haystack alive through GC).
+        run_test(
+            r##"
+        mds = 20.times.map { |i| ("p#{i} " + "x" * 64 + " needle#{i}").match(/needle\d+/) }
+        GC.start
+        mds.each_with_index.map { |m, i| m[0] == "needle#{i}" && m.string.start_with?("p#{i}") }.all?
+        "##,
+        );
+    }
+
     #[test]
     fn match_data() {
         run_tests(&[

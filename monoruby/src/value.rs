@@ -1238,6 +1238,21 @@ impl Value {
         RValue::new_match_data(captures, heystack, regex).pack()
     }
 
+    /// Like `new_matchdata`, but takes the result of
+    /// `Executor::resolve_haystack` so the haystack snapshot can be a
+    /// zero-copy shared substring of the subject String.
+    pub(crate) fn new_matchdata_snap(
+        captures: Captures,
+        heystack: &str,
+        resolved: Option<(Value, usize)>,
+        regex: Regexp,
+    ) -> Self {
+        RValue::new_match_data_from_inner(MatchDataInner::from_capture_snap(
+            captures, heystack, resolved, regex,
+        ))
+        .pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV<'_> {
         if let Some(i) = self.try_fixnum() {
             RV::Fixnum(i)

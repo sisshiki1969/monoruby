@@ -1016,7 +1016,15 @@ impl RegexpInner {
         match re.captures_from_pos(given, byte_pos, vm)? {
             None => Ok(Value::nil()),
             Some(captures) => {
-                let match_data = Value::new_matchdata(captures, given, re);
+                // Zero-copy haystack snapshot when the caller stashed
+                // the subject Value (see `Executor::resolve_haystack`).
+                let md = MatchDataInner::from_capture_snap(
+                    captures,
+                    given,
+                    vm.resolve_haystack(given),
+                    re,
+                );
+                let match_data = RValue::new_match_data_from_inner(md).pack();
                 if let Some(bh) = block {
                     vm.invoke_block_once(globals, bh, &[match_data])
                 } else {

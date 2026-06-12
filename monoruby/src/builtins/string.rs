@@ -1417,6 +1417,8 @@ fn locate_regex_match(
     globals: &mut Globals,
 ) -> Result<(usize, usize)> {
     let given = self_val.expect_str(globals)?;
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(*self_val);
     let captures = match re.captures_from_pos(given, 0, vm)? {
         Some(c) => c,
         None => return Err(MonorubyErr::indexerr("regexp not matched")),
@@ -1864,6 +1866,8 @@ fn enc_char_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> b
 #[monoruby_builtin]
 fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     // Non-UTF-8 receiver + empty String separator: split into
     // characters via the encoding-aware iterator (the generic path
     // below needs a `&str`, which would error for EUC-JP/Shift_JIS).
@@ -2682,6 +2686,8 @@ fn sub_main(
     self_val: Value,
     lfp: Lfp,
 ) -> Result<(RStringInner, bool)> {
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_val);
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -2793,6 +2799,8 @@ fn gsub_main(
     self_val: Value,
     lfp: Lfp,
 ) -> Result<(RStringInner, bool)> {
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_val);
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -2828,6 +2836,8 @@ fn gsub_main(
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.expect_str(globals)?;
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     let arg0 = lfp.arg(0);
     let owned_re;
     let coerced_re;
@@ -2925,6 +2935,8 @@ fn string_match(
     let given = self_.expect_str(globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
+    // Enable zero-copy MatchData/$~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     RegexpInner::match_one(vm, globals, re, given, lfp.block(), pos)
 }
 
@@ -2977,6 +2989,8 @@ fn string_index(
     };
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
         // Non-UTF-8 receiver + String needle: encoding-aware byte
@@ -3037,6 +3051,8 @@ fn string_index(
 fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
@@ -3094,6 +3110,8 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
@@ -3232,6 +3250,8 @@ fn string_rindex(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
+    // Enable zero-copy $~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
     }
