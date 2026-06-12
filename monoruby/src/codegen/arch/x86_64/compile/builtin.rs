@@ -202,6 +202,75 @@ impl Codegen {
         }
     }
 
+    /// `Fiddle.___read` (integer kinds): fixnum pointer in rdi; NULL deopts
+    /// (interpreter raises). Typed load, tagged as a fixnum in rax.
+    pub(crate) fn emit_fiddle_read(&mut self, kind: crate::builtins::FiddleReadKind, deopt: &DestLabel) {
+        use crate::builtins::FiddleReadKind;
+        monoasm! { &mut self.jit,
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+        };
+        match kind {
+            FiddleReadKind::I8 => monoasm! { &mut self.jit, movsxb rax, [rdi]; },
+            FiddleReadKind::U8 => monoasm! { &mut self.jit, movzxb rax, [rdi]; },
+            FiddleReadKind::I16 => monoasm! { &mut self.jit, movsxw rax, [rdi]; },
+            FiddleReadKind::U16 => monoasm! { &mut self.jit, movzxw rax, [rdi]; },
+            FiddleReadKind::I32 => monoasm! { &mut self.jit, movsxl rax, [rdi]; },
+            FiddleReadKind::U32 => monoasm! { &mut self.jit, movl rax, [rdi]; },
+            FiddleReadKind::F64 => unreachable!(),
+        };
+        // Tag as Fixnum: rax = (rax << 1) | 1.
+        monoasm! { &mut self.jit,
+            addq rax, rax;
+            orq rax, 1;
+        };
+    }
+
+    /// `Fiddle.___read` (DOUBLE): fixnum pointer in rdi; NULL deopts. The
+    /// loaded f64 is stored into `fret`.
+    pub(crate) fn emit_fiddle_read_f64(&mut self, fret: FPReg, deopt: &DestLabel, base: usize) {
+        monoasm! { &mut self.jit,
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            movq xmm0, [rdi];
+        };
+        self.store_fpr_into_xmm(fret, base);
+    }
+
+    /// `Fiddle.___write` (integer kinds): fixnum pointer in rdi, fixnum value
+    /// in rsi; NULL deopts. Returns the tagged pointer in rax.
+    pub(crate) fn emit_fiddle_write(&mut self, kind: crate::builtins::FiddleWriteKind, deopt: &DestLabel) {
+        use crate::builtins::FiddleWriteKind;
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            sarq rsi, 1;
+        };
+        match kind {
+            FiddleWriteKind::Int8 => monoasm! { &mut self.jit, movb [rdi], rsi; },
+            FiddleWriteKind::Int16 => monoasm! { &mut self.jit, movw [rdi], rsi; },
+            FiddleWriteKind::Int32 => monoasm! { &mut self.jit, movl [rdi], rsi; },
+            FiddleWriteKind::F64 => unreachable!(),
+        };
+    }
+
+    /// `Fiddle.___write` (DOUBLE): fixnum pointer in rdi, f64 value in `xsrc`;
+    /// NULL deopts. Returns the tagged pointer in rax.
+    pub(crate) fn emit_fiddle_write_f64(&mut self, xsrc: FPReg, deopt: &DestLabel, base: usize) {
+        self.load_fpr_into_xmm0(xsrc, base);
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            movq [rdi], xmm0;
+        };
+    }
+
     /// `Hash#[]`: `hashindex(vm, globals, recv, key)`. recv in rdx, key in rcx.
     /// Result Value in rax (errors via the trailing HandleError).
     pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {

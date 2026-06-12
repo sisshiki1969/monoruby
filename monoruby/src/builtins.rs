@@ -50,14 +50,15 @@ use crate::codegen::jitgen::AbstractState;
 use codegen::jitgen::asmir::*;
 pub use enumerator::YIELDER;
 pub use monoasm::*;
-// The asm macros are only used by the x86-only inline generators
-// (`fiddle`, the x86 `gen_class_new_inline`/`object_send`, and the integer
-// float/shift paths). aarch64 builtins emit no asm directly — they call the
-// `emit_*` Codegen methods in `arch/aarch64/compile.rs`.
+// The asm macros are only used by the remaining x86-only inline generator
+// (`gen_class_new_inline` in class.rs). All other builtins emit no asm
+// directly — they call the per-arch `emit_*` Codegen methods
+// (`arch/x86_64/compile/builtin.rs` / `arch/aarch64/compile.rs`).
 #[cfg(target_arch = "x86_64")]
 pub use monoasm_macro::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
+pub(crate) use fiddle::{ReadKind as FiddleReadKind, WriteKind as FiddleWriteKind};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use kernel::object_send;
 pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};

@@ -17,7 +17,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         "succ",
         &["next"],
         succ,
-        inline_gen!(integer_succ),
+        inline_gen2!(integer_succ),
         0,
     );
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
@@ -539,7 +539,6 @@ fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// The receiver-class guard already pins the receiver to a fixnum (a Bignum
 /// receiver deopts there); i63 overflow deopts to the interpreter, which
 /// returns a Bignum.
-#[cfg(target_arch = "x86_64")]
 fn integer_succ(
     state: &mut AbstractState,
     ir: &mut AsmIr,
