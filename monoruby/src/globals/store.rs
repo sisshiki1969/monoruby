@@ -14,10 +14,6 @@ pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
 
-thread_local! {
-    pub static GLOBAL_METHOD_CACHE: RefCell<GlobalMethodCache> = RefCell::new(GlobalMethodCache::default());
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
     owner: ClassId,
@@ -85,6 +81,12 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
+    /// Global method cache: memoizes `name` × `class` → method-table
+    /// entry lookups, cleared as a whole when class_version moves on.
+    /// In a `RefCell` because lookups happen behind `&Store` (including
+    /// during JIT compilation); the borrow never outlives a single
+    /// cache probe/fill.
+    method_cache: RefCell<GlobalMethodCache>,
 }
 
 impl std::ops::Deref for Store {
@@ -198,6 +200,7 @@ impl Store {
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
             default_neq: None,
+            method_cache: RefCell::new(GlobalMethodCache::default()),
         }
     }
 
@@ -737,7 +740,7 @@ impl Store {
             return true;
         }
         // Resolve via the uncached ancestor walk rather than
-        // GLOBAL_METHOD_CACHE: this runs at most once per class per
+        // `method_cache`: this runs at most once per class per
         // class_version (the memo covers repeats), and it must also be
         // callable from JIT compilation, where the global cache's RefCell
         // may already be borrowed.
@@ -816,15 +819,13 @@ impl Store {
         if class_id == BOOL_CLASS {
             return self.check_bool_method_with_version(name, class_version);
         }
-        GLOBAL_METHOD_CACHE.with(|cache| {
-            let mut c = cache.borrow_mut();
-            if let Some(entry) = c.get(class_id, name, class_version) {
-                return entry.cloned();
-            };
-            let entry = self.classes.search_method_by_class_id(class_id, name);
-            c.insert((name, class_id), class_version, entry.clone());
-            entry
-        })
+        let mut cache = self.method_cache.borrow_mut();
+        if let Some(entry) = cache.get(class_id, name, class_version) {
+            return entry.cloned();
+        };
+        let entry = self.classes.search_method_by_class_id(class_id, name);
+        cache.insert((name, class_id), class_version, entry.clone());
+        entry
     }
 
     /// Resolve `name` against `BOOL_CLASS` by looking up on both
@@ -838,20 +839,18 @@ impl Store {
         name: IdentId,
         class_version: u32,
     ) -> Option<MethodTableEntry> {
-        GLOBAL_METHOD_CACHE.with(|cache| {
-            let mut c = cache.borrow_mut();
-            if let Some(entry) = c.get(BOOL_CLASS, name, class_version) {
-                return entry.cloned();
-            }
-            let true_entry = self.classes.search_method_by_class_id(TRUE_CLASS, name);
-            let false_entry = self.classes.search_method_by_class_id(FALSE_CLASS, name);
-            let entry = match (true_entry, false_entry) {
-                (Some(t), Some(f)) if t.func_id() == f.func_id() => Some(t),
-                _ => None,
-            };
-            c.insert((name, BOOL_CLASS), class_version, entry.clone());
-            entry
-        })
+        let mut cache = self.method_cache.borrow_mut();
+        if let Some(entry) = cache.get(BOOL_CLASS, name, class_version) {
+            return entry.cloned();
+        }
+        let true_entry = self.classes.search_method_by_class_id(TRUE_CLASS, name);
+        let false_entry = self.classes.search_method_by_class_id(FALSE_CLASS, name);
+        let entry = match (true_entry, false_entry) {
+            (Some(t), Some(f)) if t.func_id() == f.func_id() => Some(t),
+            _ => None,
+        };
+        cache.insert((name, BOOL_CLASS), class_version, entry.clone());
+        entry
     }
 
     pub(super) fn invalidate_jit_code(&mut self) {
@@ -927,9 +926,7 @@ impl Store {
 
     #[cfg(feature = "profile")]
     pub fn clear_stats(&mut self) {
-        GLOBAL_METHOD_CACHE.with(|cache| {
-            cache.borrow_mut().clear_stats();
-        });
+        self.method_cache.get_mut().clear_stats();
     }
 
     #[cfg(feature = "profile")]
@@ -937,9 +934,9 @@ impl Store {
         eprintln!("global method cache stats (top 20)");
         eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
         eprintln!("------------------------------------------------------------------------");
-        GLOBAL_METHOD_CACHE.with(|cache| {
-            let c = cache.borrow();
-            let mut v = c.global_method_cache_stats();
+        {
+            let cache = self.method_cache.borrow();
+            let mut v = cache.global_method_cache_stats();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((class_id, name), count) in v.into_iter().take(20) {
                 eprintln!(
@@ -949,7 +946,7 @@ impl Store {
                     count
                 );
             }
-        });
+        }
 
         eprintln!();
         eprintln!("full method exploration stats (top 20)");
@@ -957,9 +954,9 @@ impl Store {
         eprintln!(
             "----------------------------------------------------------------------------------"
         );
-        GLOBAL_METHOD_CACHE.with(|cache| {
-            let c = cache.borrow();
-            let mut v = c.method_exprolation_stats();
+        {
+            let cache = self.method_cache.borrow();
+            let mut v = cache.method_exprolation_stats();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((class_id, name), count) in v.into_iter().take(20) {
                 eprintln!(
@@ -969,7 +966,7 @@ impl Store {
                     count
                 );
             }
-        });
+        }
     }
 }
 
