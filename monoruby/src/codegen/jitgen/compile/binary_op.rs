@@ -232,10 +232,35 @@ impl<'a> JitContext<'a> {
                     state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
                 )?;
                 if let CompileResult::Continue = res {
-                    let src_idx = bc_pos + 1;
                     state.unset_class_version_guard();
                     state.unset_const_version_guard();
-                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                    // An inline gen may have resolved the comparison to a
+                    // state-known constant (e.g. `String == nil` folds to
+                    // `false` under the gen's class guards, LinkMode::C on
+                    // the callsite dst). The trailing branch must then be
+                    // resolved statically, exactly like `TraceIr::CondBr`
+                    // does — emitting a dynamic CondBr here would read a
+                    // result from rax that no code ever produced.
+                    let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+                    let dst = self.store[callid].dst;
+                    if let Some(dst) = dst
+                        && state.is_truthy(dst)
+                    {
+                        if brkind == BrKind::BrIf {
+                            return Ok(CompileResult::Branch(dest_bb));
+                        }
+                        // BrIfNot on a truthy value: branch statically dead.
+                    } else if let Some(dst) = dst
+                        && state.is_falsy(dst)
+                    {
+                        if brkind == BrKind::BrIfNot {
+                            return Ok(CompileResult::Branch(dest_bb));
+                        }
+                        // BrIf on a falsy value: branch statically dead.
+                    } else {
+                        let src_idx = bc_pos + 1;
+                        self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                    }
                 }
                 Ok(res)
             }

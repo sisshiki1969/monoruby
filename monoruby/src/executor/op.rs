@@ -222,11 +222,14 @@ impl Executor {
                 // call `to_str`). Without this branch, the fast path
                 // would short-circuit to `false` and never reach the
                 // builtin, masking custom `==` defined alongside
-                // `to_str` on a mock.
-                if globals.check_method(rhs, IdentId::TO_STR).is_some() {
+                // `to_str` on a mock. `no_to_str` is a version-stamped
+                // memo, so the common `str == nil` case costs a load
+                // instead of a method-table probe.
+                if globals.store.no_to_str(rhs.class(), Globals::class_version()) {
+                    false
+                } else {
                     return self.invoke_eq(globals, rhs, lhs);
                 }
-                false
             }
             _ => self.invoke_eq(globals, lhs, rhs)?,
         };
@@ -248,15 +251,16 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        // Check if the receiver has a custom != method (not the default basic op).
-        // If so, dispatch to it directly instead of negating ==.
+        // Check if the receiver has a custom != method (not a basic op /
+        // the default BasicObject#!=). If so, dispatch to it directly
+        // instead of negating ==. `custom_neq` is memoized per
+        // class_version, so the common unredefined case costs a load
+        // instead of a method-table probe per comparison.
         let class_id = lhs.class();
-        if let Some(entry) = globals.check_method_for_class(class_id, IdentId::_NEQ) {
-            if !entry.is_basic_op() {
-                if let Some(func_id) = entry.func_id() {
-                    let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
-                    return Ok(b.as_bool());
-                }
+        if let Some(entry) = globals.store.custom_neq(class_id, Globals::class_version()) {
+            if let Some(func_id) = entry.func_id() {
+                let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
+                return Ok(b.as_bool());
             }
         }
         Ok(!self.eq_values_bool(globals, lhs, rhs)?)
