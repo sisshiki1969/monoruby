@@ -1,7 +1,6 @@
 class Integer
-  #def succ
-  #  self + 1
-  #end
+  # succ / next are implemented in Rust (integer.rs) with a JIT inline
+  # specialization.
 
   def to_i
     self
@@ -65,11 +64,6 @@ class Integer
     self
   end
 
-
-  def next
-    self + 1
-  end
-  alias succ next
 
   def pred
     self - 1

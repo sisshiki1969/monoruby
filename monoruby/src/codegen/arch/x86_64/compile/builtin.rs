@@ -119,6 +119,89 @@ impl Codegen {
         }
     }
 
+    /// `String#getbyte`: receiver String in rdi, fixnum index in rsi →
+    /// rax = byte tagged as a fixnum, or nil when the (negative-adjusted)
+    /// index is out of range.
+    pub(crate) fn emit_string_getbyte(&mut self) {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            sarq rsi, 1;
+            // rax = len, rcx = data ptr (inline vs heap storage select)
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
+            cmpq rax, (STRING_INLINE_CAP);
+            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmovgtq rcx, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            // negative index counts back from the end
+            movq rdx, rsi;
+            addq rdx, rax;
+            testq rsi, rsi;
+            cmovsq rsi, rdx;
+            // unsigned bound check covers a still-negative index too
+            cmpq rsi, rax;
+            movq rax, (NIL_VALUE);
+            jae  exit;
+            movzxb rax, [rcx + rsi];
+            salq rax, 1;
+            orq  rax, 1;
+        exit:
+        }
+    }
+
+    /// `String#setbyte`: receiver String in rdi, fixnum index in rsi, fixnum
+    /// byte value in rdx. Deopts when the receiver is frozen or chilled
+    /// (interpreter raises / warns) or the index is out of range
+    /// (interpreter raises IndexError). Keeps the cached code-range
+    /// classification consistent with `RStringInner::set_byte`.
+    ///
+    /// ### destroy
+    /// - rax, rcx, rdx, rsi, r8
+    pub(crate) fn emit_string_setbyte(&mut self, deopt: &DestLabel) {
+        let exit = self.jit.label();
+        let set_unknown = self.jit.label();
+        monoasm! { &mut self.jit,
+            // frozen (0b010) or chilled (0b100) → deopt
+            movzxw rax, [rdi + (RVALUE_OFFSET_FLAG)];
+            testq rax, (0b110);
+            jne  deopt;
+            sarq rsi, 1;
+            sarq rdx, 1;
+            // rax = len, rcx = data ptr (inline vs heap storage select)
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
+            cmpq rax, (STRING_INLINE_CAP);
+            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmovgtq rcx, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            // negative index counts back from the end
+            movq r8, rsi;
+            addq r8, rax;
+            testq rsi, rsi;
+            cmovsq rsi, r8;
+            // out of range (unsigned check covers still-negative) → IndexError
+            cmpq rsi, rax;
+            jae  deopt;
+            movb [rcx + rsi], rdx;
+            // code range cache: poking an ASCII byte into a SevenBit string
+            // keeps SevenBit; anything else degrades to Unknown.
+            cmpb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::SevenBit as u64);
+            jne  set_unknown;
+            testq rdx, (0x80);
+            jeq  exit;
+        set_unknown:
+            movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
+        exit:
+        }
+    }
+
+    /// `Integer#succ` / `#next`: fixnum in rdi; tagged `+1` is `+2` on the
+    /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum).
+    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
+        monoasm! { &mut self.jit,
+            addq rdi, 2;
+            jo   deopt;
+        }
+    }
+
     /// `Hash#[]`: `hashindex(vm, globals, recv, key)`. recv in rdx, key in rcx.
     /// Result Value in rax (errors via the trailing HandleError).
     pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {

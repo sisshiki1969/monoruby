@@ -103,10 +103,22 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(STRING_CLASS, "bytes", bytes, 0);
-    globals.define_builtin_func(STRING_CLASS, "getbyte", getbyte, 1);
+    globals.define_builtin_inline_func(
+        STRING_CLASS,
+        "getbyte",
+        getbyte,
+        inline_gen!(string_getbyte),
+        1,
+    );
     globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "bytesplice", bytesplice, 2, 5, false);
-    globals.define_builtin_func(STRING_CLASS, "setbyte", setbyte, 2);
+    globals.define_builtin_inline_func(
+        STRING_CLASS,
+        "setbyte",
+        setbyte,
+        inline_gen!(string_setbyte),
+        2,
+    );
     globals.define_builtin_func_with_kw(
         STRING_CLASS,
         "each_line",
@@ -3843,6 +3855,70 @@ fn setbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         .as_rstring_inner_mut()
         .set_byte(idx as usize, byte_val as u8);
     Ok(lfp.arg(1))
+}
+
+/// JIT inliner for `String#getbyte`: guards the index to a fixnum (deopt
+/// otherwise — the interpreter handles `to_int` coercion / TypeError) and
+/// emits the load + bounds check inline. Out-of-range yields nil inline, so
+/// `while b = s.getbyte(i)` loops don't deopt at termination.
+#[cfg(target_arch = "x86_64")]
+fn string_getbyte(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    if dst.is_some() {
+        ir.inline(move |r#gen, _, _, _| r#gen.emit_string_getbyte());
+        // result is a fixnum or nil
+        state.def_reg2acc(ir, GP::Rax, dst);
+    }
+    true
+}
+
+/// JIT inliner for `String#setbyte`: guards both arguments to fixnums and
+/// emits the byte store inline. Frozen/chilled receivers and out-of-range
+/// indices deopt — the interpreter raises (or warns and unchills) there.
+#[cfg(target_arch = "x86_64")]
+fn string_setbyte(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args, GP::Rsi);
+    state.load_fixnum(ir, args + 1usize, GP::Rdx);
+    let deopt = ir.new_deopt(state);
+    ir.inline(move |r#gen, _, labels, _| r#gen.emit_string_setbyte(&labels[deopt]));
+    if dst.is_some() {
+        // setbyte returns its value argument (a fixnum after the guard above)
+        state.load(ir, args + 1usize, GP::Rax);
+        state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    }
+    true
 }
 
 ///
