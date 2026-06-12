@@ -3179,6 +3179,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     }
 
+    rindex_set_backref(vm, &re, s, best)?;
     Ok(match best {
         Some(p) => Value::integer(p as i64),
         None => Value::nil(),
@@ -3293,6 +3294,7 @@ fn string_rindex(
     for (char_pos, (byte_pos, _)) in s.char_indices().enumerate() {
         if last_byte_pos == byte_pos {
             if char_pos > max_char_pos {
+                rindex_set_backref(vm, &re, s, last_char_pos.map(|p| char_to_byte_pos(s, p)))?;
                 return Ok(match last_char_pos {
                     Some(pos) => Value::integer(pos as i64),
                     None => Value::nil(),
@@ -3304,11 +3306,16 @@ fn string_rindex(
             continue;
         }
         match re.captures_from_pos(s, byte_pos, vm)? {
-            None => return Ok(Value::integer(last_char_pos.unwrap() as i64)),
+            None => {
+                let pos = last_char_pos.unwrap();
+                rindex_set_backref(vm, &re, s, Some(char_to_byte_pos(s, pos)))?;
+                return Ok(Value::integer(pos as i64));
+            }
             Some(captures) => {
                 last_byte_pos = captures.get(0).unwrap().start();
                 if last_byte_pos == byte_pos {
                     if char_pos > max_char_pos {
+                        rindex_set_backref(vm, &re, s, last_char_pos.map(|p| char_to_byte_pos(s, p)))?;
                         return Ok(match last_char_pos {
                             Some(pos) => Value::integer(pos as i64),
                             None => Value::nil(),
@@ -3333,10 +3340,38 @@ fn string_rindex(
             }
         }
     }
+    rindex_set_backref(vm, &re, s, last_char_pos.map(|p| char_to_byte_pos(s, p)))?;
     Ok(match last_char_pos {
         Some(pos) => Value::integer(pos as i64),
         None => Value::nil(),
     })
+}
+
+
+/// Final `$~` fix-up for the `rindex`-style forward scans: the loop
+/// probes *past* the match it ends up returning, leaving `$~` as the
+/// last (failed or too-far) probe. Re-run one probe at the returned
+/// match's byte position so `$~` reflects the result (CRuby
+/// behaviour); a `None` result clears `$~`.
+fn rindex_set_backref(
+    vm: &mut Executor,
+    re: &Regexp,
+    s: &str,
+    byte_pos: Option<usize>,
+) -> Result<()> {
+    match byte_pos {
+        Some(p) => {
+            re.captures_from_pos(s, p, vm)?;
+        }
+        None => vm.clear_capture_special_variables(),
+    }
+    Ok(())
+}
+
+/// Byte position of character index `cp` in `s` (`s.len()` for the
+/// one-past-the-end position).
+fn char_to_byte_pos(s: &str, cp: usize) -> usize {
+    s.char_indices().nth(cp).map(|(b, _)| b).unwrap_or(s.len())
 }
 
 /// `String#rindex` with a String argument. Splits off from
@@ -7388,6 +7423,33 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn rindex_and_byterindex_set_backref() {
+        // The forward-scan rindex implementations probe past the
+        // returned match; `$~` must still end up as the match at the
+        // returned position (and nil when there is no match).
+        run_tests(&[
+            r##"u = "one two three two one"; [u.rindex(/two/), $~[0], $~.begin(0)]"##,
+            r##"u = "one two three two one"; [u.rindex(/two/, 10), $~[0], $~.begin(0)]"##,
+            r##"u = "one two three two one"; [u.rindex(/zzz/), $~.nil?]"##,
+            r##"u = "one two three two one"; [u.byterindex(/two/), $~[0], $~.begin(0)]"##,
+            r##"u = "one two three two one"; [u.byterindex(/zzz/), $~.nil?]"##,
+            r##"u = "abcabc"; [u.rindex(/b/), $~[0], $~.pre_match]"##,
+        ]);
+    }
+
+    #[test]
+    fn string_match_attaches_regexp_to_backref() {
+        // `$~` saved by `String#match` must carry the Regexp so
+        // named-capture lookup works (used to raise IndexError).
+        run_tests(&[
+            r##""alpha beta".match(/(?<a>\w+) (?<b>\w+)/); [$~[:a], $~[:b]]"##,
+            r##""alpha beta".match(/(?<a>\w+) (?<b>\w+)/); $~.named_captures"##,
+            r##""alpha beta".match(/(?<a>\w+)/); $~.regexp.source"##,
+            r##""x42y".match(/(?<n>\d+)/) { |m| m[:n] } + $~[:n]"##,
+        ]);
+    }
 
     #[test]
     fn string_new_group() {
