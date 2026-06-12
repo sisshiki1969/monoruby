@@ -63,7 +63,7 @@ pub use executor::Executor;
 pub use executor::frame_leak_stats;
 pub use executor::install_panic_hook;
 pub use globals::OBJECT_CLASS;
-pub use globals::load_file;
+pub use globals::{load_file, read_source_file};
 pub use globals::{Globals, MonorubyErr, MonorubyErrKind};
 pub use value::*;
 

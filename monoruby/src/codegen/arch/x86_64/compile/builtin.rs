@@ -168,6 +168,12 @@ impl Codegen {
             sarq rdx, 1;
             // rax = len, rcx = data ptr (inline vs heap storage select)
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            // Shared (copy-on-write) string: the buffer is aliased by
+            // other sharers and must not be written in place — deopt to
+            // the interpreter, which detaches via `owned_mut`.
+            movq r8, (crate::rvalue::STRING_SHARED_TAG);
+            cmpq rax, r8;
+            jeq  deopt;
             lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
             cmpq rax, (STRING_INLINE_CAP);
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];

@@ -302,30 +302,35 @@ fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
-    fn inner(path: &std::path::Path) -> std::io::Result<(String, std::path::PathBuf)> {
-        // Read the file first; this gives a clear error if the file doesn't exist.
-        let mut file_body = String::new();
-        let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
-        file.read_to_string(&mut file_body)?;
-        // Try to canonicalize the path for dedup tracking;
-        // fall back to the original path if canonicalize fails.
-        let resolved_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        Ok((file_body, resolved_path))
-    }
+    read_source_file(path).map_err(|err| MonorubyErr::cant_load(Some(err), path))
+}
 
-    match inner(path) {
-        Ok(res) => {
-            // Closure-measurement hook (Phase 1 of decoupling from a host
-            // Ruby): when MONORUBY_TRACE_LOAD is set, emit every resolved
-            // load path so the transitive stdlib closure can be captured
-            // by running the test/spec suite and filtering paths that
-            // resolve under the CRuby $LOAD_PATH vs ~/.monoruby. Gated by
-            // an env var so it has zero cost in normal runs.
-            if std::env::var_os("MONORUBY_TRACE_LOAD").is_some() {
-                eprintln!("MONORUBY_LOADED\t{}", res.1.display());
-            }
-            Ok(res)
-        }
-        Err(err) => Err(MonorubyErr::cant_load(Some(err), path)),
+///
+/// Read a source file, returning the file body and the symlink-resolved
+/// path. Unlike `load_file`, an I/O failure is returned as the raw
+/// `std::io::Error` — callers that sit outside the VM (the program-file
+/// load in `main`) must not produce a `MonorubyErr`, because no frame
+/// exists to push a trace onto and a trace-less error cannot be
+/// displayed properly.
+///
+pub fn read_source_file(
+    path: &std::path::Path,
+) -> std::io::Result<(String, std::path::PathBuf)> {
+    // Read the file first; this gives a clear error if the file doesn't exist.
+    let mut file_body = String::new();
+    let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
+    file.read_to_string(&mut file_body)?;
+    // Try to canonicalize the path for dedup tracking;
+    // fall back to the original path if canonicalize fails.
+    let resolved_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Closure-measurement hook (Phase 1 of decoupling from a host
+    // Ruby): when MONORUBY_TRACE_LOAD is set, emit every resolved
+    // load path so the transitive stdlib closure can be captured
+    // by running the test/spec suite and filtering paths that
+    // resolve under the CRuby $LOAD_PATH vs ~/.monoruby. Gated by
+    // an env var so it has zero cost in normal runs.
+    if std::env::var_os("MONORUBY_TRACE_LOAD").is_some() {
+        eprintln!("MONORUBY_LOADED\t{}", resolved_path.display());
     }
+    Ok((file_body, resolved_path))
 }

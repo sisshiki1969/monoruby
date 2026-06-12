@@ -19,7 +19,7 @@ pub(crate) use dump::log_deoptimize;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
-pub use require::load_file;
+pub use require::{load_file, read_source_file};
 pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));

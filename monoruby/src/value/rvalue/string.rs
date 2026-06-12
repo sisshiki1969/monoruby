@@ -494,6 +494,89 @@ impl Encoding {
     }
 }
 
+/// Tag stored in the `capacity` slot of a *shared* `StringContent`.
+///
+/// A real `SmallVec` capacity can never be `isize::MAX` (Rust
+/// allocations are bounded by `isize::MAX` bytes), so the value is an
+/// unambiguous discriminant. It is deliberately `isize::MAX` rather
+/// than `usize::MAX`: the JIT's inline `String#bytesize` / `#getbyte`
+/// select inline-vs-heap storage with a *signed* `capa > INLINE_CAP`
+/// compare (`cmovgt` / `csel gt`), so the tag must stay positive to
+/// route shared strings onto the heap path (where the shared `ptr` /
+/// `len` overlay the spilled SmallVec's fields — see `SharedContent`).
+pub(crate) const STRING_SHARED_TAG: usize = isize::MAX as usize;
+
+/// Payload of a shared (zero-copy substring) `StringContent`. Field
+/// order is layout-critical: it overlays the vendored `SmallVec`
+/// (whose layout the JIT already depends on via `smallvec::OFFSET_*`):
+///
+/// | offset | `SmallVec` (spilled)  | `SharedContent` |
+/// |--------|-----------------------|-----------------|
+/// | 0      | capacity              | tag (= `STRING_SHARED_TAG`) |
+/// | 8      | heap ptr              | ptr             |
+/// | 16     | heap len              | len             |
+/// | 24     | (inline tail)         | root            |
+///
+/// Keeping `ptr`/`len` on the spilled heap-ptr/len offsets means the
+/// JIT's read-only inline string ops (`bytesize`, `getbyte`) work on
+/// shared strings without modification; only mutating inline ops
+/// (`setbyte`) need a shared check (they deopt).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SharedContent {
+    tag: usize,
+    /// Start of this string's view, pointing into `root`'s heap buffer.
+    ptr: *const u8,
+    /// Byte length of the view.
+    len: usize,
+    /// The hidden, frozen String that owns the heap buffer. Kept alive
+    /// by the GC via `RValue::mark` on every sharer.
+    root: Value,
+}
+
+/// Byte storage of a Ruby String: either an owned buffer (the plain
+/// `SmallVec`, inline ≤ `STRING_INLINE_CAP` bytes or spilled to the
+/// heap) or a zero-copy view into a frozen root's buffer. The active
+/// variant is discriminated by the first `usize` (the SmallVec
+/// `capacity` slot): `STRING_SHARED_TAG` means shared.
+#[repr(C)]
+union StringContent {
+    owned: ManuallyDrop<SmallVec<[u8; STRING_INLINE_CAP]>>,
+    shared: SharedContent,
+}
+
+impl StringContent {
+    #[inline]
+    fn is_shared(&self) -> bool {
+        // SAFETY: both variants start with a usize (SmallVec's
+        // `capacity` / SharedContent's `tag`), so reading it through
+        // either field is always valid.
+        unsafe { self.shared.tag == STRING_SHARED_TAG }
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        unsafe {
+            if self.is_shared() {
+                // SAFETY: `ptr`/`len` describe a live sub-range of the
+                // root's heap buffer; the root is kept alive by the GC
+                // as long as this sharer is, and its buffer is frozen
+                // (never reallocated).
+                std::slice::from_raw_parts(self.shared.ptr, self.shared.len)
+            } else {
+                &self.owned
+            }
+        }
+    }
+
+    #[inline]
+    fn from_owned(owned: SmallVec<[u8; STRING_INLINE_CAP]>) -> Self {
+        StringContent {
+            owned: ManuallyDrop::new(owned),
+        }
+    }
+}
+
 ///
 /// Ruby-level String.
 ///
@@ -505,12 +588,61 @@ impl Encoding {
 /// `valid_encoding?` / `ascii_only?` / encoding-compatibility checks
 /// don't re-scan on every call.
 ///
-#[derive(Debug, Clone, Eq)]
+/// `content` must stay the first field (the JIT's inline string ops
+/// address it at `RVALUE_OFFSET_KIND + smallvec::OFFSET_*`).
+///
+#[repr(C)]
 pub struct RStringInner {
-    content: SmallVec<[u8; STRING_INLINE_CAP]>,
+    content: StringContent,
     ty: Encoding,
     cr: Cell<CodeRange>,
 }
+
+impl Drop for RStringInner {
+    fn drop(&mut self) {
+        if !self.content.is_shared() {
+            // SAFETY: discriminated by the tag — `owned` is the live
+            // variant here, and it is dropped exactly once.
+            unsafe { ManuallyDrop::drop(&mut self.content.owned) }
+        }
+        // Shared: nothing to drop — the root's buffer is owned by the
+        // root RValue and freed when the GC collects it.
+    }
+}
+
+impl Clone for RStringInner {
+    fn clone(&self) -> Self {
+        let content = if self.content.is_shared() {
+            // Cloning a sharer just adds another sharer of the same
+            // root (O(1)); copy-on-write protects all of them.
+            // SAFETY: tag-discriminated; `shared` is the live variant.
+            StringContent {
+                shared: unsafe { self.content.shared },
+            }
+        } else {
+            // SAFETY: tag-discriminated; `owned` is the live variant.
+            StringContent::from_owned(unsafe { (*self.content.owned).clone() })
+        };
+        RStringInner {
+            content,
+            ty: self.ty,
+            cr: self.cr.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RStringInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RStringInner")
+            .field("content", &self.as_bytes())
+            .field("shared", &self.content.is_shared())
+            .field("ty", &self.ty)
+            .field("cr", &self.cr)
+            .finish()
+    }
+}
+
+impl Eq for RStringInner {}
 
 /// Byte offset of the cached `CodeRange` (`cr`) from the head of an
 /// `RValue` holding a String, for the JIT's inline `String#setbyte`.
@@ -521,19 +653,19 @@ pub const STRING_CR_OFFSET: usize =
 impl std::ops::Deref for RStringInner {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
-        &self.content
+        self.content.as_slice()
     }
 }
 
 impl std::cmp::PartialEq for RStringInner {
     fn eq(&self, other: &Self) -> bool {
-        self.content == other.content
+        self.as_bytes() == other.as_bytes()
     }
 }
 
 impl std::hash::Hash for RStringInner {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.content.hash(state);
+        self.as_bytes().hash(state);
     }
 }
 
@@ -580,7 +712,7 @@ impl RStringInner {
                 Err(err) => Err(MonorubyErr::runtimeerr(format!(
                     "invalid byte sequence: {} {}",
                     err,
-                    String::from_utf8_lossy(&self.content)
+                    String::from_utf8_lossy(self.as_bytes())
                 ))),
             }
         } else {
@@ -970,9 +1102,71 @@ impl RStringInner {
     /// public constructor states its scanning behaviour in one place.
     fn from(content: SmallVec<[u8; STRING_INLINE_CAP]>, ty: Encoding, cr: CodeRange) -> Self {
         RStringInner {
-            content,
+            content: StringContent::from_owned(content),
             ty,
             cr: Cell::new(cr),
+        }
+    }
+
+    /// Construct a zero-copy view of `len` bytes at `ptr` inside
+    /// `root`'s heap buffer. `root` must be a frozen String whose
+    /// content is owned and spilled (so the buffer address is stable
+    /// for the root's lifetime).
+    fn from_shared(root: Value, ptr: *const u8, len: usize, ty: Encoding, cr: CodeRange) -> Self {
+        RStringInner {
+            content: StringContent {
+                shared: SharedContent {
+                    tag: STRING_SHARED_TAG,
+                    ptr,
+                    len,
+                    root,
+                },
+            },
+            ty,
+            cr: Cell::new(cr),
+        }
+    }
+
+    /// Whether this string is a zero-copy view into a shared root's
+    /// buffer.
+    #[inline]
+    pub(crate) fn is_shared(&self) -> bool {
+        self.content.is_shared()
+    }
+
+    /// The hidden root whose buffer this string shares, if any. Used
+    /// by the GC to keep the buffer owner alive.
+    #[inline]
+    pub(crate) fn shared_root(&self) -> Option<Value> {
+        if self.content.is_shared() {
+            // SAFETY: tag-discriminated.
+            Some(unsafe { self.content.shared.root })
+        } else {
+            None
+        }
+    }
+
+    /// Mutation funnel: every write to the byte buffer goes through
+    /// here. A shared string is first detached from its root
+    /// (copy-on-write); an owned string is returned as-is.
+    #[inline]
+    fn owned_mut(&mut self) -> &mut SmallVec<[u8; STRING_INLINE_CAP]> {
+        if self.content.is_shared() {
+            self.uniquify();
+        }
+        // SAFETY: owned is the live variant (just uniquified if needed).
+        unsafe { &mut self.content.owned }
+    }
+
+    /// Detach a shared string from its root by copying the viewed
+    /// bytes into a fresh owned buffer (the "write" half of
+    /// copy-on-write).
+    fn uniquify(&mut self) {
+        if self.content.is_shared() {
+            let owned = SmallVec::from_slice(self.content.as_slice());
+            // Plain assignment: the old value is shared, so RStringInner's
+            // Drop has nothing to release for it.
+            self.content = StringContent::from_owned(owned);
         }
     }
 
@@ -993,7 +1187,7 @@ impl RStringInner {
     pub fn code_range(&self) -> CodeRange {
         match self.cr.get() {
             CodeRange::Unknown => {
-                let cr = self.ty.classify(&self.content);
+                let cr = self.ty.classify(self.as_bytes());
                 self.cr.set(cr);
                 cr
             }
@@ -1019,18 +1213,18 @@ impl RStringInner {
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
-            | Encoding::Other(_) => self.content.len(),
+            | Encoding::Other(_) => self.len(),
             // UTF-16 / UTF-32 with one extra unit per broken trailing
             // byte. CRuby's `String#length` for these reports the
             // number of *complete* code units plus one per stray byte
             // ("adds 1 (and not 2) for a incomplete surrogate in
             // UTF-16").
             Encoding::Utf16Le | Encoding::Utf16Be => {
-                let len = self.content.len();
+                let len = self.len();
                 len / 2 + len % 2
             }
             Encoding::Utf32Le | Encoding::Utf32Be => {
-                let len = self.content.len();
+                let len = self.len();
                 len / 4 + (len % 4 > 0) as usize
             }
             // UTF-8: count valid scalars and count each invalid byte
@@ -1038,8 +1232,8 @@ impl RStringInner {
             // in UTF-8" rule). Use the cached cr instead of re-running
             // from_utf8 -- a SevenBit string can answer in O(1).
             Encoding::Utf8 => match self.code_range() {
-                CodeRange::SevenBit => self.content.len(),
-                CodeRange::Valid => self.content.iter().filter(|&&b| (b & 0xC0) != 0x80).count(),
+                CodeRange::SevenBit => self.len(),
+                CodeRange::Valid => self.as_bytes().iter().filter(|&&b| (b & 0xC0) != 0x80).count(),
                 CodeRange::Broken => self.iter_char_bytes().count(),
                 // code_range() always populates `cr` to a concrete
                 // variant before returning; Unknown is unreachable.
@@ -1050,7 +1244,7 @@ impl RStringInner {
             // SevenBit range answers in O(1); otherwise walk the
             // encoding-aware character iterator.
             Encoding::EucJp | Encoding::Sjis(_) => match self.code_range() {
-                CodeRange::SevenBit => self.content.len(),
+                CodeRange::SevenBit => self.len(),
                 _ => self.iter_char_bytes().count(),
             },
             // ISO-2022-JP: route through `encoding_rs` to get an
@@ -1060,9 +1254,9 @@ impl RStringInner {
             Encoding::Iso2022Jp => {
                 let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
                     .expect("encoding_rs always supports iso-2022-jp");
-                let (decoded, had_errors) = enc_rs.decode_without_bom_handling(&self.content);
+                let (decoded, had_errors) = enc_rs.decode_without_bom_handling(self.as_bytes());
                 if had_errors {
-                    self.content.len()
+                    self.len()
                 } else {
                     decoded.chars().count()
                 }
@@ -1076,7 +1270,7 @@ impl RStringInner {
     /// without converting through a `&str`.
     pub fn iter_char_bytes(&self) -> CharByteIter<'_> {
         CharByteIter {
-            bytes: &self.content,
+            bytes: self.as_bytes(),
             pos: 0,
             encoding: self.ty,
         }
@@ -1142,8 +1336,8 @@ impl RStringInner {
         if self.encoding() == other.encoding() {
             return Some(self.encoding());
         }
-        let self_empty = self.content.is_empty();
-        let other_empty = other.content.is_empty();
+        let self_empty = self.is_empty();
+        let other_empty = other.is_empty();
         // Both empty: left wins unconditionally (CRuby preserves
         // the receiver's declared encoding when both sides carry
         // no bytes — even when the encodings are non-ASCII-compat
@@ -1201,7 +1395,7 @@ impl RStringInner {
             || (self.ty == Encoding::Utf8 && matches!(cr, CodeRange::Valid))
         {
             // SAFETY: see above.
-            return Ok(unsafe { std::str::from_utf8_unchecked(&self.content) });
+            return Ok(unsafe { std::str::from_utf8_unchecked(self.as_bytes()) });
         }
         match std::str::from_utf8(self) {
             Ok(s) => Ok(s),
@@ -1376,10 +1570,17 @@ impl RStringInner {
     /// byteslice of an already-classified haystack.
     pub fn from_substring(parent: &RStringInner, start: usize, end: usize) -> Self {
         RStringInner::from(
-            SmallVec::from_slice(&parent.content[start..end]),
+            SmallVec::from_slice(&parent.as_bytes()[start..end]),
             parent.encoding(),
             Self::propagated_cr(parent, start, end),
         )
+    }
+
+    /// Owned, with the byte buffer spilled to the heap (so its address
+    /// is stable and shareable).
+    fn owned_spilled(&self) -> bool {
+        // SAFETY: tag-discriminated; `owned` is the live variant.
+        !self.content.is_shared() && unsafe { self.content.owned.spilled() }
     }
 
     /// Determine the child code range for a `start..end` byte-range
@@ -1456,7 +1657,7 @@ impl RStringInner {
     /// `content.len()` are always boundaries; otherwise the byte at
     /// `i` must not be a continuation byte (top two bits != `10`).
     fn is_utf8_char_boundary(parent: &RStringInner, i: usize) -> bool {
-        i == 0 || i == parent.content.len() || (parent.content[i] & 0xC0) != 0x80
+        i == 0 || i == parent.len() || (parent.as_bytes()[i] & 0xC0) != 0x80
     }
 
     /// O(N): build a string from arbitrary bytes with auto-detected
@@ -1477,7 +1678,7 @@ impl RStringInner {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.content
+        self.content.as_slice()
     }
 
     /// Make the buffer C-string compatible without changing the visible
@@ -1498,18 +1699,21 @@ impl RStringInner {
     /// (which may reallocate). `as_bytes`, `len`, `hash`, and equality
     /// of `self` are unchanged — the NUL lives in spare capacity.
     pub fn nul_terminated_buf_ptr(&mut self) -> *mut u8 {
-        let len = self.content.len();
-        if self.content.capacity() <= len {
-            self.content.reserve(1);
+        // C callees may write through the returned pointer, so a shared
+        // string must be detached from its root first (copy-on-write).
+        let buf = self.owned_mut();
+        let len = buf.len();
+        if buf.capacity() <= len {
+            buf.reserve(1);
         }
         // SAFETY: capacity > len after the reserve above, so the byte at
         // offset `len` is owned spare capacity that we can write to.
-        unsafe { self.content.as_mut_ptr().add(len).write(0) };
-        self.content.as_mut_ptr()
+        unsafe { buf.as_mut_ptr().add(len).write(0) };
+        buf.as_mut_ptr()
     }
 
     pub fn set_byte(&mut self, index: usize, byte: u8) {
-        self.content[index] = byte;
+        self.owned_mut()[index] = byte;
         // Phase 1 lets a UTF-8-tagged buffer hold invalid bytes,
         // so we no longer downgrade the encoding tag here.
         //
@@ -1608,7 +1812,7 @@ impl RStringInner {
             Encoding::EucJp | Encoding::Sjis(_) | Encoding::Utf8 => None,
         };
         if let Some(u) = unit {
-            let total = self.content.len();
+            let total = self.len();
             let start_byte = (index * u).min(total);
             let end_byte = ((index + len) * u).min(total);
             return start_byte..end_byte;
@@ -1616,7 +1820,7 @@ impl RStringInner {
         // UTF-8 path: walk per scalar (or per broken byte) so
         // `String#[char_index]` indexes by *characters*, not bytes.
         let mut start_byte: Option<usize> = None;
-        let mut end_byte = self.content.len();
+        let mut end_byte = self.len();
         let mut byte_pos = 0usize;
         for (i, c) in self.iter_char_bytes().enumerate() {
             if i == index {
@@ -1635,7 +1839,7 @@ impl RStringInner {
         match start_byte {
             // `index` past the end but exactly equal to char count
             // is the "append point" — empty range at end.
-            None if index == self.char_length() => self.content.len()..self.content.len(),
+            None if index == self.char_length() => self.len()..self.len(),
             None => 0..0,
             Some(s) => s..end_byte,
         }
@@ -1673,7 +1877,7 @@ impl RStringInner {
             // fall back to lazy re-classify on the next access.
             _ => CodeRange::Unknown,
         };
-        self.content.extend_from_slice(&other.content);
+        self.owned_mut().extend_from_slice(other.as_bytes());
         self.ty = result_enc;
         self.cr.set(new_cr);
         Ok(())
@@ -1706,7 +1910,7 @@ impl RStringInner {
             }
             _ => CodeRange::Unknown,
         };
-        self.content.extend_from_slice(slice);
+        self.owned_mut().extend_from_slice(slice);
         self.cr.set(new_cr);
         Ok(())
     }
@@ -1715,7 +1919,7 @@ impl RStringInner {
     /// `String#append_as_bytes` where deliberately producing
     /// "broken" sequences in the receiver's encoding is permitted.
     pub fn extend_from_slice_no_validate(&mut self, slice: &[u8]) {
-        self.content.extend_from_slice(slice);
+        self.owned_mut().extend_from_slice(slice);
         self.cr.set(CodeRange::Unknown);
     }
 
@@ -1729,7 +1933,7 @@ impl RStringInner {
         } else {
             self.cr.get()
         };
-        RStringInner::from(SmallVec::from_vec(self.content.repeat(len)), self.ty, cr)
+        RStringInner::from(SmallVec::from_vec(self.as_bytes().repeat(len)), self.ty, cr)
     }
 
     /// Mutate `self.content` in place: replace bytes `start..end` with
@@ -1737,23 +1941,24 @@ impl RStringInner {
     /// caller is responsible for re-classifying or otherwise updating
     /// them. The shared low-level shuffling used by `bytesplice_with`.
     fn splice_bytes(&mut self, start: usize, end: usize, replacement: &[u8]) {
+        let buf = self.owned_mut();
         debug_assert!(start <= end);
-        debug_assert!(end <= self.content.len());
+        debug_assert!(end <= buf.len());
         let len = end - start;
-        let new_len = self.content.len() - len + replacement.len();
+        let new_len = buf.len() - len + replacement.len();
         if replacement.len() > len {
             // Need to grow: extend first, then shift the tail right.
             let extra = replacement.len() - len;
-            self.content.resize(new_len, 0);
-            self.content.copy_within(end..new_len - extra, end + extra);
+            buf.resize(new_len, 0);
+            buf.copy_within(end..new_len - extra, end + extra);
         } else if replacement.len() < len {
             // Shrink: shift the tail left, then truncate.
             let shrink = len - replacement.len();
-            let old_len = self.content.len();
-            self.content.copy_within(end..old_len, end - shrink);
-            self.content.truncate(new_len);
+            let old_len = buf.len();
+            buf.copy_within(end..old_len, end - shrink);
+            buf.truncate(new_len);
         }
-        self.content[start..start + replacement.len()].copy_from_slice(replacement);
+        buf[start..start + replacement.len()].copy_from_slice(replacement);
     }
 
     /// Replace byte range `start..start+len` with the bytes of
@@ -1794,8 +1999,8 @@ impl RStringInner {
         // its cached cr tells us in O(1)).
         let utf8_boundaries_ok = matches!(prev_ty, Encoding::Utf8)
             && matches!(prev_cr, CodeRange::Valid | CodeRange::SevenBit)
-            && is_utf8_char_boundary(&self.content, start)
-            && is_utf8_char_boundary(&self.content, end);
+            && is_utf8_char_boundary(self.as_bytes(), start)
+            && is_utf8_char_boundary(self.as_bytes(), end);
 
         self.splice_bytes(start, end, repl_bytes);
         self.ty = result_enc;
@@ -1819,7 +2024,7 @@ impl RStringInner {
         // Slow path: re-classify the whole buffer. Caching the
         // result keeps a chain of in-place splices O(N) rather than
         // O(N²).
-        let cr = self.ty.classify(&self.content);
+        let cr = self.ty.classify(self.as_bytes());
         if matches!(cr, CodeRange::Broken) && self.ty.is_utf8_compatible() {
             // CRuby downgrades to ASCII-8BIT when UTF-8-tagged
             // content becomes invalid; under that tag every byte is
@@ -1855,6 +2060,97 @@ impl RStringInner {
         };
         Ok(ord)
     }
+}
+
+///
+/// Substring `start..end` (byte offsets) of the String `parent`,
+/// returned as a new String `Value`.
+///
+/// When the slice is long enough and the parent's buffer lives on the
+/// heap, the result is a zero-copy *shared* view (CRuby-style shared
+/// substring): the parent's buffer is moved to a hidden frozen root
+/// (or the parent itself serves as the root when it is frozen, or is
+/// already a sharer), and both strings become copy-on-write views of
+/// it. Otherwise this is an ordinary O(len) copy.
+///
+pub(crate) fn string_substring(mut parent: Value, start: usize, end: usize) -> Value {
+    let inner = parent.as_rstring_inner();
+    debug_assert!(start <= end && end <= inner.len());
+    let len = end - start;
+    let ty = inner.encoding();
+    let cr = RStringInner::propagated_cr(inner, start, end);
+    // Share only when the copy would have to heap-allocate anyway
+    // (an inline copy is at most STRING_INLINE_CAP bytes and cheaper
+    // than a root allocation + GC edge).
+    if len > STRING_INLINE_CAP && (inner.is_shared() || inner.owned_spilled()) {
+        let (root, base) = ensure_shared_root(&mut parent);
+        // SAFETY: `base..base+parent.len()` is a live range of the
+        // root's heap buffer and `start..end` is within it.
+        let ptr = unsafe { base.add(start) };
+        Value::string_from_inner(RStringInner::from_shared(root, ptr, len, ty, cr))
+    } else {
+        Value::string_from_inner(RStringInner::from(
+            SmallVec::from_slice(&parent.as_rstring_inner().as_bytes()[start..end]),
+            ty,
+            cr,
+        ))
+    }
+}
+
+///
+/// Make `parent`'s byte buffer shareable and return `(root, base)`:
+/// the (frozen, hidden) String owning the buffer and the address of
+/// `parent`'s first byte within it.
+///
+/// * already a sharer  → its existing root.
+/// * frozen            → `parent` is its own root (the buffer can
+///   never be reallocated; chilled strings are mutable-with-warning
+///   and do NOT qualify).
+/// * mutable + spilled → move the buffer into a fresh hidden frozen
+///   root and turn `parent` into the first sharer; later mutations of
+///   `parent` copy-on-write via `owned_mut`.
+///
+/// The caller must guarantee `parent` is a spilled-or-shared String.
+///
+fn ensure_shared_root(parent: &mut Value) -> (Value, *const u8) {
+    {
+        let inner = parent.as_rstring_inner();
+        if inner.content.is_shared() {
+            // SAFETY: tag-discriminated.
+            let sc = unsafe { inner.content.shared };
+            return (sc.root, sc.ptr);
+        }
+        if parent.is_frozen() {
+            return (*parent, inner.as_ptr());
+        }
+    }
+    // Move the heap buffer out of `parent` into a hidden root.
+    // `parent` is left briefly as a valid empty string: if allocating
+    // the root triggers GC, every object is in a consistent state (the
+    // buffer itself is owned by the local `buf`, unreachable by GC and
+    // therefore safe).
+    let (buf, ty, cr) = {
+        let inner = parent.as_rstring_inner_mut();
+        debug_assert!(inner.owned_spilled());
+        // SAFETY: tag-discriminated; `owned` is the live variant.
+        let buf = std::mem::take(unsafe { &mut *inner.content.owned });
+        (buf, inner.ty, inner.cr.get())
+    };
+    let mut root = Value::string_from_inner(RStringInner::from(buf, ty, cr));
+    root.set_frozen();
+    let root_inner = root.as_rstring_inner();
+    let (ptr, len) = (root_inner.as_ptr(), root_inner.len());
+    // Overwriting the (empty, heap-free) owned content with the shared
+    // variant leaks nothing: an un-spilled SmallVec owns no allocation.
+    parent.as_rstring_inner_mut().content = StringContent {
+        shared: SharedContent {
+            tag: STRING_SHARED_TAG,
+            ptr,
+            len,
+            root,
+        },
+    };
+    (root, ptr)
 }
 
 #[cfg(test)]
@@ -2634,5 +2930,120 @@ mod encoding_tests {
         s.bytesplice_with(1, 0, &repl, &globals.store).unwrap();
         assert_eq!(s.encoding(), Encoding::Ascii8);
         assert_eq!(s.cr.get(), CodeRange::Valid);
+    }
+}
+
+#[cfg(test)]
+mod shared_string_tests {
+    use super::*;
+
+    /// The shared overlay is only sound if `SharedContent`'s fields sit
+    /// exactly on the vendored SmallVec's capacity / heap-ptr / heap-len
+    /// offsets (the JIT's inline `bytesize`/`getbyte` read shared strings
+    /// through those offsets). Verify behaviourally against a spilled
+    /// SmallVec rather than trusting the (non-repr(C)) SmallVec layout.
+    #[test]
+    fn shared_overlay_matches_spilled_smallvec_layout() {
+        assert_eq!(std::mem::offset_of!(SharedContent, tag), smallvec::OFFSET_CAPA);
+        assert_eq!(
+            std::mem::offset_of!(SharedContent, ptr),
+            smallvec::OFFSET_HEAP_PTR
+        );
+        assert_eq!(
+            std::mem::offset_of!(SharedContent, len),
+            smallvec::OFFSET_HEAP_LEN
+        );
+        assert_eq!(
+            std::mem::size_of::<StringContent>(),
+            std::mem::size_of::<SmallVec<[u8; STRING_INLINE_CAP]>>()
+        );
+
+        // A spilled owned buffer read through the `shared` overlay must
+        // expose its heap ptr / len on the same offsets.
+        let bytes: Vec<u8> = (0..100u8).collect();
+        let inner = RStringInner::from(SmallVec::from_slice(&bytes), Encoding::Ascii8, CodeRange::Valid);
+        assert!(inner.owned_spilled());
+        let (ptr, len) = unsafe { (inner.content.shared.ptr, inner.content.shared.len) };
+        assert_eq!(ptr, inner.as_ptr());
+        assert_eq!(len, inner.len());
+        // ... and a real capacity can never collide with the tag.
+        assert_ne!(unsafe { inner.content.shared.tag }, STRING_SHARED_TAG);
+    }
+
+    #[test]
+    fn substring_shares_and_copy_on_write_isolates() {
+        let _globals = Globals::new_test();
+        let src: String = ('a'..='z').cycle().take(200).collect();
+        let mut parent = Value::string(src.clone());
+        assert!(parent.as_rstring_inner().owned_spilled());
+
+        // Long suffix: shared, zero-copy.
+        let mut child = string_substring(parent, 50, 200);
+        assert!(child.as_rstring_inner().is_shared());
+        // Parent has been converted into a sharer of the same hidden root.
+        assert!(parent.as_rstring_inner().is_shared());
+        let root = child.as_rstring_inner().shared_root().unwrap();
+        assert_eq!(parent.as_rstring_inner().shared_root(), Some(root));
+        assert!(root.is_frozen());
+        assert_eq!(child.as_rstring_inner().as_bytes(), &src.as_bytes()[50..200]);
+        assert_eq!(parent.as_rstring_inner().as_bytes(), src.as_bytes());
+        // Both views alias the root's buffer (no copy happened).
+        assert_eq!(
+            unsafe { parent.as_rstring_inner().as_ptr().add(50) },
+            child.as_rstring_inner().as_ptr()
+        );
+
+        // Mutating the parent copies it out; the child is unaffected.
+        parent.as_rstring_inner_mut().set_byte(50, b'!');
+        assert!(!parent.as_rstring_inner().is_shared());
+        assert_eq!(parent.as_rstring_inner().as_bytes()[50], b'!');
+        assert_eq!(child.as_rstring_inner().as_bytes()[0], src.as_bytes()[50]);
+
+        // Mutating the child copies it out; the root stays intact.
+        child.as_rstring_inner_mut().set_byte(0, b'?');
+        assert!(!child.as_rstring_inner().is_shared());
+        assert_eq!(root.as_rstring_inner().as_bytes(), src.as_bytes());
+
+        // Short slices stay plain owned copies.
+        let small = string_substring(parent, 0, 10);
+        assert!(!small.as_rstring_inner().is_shared());
+
+        // A substring of a sharer shares the same root (no chains).
+        let mut parent2 = Value::string(src.clone());
+        let c1 = string_substring(parent2, 10, 190);
+        let c2 = string_substring(c1, 5, 120);
+        assert_eq!(
+            c2.as_rstring_inner().shared_root(),
+            c1.as_rstring_inner().shared_root()
+        );
+        assert_eq!(c2.as_rstring_inner().as_bytes(), &src.as_bytes()[15..130]);
+        let _ = &mut parent2;
+    }
+
+    #[test]
+    fn frozen_parent_is_its_own_root() {
+        let _globals = Globals::new_test();
+        let src: String = ('0'..='9').cycle().take(120).collect();
+        let mut parent = Value::string(src.clone());
+        parent.set_frozen();
+        let child = string_substring(parent, 0, 100);
+        assert!(child.as_rstring_inner().is_shared());
+        // No hidden root was created: the frozen parent serves directly.
+        assert_eq!(child.as_rstring_inner().shared_root(), Some(parent));
+        assert!(!parent.as_rstring_inner().is_shared());
+        assert_eq!(child.as_rstring_inner().as_bytes(), &src.as_bytes()[0..100]);
+    }
+
+    #[test]
+    fn clone_of_sharer_is_cheap_and_isolated() {
+        let _globals = Globals::new_test();
+        let src = "x".repeat(150);
+        let parent = Value::string(src.clone());
+        let child = string_substring(parent, 0, 150);
+        assert!(child.as_rstring_inner().is_shared());
+        let cloned = child.as_rstring_inner().clone();
+        assert!(cloned.is_shared());
+        assert_eq!(cloned.as_ptr(), child.as_rstring_inner().as_ptr());
+        assert_eq!(cloned.as_bytes(), src.as_bytes());
     }
 }

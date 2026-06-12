@@ -30,6 +30,7 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET};
+pub(crate) use string::{string_substring, STRING_SHARED_TAG};
 pub(crate) use string::{eucjp_char_width, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
@@ -824,7 +825,13 @@ impl alloc::GCBox for RValue {
                 ObjTy::FLOAT => {}
                 ObjTy::COMPLEX => self.as_complex().mark(alloc),
                 ObjTy::RATIONAL => self.as_rational().mark(alloc),
-                ObjTy::STRING => {}
+                ObjTy::STRING => {
+                    // A shared substring keeps its (hidden, frozen) root
+                    // alive — the root owns the heap buffer it views.
+                    if let Some(root) = self.as_rstring().shared_root() {
+                        root.mark(alloc)
+                    }
+                }
                 ObjTy::TIME => {}
                 ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
                 ObjTy::RANGE => self.as_range().mark(alloc),

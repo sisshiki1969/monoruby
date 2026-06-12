@@ -136,10 +136,19 @@ fn main() {
     globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
     globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
     let (code, path) = if let Some(file_name) = first {
-        match load_file(&std::path::PathBuf::from(&file_name)) {
+        match read_source_file(&std::path::PathBuf::from(&file_name)) {
             Ok(res) => res,
             Err(err) => {
-                handle_error(err, &globals);
+                // No VM frame exists yet, so a `MonorubyErr` here would
+                // carry no trace and cannot be displayed as a normal
+                // exception. Print CRuby's one-liner instead
+                // (`ruby: No such file or directory -- t.rb (LoadError)`).
+                // `io::Error`'s Display appends ` (os error N)`, which
+                // CRuby's strerror-based message doesn't have — strip it.
+                let msg = err.to_string();
+                let msg = msg.split(" (os error ").next().unwrap();
+                eprintln!("monoruby: {msg} -- {file_name} (LoadError)");
+                std::process::exit(1);
             }
         }
     } else {
