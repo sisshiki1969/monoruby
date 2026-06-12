@@ -90,6 +90,9 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<i64> {
+        if let Some(i) = self.try_fixnum() {
+            return Ok(i);
+        }
         let res = match self.unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => *self,
             _ => self.coerce_to_int(vm, globals)?,

@@ -140,16 +140,20 @@ impl<'a> Iterator for CharByteIter<'a> {
 /// to its declared `encoding`. CRuby's `enum ruby_coderange_type`
 /// equivalent — keeps `valid_encoding?` / `ascii_only?` /
 /// compatibility checks O(1) after the first walk.
+/// `repr(u8)` with fixed discriminants because the JIT's inline
+/// `String#setbyte` pokes the cached classification directly (see
+/// `STRING_CR_OFFSET` / `emit_string_setbyte`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CodeRange {
     /// Not yet computed.
-    Unknown,
+    Unknown = 0,
     /// Every byte is < 0x80; safe under any ASCII-compatible encoding.
-    SevenBit,
+    SevenBit = 1,
     /// Encoding-valid (and contains at least one non-ASCII codepoint).
-    Valid,
+    Valid = 2,
     /// Contains a byte sequence invalid in the declared encoding.
-    Broken,
+    Broken = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -507,6 +511,12 @@ pub struct RStringInner {
     ty: Encoding,
     cr: Cell<CodeRange>,
 }
+
+/// Byte offset of the cached `CodeRange` (`cr`) from the head of an
+/// `RValue` holding a String, for the JIT's inline `String#setbyte`.
+/// `Cell<CodeRange>` has the same layout as `CodeRange` (`repr(u8)`).
+pub const STRING_CR_OFFSET: usize =
+    super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, cr);
 
 impl std::ops::Deref for RStringInner {
     type Target = [u8];

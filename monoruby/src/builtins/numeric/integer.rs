@@ -11,7 +11,15 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.store[INTEGER_CLASS].clear_alloc_func();
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
-    //globals.define_builtin_inline_func(INTEGER_CLASS, "succ", succ, inline_gen!(integer_succ), 0);
+    // `next` is a true alias of `succ`.
+    globals.define_builtin_inline_funcs(
+        INTEGER_CLASS,
+        "succ",
+        &["next"],
+        succ,
+        inline_gen!(integer_succ),
+        0,
+    );
     //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
@@ -511,24 +519,27 @@ fn chr_set_encoding_label(globals: &mut Globals, val: Value, enc_name: &str) {
     }
 }
 
-// Integer#succ is defined in Ruby (integer.rb).
-// The Rust implementation and JIT inline specialization are commented out
-// because the Ruby definition takes precedence at runtime.
-/*
+///
+/// ### Integer#succ / Integer#next
+///
+/// - succ -> Integer
+/// - next -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/succ.html]
 #[monoruby_builtin]
 fn succ(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(match lfp.self_val().unpack() {
-        RV::Fixnum(i) => i
-            .checked_add(1)
-            .map(Value::integer)
-            .unwrap_or_else(|| Value::bigint(BigInt::from(i) + 1)),
+        RV::Fixnum(i) => Value::integer(i + 1),
         RV::BigInt(b) => Value::bigint(b + 1),
-        _ => unimplemented!(),
+        _ => unreachable!(),
     })
 }
 
+/// JIT inliner for `Integer#succ` / `#next`: a tagged-fixnum increment.
+/// The receiver-class guard already pins the receiver to a fixnum (a Bignum
+/// receiver deopts there); i63 overflow deopts to the interpreter, which
+/// returns a Bignum.
 #[cfg(target_arch = "x86_64")]
-
 fn integer_succ(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -536,9 +547,10 @@ fn integer_succ(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() {
+    if !callsite.is_simple() || callsite.pos_num != 0 {
         return false;
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
@@ -551,19 +563,10 @@ fn integer_succ(
 
     let deopt = ir.new_deopt(state);
     state.load(ir, recv, GP::Rdi);
-    ir.inline(move |r#gen, _, labels, _| {
-        let deopt = &labels[deopt];
-        monoasm! { &mut r#gen.jit,
-            addq  rdi, 2;
-            jo    deopt;
-        }
-    });
-    if let Some(dst) = dst {
-        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
-    }
+    ir.inline(move |r#gen, _, labels, _| r#gen.emit_integer_succ(&labels[deopt]));
+    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
-*/
 
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
