@@ -296,6 +296,12 @@ pub struct ClassInfo {
     /// so `a != b` can be computed as `!(a == b)` without dispatch.
     ///
     neq_basic_at: std::cell::Cell<Option<u32>>,
+    ///
+    /// Version-stamped memo: as of class_version `.0`, `=~` on this class
+    /// resolves to FuncId `.1`. Consulted by `Kernel#!~` so the inner
+    /// dispatch costs a load instead of a method-table probe per call.
+    ///
+    match_method_at: std::cell::Cell<Option<(u32, FuncId)>>,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -388,6 +394,7 @@ impl ClassInfo {
             alloc_func: None,
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
+            match_method_at: std::cell::Cell::new(None),
         }
     }
 
@@ -408,6 +415,7 @@ impl ClassInfo {
             alloc_func: self.alloc_func,
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
+            match_method_at: std::cell::Cell::new(None),
         }
     }
 
@@ -429,6 +437,14 @@ impl ClassInfo {
 
     pub(super) fn set_neq_basic_at(&self, version: u32) {
         self.neq_basic_at.set(Some(version));
+    }
+
+    pub(super) fn match_method_at(&self) -> Option<(u32, FuncId)> {
+        self.match_method_at.get()
+    }
+
+    pub(super) fn set_match_method_at(&self, version: u32, fid: FuncId) {
+        self.match_method_at.set(Some((version, fid)));
     }
 
     pub(crate) fn set_alloc_func(&mut self, f: AllocFunc) {

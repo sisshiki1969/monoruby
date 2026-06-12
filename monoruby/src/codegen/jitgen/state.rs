@@ -198,7 +198,7 @@ impl AbstractFrame {
         self.invariants.class_version_guard = true;
     }
 
-    pub(super) fn unset_class_version_guard(&mut self) {
+    pub(crate) fn unset_class_version_guard(&mut self) {
         self.invariants.class_version_guard = false;
     }
 
@@ -210,7 +210,7 @@ impl AbstractFrame {
         self.invariants.const_version_guard = true;
     }
 
-    pub(super) fn unset_const_version_guard(&mut self) {
+    pub(crate) fn unset_const_version_guard(&mut self) {
         self.invariants.const_version_guard = false;
     }
 

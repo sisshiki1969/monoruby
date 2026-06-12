@@ -764,6 +764,26 @@ impl Store {
         self.default_neq = Some(fid);
     }
 
+    ///
+    /// Resolve `=~` on `class_id`, memoized per class_version (same
+    /// pattern as `no_to_str`: the uncached ancestor walk runs at most
+    /// once per class per class_version and is callable during JIT
+    /// compilation, where the global cache's RefCell may be borrowed).
+    /// `None` when the class (chain) defines no `=~`.
+    ///
+    pub(crate) fn match_method(&self, class_id: ClassId, version: u32) -> Option<FuncId> {
+        if let Some((v, fid)) = self[class_id].match_method_at()
+            && v == version
+        {
+            return Some(fid);
+        }
+        let fid = self
+            .search_method_by_class_id(class_id, IdentId::_MATCH)?
+            .func_id()?;
+        self[class_id].set_match_method_at(version, fid);
+        Some(fid)
+    }
+
     pub(crate) fn custom_neq(&self, class_id: ClassId, version: u32) -> Option<MethodTableEntry> {
         if self[class_id].neq_basic_at() == Some(version) {
             return None;
