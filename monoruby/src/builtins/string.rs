@@ -448,6 +448,27 @@ fn string_cmp_const_gen(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(string_eq_bool(vm, globals, lfp)?))
+}
+
+///
+/// ### String#!=
+///
+/// - self != other -> bool
+///
+/// CRuby has no `String#!=`; `str != x` resolves to `BasicObject#!=`,
+/// i.e. the boolean negation of `String#==` *including* its `to_str`
+/// reverse dispatch. This basic op shortcuts the dispatch but must
+/// keep that negation exact — a strict byte-compare here diverges for
+/// a rhs that defines both `to_str` and a custom `==`.
+#[monoruby_builtin]
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(!string_eq_bool(vm, globals, lfp)?))
+}
+
+/// The full `String#==` predicate shared by `==`/`===`/`eql?` and the
+/// `!=` negation.
+fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<bool> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();
     let rhs = lfp.arg(0);
@@ -458,9 +479,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         // empty-string special case in `compatible_encoding`
         // already handles `"".compat("".encode("ISO-2022-JP"))`.
         if lhs != rhs_inner {
-            return Ok(Value::bool(false));
+            return Ok(false);
         }
-        return Ok(Value::bool(lhs.compatible_encoding(&rhs_inner).is_some()));
+        return Ok(lhs.compatible_encoding(&rhs_inner).is_some());
     }
     // CRuby's `String#==` short-circuits on `to_str`: if the rhs
     // *responds to* `to_str`, dispatch to `rhs == self` and let the
@@ -470,30 +491,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if !globals.store.no_to_str(rhs.class(), Globals::class_version()) {
         let result =
             vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
-        return Ok(Value::bool(result.as_bool()));
+        return Ok(result.as_bool());
     }
-    Ok(Value::bool(false))
-}
-
-///
-/// ### String#!=
-///
-/// - self != other -> bool
-///
-/// []
-#[monoruby_builtin]
-fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let lhs = self_.as_rstring_inner();
-    let b = equal(lhs, lfp.arg(0));
-    Ok(Value::bool(!b))
-}
-
-fn equal(lhs: &RStringInner, rhs: Value) -> bool {
-    match rhs.is_rstring_inner() {
-        Some(rhs) => lhs == rhs,
-        None => false,
-    }
+    Ok(false)
 }
 
 fn string_cmp(
@@ -7504,6 +7504,26 @@ mod tests {
         r = []
         100.times { r << v.validate }
         r.uniq
+        "##,
+        );
+    }
+
+    #[test]
+    fn string_neq_to_str_reverse_dispatch() {
+        // CRuby has no String#!=: `str != x` is !(str == x) including the
+        // to_str reverse dispatch. A rhs defining both to_str and a custom
+        // == must flow through that dispatch (and its negation), on the VM
+        // tier, the JIT tier, and explicit send.
+        run_test_once(
+            r##"
+        class StrMock
+          def to_str; "abc"; end
+          def ==(o); o == "abc"; end
+        end
+        m = StrMock.new
+        res = ["abc" != m, "xyz" != m, "abc" == m, "xyz" == m, "abc".send(:!=, m)]
+        30.times { res << ("abc" != m) << ("xyz" != m) }
+        res
         "##,
         );
     }
