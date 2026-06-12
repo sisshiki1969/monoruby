@@ -18,7 +18,7 @@ permissions:
   contents: write
 
 jobs:
-  bench:
+  bench-amd64:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -52,17 +52,10 @@ jobs:
       - name: Patch yjit-bench to record per-benchmark exit codes
         working-directory: ../ruby-bench
         run: |
-          # yjit-bench captures result[:status].exitstatus into bench_failures
-          # but never writes it to disk. Insert one line that dumps the full
-          # {executable: {bench_name: exit_code}} hash next to the other
-          # output files so we can render the cause of failure on the
-          # dashboard.
           ruby - <<'RUBY'
           file = "lib/benchmark_runner/cli.rb"
           src = File.read(file)
           unless src.include?("failures.json")
-            # Single-quoted Ruby string so #{output_path} is preserved
-            # verbatim; it'll be interpolated inside cli.rb at run time.
             insert = '      File.write("#{output_path}.failures.json", JSON.generate(bench_failures))' + "\n\n"
             patched = src.sub(/(^      # Save the output in a text file)/) { insert + $1 }
             raise "could not locate insertion point" if patched == src
@@ -96,15 +89,6 @@ jobs:
           OUT="$GITHUB_WORKSPACE/bench-results"
           mkdir -p "$OUT/data"
 
-          # Cap each benchmark process with `timeout(1)`. yjit-bench parses
-          # the path side of `-e "name::path"` with shellsplit, so any
-          # leading tokens are passed through verbatim and re-joined for
-          # execution. The OOM that took down #416's first run was a
-          # MATCHDATA GC leak (since fixed), but per-process timeouts are a
-          # cheap safety net for any future runaway in monoruby or YJIT --
-          # without them, one hung benchmark drags the rest of the run with
-          # it. Exit codes from `timeout` (124 -> SIGTERM, 137 -> SIGKILL)
-          # are captured below as part of failure reasons.
           ./run_benchmarks.rb \
             --no-sudo \
             --no-pinning \
@@ -116,8 +100,6 @@ jobs:
             -e "yjit::timeout --foreground -k 5 ${YJ_TIMEOUT} $(command -v ruby) --yjit" \
             2>&1 | tee "$OUT/run.log"
 
-          # run_benchmarks.rb exits 1 when at least one benchmark failed.
-          # We always want to publish the partial result.
           true
 
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -160,10 +142,6 @@ jobs:
           mr_to = ENV.fetch('MR_TIMEOUT', '400').to_i
           yj_to = ENV.fetch('YJ_TIMEOUT', '400').to_i
 
-          # Translate a process exit status (as captured by yjit-bench's
-          # $?.exitstatus) into a short human-readable reason. The runtime
-          # is wrapped with `timeout -k 5 N`, so 124 / 137 mean "killed
-          # by timeout"; values > 128 are signals (n - 128).
           reason = ->(status, timeout_s) {
             return nil if status.nil?
             case status
@@ -223,9 +201,8 @@ jobs:
           )
           RUBY
 
-          # Step Summary
           {
-            echo "## Benchmark vs YJIT (yjit-bench)"
+            echo "## Benchmark vs YJIT (yjit-bench, x86-64)"
             echo ""
             echo "monoruby commit: \`$SHORT_SHA\`  (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s)"
             echo ""
@@ -248,16 +225,239 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results
+          name: bench-amd64
           path: bench-results/
           retention-days: 30
 
-      - name: Publish to gh-pages
-        if: github.ref == 'refs/heads/master' || github.event_name == 'schedule'
+  bench-arm64:
+    runs-on: macos-latest
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+
+      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
+        run: gem install bigdecimal --no-document
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps for yjit-bench (macOS)
+        run: |
+          brew install coreutils imagemagick sqlite libpq libyaml libffi pkg-config
+          # GNU coreutils provides `timeout --foreground` used by the bench wrapper.
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install monoruby (release)
+        run: cargo install --path monoruby --locked
+
+      - name: Clone yjit-bench (Shopify/yjit-bench)
+        run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
+
+      - name: Patch yjit-bench to record per-benchmark exit codes
+        working-directory: ../ruby-bench
+        run: |
+          ruby - <<'RUBY'
+          file = "lib/benchmark_runner/cli.rb"
+          src = File.read(file)
+          unless src.include?("failures.json")
+            insert = '      File.write("#{output_path}.failures.json", JSON.generate(bench_failures))' + "\n\n"
+            patched = src.sub(/(^      # Save the output in a text file)/) { insert + $1 }
+            raise "could not locate insertion point" if patched == src
+            File.write(file, patched)
+            puts "patched: writes <output_path>.failures.json"
+          end
+          RUBY
+
+      - name: bundle install yjit-bench
+        working-directory: ../ruby-bench
+        run: |
+          gem install --no-document bundler
+          bundle install || true
+
+      - name: Run yjit-bench (monoruby vs ruby --yjit)
+        id: run
+        working-directory: ../ruby-bench
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MR_TIMEOUT: '400'
+          YJ_TIMEOUT: '400'
+        run: |
+          set +e
+          set -uo pipefail
+
+          OUT="$GITHUB_WORKSPACE/bench-results"
+          mkdir -p "$OUT/data"
+
+          ./run_benchmarks.rb \
+            --no-sudo \
+            --no-pinning \
+            --rss \
+            --harness=harness-warmup \
+            --out_path="$OUT/data" \
+            --out-name="$OUT/data/raw" \
+            -e "monoruby::timeout --foreground -k 5 ${MR_TIMEOUT} $HOME/.cargo/bin/monoruby" \
+            -e "yjit::timeout --foreground -k 5 ${YJ_TIMEOUT} $(command -v ruby) --yjit" \
+            2>&1 | tee "$OUT/run.log"
+
+          true
+
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          {
+            echo "timestamp=$TIMESTAMP"
+            echo "short_sha=$SHORT_SHA"
+            echo "mr_timeout=${MR_TIMEOUT}"
+            echo "yj_timeout=${YJ_TIMEOUT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Aggregate to portal JSON
+        env:
           TIMESTAMP: ${{ steps.run.outputs.timestamp }}
           SHORT_SHA: ${{ steps.run.outputs.short_sha }}
+          MR_TIMEOUT: ${{ steps.run.outputs.mr_timeout }}
+          YJ_TIMEOUT: ${{ steps.run.outputs.yj_timeout }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/bench-results"
+
+          ruby -rjson <<'RUBY' > "$OUT/portal.json"
+          out = ENV['GITHUB_WORKSPACE'] + '/bench-results'
+          raw = JSON.parse(File.read(out + '/data/raw.json'))
+          fails_path = out + '/data/raw.failures.json'
+          fails = File.exist?(fails_path) ? JSON.parse(File.read(fails_path)) : {}
+
+          mr_data = raw.dig('raw_data', 'monoruby') || {}
+          yj_data = raw.dig('raw_data', 'yjit') || {}
+          mr_fails = fails['monoruby'] || {}
+          yj_fails = fails['yjit']     || {}
+          mr_to = ENV.fetch('MR_TIMEOUT', '400').to_i
+          yj_to = ENV.fetch('YJ_TIMEOUT', '400').to_i
+
+          reason = ->(status, timeout_s) {
+            return nil if status.nil?
+            case status
+            when 0   then 'ok'
+            when 1   then 'exit 1'
+            when 124 then "timeout (#{timeout_s}s)"
+            when 137 then "SIGKILL after timeout (#{timeout_s}s)"
+            when 132 then 'SIGILL'
+            when 134 then 'SIGABRT'
+            when 136 then 'SIGFPE'
+            when 138 then 'SIGBUS'
+            when 139 then 'SIGSEGV'
+            when 143 then 'SIGTERM'
+            else
+              if status > 128
+                "signal #{status - 128} (exit #{status})"
+              else
+                "exit #{status}"
+              end
+            end
+          }
+
+          median = ->(arr) {
+            return nil if arr.nil? || arr.empty?
+            s = arr.sort
+            n = s.size
+            n.odd? ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2.0
+          }
+
+          all_names = (mr_data.keys + yj_data.keys + mr_fails.keys + yj_fails.keys).uniq.sort
+
+          benches = all_names.map do |name|
+            mr = mr_data[name]
+            yj = yj_data[name]
+            mr_med = mr ? median.call(mr['bench']) : nil
+            yj_med = yj ? median.call(yj['bench']) : nil
+            mr_ms = (mr_med && mr_med > 0) ? mr_med * 1000.0 : nil
+            yj_ms = (yj_med && yj_med > 0) ? yj_med * 1000.0 : nil
+            ratio = (mr_ms && yj_ms) ? yj_ms / mr_ms : nil
+            {
+              name: name,
+              monoruby_ms: mr_ms,
+              yjit_ms: yj_ms,
+              ratio: ratio,
+              monoruby_failed: mr_ms.nil?,
+              yjit_failed: yj_ms.nil?,
+              monoruby_reason: mr_ms.nil? ? (reason.call(mr_fails[name], mr_to) || 'no result') : nil,
+              yjit_reason:     yj_ms.nil? ? (reason.call(yj_fails[name], yj_to) || 'no result') : nil,
+            }
+          end
+
+          puts JSON.generate(
+            timestamp: ENV['TIMESTAMP'],
+            commit: ENV['SHORT_SHA'],
+            timeouts: { 'monoruby' => mr_to, 'yjit' => yj_to },
+            benchmarks: benches,
+          )
+          RUBY
+
+          {
+            echo "## Benchmark vs YJIT (yjit-bench, aarch64)"
+            echo ""
+            echo "monoruby commit: \`$SHORT_SHA\`  (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s)"
+            echo ""
+            echo "| Benchmark | monoruby (ms) | YJIT (ms) | YJIT / monoruby | monoruby reason | yjit reason |"
+            echo "| --- | ---: | ---: | ---: | --- | --- |"
+            ruby -rjson <<'RUBY'
+          data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
+          data['benchmarks'].each do |b|
+            mr = b['monoruby_failed'] ? '**ERROR**' : '%.3f' % b['monoruby_ms']
+            yj = b['yjit_failed']     ? '**ERROR**' : '%.3f' % b['yjit_ms']
+            ratio = b['ratio'] ? '%.3fx' % b['ratio'] : '-'
+            mr_r = b['monoruby_reason'] || '-'
+            yj_r = b['yjit_reason']     || '-'
+            puts "| #{b['name']} | #{mr} | #{yj} | #{ratio} | #{mr_r} | #{yj_r} |"
+          end
+          RUBY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-arm64
+          path: bench-results/
+          retention-days: 30
+
+  publish:
+    needs: [bench-amd64, bench-arm64]
+    # Run even if one benchmark job failed, so partial results are still published.
+    if: ${{ always() && (github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bench-amd64
+          path: bench-results-amd64/
+
+      - name: Download arm64 results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bench-arm64
+          path: bench-results-arm64/
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -275,36 +475,53 @@ jobs:
             git -C "$GH_PAGES_DIR" remote add origin "$REPO_URL"
           fi
 
+          # publish_arch RESULTS_DIR GH_PAGES_SUBDIR
+          publish_arch() {
+            local RESULTS="$1"
+            local SUBDIR="$2"
+
+            if [ ! -f "$RESULTS/portal.json" ]; then
+              echo "no portal.json for $SUBDIR — skipping"
+              return
+            fi
+
+            mkdir -p "$GH_PAGES_DIR/$SUBDIR/data"
+
+            if [ ! -f "$GH_PAGES_DIR/$SUBDIR/data/history.csv" ]; then
+              echo "timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason" \
+                > "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
+            fi
+
+            PORTAL_JSON="$RESULTS/portal.json" \
+            ruby -rjson <<'RUBY' >> "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
+            data = JSON.parse(File.read(ENV['PORTAL_JSON']))
+            ts  = data['timestamp']
+            sha = data['commit']
+            q   = ->(s) { s.nil? ? '' : '"' + s.to_s.gsub('"', '""') + '"' }
+            data['benchmarks'].each do |b|
+              mr   = b['monoruby_failed'] ? '' : '%.4f' % b['monoruby_ms']
+              yj   = b['yjit_failed']     ? '' : '%.4f' % b['yjit_ms']
+              ra   = b['ratio']           ? '%.4f' % b['ratio'] : ''
+              mr_r = q.call(b['monoruby_reason'])
+              yj_r = q.call(b['yjit_reason'])
+              puts [ts, sha, b['name'], mr, yj, ra, b['monoruby_failed'], b['yjit_failed'], mr_r, yj_r].join(',')
+            end
+            RUBY
+
+            cp "$RESULTS/portal.json" "$GH_PAGES_DIR/$SUBDIR/latest.json"
+            cp "$GITHUB_WORKSPACE/.github/bench-pages/index.html" "$GH_PAGES_DIR/$SUBDIR/index.html"
+            echo "published $SUBDIR @ $(ruby -rjson -e 'puts JSON.parse(File.read(ENV["PORTAL_JSON"]))["timestamp"]' PORTAL_JSON="$RESULTS/portal.json")"
+          }
+
+          publish_arch "$GITHUB_WORKSPACE/bench-results-amd64" "bench"
+          publish_arch "$GITHUB_WORKSPACE/bench-results-arm64" "bench-arm64"
+
           cd "$GH_PAGES_DIR"
-          mkdir -p bench/data
-
-          if [ ! -f bench/data/history.csv ]; then
-            echo "timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason" > bench/data/history.csv
-          fi
-
-          ruby -rjson <<'RUBY' >> bench/data/history.csv
-          data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
-          ts = ENV['TIMESTAMP']
-          sha = ENV['SHORT_SHA']
-          q = ->(s) { s.nil? ? '' : '"' + s.to_s.gsub('"', '""') + '"' }
-          data['benchmarks'].each do |b|
-            mr   = b['monoruby_failed'] ? '' : '%.4f' % b['monoruby_ms']
-            yj   = b['yjit_failed']     ? '' : '%.4f' % b['yjit_ms']
-            ra   = b['ratio'] ? '%.4f' % b['ratio'] : ''
-            mr_r = q.call(b['monoruby_reason'])
-            yj_r = q.call(b['yjit_reason'])
-            puts [ts, sha, b['name'], mr, yj, ra, b['monoruby_failed'], b['yjit_failed'], mr_r, yj_r].join(',')
-          end
-          RUBY
-
-          cp "$GITHUB_WORKSPACE/bench-results/portal.json" bench/latest.json
-          cp "$GITHUB_WORKSPACE/.github/bench-pages/index.html" bench/index.html
-
           git add -A
           if git diff --cached --quiet; then
             echo "no changes to publish"
           else
-            git commit -m "bench: ${TIMESTAMP} (${SHORT_SHA})"
+            git commit -m "bench: $(date -u +%Y-%m-%dT%H:%M:%SZ) (${GITHUB_SHA:0:7})"
             for i in 1 2 3 4; do
               if git push -u origin gh-pages; then
                 break

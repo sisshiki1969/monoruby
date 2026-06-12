@@ -32,13 +32,20 @@
 </style>
 </head>
 <body>
-<h1>monoruby × ruby <code>--yjit</code></h1>
+<h1>monoruby × ruby <code>--yjit</code> <span id="archBadge" style="font-size:0.55em;color:#888;font-weight:400"></span></h1>
 <div class="meta">
   Per-benchmark relative speed against <code>ruby 4.0.1 --yjit</code>, measured on every <code>master</code> push with
   <a href="https://github.com/Shopify/yjit-bench">Shopify/yjit-bench</a> (<code>--rss --harness=harness-warmup</code>).
   Each benchmark process is bounded with <code>timeout(1)</code>; benchmarks that crash or time out are listed in red with the cause.
   Source: <a href="latest.json">latest.json</a>, <a href="data/history.csv">history.csv</a>. Back to <a href="../">portal</a>.
 </div>
+<script>
+  (function() {
+    const arch = location.pathname.includes('arm64') ? 'aarch64' : 'x86-64';
+    document.getElementById('archBadge').textContent = '(' + arch + ')';
+    document.title = 'monoruby — Performance vs YJIT (' + arch + ')';
+  })();
+</script>
 
 <section>
   <h2>Latest snapshot</h2>
