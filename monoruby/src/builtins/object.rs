@@ -370,6 +370,25 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn cmp_dispatch_preserves_return_value() {
+        // A custom `==` / `!=` may return an arbitrary value; the binop
+        // must evaluate to it untouched (CRuby semantics). Reverse
+        // coercion dispatches (`1 == obj`) stay boolean-coerced, and the
+        // default `!=` is the boolean negation of `==`.
+        run_test_once(
+            r##"
+        class CustomEq; def ==(o); "EQ-RAW"; end; end
+        class CustomNe; def ==(o); true; end; def !=(o); "NE-RAW"; end; end
+        e = CustomEq.new
+        n = CustomNe.new
+        res = [e == 1, e != 1, n != 1, n == 1, 1 == e, "a" == e]
+        30.times { res << (e == 1) << (n != 1) }
+        res
+        "##,
+        );
+    }
+
+    #[test]
     fn neq_custom_redefinition() {
         // Exercises the version-stamped `custom_neq` memo: `!=` on a class
         // computes `!(a == b)` while it resolves to the default, and a

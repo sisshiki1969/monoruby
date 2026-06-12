@@ -1613,9 +1613,18 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
+        Ok(self.invoke_eq_raw(globals, lhs, rhs)?.as_bool())
+    }
+
+    /// Dispatch `lhs == rhs` and return the method's value untouched.
+    pub(crate) fn invoke_eq_raw(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
         let func_id = self.find_method(globals, lhs, IdentId::_EQ, true)?;
-        let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
-        Ok(b.as_bool())
+        self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
     }
 
     pub(crate) fn invoke_method_missing(
