@@ -1576,12 +1576,20 @@ impl Codegen {
         // reload recv from the callee self slot (get_class/find_method clobber
         // the caller-saved receiver register; recv was stored there above).
             ldur x3, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
+        // Reserve scratch below the callee frame being built: its slots
+        // (LFP_SELF in particular) live *below* SP, and AAPCS64 has no
+        // red zone, so find_method's C frame would otherwise overwrite
+        // them — boot-breaking once the callee's frame happens to reach
+        // that depth. Mirrors x86 `subq rsp, 1016` around the same call
+        // and the vm_handle_arguments reservation below.
+            sub sp, sp, #(1024);
             mov x9, (runtime::find_method as *const () as u64);
             // x0 = (ClassId to tag the cache with) << 32 | FuncId
             // (low 32 = 0 -> method_missing). The tag is the receiver's
             // IC class, or its real class for a bool receiver whose
             // method is not unified across TrueClass/FalseClass (#713).
             blr x9;
+            add sp, sp, #(1024);
         );
         // Populate the inline cache (X0 = FuncId, preserved across the call).
         self.a64_save_method_cache();

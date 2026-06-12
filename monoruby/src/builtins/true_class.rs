@@ -40,6 +40,18 @@ mod tests {
         res.uniq
         "##,
         );
+        // Super dispatch on a bool receiver (a callsite without a name)
+        // tags the cache with the real class unconditionally. `super`
+        // has no super-method here, so both engines raise NoMethodError.
+        run_test_once(
+            r##"
+        class TrueClass; def label_t713; super rescue "T"; end; end
+        class FalseClass; def label_f713; super rescue "F"; end; end
+        res = []
+        50.times { |i| v = (i % 2 == 0); res << (v ? v.label_t713 : v.label_f713) }
+        res.uniq
+        "##,
+        );
         // A method present on only one of the two classes must not leak
         // to the other through the unified cache.
         run_test_once(
