@@ -169,12 +169,20 @@ cmp_values!(
 );
 
 impl Executor {
-    pub(crate) fn eq_values_bool(
+    ///
+    /// `==` with CRuby-faithful result-value semantics: the fast paths
+    /// produce booleans, and a *reverse* coercion dispatch (`1 == obj`
+    /// re-asking `obj == 1`) coerces the answer to a boolean exactly like
+    /// CRuby's `rb_equal`, but a direct dispatch of the receiver's own
+    /// `==` returns the method's value untouched (`obj == 1` evaluates to
+    /// whatever `obj.==` returned).
+    ///
+    pub(crate) fn eq_values(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
-    ) -> Result<bool> {
+    ) -> Result<Value> {
         let b = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => true,
             (RV::Nil, _) => false,
@@ -182,8 +190,9 @@ impl Executor {
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
             (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
             (RV::Fixnum(_), _) => {
-                // Reverse dispatch: try rhs == lhs
-                return self.invoke_eq(globals, rhs, lhs);
+                // Reverse dispatch: try rhs == lhs (boolean-coerced, like
+                // CRuby's num_equal -> rb_equal)
+                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
             }
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
@@ -191,8 +200,8 @@ impl Executor {
                 bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
             }
             (RV::BigInt(_), _) => {
-                // Reverse dispatch: try rhs == lhs
-                return self.invoke_eq(globals, rhs, lhs);
+                // Reverse dispatch: try rhs == lhs (boolean-coerced)
+                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
             }
             (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
             (RV::Float(lhs), RV::BigInt(rhs)) => {
@@ -200,8 +209,8 @@ impl Executor {
             }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
             (RV::Float(_), _) => {
-                // Reverse dispatch: try rhs == lhs
-                return self.invoke_eq(globals, rhs, lhs);
+                // Reverse dispatch: try rhs == lhs (boolean-coerced)
+                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
             }
             (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
             (RV::Bool(_), _) => false,
@@ -228,29 +237,44 @@ impl Executor {
                 if globals.store.no_to_str(rhs.class(), Globals::class_version()) {
                     false
                 } else {
-                    return self.invoke_eq(globals, rhs, lhs);
+                    return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
                 }
             }
-            _ => self.invoke_eq(globals, lhs, rhs)?,
+            _ => return self.invoke_eq_raw(globals, lhs, rhs),
         };
-        Ok(b)
+        Ok(Value::bool(b))
     }
 
-    pub(crate) fn eq_values_bool_no_opt(
+    pub(crate) fn eq_values_bool(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
-        self.invoke_eq(globals, lhs, rhs)
+        Ok(self.eq_values(globals, lhs, rhs)?.as_bool())
     }
 
-    pub(crate) fn ne_values_bool(
+    pub(crate) fn eq_values_no_opt(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
-    ) -> Result<bool> {
+    ) -> Result<Value> {
+        self.invoke_eq_raw(globals, lhs, rhs)
+    }
+
+    ///
+    /// `!=` with CRuby-faithful result-value semantics: while `!=`
+    /// resolves to a basic op / the default `BasicObject#!=`, the result
+    /// is the boolean negation of `==`; a custom `!=` returns the
+    /// method's value untouched.
+    ///
+    pub(crate) fn ne_values(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
         // Check if the receiver has a custom != method (not a basic op /
         // the default BasicObject#!=). If so, dispatch to it directly
         // instead of negating ==. `custom_neq` is memoized per
@@ -259,25 +283,34 @@ impl Executor {
         let class_id = lhs.class();
         if let Some(entry) = globals.store.custom_neq(class_id, Globals::class_version()) {
             if let Some(func_id) = entry.func_id() {
-                let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
-                return Ok(b.as_bool());
+                return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
             }
         }
-        Ok(!self.eq_values_bool(globals, lhs, rhs)?)
+        Ok(Value::bool(!self.eq_values_bool(globals, lhs, rhs)?))
     }
 
-    pub(crate) fn ne_values_bool_no_opt(
+    pub(crate) fn ne_values_bool(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
     ) -> Result<bool> {
+        Ok(self.ne_values(globals, lhs, rhs)?.as_bool())
+    }
+
+    pub(crate) fn ne_values_no_opt(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
         let func_id = self.find_method(globals, lhs, IdentId::_NEQ, true)?;
-        let b = self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)?;
-        Ok(b.as_bool())
+        self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
     }
 }
 
+// `==` / `!=` wrappers return the dispatched method's value as-is (the
+// fast paths inside `eq_values` / `ne_values` produce booleans).
 macro_rules! eq_values {
     ($op:ident) => {
         paste! {
@@ -287,8 +320,8 @@ macro_rules! eq_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                match vm.[<$op _values_bool>](globals, lhs, rhs) {
-                    Ok(b) => Some(Value::bool(b)),
+                match vm.[<$op _values>](globals, lhs, rhs) {
+                    Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
                         None
@@ -304,8 +337,8 @@ macro_rules! eq_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                match vm.[<$op _values_bool_no_opt>](globals, lhs, rhs) {
-                    Ok(b) => Some(Value::bool(b)),
+                match vm.[<$op _values_no_opt>](globals, lhs, rhs) {
+                    Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
                         None
