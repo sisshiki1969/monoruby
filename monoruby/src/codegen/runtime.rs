@@ -10,20 +10,48 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 // Runtime functions.
 //
 
+/// Resolve the method for a call-site inline-cache miss.
+///
+/// Returns the resolved `FuncId` in the **low 32 bits** (0 = not found /
+/// method_missing; the error, if any, is set on the executor) and the
+/// `ClassId` to **tag the inline cache with** in the **high 32 bits**.
+///
+/// For most receivers the tag is the receiver's class. `true` / `false`
+/// are unified under `BOOL_CLASS` *only when both `TrueClass` and
+/// `FalseClass` resolve the name to the same method* (the
+/// `check_bool_method_with_version` rule). Otherwise the cache is tagged
+/// with the receiver's real class, so the *other* boolean misses and
+/// re-resolves instead of hitting this entry and running the wrong
+/// class's method (#713). Super dispatch (no callsite name) is tagged
+/// with the real class unconditionally.
 pub(super) extern "C" fn find_method(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     recv: Value,
-) -> Option<FuncId> {
-    if let Some(func_name) = globals[callid].name {
+) -> u64 {
+    let name = globals[callid].name;
+    let fid = if let Some(func_name) = name {
         let is_func_call = globals[callid].is_func_call();
         vm.find_method(globals, recv, func_name, is_func_call)
     } else {
         find_super(vm, globals)
     }
     .map_err(|err| vm.set_error(err))
-    .ok()
+    .ok();
+    let cache_class = {
+        let ic_class = recv.class_for_ic();
+        if ic_class == BOOL_CLASS {
+            let unified = match name {
+                Some(name) => globals.store.check_method_for_class(BOOL_CLASS, name).is_some(),
+                None => false,
+            };
+            if unified { BOOL_CLASS } else { recv.class() }
+        } else {
+            ic_class
+        }
+    };
+    ((cache_class.u32() as u64) << 32) | fid.map_or(0, |f| f.get()) as u64
 }
 
 fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {

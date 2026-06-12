@@ -1576,8 +1576,20 @@ impl Codegen {
         // reload recv from the callee self slot (get_class/find_method clobber
         // the caller-saved receiver register; recv was stored there above).
             ldur x3, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
+        // Reserve scratch below the callee frame being built: its slots
+        // (LFP_SELF in particular) live *below* SP, and AAPCS64 has no
+        // red zone, so find_method's C frame would otherwise overwrite
+        // them — boot-breaking once the callee's frame happens to reach
+        // that depth. Mirrors x86 `subq rsp, 1016` around the same call
+        // and the vm_handle_arguments reservation below.
+            sub sp, sp, #(1024);
             mov x9, (runtime::find_method as *const () as u64);
-            blr x9;  // x0 = Option<FuncId> (0 = method_missing)
+            // x0 = (ClassId to tag the cache with) << 32 | FuncId
+            // (low 32 = 0 -> method_missing). The tag is the receiver's
+            // IC class, or its real class for a bool receiver whose
+            // method is not unified across TrueClass/FalseClass (#713).
+            blr x9;
+            add sp, sp, #(1024);
         );
         // Populate the inline cache (X0 = FuncId, preserved across the call).
         self.a64_save_method_cache();
@@ -2038,31 +2050,26 @@ impl Codegen {
 
     /// Stamp the method-call inline cache so the JIT can specialize this call
     /// site (otherwise `pc.method_cache()` stays `None` and every call deopts).
-    /// Mirrors x86 `save_cache`. On entry X0 = the resolved FuncId. Writes
-    /// FuncId @ `[PC+16]`, receiver ClassId @ `[PC+24]` and the current
-    /// class_version @ `[PC+28]` (the layout `method_cache()` reads). The
-    /// receiver is reloaded from its slot `[PC+12]` (rather than trusting a
-    /// register) since `find_method` is a C call that clobbers the caller-saved
-    /// receiver register. X0 is preserved (reloaded from the FuncId cache
-    /// slot); clobbers X1/X2/X11 and the link register.
+    /// Mirrors x86 `save_cache`. On entry X0 = `runtime::find_method`'s packed
+    /// result: the cache-tag ClassId in the high 32 bits and the resolved
+    /// FuncId in the low 32 (the tag is the receiver's IC class, or its real
+    /// class for a bool receiver with a non-unified method — #713). Writes
+    /// FuncId @ `[PC+16]`, the tag ClassId @ `[PC+24]` and the current
+    /// class_version @ `[PC+28]` (the layout `method_cache()` reads). On exit
+    /// X0 = the FuncId (zero-extended); clobbers X1/X11.
     pub(in crate::codegen) fn a64_save_method_cache(&mut self) {
         let cv_addr = self
             .jit
             .get_label_address(&self.class_version_label())
             .as_ptr() as u64;
-        let get_class = self.get_class.clone();
         monoasm_arm64!(&mut self.jit,
-            str w0, [x(PC.0), #(16)];   // CACHED_FUNCID (also our save of X0)
-            ldrh x0, [x(PC.0), #(12)];  // recv slot index
-        );
-        self.a64_slot_value(X0); // X0 = receiver value
-        monoasm_arm64!(&mut self.jit,
-            bl get_class;               // x0 = class(recv)
-            str w0, [x(PC.0), #(24)];   // CACHED_CLASS
+            str w0, [x(PC.0), #(16)];   // CACHED_FUNCID (low 32 bits)
+            lsr x1, x0, #(32);
+            str w1, [x(PC.0), #(24)];   // CACHED_CLASS (cache tag)
             mov x11, (cv_addr);
-            ldr w0, [x11];              // class_version (i32)
-            str w0, [x(PC.0), #(28)];   // CACHED_VERSION
-            ldr w0, [x(PC.0), #(16)];   // reload FuncId into X0 (u32, zero-ext)
+            ldr w1, [x11];              // class_version (i32)
+            str w1, [x(PC.0), #(28)];   // CACHED_VERSION
+            ldr w0, [x(PC.0), #(16)];   // X0 = FuncId (u32, zero-ext)
         );
     }
 
