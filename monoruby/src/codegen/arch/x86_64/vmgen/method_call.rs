@@ -277,7 +277,13 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, [r13 + (CALLSITE_ID)];  // CallSiteId
             movq rax, (runtime::find_method);
-            call rax;   // rax <- Option<FuncId>
+            // rax <- (ClassId to tag the cache with) << 32 | FuncId
+            // (0 = method_missing). The tag differs from r15's
+            // get_class result for a bool receiver whose method is not
+            // unified across TrueClass/FalseClass (#713).
+            call rax;
+            movq r15, rax;
+            shrq r15, 32;
             movl rax, rax;
             popq rcx;
             addq rsp, 1016;
@@ -295,7 +301,9 @@ impl Codegen {
     ///
     /// ### in
     /// - rax: FuncId
-    /// - r15: ClassId of receiver
+    /// - r15: ClassId to tag the cache with (the receiver's IC class,
+    ///   or the real class for a bool receiver with a non-unified
+    ///   method — see `runtime::find_method`)
     ///
     fn save_cache(&mut self) {
         let class_version = self.class_version_label();
