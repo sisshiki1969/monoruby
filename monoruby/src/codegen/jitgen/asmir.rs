@@ -537,7 +537,7 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn generic_binop(
+    pub(crate) fn generic_binop(
         &mut self,
         state: &AbstractFrame,
         lhs: SlotId,

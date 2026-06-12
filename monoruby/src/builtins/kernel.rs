@@ -15,7 +15,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
     globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen2!(kernel_nil), 0);
-    globals.define_builtin_func(kernel_class, "!~", not_match, 1);
+    globals.define_builtin_inline_func(
+        kernel_class,
+        "!~",
+        not_match,
+        inline_gen2!(kernel_not_match),
+        1,
+    );
     //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
@@ -347,10 +353,86 @@ fn kernel_nil(
 ///
 #[monoruby_builtin]
 fn not_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    let res = vm.invoke_method_inner(globals, IdentId::_MATCH, lhs, &[rhs], None, None)?;
+    not_match_inner(vm, globals, lfp.self_val(), lfp.arg(0))
+}
+
+/// `!(lhs =~ rhs)`. The `=~` resolution is memoized per class_version
+/// (`Store::match_method`), so the common case costs a load instead of a
+/// global-method-cache probe per call. Receivers without `=~` keep the
+/// uncached dispatch for its NoMethodError / method_missing semantics.
+fn not_match_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value> {
+    let res = if let Some(fid) = globals
+        .store
+        .match_method(lhs.class(), Globals::class_version())
+    {
+        vm.invoke_func_inner(globals, fid, lhs, &[rhs], None, None)?
+    } else {
+        vm.invoke_method_inner(globals, IdentId::_MATCH, lhs, &[rhs], None, None)?
+    };
     Ok(Value::bool(!res.as_bool()))
+}
+
+/// Runtime arm of the inlined `Kernel#!~` (BinaryOpFn-shaped so the JIT
+/// can emit it via the generic binop call, skipping the `Kernel#!~`
+/// wrapper frame entirely).
+pub(crate) extern "C" fn not_match_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    match not_match_inner(vm, globals, lhs, rhs) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// JIT inliner for `Kernel#!~`: when the receiver class (guarded by the
+/// inline dispatch) resolves `=~`, emit a direct `not_match_values` call
+/// — no `Kernel#!~` frame, and the inner `=~` resolution is the
+/// memoized load. Receivers without `=~` (NoMethodError path) and
+/// non-simple callsites take the generic call.
+fn kernel_not_match(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    // BOOL_CLASS is the IC pseudo-class for bool receivers; it has no
+    // method table of its own to resolve `=~` against.
+    if recv_class == BOOL_CLASS
+        || store.match_method(recv_class, ctx.class_version()).is_none()
+    {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    state.write_back_recv_and_callargs(ir, callsite);
+    let error = ir.new_error(state);
+    ir.generic_binop(state, recv, args, not_match_values);
+    ir.handle_error(error);
+    // The dispatched `=~` can run arbitrary Ruby; invalidate cached
+    // guards so subsequent instructions re-establish them.
+    state.unset_class_version_guard();
+    state.unset_const_version_guard();
+    state.def_rax2acc(ir, dst);
+    true
 }
 
 fn kernel_block_given(
@@ -3760,6 +3842,29 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn not_match_memoized_dispatch() {
+        // Kernel#!~ resolves `=~` through a class_version-stamped memo
+        // (and the JIT inlines the whole call); a later `=~`
+        // (re)definition must be picked up, $~ must still be set, and a
+        // receiver without `=~` keeps NoMethodError.
+        run_test_once(
+            r##"
+        res = []
+        30.times { res << ("abc" !~ /b/) << ("abc" !~ /z/) << (/z/ !~ "ab") }
+        "xyz" !~ /y(z)/
+        res << $1
+        class MatchM713; def =~(o); o == 1; end; end
+        m = MatchM713.new
+        30.times { res << (m !~ 1) << (m !~ 2) }
+        class String; def =~(o); nil; end; end
+        res << ("abc" !~ /b/)
+        res << begin; Object.new !~ /x/; rescue NoMethodError; :nme; end
+        res.uniq
+        "##,
+        );
+    }
 
     #[test]
     fn define_singleton_method_super() {
