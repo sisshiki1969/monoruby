@@ -316,3 +316,31 @@ fn require_removes_loaded_feature_on_failure() {
         "#,
     );
 }
+
+// Regression test for #719: a program file that cannot be loaded used to
+// print only "location not defined.", swallowing the LoadError message.
+// No VM frame exists at program-file load time (there is nothing to push
+// a trace onto), so `main` prints CRuby's one-liner directly instead of
+// routing the failure through `MonorubyErr` display.
+#[test]
+fn unloadable_program_file_prints_loaderror() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .arg("/no/such/monoruby_program.rb")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.trim(),
+        "monoruby: No such file or directory -- /no/such/monoruby_program.rb (LoadError)"
+    );
+
+    // A directory is not loadable either (CRuby: `Is a directory -- ...`).
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .arg("/etc")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.trim(), "monoruby: Is a directory -- /etc (LoadError)");
+}

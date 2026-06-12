@@ -179,7 +179,10 @@ impl MonorubyErr {
                 eprintln!("<internal>: {error_message}");
             }
         } else {
-            eprintln!("location not defined.");
+            // An error constructed outside any VM frame has no trace to
+            // point into, but its message must still surface (an error
+            // should never reach the user as a bare placeholder).
+            eprintln!("monoruby: {}", self.get_error_message(store));
         };
         loc_flag
     }
