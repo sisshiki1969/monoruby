@@ -389,6 +389,21 @@ mod tests {
     }
 
     #[test]
+    fn cmp_dispatch_raw_in_bop_redefined_mode() {
+        // Overwriting a basic op (Integer#!=) trips set_bop_redefine and
+        // flips the VM to the *_no_opt cmp handlers; those must also
+        // dispatch ==/!= raw (and honor the redefined basic op itself).
+        run_test_once(
+            r##"
+        class Integer; def !=(o); "INT-NE"; end; end
+        class CustomEqB; def ==(o); "RAW-B"; end; end
+        e = CustomEqB.new
+        [1 != 2, e == 1, e != 1, "a" == "a", "a" != "b", nil == nil, nil != 1]
+        "##,
+        );
+    }
+
+    #[test]
     fn neq_custom_redefinition() {
         // Exercises the version-stamped `custom_neq` memo: `!=` on a class
         // computes `!(a == b)` while it resolves to the default, and a
