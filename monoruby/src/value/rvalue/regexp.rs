@@ -886,53 +886,81 @@ impl RegexpInner {
         })
     }
 
-    /// Replaces all non-overlapping matches in `given` string with `replace`.
+    /// Replaces all non-overlapping matches in `recv` with the result of
+    /// calling `bh` for each match.
+    ///
+    /// Matching and splicing run against a frozen snapshot of `recv`, so
+    /// they cannot read freed memory if the block reallocates the
+    /// receiver (no use-after-free). The live `recv` is length-checked
+    /// after each block call: a length change raises
+    /// `RuntimeError: "string modified"`, matching CRuby.
     pub(crate) fn replace_all_block(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        given: &str,
+        recv: Value,
         bh: BlockHandler,
         self_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            let mut range = vec![];
-            let data = vm.get_block_data(globals, bh)?;
+            let subject = string_snapshot(recv);
+            let tmp = vm.temp_len();
+            vm.temp_push(subject);
+            let res = re.replace_all_block_inner(vm, globals, subject, recv, bh, self_enc);
+            vm.temp_clear(tmp);
+            res
+        })
+    }
 
-            vm.clear_capture_special_variables();
-            for cap in re.captures_iter(given) {
-                let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-                let m = cap.get(0).unwrap();
+    fn replace_all_block_inner(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        subject: Value,
+        recv: Value,
+        bh: BlockHandler,
+        self_enc: Option<crate::value::Encoding>,
+    ) -> Result<(RStringInner, bool)> {
+        // `subject` is frozen and temp-rooted by the caller, so `given`
+        // and the matched views stay valid across `invoke_block`.
+        let given = subject.as_rstring_inner().check_utf8()?;
+        let recv_len = recv.as_rstring_inner().len();
+        let mut range = vec![];
+        let data = vm.get_block_data(globals, bh)?;
 
-                let matched_str = m.as_str();
-                let matched = Value::string_from_str(matched_str);
-                vm.save_capture_special_variables(&cap, given);
-                let result = vm.invoke_block(globals, &data, &[matched])?;
-                // CRuby raises Encoding::CompatibilityError if the
-                // block returned a String whose encoding can't merge
-                // with self's. Check before stringifying.
-                if let Some(enc) = self_enc {
-                    if let Some(repl_inner) = result.is_rstring_inner() {
-                        let dummy = crate::value::RStringInner::from_encoding(b"", enc);
-                        if dummy.compatible_encoding(&repl_inner).is_none() {
-                            return Err(MonorubyErr::incompatible_encoding(
-                                &globals.store,
-                                enc,
-                                repl_inner.encoding(),
-                            ));
-                        }
+        vm.clear_capture_special_variables();
+        for cap in self.captures_iter(given) {
+            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+            let m = cap.get(0).unwrap();
+
+            let matched = string_substring(subject, m.start(), m.end());
+            vm.save_capture_special_variables(&cap, given);
+            let result = vm.invoke_block(globals, &data, &[matched])?;
+            check_string_not_modified(recv, recv_len)?;
+            // CRuby raises Encoding::CompatibilityError if the
+            // block returned a String whose encoding can't merge
+            // with self's. Check before stringifying.
+            if let Some(enc) = self_enc {
+                if let Some(repl_inner) = result.is_rstring_inner() {
+                    let dummy = crate::value::RStringInner::from_encoding(b"", enc);
+                    if dummy.compatible_encoding(&repl_inner).is_none() {
+                        return Err(MonorubyErr::incompatible_encoding(
+                            &globals.store,
+                            enc,
+                            repl_inner.encoding(),
+                        ));
                     }
                 }
-                let replace = block_result_to_inner(vm, globals, result)?;
-
-                range.push((m.range(), replace));
             }
+            let replace = block_result_to_inner(vm, globals, result)?;
 
-            let is_empty = range.is_empty();
-            let res = RStringInner::splice_all(&globals.store, given, &range)?;
+            range.push((m.range(), replace));
+        }
 
-            Ok((res, !is_empty))
-        })
+        let is_empty = range.is_empty();
+        let res = RStringInner::splice_all(&globals.store, given, &range)?;
+
+        Ok((res, !is_empty))
     }
 
     /// Replaces the first match in `given` string using hash lookup.
@@ -962,35 +990,57 @@ impl RegexpInner {
         })
     }
 
-    /// Replaces all non-overlapping matches in `given` string using hash lookup.
+    /// Replaces all non-overlapping matches in `recv` using hash lookup.
+    /// Like `replace_all_block`: matches against a frozen snapshot (no
+    /// use-after-free if a hash `default_proc` mutates the receiver) and
+    /// raises "string modified" on a live length change after each
+    /// lookup, matching CRuby.
     pub(crate) fn replace_all_hash(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        given: &str,
+        recv: Value,
         hash_val: Value,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            let mut range = vec![];
-
-            vm.clear_capture_special_variables();
-            for cap in re.captures_iter(given) {
-                let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-                let m = cap.get(0).unwrap();
-
-                let matched_str = m.as_str();
-                let key = Value::string_from_str(matched_str);
-                vm.save_capture_special_variables(&cap, given);
-                let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
-
-                range.push((m.range(), replacement));
-            }
-
-            let is_empty = range.is_empty();
-            let res = RStringInner::splice_all(&globals.store, given, &range)?;
-
-            Ok((res, !is_empty))
+            let subject = string_snapshot(recv);
+            let tmp = vm.temp_len();
+            vm.temp_push(subject);
+            let res = re.replace_all_hash_inner(vm, globals, subject, recv, hash_val);
+            vm.temp_clear(tmp);
+            res
         })
+    }
+
+    fn replace_all_hash_inner(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        subject: Value,
+        recv: Value,
+        hash_val: Value,
+    ) -> Result<(RStringInner, bool)> {
+        let given = subject.as_rstring_inner().check_utf8()?;
+        let recv_len = recv.as_rstring_inner().len();
+        let mut range = vec![];
+
+        vm.clear_capture_special_variables();
+        for cap in self.captures_iter(given) {
+            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+            let m = cap.get(0).unwrap();
+
+            let key = string_substring(subject, m.start(), m.end());
+            vm.save_capture_special_variables(&cap, given);
+            let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
+            check_string_not_modified(recv, recv_len)?;
+
+            range.push((m.range(), replacement));
+        }
+
+        let is_empty = range.is_empty();
+        let res = RStringInner::splice_all(&globals.store, given, &range)?;
+
+        Ok((res, !is_empty))
     }
 
     pub(crate) fn match_one(
