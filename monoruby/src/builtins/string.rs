@@ -4597,55 +4597,61 @@ fn split_with_separator_ranges(s: &str, sep: &str, chomp: bool) -> Vec<std::ops:
 }
 
 fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
-    // Paragraph mode: skip leading newlines, then split on runs of 2+
-    // newlines. CRuby keeps `\n\n` at the end of each paragraph (or
-    // strips it when `chomp: true`). Ranges are relative to `s`, so the
-    // skipped leading newlines shift every offset by `base`.
-    let trimmed = s.trim_start_matches('\n');
-    if trimmed.is_empty() {
-        return vec![];
-    }
-    let base = s.len() - trimmed.len();
+    // Paragraph mode (empty record separator): split on a run of two or
+    // more `\n`. Each paragraph keeps exactly the first two newlines of
+    // the run that terminates it (`\n\n`); the remaining newlines in
+    // that run are skipped, not emitted. A leading run of `\n` therefore
+    // forms its own (empty-content) `"\n\n"` paragraph, and a single
+    // leading `\n` stays attached to the following paragraph — matching
+    // CRuby (the previous implementation wrongly stripped *all* leading
+    // newlines). The final paragraph (ending at end-of-string, never on
+    // a 2+ run) is emitted verbatim and is *not* chomped, so a lone
+    // trailing `\n` survives even under `chomp: true`.
+    //
+    // Newline detection is `\n`-only, matching the prior implementation;
+    // CRuby additionally treats `\r\n` pairs as paragraph newlines, but
+    // that is a separate, pre-existing divergence outside this fix.
+    let bytes = s.as_bytes();
+    let pend = bytes.len();
     let mut out = Vec::new();
-    let bytes = trimmed.as_bytes();
-    // Trim trailing `\n`s from a `[start, end)` paragraph when chomping.
-    let push = |out: &mut Vec<std::ops::Range<usize>>, start: usize, end: usize| {
-        let end = if chomp {
-            let mut e = end;
-            while e > start && bytes[e - 1] == b'\n' {
-                e -= 1;
-            }
-            e
-        } else {
-            end
-        };
-        out.push((base + start)..(base + end));
-    };
-    let mut start = 0usize;
     let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'\n' {
-            // Count consecutive newlines starting at i.
-            let mut j = i;
-            while j < bytes.len() && bytes[j] == b'\n' {
-                j += 1;
+    while i < pend {
+        let para_start = i;
+        // Scan forward to the paragraph terminator: the first run of
+        // two or more consecutive `\n`. A lone `\n` is content.
+        let mut p = i;
+        let term = loop {
+            if p >= pend {
+                break None;
             }
-            let nl_count = j - i;
-            if nl_count >= 2 {
-                // Paragraph ends with `\n\n` retained.
-                let para_end = i + 2;
-                push(&mut out, start, para_end);
-                start = j;
-                i = j;
-                continue;
+            if bytes[p] == b'\n' {
+                let mut run_end = p;
+                while run_end < pend && bytes[run_end] == b'\n' {
+                    run_end += 1;
+                }
+                if run_end - p >= 2 {
+                    break Some((p, run_end));
+                }
+                // Single newline: part of the paragraph's content.
+                p = run_end;
+            } else {
+                p += 1;
             }
-            i = j;
-        } else {
-            i += 1;
+        };
+        match term {
+            Some((nl, run_end)) => {
+                // Keep two terminating newlines (none when chomping);
+                // skip the rest of the run.
+                let end = if chomp { nl } else { nl + 2 };
+                out.push(para_start..end);
+                i = run_end;
+            }
+            None => {
+                // Final paragraph: up to end-of-string, never chomped.
+                out.push(para_start..pend);
+                i = pend;
+            }
         }
-    }
-    if start < trimmed.len() {
-        push(&mut out, start, trimmed.len());
     }
     out
 }
@@ -8543,6 +8549,41 @@ mod tests {
         run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
         // end_with? with Regexp raises TypeError
         run_test_error(r#""hello".end_with?(/lo/)"#);
+    }
+
+    #[test]
+    fn lines_paragraph_mode() {
+        // Paragraph mode (empty separator). Differential against CRuby:
+        // leading newline runs form their own `"\n\n"` paragraph, a lone
+        // leading newline stays attached, runs of 3+ keep only two, and
+        // the final (end-of-string) paragraph is never chomped.
+        run_tests(&[
+            r##""\n\nlead\n\nbody".lines("")"##,
+            r##""\n\n\nfoo".lines("")"##,
+            r##""\nx\n\ny".lines("")"##,
+            r##""\n\n".lines("")"##,
+            r##""body\n\nmore".lines("")"##,
+            r##""\nfoo".lines("")"##,
+            r##""foo\n\n\n\nbar".lines("")"##,
+            r##""".lines("")"##,
+            r##""\n".lines("")"##,
+            r##""\n\n\n".lines("")"##,
+            r##""a\n\n\n\nb\n\nc".lines("")"##,
+            r##""\n\nabc".lines("")"##,
+            r##""x\ny\n\nz".lines("")"##,
+            r##""\n\n\n\nq".lines("")"##,
+            // chomp: trailing `\n\n` terminator removed, but a lone
+            // trailing `\n` on the final paragraph survives.
+            r##""\n\nlead\n\nbody".lines("", chomp: true)"##,
+            r##""\nx\n\ny".lines("", chomp: true)"##,
+            r##""\n\n\n".lines("", chomp: true)"##,
+            r##""abc\n".lines("", chomp: true)"##,
+            r##""abc\n\n".lines("", chomp: true)"##,
+            r##""\n\n\n\nq".lines("", chomp: true)"##,
+            // each_line parity (block form goes through the same path).
+            r##"r = []; "\n\nlead\n\nbody".each_line("") { |p| r << p }; r"##,
+            r##"r = []; "abc\n".each_line("", chomp: true) { |p| r << p }; r"##,
+        ]);
     }
 
     #[test]
