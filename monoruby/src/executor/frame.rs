@@ -327,18 +327,35 @@ impl Lfp {
     /// * **Block-style** frames (block literal `{ }` / `do … end`
     ///   and `Proc.new`) `share` their lexical parent's MFP — follow
     ///   `outer` upward.
-    /// * **Method-style** frames (`def`, lambda, class/module body,
-    ///   toplevel script, `define_method`-installed Proc tagged
-    ///   `is_proc_method`) own their MFP — stop.
+    /// * **Lambdas** (`-> {}` / `lambda {}`) are method-style for
+    ///   `return`/arity purposes, but for svar they behave like blocks:
+    ///   a `$~`/`$1` set before the lambda was created is visible inside
+    ///   it (CRuby shares the defining scope's svar). They close over a
+    ///   lexical `outer`, so follow it upward too.
+    /// * **Method-style** frames that own their MFP — stop here:
+    ///   * `def`, class/module body, toplevel script: method-style with
+    ///     no lexical `outer`.
+    ///   * `define_method`-installed Proc bodies, tagged
+    ///     `is_proc_method`: a true method boundary even though they
+    ///     close over an `outer`.
     ///
-    /// The chain is guaranteed to terminate at a method-style frame
-    /// (the toplevel script body is method-style with no outer), so
-    /// this loop always returns a real Mfp.
+    /// The chain is guaranteed to terminate (the toplevel script body
+    /// is method-style with no outer), so this loop always returns a
+    /// real Mfp.
     pub(crate) fn mfp(self) -> Lfp {
         let mut lfp = self;
         loop {
             let meta = lfp.meta();
-            if !meta.is_block_style() || meta.is_proc_method() {
+            // `define_method` body: a method boundary that nonetheless
+            // closes over an outer env — stop before walking past it.
+            if meta.is_proc_method() {
+                return lfp;
+            }
+            // `def` / class-body / toplevel: method-style frames that
+            // never capture a lexical outer, so they own their svar.
+            // A method-style frame *with* an outer is a lambda, which
+            // shares its definer's svar — fall through and walk.
+            if !meta.is_block_style() && lfp.outer().is_none() {
                 return lfp;
             }
             match lfp.outer() {

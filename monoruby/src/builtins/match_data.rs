@@ -297,7 +297,12 @@ fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/string.html]
 #[monoruby_builtin]
 fn string_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string_from_str(lfp.self_val().as_match_data().string()))
+    // CRuby returns a single frozen copy of the subject string, the same
+    // object on every call. Our MatchData already holds an immutable
+    // snapshot of the haystack, so freeze it in place and return it.
+    let mut s = lfp.self_val().as_match_data().string_value();
+    s.set_frozen();
+    Ok(s)
 }
 
 ///

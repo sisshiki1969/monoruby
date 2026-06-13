@@ -432,6 +432,14 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         IdentId::get_id("$\""),
         IdentId::get_id("$LOADED_FEATURES"),
     );
+
+    // --- Record separator ---------------------------------------------------
+
+    // `$/` (the input record separator, used as the default argument of
+    // `String#chomp`, `IO#gets`, `String#lines`, …) defaults to "\n" in
+    // CRuby. It is a plain, assignable global; seed the default value so
+    // reads return "\n" before any assignment.
+    globals.set_gvar(IdentId::get_id("$/"), Value::string_from_str("\n"));
 }
 
 // ============================================================================

@@ -857,13 +857,26 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    // Fast path: rhs is already a Regexp or String — go through the
-    // standard regex match.
-    if other.is_regex().is_some() || other.is_str().is_some() {
+    // CRuby `String#=~` raises `TypeError` when the rhs is a String —
+    // matching a string against a string is meaningless (and would
+    // otherwise recurse via the `=~` dispatch below).
+    if other.is_str().is_some() {
+        return Err(MonorubyErr::typeerr("type mismatch: String given"));
+    }
+    // Fast path: rhs is a Regexp — run the match and return the
+    // **character** index of the match start (CRuby returns a char
+    // offset, not a byte offset, so multibyte subjects match CRuby).
+    if other.is_regex().is_some() {
         let given = self_val.expect_str(globals)?;
         let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
         let res = match regex.find_one(vm, given)? {
-            Some(r) => Value::integer(r.start as i64),
+            Some(r) => {
+                let char_idx = given
+                    .get(..r.start)
+                    .map(|p| p.chars().count())
+                    .unwrap_or(r.start);
+                Value::integer(char_idx as i64)
+            }
             None => Value::nil(),
         };
         return Ok(res);
@@ -2445,7 +2458,16 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         rs_owned = arg0.coerce_to_rstring(vm, globals)?;
         rs_owned.as_bytes()
     } else {
-        b"\n"
+        // No argument: the separator defaults to `$/` (itself "\n"
+        // unless reassigned). `$/ = nil` means "never chomp".
+        match globals.get_gvar(IdentId::get_id("$/")) {
+            Some(v) if v.is_nil() => return Ok(lfp.self_val().dup()),
+            Some(v) => {
+                rs_owned = v.coerce_to_rstring(vm, globals)?;
+                rs_owned.as_bytes()
+            }
+            None => b"\n",
+        }
     };
 
     let self_ = lfp.self_val();
@@ -2475,7 +2497,16 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         rs_owned = arg0.coerce_to_rstring(vm, globals)?;
         rs_owned.as_bytes()
     } else {
-        b"\n"
+        // No argument: the separator defaults to `$/` (itself "\n"
+        // unless reassigned). `$/ = nil` means "never chomp".
+        match globals.get_gvar(IdentId::get_id("$/")) {
+            Some(v) if v.is_nil() => return Ok(Value::nil()),
+            Some(v) => {
+                rs_owned = v.coerce_to_rstring(vm, globals)?;
+                rs_owned.as_bytes()
+            }
+            None => b"\n",
+        }
     };
 
     let self_ = lfp.self_val();
@@ -4514,7 +4545,25 @@ fn line_ranges(
         Str(String),
     }
     let sep = match rs_arg {
-        None => Sep::Default,
+        // No explicit separator: the default is `$/`. Its "\n" default
+        // (and the unset state) keeps the default-newline behaviour
+        // (recognising "\r\n"/"\r" line ends under `chomp:`); `nil`
+        // slurps the whole string; any other value acts like an
+        // explicit separator argument.
+        None => match globals.get_gvar(IdentId::get_id("$/")) {
+            None => Sep::Default,
+            Some(v) if v.is_nil() => Sep::Whole,
+            Some(v) => {
+                let sep = v.coerce_to_str(vm, globals)?.to_string();
+                if sep == "\n" {
+                    Sep::Default
+                } else if sep.is_empty() {
+                    Sep::Paragraph
+                } else {
+                    Sep::Str(sep)
+                }
+            }
+        },
         Some(arg) if arg.is_nil() => Sep::Whole,
         Some(arg) => {
             // CRuby rejects `false`/`true`/Symbol explicitly here, even
@@ -5000,6 +5049,11 @@ fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .strip_prefix("0x")
         .or_else(|| s.strip_prefix("0X"))
         .unwrap_or(s);
+    // A (second) sign in the digit portion is invalid: CRuby stops at
+    // the first non-digit, so e.g. `"0x-1".hex` and `"+-5".hex` are 0.
+    if s.starts_with(['+', '-']) {
+        return Ok(Value::integer(0));
+    }
     Ok(parse_int_value(s, 16, negative))
 }
 
@@ -5033,6 +5087,11 @@ fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         (s, 8)
     };
+    // A (second) sign in the digit portion is invalid: CRuby stops at
+    // the first non-digit, so e.g. `"+-5".oct` is 0.
+    if s.starts_with(['+', '-']) {
+        return Ok(Value::integer(0));
+    }
     Ok(parse_int_value(s, radix, negative))
 }
 
