@@ -1806,6 +1806,11 @@ impl RStringInner {
             // deferred), so the fixed-1-byte shortcut matches its
             // iterator.
             Encoding::Iso2022Jp => Some(1),
+            // ASCII-only UTF-8: every character is a single byte, so
+            // char index == byte index — take the O(1) offset path
+            // instead of walking the scalar iterator. (Must precede the
+            // generic UTF-8 arm below.)
+            Encoding::Utf8 if matches!(self.code_range(), CodeRange::SevenBit) => Some(1),
             // EUC-JP / Shift_JIS are variable-width: walk the
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.
@@ -1934,6 +1939,52 @@ impl RStringInner {
             self.cr.get()
         };
         RStringInner::from(SmallVec::from_vec(self.as_bytes().repeat(len)), self.ty, cr)
+    }
+
+    /// Apply a set of non-overlapping replacements to `given` (a valid
+    /// UTF-8 haystack) in a single forward pass, producing a fresh
+    /// `RStringInner`. `replacements` must be sorted by start position
+    /// and non-overlapping — `gsub`/`sub` collect them that way.
+    ///
+    /// This is O(`given` + Σ replacement) instead of the
+    /// O(`given` · matches) you get from applying each replacement with
+    /// an individual buffer-shifting `bytesplice_with` (which `copy_within`s
+    /// the tail every time — quadratic in the match count). Each
+    /// replacement is still encoding-compatibility-checked against the
+    /// haystack, raising `Encoding::CompatibilityError` to preserve the
+    /// per-splice behaviour. The result is tagged UTF-8 with a lazy code
+    /// range because every `gsub`/`sub` caller re-tags the encoding
+    /// afterward via `apply_template_encoding` (which resets the cr).
+    pub fn splice_all(
+        store: &Store,
+        given: &str,
+        replacements: &[(std::ops::Range<usize>, RStringInner)],
+    ) -> Result<RStringInner> {
+        // The haystack drives the compat check, exactly as the old
+        // `res = from_str_scanned(given)` receiver did.
+        let given_inner = RStringInner::from_str_scanned(given);
+        let bytes = given.as_bytes();
+        // Final length is non-negative (ranges are within `given` and
+        // non-overlapping), but the running sum can dip, so compute in
+        // signed space.
+        let cap = (given.len() as i64
+            + replacements
+                .iter()
+                .map(|(r, rep)| rep.len() as i64 - (r.end - r.start) as i64)
+                .sum::<i64>())
+        .max(0) as usize;
+        let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(cap);
+        let mut last = 0usize;
+        for (r, rep) in replacements {
+            given_inner.compatible_encoding(rep).ok_or_else(|| {
+                MonorubyErr::incompatible_encoding(store, given_inner.encoding(), rep.encoding())
+            })?;
+            buf.extend_from_slice(&bytes[last..r.start]);
+            buf.extend_from_slice(rep.as_bytes());
+            last = r.end;
+        }
+        buf.extend_from_slice(&bytes[last..]);
+        Ok(RStringInner::from(buf, Encoding::Utf8, CodeRange::Unknown))
     }
 
     /// Mutate `self.content` in place: replace bytes `start..end` with

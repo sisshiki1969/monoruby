@@ -928,12 +928,8 @@ impl RegexpInner {
                 range.push((m.range(), replace));
             }
 
-            let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
-
-            for (r, rep_inner) in range.into_iter().rev() {
-                res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
-            }
+            let res = RStringInner::splice_all(&globals.store, given, &range)?;
 
             Ok((res, !is_empty))
         })
@@ -990,12 +986,8 @@ impl RegexpInner {
                 range.push((m.range(), replacement));
             }
 
-            let mut res = RStringInner::from_str_scanned(given);
             let is_empty = range.is_empty();
-
-            for (r, rep_inner) in range.into_iter().rev() {
-                res.bytesplice_with(r.start, r.end - r.start, &rep_inner, &globals.store)?;
-            }
+            let res = RStringInner::splice_all(&globals.store, given, &range)?;
 
             Ok((res, !is_empty))
         })
@@ -1151,7 +1143,7 @@ impl RegexpInner {
             let m = cap.get(0).unwrap();
             let (start, end) = (m.start(), m.end());
             let rep = self.expand_backref(replace, given, &cap);
-            replacements.push((start..end, rep));
+            replacements.push((start..end, RStringInner::from_string_scanned(rep)));
             last_captures = Some(cap);
             pos = if end > start {
                 end
@@ -1165,16 +1157,9 @@ impl RegexpInner {
                 next
             };
         }
-        let mut res = RStringInner::from_str_scanned(given);
         let is_empty = replacements.is_empty();
-        for (r, rep) in replacements.into_iter().rev() {
-            // `r` is a UTF-8 byte range produced by Onigmo, so it
-            // sits on character boundaries; `rep` is the
-            // backref-expanded replacement, which inherits the
-            // splice substring's UTF-8 validity.
-            let rep_inner = RStringInner::from_string_scanned(rep);
-            res.bytesplice_with(r.start, r.end - r.start, &rep_inner, store)?;
-        }
+        // Single forward pass instead of N tail-shifting splices.
+        let res = RStringInner::splice_all(store, given, &replacements)?;
 
         if let Some(c) = last_captures {
             vm.save_capture_special_variables(&c, given)
