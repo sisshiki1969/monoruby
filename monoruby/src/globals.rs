@@ -720,6 +720,7 @@ impl Globals {
     /// GC enable flag before set.
     ///
     pub fn gc_enable(flag: bool) -> bool {
+        alloc::set_gc_enabled(flag);
         alloc::ALLOC.with(|alloc| {
             let old = alloc.borrow().gc_enabled;
             alloc.borrow_mut().gc_enabled = flag;

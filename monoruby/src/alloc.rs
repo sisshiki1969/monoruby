@@ -8,12 +8,21 @@ pub struct RurubyAlloc;
 
 unsafe impl GlobalAlloc for RurubyAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        MALLOC_AMOUNT.fetch_add(layout.size(), Ordering::SeqCst);
+        // Only object-scale buffers count toward the malloc-driven GC trigger;
+        // huge one-shot reservations are skipped (see `MALLOC_TRACK_LIMIT`).
+        // The same size test gates `dealloc`, so accounting stays symmetric
+        // and `MALLOC_AMOUNT` never underflows.
+        if layout.size() < MALLOC_TRACK_LIMIT {
+            let total = MALLOC_AMOUNT.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
+            request_gc_if_malloc_over(total);
+        }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        MALLOC_AMOUNT.fetch_sub(layout.size(), Ordering::SeqCst);
+        if layout.size() < MALLOC_TRACK_LIMIT {
+            MALLOC_AMOUNT.fetch_sub(layout.size(), Ordering::SeqCst);
+        }
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -21,7 +30,96 @@ unsafe impl GlobalAlloc for RurubyAlloc {
 #[global_allocator]
 pub static GLOBAL_ALLOC: RurubyAlloc = RurubyAlloc;
 
+/// Allocations of at least this size are excluded from `MALLOC_AMOUNT` (and
+/// from the GC trigger). They are one-shot infrastructure reservations, not
+/// Ruby-object churn the GC could reclaim — chiefly monoasm's JIT memory,
+/// which reserves three 256 MB pages (768 MB of mostly-untouched virtual
+/// address space) at startup. Counting that reservation would peg the malloc
+/// threshold near a gigabyte, so real String/Array/Hash growth would never
+/// trip a collection. No legitimate single Ruby object buffer approaches this
+/// size, and the cap gates `dealloc` identically, so a buffer is always
+/// tracked or skipped consistently and `MALLOC_AMOUNT` cannot underflow.
+const MALLOC_TRACK_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Net live bytes handed out through the global allocator for object-scale
+/// buffers (those under `MALLOC_TRACK_LIMIT`). Tracked so the GC can be
+/// triggered by external-buffer growth (large Strings/Arrays/Hashes), not
+/// only by GC-arena (`RValue`) pressure — a `String#<<` loop allocates almost
+/// no `RValue`s yet can balloon malloc memory unboundedly.
 pub static MALLOC_AMOUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Address (as `usize`; `0` until the VM registers it) of the JIT/VM
+/// allocation flag — the same `u32` the GC-arena path nudges. Stored
+/// globally so `RurubyAlloc::alloc` can request a GC without reaching into
+/// the (non-reentrant) thread-local `Allocator`.
+static MALLOC_GC_FLAG_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+/// `MALLOC_AMOUNT` ceiling above which a GC is requested. Recomputed after
+/// each GC from the post-collection live amount (see `Allocator::gc`).
+static MALLOC_GC_THRESHOLD: AtomicUsize = AtomicUsize::new(MALLOC_THRESHOLD);
+
+/// Mirror of `Allocator::gc_enabled`, readable from the global allocator
+/// without touching the (non-reentrant) thread-local `Allocator`. When GC is
+/// disabled (`--no-gc`), `gc()` early-returns without clearing the alloc flag,
+/// so requesting a collection would leave the flag stuck in the trigger band
+/// and spin the safepoint poll. Skip the request entirely in that case.
+static GC_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Keep `GC_ENABLED` in step with `Allocator::gc_enabled` (see `Globals::gc_enable`).
+pub(crate) fn set_gc_enabled(enabled: bool) {
+    GC_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Request a GC at the next VM safepoint when live malloc has crossed the
+/// threshold. Cheap and allocation-free (just a flag store), so it is safe
+/// to call from inside the global allocator.
+///
+/// The requested collection is left minor-eligible (it is not forced to be a
+/// major): the buffers behind transient String/Array growth die young, so a
+/// minor GC reclaims them, while genuinely old-generation garbage is still
+/// caught by the existing major triggers (old-gen growth and
+/// `MAX_MINORS_PER_MAJOR`). Forcing a major on every malloc trigger instead
+/// made full-heap marking dominate any workload with a large stable old
+/// generation, for no memory benefit over minor collection here.
+#[inline]
+fn request_gc_if_malloc_over(total: usize) {
+    if total < MALLOC_GC_THRESHOLD.load(Ordering::Relaxed) {
+        return;
+    }
+    if !GC_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        // VM not initialised yet (e.g. early runtime / lazy statics).
+        return;
+    }
+    // The VM/JIT GC poll fires when this `u32` is `>= 8`: the GC-arena path
+    // bumps it `+= 1` per nearly-full page (so ~8 pages of `RValue`s trips
+    // it), and the signal handler adds 10. To actually request a GC we must
+    // therefore lift it to the `>= 8` trigger band — writing a small value
+    // like `1` only joins the page-fill accumulation and is effectively a
+    // no-op. Write `8` (the low edge of the trigger band) only when the flag
+    // is below it, so we request exactly one collection, never stomp a value
+    // already in the trigger/signal range, and never climb unboundedly while
+    // we sit over threshold. Racing the async signal handler is harmless: a
+    // signal's delivery rides the separate `pending_signals` bitmap, so even
+    // if our store overwrites its `+= 10`, the poll still fires (`== 8`) and
+    // `execute_gc` still drains the pending signal.
+    let flag = addr as *mut u32;
+    // SAFETY: `flag` is the JIT alloc-flag location, valid for the VM
+    // thread's lifetime once registered; monoruby's VM is single-threaded.
+    unsafe {
+        if std::ptr::read_volatile(flag) < 8 {
+            std::ptr::write_volatile(flag, 8);
+        }
+    }
+}
+
+/// Register the VM allocation-flag address with the malloc-trigger path.
+pub(crate) fn set_malloc_gc_flag_addr(addr: *mut u32) {
+    MALLOC_GC_FLAG_ADDR.store(addr as usize, Ordering::Relaxed);
+}
 
 thread_local!(
     pub static ALLOC: RefCell<Allocator<RValue>> = RefCell::new(Allocator::new());
@@ -231,8 +329,6 @@ pub struct Allocator<T> {
     alloc_flag: Option<*mut u32>,
     /// Flag whether GC is enabled or not.
     pub gc_enabled: bool,
-    /// Threshold of malloced memory for invoking GC.
-    pub malloc_threshold: usize,
     /// Registry of promoted heap frames (`Box<[u64]>` buffers that
     /// `move_frame_to_heap` / `heap_frame` previously leaked via
     /// `Box::into_raw`). Keyed by the LFP address. Reclaimed by
@@ -330,7 +426,6 @@ impl<T: GCBox> Allocator<T> {
             remembered: Vec::new(),
             alloc_flag: None,
             gc_enabled: true,
-            malloc_threshold: MALLOC_THRESHOLD,
             heap_frames: std::collections::HashMap::default(),
         }
     }
@@ -417,6 +512,9 @@ impl<T: GCBox> Allocator<T> {
     ///
     pub(crate) fn set_alloc_flag_address(&mut self, address: *mut u32) {
         self.alloc_flag = Some(address);
+        // Let the global allocator reach the same flag for malloc-driven
+        // GC requests.
+        set_malloc_gc_flag_addr(address);
     }
 
     ///
@@ -575,6 +673,11 @@ impl<T: GCBox> Allocator<T> {
     /// remembered set is rebuilt and old garbage reclaimed even if the
     /// adaptive trigger never fires.
     ///
+    /// A malloc-pressure-triggered collection (see `request_gc_if_malloc_over`)
+    /// is intentionally not forced major here: transient buffers die young and
+    /// are reclaimed by a minor GC, and old-generation buffer garbage is still
+    /// caught by the triggers above.
+    ///
     fn decide_gc_kind(&self) -> GcKind {
         if self.old_count >= self.old_major_threshold
             || self.minors_since_major >= MAX_MINORS_PER_MAJOR
@@ -693,7 +796,13 @@ impl<T: GCBox> Allocator<T> {
         }
         self.unset_alloc_flag();
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
-        self.malloc_threshold = malloced + MALLOC_THRESHOLD;
+        // Allow malloc to grow by half the live amount (at least
+        // MALLOC_THRESHOLD) before the next GC. Additive-only growth would
+        // GC every 256 KB even on a multi-GB heap; the multiplicative term
+        // keeps the trigger proportional so large but stable heaps don't
+        // thrash, while small heaps (e.g. a `String#<<` loop) stay bounded.
+        let next_threshold = malloced + (malloced / 2).max(MALLOC_THRESHOLD);
+        MALLOC_GC_THRESHOLD.store(next_threshold, Ordering::Relaxed);
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("#### GC End");
