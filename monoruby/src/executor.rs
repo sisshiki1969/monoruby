@@ -119,6 +119,15 @@ pub struct Executor {
     /// LEP's `LFP_SVAR`. All other per-match state (`$~`, `$&`, `$'`,
     /// `$\``, `$1`..`$N`) now lives frame-locally on the LEP.
     sp_match_regex: Option<Value>,
+    /// In-flight haystack stash: regex-matching entry points that know
+    /// the *subject String Value* (e.g. `String#match`, `Regexp#match`,
+    /// `String#gsub`) record it here so MatchData / `$~` construction
+    /// can snapshot the haystack as a zero-copy shared substring
+    /// instead of copying the bytes. Consumers verify by pointer
+    /// containment (`resolve_haystack`) that the `&str` they hold
+    /// actually borrows from this Value's buffer, so a stale stash can
+    /// never mis-attribute a haystack — it only falls back to copying.
+    sp_match_haystack: Option<Value>,
     temp_stack: Vec<Value>,
     require_level: usize,
     /// Stack of canonical paths currently being executed via `require` /
@@ -157,6 +166,7 @@ impl std::default::Default for Executor {
             lexical_class: vec![vec![]],
             toplevel_visibility: Visibility::Private,
             sp_match_regex: None,
+            sp_match_haystack: None,
             temp_stack: vec![],
             require_level: 0,
             loading_paths: vec![],
@@ -193,6 +203,15 @@ impl alloc::GC<RValue> for Executor {
         // returns. See `MonorubyErr::mark`.
         if let Some(err) = &self.exception {
             err.mark(alloc);
+        }
+        // Transient per-match stashes: live across the MatchData
+        // allocation in `save_capture_special_variables`, which can
+        // trigger GC.
+        if let Some(v) = self.sp_match_regex {
+            v.mark(alloc);
+        }
+        if let Some(v) = self.sp_match_haystack {
+            v.mark(alloc);
         }
         // Deferred `MethodReturn` / `Throw` carry packed Values (return
         // value, throw tag/value) and an `Lfp`; keep them alive across
@@ -2404,6 +2423,32 @@ impl Executor {
         self.sp_match_regex = Some(regex);
     }
 
+    /// Stash the subject String `Value` about to be matched, enabling
+    /// zero-copy haystack snapshots (see the `sp_match_haystack` field
+    /// docs). Non-String values are ignored.
+    pub(crate) fn set_match_haystack(&mut self, subject: Value) {
+        if subject.is_rstring().is_some() {
+            self.sp_match_haystack = Some(subject);
+        }
+    }
+
+    /// If `s` borrows from the stashed subject's byte buffer, return
+    /// `(subject, byte offset of s within it)`. The pointer-containment
+    /// check makes a stale or unrelated stash harmless: it simply
+    /// resolves to `None` and the caller copies the haystack as before.
+    pub(crate) fn resolve_haystack(&self, s: &str) -> Option<(Value, usize)> {
+        let subject = self.sp_match_haystack?;
+        let rs = subject.is_rstring()?;
+        let bytes = rs.as_bytes();
+        let base = bytes.as_ptr() as usize;
+        let p = s.as_ptr() as usize;
+        if p >= base && p + s.len() <= base + bytes.len() {
+            Some((subject, p - base))
+        } else {
+            None
+        }
+    }
+
     ///
     /// Build a `MatchData` from `captures` + `haystack` (plus the
     /// transient `sp_match_regex` stash) and store it as the current
@@ -2414,7 +2459,8 @@ impl Executor {
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
     ) {
-        let mut md = MatchDataInner::from_captures(captures, haystack);
+        let mut md =
+            MatchDataInner::from_captures_snap(captures, haystack, self.resolve_haystack(haystack));
         if let Some(regex_val) = self.sp_match_regex
             && let Some(regex) = regex_val.is_regex()
         {

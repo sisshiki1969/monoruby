@@ -1234,8 +1234,19 @@ impl Value {
         RValue::new_binding(outer_lfp, pc).pack()
     }
 
-    pub(crate) fn new_matchdata(captures: Captures, heystack: &str, regex: Regexp) -> Self {
-        RValue::new_match_data(captures, heystack, regex).pack()
+    /// Construct a MatchData. Takes the result of
+    /// `Executor::resolve_haystack` so the haystack snapshot can be a
+    /// zero-copy shared substring of the subject String.
+    pub(crate) fn new_matchdata_snap(
+        captures: Captures,
+        heystack: &str,
+        resolved: Option<(Value, usize)>,
+        regex: Regexp,
+    ) -> Self {
+        RValue::new_match_data_from_inner(MatchDataInner::from_capture_snap(
+            captures, heystack, resolved, regex,
+        ))
+        .pack()
     }
 
     pub(crate) fn unpack(&self) -> RV<'_> {

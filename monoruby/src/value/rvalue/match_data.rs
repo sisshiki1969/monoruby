@@ -32,16 +32,24 @@ fn decode_span(span: Span) -> Option<(usize, usize)> {
 ///
 /// `$~` is materialized on every successful regexp match, so this
 /// struct is sized to keep that as cheap as possible while fitting
-/// RValue's 48-byte payload: 8 (regex) + 16 (`Box<str>`) + 24
-/// (SmallVec) = 48. The inline capacity of 2 covers the most common
-/// match shapes (whole match only, or one capture group) without a
-/// positions heap allocation.
+/// RValue's 48-byte payload: 8 (regex) + 8 (`Value`) + 24 (SmallVec)
+/// = 40. The inline capacity of 2 covers the most common match shapes
+/// (whole match only, or one capture group) without a positions heap
+/// allocation.
+///
+/// `heystack` is a *snapshot* String taken at match time — a shared
+/// (copy-on-write) view when the subject's Value was known to the
+/// matcher (see `Executor::resolve_haystack`), an owned copy
+/// otherwise — so later mutation of the subject never changes this
+/// MatchData (CRuby behaviour: `MatchData#string` is frozen). Its
+/// content is guaranteed valid UTF-8: every constructor takes the
+/// haystack as `&str`.
 ///
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct MatchDataInner {
     regex: Option<Regexp>,
-    heystack: Box<str>,
+    heystack: Value,
     matches: SmallVec<[Span; 2]>,
 }
 
@@ -50,25 +58,33 @@ impl GC<RValue> for MatchDataInner {
         if let Some(re) = &self.regex {
             re.mark(alloc);
         }
+        self.heystack.mark(alloc);
     }
 }
 
 impl MatchDataInner {
-    pub fn new(heystack: &str, matches: Vec<Option<(usize, usize)>>) -> Self {
-        assert!(
-            heystack.len() < u32::MAX as usize,
-            "match subject longer than 4GiB is not supported"
-        );
-        MatchDataInner {
-            regex: None,
-            heystack: Box::from(heystack),
-            matches: matches.into_iter().map(encode_span).collect(),
+    /// Snapshot the haystack as a String `Value`. When `resolved` says
+    /// `s` borrows from a known String Value's buffer (verified by
+    /// pointer containment in `Executor::resolve_haystack`), the
+    /// snapshot is a zero-copy shared substring (the subject becomes a
+    /// CoW sharer); otherwise the bytes are copied, exactly as the old
+    /// `Box<str>` field did.
+    fn snapshot(s: &str, resolved: Option<(Value, usize)>) -> Value {
+        match resolved {
+            Some((val, offset)) => string_substring(val, offset, offset + s.len()),
+            None => Value::string_from_str(s),
         }
     }
 
     /// Build directly from onigmo `Captures` without intermediate
     /// position vectors (hot path: `$~` save on every match).
-    pub fn from_captures(captures: &Captures, heystack: &str) -> Self {
+    /// `resolved` (from `Executor::resolve_haystack`) enables the
+    /// zero-copy haystack snapshot.
+    pub fn from_captures_snap(
+        captures: &Captures,
+        heystack: &str,
+        resolved: Option<(Value, usize)>,
+    ) -> Self {
         assert!(
             heystack.len() < u32::MAX as usize,
             "match subject longer than 4GiB is not supported"
@@ -79,9 +95,14 @@ impl MatchDataInner {
             .collect();
         MatchDataInner {
             regex: None,
-            heystack: Box::from(heystack),
+            heystack: Self::snapshot(heystack, resolved),
             matches,
         }
+    }
+
+    /// `from_captures_snap` without a haystack Value (always copies).
+    pub fn from_captures(captures: &Captures, heystack: &str) -> Self {
+        Self::from_captures_snap(captures, heystack, None)
     }
 
     /// Builder helper: attach a `Regexp` to a freshly-constructed
@@ -94,16 +115,28 @@ impl MatchDataInner {
         self
     }
 
-    pub fn from_capture(captures: Captures, heystack: &str, regex: Regexp) -> Self {
-        Self::from_captures(&captures, heystack).with_regex(regex)
+    pub fn from_capture_snap(
+        captures: Captures,
+        heystack: &str,
+        resolved: Option<(Value, usize)>,
+        regex: Regexp,
+    ) -> Self {
+        Self::from_captures_snap(&captures, heystack, resolved).with_regex(regex)
     }
 
     pub fn regexp(&self) -> Option<Regexp> {
         self.regex
     }
 
+    fn heystack_bytes(&self) -> &[u8] {
+        self.heystack.as_rstring_inner().as_bytes()
+    }
+
     pub fn string(&self) -> &str {
-        &self.heystack
+        // SAFETY: every constructor receives the haystack as `&str`
+        // and the snapshot preserves those exact bytes (shared view or
+        // copy), so the content is valid UTF-8.
+        unsafe { std::str::from_utf8_unchecked(self.heystack_bytes()) }
     }
 
     pub fn pos(&self, pos: usize) -> Option<(usize, usize)> {
@@ -119,7 +152,7 @@ impl MatchDataInner {
     /// `#[monoruby_builtin]` extern "C" boundary).
     pub fn at(&self, pos: usize) -> Option<&[u8]> {
         self.pos(pos)
-            .map(|(start, end)| &self.heystack.as_bytes()[start..end])
+            .map(|(start, end)| &self.heystack_bytes()[start..end])
     }
 
     pub fn len(&self) -> usize {
@@ -129,7 +162,7 @@ impl MatchDataInner {
     pub fn captures(&self) -> impl Iterator<Item = Option<&[u8]>> {
         self.matches
             .iter()
-            .map(|m| decode_span(*m).map(|(start, end)| &self.heystack.as_bytes()[start..end]))
+            .map(|m| decode_span(*m).map(|(start, end)| &self.heystack_bytes()[start..end]))
     }
 
     pub fn to_s(&self) -> String {

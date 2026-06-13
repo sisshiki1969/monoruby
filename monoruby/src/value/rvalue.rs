@@ -433,12 +433,6 @@ impl ObjKind {
         }
     }
 
-    fn matchdata(captures: Captures, heystack: &str, regex: Regexp) -> Self {
-        Self {
-            matchdata: ManuallyDrop::new(MatchDataInner::from_capture(captures, heystack, regex)),
-        }
-    }
-
     fn matchdata_from_inner(inner: MatchDataInner) -> Self {
         Self {
             matchdata: ManuallyDrop::new(inner),
@@ -1936,14 +1930,6 @@ impl RValue {
         RValue {
             header: Header::new(BINDING_CLASS, ObjTy::BINDING),
             kind: ObjKind::binding(outer_lfp, call_site_pc),
-            var_table: None,
-        }
-    }
-
-    pub(super) fn new_match_data(captures: Captures, heystack: &str, regex: Regexp) -> Self {
-        RValue {
-            header: Header::new(MATCHDATA_CLASS, ObjTy::MATCHDATA),
-            kind: ObjKind::matchdata(captures, heystack, regex),
             var_table: None,
         }
     }
