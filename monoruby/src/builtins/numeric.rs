@@ -16,12 +16,18 @@ pub(super) fn init(globals: &mut Globals) {
     float::init(globals, numeric);
     complex::init(globals, numeric);
     rational::init(globals, numeric);
-    globals.define_builtin_func(NUMERIC_CLASS, "+", add, 1);
-    globals.define_builtin_func(NUMERIC_CLASS, "-", sub, 1);
-    globals.define_builtin_func(NUMERIC_CLASS, "*", mul, 1);
-    globals.define_builtin_func(NUMERIC_CLASS, "/", div, 1);
-    globals.define_builtin_funcs(NUMERIC_CLASS, "%", &["module"], rem, 1);
-    globals.define_builtin_func(NUMERIC_CLASS, "**", pow, 1);
+    // The binary arithmetic operators are NOT defined on `Numeric` in
+    // CRuby — each concrete subclass owns its own. `Integer`/`Float`/
+    // `Rational` already do (`define_basic_op` in their `init`), so `super`
+    // from a redefined `Integer#+` must reach `Numeric`, find nothing, and
+    // raise `NoMethodError` (issue #716). `Complex` is the only built-in
+    // that lacked its own, so re-root the generic coerce-based `add`/`sub`/
+    // `mul` directly on it (CRuby's `Complex` has `+ - * / **`; it has no
+    // `%`, which now correctly becomes a `NoMethodError` here too). `/` and
+    // `**` are already defined on `Complex` in `complex::init`.
+    globals.define_builtin_func(COMPLEX_CLASS, "+", add, 1);
+    globals.define_builtin_func(COMPLEX_CLASS, "-", sub, 1);
+    globals.define_builtin_func(COMPLEX_CLASS, "*", mul, 1);
     globals.define_builtin_func(INTEGER_CLASS, "-@", neg, 0);
     globals.define_builtin_func(FLOAT_CLASS, "-@", neg, 0);
     // NOTE: `Complex#-@` is defined in `complex::init` (`neg_op`), which sends

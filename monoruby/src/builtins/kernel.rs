@@ -3252,7 +3252,25 @@ fn initialize_clone(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.self_val().to_s(&globals.store);
+    let recv = lfp.self_val();
+    // This is the default `Object#to_s`. It is normally shadowed by a
+    // more specific `to_s` (e.g. `TrueClass#to_s`, `Integer#to_s`); it
+    // is reached on a bare object or via `super` from a redefined
+    // `to_s`. CRuby's `Object#to_s` returns `"#<ClassName:0x...>"` for
+    // *every* receiver. For heap objects that is what `Value::to_s`
+    // already produces, but for immediates (true/false/nil/Integer/
+    // Symbol) it returns the value literal ("true", "3", …) — that
+    // literal is the general-purpose stringification used elsewhere, not
+    // the default object representation, so build the `#<...>` form here.
+    let s = if recv.try_rvalue().is_some() {
+        recv.to_s(&globals.store)
+    } else {
+        format!(
+            "#<{}:0x{:016x}>",
+            recv.get_real_class_name(&globals.store),
+            recv.id()
+        )
+    };
     Ok(Value::string(s))
 }
 
@@ -3842,6 +3860,57 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn super_from_redefined_builtin_716() {
+        // #716: `super` from a method that redefines a builtin must walk
+        // to the real ancestor, not re-enter the replaced builtin.
+        //
+        // `to_s`: super reaches the default `Object#to_s`, which returns
+        // "#<ClassName:0x...>" for *every* receiver, including immediates
+        // (previously returned the value literal like "true"/"3").
+        //
+        // Arithmetic operators are not defined on `Numeric` (CRuby
+        // semantics), so `super` from a redefined `Integer#+` / `Float#*`
+        // finds no super method and raises `NoMethodError`.
+        //
+        // NOTE: `run_test_once` (single interpreter run) is used
+        // deliberately. Re-running these `super`-from-a-redefined-
+        // immediate-`to_s` snippets enough times to JIT-compile them
+        // trips a *separate, pre-existing* JIT codegen bug (the compiled
+        // `super` corrupts a surrounding register); that is tracked
+        // separately and is independent of the method-resolution fix
+        // verified here.
+        run_test_once(
+            r##"class TrueClass; def to_s; "T:" + super; end; end
+                true.to_s.sub(/0x[0-9a-f]+/, "0xADDR")"##,
+        );
+        run_test_once(
+            r##"class NilClass; def to_s; "N:" + super; end; end
+                nil.to_s.sub(/0x[0-9a-f]+/, "0xADDR")"##,
+        );
+        run_test_once(
+            r##"class Integer; def to_s; "I:" + super; end; end
+                5.to_s.sub(/0x[0-9a-f]+/, "0xADDR")"##,
+        );
+        run_test_once(
+            r##"class Symbol; def to_s; "S:" + super; end; end
+                :foo.to_s.sub(/0x[0-9a-f]+/, "0xADDR")"##,
+        );
+        // a bare object's default to_s is unchanged
+        run_test_once(r##"Object.new.to_s.sub(/0x[0-9a-f]+/, "0xADDR")"##);
+        // immediates' own (non-super) to_s is unaffected
+        run_test(r##"[true.to_s, 5.to_s, nil.to_s, :foo.to_s]"##);
+        // arithmetic super → NoMethodError (Numeric has no operators)
+        run_test_once(
+            r##"class Integer; def +(o); super(o) * 10; end; end
+                begin; 1 + 2; rescue NoMethodError; :nme; end"##,
+        );
+        run_test_once(
+            r##"class Float; def *(o); super(o); end; end
+                begin; 2.0 * 3; rescue NoMethodError; :nme; end"##,
+        );
+    }
 
     #[test]
     fn not_match_memoized_dispatch() {
