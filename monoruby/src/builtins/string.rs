@@ -2823,9 +2823,12 @@ fn gsub_main(
 #[monoruby_builtin]
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let given = self_.expect_str(globals)?;
-    // Enable zero-copy $~ haystack snapshots (CoW).
-    vm.set_match_haystack(self_);
+    // Take a stable frozen snapshot of the receiver up front, so every
+    // match can be a zero-copy shared (CoW) view even if a block mutates
+    // the receiver mid-scan. `$~` snapshots share the same buffer.
+    self_.expect_str(globals)?;
+    let subject = string_snapshot(self_);
+    vm.set_match_haystack(subject);
     let arg0 = lfp.arg(0);
     let owned_re;
     let coerced_re;
@@ -2840,14 +2843,16 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         coerced_re = RegexpInner::from_escaped(&coerced)?;
         &coerced_re
     };
-    let result_enc = self_.is_rstring_inner().map(|r| r.encoding());
     match lfp.block() {
         None => {
-            let vec = re.scan(vm, given, result_enc)?;
+            // SAFETY of the borrow: `subject` is frozen, so its buffer is
+            // never reallocated; `string_substring(subject, …)` only reads.
+            let given = subject.as_rstring_inner().check_utf8()?;
+            let vec = re.scan(vm, subject, given)?;
             Ok(Value::array_from_vec(vec))
         }
         Some(block) => {
-            scan_with_block(vm, globals, re, given, block, result_enc)?;
+            scan_with_block(vm, globals, re, subject, block)?;
             Ok(lfp.self_val())
         }
     }
@@ -2857,40 +2862,51 @@ fn scan_with_block(
     vm: &mut Executor,
     globals: &mut Globals,
     re: &RegexpInner,
-    given: &str,
+    subject: Value,
     block: BlockHandler,
-    result_enc: Option<Encoding>,
 ) -> Result<()> {
-    // We must own the string since `given` borrows from self_val,
-    // and invoke_block may mutate self_val.
-    let given = given.to_string();
     let data = vm.get_block_data(globals, block)?;
     vm.clear_capture_special_variables();
-    let str_with_enc = |s: &str| match result_enc {
-        Some(e) => Value::string_from_inner(RStringInner::from_encoding_scanned(s.as_bytes(), e)),
-        None => Value::string(s.to_string()),
-    };
-    for cap in re.captures_iter(&given) {
+    // Root the snapshot across block invocations (which may GC) so the
+    // borrowed `given` and the shared match views stay alive even if the
+    // block drops every reference to the receiver.
+    let temp_len = vm.temp_len();
+    vm.temp_push(subject);
+    let res = scan_block_loop(vm, globals, re, subject, &data);
+    vm.temp_clear(temp_len);
+    res
+}
+
+fn scan_block_loop(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    re: &RegexpInner,
+    subject: Value,
+    data: &ProcData,
+) -> Result<()> {
+    // `subject` is frozen (stable buffer) and temp-rooted by the caller,
+    // so this borrow stays valid across `invoke_block`.
+    let given = subject.as_rstring_inner().check_utf8()?;
+    for cap in re.captures_iter(given) {
         let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-        vm.save_capture_special_variables(&cap, &given);
+        vm.save_capture_special_variables(&cap, given);
         match cap.len() {
             0 => unreachable!(),
             1 => {
-                let val = str_with_enc(cap.get(0).unwrap().as_str());
-                vm.invoke_block(globals, &data, &[val])?;
+                let m = cap.get(0).unwrap();
+                let val = string_substring(subject, m.start(), m.end());
+                vm.invoke_block(globals, data, &[val])?;
             }
             len => {
                 let mut vec = vec![];
                 for i in 1..len {
                     match cap.get(i) {
-                        Some(m) => {
-                            vec.push(str_with_enc(m.as_str()));
-                        }
+                        Some(m) => vec.push(string_substring(subject, m.start(), m.end())),
                         None => vec.push(Value::nil()),
                     }
                 }
                 let val = Value::array_from_vec(vec);
-                vm.invoke_block(globals, &data, &val.as_array())?;
+                vm.invoke_block(globals, data, &val.as_array())?;
             }
         }
     }
@@ -3887,19 +3903,14 @@ fn rjust(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn lines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
-    let inner = receiver.as_rstring_inner();
-    let enc = inner.encoding();
-    let s = inner.check_utf8()?.to_string();
     let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
-    let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
-    let out = parts
-        .into_iter()
-        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)));
+    // Zero-copy shared (CoW) line views, built eagerly before any block.
+    let lines = build_lines(vm, globals, receiver, lfp.try_arg(0), chomp)?;
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, bh, out)?;
+        vm.invoke_block_iter1(globals, bh, lines.into_iter())?;
         Ok(receiver)
     } else {
-        Ok(Value::array_from_iter(out))
+        Ok(Value::array_from_vec(lines))
     }
 }
 
@@ -4439,16 +4450,12 @@ fn is_char_boundary(bytes: &[u8], offset: usize) -> bool {
 #[monoruby_builtin]
 fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
-    let inner = receiver.as_rstring_inner();
-    let enc = inner.encoding();
-    let s = inner.check_utf8()?.to_string();
-    let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
-    let parts = split_lines(vm, globals, &s, lfp.try_arg(0), chomp)?;
-    let out = parts
-        .into_iter()
-        .map(|p| Value::string_from_inner(RStringInner::from_encoding(p.as_bytes(), enc)));
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, bh, out)?;
+        let chomp = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
+        // Zero-copy shared (CoW) line views, built eagerly before the
+        // block runs so each view references the frozen root buffer.
+        let lines = build_lines(vm, globals, receiver, lfp.try_arg(0), chomp)?;
+        vm.invoke_block_iter1(globals, bh, lines.into_iter())?;
         Ok(receiver)
     } else {
         let mut args = vec![];
@@ -4469,86 +4476,151 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// When `chomp` is `true`, the trailing separator (or `\r\n` /
 /// `\n` / `\r` when separator is the default newline) is removed
 /// from each yielded part.
-fn split_lines(
+/// Compute the byte ranges (into the receiver's UTF-8 content) of the
+/// lines produced by `String#lines` / `#each_line`, per CRuby's
+/// record-separator rules:
+/// * separator missing or `$/` → uses `"\n"`,
+/// * separator `nil`           → the whole string as one line,
+/// * separator `""`            → paragraph mode (runs of 2+ `\n`),
+/// * any other separator       → splits keeping the separator.
+/// With `chomp: true` the trailing separator (or `\r\n` / `\n` / `\r`
+/// under the default newline) is trimmed from each range's end.
+///
+/// The separator's `to_str` coercion may run Ruby code, so it is
+/// resolved *before* the receiver's bytes are borrowed — a mid-borrow
+/// mutation would invalidate the slice the ranges index into.
+fn line_ranges(
     vm: &mut Executor,
     globals: &mut Globals,
-    s: &str,
+    receiver: Value,
     rs_arg: Option<Value>,
     chomp: bool,
-) -> Result<Vec<String>> {
-    if let Some(arg) = rs_arg {
-        if arg.is_nil() {
-            // nil separator: return the whole string as one element
-            // (ignoring `chomp`, matching CRuby).
-            return Ok(if s.is_empty() {
+) -> Result<Vec<std::ops::Range<usize>>> {
+    enum Sep {
+        Whole,
+        Default,
+        Paragraph,
+        Str(String),
+    }
+    let sep = match rs_arg {
+        None => Sep::Default,
+        Some(arg) if arg.is_nil() => Sep::Whole,
+        Some(arg) => {
+            // CRuby rejects `false`/`true`/Symbol explicitly here, even
+            // though `coerce_to_str` would also raise. We mirror that so
+            // the spec error class matches (TypeError, not NoMethodError).
+            match arg.unpack() {
+                RV::Bool(_) | RV::Symbol(_) => {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        globals,
+                        arg,
+                        STRING_CLASS,
+                    ));
+                }
+                _ => {}
+            }
+            let sep = arg.coerce_to_str(vm, globals)?.to_string();
+            if sep.is_empty() {
+                Sep::Paragraph
+            } else {
+                Sep::Str(sep)
+            }
+        }
+    };
+    let inner = receiver.as_rstring_inner();
+    let s = inner.check_utf8()?;
+    Ok(match sep {
+        Sep::Whole => {
+            if s.is_empty() {
                 vec![]
             } else {
-                vec![s.to_string()]
-            });
-        }
-        // CRuby rejects `false`/`true`/Symbol explicitly here, even
-        // though `coerce_to_str` would also raise. We mirror that so
-        // the spec error class matches (TypeError, not NoMethodError).
-        match arg.unpack() {
-            RV::Bool(_) | RV::Symbol(_) => {
-                return Err(MonorubyErr::no_implicit_conversion(
-                    globals,
-                    arg,
-                    STRING_CLASS,
-                ));
+                vec![0..s.len()]
             }
-            _ => {}
         }
-        let sep = arg.coerce_to_str(vm, globals)?.to_string();
-        if sep.is_empty() {
-            return Ok(split_paragraphs(s, chomp));
-        }
-        return Ok(split_with_separator(s, &sep, chomp));
-    }
-    Ok(split_with_default_newline(s, chomp))
+        Sep::Default => split_with_default_newline_ranges(s, chomp),
+        Sep::Paragraph => split_paragraph_ranges(s, chomp),
+        Sep::Str(sep) => split_with_separator_ranges(s, &sep, chomp),
+    })
+}
+
+/// Build the line Values for `String#lines` / `#each_line` as zero-copy
+/// shared (CoW) substrings of the receiver. They are materialised
+/// eagerly — before any block runs — so every view references the same
+/// frozen root buffer even if a block later mutates the receiver.
+fn build_lines(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    rs_arg: Option<Value>,
+    chomp: bool,
+) -> Result<Vec<Value>> {
+    let ranges = line_ranges(vm, globals, receiver, rs_arg, chomp)?;
+    Ok(ranges
+        .into_iter()
+        .map(|r| string_substring(receiver, r.start, r.end))
+        .collect())
 }
 
 /// Default-newline splitter (CRuby treats the unspecified separator as
 /// "\n" but also allows the line to end with `\r\n` or a bare `\r`,
-/// which matters only for `chomp: true`).
-fn split_with_default_newline(s: &str, chomp: bool) -> Vec<String> {
-    let mut out: Vec<String> = s.split_inclusive('\n').map(String::from).collect();
-    if chomp {
-        for line in out.iter_mut() {
-            if let Some(stripped) = line.strip_suffix("\r\n") {
-                *line = stripped.to_string();
-            } else if let Some(stripped) =
-                line.strip_suffix('\n').or_else(|| line.strip_suffix('\r'))
-            {
-                *line = stripped.to_string();
+/// which matters only for `chomp: true`). Returns byte ranges into `s`.
+fn split_with_default_newline_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for piece in s.split_inclusive('\n') {
+        let mut end = start + piece.len();
+        if chomp {
+            if piece.ends_with("\r\n") {
+                end -= 2;
+            } else if piece.ends_with('\n') || piece.ends_with('\r') {
+                end -= 1;
             }
         }
+        out.push(start..end);
+        start += piece.len();
     }
     out
 }
 
-fn split_with_separator(s: &str, sep: &str, chomp: bool) -> Vec<String> {
-    let mut out: Vec<String> = s.split_inclusive(sep).map(String::from).collect();
-    if chomp {
-        for line in out.iter_mut() {
-            if let Some(stripped) = line.strip_suffix(sep) {
-                *line = stripped.to_string();
-            }
+fn split_with_separator_ranges(s: &str, sep: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for piece in s.split_inclusive(sep) {
+        let mut end = start + piece.len();
+        if chomp && piece.ends_with(sep) {
+            end -= sep.len();
         }
+        out.push(start..end);
+        start += piece.len();
     }
     out
 }
 
-fn split_paragraphs(s: &str, chomp: bool) -> Vec<String> {
+fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
     // Paragraph mode: skip leading newlines, then split on runs of 2+
     // newlines. CRuby keeps `\n\n` at the end of each paragraph (or
-    // strips it when `chomp: true`).
+    // strips it when `chomp: true`). Ranges are relative to `s`, so the
+    // skipped leading newlines shift every offset by `base`.
     let trimmed = s.trim_start_matches('\n');
     if trimmed.is_empty() {
         return vec![];
     }
+    let base = s.len() - trimmed.len();
     let mut out = Vec::new();
     let bytes = trimmed.as_bytes();
+    // Trim trailing `\n`s from a `[start, end)` paragraph when chomping.
+    let push = |out: &mut Vec<std::ops::Range<usize>>, start: usize, end: usize| {
+        let end = if chomp {
+            let mut e = end;
+            while e > start && bytes[e - 1] == b'\n' {
+                e -= 1;
+            }
+            e
+        } else {
+            end
+        };
+        out.push((base + start)..(base + end));
+    };
     let mut start = 0usize;
     let mut i = 0usize;
     while i < bytes.len() {
@@ -4562,12 +4634,7 @@ fn split_paragraphs(s: &str, chomp: bool) -> Vec<String> {
             if nl_count >= 2 {
                 // Paragraph ends with `\n\n` retained.
                 let para_end = i + 2;
-                let para = &trimmed[start..para_end];
-                out.push(if chomp {
-                    para.trim_end_matches('\n').to_string()
-                } else {
-                    para.to_string()
-                });
+                push(&mut out, start, para_end);
                 start = j;
                 i = j;
                 continue;
@@ -4578,12 +4645,7 @@ fn split_paragraphs(s: &str, chomp: bool) -> Vec<String> {
         }
     }
     if start < trimmed.len() {
-        let para = &trimmed[start..];
-        out.push(if chomp {
-            para.trim_end_matches('\n').to_string()
-        } else {
-            para.to_string()
-        });
+        push(&mut out, start, trimmed.len());
     }
     out
 }
@@ -6771,10 +6833,14 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let enc = inner.encoding();
     // Materialise per-char byte slices into owned RStringInner values
     // tagged with the source encoding. Walking eagerly avoids
-    // borrowing `inner` past the iterator.
+    // borrowing `inner` past the iterator. Classify each char's code
+    // range up front (`from_encoding_scanned`): the slice is one
+    // character (1-4 bytes), so the scan is O(1), and it spares a lazy
+    // re-classification on the first `valid_encoding?` / encoding-compat
+    // query (e.g. when the chars are concatenated back together).
     let chars = inner
         .iter_char_bytes()
-        .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)));
+        .map(|s| Value::string_from_inner(RStringInner::from_encoding_scanned(s, enc)));
     if let Some(bh) = lfp.block() {
         vm.invoke_block_map1(globals, bh, chars, None)?;
         Ok(lfp.self_val())
@@ -6879,9 +6945,11 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     if let Some(bh) = lfp.block() {
         let inner = self_.as_rstring_inner();
         let enc = inner.encoding();
+        // Classify each one-character slice up front (cheap, O(1) per
+        // char) so a later cr query doesn't re-scan — see `chars`.
         let chars = inner
             .iter_char_bytes()
-            .map(|s| Value::string_from_inner(RStringInner::from_encoding(s, enc)));
+            .map(|s| Value::string_from_inner(RStringInner::from_encoding_scanned(s, enc)));
         vm.invoke_block_iter1(globals, bh, chars)?;
         Ok(lfp.self_val())
     } else {
@@ -8475,6 +8543,43 @@ mod tests {
         run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
         // end_with? with Regexp raises TypeError
         run_test_error(r#""hello".end_with?(/lo/)"#);
+    }
+
+    #[test]
+    fn lines_scan_chars_cow() {
+        // lines / each_line return zero-copy shared (CoW) line views;
+        // scan returns shared match views; chars classify their code
+        // range up front. Verify CRuby-identical results, snapshot
+        // semantics (a block mutating the receiver mid-iteration does not
+        // disturb the already-built views), and CoW mutation isolation.
+        run_tests(&[
+            // lines: separators, chomp, paragraph mode, multibyte
+            r##"(("x"*40 + "\n") * 20).lines.length"##,
+            r##""a\nb\nc\n".lines(chomp: true)"##,
+            r##""a\r\nb\r\n".lines(chomp: true)"##,
+            r##""foo|bar|baz|".lines("|", chomp: true)"##,
+            r##""p1\n\np2\n\n\np3".lines("")"##,
+            r##""あ\nい\nう\n".lines.map(&:bytes)"##,
+            // each_line block + receiver mutation mid-iteration (snapshot)
+            r##"t = "p\nq\nr\n".dup; g = []; t.each_line { |l| g << l; t << "X" }; g"##,
+            // lines CoW isolation: mutate a long line, source intact
+            r##"s = (("z"*50 + "\n") * 4).dup; ls = s.lines; ls[0].setbyte(0, 89); [s.getbyte(0), ls[0].getbyte(0)]"##,
+            // scan: groups, named captures, block, multibyte, $~
+            r##""foo bar baz".scan(/\w+/)"##,
+            r##""a1b2c3".scan(/([a-z])(\d)/)"##,
+            r##""no match".scan(/xyz/)"##,
+            r##"r=[]; "foo bar".scan(/\w+/){|m| r<<m.upcase}; r"##,
+            r##""x1y2".scan(/\d/); $~[0]"##,
+            r##""café résumé".scan(/\w+/).map(&:bytes)"##,
+            // scan CoW isolation on a long match
+            r##"src = ("TOK_" + "q"*40 + " ") * 4; t = src.scan(/\S+/); t[0].setbyte(0, 88); [src.getbyte(0), t[0].getbyte(0)]"##,
+            // chars: code-range-dependent queries
+            r##""café".chars.map(&:bytes)"##,
+            r##"["a".chars[0].valid_encoding?, "あ".chars[0].valid_encoding?]"##,
+            r##""aé".chars.map(&:ascii_only?)"##,
+            r##"("a\xFFb").dup.force_encoding("UTF-8").chars.map(&:valid_encoding?)"##,
+            r##"c=[]; "xyz".each_char { |ch| c << ch.upcase }; c"##,
+        ]);
     }
 
     #[test]
