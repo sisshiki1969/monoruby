@@ -2993,22 +2993,21 @@ fn string_index(
     vm.set_match_haystack(self_);
     if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
-        // Non-UTF-8 receiver + String needle: encoding-aware byte
-        // search at character boundaries (the regex path below needs
-        // valid UTF-8).
-        if !given.encoding().is_utf8_compatible() {
-            let from = match given.conv_char_index(char_pos) {
-                Some(p) => p,
-                None => return Ok(Value::nil()),
-            };
-            let needle = arg_inner.as_bytes().to_vec();
-            return Ok(
-                match nonutf8_substring_index(&given, &needle, from, false) {
-                    Some(cp) => Value::integer(cp as i64),
-                    None => Value::nil(),
-                },
-            );
-        }
+        // String needle: substring search at character boundaries.
+        // Never enters the regex engine, so `$~` is untouched (CRuby
+        // only sets the backref for Regexp patterns — issue #721) and
+        // broken-UTF-8 receivers work (CRuby allows them here).
+        let from = match given.conv_char_index(char_pos) {
+            Some(p) => p,
+            None => return Ok(Value::nil()),
+        };
+        let needle = arg_inner.as_bytes().to_vec();
+        return Ok(
+            match substring_char_index(&given, &needle, from, false) {
+                Some(cp) => Value::integer(cp as i64),
+                None => Value::nil(),
+            },
+        );
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
@@ -3054,7 +3053,6 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_);
     check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
-    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
     let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
         let offset = arg1.coerce_to_int_i64(vm, globals)?;
@@ -3074,6 +3072,24 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     if byte_offset > haystack.len() {
         return Ok(Value::nil());
     }
+
+    // String needle: plain byte search (CRuby's `rb_memsearch`).
+    // Never enters the regex engine, so `$~` is untouched (CRuby only
+    // sets the backref for Regexp patterns — issue #721) and broken
+    // receivers work; the boundary check is encoding-aware.
+    if let Some(needle) = lfp.arg(0).is_rstring_inner() {
+        if !is_enc_char_boundary(&given, byte_offset) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {byte_offset} does not land on character boundary"
+            )));
+        }
+        return Ok(match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
+            Some(p) => Value::integer(p as i64),
+            None => Value::nil(),
+        });
+    }
+
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
     // Ensure byte_offset falls on a valid UTF-8 character boundary.
@@ -3113,7 +3129,6 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_);
     check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
-    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let haystack = given.as_bytes();
     let bytesize = haystack.len();
 
@@ -3137,6 +3152,22 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         bytesize
     };
 
+    // String needle: plain reverse byte search — `$~` untouched
+    // (issue #721), broken receivers allowed, encoding-aware
+    // boundary check.
+    if let Some(needle) = lfp.arg(0).is_rstring_inner() {
+        if !is_enc_char_boundary(&given, byte_offset) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {byte_offset} does not land on character boundary"
+            )));
+        }
+        return Ok(match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
+            Some(p) => Value::integer(p as i64),
+            None => Value::nil(),
+        });
+    }
+
+    let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
     if !s.is_char_boundary(byte_offset) {
@@ -3184,6 +3215,46 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         Some(p) => Value::integer(p as i64),
         None => Value::nil(),
     })
+}
+
+
+/// Whether `pos` lands on a character boundary of `inner` in its
+/// declared encoding (broken bytes count as single characters, like
+/// CRuby's byte-position checks). `0` and `inner.len()` are always
+/// boundaries.
+fn is_enc_char_boundary(inner: &RStringInner, pos: usize) -> bool {
+    if pos == 0 || pos == inner.len() {
+        return true;
+    }
+    let mut off = 0usize;
+    for ch in inner.iter_char_bytes() {
+        if off >= pos {
+            return off == pos;
+        }
+        off += ch.len();
+    }
+    off == pos
+}
+
+/// First byte index `>= from` where `needle` occurs in `haystack`
+/// (plain byte search — CRuby's `rb_memsearch`; no boundary
+/// constraint). Empty needles match at `from`.
+fn byte_search_fwd(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return (from <= haystack.len()).then_some(from);
+    }
+    let last = haystack.len().checked_sub(needle.len())?;
+    (from..=last).find(|&i| haystack[i..].starts_with(needle))
+}
+
+/// Last byte index `<= upto` where `needle` occurs in `haystack`.
+/// Empty needles match at `upto` (clamped to the length).
+fn byte_search_rev(haystack: &[u8], needle: &[u8], upto: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(upto.min(haystack.len()));
+    }
+    let last = haystack.len().checked_sub(needle.len())?;
+    (0..=last.min(upto)).rev().find(|&i| haystack[i..].starts_with(needle))
 }
 
 /// Coerce a value to a `Regexp` for `byteindex`/`byterindex`. Accepts
@@ -3382,13 +3453,16 @@ fn char_to_byte_pos(s: &str, cp: usize) -> usize {
 /// matches right-to-left and is bytewise correct because it works on
 /// `&str`: candidate positions inside a multibyte char's interior are
 /// skipped by `str::Searcher`'s boundary check.
-/// Character index of `needle`'s bytes within a non-UTF-8 receiver,
-/// constrained to character boundaries (so an ASCII needle never
-/// matches a Shift_JIS trail byte). `rev=false` ⇒ first match at or
-/// after `anchor`; `rev=true` ⇒ last match at or before `anchor`.
-/// The caller has already passed `check_string_encoding_compat`, so
-/// `needle` is ASCII or same-encoding bytes.
-fn nonutf8_substring_index(
+/// Character index of `needle`'s bytes within the receiver,
+/// constrained to character boundaries in the receiver's declared
+/// encoding (so an ASCII needle never matches a Shift_JIS trail byte;
+/// broken bytes count as single characters, like CRuby). Works for any
+/// encoding, including broken UTF-8 — it never enters the regex engine,
+/// so `$~` is untouched. `rev=false` ⇒ first match at or after
+/// `anchor`; `rev=true` ⇒ last match at or before `anchor`. The caller
+/// has already passed `check_string_encoding_compat`, so `needle` is
+/// ASCII or same-encoding bytes.
+fn substring_char_index(
     inner: &RStringInner,
     needle: &[u8],
     anchor: usize,
@@ -3453,11 +3527,13 @@ fn string_rindex_string(
         return Ok(Value::integer(max_char_pos as i64));
     }
 
-    // Non-UTF-8 receiver: encoding-aware reverse byte search at
-    // character boundaries.
-    if !given.encoding().is_utf8_compatible() {
+    // Non-UTF-8 or broken-UTF-8 receiver: encoding-aware reverse
+    // byte search at character boundaries (`rmatch_indices` below
+    // needs a valid `&str`; CRuby allows String needles on broken
+    // receivers).
+    if !given.encoding().is_utf8_compatible() || !given.is_valid_encoding() {
         return Ok(
-            match nonutf8_substring_index(given, needle_bytes, max_char_pos, true) {
+            match substring_char_index(given, needle_bytes, max_char_pos, true) {
                 Some(cp) => Value::integer(cp as i64),
                 None => Value::nil(),
             },
@@ -7425,6 +7501,33 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn index_family_string_pattern_preserves_backref() {
+        // String patterns must never touch `$~` (CRuby only sets the
+        // backref for Regexp patterns) — issue #721.
+        run_tests(&[
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.index("two"); [$~[0], $~[1]]"##,
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.index("zzz"); $~[0]"##,
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.byteindex("two"); $~[0]"##,
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.byteindex("zzz"); $~[0]"##,
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.byterindex("two"); $~[0]"##,
+            r##"u = "one two"; "seed" =~ /se(ed)/; u.byterindex("zzz"); $~[0]"##,
+        ]);
+        // ... and the byte searches themselves must match CRuby,
+        // including overlap, offsets, boundaries, and broken UTF-8.
+        run_tests(&[
+            r##""ababa".byteindex("aba", 1)"##,
+            r##""ababa".byterindex("aba")"##,
+            r##""ababa".byterindex("aba", 1)"##,
+            r##""abc".byterindex("", 2)"##,
+            r##"u = "あいうあいう"; [u.index("い"), u.index("い", 2), u.rindex("い"), u.byteindex("い"), u.byteindex("い", 6), u.byterindex("い"), u.byterindex("い", 6)]"##,
+            r##"s = ("ab\xFFcd").dup.force_encoding("UTF-8"); [s.index("c"), s.rindex("c"), s.byteindex("c", 3), s.byterindex("c")]"##,
+            r##"begin; "あいう".byteindex("い", 1); rescue IndexError; :boundary; end"##,
+            r##"begin; "あいう".byterindex("あ", 1); rescue IndexError; :boundary; end"##,
+            r##"sj = "soft".encode("Shift_JIS"); sj.index("f".dup.force_encoding("Shift_JIS"))"##,
+        ]);
+    }
+
+    #[test]
     fn rindex_and_byterindex_set_backref() {
         // The forward-scan rindex implementations probe past the
         // returned match; `$~` must still end up as the match at the
@@ -9215,10 +9318,14 @@ mod tests {
     }
 
     #[test]
-    fn string_rindex_string_invalid_utf8_raises() {
-        // Same contract as the regex path: broken UTF-8 receivers
-        // raise ArgumentError rather than silently scan bytes.
-        run_test_error(r#""\xC3".dup.force_encoding("UTF-8").rindex("a")"#);
+    fn string_rindex_string_invalid_utf8() {
+        // CRuby allows String needles on broken-UTF-8 receivers (only
+        // the Regexp path raises): the search runs on encoding-aware
+        // character boundaries, counting each broken byte as one char.
+        run_tests(&[
+            r#""\xC3".dup.force_encoding("UTF-8").rindex("a")"#,
+            r#""ab\xC3cd".dup.force_encoding("UTF-8").rindex("c")"#,
+        ]);
     }
 
     #[test]

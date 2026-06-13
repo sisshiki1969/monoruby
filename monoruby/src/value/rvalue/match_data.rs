@@ -115,10 +115,6 @@ impl MatchDataInner {
         self
     }
 
-    pub fn from_capture(captures: Captures, heystack: &str, regex: Regexp) -> Self {
-        Self::from_captures(&captures, heystack).with_regex(regex)
-    }
-
     pub fn from_capture_snap(
         captures: Captures,
         heystack: &str,
