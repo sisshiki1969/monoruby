@@ -937,10 +937,6 @@ impl RegexpInner {
             vm.save_capture_special_variables(&cap, given);
             let result = vm.invoke_block(globals, &data, &[matched])?;
             check_string_not_modified(recv, recv_len)?;
-            // CRuby leaves `$~` set to *gsub's* last match once the block
-            // returns, even if the block ran its own match. Re-establish
-            // it after each yield so the final state reflects gsub.
-            vm.save_capture_special_variables(&cap, given);
             // CRuby raises Encoding::CompatibilityError if the
             // block returned a String whose encoding can't merge
             // with self's. Check before stringifying.

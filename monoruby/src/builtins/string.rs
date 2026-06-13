@@ -2953,11 +2953,6 @@ fn scan_block_loop(
                 vm.invoke_block(globals, data, &val.as_array())?;
             }
         }
-        // CRuby leaves `$~` set to *scan's* last match once the block
-        // returns, even if the block ran its own match. Re-establish it
-        // after each yield so the final state reflects scan, not the
-        // block's last match.
-        vm.save_capture_special_variables(&cap, given);
         check_string_not_modified(recv, recv_len)?;
     }
     Ok(())
