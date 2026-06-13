@@ -330,7 +330,10 @@ fn string_try_convert(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val().dup();
+    // CRuby `String#+` always returns a plain String, even for a String
+    // subclass receiver — so build a fresh String rather than `dup`ing
+    // (which would carry over the receiver's class).
+    let mut self_ = Value::string_from_inner(lfp.self_val().as_rstring_inner().clone());
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     self_
         .as_rstring_inner_mut()
@@ -857,13 +860,26 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    // Fast path: rhs is already a Regexp or String — go through the
-    // standard regex match.
-    if other.is_regex().is_some() || other.is_str().is_some() {
+    // CRuby `String#=~` raises `TypeError` when the rhs is a String —
+    // matching a string against a string is meaningless (and would
+    // otherwise recurse via the `=~` dispatch below).
+    if other.is_str().is_some() {
+        return Err(MonorubyErr::typeerr("type mismatch: String given"));
+    }
+    // Fast path: rhs is a Regexp — run the match and return the
+    // **character** index of the match start (CRuby returns a char
+    // offset, not a byte offset, so multibyte subjects match CRuby).
+    if other.is_regex().is_some() {
         let given = self_val.expect_str(globals)?;
         let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
         let res = match regex.find_one(vm, given)? {
-            Some(r) => Value::integer(r.start as i64),
+            Some(r) => {
+                let char_idx = given
+                    .get(..r.start)
+                    .map(|p| p.chars().count())
+                    .unwrap_or(r.start);
+                Value::integer(char_idx as i64)
+            }
             None => Value::nil(),
         };
         return Ok(res);
@@ -2445,7 +2461,16 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         rs_owned = arg0.coerce_to_rstring(vm, globals)?;
         rs_owned.as_bytes()
     } else {
-        b"\n"
+        // No argument: the separator defaults to `$/` (itself "\n"
+        // unless reassigned). `$/ = nil` means "never chomp".
+        match globals.get_gvar(IdentId::get_id("$/")) {
+            Some(v) if v.is_nil() => return Ok(lfp.self_val().dup()),
+            Some(v) => {
+                rs_owned = v.coerce_to_rstring(vm, globals)?;
+                rs_owned.as_bytes()
+            }
+            None => b"\n",
+        }
     };
 
     let self_ = lfp.self_val();
@@ -2475,7 +2500,16 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         rs_owned = arg0.coerce_to_rstring(vm, globals)?;
         rs_owned.as_bytes()
     } else {
-        b"\n"
+        // No argument: the separator defaults to `$/` (itself "\n"
+        // unless reassigned). `$/ = nil` means "never chomp".
+        match globals.get_gvar(IdentId::get_id("$/")) {
+            Some(v) if v.is_nil() => return Ok(Value::nil()),
+            Some(v) => {
+                rs_owned = v.coerce_to_rstring(vm, globals)?;
+                rs_owned.as_bytes()
+            }
+            None => b"\n",
+        }
     };
 
     let self_ = lfp.self_val();
@@ -3028,7 +3062,12 @@ fn string_index(
 
     let char_pos = match given.conv_char_index(char_pos) {
         Some(pos) => pos,
-        None => return Ok(Value::nil()),
+        None => {
+            // CRuby's `String#index` with a Regexp always updates `$~`,
+            // clearing it to nil when there is no match.
+            vm.clear_capture_special_variables();
+            return Ok(Value::nil());
+        }
     };
 
     let s = given.check_utf8()?;
@@ -3039,12 +3078,18 @@ fn string_index(
             Some(captures) if captures.get(0).unwrap().range().is_empty() => {
                 Ok(Value::integer(char_pos as i64))
             }
-            _ => Ok(Value::nil()),
+            _ => {
+                vm.clear_capture_special_variables();
+                Ok(Value::nil())
+            }
         };
     }
     let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
     match re.captures_from_pos(s, byte_pos, vm)? {
-        None => Ok(Value::nil()),
+        None => {
+            vm.clear_capture_special_variables();
+            Ok(Value::nil())
+        }
         Some(captures) => {
             let start = captures.get(0).unwrap().start();
             let char_pos = given.byte_to_char_index(start)?;
@@ -4514,7 +4559,25 @@ fn line_ranges(
         Str(String),
     }
     let sep = match rs_arg {
-        None => Sep::Default,
+        // No explicit separator: the default is `$/`. Its "\n" default
+        // (and the unset state) keeps the default-newline behaviour
+        // (recognising "\r\n"/"\r" line ends under `chomp:`); `nil`
+        // slurps the whole string; any other value acts like an
+        // explicit separator argument.
+        None => match globals.get_gvar(IdentId::get_id("$/")) {
+            None => Sep::Default,
+            Some(v) if v.is_nil() => Sep::Whole,
+            Some(v) => {
+                let sep = v.coerce_to_str(vm, globals)?.to_string();
+                if sep == "\n" {
+                    Sep::Default
+                } else if sep.is_empty() {
+                    Sep::Paragraph
+                } else {
+                    Sep::Str(sep)
+                }
+            }
+        },
         Some(arg) if arg.is_nil() => Sep::Whole,
         Some(arg) => {
             // CRuby rejects `false`/`true`/Symbol explicitly here, even
@@ -5000,6 +5063,11 @@ fn hex(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .strip_prefix("0x")
         .or_else(|| s.strip_prefix("0X"))
         .unwrap_or(s);
+    // A (second) sign in the digit portion is invalid: CRuby stops at
+    // the first non-digit, so e.g. `"0x-1".hex` and `"+-5".hex` are 0.
+    if s.starts_with(['+', '-']) {
+        return Ok(Value::integer(0));
+    }
     Ok(parse_int_value(s, 16, negative))
 }
 
@@ -5033,6 +5101,11 @@ fn oct(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         (s, 8)
     };
+    // A (second) sign in the digit portion is invalid: CRuby stops at
+    // the first non-digit, so e.g. `"+-5".oct` is 0.
+    if s.starts_with(['+', '-']) {
+        return Ok(Value::integer(0));
+    }
     Ok(parse_int_value(s, radix, negative))
 }
 
@@ -8893,6 +8966,13 @@ mod tests {
             r#""0".oct"#,
             r#""".oct"#,
             r#""xyz".oct"#,
+            // A (second) sign in the digit portion is invalid → 0.
+            r#""0x-1".hex"#,
+            r#""0x-10".hex"#,
+            r#""+-5".hex"#,
+            r#""-+5".hex"#,
+            r#""+-5".oct"#,
+            r#""0x-7".oct"#,
             r"'4285'.to_f",
             r"'-4285'.to_f",
             r"'428.55'.to_f",
@@ -10315,6 +10395,47 @@ mod tests {
         ]);
         run_test_error(r##""hello".lines(:sym)"##);
         run_test_error(r##""hello".lines(false)"##);
+    }
+
+    #[test]
+    fn string_chomp_record_separator() {
+        // No-argument chomp/chomp! use `$/` (default "\n") as the separator.
+        run_test(r#""abc\n".chomp"#);
+        run_test(r#"$/ = "cdef"; r = "abcdef".chomp; $/ = "\n"; r"#);
+        run_test(r#"$/ = "cde"; s = +"abcde"; r = s.chomp!; $/ = "\n"; [r, s]"#);
+        run_test(r#"$/ = "xyz"; r = "abcde".chomp!; $/ = "\n"; r"#);
+    }
+
+    #[test]
+    fn string_match_operator() {
+        // `=~` returns the character (not byte) index of the match start.
+        run_test(r#"("こにちわ" =~ /に/)"#);
+        run_test(r#"("hello" =~ /l/)"#);
+        run_test(r#"("hello" =~ /z/)"#);
+        // A String rhs raises TypeError.
+        run_test(r#"("a" =~ "b" rescue $!.class)"#);
+    }
+
+    #[test]
+    fn string_plus_returns_string() {
+        run_test(r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#);
+        run_test(r#"("foo" + "bar")"#);
+    }
+
+    #[test]
+    fn string_index_regexp_clears_backref() {
+        // index with a Regexp updates `$~`: a match sets it, a miss clears it.
+        run_test(r#""a".index(/a/); $~.nil?"#);
+        run_test(r#"s = "blablabla"; s.index(/bla/, s.length + 1); $~.nil?"#);
+        run_test(r#""hello".index(/z/); $~.nil?"#);
+    }
+
+    #[test]
+    fn string_lines_each_line_record_separator() {
+        // No-argument lines/each_line default to `$/`.
+        run_test(r#"$/ = "l"; r = "hello".lines; $/ = "\n"; r"#);
+        run_test(r#"$/ = "l"; a = []; "hello".each_line { |x| a << x }; $/ = "\n"; a"#);
+        run_test(r#"$/ = nil; r = "one\ntwo".lines; $/ = "\n"; r"#);
     }
 
     #[test]

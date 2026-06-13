@@ -139,6 +139,15 @@ impl MatchDataInner {
         unsafe { std::str::from_utf8_unchecked(self.heystack_bytes()) }
     }
 
+    /// The stored haystack snapshot as a String `Value`.
+    ///
+    /// This is the exact object `MatchData#string` returns: a single
+    /// per-MatchData snapshot, so repeated calls hand back the *same*
+    /// (frozen) String — matching CRuby, where `md.string.equal?(md.string)`.
+    pub fn string_value(&self) -> Value {
+        self.heystack
+    }
+
     pub fn pos(&self, pos: usize) -> Option<(usize, usize)> {
         decode_span(self.matches[pos])
     }

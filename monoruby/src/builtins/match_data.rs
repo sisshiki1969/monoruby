@@ -297,7 +297,12 @@ fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/string.html]
 #[monoruby_builtin]
 fn string_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string_from_str(lfp.self_val().as_match_data().string()))
+    // CRuby returns a single frozen copy of the subject string, the same
+    // object on every call. Our MatchData already holds an immutable
+    // snapshot of the haystack, so freeze it in place and return it.
+    let mut s = lfp.self_val().as_match_data().string_value();
+    s.set_frozen();
+    Ok(s)
 }
 
 ///
@@ -1142,5 +1147,20 @@ mod tests {
         run_test_error(r##"/(foo)/.match("foo").begin(-1)"##);
         run_test_error(r##"/(foo)/.match("foo").byteoffset(-1)"##);
         run_test_error(r##"/(foo)/.match("foo").offset(-1)"##);
+    }
+
+    #[test]
+    fn match_data_string_frozen() {
+        // MatchData#string is a single frozen object, the same on every call.
+        run_test(r##"md = /(.)(\d+)/.match("THX1138"); [md.string, md.string.frozen?, md.string.equal?(md.string)]"##);
+    }
+
+    #[test]
+    fn backref_shared_with_lambda() {
+        // A match performed before a lambda is visible as `$~` inside it
+        // (lambdas share their defining method frame's special variables).
+        run_test(r##"/(?<t>\w+)/ =~ "TEST"; l = -> { Regexp.last_match(:t) }; l.call"##);
+        run_test(r##"def m; /(\w)(\w)/ =~ "xy"; -> { $~[0] }.call; end; m"##);
+        run_test(r##"/(\w+)/ =~ "abc"; [1].each { }; $1"##);
     }
 }
