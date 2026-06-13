@@ -330,7 +330,10 @@ fn string_try_convert(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val().dup();
+    // CRuby `String#+` always returns a plain String, even for a String
+    // subclass receiver — so build a fresh String rather than `dup`ing
+    // (which would carry over the receiver's class).
+    let mut self_ = Value::string_from_inner(lfp.self_val().as_rstring_inner().clone());
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     self_
         .as_rstring_inner_mut()
@@ -2950,6 +2953,11 @@ fn scan_block_loop(
                 vm.invoke_block(globals, data, &val.as_array())?;
             }
         }
+        // CRuby leaves `$~` set to *scan's* last match once the block
+        // returns, even if the block ran its own match. Re-establish it
+        // after each yield so the final state reflects scan, not the
+        // block's last match.
+        vm.save_capture_special_variables(&cap, given);
         check_string_not_modified(recv, recv_len)?;
     }
     Ok(())
@@ -3059,7 +3067,12 @@ fn string_index(
 
     let char_pos = match given.conv_char_index(char_pos) {
         Some(pos) => pos,
-        None => return Ok(Value::nil()),
+        None => {
+            // CRuby's `String#index` with a Regexp always updates `$~`,
+            // clearing it to nil when there is no match.
+            vm.clear_capture_special_variables();
+            return Ok(Value::nil());
+        }
     };
 
     let s = given.check_utf8()?;
@@ -3070,12 +3083,18 @@ fn string_index(
             Some(captures) if captures.get(0).unwrap().range().is_empty() => {
                 Ok(Value::integer(char_pos as i64))
             }
-            _ => Ok(Value::nil()),
+            _ => {
+                vm.clear_capture_special_variables();
+                Ok(Value::nil())
+            }
         };
     }
     let byte_pos = s.char_indices().nth(char_pos).unwrap().0;
     match re.captures_from_pos(s, byte_pos, vm)? {
-        None => Ok(Value::nil()),
+        None => {
+            vm.clear_capture_special_variables();
+            Ok(Value::nil())
+        }
         Some(captures) => {
             let start = captures.get(0).unwrap().start();
             let char_pos = given.byte_to_char_index(start)?;
