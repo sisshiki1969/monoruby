@@ -2309,10 +2309,12 @@ r##"
 
     #[test]
     fn bop_redefinition() {
-        // Verify that redefining Integer#+ does not crash the JIT.
-        // Uses run_test_no_result_check because BOP redefinition
-        // affects global state and the result may differ from CRuby.
-        run_test_no_result_check(
+        // Redefining Integer#+ must not crash, and once the redefinition
+        // is removed `1 + 2` has no `+` to fall back on — Numeric defines
+        // no arithmetic operators (issue #716) — so it raises
+        // NoMethodError, matching CRuby (`[3, -1, :nme]`). `run_test_once`
+        // (single run) because the script permanently removes Integer#+.
+        run_test_once(
             r##"
             res = []
             res << (1 + 2)
@@ -2325,7 +2327,11 @@ r##"
             class Integer
               remove_method :+
             end
-            res << (1 + 2)
+            begin
+              res << (1 + 2)
+            rescue NoMethodError
+              res << :nme
+            end
             res
             "##,
         );
