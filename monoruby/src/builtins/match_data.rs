@@ -156,10 +156,7 @@ fn deconstruct_keys_md(
                 last = Some(i);
             }
         }
-        match last.and_then(|i| m.at(i + 1)) {
-            Some(s) => Value::string_from_vec(s.to_vec()),
-            None => Value::nil(),
-        }
+        last.and_then(|i| m.at_value(i + 1)).unwrap_or_default()
     };
     let mut map = RubyMap::default();
     if arg.is_nil() {
@@ -315,14 +312,9 @@ fn string_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/pre_match.html]
 #[monoruby_builtin]
 fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let m = self_.as_match_data();
-    match m.pos(0) {
-        Some((start, _)) => Ok(Value::string_from_vec(
-            m.string().as_bytes()[..start].to_vec(),
-        )),
-        None => Ok(Value::string_from_str("")),
-    }
+    // The result carries the source string's encoding (CRuby semantics);
+    // `pre_match_value` returns a CoW substring of the haystack snapshot.
+    Ok(lfp.self_val().as_match_data().pre_match_value())
 }
 
 ///
@@ -335,14 +327,8 @@ fn pre_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/post_match.html]
 #[monoruby_builtin]
 fn post_match(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let m = self_.as_match_data();
-    match m.pos(0) {
-        Some((_, end)) => Ok(Value::string_from_vec(
-            m.string().as_bytes()[end..].to_vec(),
-        )),
-        None => Ok(Value::string_from_str("")),
-    }
+    // The result carries the source string's encoding (CRuby semantics).
+    Ok(lfp.self_val().as_match_data().post_match_value())
 }
 
 ///
@@ -396,17 +382,15 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 /// The value of named capture `name`: the *last* group sharing that
 /// name whose capture actually participated in the match (CRuby
 /// "latest matched capture"); `None` if the name never matched.
-fn last_matched_named<'a>(
-    m: &'a crate::value::rvalue::MatchDataInner,
+fn last_matched_named(
+    m: &crate::value::rvalue::MatchDataInner,
     capture_names: &[String],
     name: &str,
-) -> Option<&'a [u8]> {
+) -> Option<usize> {
     let mut result = None;
     for (i, n) in capture_names.iter().enumerate() {
-        if n == name
-            && let Some(s) = m.at(i + 1)
-        {
-            result = Some(s);
+        if n == name && m.at(i + 1).is_some() {
+            result = Some(i + 1);
         }
     }
     result
@@ -446,8 +430,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             let e = (s + slice_len as usize).min(m.len());
             for i in s..e {
                 res.push(
-                    m.at(i)
-                        .map(|b| Value::string_from_vec(b.to_vec()))
+                    m.at_value(i)
                         .unwrap_or_default(),
                 );
             }
@@ -479,8 +462,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                     ))
                 })?;
             res.push(
-                m.at(i)
-                    .map(|b| Value::string_from_vec(b.to_vec()))
+                m.at_value(i)
                     .unwrap_or_else(Value::nil),
             );
             continue;
@@ -500,8 +482,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             res.push(Value::nil());
         } else {
             res.push(
-                m.at(idx)
-                    .map(|b| Value::string_from_vec(b.to_vec()))
+                m.at_value(idx)
                     .unwrap_or_default(),
             );
         }
@@ -521,9 +502,11 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn deconstruct(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
-        lfp.self_val().as_match_data().captures().skip(1).map(|s| {
-            s.map(|b| Value::string_from_vec(b.to_vec())).unwrap_or_default()
-        }),
+        lfp.self_val()
+            .as_match_data()
+            .captures_values()
+            .skip(1)
+            .map(|s| s.unwrap_or_default()),
     ))
 }
 
@@ -552,8 +535,7 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         if idx >= m.len() {
             return Ok(Value::nil());
         }
-        Ok(m.at(idx)
-            .map(|b| Value::string_from_vec(b.to_vec()))
+        Ok(m.at_value(idx)
             .unwrap_or_default())
     } else if let Some(sym) = arg.try_symbol_or_string() {
         if let Some(i) = m
@@ -561,8 +543,7 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             .map(|r| r.get_group_members(&format!("{sym}")))
             .and_then(|g| g.last().copied())
         {
-            Ok(m.at(i as usize)
-                .map(|b| Value::string_from_vec(b.to_vec()))
+            Ok(m.at_value(i as usize)
                 .unwrap_or_default())
         } else {
             Err(MonorubyErr::indexerr(format!(
@@ -636,13 +617,11 @@ fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 #[monoruby_builtin]
 fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
-        lfp.self_val().as_match_data().captures().skip(1).map(|s| {
-            if let Some(s) = s {
-                Value::string_from_vec(s.to_vec())
-            } else {
-                Value::nil()
-            }
-        }),
+        lfp.self_val()
+            .as_match_data()
+            .captures_values()
+            .skip(1)
+            .map(|s| s.unwrap_or_default()),
     ))
 }
 
@@ -654,13 +633,10 @@ fn captures(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 #[monoruby_builtin]
 fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::array_from_iter(
-        lfp.self_val().as_match_data().captures().map(|s| {
-            if let Some(s) = s {
-                Value::string_from_vec(s.to_vec())
-            } else {
-                Value::nil()
-            }
-        }),
+        lfp.self_val()
+            .as_match_data()
+            .captures_values()
+            .map(|s| s.unwrap_or_default()),
     ))
 }
 
@@ -704,8 +680,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if idx >= m.len() {
             return Ok(Value::nil());
         }
-        Ok(m.at(idx as usize)
-            .map(|s| Value::string_from_vec(s.to_vec()))
+        Ok(m.at_value(idx as usize)
             .unwrap_or_default())
     } else if let Some(range) = lfp.arg(0).is_range() {
         // `[start..end]` / `[start...]` / `[..end]` slicing.
@@ -729,8 +704,8 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // actually matched (CRuby semantics); nil if none matched.
         let mut result = Value::nil();
         for i in members {
-            if let Some(s) = m.at(i as usize) {
-                result = Value::string_from_vec(s.to_vec());
+            if let Some(s) = m.at_value(i as usize) {
+                result = s;
             }
         }
         Ok(result)
@@ -760,8 +735,7 @@ fn slice_match_data(
     let mut out = Vec::with_capacity(e - s);
     for i in s..e {
         out.push(
-            m.at(i)
-                .map(|v| Value::string_from_vec(v.to_vec()))
+            m.at_value(i)
                 .unwrap_or_default(),
         );
     }
@@ -878,7 +852,7 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
             Value::string_from_str(name)
         };
         let val = last_matched_named(&m, &names, name)
-            .map(|b| Value::string_from_vec(b.to_vec()))
+            .and_then(|i| m.at_value(i))
             .unwrap_or_default();
         map.insert(key, val, vm, globals)?;
     }
@@ -1153,6 +1127,28 @@ mod tests {
     fn match_data_string_frozen() {
         // MatchData#string is a single frozen object, the same on every call.
         run_test(r##"md = /(.)(\d+)/.match("THX1138"); [md.string, md.string.frozen?, md.string.equal?(md.string)]"##);
+    }
+
+    #[test]
+    fn match_data_result_encoding() {
+        // Capture / pre_match / post_match strings inherit the subject's
+        // encoding (not a fixed UTF-8/ASCII-8BIT auto-detection).
+        run_test(
+            r#"s = "abc".dup.force_encoding(Encoding::EUC_JP); \
+               m = s.match(/b/); [m.pre_match.encoding.to_s, m.post_match.encoding.to_s]"#,
+        );
+        run_test(
+            r#"s = "abc".dup.force_encoding(Encoding::ISO_8859_1); \
+               s.match(/a/).pre_match.encoding.to_s"#,
+        );
+        run_test(
+            r#"md = "haystack".dup.force_encoding("euc-jp").match(/(?<t>t(?<a>ack))/u); \
+               [md[:t].encoding.to_s, md[1].encoding.to_s]"#,
+        );
+        run_test(
+            r#"s = "abc".dup.force_encoding(Encoding::EUC_JP); \
+               s.match(/(b)(c)/).captures.map { |x| x.encoding.to_s }"#,
+        );
     }
 
     #[test]

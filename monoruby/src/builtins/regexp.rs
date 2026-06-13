@@ -1879,4 +1879,13 @@ mod tests {
         // An arg that can't be coerced ⇒ TypeError.
         run_test_error(r#"Regexp.escape(5)"#);
     }
+
+    #[test]
+    fn regexp_options_fixedencoding() {
+        // The `u`/`e`/`s` encoding modifiers pin the encoding, so
+        // `#options` exposes Regexp::FIXEDENCODING; a plain regexp does not.
+        run_test(
+            "[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) != 0 }",
+        );
+    }
 }

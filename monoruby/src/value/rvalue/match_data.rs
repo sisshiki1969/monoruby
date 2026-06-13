@@ -164,6 +164,32 @@ impl MatchDataInner {
             .map(|(start, end)| &self.heystack_bytes()[start..end])
     }
 
+    /// Matched capture `pos` as a String `Value` carrying the **source
+    /// string's encoding** (CRuby: capture/pre/post strings inherit the
+    /// subject's encoding). A zero-copy shared (CoW) substring of the
+    /// haystack snapshot, sliced on byte boundaries (safe for binary
+    /// regexps).
+    pub fn at_value(&self, pos: usize) -> Option<Value> {
+        self.pos(pos)
+            .map(|(start, end)| string_substring(self.heystack, start, end))
+    }
+
+    /// `pre_match` as a String `Value` in the source string's encoding
+    /// (the portion of the subject before the whole match; empty when
+    /// there is no match position).
+    pub fn pre_match_value(&self) -> Value {
+        let start = self.pos(0).map(|(s, _)| s).unwrap_or(0);
+        string_substring(self.heystack, 0, start)
+    }
+
+    /// `post_match` as a String `Value` in the source string's encoding
+    /// (the portion of the subject after the whole match).
+    pub fn post_match_value(&self) -> Value {
+        let len = self.heystack_bytes().len();
+        let end = self.pos(0).map(|(_, e)| e).unwrap_or(len);
+        string_substring(self.heystack, end, len)
+    }
+
     pub fn len(&self) -> usize {
         self.matches.len()
     }
@@ -172,6 +198,12 @@ impl MatchDataInner {
         self.matches
             .iter()
             .map(|m| decode_span(*m).map(|(start, end)| &self.heystack_bytes()[start..end]))
+    }
+
+    /// Like [`captures`] but yields each group as a String `Value` in the
+    /// source string's encoding (`None` for groups that did not match).
+    pub fn captures_values(&self) -> impl Iterator<Item = Option<Value>> + '_ {
+        (0..self.len()).map(move |i| self.at_value(i))
     }
 
     pub fn to_s(&self) -> String {

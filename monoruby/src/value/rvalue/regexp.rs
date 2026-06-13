@@ -117,6 +117,13 @@ impl RegexpInner {
         if self.encoding == OnigmoEncoding::ASCII {
             opt |= Self::NOENCODING;
         }
+        if self.fixed_encoding {
+            // `Regexp#options` exposes FIXEDENCODING for a regexp whose
+            // encoding is pinned (the `u`/`e`/`s` modifiers, or a source
+            // with non-ASCII bytes). `raw_option`/`#==`/`#hash` are
+            // unaffected — they intentionally ignore the encoding flags.
+            opt |= Self::FIXEDENCODING;
+        }
         opt
     }
 
