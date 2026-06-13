@@ -2098,6 +2098,34 @@ pub(crate) fn string_substring(mut parent: Value, start: usize, end: usize) -> V
 }
 
 ///
+/// Return a frozen String holding a stable snapshot of `receiver`'s
+/// current bytes — a buffer that never changes, so callers can borrow
+/// its `&str` and slice zero-copy [`string_substring`] views from it
+/// while user code (e.g. a block) may concurrently mutate `receiver`.
+///
+/// * frozen receiver        → itself (already immutable).
+/// * shared / heap-spilled  → a frozen shared root of its buffer
+///   (`receiver` becomes a CoW sharer of the same root).
+/// * small inline receiver  → a frozen clone (cheap; avoids promoting
+///   the receiver to a sharer for a buffer that views would copy anyway).
+pub(crate) fn string_snapshot(mut receiver: Value) -> Value {
+    if receiver.is_frozen() {
+        return receiver;
+    }
+    let shareable = {
+        let inner = receiver.as_rstring_inner();
+        inner.is_shared() || inner.owned_spilled()
+    };
+    if shareable {
+        ensure_shared_root(&mut receiver).0
+    } else {
+        let mut dup = Value::string_from_inner(receiver.as_rstring_inner().clone());
+        dup.set_frozen();
+        dup
+    }
+}
+
+///
 /// Make `parent`'s byte buffer shareable and return `(root, base)`:
 /// the (frozen, hidden) String owning the buffer and the address of
 /// `parent`'s first byte within it.

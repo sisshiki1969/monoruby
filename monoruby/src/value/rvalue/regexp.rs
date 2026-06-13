@@ -1064,11 +1064,15 @@ impl RegexpInner {
         }
     }
 
+    /// `subject` is a frozen snapshot whose bytes are exactly `given`;
+    /// each match/capture is returned as a zero-copy shared (CoW)
+    /// substring view of it (`string_substring`), inheriting its
+    /// encoding. The caller is responsible for keeping `subject` alive.
     pub(crate) fn scan(
         &self,
         vm: &mut Executor,
+        subject: Value,
         given: &str,
-        result_enc: Option<crate::value::Encoding>,
     ) -> Result<Vec<Value>> {
         let mut ary = vec![];
         let mut last_captures = None;
@@ -1078,21 +1082,18 @@ impl RegexpInner {
             match cap.len() {
                 0 => unreachable!(),
                 1 => {
-                    let val = build_str_with_enc(cap.get(0).unwrap().as_str(), result_enc);
-                    ary.push(val);
+                    let m = cap.get(0).unwrap();
+                    ary.push(string_substring(subject, m.start(), m.end()));
                 }
                 len => {
                     let mut vec = vec![];
                     for i in 1..len {
                         match cap.get(i) {
-                            Some(m) => {
-                                vec.push(build_str_with_enc(m.as_str(), result_enc));
-                            }
+                            Some(m) => vec.push(string_substring(subject, m.start(), m.end())),
                             None => vec.push(Value::nil()),
                         }
                     }
-                    let val = Value::array_from_vec(vec);
-                    ary.push(val);
+                    ary.push(Value::array_from_vec(vec));
                 }
             }
             last_captures = Some(cap);
@@ -1102,17 +1103,6 @@ impl RegexpInner {
             vm.save_capture_special_variables(&c, given)
         }
         Ok(ary)
-    }
-}
-
-/// Build a String value tagged with `enc` if provided, otherwise
-/// fall back to UTF-8. Used by `scan` (and other regex helpers
-/// that produce string slices) so the result inherits the
-/// receiver's encoding instead of always defaulting to UTF-8.
-fn build_str_with_enc(s: &str, enc: Option<crate::value::Encoding>) -> Value {
-    match enc {
-        Some(e) => Value::string_from_inner(RStringInner::from_encoding_scanned(s.as_bytes(), e)),
-        None => Value::string(s.to_string()),
     }
 }
 
