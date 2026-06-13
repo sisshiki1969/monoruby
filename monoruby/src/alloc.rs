@@ -70,6 +70,35 @@ pub(crate) fn set_gc_enabled(enabled: bool) {
     GC_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Set by `GC.start` so the next safepoint collection is a Major (full)
+/// one — running a collection inline from a builtin is unsafe, so
+/// `GC.start` asks for one at the next poll via [`request_gc`].
+static GC_FORCE_MAJOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Request a garbage collection at the next VM safepoint (`GC.start`).
+///
+/// Only nudges the JIT/VM alloc flag into its trigger band (and, when
+/// `force_major`, records that the pending collection must be Major); the
+/// actual collection runs from the safepoint poll where live registers
+/// are spilled, so this is safe to call from inside a builtin.
+pub(crate) fn request_gc(force_major: bool) {
+    if force_major {
+        GC_FORCE_MAJOR.store(true, Ordering::Relaxed);
+    }
+    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let flag = addr as *mut u32;
+    // SAFETY: `flag` is the registered JIT alloc-flag location, valid for
+    // the VM thread's lifetime; monoruby's VM is single-threaded.
+    unsafe {
+        if std::ptr::read_volatile(flag) < 8 {
+            std::ptr::write_volatile(flag, 8);
+        }
+    }
+}
+
 /// Request a GC at the next VM safepoint when live malloc has crossed the
 /// threshold. Cheap and allocation-free (just a flag store), so it is safe
 /// to call from inside the global allocator.
@@ -555,7 +584,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total allocated objects.
     ///
-    #[cfg(feature = "gc-log")]
+    #[allow(unused)]
     pub fn total_allocated(&self) -> usize {
         self.total_allocated_objects
     }
@@ -563,7 +592,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total gc execution count.
     ///
-    #[cfg(feature = "gc-log")]
+    #[allow(unused)]
     pub fn total_gc_counter(&self) -> usize {
         self.total_gc_counter
     }
@@ -571,7 +600,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns the number of minor (young-generation) GC executions.
     ///
-    #[cfg(feature = "gc-log")]
+    #[allow(unused)]
     pub fn minor_gc_count(&self) -> usize {
         self.minor_gc_count
     }
@@ -579,7 +608,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns the number of major (full-heap) GC executions.
     ///
-    #[cfg(feature = "gc-log")]
+    #[allow(unused)]
     pub fn major_gc_count(&self) -> usize {
         self.major_gc_count
     }
@@ -692,7 +721,12 @@ impl<T: GCBox> Allocator<T> {
         if !self.gc_enabled {
             return;
         }
-        let kind = self.decide_gc_kind();
+        // A pending `GC.start` request forces a Major collection.
+        let kind = if GC_FORCE_MAJOR.swap(false, Ordering::Relaxed) {
+            GcKind::Major
+        } else {
+            self.decide_gc_kind()
+        };
         self.total_gc_counter += 1;
         match kind {
             GcKind::Minor => {

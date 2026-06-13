@@ -9,6 +9,58 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_with(klass, "stat", stat, 0, 1, false);
     globals.define_builtin_module_func(klass, "enable", enable, 0);
     globals.define_builtin_module_func(klass, "disable", disable, 0);
+    globals.define_builtin_module_func(klass, "count", count, 0);
+    globals.define_builtin_module_func_rest(klass, "start", start);
+}
+
+/// The `GC.stat` keys, in CRuby order. Only a handful map to real
+/// allocator counters (see [`stat_value`]); the rest are reported as 0
+/// because monoruby's mark-and-sweep collector has no equivalent.
+const STAT_KEYS: &[&str] = &[
+    "count",
+    "heap_allocated_pages",
+    "heap_sorted_length",
+    "heap_allocatable_pages",
+    "heap_available_slots",
+    "heap_live_slots",
+    "heap_free_slots",
+    "heap_final_slots",
+    "heap_marked_slots",
+    "heap_eden_pages",
+    "heap_tomb_pages",
+    "total_allocated_pages",
+    "total_freed_pages",
+    "total_allocated_objects",
+    "total_freed_objects",
+    "malloc_increase_bytes",
+    "malloc_increase_bytes_limit",
+    "minor_gc_count",
+    "major_gc_count",
+    "remembered_wb_unprotected_objects",
+    "remembered_wb_unprotected_objects_limit",
+    "old_objects",
+    "old_objects_limit",
+    "oldmalloc_increase_bytes",
+    "oldmalloc_increase_bytes_limit",
+];
+
+/// Value of a `GC.stat` key. Returns `None` for keys we don't recognise
+/// (so `GC.stat(:bogus)` can raise), real allocator counters for the
+/// keys we track, and 0 for the remaining known-but-unsupported keys.
+fn stat_value(name: &str) -> Option<i64> {
+    crate::alloc::ALLOC.with(|alloc| {
+        let alloc = alloc.borrow();
+        Some(match name {
+            "count" => alloc.total_gc_counter() as i64,
+            "minor_gc_count" => alloc.minor_gc_count() as i64,
+            "major_gc_count" => alloc.major_gc_count() as i64,
+            "total_allocated_objects" => alloc.total_allocated() as i64,
+            "heap_live_slots" | "heap_marked_slots" => alloc.live_count() as i64,
+            "heap_free_slots" => alloc.free_count() as i64,
+            _ if STAT_KEYS.contains(&name) => 0,
+            _ => return None,
+        })
+    })
 }
 
 ///
@@ -16,58 +68,79 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// - stat -> Hash
 /// - stat(key) -> Integer
+/// - stat(hash) -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/GC/s/stat.html]
 #[monoruby_builtin]
 fn stat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let keys: &[&str] = &[
-        "count",
-        "heap_allocated_pages",
-        "heap_sorted_length",
-        "heap_allocatable_pages",
-        "heap_available_slots",
-        "heap_live_slots",
-        "heap_free_slots",
-        "heap_final_slots",
-        "heap_marked_slots",
-        "heap_eden_pages",
-        "heap_tomb_pages",
-        "total_allocated_pages",
-        "total_freed_pages",
-        "total_allocated_objects",
-        "total_freed_objects",
-        "malloc_increase_bytes",
-        "malloc_increase_bytes_limit",
-        "minor_gc_count",
-        "major_gc_count",
-        "remembered_wb_unprotected_objects",
-        "remembered_wb_unprotected_objects_limit",
-        "old_objects",
-        "old_objects_limit",
-        "oldmalloc_increase_bytes",
-        "oldmalloc_increase_bytes_limit",
-    ];
-
-    if let Some(key) = lfp.try_arg(0) {
-        let key_name = key.expect_symbol_or_string(globals)?;
-        let name = key_name.to_string();
-        if keys.contains(&name.as_str()) {
-            Ok(Value::integer(0))
-        } else {
-            Err(MonorubyErr::argumenterr(format!(
-                "unknown key: {}",
-                name
-            )))
+    match lfp.try_arg(0) {
+        // `GC.stat(nil)` behaves like the no-argument form.
+        Some(arg) if arg.is_nil() => stat_full_hash(vm, globals),
+        // `GC.stat(hash)` fills the given hash (preserving keys we don't
+        // set) and returns the *same* hash object.
+        Some(arg) if arg.try_hash_ty().is_some() => {
+            let mut hash = arg.try_hash_ty().unwrap();
+            for key in STAT_KEYS {
+                let v = Value::integer(stat_value(key).unwrap_or(0));
+                hash.insert(Value::symbol_from_str(key), v, vm, globals)?;
+            }
+            Ok(arg)
         }
-    } else {
-        let mut inner = HashmapInner::default();
-        for key_name in keys {
-            let k = Value::symbol_from_str(key_name);
-            let v = Value::integer(0);
-            inner.insert(k, v, vm, globals)?;
+        // `GC.stat(:key)` / `GC.stat("key")` returns a single Integer.
+        Some(arg) if arg.try_symbol().is_some() || arg.is_str().is_some() => {
+            let key_name = arg.expect_symbol_or_string(globals)?;
+            let name = key_name.to_string();
+            match stat_value(&name) {
+                Some(v) => Ok(Value::integer(v)),
+                None => Err(MonorubyErr::argumenterr(format!("unknown key: {}", name))),
+            }
         }
-        Ok(Value::hash_from_inner(inner))
+        // Anything else (Integer, Array, …) is a TypeError in CRuby.
+        Some(_) => Err(MonorubyErr::typeerr("non-hash or symbol given")),
+        None => stat_full_hash(vm, globals),
     }
+}
+
+/// Build the full `GC.stat` Hash (all keys → Integer values).
+fn stat_full_hash(vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+    let mut inner = HashmapInner::default();
+    for key in STAT_KEYS {
+        let v = Value::integer(stat_value(key).unwrap_or(0));
+        inner.insert(Value::symbol_from_str(key), v, vm, globals)?;
+    }
+    Ok(Value::hash_from_inner(inner))
+}
+
+///
+/// ### GC.count
+///
+/// - count -> Integer
+///
+/// The number of times GC has run so far.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/GC/s/count.html]
+#[monoruby_builtin]
+fn count(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let n = crate::alloc::ALLOC.with(|alloc| alloc.borrow().total_gc_counter());
+    Ok(Value::integer(n as i64))
+}
+
+///
+/// ### GC.start
+///
+/// - start(full_mark: true, immediate_mark: true, immediate_sweep: true) -> nil
+///
+/// Force a garbage collection. The keyword arguments are accepted for
+/// compatibility but ignored — `GC.start` always runs a full collection.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/GC/s/start.html]
+#[monoruby_builtin]
+fn start(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Running a collection inline here is unsafe (the JIT caller's live
+    // registers aren't spilled for the GC root scan), so request a full
+    // collection at the next VM safepoint, where registers are saved.
+    crate::alloc::request_gc(true);
+    Ok(Value::nil())
 }
 
 ///
