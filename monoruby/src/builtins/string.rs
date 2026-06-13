@@ -2793,12 +2793,18 @@ fn gsub_main(
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
         }
-        let given = self_val.expect_str(globals)?;
         if arg1.try_hash_ty().is_some() {
-            RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), given, arg1)
+            // Hash form: `Hash#[]` (default_proc) may run Ruby that
+            // mutates the receiver, so pass the live receiver and let
+            // `replace_all_hash` match against a frozen snapshot.
+            RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), self_val, arg1)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
             let replace = arg1.coerce_to_str(vm, globals)?;
+            // Borrow after `coerce_to_str` (its `to_str` could mutate
+            // the receiver); the string-replacement loop runs no Ruby,
+            // so the borrow stays valid for its duration.
+            let given = self_val.expect_str(globals)?;
             RegexpInner::replace_all(vm, globals, lfp.arg(0), given, &replace)
         }
     } else {
@@ -2806,8 +2812,7 @@ fn gsub_main(
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
                 let self_enc = self_val.as_rstring_inner().encoding();
-                let given = self_val.expect_str(globals)?;
-                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), given, bh, Some(self_enc))
+                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), self_val, bh, Some(self_enc))
             }
         }
     }
@@ -2852,7 +2857,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Ok(Value::array_from_vec(vec))
         }
         Some(block) => {
-            scan_with_block(vm, globals, re, subject, block)?;
+            scan_with_block(vm, globals, re, self_, subject, block)?;
             Ok(lfp.self_val())
         }
     }
@@ -2862,6 +2867,7 @@ fn scan_with_block(
     vm: &mut Executor,
     globals: &mut Globals,
     re: &RegexpInner,
+    recv: Value,
     subject: Value,
     block: BlockHandler,
 ) -> Result<()> {
@@ -2872,7 +2878,7 @@ fn scan_with_block(
     // block drops every reference to the receiver.
     let temp_len = vm.temp_len();
     vm.temp_push(subject);
-    let res = scan_block_loop(vm, globals, re, subject, &data);
+    let res = scan_block_loop(vm, globals, re, recv, subject, &data);
     vm.temp_clear(temp_len);
     res
 }
@@ -2881,12 +2887,16 @@ fn scan_block_loop(
     vm: &mut Executor,
     globals: &mut Globals,
     re: &RegexpInner,
+    recv: Value,
     subject: Value,
     data: &ProcData,
 ) -> Result<()> {
     // `subject` is frozen (stable buffer) and temp-rooted by the caller,
-    // so this borrow stays valid across `invoke_block`.
+    // so this borrow stays valid across `invoke_block`. Matching runs on
+    // the snapshot; the *live* receiver `recv` is checked for a length
+    // change after each block call to raise "string modified" like CRuby.
     let given = subject.as_rstring_inner().check_utf8()?;
+    let recv_len = recv.as_rstring_inner().len();
     for cap in re.captures_iter(given) {
         let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
         vm.save_capture_special_variables(&cap, given);
@@ -2909,6 +2919,7 @@ fn scan_block_loop(
                 vm.invoke_block(globals, data, &val.as_array())?;
             }
         }
+        check_string_not_modified(recv, recv_len)?;
     }
     Ok(())
 }
@@ -8115,6 +8126,32 @@ mod tests {
         run_test_no_result_check(r###""a&b<c>d".encode(xml: :attr)"###);
         run_test_no_result_check(r###""a&b<c>d".encode(xml: :text)"###);
         run_test_no_result_check(r###""plain".encode(xml: :text)"###);
+    }
+
+    #[test]
+    fn scan_gsub_string_modified() {
+        // A block (or hash default_proc) that changes the receiver's
+        // *length* during scan/gsub must raise `RuntimeError: "string
+        // modified"`, matching CRuby; same-length in-place edits and
+        // mutating a different string must NOT raise. Differential via
+        // begin/rescue so the test compares both the raise and the
+        // non-raise against CRuby.
+        run_tests(&[
+            // length-changing mutations → raise
+            r##"begin; s="a b c".dup; s.scan(/\w/){ s << "x" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s="a b c".dup; s.gsub(/\w/){ s << "x"; "Q" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s="a b c".dup; s.gsub!(/\w/){ s << "x"; "Q" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s=("a "*30).dup; h=Hash.new{|_,_k| s<<"zz"; "Q"}; s.gsub(/\w/,h); :ok; rescue => e; e.class; end"##,
+            r##"begin; s=("a "*40).dup; s.gsub(/a/){ s << ("X"*200); "Q" }; :ok; rescue => e; e.class; end"##,
+            // same-length / no-op mutations → no raise
+            r##"begin; s="a b c".dup; s.scan(/\w/){ s[0]="Z" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s="a b c".dup; s.scan(/\w/){ s.upcase! }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s=("a"*100).dup; s.gsub(/a/){ s.replace("b"*100); "Q" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s="a b c".dup; t=s.dup; s.scan(/\w/){ t << "x" }; :ok; rescue => e; e.class; end"##,
+            r##"begin; s="a b c".dup; s.scan(/\w/){ |m| m }; :ok; rescue => e; e.class; end"##,
+            // grow-then-shrink back to same length within one block → no raise
+            r##"begin; s=("a"*20).dup; s.gsub(/a/){ s << "x"; s.chop!; "Q" }; :ok; rescue => e; e.class; end"##,
+        ]);
     }
 
     #[test]

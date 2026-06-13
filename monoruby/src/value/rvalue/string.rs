@@ -2176,6 +2176,20 @@ pub(crate) fn string_snapshot(mut receiver: Value) -> Value {
     }
 }
 
+/// CRuby's `str_mod_check`: raise `RuntimeError: "string modified"` when
+/// the receiver's byte length changed during a block iteration
+/// (`String#scan` / `#gsub` with a block or hash). Length is the only
+/// signal that matches CRuby here — monoruby reallocates the buffer on
+/// in-place same-length edits (copy-on-write detach), so a pointer
+/// comparison would over-trigger on mutations CRuby treats as in place.
+pub(crate) fn check_string_not_modified(recv: Value, expected_len: usize) -> Result<()> {
+    if recv.as_rstring_inner().len() != expected_len {
+        Err(MonorubyErr::runtimeerr("string modified"))
+    } else {
+        Ok(())
+    }
+}
+
 ///
 /// Make `parent`'s byte buffer shareable and return `(root, base)`:
 /// the (frozen, hidden) String owning the buffer and the address of
