@@ -1806,6 +1806,11 @@ impl RStringInner {
             // deferred), so the fixed-1-byte shortcut matches its
             // iterator.
             Encoding::Iso2022Jp => Some(1),
+            // ASCII-only UTF-8: every character is a single byte, so
+            // char index == byte index — take the O(1) offset path
+            // instead of walking the scalar iterator. (Must precede the
+            // generic UTF-8 arm below.)
+            Encoding::Utf8 if matches!(self.code_range(), CodeRange::SevenBit) => Some(1),
             // EUC-JP / Shift_JIS are variable-width: walk the
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.

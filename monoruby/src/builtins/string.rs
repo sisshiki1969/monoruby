@@ -935,15 +935,12 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 i => i as usize,
             };
             let r = lhs.get_range(index, len);
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &lhs[r], enc,
-            )))
+            // Zero-copy shared substring (CoW) for long enough slices.
+            Ok(string_substring(self_, r.start, r.end))
         } else {
             let r = lhs.get_range(index, 1);
             if !r.is_empty() {
-                Ok(Value::string_from_inner(RStringInner::from_encoding(
-                    &lhs[r], enc,
-                )))
+                Ok(string_substring(self_, r.start, r.end))
             } else {
                 Ok(Value::nil())
             }
@@ -960,8 +957,9 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_length - 1
         // (so the inclusive `end` reaches the last character; the
-        // exclusive bookkeeping below subtracts as usual).
-        let char_length = lhs.iter_char_bytes().count() as i64;
+        // exclusive bookkeeping below subtracts as usual). `char_length`
+        // is O(1) for ASCII-only strings (cached SevenBit code range).
+        let char_length = lhs.char_length() as i64;
         let start = if info.start().is_nil() {
             0
         } else {
@@ -987,9 +985,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             (None, _) => return Ok(Value::nil()),
         };
         let r = lhs.get_range(start, len);
-        Ok(Value::string_from_inner(RStringInner::from_encoding(
-            &lhs[r], enc,
-        )))
+        // Zero-copy shared substring (CoW) for long enough slices.
+        Ok(string_substring(self_, r.start, r.end))
     } else if let Some(re) = lfp.arg(0).is_regex() {
         // Second arg may be an Integer (group number) or a String/Symbol
         // (named capture group).
@@ -2452,14 +2449,12 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
 
     let self_ = lfp.self_val();
-    let inner = self_.as_rstring_inner();
     // Operate on bytes so that strings whose declared encoding
     // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
     // have their trailing newline stripped.
-    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
-    Ok(Value::string_from_inner(RStringInner::from_substring(
-        inner, 0, new_end,
-    )))
+    let new_end = chomp_byte_end(self_.as_rstring_inner().as_bytes(), rs_bytes);
+    // Zero-copy shared substring (CoW) for long enough results.
+    Ok(string_substring(self_, 0, new_end))
 }
 
 ///
@@ -2507,15 +2502,13 @@ const STRIP: &[char] = &[' ', '\n', '\t', '\x0d', '\x0c', '\x0b', '\x00'];
 #[monoruby_builtin]
 fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let inner = self_val.as_rstring_inner();
     let s = self_val.expect_str(globals)?;
     let after_rtrim = s.trim_end_matches(STRIP);
     let new_end = after_rtrim.len();
     let after_ltrim = after_rtrim.trim_start_matches(STRIP);
     let new_start = new_end - after_ltrim.len();
-    Ok(Value::string_from_inner(RStringInner::from_substring(
-        inner, new_start, new_end,
-    )))
+    // Zero-copy shared substring (CoW) for long enough results.
+    Ok(string_substring(self_val, new_start, new_end))
 }
 
 ///
@@ -2551,12 +2544,10 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let inner = self_val.as_rstring_inner();
     let s = self_val.expect_str(globals)?;
     let new_end = s.trim_end_matches(STRIP).len();
-    Ok(Value::string_from_inner(RStringInner::from_substring(
-        inner, 0, new_end,
-    )))
+    // Zero-copy shared substring (CoW) for long enough results.
+    Ok(string_substring(self_val, 0, new_end))
 }
 
 ///
@@ -2589,15 +2580,12 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn lstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let inner = self_val.as_rstring_inner();
     let s = self_val.expect_str(globals)?;
     let trimmed = s.trim_start_matches(STRIP);
     let new_start = s.len() - trimmed.len();
-    Ok(Value::string_from_inner(RStringInner::from_substring(
-        inner,
-        new_start,
-        s.len(),
-    )))
+    let s_len = s.len();
+    // Zero-copy shared substring (CoW) for long enough results.
+    Ok(string_substring(self_val, new_start, s_len))
 }
 
 ///
@@ -7838,6 +7826,32 @@ mod tests {
             // Range with start out-of-bounds returns nil
             r##""symbol"[10..12]"##,
             r##""symbol"[-10..-12]"##,
+        ]);
+    }
+
+    #[test]
+    fn slice_strip_cow_and_fast_path() {
+        // `[]`/slice and the strip family now return zero-copy shared
+        // (CoW) substrings; ASCII slicing takes the O(1) byte-offset
+        // path. Verify CRuby-identical results, mutation isolation
+        // between a shared view and its parent, and the multibyte
+        // (non-SevenBit) walk path that must NOT use the fast path.
+        run_tests(&[
+            // long ASCII slices (shared) — value, length, encoding
+            r##"s = "hello world " * 50; [s[100, 200], s[100..299], s[-100..], s[0,3000].length]"##,
+            // mutation isolation: parent change must not touch the slice
+            r##"s = ("abc" * 200).dup; sub = s[10, 100]; s.setbyte(20, 33); [sub, s.getbyte(20)]"##,
+            // strip family on long strings (shared)
+            r##"("   " + "x"*300 + "   ").strip"##,
+            r##"("  " + "a"*100).lstrip"##,
+            r##"("a"*100 + "  ").rstrip"##,
+            r##"("line " * 60 + "\n").chomp"##,
+            // mutating a shared strip result leaves the source intact
+            r##"s = ("   " + "y"*300 + "   ").dup; t = s.strip; t << "Z"; [s.length, t.length]"##,
+            // multibyte slice (cr Valid → walk path, NOT byte offsets)
+            r##"m = "あいうえお" * 20; [m[10, 5], m[0, 3], m.slice(95..)]"##,
+            // empty / boundary
+            r##"s = "x" * 100; [s[0,0], s[100,5], s[50..49], s[200]]"##,
         ]);
     }
 
