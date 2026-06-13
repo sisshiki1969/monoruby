@@ -11,6 +11,12 @@ impl AbstractState {
         func_id: FuncId,
         is_module: bool,
     ) {
+        // A class/module body is a full call (`enter_classdef`) that
+        // clobbers the accumulator (r15). When `class ... end` appears in
+        // expression position (e.g. `a << (class C; ...; end)`) the
+        // accumulator holds a live slot — spill it first, exactly like a
+        // method call does, or the later use reads a clobbered register.
+        self.writeback_acc(ir);
         if let Some(base) = base {
             self.write_back_slots(ir, &[base]);
         }
@@ -41,6 +47,9 @@ impl AbstractState {
         base: SlotId,
         func_id: FuncId,
     ) {
+        // See `class_def`: `class << obj` runs a body that clobbers the
+        // accumulator, so spill it before the call.
+        self.writeback_acc(ir);
         self.write_back_slots(ir, &[base]);
         if let Some(dst) = dst {
             self.def_S(dst);

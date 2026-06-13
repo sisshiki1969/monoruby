@@ -86,3 +86,36 @@ fn redefine_test4() {
         "##,
     );
 }
+
+// Regression for #730: a `class`/`module`/`class << obj` definition used
+// in *expression* position (its value feeds a surrounding operation)
+// must not clobber the accumulator that holds a live operand. Here `a`
+// (a freshly built Array) is the receiver of `<<` while the argument is a
+// class definition; the JIT used to leave `a` in the accumulator across
+// the class-body call, so the `<<` read a clobbered register and tripped
+// a non-Array assertion. `run_test` exercises the JIT (≥ warmup runs).
+#[test]
+fn class_def_in_expression_position_730() {
+    run_test(
+        r##"
+        out = nil
+        50.times do
+          a = []
+          a << (class C730A; 42; end)
+          a << (class C730B; def m; 7; end; end; "z")
+          obj = Object.new
+          a << (class << obj; 99; end)
+          out = a
+        end
+        out
+        "##,
+    );
+    // module form, and the value flowing into arithmetic
+    run_test(
+        r##"
+        r = nil
+        50.times { r = 1 + (module M730; 41; end) }
+        r
+        "##,
+    );
+}
