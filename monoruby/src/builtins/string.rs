@@ -8030,6 +8030,26 @@ mod tests {
     }
 
     #[test]
+    fn gsub_many_matches_linear() {
+        // Regression for the O(N²) apply loop: many matches on a long
+        // string must produce CRuby-identical output. Covers the
+        // string-replacement, block, and hash forms (all three now go
+        // through the single-forward-pass `RStringInner::splice_all`),
+        // plus growing/shrinking/equal replacement widths and
+        // interleaved unchanged spans.
+        run_tests(&[
+            r##"("a" * 500).gsub(/a/, "bb")"##,
+            r##"("ab" * 400).gsub(/a/, "")"##,
+            r##"("xay" * 300).gsub(/a/, "ZZZ")"##,
+            r##"("a" * 500).gsub(/a/) { "bb" }"##,
+            r##"("cat dog " * 200).gsub(/cat|dog/, "cat" => "C", "dog" => "D")"##,
+            r##"s = "a" * 500; s.gsub!(/a/, "bb"); s"##,
+            r##"("a,b,,c," * 100).gsub(/,/, "|")"##,
+            r##"("é" * 200).gsub(/é/, "e")"##,
+        ]);
+    }
+
+    #[test]
     fn gsub() {
         run_tests(&[
             r##"
