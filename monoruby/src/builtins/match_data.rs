@@ -1148,4 +1148,19 @@ mod tests {
         run_test_error(r##"/(foo)/.match("foo").byteoffset(-1)"##);
         run_test_error(r##"/(foo)/.match("foo").offset(-1)"##);
     }
+
+    #[test]
+    fn match_data_string_frozen() {
+        // MatchData#string is a single frozen object, the same on every call.
+        run_test(r##"md = /(.)(\d+)/.match("THX1138"); [md.string, md.string.frozen?, md.string.equal?(md.string)]"##);
+    }
+
+    #[test]
+    fn backref_shared_with_lambda() {
+        // A match performed before a lambda is visible as `$~` inside it
+        // (lambdas share their defining method frame's special variables).
+        run_test(r##"/(?<t>\w+)/ =~ "TEST"; l = -> { Regexp.last_match(:t) }; l.call"##);
+        run_test(r##"def m; /(\w)(\w)/ =~ "xy"; -> { $~[0] }.call; end; m"##);
+        run_test(r##"/(\w+)/ =~ "abc"; [1].each { }; $1"##);
+    }
 }

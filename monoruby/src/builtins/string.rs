@@ -8966,6 +8966,13 @@ mod tests {
             r#""0".oct"#,
             r#""".oct"#,
             r#""xyz".oct"#,
+            // A (second) sign in the digit portion is invalid → 0.
+            r#""0x-1".hex"#,
+            r#""0x-10".hex"#,
+            r#""+-5".hex"#,
+            r#""-+5".hex"#,
+            r#""+-5".oct"#,
+            r#""0x-7".oct"#,
             r"'4285'.to_f",
             r"'-4285'.to_f",
             r"'428.55'.to_f",
@@ -10388,6 +10395,47 @@ mod tests {
         ]);
         run_test_error(r##""hello".lines(:sym)"##);
         run_test_error(r##""hello".lines(false)"##);
+    }
+
+    #[test]
+    fn string_chomp_record_separator() {
+        // No-argument chomp/chomp! use `$/` (default "\n") as the separator.
+        run_test(r#""abc\n".chomp"#);
+        run_test(r#"$/ = "cdef"; r = "abcdef".chomp; $/ = "\n"; r"#);
+        run_test(r#"$/ = "cde"; s = +"abcde"; r = s.chomp!; $/ = "\n"; [r, s]"#);
+        run_test(r#"$/ = "xyz"; r = "abcde".chomp!; $/ = "\n"; r"#);
+    }
+
+    #[test]
+    fn string_match_operator() {
+        // `=~` returns the character (not byte) index of the match start.
+        run_test(r#"("こにちわ" =~ /に/)"#);
+        run_test(r#"("hello" =~ /l/)"#);
+        run_test(r#"("hello" =~ /z/)"#);
+        // A String rhs raises TypeError.
+        run_test(r#"("a" =~ "b" rescue $!.class)"#);
+    }
+
+    #[test]
+    fn string_plus_returns_string() {
+        run_test(r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#);
+        run_test(r#"("foo" + "bar")"#);
+    }
+
+    #[test]
+    fn string_index_regexp_clears_backref() {
+        // index with a Regexp updates `$~`: a match sets it, a miss clears it.
+        run_test(r#""a".index(/a/); $~.nil?"#);
+        run_test(r#"s = "blablabla"; s.index(/bla/, s.length + 1); $~.nil?"#);
+        run_test(r#""hello".index(/z/); $~.nil?"#);
+    }
+
+    #[test]
+    fn string_lines_each_line_record_separator() {
+        // No-argument lines/each_line default to `$/`.
+        run_test(r#"$/ = "l"; r = "hello".lines; $/ = "\n"; r"#);
+        run_test(r#"$/ = "l"; a = []; "hello".each_line { |x| a << x }; $/ = "\n"; a"#);
+        run_test(r#"$/ = nil; r = "one\ntwo".lines; $/ = "\n"; r"#);
     }
 
     #[test]

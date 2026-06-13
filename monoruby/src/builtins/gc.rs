@@ -198,4 +198,56 @@ mod tests {
     fn gc_start() {
         run_test("GC.start");
     }
+
+    #[test]
+    fn gc_stat_variants() {
+        run_test("GC.stat(:count).is_a?(Integer)");
+        run_test("GC.stat(nil).is_a?(Hash)");
+        run_test("GC.stat.values.all? { |v| v.is_a?(Integer) }");
+        run_test(
+            "h = { count: \"x\", __other__: \"y\" }; r = GC.stat(h); \
+             [r.equal?(h), h[:count].is_a?(Integer), h[:__other__]]",
+        );
+        run_test("(GC.stat(7) rescue $!.class)");
+        run_test("(GC.stat(:bogus_key) rescue $!.class)");
+    }
+
+    #[test]
+    fn gc_mode_flags() {
+        // Explicit set/read round-trips (default-independent: CRuby's
+        // default for these knobs is build/platform-specific).
+        run_test("GC.stress = true; r = GC.stress; GC.stress = false; [r, GC.stress]");
+        run_test(
+            "GC.measure_total_time = true; a = GC.measure_total_time; \
+             GC.measure_total_time = false; b = GC.measure_total_time; [a, b]",
+        );
+        run_test("GC.total_time.is_a?(Integer)");
+        // `auto_compact=` may raise NotImplementedError on some platforms.
+        run_test("(GC.auto_compact = false rescue nil); [true, false].include?(GC.auto_compact)");
+    }
+
+    #[test]
+    fn gc_config() {
+        run_test("GC.config.is_a?(Hash)");
+        run_test("GC.config[:implementation]");
+        run_test("GC.config({}) == GC.config");
+        run_test("GC.config(nil) == GC.config");
+        run_test("(GC.config(implementation: \"x\") rescue $!.class)");
+    }
+
+    #[test]
+    fn gc_garbage_collect() {
+        run_test("o = Object.new; o.extend(GC); o.garbage_collect");
+    }
+
+    #[test]
+    fn gc_profiler() {
+        run_test(
+            "GC::Profiler.enable; r = GC::Profiler.enabled?; \
+             GC::Profiler.disable; [r, GC::Profiler.enabled?]",
+        );
+        run_test("GC::Profiler.result.is_a?(String)");
+        run_test("GC::Profiler.total_time.is_a?(Float)");
+        run_test("GC::Profiler.clear");
+    }
 }
