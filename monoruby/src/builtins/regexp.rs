@@ -818,7 +818,20 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 #[monoruby_builtin]
 fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(Value::string_from_str(self_.is_regex().unwrap().as_str()))
+    let re = self_.is_regex().unwrap();
+    let src = re.as_str();
+    // CRuby's `Regexp#source.encoding`: a regexp whose encoding is pinned
+    // (the `u`/`e`/`s` modifiers, a non-ASCII `\u{}` escape, or non-ASCII
+    // source bytes) carries that encoding; an unpinned, 7-bit-only source
+    // is US-ASCII.
+    let enc = if re.fixed_encoding() {
+        re.declared_encoding()
+    } else {
+        crate::value::Encoding::UsAscii
+    };
+    Ok(Value::string_from_inner(
+        crate::value::rvalue::RStringInner::from_encoding_scanned(src.as_bytes(), enc),
+    ))
 }
 
 ///
@@ -1886,6 +1899,18 @@ mod tests {
         // `#options` exposes Regexp::FIXEDENCODING; a plain regexp does not.
         run_test(
             "[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) != 0 }",
+        );
+    }
+
+    #[test]
+    fn regexp_source_encoding() {
+        // A 7-bit, unpinned source is US-ASCII; a pinned encoding (u/e/s
+        // modifier, non-ASCII `\u{}` escape, non-ASCII source) carries
+        // that encoding.
+        run_test(
+            r#"[ /abc/, /abc/u, /abc/e, /\u{61}/, /\u{3042}/,
+                Regexp.new("abc"), Regexp.new("\u{ff}"), Regexp.new("ほげ") ]
+              .map { |r| r.source.encoding.to_s }"#,
         );
     }
 }
