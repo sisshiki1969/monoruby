@@ -455,6 +455,28 @@ impl Codegen {
             } => {
                 self.integer_binop(lhs, rhs, &mode, kind, &deopt);
             }
+            // Fixnum unary negate (tagged); deopt on i63 overflow.
+            LInst::FixnumNeg { reg, deopt } => {
+                let r = reg as u64;
+                monoasm! { &mut self.jit,
+                    sarq  R(r), 1;
+                    negq  R(r);
+                    jo    deopt;
+                    addq  R(r), R(r);
+                    jo    deopt;
+                    orq   R(r), 1;
+                }
+            }
+            // Fixnum bitwise-not (tagged); cannot overflow.
+            LInst::FixnumBitNot { reg } => {
+                let r = reg as u64;
+                monoasm! { &mut self.jit,
+                    sarq  R(r), 1;
+                    notq  R(r);
+                    salq  R(r), 1;
+                    orq   R(r), 1;
+                }
+            }
             // ---- FP transfer / convert (spill-aware) -------------------------
             LInst::FprMove { src, dst, base } => {
                 if src != dst {
@@ -1427,30 +1449,6 @@ impl Codegen {
             self.jit.select_page(0);
         }
         true
-    }
-
-    /// Fixnum negate (tagged): untag, negate, re-tag; deopt on i63 overflow.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
-        let r = reg as u64;
-        monoasm! { &mut self.jit,
-            sarq  R(r), 1;
-            negq  R(r);
-            jo    deopt;
-            addq  R(r), R(r);
-            jo    deopt;
-            orq   R(r), 1;
-        }
-    }
-
-    /// Fixnum bitwise-not (tagged): untag, complement, re-tag. Cannot overflow.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
-        let r = reg as u64;
-        monoasm! { &mut self.jit,
-            sarq  R(r), 1;
-            notq  R(r);
-            salq  R(r), 1;
-            orq   R(r), 1;
-        }
     }
 
     /// reg += i (no-op when i == 0).

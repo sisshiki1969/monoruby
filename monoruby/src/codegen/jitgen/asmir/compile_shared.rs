@@ -394,8 +394,11 @@ impl Codegen {
             AsmInst::Preparation => return self.emit_preparation(store, frame),
             // Fixnum unary ops on the tagged value. Negate deopts on i63
             // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
-            AsmInst::FixnumNeg { reg, deopt } => self.emit_fixnum_neg(reg, &labels[deopt]),
-            AsmInst::FixnumBitNot { reg } => self.emit_fixnum_bit_not(reg),
+            AsmInst::FixnumNeg { reg, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::FixnumNeg { reg, deopt });
+            }
+            AsmInst::FixnumBitNot { reg } => self.encode_linst(LInst::FixnumBitNot { reg }),
             // Type guards: deopt unless `reg` is an Array / the receiver in rdi
             // is unfrozen.
             AsmInst::GuardArrayTy(reg, deopt) => {

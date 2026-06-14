@@ -298,6 +298,11 @@ pub(in crate::codegen::jitgen) enum LInst {
         rhs: GP,
         deopt: DestLabel,
     },
+    /// Fixnum unary negate on the tagged value in `reg`; deopt on i63 overflow
+    /// (e.g. `-i63::MIN`).
+    FixnumNeg { reg: GP, deopt: DestLabel },
+    /// Fixnum bitwise-not on the tagged value in `reg` (cannot overflow).
+    FixnumBitNot { reg: GP },
     // ---- floating-point transfer / convert -----------------------------------
     // FP operands are virtual `FPReg`s (physical xmm/d-reg or a stack spill); the
     // encoders resolve the spill via `FPReg::loc(base)`, so these carry the
