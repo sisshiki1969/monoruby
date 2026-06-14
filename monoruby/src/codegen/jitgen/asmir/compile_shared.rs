@@ -347,7 +347,19 @@ impl Codegen {
             // Inline instance-variable / struct-member access on the receiver in
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
-            AsmInst::LoadIVarInline { ivarid } => return self.emit_load_ivar_inline(ivarid),
+            // Inline ivar load: `r15 <- self.@ivar` at a fixed field offset on
+            // the receiver (rdi); an unset slot reads as 0 and becomes nil.
+            AsmInst::LoadIVarInline { ivarid } => {
+                let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
+                self.encode_linst(LInst::Load {
+                    dst: GP::R15,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp,
+                    },
+                });
+                self.encode_linst(LInst::NilIfZero { reg: GP::R15 });
+            }
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
             AsmInst::StoreIVarInline { src, ivarid } => {

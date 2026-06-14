@@ -234,6 +234,10 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// macro-op — the encoder emits the arch's inline fast-path + slow-path call
     /// (x86 fixes `parent` in rdi).
     WriteBarrier { parent: GP, value: GP },
+    /// `reg <- nil` if `reg == 0` (an unset inline-ivar slot reads as 0). The
+    /// arches differ structurally — x86 branches over a `mov`, aarch64 uses a
+    /// branchless `csel` — so this is its own op rather than a Load + branch.
+    NilIfZero { reg: GP },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

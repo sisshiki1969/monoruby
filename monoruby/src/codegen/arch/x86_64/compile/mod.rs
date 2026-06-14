@@ -390,6 +390,17 @@ impl Codegen {
                 debug_assert_eq!(parent, GP::Rdi, "x86 write barrier expects parent in rdi");
                 self.emit_write_barrier_rdi(value);
             }
+            // reg <- nil if reg == 0 (x86: branch over the nil mov).
+            LInst::NilIfZero { reg } => {
+                let r = reg as u64;
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    testq R(r), R(r);
+                    jne  skip;
+                    movq R(r), (NIL_VALUE);
+                skip:
+                }
+            }
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1505,13 +1516,6 @@ impl Codegen {
     /// Guard that the receiver in rdi is not frozen; deopt otherwise.
     pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
         self.guard_frozen(deopt);
-    }
-
-    /// Load an inline (object-embedded) instance variable into the accumulator,
-    /// substituting nil for an unset slot.
-    pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
-        self.load_ivar_inline(ivarid);
-        true
     }
 
     /// Load a heap-spilled Struct member slot into the accumulator.

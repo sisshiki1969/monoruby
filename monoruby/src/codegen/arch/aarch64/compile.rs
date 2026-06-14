@@ -1497,6 +1497,15 @@ impl Codegen {
             LInst::WriteBarrier { parent, value } => {
                 self.emit_write_barrier(parent, value);
             }
+            // reg <- nil if reg == 0 (aarch64: branchless csel).
+            LInst::NilIfZero { reg } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (NIL_VALUE);
+                    cmp x(r), #(0u32);
+                    csel x(r), x(r), x9, ne;
+                );
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2950,22 +2959,6 @@ impl Codegen {
     /// `ldr`/`str` use a 12-bit scaled (×8) immediate offset; bail above that.
     fn a64_field_off_ok(off: u32) -> bool {
         off <= 32760 && off % 8 == 0
-    }
-
-    /// Load an inline (object-embedded) instance variable into the accumulator
-    /// (x23), substituting nil for an unset (zero) slot. Bails if the field
-    /// offset is out of the load immediate's range.
-    pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
-        let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let r15 = GP::R15.a64().0;
-        self.a64_field_load(r15, rdi, off);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (NIL_VALUE);
-            cmp x(r15), #(0u32);
-            csel x(r15), x(r15), x9, ne;   // unset slot (0) -> nil
-        );
-        true
     }
 
     /// Load a heap-spilled Struct member slot: deref the heap pointer (into rdi)

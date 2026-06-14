@@ -3,30 +3,6 @@ use crate::codegen::jitgen::asmir::compile_shared::set_ivar;
 
 impl Codegen {
     ///
-    /// Load ivar embedded to RValue. (only for object type)
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    /// #### out
-    /// - r15: Value
-    ///
-    /// #### destroy
-    /// - rdi
-    ///
-    pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
-        let exit = self.jit.label();
-        monoasm! {&mut self.jit,
-            movq r15, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
-            // We must check whether the ivar slot is None.
-            testq r15, r15;
-            jne  exit;
-            movq r15, (NIL_VALUE);
-        exit:
-        }
-    }
-
-    ///
     /// Load ivar on `var_table`.
     ///
     /// #### in
