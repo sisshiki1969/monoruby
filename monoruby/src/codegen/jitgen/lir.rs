@@ -426,6 +426,76 @@ pub(in crate::codegen::jitgen) enum LInst {
         is_object_ty: bool,
         using_xmm: UsingXmm,
     },
+    // Variable access (gvar/cvar via runtime call; dynvar walks the LFP chain).
+    StoreConstant {
+        id: ConstSiteId,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    },
+    LoadGVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    StoreGVar {
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    },
+    LoadCVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    LoadDynVar {
+        src: DynVar,
+    },
+    StoreDynVar {
+        dst: DynVar,
+        src: GP,
+    },
+    // Runtime allocation / C-call family (each builds a heap object).
+    CreateArray {
+        src: SlotId,
+        len: usize,
+    },
+    NewArray {
+        callid: CallSiteId,
+        using_xmm: UsingXmm,
+    },
+    NewHash {
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    },
+    HashInsert {
+        hash: SlotId,
+        args: SlotId,
+        len: usize,
+        using_xmm: UsingXmm,
+    },
+    ArrayConcat {
+        dst: SlotId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    },
+    NewRange {
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+        using_xmm: UsingXmm,
+    },
+    ConcatStr {
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    },
+    ToA {
+        src: SlotId,
+        using_xmm: UsingXmm,
+    },
+    DeepCopyLit {
+        v: Value,
+        using_xmm: UsingXmm,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

@@ -126,42 +126,51 @@ impl Codegen {
             // Store to a constant, bumping the global constant version (aarch64
             // bails if any xmm is live, hence the bool result).
             AsmInst::StoreConstant { id, using_xmm, error } => {
-                return self.emit_store_constant(id, using_xmm, &labels[error]);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::StoreConstant { id, using_xmm, error })
             }
-            // Variable access (aarch64 bails on a live xmm / range overflow,
-            // hence the bool results). gvar/cvar go via a runtime call; dynvar
-            // walks the outer-LFP chain.
-            AsmInst::LoadGVar { name, using_xmm } => return self.emit_load_gvar(name, using_xmm),
+            // Variable access. gvar/cvar go via a runtime call; dynvar walks the
+            // outer-LFP chain.
+            AsmInst::LoadGVar { name, using_xmm } => {
+                self.encode_linst(LInst::LoadGVar { name, using_xmm })
+            }
             AsmInst::StoreGVar { name, src, using_xmm } => {
-                return self.emit_store_gvar(name, src, using_xmm);
+                self.encode_linst(LInst::StoreGVar { name, src, using_xmm })
             }
-            AsmInst::LoadCVar { name, using_xmm } => return self.emit_load_cvar(name, using_xmm),
-            AsmInst::LoadDynVar { src } => return self.emit_load_dyn_var(src),
-            AsmInst::StoreDynVar { dst, src } => return self.emit_store_dyn_var(dst, src),
-            // Runtime allocation / C-call family: each builds a heap object via
-            // a runtime call (aarch64 bails on a live xmm / range overflow,
-            // hence the bool results).
-            AsmInst::CreateArray { src, len } => return self.emit_create_array(src, len),
+            AsmInst::LoadCVar { name, using_xmm } => {
+                self.encode_linst(LInst::LoadCVar { name, using_xmm })
+            }
+            AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
+            AsmInst::StoreDynVar { dst, src } => {
+                self.encode_linst(LInst::StoreDynVar { dst, src })
+            }
+            // Runtime allocation / C-call family: each builds a heap object via a
+            // runtime call.
+            AsmInst::CreateArray { src, len } => {
+                self.encode_linst(LInst::CreateArray { src, len })
+            }
             AsmInst::NewArray { callid, using_xmm } => {
-                return self.emit_new_array(callid, using_xmm);
+                self.encode_linst(LInst::NewArray { callid, using_xmm })
             }
             AsmInst::NewHash(args, len, using_xmm) => {
-                return self.emit_new_hash(args, len, using_xmm);
+                self.encode_linst(LInst::NewHash { args, len, using_xmm })
             }
             AsmInst::HashInsert { hash, args, len, using_xmm } => {
-                return self.emit_hash_insert(hash, args, len, using_xmm);
+                self.encode_linst(LInst::HashInsert { hash, args, len, using_xmm })
             }
             AsmInst::ArrayConcat { dst, src, using_xmm } => {
-                return self.emit_array_concat(dst, src, using_xmm);
+                self.encode_linst(LInst::ArrayConcat { dst, src, using_xmm })
             }
             AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
-                return self.emit_new_range(start, end, exclude_end, using_xmm);
+                self.encode_linst(LInst::NewRange { start, end, exclude_end, using_xmm })
             }
             AsmInst::ConcatStr { arg, len, using_xmm } => {
-                return self.emit_concat_str(arg, len, using_xmm);
+                self.encode_linst(LInst::ConcatStr { arg, len, using_xmm })
             }
-            AsmInst::ToA { src, using_xmm } => return self.emit_to_a(src, using_xmm),
-            AsmInst::DeepCopyLit(v, using_xmm) => return self.emit_deep_copy_lit(v, using_xmm),
+            AsmInst::ToA { src, using_xmm } => self.encode_linst(LInst::ToA { src, using_xmm }),
+            AsmInst::DeepCopyLit(v, using_xmm) => {
+                self.encode_linst(LInst::DeepCopyLit { v, using_xmm })
+            }
             // Floating-point register transfer/convert family (aarch64 bails if
             // the FP pool register is not lowerable, hence the bool results).
             // `base` is the spill base; deopt is a side-exit label.
@@ -835,6 +844,51 @@ impl Codegen {
                 using_xmm,
             } => {
                 self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_xmm);
+            }
+            LInst::StoreConstant { id, using_xmm, error } => {
+                self.emit_store_constant(id, using_xmm, &error);
+            }
+            LInst::LoadGVar { name, using_xmm } => {
+                self.emit_load_gvar(name, using_xmm);
+            }
+            LInst::StoreGVar { name, src, using_xmm } => {
+                self.emit_store_gvar(name, src, using_xmm);
+            }
+            LInst::LoadCVar { name, using_xmm } => {
+                self.emit_load_cvar(name, using_xmm);
+            }
+            LInst::LoadDynVar { src } => {
+                self.emit_load_dyn_var(src);
+            }
+            LInst::StoreDynVar { dst, src } => {
+                self.emit_store_dyn_var(dst, src);
+            }
+            LInst::CreateArray { src, len } => {
+                self.emit_create_array(src, len);
+            }
+            LInst::NewArray { callid, using_xmm } => {
+                self.emit_new_array(callid, using_xmm);
+            }
+            LInst::NewHash { args, len, using_xmm } => {
+                self.emit_new_hash(args, len, using_xmm);
+            }
+            LInst::HashInsert { hash, args, len, using_xmm } => {
+                self.emit_hash_insert(hash, args, len, using_xmm);
+            }
+            LInst::ArrayConcat { dst, src, using_xmm } => {
+                self.emit_array_concat(dst, src, using_xmm);
+            }
+            LInst::NewRange { start, end, exclude_end, using_xmm } => {
+                self.emit_new_range(start, end, exclude_end, using_xmm);
+            }
+            LInst::ConcatStr { arg, len, using_xmm } => {
+                self.emit_concat_str(arg, len, using_xmm);
+            }
+            LInst::ToA { src, using_xmm } => {
+                self.emit_to_a(src, using_xmm);
+            }
+            LInst::DeepCopyLit { v, using_xmm } => {
+                self.emit_deep_copy_lit(v, using_xmm);
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }
