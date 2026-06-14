@@ -1130,6 +1130,12 @@ mod tests {
     }
 
     #[test]
+    fn match_data_regexp_after_gsub_string() {
+        // gsub(String) attaches the (escaped) Regexp to `$~`.
+        run_test(r#"'he[[o'.gsub('[', ']'); $~.regexp == /\[/"#);
+    }
+
+    #[test]
     fn match_data_result_encoding() {
         // Capture / pre_match / post_match strings inherit the subject's
         // encoding (not a fixed UTF-8/ASCII-8BIT auto-detection).

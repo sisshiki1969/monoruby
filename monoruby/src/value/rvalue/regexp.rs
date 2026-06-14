@@ -1209,6 +1209,9 @@ impl RegexpInner {
         let res = RStringInner::splice_all(store, given, &replacements)?;
 
         if let Some(c) = last_captures {
+            // Attach the (possibly coerced-from-String) Regexp to `$~` so
+            // `$~.regexp` works after `gsub(String)`.
+            vm.set_match_regex(Value::regexp(self.clone()));
             vm.save_capture_special_variables(&c, given)
         }
 
