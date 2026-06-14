@@ -928,6 +928,17 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
     }
+    // A subject String that is invalid in its own encoding can't be
+    // matched — CRuby raises ArgumentError before scanning.
+    if arg0.is_rstring().is_some() {
+        let inner = arg0.as_rstring_inner();
+        if !inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid byte sequence in {}",
+                inner.encoding().name()
+            )));
+        }
+    }
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
@@ -1956,6 +1967,22 @@ mod tests {
         run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
         // A Regexp argument preserves the original source verbatim.
         run_test(r#"Regexp.new(/\u{61}/).source"#);
+    }
+
+    #[test]
+    fn regexp_match_invalid_encoding() {
+        // Matching a subject that is invalid in its own encoding raises
+        // ArgumentError (CRuby), instead of mis-matching or erroring.
+        run_test(
+            r#"x = [150].pack("C").force_encoding("utf-8");
+               (/(.).(.)/.match("ab #{x} cd", 1); nil) rescue [$!.class, $!.message]"#,
+        );
+        run_test(
+            r#"x = [150].pack("C").force_encoding("utf-8");
+               (/(.).(.)/.match("ab #{x} cd", -1); nil) rescue [$!.class, $!.message]"#,
+        );
+        // A valid (binary) subject still matches.
+        run_test(r#"/a/.match("xay".b).nil?"#);
     }
 
     #[test]
