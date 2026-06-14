@@ -712,7 +712,3 @@ class Thread
   def to_s = super
   alias inspect to_s
 end
-class Proc
-  def ==(other) = super
-  alias eql? ==
-end
