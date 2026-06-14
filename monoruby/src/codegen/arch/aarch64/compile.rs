@@ -2961,37 +2961,6 @@ impl Codegen {
         off <= 32760 && off % 8 == 0
     }
 
-    /// Load a heap-spilled Struct member slot: deref the heap pointer (into rdi)
-    /// then load the slot into the accumulator (x23).
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_heap(&mut self, slot_index: u16) -> bool {
-        let off = slot_index as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let r15 = GP::R15.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            ldr x(rdi), [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
-        );
-        self.a64_field_load(r15, rdi, off);
-        true
-    }
-
-    /// Store `src` into a heap-spilled Struct member slot (also returned in
-    /// rax/x0). Derefs the heap pointer first (clobbering rdi, like x86).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_heap(&mut self, src: GP, slot_index: u16) -> bool {
-        let off = slot_index as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let s = src.a64().0;
-        let rax = GP::Rax.a64().0;
-        // Write barrier before `rdi` is repointed at the heap buffer:
-        // rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier(GP::Rdi, src);
-        monoasm_arm64!(&mut self.jit,
-            ldr x(rdi), [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
-        );
-        self.a64_field_store(s, rdi, off);
-        monoasm_arm64!(&mut self.jit, mov x(rax), x(s););
-        true
-    }
-
     /// reg += i (no-op when i == 0). `i` is materialized so any i32 works.
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
         self.encode_linst(LInst::Alu {

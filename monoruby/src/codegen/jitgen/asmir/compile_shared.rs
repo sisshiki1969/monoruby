@@ -409,13 +409,49 @@ impl Codegen {
                     src,
                 });
             }
-            // Heap (Box-spilled) Struct member access: deref the heap pointer
-            // first, then load/store the slot (aarch64 bails on a large offset).
+            // Heap (Box-spilled) Struct member access: deref the heap buffer
+            // pointer into rdi, then load/store the slot at `slot_index * 8`.
             AsmInst::LoadStructSlotHeap { slot_index } => {
-                return self.emit_load_struct_slot_heap(slot_index);
+                self.encode_linst(LInst::Load {
+                    dst: GP::Rdi,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp: RVALUE_OFFSET_HEAP_PTR as i32,
+                    },
+                });
+                self.encode_linst(LInst::Load {
+                    dst: GP::R15,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp: slot_index as i32 * 8,
+                    },
+                });
             }
             AsmInst::StoreStructSlotHeap { src, slot_index } => {
-                return self.emit_store_struct_slot_heap(src, slot_index);
+                // Barrier first: it needs rdi = the struct (parent), before the
+                // deref repoints rdi at the heap buffer.
+                self.encode_linst(LInst::WriteBarrier {
+                    parent: GP::Rdi,
+                    value: src,
+                });
+                self.encode_linst(LInst::Load {
+                    dst: GP::Rdi,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp: RVALUE_OFFSET_HEAP_PTR as i32,
+                    },
+                });
+                self.encode_linst(LInst::Store {
+                    src,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp: slot_index as i32 * 8,
+                    },
+                });
+                self.encode_linst(LInst::Mov {
+                    dst: GP::Rax,
+                    src,
+                });
             }
             // reg += i / reg -= i (no-op when i == 0).
             AsmInst::RegAdd(reg, i) => self.emit_reg_add(reg, i),

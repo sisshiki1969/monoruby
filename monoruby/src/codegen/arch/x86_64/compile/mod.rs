@@ -1518,18 +1518,6 @@ impl Codegen {
         self.guard_frozen(deopt);
     }
 
-    /// Load a heap-spilled Struct member slot into the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_heap(&mut self, slot_index: u16) -> bool {
-        self.load_struct_slot_heap(slot_index);
-        true
-    }
-
-    /// Store `src` into a heap-spilled Struct member slot (also returned in rax).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_heap(&mut self, src: GP, slot_index: u16) -> bool {
-        self.store_struct_slot_heap(src, slot_index);
-        true
-    }
-
     /// reg += i (no-op when i == 0).
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
         self.encode_linst(LInst::Alu {

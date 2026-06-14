@@ -63,46 +63,6 @@ impl Codegen {
     }
 
     ///
-    /// Load slot `slot_index` of a `Struct` instance whose slot
-    /// vector spilled to the **heap** (the class has more than
-    /// `STRUCT_INLINE_SLOTS` members). Two movs.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// #### out
-    /// - r15: Value
-    /// #### destroy
-    /// - rdi
-    pub(super) fn load_struct_slot_heap(&mut self, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
-            movq r15, [rdi + ((slot_index as i32) * 8)];
-        }
-    }
-
-    ///
-    /// Store *src* into heap slot `slot_index` of `rdi`. Two movs.
-    /// Caller must have emitted `GuardFrozen` already.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// - src: Value to store
-    /// #### out
-    /// - rax: src
-    /// #### destroy
-    /// - rdi
-    pub(super) fn store_struct_slot_heap(&mut self, src: GP, slot_index: u16) {
-        // Write barrier before `rdi` is repointed at the heap buffer:
-        // rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier_rdi(src);
-        monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
-            movq [rdi + ((slot_index as i32) * 8)], R(src as _);
-            movq rax, R(src as _);
-        }
-    }
-
-    ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
