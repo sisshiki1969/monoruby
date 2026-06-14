@@ -12,7 +12,7 @@ use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::{LInst, LMem};
+use crate::codegen::jitgen::lir::{LAluOp, LInst, LMem, LOperand};
 use monoasm_macro::monoasm_arm64;
 
 ///
@@ -1388,6 +1388,38 @@ impl Codegen {
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
                 monoasm_arm64!(&mut self.jit, mov x9, (imm););
                 self.a64_frame_store(9, lfp, off);
+            }
+            // dst <op>= imm (in-place register/immediate ALU; the only Alu
+            // shape produced so far, from RegAdd/RegSub). The immediate is
+            // staged through scratch x9; SP (reg 31 == XZR in the
+            // shifted-register form) is updated via x10. No-op when imm == 0.
+            LInst::Alu {
+                op,
+                dst,
+                lhs,
+                rhs: LOperand::Imm(i),
+            } if dst == lhs => {
+                if i != 0 {
+                    let d = dst.a64().0;
+                    let imm = i as u64;
+                    match (op, dst == GP::Rsp) {
+                        (LAluOp::Add, false) => {
+                            monoasm_arm64!(&mut self.jit, mov x9, (imm); add x(d), x(d), x9;)
+                        }
+                        (LAluOp::Add, true) => monoasm_arm64!(&mut self.jit,
+                            mov x9, (imm); mov x10, sp; add x10, x10, x9; mov sp, x10;
+                        ),
+                        (LAluOp::Sub, false) => {
+                            monoasm_arm64!(&mut self.jit, mov x9, (imm); sub x(d), x(d), x9;)
+                        }
+                        (LAluOp::Sub, true) => monoasm_arm64!(&mut self.jit,
+                            mov x9, (imm); mov x10, sp; sub x10, x10, x9; mov sp, x10;
+                        ),
+                        _ => todo!(
+                            "LIR encode (aarch64): Alu {op:?} imm not yet migrated (Phase-1 Stage > 2-C)"
+                        ),
+                    }
+                }
             }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
@@ -2976,47 +3008,22 @@ impl Codegen {
 
     /// reg += i (no-op when i == 0). `i` is materialized so any i32 works.
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let d = reg.a64().0;
-            if reg == GP::Rsp {
-                // Register 31 decodes as XZR (not SP) in the add/sub
-                // shifted-register form, so `add x31, x31, x9` would be a no-op.
-                // Go through a GP temp: mov to/from SP is the sp-aware form.
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (i as i64 as u64);
-                    mov x10, sp;
-                    add x10, x10, x9;
-                    mov sp, x10;
-                );
-            } else {
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (i as i64 as u64);
-                    add x(d), x(d), x9;
-                );
-            }
-        }
+        self.encode_linst(LInst::Alu {
+            op: LAluOp::Add,
+            dst: reg,
+            lhs: reg,
+            rhs: LOperand::Imm(i as i64),
+        });
     }
 
     /// reg -= i (no-op when i == 0).
     pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let d = reg.a64().0;
-            if reg == GP::Rsp {
-                // See emit_reg_add: SP must be updated via a GP temp (reg 31 is
-                // XZR in the shifted-register form).
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (i as i64 as u64);
-                    mov x10, sp;
-                    sub x10, x10, x9;
-                    mov sp, x10;
-                );
-            } else {
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (i as i64 as u64);
-                    sub x(d), x(d), x9;
-                );
-            }
-        }
+        self.encode_linst(LInst::Alu {
+            op: LAluOp::Sub,
+            dst: reg,
+            lhs: reg,
+            rhs: LOperand::Imm(i as i64),
+        });
     }
 
     /// Loop-JIT entry stack bump (large bumps go through `a64_sp_sub`).

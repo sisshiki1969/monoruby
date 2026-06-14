@@ -11,7 +11,7 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
-use crate::codegen::jitgen::lir::{LInst, LMem};
+use crate::codegen::jitgen::lir::{LAluOp, LInst, LMem, LOperand};
 
 impl Codegen {
     ///
@@ -297,6 +297,26 @@ impl Codegen {
                         movq rax, (imm);
                         movq [rbp - (rbp_local(slot))], rax;
                     );
+                }
+            }
+            // dst <op>= imm (in-place register/immediate ALU; the only Alu
+            // shape produced so far, from RegAdd/RegSub). No-op when imm == 0.
+            LInst::Alu {
+                op,
+                dst,
+                lhs,
+                rhs: LOperand::Imm(i),
+            } if dst == lhs => {
+                if i != 0 {
+                    let r = dst as u64;
+                    let imm = i as i32;
+                    match op {
+                        LAluOp::Add => monoasm! { &mut self.jit, addq R(r), (imm); },
+                        LAluOp::Sub => monoasm! { &mut self.jit, subq R(r), (imm); },
+                        _ => todo!(
+                            "LIR encode (x86-64): Alu {op:?} imm not yet migrated (Phase-1 Stage > 2-C)"
+                        ),
+                    }
                 }
             }
             other => {
@@ -1490,18 +1510,22 @@ impl Codegen {
 
     /// reg += i (no-op when i == 0).
     pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let r = reg as u64;
-            monoasm! { &mut self.jit, addq R(r), (i); }
-        }
+        self.encode_linst(LInst::Alu {
+            op: LAluOp::Add,
+            dst: reg,
+            lhs: reg,
+            rhs: LOperand::Imm(i as i64),
+        });
     }
 
     /// reg -= i (no-op when i == 0).
     pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let r = reg as u64;
-            monoasm! { &mut self.jit, subq R(r), (i); }
-        }
+        self.encode_linst(LInst::Alu {
+            op: LAluOp::Sub,
+            dst: reg,
+            lhs: reg,
+            rhs: LOperand::Imm(i as i64),
+        });
     }
 
     /// Loop-JIT entry: reserve the loop body's spill area on the native stack.
