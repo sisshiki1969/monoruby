@@ -20,6 +20,14 @@ pub struct Regexp(Value);
 #[derive(Clone, Debug)]
 pub struct RegexpInner {
     regex: Arc<Regex>,
+    /// The original regex *source* bytes, exactly as supplied (before
+    /// `\u{}` expansion and without any escaping of non-UTF-8 input),
+    /// in `declared_encoding`. The matching engine (`regex`) only ever
+    /// sees a UTF-8/ASCII view, but `Regexp#source` / `#==` / `#hash` /
+    /// `#inspect` / `#to_s` reflect these bytes so non-UTF-8 sources
+    /// (Shift_JIS / EUC-JP / binary) round-trip faithfully. `Arc` keeps
+    /// `RegexpInner::clone` cheap.
+    source: Arc<[u8]>,
     /// The encoding the matching engine runs under
     /// (`UTF8` / `ASCII`). Onigmo only exposes those two; richer
     /// encodings (EUC-JP, Shift_JIS, ISO-8859-*) fall through to
@@ -50,7 +58,7 @@ impl PartialEq for RegexpInner {
         if Arc::ptr_eq(&self.regex, &other.regex) {
             return true;
         }
-        self.as_str() == other.as_str()
+        self.source == other.source
             && self.encoding == other.encoding
             && self.declared_encoding == other.declared_encoding
     }
@@ -76,8 +84,24 @@ impl RegexpInner {
     pub const KCODE_SJIS: u32 = 1 << 10;
     pub const KCODE_MASK: u32 = Self::KCODE_UTF8 | Self::KCODE_EUCJP | Self::KCODE_SJIS;
 
+    /// The onigmo matching pattern (UTF-8/ASCII view, with `\u{}`
+    /// expanded). Use [`source_bytes`](Self::source_bytes) for the
+    /// CRuby-visible `Regexp#source`.
     pub fn as_str(&self) -> &str {
         self.regex.as_str()
+    }
+
+    /// The original source bytes (CRuby `Regexp#source`), in
+    /// `declared_encoding`.
+    pub fn source_bytes(&self) -> &[u8] {
+        &self.source
+    }
+
+    /// The source rendered as a `String` for display (`#inspect` /
+    /// `#to_s`). Valid-UTF-8 sources pass through unchanged; non-UTF-8
+    /// bytes are shown lossily (a rare edge for exotic-encoding regexps).
+    pub fn source_string(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.source)
     }
 
     pub fn encoding(&self) -> OnigmoEncoding {
@@ -373,19 +397,24 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
 ///      *not* pinned. Such regexps freely combine with strings
 ///      of any ASCII-compatible encoding.
 pub(crate) fn resolve_declared_encoding(
-    reg_str: &str,
+    source: &[u8],
     option: u32,
     kcode: Option<u32>,
     source_encoding: Option<crate::value::Encoding>,
 ) -> (crate::value::Encoding, bool) {
     use crate::value::Encoding;
-    let has_non_ascii = reg_str.bytes().any(|b| b >= 0x80);
+    // Non-ASCII is decided on the *raw source* bytes (which may be
+    // non-UTF-8, e.g. a Shift_JIS pattern), not the escaped UTF-8 view
+    // the matching engine sees.
+    let has_non_ascii = source.iter().any(|&b| b >= 0x80);
     if option & RegexpInner::NOENCODING != 0 {
-        // `/.../n` (NOENCODING): BINARY when source has non-ASCII
-        // bytes, US-ASCII otherwise. CRuby's regex parser only
-        // pins to ASCII-8BIT when there's actual binary content
-        // — pure-ASCII patterns stay re-tag-free.
-        if has_non_ascii {
+        // `/.../n` (NOENCODING): BINARY when the source carries
+        // non-ASCII content — either raw bytes >= 0x80 or a `\xHH`
+        // escape decoding to one (`/\xc2\xa1/n` is BINARY) — US-ASCII
+        // otherwise. CRuby's regex parser only pins to ASCII-8BIT when
+        // there's actual binary content; pure-ASCII patterns stay
+        // re-tag-free.
+        if has_non_ascii || has_non_ascii_hex_escape(source) {
             return (Encoding::Ascii8, true);
         }
         return (Encoding::UsAscii, false);
@@ -418,11 +447,51 @@ fn source_encoding_fallback(
     let fixed_flag = option & RegexpInner::FIXEDENCODING != 0;
     match source_encoding {
         Some(src) if has_non_ascii => (src, true),
+        // An ASCII-incompatible source encoding (UTF-16/32) is pinned
+        // even when the content is all 7-bit: such a string can never be
+        // re-interpreted as US-ASCII.
+        Some(src) if !src.is_ascii_compatible() => (src, true),
         Some(src) if fixed_flag => (src, true),
         Some(_) => (Encoding::UsAscii, false),
         None if has_non_ascii => (Encoding::Utf8, true),
         None => (Encoding::UsAscii, fixed_flag),
     }
+}
+
+/// Scan `source` for a `\xHH` hexadecimal escape whose byte value is
+/// non-ASCII (>= 0x80), e.g. `\xc2` or `\xFF`. Used by the `/.../n`
+/// (NOENCODING) path to pin the encoding to BINARY when the pattern
+/// embeds high bytes via escapes (`/\xc2\xa1/n.encoding == BINARY`).
+/// A literal escaped backslash (`\\`) is skipped so `\\xFF` is not
+/// mistaken for a high-byte escape.
+fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < source.len() {
+        if source[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        match source[i + 1] {
+            b'x' => {
+                let mut j = i + 2;
+                let mut val: u32 = 0;
+                let mut n = 0;
+                while j < source.len() && n < 2 && source[j].is_ascii_hexdigit() {
+                    val = val * 16 + (source[j] as char).to_digit(16).unwrap();
+                    j += 1;
+                    n += 1;
+                }
+                if n > 0 && val >= 0x80 {
+                    return true;
+                }
+                i = j;
+            }
+            // Any other escaped char (incl. `\\`) consumes both bytes,
+            // so an escaped backslash can't start a spurious `\x`.
+            _ => i += 2,
+        }
+    }
+    false
 }
 
 /// Scan `src` for a `\u` escape (`\uXXXX` or `\u{...}`) whose
@@ -534,9 +603,30 @@ impl RegexpInner {
         kcode: Option<u32>,
         source_encoding: Option<crate::value::Encoding>,
     ) -> Result<Self> {
+        Self::with_option_kcode_source(reg_str, option, encoding, kcode, source_encoding, None)
+    }
+
+    /// As [`with_option_kcode`](Self::with_option_kcode) but with an
+    /// explicit raw `source` byte sequence (CRuby `Regexp#source`).
+    /// When `None`, the source is taken from `reg_str`'s bytes (the
+    /// common case — a UTF-8/ASCII pattern that *is* its own source).
+    /// `Regexp.new` on a non-UTF-8 String passes the original bytes here
+    /// so they survive instead of being escaped away.
+    pub fn with_option_kcode_source(
+        reg_str: impl Into<String>,
+        option: u32,
+        encoding: OnigmoEncoding,
+        kcode: Option<u32>,
+        source_encoding: Option<crate::value::Encoding>,
+        source: Option<Vec<u8>>,
+    ) -> Result<Self> {
         let reg_str: String = reg_str.into();
+        // Capture the source as written (before `\u{}` expansion); the
+        // caller may override with the true raw bytes for non-UTF-8 input.
+        let source: Arc<[u8]> =
+            source.map_or_else(|| Arc::from(reg_str.as_bytes()), Arc::from);
         let (mut declared_encoding, mut fixed_encoding) =
-            resolve_declared_encoding(&reg_str, option, kcode, source_encoding);
+            resolve_declared_encoding(&source, option, kcode, source_encoding);
         // CRuby pins the regex to UTF-8 when the source contains a
         // `\u` escape that decodes to a non-ASCII codepoint, even on
         // an otherwise pure-7-bit pattern (`/\u{1234}/.fixed_encoding?`
@@ -570,6 +660,7 @@ impl RegexpInner {
         {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(RegexpInner {
                 regex: entry.get().clone(),
+                source,
                 encoding,
                 declared_encoding,
                 fixed_encoding,
@@ -582,6 +673,7 @@ impl RegexpInner {
                         entry.insert(regex.clone());
                         Ok(RegexpInner {
                             regex,
+                            source,
                             encoding,
                             declared_encoding,
                             fixed_encoding,
@@ -667,7 +759,7 @@ impl RegexpInner {
         // CRuby `rb_reg_to_s`: while the whole pattern is a single
         // wrapping option group `(?on-off:body)` (or `(?:body)`), fold
         // its flags into the displayed options and recurse on `body`.
-        let mut src = self.as_str().to_string();
+        let mut src = self.source_string().into_owned();
         loop {
             let b = src.as_bytes();
             if b.len() < 4 || b[0] != b'(' || b[1] != b'?' {
@@ -744,7 +836,7 @@ impl RegexpInner {
     pub fn inspect(&self) -> String {
         format!(
             "/{}/{}",
-            escape_unescaped_slashes(self.as_str()),
+            escape_unescaped_slashes(&self.source_string()),
             self.option_string()
         )
     }

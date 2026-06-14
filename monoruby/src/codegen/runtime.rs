@@ -438,12 +438,38 @@ pub(super) extern "C" fn concatenate_regexp(
     arg: *mut Value,
     len: usize,
 ) -> Option<Value> {
-    let mut res = String::new();
-    for i in 0..len {
-        let v = unsafe { *arg.sub(i) };
-        res += &v.to_s(&globals.store);
-    }
-    let inner = match RegexpInner::with_option(res, 0) {
+    use crate::value::rvalue::Encoding;
+    // Build the interpolated source as a String first, so each operand's
+    // bytes and encoding combine under the same rules as `"#{}"` — a
+    // non-ASCII embedded String (e.g. EUC-JP) then upgrades the regexp's
+    // encoding (`/#{euc_str}/.encoding == EUC-JP`).
+    let s_val = match concatenate_string_inner(vm, globals, arg, len) {
+        Ok(v) => v,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    let inner = s_val.as_rstring_inner();
+    let bytes = inner.as_bytes().to_vec();
+    let enc = inner.encoding();
+    // The matching engine only understands UTF-8/ASCII; feed it a
+    // best-effort UTF-8 view while the raw bytes + encoding drive
+    // `Regexp#source` / `#encoding`.
+    let reg_str = String::from_utf8_lossy(&bytes).into_owned();
+    let onig_enc = if enc == Encoding::Ascii8 {
+        onigmo_regex::OnigmoEncoding::ASCII
+    } else {
+        onigmo_regex::OnigmoEncoding::UTF8
+    };
+    let inner = match RegexpInner::with_option_kcode_source(
+        reg_str,
+        0,
+        onig_enc,
+        None,
+        Some(enc),
+        Some(bytes),
+    ) {
         Ok(inner) => inner,
         Err(err) => {
             vm.set_error(err);

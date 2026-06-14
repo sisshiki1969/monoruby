@@ -55,7 +55,14 @@ pub(crate) fn init(globals: &mut Globals) {
     // - `TypeError` otherwise (CRuby treats every monoruby Regexp as
     //   "already initialized" since `Regexp.new` is the sole entry
     //   point and produces a fully-built instance).
-    let init_id = globals.define_private_builtin_func(REGEXP_CLASS, "initialize", regexp_initialize, 1);
+    let init_id = globals.define_private_builtin_func_with(
+        REGEXP_CLASS,
+        "initialize",
+        regexp_initialize,
+        1,
+        2,
+        false,
+    );
     let _ = init_id;
     globals.store[REGEXP_CLASS].set_alloc_func(regexp_alloc_func);
 }
@@ -96,24 +103,39 @@ pub(crate) extern "C" fn regexp_alloc_func(class_id: ClassId, _: &mut Globals) -
     Value::regexp_with_class(regexp, class_id)
 }
 
-/// Private `Regexp#initialize` that always rejects re-initialisation.
-/// `Regexp.new` builds a fully-formed instance via the alloc function +
-/// internal construction path, so any subsequent `.send(:initialize, …)`
-/// must be either a frozen literal (FrozenError) or an already-built
-/// instance (TypeError "already initialized regexp"). matches CRuby
-/// (the `< 4.1` branch of `initialize_spec.rb`).
+/// Private `Regexp#initialize`. On a freshly-`allocate`d (uninitialized)
+/// receiver — the path taken by `SubclassOfRegexp.new` and an explicit
+/// `super` from an overridden `#initialize` — it compiles the source and
+/// fills in the instance. Re-initialising an already-built regexp is
+/// rejected: `FrozenError` for a frozen literal, otherwise `TypeError`
+/// "already initialized regexp" (matches CRuby).
 #[monoruby_builtin]
 fn regexp_initialize(
-    _: &mut Executor,
-    _: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.self_val();
+    let mut self_ = lfp.self_val();
     if self_.is_frozen() {
         return Err(MonorubyErr::frozenerr("can't modify frozen Regexp"));
     }
-    Err(MonorubyErr::typeerr("already initialized regexp"))
+    if self_.as_regexp_inner().initialized() {
+        return Err(MonorubyErr::typeerr("already initialized regexp"));
+    }
+    // Root the receiver and the source/option args across the allocating
+    // build below: this runs from `super` in an overridden `#initialize`,
+    // whose frame slots aren't otherwise reachable by the GC here.
+    let temp = vm.temp_len();
+    vm.temp_push(self_);
+    vm.temp_push(lfp.arg(0));
+    if let Some(a1) = lfp.try_arg(1) {
+        vm.temp_push(a1);
+    }
+    let inner = build_regexp_inner(vm, globals, lfp)?;
+    *self_.as_regexp_inner_mut() = inner;
+    vm.temp_clear(temp);
+    Ok(Value::nil())
 }
 
 ///
@@ -124,6 +146,44 @@ fn regexp_initialize(
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
 fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    if class_id == REGEXP_CLASS {
+        // Fast path for the base class: build directly.
+        return Ok(Value::regexp(build_regexp_inner(vm, globals, lfp)?));
+    }
+    // A subclass: allocate an instance of it, then initialize. Root the
+    // fresh instance across the construction below, which allocates (and
+    // may GC) before the instance is reachable from the Ruby stack.
+    let mut obj = regexp_alloc_func(class_id, globals);
+    let temp = vm.temp_len();
+    vm.temp_push(obj);
+    let init_fid = vm.find_method(globals, obj, IdentId::INITIALIZE, true)?;
+    if globals.store[init_fid].is_iseq().is_some() {
+        // The subclass overrides `#initialize` (a Ruby method): run it so
+        // its `super` reaches `Regexp#initialize` and its own body (e.g.
+        // `@args = args`) executes.
+        let args: Vec<Value> = match lfp.try_arg(1) {
+            Some(opt) => vec![lfp.arg(0), opt],
+            None => vec![lfp.arg(0)],
+        };
+        vm.invoke_func_inner(globals, init_fid, obj, &args, None, None)?;
+    } else {
+        // Inherited `Regexp#initialize`: build the data directly into the
+        // freshly-allocated instance.
+        let inner = build_regexp_inner(vm, globals, lfp)?;
+        *obj.as_regexp_inner_mut() = inner;
+    }
+    vm.temp_clear(temp);
+    Ok(obj)
+}
+
+/// Parse `Regexp.new`/`#initialize` arguments (source + optional option)
+/// into a fully-built `RegexpInner`.
+fn build_regexp_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<RegexpInner> {
     let arg0 = lfp.arg(0);
     // When given an existing Regexp, carry over both source and
     // options so `Regexp.new(/abc/i) == /abc/i`. CRuby's `rb_reg_init`
@@ -136,31 +196,37 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // ends up with `encoding == UTF-8` and `fixed_encoding? == true`.
     // `raw_option()` doesn't carry KCODE/NOENCODING/FIXEDENCODING
     // bits (those live in `RegexpInner`, not in Onigmo's option word).
-    let (string, default_option, source_encoding, default_kcode) = if let Some(re) = arg0.is_regex()
-    {
-        let kc = if re.fixed_encoding() {
-            kcode_from_encoding(re.declared_encoding())
+    let (string, default_option, source_encoding, default_kcode, source_bytes) =
+        if let Some(re) = arg0.is_regex() {
+            let kc = if re.fixed_encoding() {
+                kcode_from_encoding(re.declared_encoding())
+            } else {
+                None
+            };
+            let mut opt = re.raw_option();
+            if let Some(bits) = kc {
+                opt |= bits;
+            }
+            (
+                re.as_str().to_string(),
+                Some(opt),
+                Some(re.declared_encoding()),
+                kc,
+                // Preserve the original Regexp's source verbatim.
+                Some(re.source_bytes().to_vec()),
+            )
         } else {
-            None
+            // The matching engine needs a UTF-8 view, so escape non-UTF-8
+            // bytes (`coerce_to_string`), but keep the *raw* bytes for
+            // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
+            let s = arg0.coerce_to_string(vm, globals)?;
+            let raw = arg0.is_rstring_inner().map(|r| r.as_bytes().to_vec());
+            let enc = arg0
+                .is_rstring_inner()
+                .map(|r| r.encoding())
+                .unwrap_or(crate::value::Encoding::Utf8);
+            (s, None, Some(enc), None, raw)
         };
-        let mut opt = re.raw_option();
-        if let Some(bits) = kc {
-            opt |= bits;
-        }
-        (
-            re.as_str().to_string(),
-            Some(opt),
-            Some(re.declared_encoding()),
-            kc,
-        )
-    } else {
-        let s = arg0.coerce_to_string(vm, globals)?;
-        let enc = arg0
-            .is_rstring_inner()
-            .map(|r| r.encoding())
-            .unwrap_or(crate::value::Encoding::Utf8);
-        (s, None, Some(enc), None)
-    };
     let option_provided = lfp.try_arg(1).is_some_and(|v| !v.is_nil());
     if arg0.is_regex().is_some() && option_provided {
         // CRuby emits "warning: flags ignored" (without raising) when
@@ -202,9 +268,15 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         default_kcode
     };
-    let regexp =
-        RegexpInner::with_option_kcode(string, option, encoding, kcode, source_encoding)?;
-    Ok(Value::regexp(regexp))
+    let regexp = RegexpInner::with_option_kcode_source(
+        string,
+        option,
+        encoding,
+        kcode,
+        source_encoding,
+        source_bytes,
+    )?;
+    Ok(regexp)
 }
 
 /// Map a Ruby-visible encoding to the matching KCODE_* bit, mirroring
@@ -463,8 +535,17 @@ impl UnionEnc {
             }
         } else if prev_pinned {
             // Previous side is non-ASCII-compat; arg is anything
-            // else (even pure-ASCII). CRuby still rejects.
+            // else (even pure-ASCII). CRuby still rejects. When the
+            // other side is pure 7-bit ASCII, CRuby phrases it as
+            // "ASCII incompatible encoding: <enc>"; otherwise it names
+            // both encodings.
             if let UnionEnc::Pinned(prev) = self {
+                if arg.ascii_only {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "ASCII incompatible encoding: {}",
+                        prev.name()
+                    )));
+                }
                 return Err(MonorubyErr::argumenterr(format!(
                     "incompatible encodings: {} and {}",
                     prev.name(),
@@ -515,7 +596,12 @@ impl UnionEnc {
 /// non-fixed US-ASCII bucket.
 fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     if let Some(re) = arg.is_regex() {
-        let ascii_only = re.as_str().bytes().all(|b| b < 0x80);
+        // A BINARY (`/.../n` with high `\xHH` escapes) regexp carries
+        // non-ASCII content even though its source *text* is 7-bit, so
+        // it must not be treated as ASCII-only (which would let
+        // `Regexp.union` downgrade the result to US-ASCII).
+        let ascii_only = re.declared_encoding() != crate::value::Encoding::Ascii8
+            && re.source_bytes().iter().all(|&b| b < 0x80);
         return ArgEnc {
             encoding: re.declared_encoding(),
             fixed: re.fixed_encoding(),
@@ -696,7 +782,7 @@ fn regexp_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if !rhs.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let same_source = lhs.as_str() == rhs.as_str();
+    let same_source = lhs.source_bytes() == rhs.source_bytes();
     let same_options =
         (lhs.raw_option() & REGEXP_EQ_OPTION_MASK) == (rhs.raw_option() & REGEXP_EQ_OPTION_MASK);
     let same_encoding = lhs.declared_encoding() == rhs.declared_encoding();
@@ -715,7 +801,7 @@ fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_ = lfp.self_val();
     let re = self_.as_regexp_inner();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    re.as_str().hash(&mut h);
+    re.source_bytes().hash(&mut h);
     (re.raw_option() & REGEXP_EQ_OPTION_MASK).hash(&mut h);
     Ok(Value::integer(h.finish() as i64))
 }
@@ -819,7 +905,6 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let re = self_.is_regex().unwrap();
-    let src = re.as_str();
     // CRuby's `Regexp#source.encoding`: a regexp whose encoding is pinned
     // (the `u`/`e`/`s` modifiers, a non-ASCII `\u{}` escape, or non-ASCII
     // source bytes) carries that encoding; an unpinned, 7-bit-only source
@@ -830,7 +915,7 @@ fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
         crate::value::Encoding::UsAscii
     };
     Ok(Value::string_from_inner(
-        crate::value::rvalue::RStringInner::from_encoding_scanned(src.as_bytes(), enc),
+        crate::value::rvalue::RStringInner::from_encoding_scanned(re.source_bytes(), enc),
     ))
 }
 
@@ -902,6 +987,17 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if arg0.is_nil() {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
+    }
+    // A subject String that is invalid in its own encoding can't be
+    // matched — CRuby raises ArgumentError before scanning.
+    if arg0.is_rstring().is_some() {
+        let inner = arg0.as_rstring_inner();
+        if !inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid byte sequence in {}",
+                inner.encoding().name()
+            )));
+        }
     }
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
@@ -1916,6 +2012,96 @@ mod tests {
         // `#options` exposes Regexp::FIXEDENCODING; a plain regexp does not.
         run_test(
             "[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) != 0 }",
+        );
+    }
+
+    #[test]
+    fn regexp_source_bytes_preserved() {
+        // A non-UTF-8 (Shift_JIS) source survives in #source / #encoding.
+        run_test(
+            r#"s = "\x82\xa0".dup.force_encoding(Encoding::Shift_JIS); r = Regexp.new(s);
+               [r.encoding.to_s, r.source.encoding.to_s, r.source.bytes]"#,
+        );
+        // `\u{}` source is kept as written (not expanded), distinct from
+        // its decoded form.
+        run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
+        // A Regexp argument preserves the original source verbatim.
+        run_test(r#"Regexp.new(/\u{61}/).source"#);
+    }
+
+    #[test]
+    fn regexp_subclass_new() {
+        // A subclass with an overridden #initialize: the override runs
+        // (its `super` builds the regexp, its body sets @args), and the
+        // result is an instance of the subclass.
+        run_test(
+            r#"class ReSubA < Regexp; def initialize(*a); super; @a = a; end; attr_reader :a; end
+               r = ReSubA.new("hi"); [r.is_a?(ReSubA), r.a.first, r.source, r.match("xhiy")[0]]"#,
+        );
+        // A subclass without an overridden #initialize.
+        run_test(r#"class ReSubB < Regexp; end; r = ReSubB.new("hi"); [r.is_a?(ReSubB), r.source]"#);
+        // Re-initializing an already-built regexp still raises.
+        run_test(r#"(Regexp.new("x").send(:initialize, "y"); nil) rescue $!.class"#);
+    }
+
+    #[test]
+    fn regexp_interpolation_encoding() {
+        // An interpolated non-ASCII String upgrades the regexp's encoding.
+        run_test(r#"s = "文字化け".encode("euc-jp"); /#{s}/.encoding.to_s"#);
+        // A 7-bit interpolated String stays US-ASCII even if tagged EUC-JP.
+        run_test(r#"a = "abc".encode("euc-jp"); /#{a}/.encoding.to_s"#);
+        run_test(r#"/#{"あ"}/.encoding.to_s"#);
+        // Interpolation still matches.
+        run_test(r#"x = "wor"; "hello world" =~ /#{x}ld/"#);
+    }
+
+    #[test]
+    fn regexp_match_invalid_encoding() {
+        // Matching a subject that is invalid in its own encoding raises
+        // ArgumentError (CRuby), instead of mis-matching or erroring.
+        run_test(
+            r#"x = [150].pack("C").force_encoding("utf-8");
+               (/(.).(.)/.match("ab #{x} cd", 1); nil) rescue [$!.class, $!.message]"#,
+        );
+        run_test(
+            r#"x = [150].pack("C").force_encoding("utf-8");
+               (/(.).(.)/.match("ab #{x} cd", -1); nil) rescue [$!.class, $!.message]"#,
+        );
+        // A valid (binary) subject still matches.
+        run_test(r#"/a/.match("xay".b).nil?"#);
+    }
+
+    #[test]
+    fn regexp_encoding_binary_noencoding() {
+        // `/.../n` with a high `\xHH` escape is BINARY; pure-ASCII /n is
+        // US-ASCII.
+        run_test(r#"[/\xc2\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\x7f/n.encoding.to_s]"#);
+        run_test(
+            r#"Regexp.new('([\x00-\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to_s"#,
+        );
+        // union keeps BINARY when a part is BINARY-with-non-ASCII.
+        run_test(r#"Regexp.union(/abc/, /[\x00-\x7f]/n, /[\x80-\xBF]/n).encoding.to_s"#);
+    }
+
+    #[test]
+    fn regexp_union_ascii_incompatible() {
+        // A single ASCII-incompatible (UTF-16) arg pins the result.
+        run_test(r#"Regexp.union("a".encode("UTF-16LE")).encoding.to_s"#);
+        run_test(r#"Regexp.new("a".encode("UTF-16LE")).encoding.to_s"#);
+        // ASCII-incompatible + ASCII-only -> "ASCII incompatible encoding".
+        run_test(
+            r#"(Regexp.union("a".encode("UTF-16LE"), "b".encode("UTF-8")); nil) rescue [$!.class, $!.message]"#,
+        );
+        run_test(
+            r#"(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-8"))); nil) rescue [$!.class, $!.message]"#,
+        );
+        // Two conflicting ASCII-incompatible encodings -> names both.
+        run_test(
+            r#"(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-16BE"))); nil) rescue [$!.class, $!.message]"#,
+        );
+        // ASCII-incompatible + non-ASCII content in a different encoding.
+        run_test(
+            r#"(Regexp.union("a".encode("UTF-16LE"), "©".encode("ISO-8859-1")); nil) rescue [$!.class, $!.message]"#,
         );
     }
 
