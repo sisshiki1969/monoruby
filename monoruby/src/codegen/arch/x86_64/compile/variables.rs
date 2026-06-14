@@ -87,19 +87,6 @@ impl Codegen {
     /// #### in
     /// - rdi: &RValue
     ///
-    /// #### destroy
-    /// - rdx
-    ///
-    pub(super) fn store_self_ivar_heap(&mut self, src: GP, ivarid: IvarId, is_object_ty: bool) {
-        self.store_ivar_heap_inner(src, ivarid, is_object_ty, None);
-    }
-
-    ///
-    /// Store *src* in an instance var *ivarid* of the object *rdi*.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
     /// #### destroy (if using.is_some())
     /// - caller-save registers
     ///

@@ -11,7 +11,16 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
+
+/// Resolve a LIR register operand to its x86 register number. The scratch
+/// pointer is `rdx`.
+fn x86_lreg(r: LReg) -> u64 {
+    match r {
+        LReg::Gp(g) => g as u64,
+        LReg::Scratch => GP::Rdx as u64,
+    }
+}
 
 impl Codegen {
     ///
@@ -266,7 +275,7 @@ impl Codegen {
                 dst,
                 mem: LMem::Slot(slot),
             } => {
-                let r = dst as u64;
+                let r = x86_lreg(dst);
                 monoasm!( &mut self.jit,
                     movq R(r), [rbp - (rbp_local(slot))];
                 );
@@ -276,7 +285,7 @@ impl Codegen {
                 dst,
                 mem: LMem::Field { base, disp },
             } => {
-                let (d, b) = (dst as u64, base as u64);
+                let (d, b) = (x86_lreg(dst), x86_lreg(base));
                 monoasm!( &mut self.jit,
                     movq R(d), [R(b) + (disp)];
                 );
@@ -296,7 +305,7 @@ impl Codegen {
                 src,
                 mem: LMem::Field { base, disp },
             } => {
-                let (s, b) = (src as u64, base as u64);
+                let (s, b) = (src as u64, x86_lreg(base));
                 monoasm!( &mut self.jit,
                     movq [R(b) + (disp)], R(s);
                 );
@@ -437,7 +446,7 @@ impl Codegen {
     /// reg <- [lfp - slot]
     pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
         self.encode_linst(LInst::Load {
-            dst: r,
+            dst: r.into(),
             mem: LMem::Slot(slot),
         });
     }
@@ -1563,18 +1572,6 @@ impl Codegen {
         if bytes > 0 {
             monoasm! { &mut self.jit, subq rsp, (bytes as i32); }
         }
-        true
-    }
-
-    /// Store the accumulator-side `src` into a heap-spilled instance variable of
-    /// self (no bounds check; the table is pre-sized).
-    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
-        &mut self,
-        src: GP,
-        ivarid: IvarId,
-        is_object_ty: bool,
-    ) -> bool {
-        self.store_self_ivar_heap(src, ivarid, is_object_ty);
         true
     }
 

@@ -12,7 +12,16 @@ use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
+
+/// Resolve a LIR register operand to its aarch64 register number. The scratch
+/// pointer is `x9`.
+fn a64_lreg(r: LReg) -> u32 {
+    match r {
+        LReg::Gp(g) => g.a64().0,
+        LReg::Scratch => 9,
+    }
+}
 use monoasm_macro::monoasm_arm64;
 
 ///
@@ -1366,7 +1375,7 @@ impl Codegen {
             } => {
                 let lfp = GP::R14.a64().0;
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                self.a64_frame_load(dst.a64().0, lfp, off);
+                self.a64_frame_load(a64_lreg(dst), lfp, off);
             }
             // dst <- [base + disp] (object field). `a64_field_load` legalizes
             // the (positive) displacement: scaled ldr immediate, else scratch
@@ -1375,7 +1384,7 @@ impl Codegen {
                 dst,
                 mem: LMem::Field { base, disp },
             } => {
-                self.a64_field_load(dst.a64().0, base.a64().0, disp as u32);
+                self.a64_field_load(a64_lreg(dst), a64_lreg(base), disp as u32);
             }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
@@ -1392,7 +1401,7 @@ impl Codegen {
                 src,
                 mem: LMem::Field { base, disp },
             } => {
-                self.a64_field_store(src.a64().0, base.a64().0, disp as u32);
+                self.a64_field_store(src.a64().0, a64_lreg(base), disp as u32);
             }
             // [rsp + (disp - RSP_LOCAL_FRAME)] <- src (callee-frame arg slot).
             // `a64_rsp_slot_addr` forms the address in scratch x10.
@@ -1653,7 +1662,7 @@ impl Codegen {
     /// reg <- [lfp - slot*8 - LFP_SELF]
     pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
         self.encode_linst(LInst::Load {
-            dst: r,
+            dst: r.into(),
             mem: LMem::Slot(slot),
         });
     }
@@ -3004,34 +3013,6 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
         let bytes = offset.unwrap_concrete();
         self.a64_sp_sub(bytes as u32);
-        true
-    }
-
-    /// Store `src` into a heap-spilled instance variable of self: deref the
-    /// var-table and its data pointer (via scratch x9), then store. No bounds
-    /// check (the table is pre-sized). Bails on an out-of-range field offset.
-    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
-        &mut self,
-        src: GP,
-        ivarid: IvarId,
-        is_object_ty: bool,
-    ) -> bool {
-        let ivar = ivarid.get() as u32;
-        let idx = if is_object_ty {
-            ivar - OBJECT_INLINE_IVAR as u32
-        } else {
-            ivar
-        };
-        let off = idx * 8;
-        let rdi = GP::Rdi.a64().0;
-        let s = src.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            ldr x9, [x(rdi), #(RVALUE_OFFSET_VAR as u32)];
-            ldr x9, [x9, #(MONOVEC_PTR as u32)];
-        );
-        self.a64_field_store(s, 9, off);
-        // Write barrier: rdi = self (parent), src = stored value.
-        self.emit_write_barrier(GP::Rdi, src);
         true
     }
 

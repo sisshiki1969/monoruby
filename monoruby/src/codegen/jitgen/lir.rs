@@ -69,6 +69,25 @@ impl From<i64> for LOperand {
 }
 
 /// A *logical* memory location. Displacements are unbounded here; the per-arch
+/// A register operand that is either an allocatable general-purpose register or
+/// the per-arch reserved *scratch* pointer register. The scratch is for
+/// intermediate pointers (e.g. dereferencing an object's heap var-table) that
+/// must not clobber an allocated value; it maps to **rdx** on x86 and **x9** on
+/// aarch64. There is deliberately no general-purpose name for these (aarch64's
+/// x9 is outside the `GP` enum's allocatable mapping), so they need their own
+/// operand kind.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum LReg {
+    Gp(GP),
+    Scratch,
+}
+
+impl From<GP> for LReg {
+    fn from(r: GP) -> Self {
+        LReg::Gp(r)
+    }
+}
+
 /// `LirEncode` implementation legalizes them (immediate field vs.
 /// scratch-register materialization) when lowering.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,10 +98,10 @@ pub(in crate::codegen::jitgen) enum LMem {
     /// aarch64. The encoder owns that arch-specific displacement formula.
     Slot(SlotId),
     /// An object field at a *positive* byte displacement from a base register
-    /// (e.g. an `RValue` header/ivar field). `disp` may exceed any
+    /// (which may be the scratch pointer). `disp` may exceed any
     /// single-instruction immediate range; the encoder materializes it into a
     /// scratch register when needed (cf. `a64_field_load`).
-    Field { base: GP, disp: i32 },
+    Field { base: LReg, disp: i32 },
     /// A callee-frame argument slot at a *positive* byte displacement below the
     /// stack pointer, used while marshalling arguments before a call
     /// (cf. the aarch64 `a64_rsp_*` helpers).
@@ -196,8 +215,8 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- imm` — materialize a full 64-bit immediate (e.g. a tagged
     /// `Value`'s bit pattern) into a register.
     LoadImm { dst: GP, imm: u64 },
-    /// `dst <- [mem]`.
-    Load { dst: GP, mem: LMem },
+    /// `dst <- [mem]`. `dst` may be the scratch pointer (intermediate deref).
+    Load { dst: LReg, mem: LMem },
     /// `[mem] <- src`.
     Store { src: GP, mem: LMem },
     /// `[mem] <- imm`. aarch64 has no store-immediate, so the encoder routes it
@@ -278,8 +297,11 @@ impl Lir {
         self.push(LInst::LoadImm { dst, imm })
     }
 
-    pub(in crate::codegen::jitgen) fn load(&mut self, dst: GP, mem: LMem) -> &mut Self {
-        self.push(LInst::Load { dst, mem })
+    pub(in crate::codegen::jitgen) fn load(&mut self, dst: impl Into<LReg>, mem: LMem) -> &mut Self {
+        self.push(LInst::Load {
+            dst: dst.into(),
+            mem,
+        })
     }
 
     pub(in crate::codegen::jitgen) fn store(&mut self, src: GP, mem: LMem) -> &mut Self {

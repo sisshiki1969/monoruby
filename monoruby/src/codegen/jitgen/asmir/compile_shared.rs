@@ -11,7 +11,7 @@
 //! instruction family at a time; see `doc/aarch64-x86-jit-differences.md`.
 
 use super::*;
-use crate::codegen::jitgen::lir::{LCond, LInst, LMem, LOperand};
+use crate::codegen::jitgen::lir::{LCond, LInst, LMem, LOperand, LReg};
 
 impl Codegen {
     ///
@@ -352,9 +352,9 @@ impl Codegen {
             AsmInst::LoadIVarInline { ivarid } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15,
+                    dst: GP::R15.into(),
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp,
                     },
                 });
@@ -367,7 +367,7 @@ impl Codegen {
                 self.encode_linst(LInst::Store {
                     src,
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp,
                     },
                 });
@@ -382,9 +382,9 @@ impl Codegen {
             AsmInst::LoadStructSlotInline { slot_index } => {
                 let disp = slot_index as i32 * 8 + RVALUE_OFFSET_INLINE as i32;
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15,
+                    dst: GP::R15.into(),
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp,
                     },
                 });
@@ -396,7 +396,7 @@ impl Codegen {
                 self.encode_linst(LInst::Store {
                     src,
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp,
                     },
                 });
@@ -413,16 +413,16 @@ impl Codegen {
             // pointer into rdi, then load/store the slot at `slot_index * 8`.
             AsmInst::LoadStructSlotHeap { slot_index } => {
                 self.encode_linst(LInst::Load {
-                    dst: GP::Rdi,
+                    dst: GP::Rdi.into(),
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp: RVALUE_OFFSET_HEAP_PTR as i32,
                     },
                 });
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15,
+                    dst: GP::R15.into(),
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp: slot_index as i32 * 8,
                     },
                 });
@@ -435,16 +435,16 @@ impl Codegen {
                     value: src,
                 });
                 self.encode_linst(LInst::Load {
-                    dst: GP::Rdi,
+                    dst: GP::Rdi.into(),
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp: RVALUE_OFFSET_HEAP_PTR as i32,
                     },
                 });
                 self.encode_linst(LInst::Store {
                     src,
                     mem: LMem::Field {
-                        base: GP::Rdi,
+                        base: GP::Rdi.into(),
                         disp: slot_index as i32 * 8,
                     },
                 });
@@ -484,11 +484,47 @@ impl Codegen {
             }
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
+            // `self.@ivar = src` where the ivar spilled to self's heap var-table
+            // (which is known large enough — no bounds check). The two derefs
+            // (RValue → var-table struct → buffer pointer) go through the scratch
+            // pointer so rdi is preserved as the barrier's parent.
             AsmInst::StoreSelfIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
-            } => return self.emit_store_self_ivar_heap(src, ivarid, is_object_ty),
+            } => {
+                let ivar = ivarid.get() as i32;
+                let idx = if is_object_ty {
+                    ivar - OBJECT_INLINE_IVAR as i32
+                } else {
+                    ivar
+                };
+                self.encode_linst(LInst::Load {
+                    dst: LReg::Scratch,
+                    mem: LMem::Field {
+                        base: GP::Rdi.into(),
+                        disp: RVALUE_OFFSET_VAR as i32,
+                    },
+                });
+                self.encode_linst(LInst::Load {
+                    dst: LReg::Scratch,
+                    mem: LMem::Field {
+                        base: LReg::Scratch,
+                        disp: MONOVEC_PTR as i32,
+                    },
+                });
+                self.encode_linst(LInst::Store {
+                    src,
+                    mem: LMem::Field {
+                        base: LReg::Scratch,
+                        disp: idx * 8,
+                    },
+                });
+                self.encode_linst(LInst::WriteBarrier {
+                    parent: GP::Rdi,
+                    value: src,
+                });
+            }
             // Store into a heap-spilled ivar of another object (bounds-checked;
             // grows the table via a runtime call on miss). aarch64 bails on an
             // out-of-range field offset.
