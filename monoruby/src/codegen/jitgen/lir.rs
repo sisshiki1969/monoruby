@@ -208,7 +208,7 @@ impl LAluOp {
 /// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
 /// primitives already receive `DestLabel`s. `DestLabel` is `Clone` but not
 /// `Copy`, so `LInst` is `Clone`/`PartialEq` but not `Copy`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     Mov { dst: GP, src: GP },
@@ -586,6 +586,93 @@ pub(in crate::codegen::jitgen) enum LInst {
         rest_pos: Option<usize>,
         using_xmm: UsingXmm,
     },
+    // Control flow / frame / exceptions / definitions.
+    Deopt {
+        deopt: DestLabel,
+    },
+    HandleError {
+        error: DestLabel,
+    },
+    CheckStack {
+        write_back: WriteBack,
+        error: DestLabel,
+        base: usize,
+    },
+    ExecGc {
+        write_back: WriteBack,
+        error: DestLabel,
+        base: usize,
+    },
+    IntegerCmp {
+        kind: CmpKind,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+    },
+    Ret,
+    MethodRet {
+        pc: BytecodePtr,
+    },
+    BlockBreak {
+        pc: BytecodePtr,
+    },
+    ImmediateEvict {
+        evict: AsmEvict,
+    },
+    Init {
+        info: FnInitInfo,
+        prologue_offset: PrologueOffset,
+    },
+    LoopJitRspBump {
+        offset: LoopRspOffset,
+    },
+    BlockArgProxy {
+        ret: SlotId,
+        outer: usize,
+    },
+    BlockArg {
+        ret: SlotId,
+        using_xmm: UsingXmm,
+        call_site_bc_ptr: BytecodePtr,
+        error: DestLabel,
+    },
+    MethodDef {
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    },
+    SingletonMethodDef {
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    },
+    Raise {
+        loop_jit_spill_bytes: usize,
+    },
+    Retry {
+        pc: BytecodePtr,
+        loop_jit_spill_bytes: usize,
+    },
+    Redo {
+        pc: BytecodePtr,
+        loop_jit_spill_bytes: usize,
+    },
+    EnsureEnd {
+        loop_jit_spill_bytes: usize,
+    },
+    Yield {
+        callid: CallSiteId,
+        error: DestLabel,
+        evict: AsmEvict,
+        evict_label: DestLabel,
+    },
+    Unreachable,
+    RestKw {
+        rest_kw: Vec<(SlotId, IdentId)>,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
@@ -719,12 +806,12 @@ mod tests {
             .alu(LAluOp::Add, GP::Rax, GP::Rax, GP::Rcx)
             .cmp(GP::Rax, 0i64);
         assert_eq!(lir.len(), 4);
-        assert_eq!(
-            lir.iter().next().cloned(),
+        assert!(matches!(
+            lir.iter().next(),
             Some(LInst::Mov {
                 dst: GP::Rax,
                 src: GP::Rdi
             })
-        );
+        ));
     }
 }

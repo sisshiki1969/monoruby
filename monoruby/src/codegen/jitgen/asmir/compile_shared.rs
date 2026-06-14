@@ -95,18 +95,32 @@ impl Codegen {
                 });
             }
             // Unconditional jump to a side-exit (deopt) label.
-            AsmInst::Deopt(deopt) => self.emit_deopt(&labels[deopt]),
+            AsmInst::Deopt(deopt) => self.encode_linst(LInst::Deopt {
+                deopt: labels[deopt].clone(),
+            }),
             // Branch to the error handler if the preceding runtime call failed
             // (returned a null/None result in the accumulator).
-            AsmInst::HandleError(error) => self.emit_handle_error(&labels[error]),
+            AsmInst::HandleError(error) => self.encode_linst(LInst::HandleError {
+                error: labels[error].clone(),
+            }),
             // Stack-overflow check before establishing a callee frame (aarch64
             // bails if the write-back needs an unsupported feature).
             AsmInst::CheckStack { write_back, error } => {
-                return self.emit_check_stack(write_back, &labels[error], frame.base_stack_offset);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::CheckStack {
+                    write_back,
+                    error,
+                    base: frame.base_stack_offset,
+                });
             }
-            // GC safepoint (aarch64 bails like CheckStack).
+            // GC safepoint.
             AsmInst::ExecGc { write_back, error } => {
-                return self.emit_exec_gc(write_back, &labels[error], frame.base_stack_offset);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::ExecGc {
+                    write_back,
+                    error,
+                    base: frame.base_stack_offset,
+                });
             }
             // Constant base-class guard: deopt if the constant's base class (in
             // the accumulator) is not the cached one.
@@ -239,7 +253,7 @@ impl Codegen {
                 kind,
                 lhs,
                 rhs,
-            } => return self.emit_integer_cmp(kind, mode, lhs, rhs),
+            } => self.encode_linst(LInst::IntegerCmp { kind, mode, lhs, rhs }),
             // Fused integer compare + conditional branch, lowered to LIR here
             // (arch-neutral) and encoded per-arch. The compare sets flags; the
             // branch is a signed conditional jump with the BrKind inversion
@@ -339,10 +353,10 @@ impl Codegen {
             // block-break path (a non-local `break` out of a block);
             // `ImmediateEvict` records a return-address patch point on x86 (a
             // no-op on aarch64, which can't patch them).
-            AsmInst::Ret => self.emit_ret(),
-            AsmInst::MethodRet(pc) => self.emit_method_ret(pc),
-            AsmInst::BlockBreak(pc) => self.emit_block_break(pc),
-            AsmInst::ImmediateEvict { evict } => self.emit_immediate_evict(evict),
+            AsmInst::Ret => self.encode_linst(LInst::Ret),
+            AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet { pc }),
+            AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak { pc }),
+            AsmInst::ImmediateEvict { evict } => self.encode_linst(LInst::ImmediateEvict { evict }),
             // Method-call prologue: class-version guard, callee frame fields,
             // argument massage. (aarch64 SetArguments bails on a not-yet-ported
             // argument shape, hence the bool result; the guard ignores the x86
@@ -398,7 +412,10 @@ impl Codegen {
             AsmInst::Init {
                 info,
                 prologue_offset,
-            } => return self.emit_init(info, prologue_offset),
+            } => self.encode_linst(LInst::Init {
+                info,
+                prologue_offset,
+            }),
             // Per-method ivar-cache prep; aarch64 bails on the heap-ivar path.
             AsmInst::Preparation => return self.emit_preparation(store, frame),
             // Fixnum unary ops on the tagged value. Negate deopts on i63
@@ -532,7 +549,7 @@ impl Codegen {
             AsmInst::RegSub(reg, i) => self.emit_reg_sub(reg, i),
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
-            AsmInst::LoopJitRspBump { offset } => return self.emit_loop_jit_rsp_bump(offset),
+            AsmInst::LoopJitRspBump { offset } => self.encode_linst(LInst::LoopJitRspBump { offset }),
             // Inline argument-setup stores into the callee frame, at a
             // (raw) rsp-relative offset the encoder legalizes per arch.
             AsmInst::RegToRSPOffset(r, ofs) => self.encode_linst(LInst::Store {
@@ -555,9 +572,15 @@ impl Codegen {
             }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live xmm / range overflow).
-            AsmInst::BlockArgProxy { ret, outer } => return self.emit_block_arg_proxy(ret, outer),
+            AsmInst::BlockArgProxy { ret, outer } => self.encode_linst(LInst::BlockArgProxy { ret, outer }),
             AsmInst::BlockArg { ret, _outer: _, using_xmm, error, call_site_bc_ptr } => {
-                return self.emit_block_arg(ret, using_xmm, call_site_bc_ptr, &labels[error]);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::BlockArg {
+                    ret,
+                    using_xmm,
+                    call_site_bc_ptr,
+                    error,
+                });
             }
             // Store into a heap-spilled instance variable of self (the table is
             // known large enough, so no bounds check / runtime extend).
@@ -707,23 +730,52 @@ impl Codegen {
             }
             // Method definition (`def`). aarch64 bails on a live xmm pool reg.
             AsmInst::MethodDef { name, func_id, using_xmm, error } => {
-                return self.emit_method_def(name, func_id, using_xmm, &labels[error]);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::MethodDef {
+                    name,
+                    func_id,
+                    using_xmm,
+                    error,
+                });
             }
             AsmInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
-                return self.emit_singleton_method_def(obj, name, func_id, using_xmm, &labels[error]);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::SingletonMethodDef {
+                    obj,
+                    name,
+                    func_id,
+                    using_xmm,
+                    error,
+                });
             }
             // Exception / non-local control flow (raise / retry / redo / ensure).
             // All branch into the shared entry_raise unwind path.
-            AsmInst::Raise => return self.emit_raise(frame.loop_jit_spill_bytes),
-            AsmInst::Retry(pc) => return self.emit_retry(pc, frame.loop_jit_spill_bytes),
-            AsmInst::Redo(pc) => return self.emit_redo(pc, frame.loop_jit_spill_bytes),
-            AsmInst::EnsureEnd => return self.emit_ensure_end(frame.loop_jit_spill_bytes),
+            AsmInst::Raise => self.encode_linst(LInst::Raise {
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
+            AsmInst::Retry(pc) => self.encode_linst(LInst::Retry {
+                pc,
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
+            AsmInst::Redo(pc) => self.encode_linst(LInst::Redo {
+                pc,
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
+            AsmInst::EnsureEnd => self.encode_linst(LInst::EnsureEnd {
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; the x86-only
             // return-address eviction patch is applied by the x86 emit_yield.
             AsmInst::Yield { callid, error, evict } => {
                 let evict_label = labels[evict].clone();
-                return self.emit_yield(callid, &labels[error], evict, &evict_label);
+                let error = labels[error].clone();
+                self.encode_linst(LInst::Yield {
+                    callid,
+                    error,
+                    evict,
+                    evict_label,
+                });
             }
             // ---- Specialized inlined-frame family ------------------------------
             // These lower an inlined callee / block frame. Each arm is identical
@@ -807,10 +859,10 @@ impl Codegen {
                 return self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
             // Trap for statically-unreachable code: call the panicking helper.
-            AsmInst::Unreachable => self.emit_unreachable(),
+            AsmInst::Unreachable => self.encode_linst(LInst::Unreachable),
             // `**kwrest` fixup: build a (name, slot) const table and call
             // `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-            AsmInst::RestKw { rest_kw } => self.emit_rest_kw(rest_kw),
+            AsmInst::RestKw { rest_kw } => self.encode_linst(LInst::RestKw { rest_kw }),
             // Not a shared instruction: hand off to the per-arch backend.
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
@@ -939,6 +991,72 @@ impl Codegen {
             }
             LInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
                 self.emit_expand_array(dst, len, rest_pos, using_xmm);
+            }
+            LInst::Deopt { deopt } => {
+                self.emit_deopt(&deopt);
+            }
+            LInst::HandleError { error } => {
+                self.emit_handle_error(&error);
+            }
+            LInst::CheckStack { write_back, error, base } => {
+                self.emit_check_stack(write_back, &error, base);
+            }
+            LInst::ExecGc { write_back, error, base } => {
+                self.emit_exec_gc(write_back, &error, base);
+            }
+            LInst::IntegerCmp { kind, mode, lhs, rhs } => {
+                self.emit_integer_cmp(kind, mode, lhs, rhs);
+            }
+            LInst::Ret => {
+                self.emit_ret();
+            }
+            LInst::MethodRet { pc } => {
+                self.emit_method_ret(pc);
+            }
+            LInst::BlockBreak { pc } => {
+                self.emit_block_break(pc);
+            }
+            LInst::ImmediateEvict { evict } => {
+                self.emit_immediate_evict(evict);
+            }
+            LInst::Init { info, prologue_offset } => {
+                self.emit_init(info, prologue_offset);
+            }
+            LInst::LoopJitRspBump { offset } => {
+                self.emit_loop_jit_rsp_bump(offset);
+            }
+            LInst::BlockArgProxy { ret, outer } => {
+                self.emit_block_arg_proxy(ret, outer);
+            }
+            LInst::BlockArg { ret, using_xmm, call_site_bc_ptr, error } => {
+                self.emit_block_arg(ret, using_xmm, call_site_bc_ptr, &error);
+            }
+            LInst::MethodDef { name, func_id, using_xmm, error } => {
+                self.emit_method_def(name, func_id, using_xmm, &error);
+            }
+            LInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
+                self.emit_singleton_method_def(obj, name, func_id, using_xmm, &error);
+            }
+            LInst::Raise { loop_jit_spill_bytes } => {
+                self.emit_raise(loop_jit_spill_bytes);
+            }
+            LInst::Retry { pc, loop_jit_spill_bytes } => {
+                self.emit_retry(pc, loop_jit_spill_bytes);
+            }
+            LInst::Redo { pc, loop_jit_spill_bytes } => {
+                self.emit_redo(pc, loop_jit_spill_bytes);
+            }
+            LInst::EnsureEnd { loop_jit_spill_bytes } => {
+                self.emit_ensure_end(loop_jit_spill_bytes);
+            }
+            LInst::Yield { callid, error, evict, evict_label } => {
+                self.emit_yield(callid, &error, evict, &evict_label);
+            }
+            LInst::Unreachable => {
+                self.emit_unreachable();
+            }
+            LInst::RestKw { rest_kw } => {
+                self.emit_rest_kw(rest_kw);
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }
