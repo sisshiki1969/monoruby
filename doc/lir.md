@@ -1,44 +1,36 @@
 # Unified low-level IR (LIR)
 
-Design notes and migration plan for the arch-neutral, machine-level IR that
-sits between `AsmIR` and the per-arch `monoasm!` / `monoasm_arm64!` byte
-emission. This is **Phase-1 item ①** ("a低レベルIR that describes amd64 and
-aarch64 uniformly").
+Design notes and migration log for the arch-neutral, machine-level IR that sits
+between `AsmIR` and the per-arch `monoasm!` / `monoasm_arm64!` byte emission.
+This is **Phase-1 item ①** ("a low-level IR that describes amd64 and aarch64
+uniformly").
 
-Status: **Stage 1 — data model defined, not yet wired into the pipeline.**
+Status: **actively migrating `AsmInst` families onto LIR, family by family.**
 The model lives in
-[`monoruby/src/codegen/jitgen/lir.rs`](../monoruby/src/codegen/jitgen/lir.rs).
+[`monoruby/src/codegen/jitgen/lir.rs`](../monoruby/src/codegen/jitgen/lir.rs);
+the per-arch encoder is `Codegen::encode_linst`, defined once in each
+`arch/<arch>/compile/…` file. As of this writing the integer + control-flow
+core, all addressing modes, the GC write barrier, the common guard/check family,
+fixnum arithmetic (with overflow deopt), and the first floating-point family are
+all lowered through `encode_linst`.
 
 ---
 
-## 1. Motivation (post-`#704`)
+## 1. Motivation
 
-The original justification for a unified IR was "close the aarch64 *bail* gap".
-That justification is **gone**: the full aarch64 port (`#704`) made aarch64
-lower every `AsmInst` (large immediates are materialized through scratch
-registers; see `doc/arch_difference.md`). The `bool` bail return is now
-vestigial.
+The original justification ("close the aarch64 *bail* gap") is **gone**: the
+full aarch64 port (`#704`) made aarch64 lower every `AsmInst` (see
+`doc/arch_difference.md`). The remaining — and real — motivation is
+**description unification**:
 
-The remaining — and still real — motivation is **description unification**:
-
-- The AsmIR → machine-code step is two parallel sets of emission primitives:
-  ≈145 `emit_*` methods on x86 (`arch/x86_64/compile/*.rs`) and ≈143 on aarch64
-  (`arch/aarch64/compile.rs`). Each backend re-implements register moves, frame
-  addressing, immediate-range handling and FP-pool save/restore by hand.
-- The aarch64 backend already factors immediate-range handling into helpers
-  (`a64_frame_load`, `a64_field_load`, `a64_sp_sub`, `a64_addr_sub`, …), each of
-  which folds a small displacement into the instruction or materializes a large
-  one into scratch `x9`/`x10`. That pattern is exactly what a low-level IR with
-  an addressing-mode abstraction formalizes — **once**, instead of per
-  primitive.
-- LIR is also the concrete **code-generation target** that the future
+- The AsmIR → machine-code step used to be two parallel sets of `emit_*`
+  primitives (x86 `arch/x86_64/compile/*.rs`, aarch64 `arch/aarch64/compile.rs`).
+  LIR makes `encode_linst` the **single seam** through which all migrated
+  families emit code.
+- LIR is also the concrete **code-generation target** the future
   interpreter/JIT DSL (Phase-1 item ③, "derive interpreter + JIT from one
-  description via partial evaluation") lowers to. Building it now gives ③ a
-  well-defined, hand-validated target.
-
-So Stage 1 is worth doing for unification and as ③'s foundation — but its
-priority should be weighed against that, not against a (now non-existent)
-coverage gap.
+  description") lowers to. A hand-written, test-validated LIR gives ③ a
+  well-defined target and a correctness oracle.
 
 ---
 
@@ -47,124 +39,186 @@ coverage gap.
 ```text
 TraceIR
   → AsmIR (AsmInst, arch-neutral, register-allocated)
-  → [compile_asmir dispatcher]                       jitgen/asmir/compile_shared.rs
-  → LIR (arch-neutral machine ops + logical addressing)   ← NEW (this layer)
-  → [per-arch LirEncode + legalize]                  arch/<arch>/lir_encode.rs (future)
+  → [compile_asmir dispatcher]                         jitgen/asmir/compile_shared.rs
+  → LIR (LInst, arch-neutral machine ops)              jitgen/lir.rs            ← this layer
+  → [per-arch Codegen::encode_linst]                   arch/<arch>/compile/…
   → monoasm! / monoasm_arm64!
   → bytes
 ```
 
-LIR does **not** replace `AsmIR`. `AsmIR` stays the register-allocated,
-arch-neutral *front-end* output (one `AsmInst` per semantic operation, often a
-macro-op that expands to a runtime call). LIR is the *machine-level* tier below
-it: a small set of real machine instructions with logical operands.
+`AsmIR` stays the register-allocated, arch-neutral *front-end* output (one
+`AsmInst` per semantic operation). The arch-neutral dispatcher
+`compile_asmir` ([compile_shared.rs](../monoruby/src/codegen/jitgen/asmir/compile_shared.rs))
+lowers each migrated `AsmInst` into one or more `LInst`s and feeds them to
+`encode_linst`; not-yet-migrated families still call their per-arch `emit_*`
+directly from the dispatcher.
+
+`encode_linst` is an inherent `Codegen` method, **defined once per arch** in the
+file that the `compile` module includes for the active `target_arch`. Because
+only one compiles per target, no trait/dynamic dispatch is needed — `cfg`
+selects the right encoder.
 
 ---
 
-## 3. Data model (Stage 1)
+## 3. Data model
 
-Defined in `lir.rs`. The model deliberately starts small, covering the integer
-move / memory / ALU / branch core migrated first in Stage 2.
+Defined in `lir.rs`. Branch and side-exit targets carry a **resolved monoasm
+`DestLabel`** (the encoder runs after label resolution), so `LInst` is
+`#[derive(Debug, Clone, PartialEq)]` — `DestLabel` is `Clone` but not `Copy`.
+
+### Operands
 
 | Type        | Role |
 | ----------- | ---- |
-| `GP`        | General-purpose register. **Reused as-is** from `codegen.rs`; already arch-neutral (maps to x86 regs / A64 `x0..x23` per `target_arch`). |
-| `FPReg`     | Virtual FP register (phys-xmm-or-spill). Reused; FP `LInst`s come in a later stage. |
-| `LOperand`  | `Reg(GP)` or `Imm(i64)` — an ALU/compare source that the encoder folds or materializes. |
-| `LMem`      | *Logical* memory location with **unbounded** displacement: `Slot(SlotId)` (LFP-relative, negative disp), `Field { base, disp }` (object field, positive disp), `RspRel { disp }` (callee-frame arg slot). |
-| `LCond`     | Signed integer branch condition (`Eq/Ne/Lt/Le/Gt/Ge`), with `from_int_cmp` / `invert`. Float/NaN-aware compares get dedicated variants later. |
+| `GP`        | General-purpose register. Reused from `codegen.rs`; already arch-neutral. |
+| `LReg`      | `Gp(GP)` or `Scratch` — a register that may be the per-arch reserved **scratch pointer** (`rdx` on x86, `x9` on aarch64). For intermediate pointers (heap var-table derefs) that must not clobber an allocated value; aarch64's x9 is outside `GP`'s allocatable map, so it needs its own kind. `From<GP>`. |
+| `FPReg`     | Virtual FP register (physical xmm/d-reg **or** a stack spill); the encoder resolves the spill via `FPReg::loc(base)`, so FP `LInst`s carry the frame's spill `base`. |
+| `LOperand`  | `Reg(GP)` or `Imm(i64)` — an ALU/compare source the encoder folds or materializes. |
+| `LMem`      | A *logical* memory location with **unbounded** displacement: `Slot(SlotId)` (LFP-relative, negative), `Field { base: LReg, disp }` (object field / scratch-relative, positive), `RspRel { disp }` (callee-frame arg slot). The encoder legalizes the displacement per arch. |
+| `LCond`     | Signed integer branch condition (`Eq/Ne/Lt/Le/Gt/Ge`), with `from_int_cmp` / `invert`. |
 | `LAluOp`    | `Add/Sub/Mul/And/Or/Xor/Shl/Sar`, with `from_binop`. |
-| `LInst`     | One machine instruction: `Mov`, `LoadImm`, `Load`, `Store`, `StoreImm`, `Alu`, `Cmp`, `Label`, `Br`, `CondBr`. |
-| `Lir`       | A straight-line `Vec<LInst>` with an ergonomic builder (`.mov().load().alu()…`). |
 
-Branch targets use the existing front-end `JitLabel` (resolved to a monoasm
-`DestLabel` by `JitContext::resolve_label`), matching how `AsmInst` carries
-labels.
+### Instructions (`LInst`)
+
+| Group | Variants |
+| ----- | -------- |
+| Move / immediate | `Mov`, `LoadImm` |
+| Memory | `Load`, `Store`, `StoreImm` (over `LMem::Slot` / `Field` / `RspRel`) |
+| ALU / compare | `Alu`, `Cmp` |
+| Branch | `Label`, `Br`, `CondBr { cond: LCond, … }`, `BranchTruthy { negate }`, `BranchIfNil`, `BranchIfNonzero` |
+| GC / nil | `WriteBarrier { parent, value }`, `NilIfZero { reg }` |
+| Guards (carry a side-exit `deopt`) | `GuardClass`, `GuardArrayTy`, `GuardFrozen`, `GuardConstBaseClass`, `GuardConstVersion`, `GuardCapture`, `CheckBOP` |
+| Arithmetic w/ deopt | `IntegerBinOp { kind, mode, lhs, rhs, deopt }` |
+| Floating-point | `FprMove`, `F64ToFpr`, `FixnumToFpr`, `FprToStack` (carry the spill `base`) |
+
+`Lir` is a thin `Vec<LInst>` builder used where a multi-instruction sequence is
+convenient.
 
 ### The legalization contract (the core idea)
 
-`LMem` displacements and `LOperand::Imm` values are **unbounded**. The per-arch
-encoder is solely responsible for legalizing them:
+`LMem` displacements and `LOperand::Imm` values are **unbounded**; the per-arch
+encoder legalizes them:
 
-- **x86-64**: `[reg + disp32]` and `imm32`/`imm64` cover essentially everything;
-  legalization is mostly a no-op.
-- **aarch64**: fixed-width encodings allow only small immediates. The encoder
-  folds a fitting displacement into the instruction (`ldur`/`stur` ±256,
-  scaled `ldr`/`str` ≤ 32760, `sub sp` ≤ 4095) and otherwise materializes the
-  byte offset into reserved scratch `x9`/`x10` and uses a register-offset form —
-  i.e. exactly what `a64_frame_load` / `a64_field_load` / `a64_addr_sub` do
-  today, but in one place.
-
-This is the single biggest structural win: the ~two dozen ad-hoc range checks
-currently scattered across the aarch64 primitives collapse into one legalizer.
+- **x86-64**: `[reg + disp32]` / `imm32` cover essentially everything — mostly a
+  no-op.
+- **aarch64**: fixed-width encodings allow only small immediates, so the encoder
+  folds a fitting displacement into the instruction (`ldur`/`stur` ±256, scaled
+  `ldr`/`str`, `sub sp`) and otherwise materializes the offset into reserved
+  scratch `x9`/`x10` (the `a64_frame_*` / `a64_field_*` / `a64_rsp_slot_addr`
+  helpers).
 
 ---
 
-## 4. The per-arch encoder seam
+## 4. The two model extensions (Stage 3)
 
-Stage 2 adds a per-arch lowering implemented on `Codegen`:
+Stages 2-A…2-J were *byte-for-byte family ports* that fit the data model as-is.
+Stage 3 extended the model so the harder families could be expressed:
 
-```rust
-trait LirEncode {
-    /// Emit one already-register-allocated `LInst`, legalizing immediates and
-    /// displacements. May use the arch's reserved scratch registers freely
-    /// (x9/x10 on aarch64).
-    fn encode(&mut self, inst: &LInst, labels: &SideExitLabels);
-}
-```
+1. **Scratch register operand (`LReg::Scratch`).** Lets the LIR express
+   intermediate pointers that map to a different physical register per arch
+   (x86 `rdx`, aarch64 `x9`). Without it, an abstract `GP` would either pick a
+   register that aarch64 keeps allocatable (clobber hazard) or have no name for
+   aarch64's reserved scratch. First user: the self heap-ivar store
+   (`Load{Scratch ← [rdi+VAR]} ; Load{Scratch ← [Scratch+MONOVEC_PTR]} ;
+   Store{[Scratch+idx*8] ← src} ; WriteBarrier`).
 
-`x86_64` impl emits via `monoasm!`; `aarch64` impl via `monoasm_arm64!` plus the
-existing `a64_*` addressing helpers. The seam is declared (commented) in
-`lir.rs` for visibility but left unimplemented in Stage 1.
-
----
-
-## 5. Migration plan (family by family, behind the dispatcher)
-
-Each `AsmInst` family is migrated independently and is independently
-revertible, because the change is local to its `emit_*` primitive: the primitive
-builds an `Lir` and runs it through `encode` instead of emitting bytes directly.
-`compile_asmir`'s dispatch is untouched.
-
-1. **Stage 2 — move / memory / ALU / branch core.** `RegMove`, `RegToAcc`,
-   `AccToStack`, `RegToStack`, `StackToReg`, `LitToReg`, `LitToStack`,
-   `RegAdd`, `RegSub`, `IntegerBinOp` (Add/Sub/Mul fast path), `IntegerCmp`,
-   `IntegerCmpBr`, `CondBr`. These are the families behind the simplest
-   primitives and exercise the whole `LMem` + legalizer path.
-2. **Stage 3 — FP transfer / compare.** `FprMove`, `FprSwap`, `F64ToFpr`,
-   `FixnumToFpr`, `FloatToFpr`, `FprToStack`, `FloatBinOp`, `FloatUnOp`,
-   `FloatCmp(Br)`, `I64ToBoth`. Adds FP `LInst` variants; NaN-aware compares are
-   dedicated ops (x86 `ucomisd`+`setp` vs aarch64 `fcmp`+MI/LS).
-3. **Stage 4 — runtime-call macro-ops.** `NewArray`/`NewHash`/`defined?`/
-   `GenericBinOp`/`class_def`/… lower to an `LInst::Call` sequence with FP-pool
-   `Save`/`Restore` expressed in LIR, so the save/restore is written once.
-4. **Stage 5 — patch / recompile machinery.** Return-address patch points and
-   in-place recompile (the two remaining x86/aarch64 *non-coverage*
-   asymmetries, see `doc/arch_difference.md` §4). Hardest; may stay partly
-   arch-specific.
-5. **Stage 6 — cleanup.** Drop the now-vestigial `bool` returns of migrated
-   families; delete dead per-arch code; the aarch64 `compile.rs` monolith
-   shrinks and can be split to mirror x86.
+2. **Deopt side-exits.** Guard ops carry the *resolved* side-exit `DestLabel`
+   they fall through to, making deopt a first-class LIR concept. The
+   arch-neutral dispatcher resolves `labels[deopt]` and builds the guard; the
+   encoder branches to it. This pattern carries the overflow exit of
+   `IntegerBinOp` and every guard/check op.
 
 ---
 
-## 6. Verification strategy (replaces the old bail-metric)
+## 5. Encoding styles: decomposition vs. macro-op
 
-Because bails no longer exist, the Stage-0 "count aarch64 bails" metric is moot.
-The safety net is instead **behaviour preservation**:
+Migrated families use one of two encoder styles, both **byte-identical** to the
+prior code:
 
-- **x86 byte-identity.** For a fixed corpus (`benchmark/`, selected `tests/`),
-  the machine code emitted before and after each family migration must be
-  byte-identical on x86 (the reference backend is not changing *what* it emits,
-  only *how* the emission is expressed). The `emit-asm` feature dumps the
-  generated asm for diffing.
-- **aarch64 correctness.** `bin/test-aarch64` (qemu / native arm64) must stay
-  green; where aarch64 output legitimately changes (e.g. a large-offset path now
-  goes through the unified legalizer), correctness is checked against CRuby via
-  the normal `run_test` harness rather than byte-identity.
-- **Unit tests** on the LIR model itself (`lir.rs` `#[cfg(test)]`): condition
-  inversion, builder ordering, `from_binop` / `from_int_cmp` mappings.
+- **Decomposition** — the LIR sequence is built from reusable primitives and the
+  per-arch lowering lives in `encode_linst`. Used by the move/memory/ALU/branch
+  core, the field load/store + write-barrier, and the FP transfer/convert ops
+  (whose spill-aware bodies were *moved* from `emit_*` into the encoder arms,
+  deleting those `emit_*`).
+- **Macro-op delegation** — a single `LInst` whose encoder calls an existing
+  per-arch helper that stays (the tag-test / page-split / tagged-arith logic is
+  irreducibly per-arch). Used by the guards (delegate to `guard_class`,
+  `a64_guard_class`, `guard_capture`, …) and `IntegerBinOp` (delegate to
+  `integer_binop` / `a64_integer_binop`, which keep the x86 cold-page overflow
+  handler). The thin `emit_*` wrappers are deleted; the substantive helper stays.
 
-The north-star is "two `emit_*` sets collapse toward one shared description with
-no behaviour change", measured by lines of per-arch lowering removed and the
-green test matrix — not by a bail counter.
+---
+
+## 6. Migration log
+
+Each stage routes one family through `encode_linst`, commits, and is verified by
+the full `cargo test --lib` suite (see §7). All stages are byte-identical
+(modulo eliding a redundant self-`mov` when a value is already in the
+accumulator).
+
+| Stage | Family | Notes |
+| ----- | ------ | ----- |
+| 0 / 1 | LIR data model + this doc | scaffolding |
+| 2-A | `Mov` (`emit_reg_move`) | first `encode_linst` user |
+| 2-B | slot memory (`Load`/`Store`/`LoadImm`/`StoreImm` over `Slot`) | frame legalization |
+| 2-C | reg-imm ALU (`emit_reg_add/sub` → `Alu`) | `LAluOp` / `LOperand` |
+| 2-D | integer compare-branch (`Cmp` + `CondBr`) | `LCond`; built in shared dispatcher |
+| 2-E | conditional branches (`BranchTruthy` / `BranchIfNil` / `BranchIfNonzero`) | |
+| 2-F | inline struct-slot load (`Load` over `LMem::Field`) | first field-offset legalization |
+| 2-G | inline ivar/struct stores (`Store{Field}` + `WriteBarrier`) | introduces `WriteBarrier` |
+| 2-H | inline ivar load (`Load{Field}` + `NilIfZero`) | introduces `NilIfZero` |
+| 2-I | heap struct-slot load/store | composed from existing ops — no new op |
+| 2-J | rsp-relative arg stores (`LMem::RspRel`) | completes the addressing modes |
+| 3-A | **scratch operand** + self heap-ivar store | model extension ① |
+| 3-B | **deopt model** + class / array-ty / frozen guards | model extension ② |
+| 3-C | const-base-class / const-version / capture / BOP guards | |
+| 3-D | fixnum `IntegerBinOp` (overflow deopt) | hottest arithmetic path |
+| 3-E | FP transfer/convert (`FprMove` / `F64ToFpr` / `FixnumToFpr` / `FprToStack`) | first FP family; real decomposition |
+
+---
+
+## 7. Verification
+
+Because the migrations are pure refactors, the safety net is **behaviour
+preservation under a correct reference Ruby**:
+
+- The harness compares JIT output against the system `ruby`, and monoruby targets
+  **CRuby 4.0+**. With an older Ruby (e.g. 3.3) ~33 `--lib` tests fail on format
+  differences (3.4 `Hash#inspect`, etc.) — *unrelated to LIR*. Every stage here
+  is verified under **CRuby 4.0.5**, where the baseline is **1702 passed / 0
+  failed**; each migration keeps it at 1702 / 0 with no new warnings.
+- Each family migration is local to its `emit_*` / dispatcher arm and is
+  independently revertible.
+
+> Building CRuby 4.x from source in a restricted-network sandbox: the official
+> tarball host (`cache.ruby-lang.org`) may be blocked while GitHub is reachable.
+> Fetch the git tag source archive from `codeload.github.com`, install `gperf`
+> (needed to generate `lex.c`), empty `gems/bundled_gems` to skip the
+> bundled-gem download (or set `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`
+> so the bundled-gem fetch trusts the egress proxy CA), then
+> `autogen → configure → make → make install`.
+
+---
+
+## 8. Remaining work
+
+Families still lowered directly via `emit_*` (not yet through `encode_linst`):
+
+- **Floating point (rest):** `FprSwap`, `FloatToFpr` (deopt), `FloatBinOp` /
+  `FloatUnOp` / `FloatCmp` / `FloatCmpBr` (NaN-correct conditions), `I64ToBoth`,
+  the FP C-calls `CFunc_F_F` / `CFunc_FF_F`, and `XmmSave` / `XmmRestore`.
+- **Bounds-checked heap ivar** load/store (non-`self`): needs a bounds-check →
+  deopt/nil branch on top of the scratch model.
+- **Runtime-call macro-ops:** `NewArray` / `NewHash` / `ConcatStr` / `defined?`
+  family / `GenericBinOp` / class & method definition / the method-call prologue
+  (`SetupMethodFrame`, `SetArguments`, `Call`, `Init`) / exceptions / `Yield` /
+  the specialized inlined-frame family. These are large C-call sequences; most
+  would migrate as macro-ops carrying the relevant labels.
+- **Patch / recompile machinery** (return-address eviction, in-place recompile)
+  — the x86/aarch64 *non-coverage* asymmetry from `doc/arch_difference.md` §4;
+  the hardest to model.
+
+These extend, but do not invalidate, the model: each needs either a macro-op
+(carrying its labels) or, where the per-arch shape genuinely differs (FP spill,
+NaN compares, page-split deopt), a dedicated op whose encoder reproduces the
+arch sequence byte-for-byte.
