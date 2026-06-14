@@ -286,6 +286,18 @@ pub(in crate::codegen::jitgen) enum LInst {
     GuardCapture { deopt: DestLabel },
     /// Basic-operator-redefinition guard: deopt if any BOP was redefined.
     CheckBOP { deopt: DestLabel },
+    /// Fixnum fast-path arithmetic (`lhs <op> rhs`) on tagged integers, with an
+    /// overflow side-exit to `deopt`. A macro-op: the encoder emits the arch's
+    /// tagged-arith sequence and overflow handler (x86 outlines the handler to a
+    /// cold page; aarch64 lays it inline), so the tag manipulation and the
+    /// idiv/imul-vs-aarch64 lowering stay per-arch.
+    IntegerBinOp {
+        kind: BinOpK,
+        mode: OpMode,
+        lhs: GP,
+        rhs: GP,
+        deopt: DestLabel,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

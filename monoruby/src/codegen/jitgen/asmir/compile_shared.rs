@@ -193,7 +193,13 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                return self.emit_integer_binop(lhs, rhs, mode, kind, deopt);
+                self.encode_linst(LInst::IntegerBinOp {
+                    kind,
+                    mode,
+                    lhs,
+                    rhs,
+                    deopt,
+                });
             }
             AsmInst::IntegerCmp {
                 mode,

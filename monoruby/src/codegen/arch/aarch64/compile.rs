@@ -1610,6 +1610,16 @@ impl Codegen {
                     cbnz x9, deopt;   // any BOP redefined -> deopt
                 );
             }
+            // Fixnum fast-path arithmetic with an overflow deopt.
+            LInst::IntegerBinOp {
+                kind,
+                mode,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2394,20 +2404,6 @@ impl Codegen {
                 i += 1;
             }
         }
-    }
-
-    /// Integer binary op fast path (guarded; deopts to `deopt`). Independent of
-    /// `inline_gen`; emitted when the inline cache says both operands are
-    /// Integer. Bails (`false`) on an unsupported `BinOpK`.
-    pub(in crate::codegen::jitgen) fn emit_integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        kind: BinOpK,
-        deopt: DestLabel,
-    ) -> bool {
-        self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt)
     }
 
     /// Integer comparison; result Value lands in the accumulator.

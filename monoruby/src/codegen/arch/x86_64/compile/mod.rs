@@ -445,6 +445,16 @@ impl Codegen {
             LInst::GuardConstVersion { const_version, deopt } => {
                 self.guard_const_version(const_version, &deopt);
             }
+            // Fixnum fast-path arithmetic with an overflow deopt.
+            LInst::IntegerBinOp {
+                kind,
+                mode,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                self.integer_binop(lhs, rhs, &mode, kind, &deopt);
+            }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
@@ -1207,20 +1217,6 @@ impl Codegen {
     /// Restore the live FP pool registers after a C-call.
     pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
         self.xmm_restore_with_cont(using_xmm, cont);
-        true
-    }
-
-    /// Integer binary op fast path (guarded; deopts to `deopt` on overflow /
-    /// type miss). Always succeeds on x86 (the bool mirrors the aarch64 twin).
-    pub(in crate::codegen::jitgen) fn emit_integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        kind: BinOpK,
-        deopt: DestLabel,
-    ) -> bool {
-        self.integer_binop(lhs, rhs, &mode, kind, &deopt);
         true
     }
 
