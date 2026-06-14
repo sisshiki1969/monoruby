@@ -433,6 +433,38 @@ impl Codegen {
             LInst::GuardClass { reg, class, deopt } => self.guard_class(reg, class, &deopt),
             LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
             LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
+            // Constant-load base-class guard: deopt unless the accumulator equals
+            // the cached base class.
+            LInst::GuardConstBaseClass { base_class, deopt } => {
+                let cached_base_class = self.jit.const_i64(base_class.id() as _);
+                monoasm! { &mut self.jit,
+                    cmpq rax, [rip + cached_base_class];
+                    jne  deopt;
+                }
+            }
+            LInst::GuardConstVersion { const_version, deopt } => {
+                self.guard_const_version(const_version, &deopt);
+            }
+            LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
+            // BOP-redefinition guard: outline the deopt path (page 1) so the hot
+            // path is a single load + branch.
+            LInst::CheckBOP { deopt } => {
+                let bop_flag = self.bop_redefined_flags.clone();
+                let l1 = self.jit.label();
+                assert_eq!(0, self.jit.get_page());
+                monoasm!(
+                    &mut self.jit,
+                    cmpl [rip + bop_flag], 0;
+                    jnz l1;
+                );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                l1:
+                    movq rdi, (Value::symbol_from_str("_bop_guard").id());
+                    jmp  deopt;
+                );
+                self.jit.select_page(0);
+            }
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -507,29 +539,6 @@ impl Codegen {
     ) -> bool {
         self.jit_execute_gc(&write_back, error, base);
         true
-    }
-
-    /// Constant base-class guard: deopt if the accumulator (rax) is not the
-    /// cached base class.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
-        &mut self,
-        base_class: Value,
-        deopt: &DestLabel,
-    ) {
-        let cached_base_class = self.jit.const_i64(base_class.id() as _);
-        monoasm! { &mut self.jit,
-            cmpq rax, [rip + cached_base_class];  // rax: base_class
-            jne  deopt;
-        }
-    }
-
-    /// Constant version guard: deopt if the global constant version moved.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
-        &mut self,
-        const_version: usize,
-        deopt: &DestLabel,
-    ) {
-        self.guard_const_version(const_version, deopt);
     }
 
     /// Store the accumulator to a constant and bump the global constant
@@ -1402,26 +1411,6 @@ impl Codegen {
         true
     }
 
-    /// Basic-operator-redefinition guard: deopt (via the `_bop_guard` symbol) if
-    /// any BOP has been redefined since compilation.
-    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
-        let bop_flag = self.bop_redefined_flags.clone();
-        let l1 = self.jit.label();
-        assert_eq!(0, self.jit.get_page());
-        monoasm!(
-            &mut self.jit,
-            cmpl [rip + bop_flag], 0;
-            jnz l1;
-        );
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        l1:
-            movq rdi, (Value::symbol_from_str("_bop_guard").id());
-            jmp  deopt;
-        );
-        self.jit.select_page(0);
-    }
-
     /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
     /// cache warms.
     pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
@@ -1939,12 +1928,6 @@ impl Codegen {
         true
     }
 
-    // ---- block-passing side-effect guard (former per-arch arm) ----
-
-    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
-        self.guard_capture(deopt);
-        true
-    }
 
     // ---- &block forwarding (former per-arch arms) ----
 

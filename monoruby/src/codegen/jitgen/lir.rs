@@ -269,6 +269,23 @@ pub(in crate::codegen::jitgen) enum LInst {
     GuardArrayTy { reg: GP, deopt: DestLabel },
     /// Deopt if the receiver (rdi) is frozen.
     GuardFrozen { deopt: DestLabel },
+    /// Constant-load guard: deopt unless the cached base class (in the
+    /// accumulator) equals `base_class`.
+    GuardConstBaseClass {
+        base_class: Value,
+        deopt: DestLabel,
+    },
+    /// Constant-load guard: deopt if the global constant version moved away from
+    /// `const_version` since compilation.
+    GuardConstVersion {
+        const_version: usize,
+        deopt: DestLabel,
+    },
+    /// Block-passing side-effect guard: deopt if the current frame was captured
+    /// or invalidated.
+    GuardCapture { deopt: DestLabel },
+    /// Basic-operator-redefinition guard: deopt if any BOP was redefined.
+    CheckBOP { deopt: DestLabel },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

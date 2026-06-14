@@ -111,12 +111,17 @@ impl Codegen {
             // Constant base-class guard: deopt if the constant's base class (in
             // the accumulator) is not the cached one.
             AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                self.emit_guard_const_base_class(base_class, &labels[deopt]);
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardConstBaseClass { base_class, deopt });
             }
             // Constant version guard: deopt if the global constant version moved
             // since compilation.
             AsmInst::GuardConstVersion { const_version, deopt } => {
-                self.emit_guard_const_version(const_version, &labels[deopt]);
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardConstVersion {
+                    const_version,
+                    deopt,
+                });
             }
             // Store to a constant, bumping the global constant version (aarch64
             // bails if any xmm is live, hence the bool result).
@@ -306,7 +311,10 @@ impl Codegen {
                 return self.emit_set_arguments(store, callid, callee_fid);
             }
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
-            AsmInst::CheckBOP { deopt } => self.emit_check_bop(&labels[deopt]),
+            AsmInst::CheckBOP { deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::CheckBOP { deopt });
+            }
             // Recompile-or-deopt point: both arches recompile the whole method
             // (or loop body) once a small miss counter warms, then deopt.
             // (Specialized frames recompile via RecompileDeoptSpecialized /
@@ -485,7 +493,10 @@ impl Codegen {
             }),
             // Side-effect guard for block-passing calls: deopt if the frame was
             // captured/promoted.
-            AsmInst::GuardCapture(deopt) => return self.emit_guard_capture(&labels[deopt]),
+            AsmInst::GuardCapture(deopt) => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardCapture { deopt });
+            }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live xmm / range overflow).
             AsmInst::BlockArgProxy { ret, outer } => return self.emit_block_arg_proxy(ret, outer),

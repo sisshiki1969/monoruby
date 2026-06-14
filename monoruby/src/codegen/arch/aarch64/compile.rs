@@ -1561,6 +1561,55 @@ impl Codegen {
                     cbnz x9, deopt;        // frozen -> deopt
                 );
             }
+            // Constant-load base-class guard.
+            LInst::GuardConstBaseClass { base_class, deopt } => {
+                let rax = GP::Rax.a64().0;
+                let cached = base_class.id() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (cached);
+                    cmp x(rax), x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+            }
+            // Constant-load version guard.
+            LInst::GuardConstVersion { const_version, deopt } => {
+                let gv_addr = self
+                    .jit
+                    .get_label_address(&self.const_version_label())
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (gv_addr);
+                    ldr x9, [x9];
+                    mov x10, (const_version as u64);
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+            }
+            // Block-passing side-effect guard: deopt if the frame was captured
+            // or invalidated.
+            LInst::GuardCapture { deopt } => {
+                let lfp = GP::R14.a64().0; // x22
+                let off = (LFP_META as i64 - META_KIND as i64) as u32; // == 1 (kind byte)
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    ldrb w9, [x10];
+                    mov x11, (0b1000_1000u64);
+                    tst x9, x11;                 // captured or invalidated?
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
+            }
+            // BOP-redefinition guard.
+            LInst::CheckBOP { deopt } => {
+                let flag_addr = self
+                    .jit
+                    .get_label_address(&self.bop_redefined_flags)
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (flag_addr);
+                    ldr w9, [x9];
+                    cbnz x9, deopt;   // any BOP redefined -> deopt
+                );
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1797,45 +1846,6 @@ impl Codegen {
         );
         self.jit.bind_label(skip);
         true
-    }
-
-    /// Constant base-class guard: deopt if the accumulator (rax/x0) is not the
-    /// cached base class. Mirrors x86 `GuardConstBaseClass`.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
-        &mut self,
-        base_class: Value,
-        deopt: &DestLabel,
-    ) {
-        let deopt = deopt.clone();
-        let rax = GP::Rax.a64().0;
-        let cached = base_class.id() as u64;
-        monoasm_arm64!(&mut self.jit,
-            mov x10, (cached);
-            cmp x(rax), x10;
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-    }
-
-    /// Constant version guard: deopt if the global constant version moved since
-    /// compilation (`const_version` is the baked-in cached value). Mirrors x86
-    /// `guard_const_version`.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
-        &mut self,
-        const_version: usize,
-        deopt: &DestLabel,
-    ) {
-        let deopt = deopt.clone();
-        let gv_addr = self
-            .jit
-            .get_label_address(&self.const_version_label())
-            .as_ptr() as u64;
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (gv_addr);
-            ldr x9, [x9];
-            mov x10, (const_version as u64);
-            cmp x9, x10;
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
     }
 
     /// Store the accumulator to a constant via set_constant(vm, globals, id,
@@ -2649,22 +2659,6 @@ impl Codegen {
     ) -> bool {
         let offset = store[callee_fid].get_offset();
         self.a64_set_arguments(callid, callee_fid, offset)
-    }
-
-    /// Basic-operator-redefinition guard: deopt if any BOP has been redefined
-    /// since compilation. The deopt PC is the BOP instruction itself, so the
-    /// interpreter re-runs it through the de-optimized VM handler.
-    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
-        let deopt = deopt.clone();
-        let flag_addr = self
-            .jit
-            .get_label_address(&self.bop_redefined_flags)
-            .as_ptr() as u64;
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (flag_addr);
-            ldr w9, [x9];
-            cbnz x9, deopt;   // any BOP redefined -> deopt
-        );
     }
 
     /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
@@ -4686,26 +4680,6 @@ impl Codegen {
         self.emit_handle_error(error);
         let rax = GP::Rax.a64().0;
         self.a64_frame_store(rax, lfp, off); // ret <- Proc
-        true
-    }
-
-    /// Side-effect guard for a method that passes a block: deopt if the current
-    /// frame has been captured/promoted (so a materialized closure observes
-    /// later local writes). Tests the captured (0b1000_0000) / invalidated
-    /// (0b0000_1000) bits of the Meta `kind` byte at `[lfp - 1]`. Mirrors x86
-    /// `branch_if_captured` + `guard_capture`; aarch64 lays the deopt inline (no
-    /// cold page) so this is just a conditional branch to the deopt label.
-    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
-        let lfp = GP::R14.a64().0; // x22
-        let off = (LFP_META as i64 - META_KIND as i64) as u32; // == 1 (kind byte)
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x(lfp), #(off);
-            ldrb w9, [x10];
-            mov x11, (0b1000_1000u64);
-            tst x9, x11;                 // captured or invalidated?
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
         true
     }
 
