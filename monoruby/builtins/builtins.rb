@@ -734,6 +734,4 @@ end
 class Proc
   def ==(other) = super
   alias eql? ==
-  def to_s = super
-  alias inspect to_s
 end

@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
+    globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
     globals.define_builtin_func_with_kw(
@@ -157,6 +158,56 @@ fn source_location(
     } else {
         Ok(Value::nil())
     }
+}
+
+///
+/// ### Proc#to_s, Proc#inspect
+///
+/// - to_s -> String
+/// - inspect -> String
+///
+/// Returns `#<Proc:0xADDR FILE:LINE>` (plus ` (lambda)` for a lambda).
+/// The result has BINARY (ASCII-8BIT) encoding, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let proc = Proc::new(self_);
+    let func_id = proc.func_id();
+    let is_lambda = !globals[func_id].is_block_style();
+    // A Method#to_proc proc reports the method's source location.
+    let src_fid = if func_id == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        m.func_id()
+    } else {
+        func_id
+    };
+    let mut s = format!("#<Proc:0x{:016x}", self_.id());
+    if func_id == SYMBOL_TO_PROC_BODY_FUNCID
+        && let Some(sym) = proc.self_val().try_symbol()
+    {
+        // `:foo.to_proc` renders as `#<Proc:0x..(&:foo) (lambda)>`.
+        s.push_str(&format!("(&:{})", sym));
+    } else if let Some(iseq) = globals.store.resolve_iseq(src_fid) {
+        let info = &globals.store[iseq];
+        s.push_str(&format!(
+            " {}:{}",
+            info.sourceinfo.file_name(),
+            info.sourceinfo.get_line(&info.loc)
+        ));
+    }
+    if is_lambda {
+        s.push_str(" (lambda)");
+    }
+    s.push('>');
+    Ok(Value::string_from_inner(
+        crate::value::rvalue::RStringInner::from_encoding(
+            s.as_bytes(),
+            crate::value::Encoding::Ascii8,
+        ),
+    ))
 }
 
 ///
@@ -416,6 +467,20 @@ fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn proc_to_s() {
+        // The address differs per run, so check the stable invariants
+        // (CRuby: `#<Proc:0xADDR FILE:LINE [(lambda)]>`, BINARY encoding;
+        // `inspect` == `to_s`; `:sym.to_proc` shows `(&:sym)`).
+        run_test(r#"proc { }.to_s.encoding.to_s"#);
+        run_test(
+            r##"[proc { }.to_s.start_with?("#<Proc:0x"),
+               (-> () {}).to_s.include?(" (lambda)"),
+               :foo.to_proc.to_s.include?("(&:foo)"),
+               proc { }.inspect.start_with?("#<Proc:0x")]"##,
+        );
+    }
 
     #[test]
     fn proc_new() {
