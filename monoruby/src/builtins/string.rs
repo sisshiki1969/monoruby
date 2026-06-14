@@ -3963,7 +3963,7 @@ fn lines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Zero-copy shared (CoW) line views, built eagerly before any block.
     let lines = build_lines(vm, globals, receiver, lfp.try_arg(0), chomp)?;
     if let Some(bh) = lfp.block() {
-        vm.invoke_block_iter1(globals, bh, lines.into_iter())?;
+        vm.invoke_block_iter1_rooted(globals, bh, lines)?;
         Ok(receiver)
     } else {
         Ok(Value::array_from_vec(lines))
@@ -4509,7 +4509,7 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         // Zero-copy shared (CoW) line views, built eagerly before the
         // block runs so each view references the frozen root buffer.
         let lines = build_lines(vm, globals, receiver, lfp.try_arg(0), chomp)?;
-        vm.invoke_block_iter1(globals, bh, lines.into_iter())?;
+        vm.invoke_block_iter1_rooted(globals, bh, lines)?;
         Ok(receiver)
     } else {
         let mut args = vec![];
@@ -10393,6 +10393,30 @@ mod tests {
         ]);
         run_test_error(r##""hello".lines(:sym)"##);
         run_test_error(r##""hello".lines(false)"##);
+    }
+
+    #[test]
+    fn string_each_line_to_a_gc() {
+        // Regression for a GC use-after-free: `each_line`/`lines` build all
+        // line views eagerly into a `Vec<Value>`, then drive the block from
+        // it. The not-yet-yielded views must stay rooted — otherwise an
+        // allocation inside the block (here, `l[dedent..-1]` and the `map`
+        // result) can trigger a GC that sweeps a pending line, leaving a
+        // dangling pointer once it is finally collected into the result
+        // array. Reliably aborts under `--features gc-stress` without the
+        // fix (a remembered old array ends up holding a dead element).
+        run_test(
+            r##"
+            def fmt(ruby)
+              lines = ruby.each_line.to_a
+              dedent = 2
+              lines.map { |l| l[dedent..-1] }.join
+            end
+            r = ""
+            200.times { |i| r = fmt("      a#{i}\n      b\n") }
+            r
+            "##,
+        );
     }
 
     #[test]

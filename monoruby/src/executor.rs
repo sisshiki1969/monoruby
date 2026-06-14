@@ -1845,6 +1845,45 @@ impl Executor {
         Ok(())
     }
 
+    /// Like [`invoke_block_iter1`], but for an *eagerly materialised*
+    /// `Vec<Value>` of freshly allocated heap objects (e.g. the line views
+    /// built by `String#each_line` / `#lines`). Unlike a lazy iterator —
+    /// where each element is created just before it is yielded and only
+    /// the current one is live — every element here already exists, so the
+    /// not-yet-yielded ones must be kept reachable: a block allocation can
+    /// otherwise trigger a GC that sweeps a pending element, leaving a
+    /// dangling pointer once it is finally yielded. We root the whole batch
+    /// on the temp stack and index into it (re-reading through the rooted
+    /// slot each step, since `invoke_block` may itself push temps).
+    pub(crate) fn invoke_block_iter1_rooted(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        values: Vec<Value>,
+    ) -> Result<()> {
+        let base = self.temp_len();
+        for v in &values {
+            self.temp_push(*v);
+        }
+        let data = match self.get_block_data(globals, bh) {
+            Ok(data) => data,
+            Err(err) => {
+                self.temp_clear(base);
+                return Err(err);
+            }
+        };
+        let mut result = Ok(());
+        for i in 0..values.len() {
+            let val = self.temp_at(base + i);
+            if let Err(err) = self.invoke_block(globals, &data, &[val]) {
+                result = Err(err);
+                break;
+            }
+        }
+        self.temp_clear(base);
+        result
+    }
+
     /*pub(crate) fn invoke_block_iter_with_index1(
         &mut self,
         globals: &mut Globals,
