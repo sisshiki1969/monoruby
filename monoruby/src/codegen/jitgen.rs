@@ -38,6 +38,8 @@ mod guard;
 #[cfg(target_arch = "aarch64")]
 #[path = "arch/aarch64/guard.rs"]
 mod guard;
+// Unified low-level IR (Phase-1 Stage 1: data model only, not yet wired in).
+mod lir;
 mod merge;
 mod state;
 pub mod trace_ir;
