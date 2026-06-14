@@ -274,10 +274,18 @@ impl Codegen {
                 kind,
                 binary_xmm,
                 dst,
-            } => return self.emit_float_binop(kind, binary_xmm, dst, frame.base_stack_offset),
-            AsmInst::FloatUnOp { kind, dst } => {
-                return self.emit_float_unop(kind, dst, frame.base_stack_offset);
-            }
+            } => self.encode_linst(LInst::FloatBinOp {
+                kind,
+                lhs: binary_xmm.0,
+                rhs: binary_xmm.1,
+                dst,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatUnOp { kind, dst } => self.encode_linst(LInst::FloatUnOp {
+                kind,
+                dst,
+                base: frame.base_stack_offset,
+            }),
             // [slot] <- Value::integer(i) and fpr(x) <- i as f64 (constant int
             // materialized as both a boxed integer and a double).
             AsmInst::I64ToBoth(i, slot, x) => self.encode_linst(LInst::I64ToBoth {
@@ -289,9 +297,12 @@ impl Codegen {
             // Float comparison. NaN compares false (except `!=`); each backend
             // picks NaN-correct condition codes (x86 ucomisd + setp tricks,
             // aarch64 fcmp + MI/LS conditions).
-            AsmInst::FloatCmp { kind, lhs, rhs } => {
-                return self.emit_float_cmp(kind, lhs, rhs, frame.base_stack_offset);
-            }
+            AsmInst::FloatCmp { kind, lhs, rhs } => self.encode_linst(LInst::FloatCmp {
+                kind,
+                lhs,
+                rhs,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::FloatCmpBr {
                 kind,
                 lhs,
@@ -299,15 +310,15 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                return self.emit_float_cmp_br(
+                let dest = frame.resolve_label(&mut self.jit, branch_dest);
+                self.encode_linst(LInst::FloatCmpBr {
                     kind,
                     lhs,
                     rhs,
                     brkind,
-                    branch_dest,
-                    frame.base_stack_offset,
-                );
+                    dest,
+                    base: frame.base_stack_offset,
+                });
             }
             // Method return / eviction family. `Ret` tears down the frame and
             // returns; `MethodRet` sets the resume PC then returns through the

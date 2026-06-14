@@ -43,7 +43,7 @@
 
 use super::*;
 use crate::ast::CmpKind;
-use crate::bytecodegen::BinOpK;
+use crate::bytecodegen::{BinOpK, UnOpK};
 
 /// A general-purpose-register operand or an inline integer immediate.
 ///
@@ -343,6 +343,39 @@ pub(in crate::codegen::jitgen) enum LInst {
         i: i64,
         slot: SlotId,
         dst: FPReg,
+        base: usize,
+    },
+    /// `dst <- lhs <op> rhs` in FP registers (the four arithmetic ops).
+    FloatBinOp {
+        kind: BinOpK,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        base: usize,
+    },
+    /// `dst <- <op> dst` in an FP register (`Neg` flips the sign bit; `Pos` is a
+    /// no-op).
+    FloatUnOp {
+        kind: UnOpK,
+        dst: FPReg,
+        base: usize,
+    },
+    /// Float comparison producing a Ruby boolean in the accumulator. NaN
+    /// compares false for every operator except `!=`; the encoder picks
+    /// NaN-correct condition codes per arch.
+    FloatCmp {
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+        base: usize,
+    },
+    /// Fused float compare + conditional branch to `dest` (NaN-correct).
+    FloatCmpBr {
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+        brkind: BrKind,
+        dest: DestLabel,
         base: usize,
     },
 }

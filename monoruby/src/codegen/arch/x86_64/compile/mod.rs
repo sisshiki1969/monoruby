@@ -556,6 +556,45 @@ impl Codegen {
                     ),
                 }
             }
+            // ---- FP arithmetic / comparison ----------------------------------
+            LInst::FloatBinOp { kind, lhs, rhs, dst, base } => {
+                self.float_binop(kind, dst, (lhs, rhs), base);
+            }
+            LInst::FloatUnOp { kind, dst, base } => match kind {
+                UnOpK::Neg => {
+                    let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
+                    match dst.loc(base) {
+                        FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                            xorps xmm(p), [rip + imm];
+                        ),
+                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                            movq  xmm0, [rbp - (off)];
+                            xorps xmm0, [rip + imm];
+                            movq  [rbp - (off)], xmm0;
+                        ),
+                    }
+                }
+                UnOpK::Pos => {}
+                _ => unreachable!(),
+            },
+            LInst::FloatCmp { kind, lhs, rhs, base } => {
+                monoasm! { &mut self.jit,
+                    xorq rax, rax;
+                };
+                self.cmp_float((lhs, rhs), base);
+                self.setflag_float(kind);
+            }
+            LInst::FloatCmpBr {
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                dest,
+                base,
+            } => {
+                self.cmp_float((lhs, rhs), base);
+                self.condbr_float(kind, dest, brkind);
+            }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
@@ -1200,65 +1239,6 @@ impl Codegen {
         true
     }
 
-
-    /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in FP registers.
-    pub(in crate::codegen::jitgen) fn emit_float_binop(
-        &mut self,
-        kind: BinOpK,
-        binary_xmm: (FPReg, FPReg),
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        self.float_binop(kind, dst, binary_xmm, base);
-        true
-    }
-
-    /// Float unary op: negate (flip the sign bit) or unary-plus (no-op).
-    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
-        match kind {
-            UnOpK::Neg => {
-                let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                match dst.loc(base) {
-                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                        xorps xmm(p), [rip + imm];
-                    ),
-                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                        movq  xmm0, [rbp - (off)];
-                        xorps xmm0, [rip + imm];
-                        movq  [rbp - (off)], xmm0;
-                    ),
-                }
-            }
-            UnOpK::Pos => {}
-            _ => unreachable!(),
-        }
-        true
-    }
-
-    /// Float comparison; NaN-correct boolean Value lands in the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
-        monoasm! { &mut self.jit,
-            xorq rax, rax;
-        };
-        self.cmp_float((lhs, rhs), base);
-        self.setflag_float(kind);
-        true
-    }
-
-    /// Fused float compare + conditional branch (NaN compares false except `!=`).
-    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        lhs: FPReg,
-        rhs: FPReg,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-        base: usize,
-    ) -> bool {
-        self.cmp_float((lhs, rhs), base);
-        self.condbr_float(kind, branch_dest, brkind);
-        true
-    }
 
     /// Method epilogue: tear down the frame and return.
     pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {

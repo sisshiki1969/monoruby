@@ -1708,6 +1708,64 @@ impl Codegen {
                 );
                 self.a64_fpr_commit(dst, 0, base);
             }
+            // ---- FP arithmetic / comparison ----------------------------------
+            LInst::FloatBinOp { kind, lhs, rhs, dst, base } => {
+                // Only Add/Sub/Mul/Div reach FloatBinOp (Rem/pow are method
+                // calls). Operands resolve to a pool reg or load a spill into
+                // d0/d1; the result writes its pool reg or scratch d0.
+                let ld = self.a64_fpr_read(lhs, 0, base);
+                let rd = self.a64_fpr_read(rhs, 1, base);
+                let dd = self.a64_fpr_wtmp(dst, 0, base);
+                match kind {
+                    BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
+                    BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
+                    BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
+                    BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
+                    _ => unreachable!(),
+                }
+                self.a64_fpr_commit(dst, 0, base);
+            }
+            LInst::FloatUnOp { kind, dst, base } => match kind {
+                UnOpK::Neg => {
+                    let p = self.a64_fpr_read(dst, 0, base);
+                    monoasm_arm64!(&mut self.jit,
+                        fmov x9, d(p);
+                        mov x10, (0x8000_0000_0000_0000u64);
+                        eor x9, x9, x10;
+                        fmov d(p), x9;
+                    );
+                    self.a64_fpr_commit(dst, 0, base);
+                }
+                UnOpK::Pos => {}
+                _ => unreachable!(),
+            },
+            LInst::FloatCmp { kind, lhs, rhs, base } => {
+                let lp = self.a64_fpr_read(lhs, 0, base);
+                let rp = self.a64_fpr_read(rhs, 1, base);
+                monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+                let cond = a64_float_cond_for_cmp(kind, BrKind::BrIf);
+                let rax = GP::Rax.a64();
+                self.jit.cset(rax, cond);
+                monoasm_arm64!(&mut self.jit,
+                    lsl x(rax.0), x(rax.0), #(3u32);
+                    mov x9, (FALSE_VALUE);
+                    orr x(rax.0), x(rax.0), x9;
+                );
+            }
+            LInst::FloatCmpBr {
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                dest,
+                base,
+            } => {
+                let lp = self.a64_fpr_read(lhs, 0, base);
+                let rp = self.a64_fpr_read(rhs, 1, base);
+                monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+                let cond = a64_float_cond_for_cmp(kind, brkind);
+                self.jit.bcond_label(cond, &dest);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2397,95 +2455,6 @@ impl Codegen {
     ) -> bool {
         self.a64_cmp_integer(&mode, lhs, rhs);
         self.a64_flag_to_bool(kind);
-        true
-    }
-
-    /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in D-registers.
-    /// Bails (`false`) if an operand is not lowerable or `kind` is unsupported.
-    pub(in crate::codegen::jitgen) fn emit_float_binop(
-        &mut self,
-        kind: BinOpK,
-        binary_xmm: (FPReg, FPReg),
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        let (l, r) = binary_xmm;
-        // Only the four arithmetic ops are emitted as FloatBinOp (Rem/pow/etc.
-        // are method calls); the `_ => unreachable!()` in the op match below
-        // mirrors x86 `float_binop`.
-        // Operands resolve to their pool register, or load a spill into d0/d1;
-        // the result writes its pool register or scratch d0 (committed below).
-        let ld = self.a64_fpr_read(l, 0, base);
-        let rd = self.a64_fpr_read(r, 1, base);
-        let dd = self.a64_fpr_wtmp(dst, 0, base);
-        // aarch64 FP 3-op writes rd, reads rn/rm — no aliasing hazard.
-        match kind {
-            BinOpK::Add => monoasm_arm64!(&mut self.jit, fadd d(dd), d(ld), d(rd);),
-            BinOpK::Sub => monoasm_arm64!(&mut self.jit, fsub d(dd), d(ld), d(rd);),
-            BinOpK::Mul => monoasm_arm64!(&mut self.jit, fmul d(dd), d(ld), d(rd);),
-            BinOpK::Div => monoasm_arm64!(&mut self.jit, fdiv d(dd), d(ld), d(rd);),
-            _ => unreachable!(),
-        }
-        self.a64_fpr_commit(dst, 0, base);
-        true
-    }
-
-    /// Float unary op: negate (flip bit 63) or unary-plus (no-op). The macro
-    /// lacks `fneg`, so the sign flip goes through a GPR (`fmov`/`eor`/`fmov`).
-    /// Bails (`false`) on a spilled operand or an unsupported `UnOpK`.
-    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
-        match kind {
-            UnOpK::Neg => {
-                let p = self.a64_fpr_read(dst, 0, base);
-                monoasm_arm64!(&mut self.jit,
-                    fmov x9, d(p);
-                    mov x10, (0x8000_0000_0000_0000u64);
-                    eor x9, x9, x10;
-                    fmov d(p), x9;
-                );
-                self.a64_fpr_commit(dst, 0, base);
-            }
-            UnOpK::Pos => {}
-            // Float unary ops are only Neg/Pos (BitNot is integer-only).
-            _ => unreachable!(),
-        }
-        true
-    }
-
-    /// Float comparison; NaN-correct boolean Value in the accumulator. Mirrors
-    /// `a64_flag_to_bool` but on `fcmp` flags with float condition codes. Bails
-    /// (`false`) if either operand is spilled.
-    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
-        let lp = self.a64_fpr_read(lhs, 0, base);
-        let rp = self.a64_fpr_read(rhs, 1, base);
-        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
-        let cond = a64_float_cond_for_cmp(kind, BrKind::BrIf);
-        let rax = GP::Rax.a64();
-        self.jit.cset(rax, cond);
-        monoasm_arm64!(&mut self.jit,
-            lsl x(rax.0), x(rax.0), #(3u32);
-            mov x9, (FALSE_VALUE);
-            orr x(rax.0), x(rax.0), x9;
-        );
-        true
-    }
-
-    /// Fused float compare + conditional branch (NaN compares false except
-    /// `!=`). Bails (`false`) if either operand is spilled.
-    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        lhs: FPReg,
-        rhs: FPReg,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-        base: usize,
-    ) -> bool {
-        let lp = self.a64_fpr_read(lhs, 0, base);
-        let rp = self.a64_fpr_read(rhs, 1, base);
-        monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
-        let cond = a64_float_cond_for_cmp(kind, brkind);
-        self.jit.bcond_label(cond, &branch_dest);
         true
     }
 
