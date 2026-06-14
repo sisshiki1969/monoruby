@@ -661,9 +661,9 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            other => {
-                todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
-            }
+            // Macro-ops (irreducible runtime-call shapes) are delegated to the
+            // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
+            other => self.encode_linst_macro(other),
         }
     }
 

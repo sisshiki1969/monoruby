@@ -406,6 +406,26 @@ pub(in crate::codegen::jitgen) enum LInst {
         using_xmm: UsingXmm,
         base: usize,
     },
+    // ---- macro-ops -----------------------------------------------------------
+    // Irreducible per-arch sequences (mostly runtime-call shapes). The encoder
+    // delegates to the existing per-arch `emit_*` helper via the arch-neutral
+    // `encode_linst_macro`; the LInst exists so that *all* emission flows through
+    // `encode_linst`.
+    /// Load a heap-spilled instance variable (bounds-checked unless `self_`),
+    /// substituting nil for an out-of-range / unset slot.
+    LoadIVarHeap {
+        ivarid: IvarId,
+        is_object_ty: bool,
+        self_: bool,
+    },
+    /// Store into a heap-spilled instance variable of another object
+    /// (bounds-checked; grows the var-table on miss via a runtime call).
+    StoreIVarHeap {
+        src: GP,
+        ivarid: IvarId,
+        is_object_ty: bool,
+        using_xmm: UsingXmm,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

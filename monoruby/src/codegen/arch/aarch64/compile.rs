@@ -1817,9 +1817,9 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
-            other => {
-                todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
-            }
+            // Macro-ops (irreducible runtime-call shapes) are delegated to the
+            // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
+            other => self.encode_linst_macro(other),
         }
     }
 

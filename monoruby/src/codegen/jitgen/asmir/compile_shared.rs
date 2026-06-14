@@ -601,14 +601,23 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 using_xmm,
-            } => return self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_xmm),
+            } => self.encode_linst(LInst::StoreIVarHeap {
+                src,
+                ivarid,
+                is_object_ty,
+                using_xmm,
+            }),
             // Load a heap-spilled instance variable (bounds-checked unless self),
             // substituting nil for an out-of-range / unset slot.
             AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 self_,
-            } => return self.emit_load_ivar_heap(ivarid, is_object_ty, self_),
+            } => self.encode_linst(LInst::LoadIVarHeap {
+                ivarid,
+                is_object_ty,
+                self_,
+            }),
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an xmm pool register is live (no xmm save yet).
             AsmInst::UndefMethod { undef, using_xmm } => {
@@ -801,6 +810,34 @@ impl Codegen {
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
         true
+    }
+
+    ///
+    /// Arch-neutral fallback of `encode_linst` for the macro-op `LInst`s — the
+    /// irreducible per-arch sequences that delegate to an existing `emit_*`
+    /// helper. Routing them here (rather than duplicating the delegation in each
+    /// backend's `encode_linst`) keeps the per-arch encoder for the decomposed
+    /// ops while still funnelling *all* emission through `encode_linst`.
+    ///
+    pub(in crate::codegen::jitgen) fn encode_linst_macro(&mut self, inst: LInst) {
+        match inst {
+            LInst::LoadIVarHeap {
+                ivarid,
+                is_object_ty,
+                self_,
+            } => {
+                self.emit_load_ivar_heap(ivarid, is_object_ty, self_);
+            }
+            LInst::StoreIVarHeap {
+                src,
+                ivarid,
+                is_object_ty,
+                using_xmm,
+            } => {
+                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_xmm);
+            }
+            other => unreachable!("encode_linst_macro: unexpected {other:?}"),
+        }
     }
 }
 
