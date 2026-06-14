@@ -1620,6 +1620,41 @@ impl Codegen {
             } => {
                 self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt);
             }
+            // ---- FP transfer / convert (spill-aware) -------------------------
+            LInst::FprMove { src, dst, base } => {
+                let s = self.a64_fpr_read(src, 0, base);
+                let d = self.a64_fpr_wtmp(dst, 0, base);
+                if s != d {
+                    monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
+                }
+                self.a64_fpr_commit(dst, 0, base);
+            }
+            LInst::F64ToFpr { f, dst, base } => {
+                let p = self.a64_fpr_wtmp(dst, 0, base);
+                let bits = f.to_bits();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (bits);
+                    fmov d(p), x9;
+                );
+                self.a64_fpr_commit(dst, 0, base);
+            }
+            LInst::FixnumToFpr { src, dst, base } => {
+                let p = self.a64_fpr_wtmp(dst, 0, base);
+                let r = src.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    asr x9, x(r), #(1);   // untag: value >> 1
+                    scvtf d(p), x9;
+                );
+                self.a64_fpr_commit(dst, 0, base);
+            }
+            LInst::FprToStack { src, slot, base } => {
+                let lfp = GP::R14.a64().0;
+                let f64_to_val = self.f64_to_val.clone();
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
+                monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+                self.a64_frame_store(0, lfp, off);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2241,22 +2276,6 @@ impl Codegen {
     // `_wtmp`/`_load`/`_save`/`_commit`). All return bool; `base` is the spill
     // base.
 
-    /// dst(f64) <- src.
-    pub(in crate::codegen::jitgen) fn emit_fpr_move(
-        &mut self,
-        src: FPReg,
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        let s = self.a64_fpr_read(src, 0, base);
-        let d = self.a64_fpr_wtmp(dst, 0, base);
-        if s != d {
-            monoasm_arm64!(&mut self.jit, fmov d(d), d(s););
-        }
-        self.a64_fpr_commit(dst, 0, base);
-        true
-    }
-
     /// swap two FP registers (via scratch D0/D1, spill-aware).
     pub(in crate::codegen::jitgen) fn emit_fpr_swap(&mut self, l: FPReg, r: FPReg, base: usize) -> bool {
         // Force both values into scratch, then store back crossed. (When both
@@ -2265,30 +2284,6 @@ impl Codegen {
         self.a64_fpr_load(r, 1, base);
         self.a64_fpr_save(l, 1, base);
         self.a64_fpr_save(r, 0, base);
-        true
-    }
-
-    /// dst(f64) <- f64 constant `f`.
-    pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
-        let p = self.a64_fpr_wtmp(x, 0, base);
-        let bits = f.to_bits();
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (bits);
-            fmov d(p), x9;
-        );
-        self.a64_fpr_commit(x, 0, base);
-        true
-    }
-
-    /// dst(f64) <- fixnum in GP `reg` (untag, signed int -> double).
-    pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, reg: GP, x: FPReg, base: usize) -> bool {
-        let p = self.a64_fpr_wtmp(x, 0, base);
-        let r = reg.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            asr x9, x(r), #(1);   // untag: value >> 1
-            scvtf d(p), x9;
-        );
-        self.a64_fpr_commit(x, 0, base);
         true
     }
 
@@ -2334,17 +2329,6 @@ impl Codegen {
             exit:
         );
         self.a64_fpr_commit(x, 0, base);
-        true
-    }
-
-    /// [slot] <- box(f64 in x): flonum-encode or heap-allocate.
-    pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
-        let lfp = GP::R14.a64().0;
-        let f64_to_val = self.f64_to_val.clone();
-        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        self.a64_fpr_load(x, 0, base); // value -> d0 (pool fmov or spill load)
-        monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
-        self.a64_frame_store(0, lfp, off);
         true
     }
 

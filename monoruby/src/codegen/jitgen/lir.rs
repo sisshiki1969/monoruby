@@ -298,6 +298,31 @@ pub(in crate::codegen::jitgen) enum LInst {
         rhs: GP,
         deopt: DestLabel,
     },
+    // ---- floating-point transfer / convert -----------------------------------
+    // FP operands are virtual `FPReg`s (physical xmm/d-reg or a stack spill); the
+    // encoders resolve the spill via `FPReg::loc(base)`, so these carry the
+    // frame's `base` spill offset.
+    /// `dst <- src` between FP registers (spill-aware; no-op when equal).
+    FprMove {
+        src: FPReg,
+        dst: FPReg,
+        base: usize,
+    },
+    /// `dst <- f` — materialize an f64 constant into an FP register.
+    F64ToFpr { f: f64, dst: FPReg, base: usize },
+    /// `dst <- (src as fixnum) as f64` — untag and convert.
+    FixnumToFpr {
+        src: GP,
+        dst: FPReg,
+        base: usize,
+    },
+    /// `[slot] <- Value::float(src)` — box the FP register into a `Value` and
+    /// store it to a frame slot.
+    FprToStack {
+        src: FPReg,
+        slot: SlotId,
+        base: usize,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

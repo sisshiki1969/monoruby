@@ -455,6 +455,53 @@ impl Codegen {
             } => {
                 self.integer_binop(lhs, rhs, &mode, kind, &deopt);
             }
+            // ---- FP transfer / convert (spill-aware) -------------------------
+            LInst::FprMove { src, dst, base } => {
+                if src != dst {
+                    match (src.loc(base), dst.loc(base)) {
+                        (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
+                            movq xmm(d), xmm(s);
+                        ),
+                        (FPRegLoc::Xmm(s), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                            movq [rbp - (d_off)], xmm(s);
+                        ),
+                        (FPRegLoc::Spill(s_off), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
+                            movq xmm(d), [rbp - (s_off)];
+                        ),
+                        (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (s_off)];
+                            movq [rbp - (d_off)], xmm0;
+                        ),
+                    }
+                }
+            }
+            LInst::F64ToFpr { f, dst, base } => {
+                let f_const = self.jit.const_f64(f);
+                match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f_const];
+                    ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f_const];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
+            }
+            LInst::FixnumToFpr { src, dst, base } => {
+                let (work, spill_off) = match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => (p, None),
+                    FPRegLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.integer_val_to_f64(src, work);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
+            }
+            LInst::FprToStack { src, slot, base } => {
+                self.fpr_to_stack(src, &[slot], base);
+            }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
@@ -1080,35 +1127,6 @@ impl Codegen {
     /// combination and avoid the round-trip through xmm0 that the
     /// generic `expand_spills` wrapping would otherwise produce.
     ///
-    /// dst(f64) <- src. Spill-aware. Always succeeds on x86 (the bool result
-    /// exists for the aarch64 twin, which bails on an unlowerable FP register).
-    pub(in crate::codegen::jitgen) fn emit_fpr_move(
-        &mut self,
-        src: FPReg,
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        if src == dst {
-            return true;
-        }
-        match (src.loc(base), dst.loc(base)) {
-            (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
-                movq xmm(d), xmm(s);
-            ),
-            (FPRegLoc::Xmm(s), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
-                movq [rbp - (d_off)], xmm(s);
-            ),
-            (FPRegLoc::Spill(s_off), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
-                movq xmm(d), [rbp - (s_off)];
-            ),
-            (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (s_off)];
-                movq [rbp - (d_off)], xmm0;
-            ),
-        }
-        true
-    }
-
     ///
     /// Spill-aware xmm swap. When both operands are spilled we swap
     /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
@@ -1149,36 +1167,6 @@ impl Codegen {
         true
     }
 
-    /// xmm(x) <- f64 constant `f`. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
-        let f_const = self.jit.const_f64(f);
-        match x.loc(base) {
-            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                movq xmm(p), [rip + f_const];
-            ),
-            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                movq xmm0, [rip + f_const];
-                movq [rbp - (off)], xmm0;
-            ),
-        }
-        true
-    }
-
-    /// xmm(x) <- the fixnum in GP `r`, converted to f64. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, r: GP, x: FPReg, base: usize) -> bool {
-        let (work, spill_off) = match x.loc(base) {
-            FPRegLoc::Xmm(p) => (p, None),
-            FPRegLoc::Spill(off) => (0u64, Some(off)),
-        };
-        self.integer_val_to_f64(r, work);
-        if let Some(off) = spill_off {
-            monoasm!( &mut self.jit,
-                movq [rbp - (off)], xmm(work);
-            );
-        }
-        true
-    }
-
     /// xmm(x) <- the Float Value in GP `reg`, decoded to f64; deopt if `reg` is
     /// not a Float. Spill-aware.
     pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
@@ -1198,12 +1186,6 @@ impl Codegen {
                 movq [rbp - (off)], xmm(work);
             );
         }
-        true
-    }
-
-    /// [slot] <- box(xmm(x)) (flonum-encode or heap-allocate the f64).
-    pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
-        self.fpr_to_stack(x, &[slot], base);
         true
     }
 

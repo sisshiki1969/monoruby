@@ -165,20 +165,30 @@ impl Codegen {
             // Floating-point register transfer/convert family (aarch64 bails if
             // the FP pool register is not lowerable, hence the bool results).
             // `base` is the spill base; deopt is a side-exit label.
-            AsmInst::FprMove(src, dst) => {
-                return self.emit_fpr_move(src, dst, frame.base_stack_offset);
-            }
+            AsmInst::FprMove(src, dst) => self.encode_linst(LInst::FprMove {
+                src,
+                dst,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::FprSwap(l, r) => return self.emit_fpr_swap(l, r, frame.base_stack_offset),
-            AsmInst::F64ToFpr(f, x) => return self.emit_f64_to_fpr(f, x, frame.base_stack_offset),
-            AsmInst::FixnumToFpr(r, x) => {
-                return self.emit_fixnum_to_fpr(r, x, frame.base_stack_offset);
-            }
+            AsmInst::F64ToFpr(f, x) => self.encode_linst(LInst::F64ToFpr {
+                f,
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FixnumToFpr(r, x) => self.encode_linst(LInst::FixnumToFpr {
+                src: r,
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::FloatToFpr(reg, x, deopt) => {
                 return self.emit_float_to_fpr(reg, x, &labels[deopt], frame.base_stack_offset);
             }
-            AsmInst::FprToStack(x, slot) => {
-                return self.emit_fpr_to_stack(x, slot, frame.base_stack_offset);
-            }
+            AsmInst::FprToStack(x, slot) => self.encode_linst(LInst::FprToStack {
+                src: x,
+                slot,
+                base: frame.base_stack_offset,
+            }),
             // Save / restore live FP pool registers around a C-call.
             AsmInst::XmmSave(using_xmm, cont) => return self.emit_xmm_save(using_xmm, cont),
             AsmInst::XmmRestore(using_xmm, cont) => return self.emit_xmm_restore(using_xmm, cont),
