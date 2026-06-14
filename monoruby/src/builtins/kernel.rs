@@ -3090,7 +3090,7 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
-fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(module) = self_val.is_class_or_module() {
         if module.id() == BASIC_OBJECT_CLASS {
@@ -3103,7 +3103,21 @@ fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let dup_module = globals.store.duplicate_module(module.id());
         return Ok(dup_module.as_val());
     }
-    Ok(self_val.dup())
+    let copy = self_val.dup();
+    // Run the `initialize_dup` hook (default validates; a subclass may
+    // override it). Root `copy` across the dispatch (it allocates).
+    let temp = vm.temp_len();
+    vm.temp_push(copy);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("initialize_dup"),
+        copy,
+        &[self_val],
+        None,
+        None,
+    )?;
+    vm.temp_clear(temp);
+    Ok(copy)
 }
 
 ///
@@ -3114,12 +3128,30 @@ fn dup(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
 fn clone_val(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.self_val().clone_value())
+    let self_val = lfp.self_val();
+    let copy = self_val.clone_value();
+    if self_val.is_class_or_module().is_some() {
+        return Ok(copy);
+    }
+    // Run the `initialize_clone` hook (default validates; a subclass may
+    // override it). Root `copy` across the dispatch (it allocates).
+    let temp = vm.temp_len();
+    vm.temp_push(copy);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("initialize_clone"),
+        copy,
+        &[self_val],
+        None,
+        None,
+    )?;
+    vm.temp_clear(temp);
+    Ok(copy)
 }
 
 /// ### Kernel#define_singleton_method

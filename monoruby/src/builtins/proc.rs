@@ -6,7 +6,19 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Proc", PROC_CLASS, ObjTy::PROC);
-    globals.define_builtin_class_func_with_effect(PROC_CLASS, "new", new, 0, 0, Effect::CAPTURE);
+    // `rest` so that `SubclassOfProc.new(*args) { }` forwards the
+    // positional args to the subclass's `#initialize`.
+    let proc_meta = globals.store.get_metaclass(PROC_CLASS).id();
+    globals.define_builtin_funcs_with_effect(
+        proc_meta,
+        "new",
+        &[],
+        new,
+        0,
+        0,
+        true,
+        Effect::CAPTURE,
+    );
     globals.store[PROC_CLASS].clear_alloc_func();
     globals.define_builtin_funcs_with_kw(
         PROC_CLASS,
@@ -56,12 +68,25 @@ fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(globals, bh, pc)?;
-        Ok(p.into())
-    } else {
-        Err(MonorubyErr::create_proc_no_block())
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::create_proc_no_block());
+    };
+    let p = vm.generate_proc(globals, bh, pc)?;
+    let class_id = lfp.self_val().as_class_id();
+    if class_id == PROC_CLASS {
+        return Ok(p.into());
     }
+    // A subclass of Proc: re-tag the freshly built proc with the
+    // subclass and run its `#initialize(*args)` (CRuby binds the block
+    // before `initialize`, so a custom `initialize` need not `super`).
+    let mut obj: Value = p.into();
+    obj.change_class(class_id);
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let temp = vm.temp_len();
+    vm.temp_push(obj);
+    vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, &args, None, None)?;
+    vm.temp_clear(temp);
+    Ok(obj)
 }
 
 ///
@@ -479,6 +504,28 @@ mod tests {
                (-> () {}).to_s.include?(" (lambda)"),
                :foo.to_proc.to_s.include?("(&:foo)"),
                proc { }.inspect.start_with?("#<Proc:0x")]"##,
+        );
+    }
+
+    #[test]
+    fn proc_subclass_new() {
+        // A Proc subclass without a custom initialize.
+        run_test(r#"class PSubA < Proc; end; p = PSubA.new { 5 }; [p.is_a?(PSubA), p.call]"#);
+        // A subclass whose #initialize takes positional args (CRuby binds
+        // the block before #initialize, so it need not call super).
+        run_test(
+            r#"class PSubB < Proc; def initialize(a, b); @a = a; @b = b; end; attr_reader :a, :b; end
+               o = PSubB.new(:x, 2) { 9 }; [o.class.name, o.a, o.b, o.call]"#,
+        );
+        // dup / clone run initialize_dup / initialize_clone (and the
+        // result is an instance of the subclass).
+        run_test(
+            r#"class PSubC < Proc
+                 def initialize_dup(o); super; @tag = :dup; end
+                 def initialize_clone(o, **k); super; @tag = :clone; end
+                 attr_reader :tag
+               end
+               o = PSubC.new { 1 }; [o.dup.class.name, o.dup.tag, o.clone.tag]"#,
         );
     }
 
