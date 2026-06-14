@@ -12,7 +12,7 @@ use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::{LAluOp, LInst, LMem, LOperand};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand};
 use monoasm_macro::monoasm_arm64;
 
 ///
@@ -1421,6 +1421,36 @@ impl Codegen {
                     }
                 }
             }
+            // Set flags from `lhs - rhs`. An `Imm` (the operand's raw tagged-
+            // fixnum bits) is staged through scratch x9, matching
+            // `a64_cmp_integer`.
+            LInst::Cmp { lhs, rhs } => {
+                let l = lhs.a64().0;
+                match rhs {
+                    LOperand::Reg(r) => {
+                        let r = r.a64().0;
+                        monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
+                    }
+                    LOperand::Imm(i) => {
+                        let imm = i as u64;
+                        monoasm_arm64!(&mut self.jit, mov x9, (imm); cmp x(l), x9;);
+                    }
+                }
+            }
+            // Conditional branch on the preceding `Cmp` (mirrors
+            // `bcond_label(a64_cond_for_cmp(..), dest)`; the BrKind inversion is
+            // folded into `cond` by the builder).
+            LInst::CondBr { cond, target } => {
+                let c = match cond {
+                    LCond::Eq => monoasm::Cond::Eq,
+                    LCond::Ne => monoasm::Cond::Ne,
+                    LCond::Lt => monoasm::Cond::Lt,
+                    LCond::Le => monoasm::Cond::Le,
+                    LCond::Gt => monoasm::Cond::Gt,
+                    LCond::Ge => monoasm::Cond::Ge,
+                };
+                self.jit.bcond_label(c, &target);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2315,22 +2345,6 @@ impl Codegen {
     ) -> bool {
         self.a64_cmp_integer(&mode, lhs, rhs);
         self.a64_flag_to_bool(kind);
-        true
-    }
-
-    /// Fused integer compare + conditional branch to `branch_dest`.
-    pub(in crate::codegen::jitgen) fn emit_integer_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        mode: OpMode,
-        lhs: GP,
-        rhs: GP,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-    ) -> bool {
-        self.a64_cmp_integer(&mode, lhs, rhs);
-        let cond = a64_cond_for_cmp(kind, brkind);
-        self.jit.bcond_label(cond, &branch_dest);
         true
     }
 

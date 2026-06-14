@@ -11,6 +11,7 @@
 //! instruction family at a time; see `doc/aarch64-x86-jit-differences.md`.
 
 use super::*;
+use crate::codegen::jitgen::lir::{LCond, LInst, LOperand};
 
 impl Codegen {
     ///
@@ -188,6 +189,10 @@ impl Codegen {
                 lhs,
                 rhs,
             } => return self.emit_integer_cmp(kind, mode, lhs, rhs),
+            // Fused integer compare + conditional branch, lowered to LIR here
+            // (arch-neutral) and encoded per-arch. The compare sets flags; the
+            // branch is a signed conditional jump with the BrKind inversion
+            // folded into the condition.
             AsmInst::IntegerCmpBr {
                 mode,
                 kind,
@@ -196,8 +201,36 @@ impl Codegen {
                 brkind,
                 branch_dest,
             } => {
-                let branch_dest = frame.resolve_label(&mut self.jit, branch_dest);
-                return self.emit_integer_cmp_br(kind, mode, lhs, rhs, brkind, branch_dest);
+                let target = frame.resolve_label(&mut self.jit, branch_dest);
+                match mode {
+                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
+                        lhs,
+                        rhs: LOperand::Reg(rhs),
+                    }),
+                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
+                        lhs,
+                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
+                    }),
+                    // imm on the left: materialize it into lhs, then compare
+                    // reg-reg (mirrors `cmp_integer`'s IR path, which clobbers
+                    // lhs).
+                    OpMode::IR(i, _) => {
+                        self.encode_linst(LInst::LoadImm {
+                            dst: lhs,
+                            imm: Value::i32(i as i32).id(),
+                        });
+                        self.encode_linst(LInst::Cmp {
+                            lhs,
+                            rhs: LOperand::Reg(rhs),
+                        });
+                    }
+                }
+                // TEq compares like Eq for integers; BrIfNot takes the inverse.
+                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
+                if brkind == BrKind::BrIfNot {
+                    cond = cond.invert();
+                }
+                self.encode_linst(LInst::CondBr { cond, target });
             }
             AsmInst::FloatBinOp {
                 kind,

@@ -435,27 +435,6 @@ macro_rules! cmp_main {
     };
 }
 
-macro_rules! jit_cmp_opt_main {
-    (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
-        paste! {
-            fn [<condbr_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { &mut self.jit,
-                        [<j $sop>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { &mut self.jit,
-                        [<j $rev_sop>] branch_dest;
-                    },
-                }
-            }
-        }
-    };
-    (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
-        jit_cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
-        jit_cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
-    };
-}
-
 impl Codegen {
     pub(super) fn cmp_float(&mut self, binary_xmm: (FPReg, FPReg), base_stack_offset: usize) {
         let (l, r) = binary_xmm;
@@ -557,27 +536,6 @@ impl Codegen {
             },
         }
     }
-
-    pub(super) fn condbr_int(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
-        match kind {
-            CmpKind::Eq => self.condbr_int_eq(branch_dest, brkind),
-            CmpKind::Ne => self.condbr_int_ne(branch_dest, brkind),
-            CmpKind::Ge => self.condbr_int_ge(branch_dest, brkind),
-            CmpKind::Gt => self.condbr_int_gt(branch_dest, brkind),
-            CmpKind::Le => self.condbr_int_le(branch_dest, brkind),
-            CmpKind::Lt => self.condbr_int_lt(branch_dest, brkind),
-            CmpKind::TEq => self.condbr_int_eq(branch_dest, brkind),
-        }
-    }
-
-    jit_cmp_opt_main!(
-        (eq, ne, eq, ne),
-        (ne, eq, ne, eq),
-        (a, be, gt, le),
-        (b, ae, lt, ge),
-        (ae, b, ge, lt),
-        (be, a, le, gt)
-    );
 
     /// Float conditional branch with proper NaN (unordered) handling.
     ///

@@ -11,7 +11,7 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
-use crate::codegen::jitgen::lir::{LAluOp, LInst, LMem, LOperand};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand};
 
 impl Codegen {
     ///
@@ -319,6 +319,27 @@ impl Codegen {
                     }
                 }
             }
+            // Set flags from `lhs - rhs`. An `Imm` is the operand's raw bit
+            // pattern (a tagged fixnum), passed as u64 so the encoding matches
+            // the hand-written `cmp_integer`.
+            LInst::Cmp { lhs, rhs } => {
+                let l = lhs as u64;
+                match rhs {
+                    LOperand::Reg(r) => monoasm! { &mut self.jit, cmpq R(l), R(r as u64); },
+                    LOperand::Imm(i) => monoasm! { &mut self.jit, cmpq R(l), (i as u64); },
+                }
+            }
+            // Signed conditional branch on the preceding `Cmp` (mirrors
+            // `condbr_int`; the BrKind inversion is folded into `cond` by the
+            // builder).
+            LInst::CondBr { cond, target } => match cond {
+                LCond::Eq => monoasm! { &mut self.jit, jeq target; },
+                LCond::Ne => monoasm! { &mut self.jit, jne target; },
+                LCond::Lt => monoasm! { &mut self.jit, jlt target; },
+                LCond::Le => monoasm! { &mut self.jit, jle target; },
+                LCond::Gt => monoasm! { &mut self.jit, jgt target; },
+                LCond::Ge => monoasm! { &mut self.jit, jge target; },
+            },
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1147,20 +1168,6 @@ impl Codegen {
         true
     }
 
-    /// Fused integer compare + conditional branch to `branch_dest`.
-    pub(in crate::codegen::jitgen) fn emit_integer_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        mode: OpMode,
-        lhs: GP,
-        rhs: GP,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-    ) -> bool {
-        self.cmp_integer(&mode, lhs, rhs);
-        self.condbr_int(kind, branch_dest, brkind);
-        true
-    }
 
     /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in FP registers.
     pub(in crate::codegen::jitgen) fn emit_float_binop(

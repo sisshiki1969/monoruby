@@ -41,7 +41,6 @@
 // Stage-1 scaffolding: the model exists but nothing consumes it yet.
 #![allow(dead_code)]
 
-use super::JitLabel;
 use super::*;
 use crate::ast::CmpKind;
 use crate::bytecodegen::BinOpK;
@@ -179,13 +178,18 @@ impl LAluOp {
 /// One arch-neutral low-level instruction.
 ///
 /// The set intentionally starts small — it covers the integer move / memory /
-/// ALU / branch core that Stage 2 migrates first (the families behind
+/// ALU / compare-branch core that Stage 2 migrates first (the families behind
 /// `emit_reg_move`, `emit_reg_to_stack`, `emit_stack_to_reg`, `emit_lit_to_reg`,
-/// `emit_lit_to_stack`, `emit_integer_binop`, `emit_integer_cmp(_br)`,
-/// `emit_reg_add/sub`, `emit_cond_br`). FP transfer/compare, runtime calls (with
-/// FP-pool save/restore), and the patch/recompile machinery are added in later
-/// stages as their `AsmInst` families are ported onto LIR.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `emit_lit_to_stack`, `emit_reg_add/sub`, `emit_integer_cmp_br`). FP
+/// transfer/compare, runtime calls (with FP-pool save/restore), and the
+/// patch/recompile machinery are added in later stages as their `AsmInst`
+/// families are ported onto LIR.
+///
+/// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
+/// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
+/// primitives already receive `DestLabel`s. `DestLabel` is `Clone` but not
+/// `Copy`, so `LInst` is `Clone`/`PartialEq` but not `Copy`.
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     Mov { dst: GP, src: GP },
@@ -206,14 +210,16 @@ pub(in crate::codegen::jitgen) enum LInst {
         lhs: GP,
         rhs: LOperand,
     },
-    /// Set condition flags from `lhs - rhs` (no result register written).
+    /// Set condition flags from `lhs - rhs` (no result register written). The
+    /// immediate of an `Imm` rhs is the operand's raw bit pattern (e.g. a tagged
+    /// fixnum `Value`), compared against the raw register bits.
     Cmp { lhs: GP, rhs: LOperand },
     /// Bind `label` at the current code position.
-    Label(JitLabel),
+    Label(DestLabel),
     /// Unconditional branch to `target`.
-    Br(JitLabel),
+    Br(DestLabel),
     /// Branch to `target` when the preceding `Cmp` satisfied `cond`.
-    CondBr { cond: LCond, target: JitLabel },
+    CondBr { cond: LCond, target: DestLabel },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
@@ -288,15 +294,15 @@ impl Lir {
         })
     }
 
-    pub(in crate::codegen::jitgen) fn label(&mut self, label: JitLabel) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn label(&mut self, label: DestLabel) -> &mut Self {
         self.push(LInst::Label(label))
     }
 
-    pub(in crate::codegen::jitgen) fn br(&mut self, target: JitLabel) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn br(&mut self, target: DestLabel) -> &mut Self {
         self.push(LInst::Br(target))
     }
 
-    pub(in crate::codegen::jitgen) fn cond_br(&mut self, cond: LCond, target: JitLabel) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn cond_br(&mut self, cond: LCond, target: DestLabel) -> &mut Self {
         self.push(LInst::CondBr { cond, target })
     }
 }
@@ -345,7 +351,7 @@ mod tests {
             .cmp(GP::Rax, 0i64);
         assert_eq!(lir.len(), 4);
         assert_eq!(
-            lir.iter().next().copied(),
+            lir.iter().next().cloned(),
             Some(LInst::Mov {
                 dst: GP::Rax,
                 src: GP::Rdi
