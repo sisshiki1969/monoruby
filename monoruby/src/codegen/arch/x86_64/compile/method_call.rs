@@ -159,12 +159,11 @@ impl Codegen {
     ///
     pub(super) fn setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
-        let callsite = &store[callid];
         if let Some(outer_lfp) = outer_lfp {
             monoasm! { &mut self.jit,
                 movq rax, (outer_lfp.as_ptr());
@@ -185,7 +184,7 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         }
-        self.set_block(callsite.block_fid, callsite.block_arg);
+        self.set_block(block_fid, block_arg);
         monoasm! { &mut self.jit,
         }
     }

@@ -15,9 +15,11 @@ fixnum arithmetic (with overflow deopt), the **whole floating-point family**,
 the bounds-checked heap-ivar load/store, and the large **runtime-call macro-op**
 families (array/hash/string/range construction, `defined?`, generic binops,
 class/method definition, exceptions, `yield`, the method-prologue guards, …) are
-all lowered through `encode_linst`. What remains in the dispatcher is the set of
-arms that need `&Store` or live frame state (the method-call argument-setup
-family) and the specialized inlined-frame family — see §8.
+all lowered through `encode_linst`, as is the method-call argument-setup family
+(the dispatcher pre-resolves the store/frame-dependent values and the encoder
+stays store-free). What remains in the dispatcher is the hot-path `Call`
+(deferred, not excluded), the specialized inlined-frame family, and the
+patch/recompile bookkeeping that is *not* byte emission — see §8.
 
 ---
 
@@ -217,6 +219,7 @@ accumulator).
 | B3 | control-flow / exception / definition macro-ops (`Ret`, `MethodRet`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `MethodDef`, `Init`, `CheckStack`, `ExecGc`, `IntegerCmp`, `BlockArg`, …) | `Raise`/`Retry`/`Redo`/`EnsureEnd` carry `loop_jit_spill_bytes` for the aarch64 loop-JIT sp unwind |
 | B4 | class-def + method-prologue guards (`ClassDef`, `SingletonClassDef`, `GuardClassVersion`, `RecompileDeopt`) | last non-store/non-frame arms |
 | B5 | elementary moves (`RegMove`/`RegToAcc`/`AccToStack`/`RegToStack`/`StackToReg`/`LitToReg`/`LitToStack`/`RegAdd`/`RegSub`) | dispatcher lowers straight to `LInst`; the thin `emit_*` move wrappers deleted from both backends |
+| B6 | method-call / argument-setup (`SetupMethodFrame`, `SetArguments`, `SetArgumentsForwardedHelper`, `Preparation`, `OptCase`) | dispatcher pre-resolves the store/frame-dependent values (offset, block info, heap-ivar length, jump-table labels) into the `LInst`; per-arch helpers made store-free. `Call` deliberately left out (see §8) |
 
 ---
 
@@ -246,17 +249,18 @@ preservation under a correct reference Ruby**:
 ## 8. Remaining work
 
 The arms still handled **directly in the `compile_asmir` dispatcher** (not routed
-through `encode_linst`) fall into three groups. The first two are a *deliberate*
-boundary — they are not pure machine-code emission — and the third is small:
+through `encode_linst`) fall into a few groups.
 
-- **Store-/frame-dependent method-call family.** `SetupMethodFrame`,
-  `SetArguments`, `Call`, `Preparation`, `OptCase`, and
-  `SetArgumentsForwardedHelper` need `&Store` (callee metadata, arg shape,
-  frame offsets) or mutate the live `frame` (label resolution, sourcemap). They
-  are *argument-massage + dispatch* logic rather than a fixed machine-code
-  sequence, so `encode_linst` — which receives neither `&Store` nor `&mut frame`
-  — is the wrong seam for them. They stay in the dispatcher, which *does* have
-  that context and still calls `encode_linst` for every primitive it emits.
+- **Store-/frame-dependent values are pre-resolved, not a blocker.** The
+  method-call / argument-setup family (`SetupMethodFrame`, `SetArguments`,
+  `SetArgumentsForwardedHelper`, `Preparation`, `OptCase`) was migrated in B6:
+  the dispatcher — which holds `&Store` / `&mut AsmInfo` — resolves the
+  store/frame-dependent values (callee scratch `offset`, block `(fid, arg)`,
+  heap-ivar table length, jump-table `DestLabel`s) and carries them in the
+  `LInst`, so the per-arch helper stays store-free. The same recipe applies to
+  the remaining `Call`, which is left for later only because it pre-resolves
+  more fields (codeptr / pc / jit-entry / iseq-ness from `store[callee_fid]`)
+  and sits on the hottest path; it is *deferred, not excluded*.
 - **Specialized inlined-frame family.** `MethodRetSpecialized`,
   `BlockBreakSpecialized`, `SpecializedCall`, `SetupYieldFrame`,
   `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
@@ -271,11 +275,19 @@ wrappers (which only forwarded to `encode_linst`) were removed from both
 backends.
 
 Beyond the dispatcher, the **patch / recompile machinery** (return-address
-eviction, in-place recompile) remains the x86/aarch64 *non-coverage* asymmetry
-described in `doc/arch_difference.md` §4 — the hardest piece to model and not yet
-unified.
+eviction, in-place recompile) is the x86/aarch64 *non-coverage* asymmetry
+described in `doc/arch_difference.md` §4. This is **explicitly out of scope** for
+LIR: it does not *emit bytes* — it records code-position metadata
+(`return_addr_table` patch points, which emit zero bytes), mutates `Codegen`
+tables, and triggers recompilation. Forcing it into `LInst` would add zero-byte
+"instructions" that only touch side tables, degrading the machine-op
+abstraction. The clean invariant is therefore:
+
+> `encode_linst` is the single seam for byte **emission**; code-position
+> metadata / patch / recompile bookkeeping is *not* emission and stays in the
+> dispatcher / `Codegen`.
 
 None of this invalidates the model: `encode_linst` (with `encode_linst_macro`)
-is now the single seam for emission, and the residual dispatcher arms either lack
-the right context to *be* emission-only or are elementary leaves trivially
-reachable from it.
+is the single seam for emission, and the residual dispatcher arms either are
+bookkeeping rather than emission, or are deferred (`Call`) by effort rather than
+by a modelling limit.

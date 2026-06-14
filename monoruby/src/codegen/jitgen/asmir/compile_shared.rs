@@ -104,7 +104,19 @@ impl Codegen {
                 min,
                 else_label,
                 branch_labels,
-            } => self.emit_opt_case(frame, max, min, else_label, branch_labels),
+            } => {
+                let branch_dests: Box<[DestLabel]> = branch_labels
+                    .iter()
+                    .map(|l| frame.resolve_label(&mut self.jit, *l))
+                    .collect();
+                let else_dest = frame.resolve_label(&mut self.jit, else_label);
+                self.encode_linst(LInst::OptCase {
+                    max,
+                    min,
+                    else_dest,
+                    branch_dests,
+                });
+            }
             // Type guard: deopt if `r`'s runtime class is not `class`.
             AsmInst::GuardClass(r, class, deopt) => {
                 let deopt = labels[deopt].clone();
@@ -398,9 +410,23 @@ impl Codegen {
                 meta,
                 callid,
                 outer_lfp,
-            } => self.emit_setup_method_frame(store, meta, callid, outer_lfp),
+            } => {
+                let callsite = &store[callid];
+                let (block_fid, block_arg) = (callsite.block_fid, callsite.block_arg);
+                self.encode_linst(LInst::SetupMethodFrame {
+                    meta,
+                    outer_lfp,
+                    block_fid,
+                    block_arg,
+                });
+            }
             AsmInst::SetArguments { callid, callee_fid } => {
-                return self.emit_set_arguments(store, callid, callee_fid);
+                let offset = store[callee_fid].get_offset();
+                self.encode_linst(LInst::SetArguments {
+                    callid,
+                    callee_fid,
+                    offset,
+                });
             }
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => {
@@ -446,8 +472,21 @@ impl Codegen {
                 info,
                 prologue_offset,
             }),
-            // Per-method ivar-cache prep; aarch64 bails on the heap-ivar path.
-            AsmInst::Preparation => return self.emit_preparation(store, frame),
+            // Per-method ivar-cache prep. The store/frame-dependent heap length
+            // is resolved here; the encoder only emits the table-extend guard.
+            AsmInst::Preparation => {
+                let heap_len = if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
+                    let ivar_len = store[frame.self_class].ivar_len();
+                    Some(if frame.self_ty == Some(ObjTy::OBJECT) {
+                        ivar_len - OBJECT_INLINE_IVAR
+                    } else {
+                        ivar_len
+                    })
+                } else {
+                    None
+                };
+                self.encode_linst(LInst::Preparation { heap_len });
+            }
             // Fixnum unary ops on the tagged value. Negate deopts on i63
             // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
             AsmInst::FixnumNeg { reg, deopt } => {
@@ -902,7 +941,11 @@ impl Codegen {
             // out-of-range frame offset).
             AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
-                return self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
+                self.encode_linst(LInst::SetArgumentsForwardedHelper {
+                    callid,
+                    callee_fid,
+                    offset,
+                });
             }
             // Trap for statically-unreachable code: call the panicking helper.
             AsmInst::Unreachable => self.encode_linst(LInst::Unreachable),
@@ -1149,6 +1192,39 @@ impl Codegen {
                 error,
             } => {
                 self.singleton_class_def(base, dst, func_id, using_xmm, &error);
+            }
+            LInst::SetupMethodFrame {
+                meta,
+                outer_lfp,
+                block_fid,
+                block_arg,
+            } => {
+                self.emit_setup_method_frame(meta, outer_lfp, block_fid, block_arg);
+            }
+            LInst::SetArguments {
+                callid,
+                callee_fid,
+                offset,
+            } => {
+                self.emit_set_arguments(callid, callee_fid, offset);
+            }
+            LInst::SetArgumentsForwardedHelper {
+                callid,
+                callee_fid,
+                offset,
+            } => {
+                self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
+            }
+            LInst::Preparation { heap_len } => {
+                self.emit_preparation(heap_len);
+            }
+            LInst::OptCase {
+                max,
+                min,
+                else_dest,
+                branch_dests,
+            } => {
+                self.emit_opt_case(max, min, else_dest, branch_dests);
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }

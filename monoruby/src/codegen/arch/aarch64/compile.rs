@@ -710,10 +710,10 @@ impl Codegen {
     /// `setup_method_frame`.
     fn a64_setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
         let outer = match outer_lfp {
             Some(lfp) => lfp.as_ptr() as u64,
@@ -726,8 +726,6 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, mov x9, (0u64););
         self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
         self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_CME) as u32);
-        let callsite = &store[callid];
-        let (block_fid, block_arg) = (callsite.block_fid, callsite.block_arg);
         self.a64_set_block(block_fid, block_arg);
     }
 
@@ -2508,18 +2506,15 @@ impl Codegen {
     /// basic block (the `br` is an unconditional indirect branch).
     pub(in crate::codegen::jitgen) fn emit_opt_case(
         &mut self,
-        frame: &mut AsmInfo,
         max: u16,
         min: u16,
-        else_label: JitLabel,
-        branch_labels: Box<[JitLabel]>,
+        else_dest: DestLabel,
+        branch_dests: Box<[DestLabel]>,
     ) {
         let jump_table = self.jit.const_align8();
-        for label in branch_labels.iter() {
-            let dest_label = frame.resolve_label(&mut self.jit, *label);
-            self.jit.abs_address(dest_label);
+        for dest_label in branch_dests.iter() {
+            self.jit.abs_address(dest_label.clone());
         }
-        let else_dest = frame.resolve_label(&mut self.jit, else_label);
         let cond = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
             asr x(cond), x(cond), #1;   // untag fixnum: x4 = n
@@ -2586,24 +2581,23 @@ impl Codegen {
     /// Write the callee frame's meta/outer/block fields before a call.
     pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
-        self.a64_setup_method_frame(store, meta, callid, outer_lfp);
+        self.a64_setup_method_frame(meta, outer_lfp, block_fid, block_arg);
     }
 
-    /// Marshal the call arguments into the callee frame. Bails (`false`) on a
-    /// not-yet-ported argument shape.
+    /// Marshal the call arguments into the callee frame (`offset` is the callee
+    /// scratch-area size, pre-resolved by the dispatcher).
     pub(in crate::codegen::jitgen) fn emit_set_arguments(
         &mut self,
-        store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-    ) -> bool {
-        let offset = store[callee_fid].get_offset();
-        self.a64_set_arguments(callid, callee_fid, offset)
+        offset: usize,
+    ) {
+        self.a64_set_arguments(callid, callee_fid, offset);
     }
 
     /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
@@ -2771,15 +2765,9 @@ impl Codegen {
     /// paths can write straight to a slot); grow it via `extend_ivar` otherwise.
     /// A no-op when no heap ivar is accessed or self is always-frozen. Mirrors
     /// x86 `emit_preparation` (inline cold path instead of a page-1 split).
-    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
-        if frame.self_class.is_always_frozen() || !frame.ivar_heap_accessed {
-            return true;
-        }
-        let ivar_len = store[frame.self_class].ivar_len();
-        let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
-            ivar_len - OBJECT_INLINE_IVAR
-        } else {
-            ivar_len
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, heap_len: Option<usize>) {
+        let Some(heap_len) = heap_len else {
+            return;
         };
         let lfp = GP::R14.a64().0; // x22
         let f = extend_ivar as *const () as u64;
@@ -2810,7 +2798,6 @@ impl Codegen {
             ldr x30, [sp], #16;
             exit:
         );
-        true
     }
 
     ///

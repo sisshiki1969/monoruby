@@ -1261,20 +1261,17 @@ impl Codegen {
     /// it with `cond - min`.
     pub(in crate::codegen::jitgen) fn emit_opt_case(
         &mut self,
-        frame: &mut AsmInfo,
         max: u16,
         min: u16,
-        else_label: JitLabel,
-        branch_labels: Box<[JitLabel]>,
+        else_dest: DestLabel,
+        branch_dests: Box<[DestLabel]>,
     ) {
         // generate a jump table.
         let jump_table = self.jit.const_align8();
-        for label in branch_labels.iter() {
-            let dest_label = frame.resolve_label(&mut self.jit, *label);
-            self.jit.abs_address(dest_label);
+        for dest_label in branch_dests.iter() {
+            self.jit.abs_address(dest_label.clone());
         }
 
-        let else_dest = frame.resolve_label(&mut self.jit, else_label);
         monoasm! {&mut self.jit,
             sarq rdi, 1;
             cmpq rdi, (max);
@@ -1307,29 +1304,27 @@ impl Codegen {
         self.guard_class_version(class_version, position, with_recovery, &deopt);
     }
 
-    /// Write the callee frame's meta/outer/block fields before a call.
+    /// Write the callee frame's meta/outer/block fields before a call. The
+    /// store-dependent block info is pre-resolved by the dispatcher.
     pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
-        self.setup_method_frame(store, meta, callid, outer_lfp);
+        self.setup_method_frame(meta, outer_lfp, block_fid, block_arg);
     }
 
-    /// Marshal the call arguments into the callee frame. Always succeeds on x86
-    /// (the bool result mirrors the aarch64 twin, which bails on unsupported
-    /// argument shapes).
+    /// Marshal the call arguments into the callee frame (`offset` is the callee
+    /// scratch-area size, pre-resolved by the dispatcher).
     pub(in crate::codegen::jitgen) fn emit_set_arguments(
         &mut self,
-        store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-    ) -> bool {
-        let offset = store[callee_fid].get_offset();
+        offset: usize,
+    ) {
         self.jit_set_arguments(callid, callee_fid, offset);
-        true
     }
 
     /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
@@ -1373,16 +1368,11 @@ impl Codegen {
     }
 
     /// Per-method ivar-cache preparation: ensure the heap ivar table is large
-    /// enough (extending it via a runtime call if not). No-op for frozen/
-    /// inline-only selves. Always succeeds on x86.
-    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
-        if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
-            let ivar_len = store[frame.self_class].ivar_len();
-            let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
-                ivar_len - OBJECT_INLINE_IVAR
-            } else {
-                ivar_len
-            };
+    /// enough (extending it via a runtime call if not). `heap_len` is `None`
+    /// for a frozen / inline-only self (no-op); the value is pre-resolved by the
+    /// dispatcher.
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, heap_len: Option<usize>) {
+        if let Some(heap_len) = heap_len {
             let fail = self.jit.label();
             let exit = self.jit.label();
             monoasm!(&mut self.jit,
@@ -1410,7 +1400,6 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        true
     }
 
     /// Loop-JIT entry: reserve the loop body's spill area on the native stack.

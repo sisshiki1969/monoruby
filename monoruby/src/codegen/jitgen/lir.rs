@@ -761,6 +761,38 @@ pub(in crate::codegen::jitgen) enum LInst {
         using_xmm: UsingXmm,
         error: DestLabel,
     },
+    // ---- method-call / argument-setup macro-ops ----------------------------
+    // Store/frame-dependent values are pre-resolved by the dispatcher (which
+    // holds `&Store` / `&mut AsmInfo`) and carried here, so the encoder stays
+    // store-free. They delegate to the existing per-arch helpers.
+    SetupMethodFrame {
+        meta: Meta,
+        outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
+    },
+    SetArguments {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        /// callee scratch-area size (`store[callee_fid].get_offset()`).
+        offset: usize,
+    },
+    SetArgumentsForwardedHelper {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        offset: usize,
+    },
+    Preparation {
+        /// `Some(heap_len)` when the self heap ivar-table must be ensured large
+        /// enough; `None` for a frozen / inline-only self (no-op).
+        heap_len: Option<usize>,
+    },
+    OptCase {
+        max: u16,
+        min: u16,
+        else_dest: DestLabel,
+        branch_dests: Box<[DestLabel]>,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
