@@ -87,19 +87,6 @@ impl Codegen {
     }
 
     ///
-    /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    pub(super) fn store_ivar_object_inline(&mut self, src: GP, ivarid: IvarId) {
-        monoasm!( &mut self.jit,
-            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], R(src as _);
-        );
-        self.emit_write_barrier_rdi(src);
-    }
-
-    ///
     /// Load slot `slot_index` of a `Struct` instance whose slot
     /// vector spilled to the **heap** (the class has more than
     /// `STRUCT_INLINE_SLOTS` members). Two movs.
@@ -114,26 +101,6 @@ impl Codegen {
         monoasm! {&mut self.jit,
             movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
             movq r15, [rdi + ((slot_index as i32) * 8)];
-        }
-    }
-
-    ///
-    /// Store *src* into inline slot `slot_index` of `rdi`. Single mov.
-    /// Caller must have emitted `GuardFrozen` already.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// - src: Value to store
-    /// #### out
-    /// - rax: src (return value of the writer)
-    pub(super) fn store_struct_slot_inline(&mut self, src: GP, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)], R(src as _);
-        }
-        // Write barrier: rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier_rdi(src);
-        monoasm! {&mut self.jit,
-            movq rax, R(src as _);
         }
     }
 

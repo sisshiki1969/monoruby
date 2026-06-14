@@ -348,8 +348,21 @@ impl Codegen {
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
             AsmInst::LoadIVarInline { ivarid } => return self.emit_load_ivar_inline(ivarid),
+            // Inline ivar store: `self.@ivar = src` at a fixed field offset on
+            // the receiver (rdi), followed by the GC write barrier.
             AsmInst::StoreIVarInline { src, ivarid } => {
-                return self.emit_store_ivar_inline(src, ivarid);
+                let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
+                self.encode_linst(LInst::Store {
+                    src,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp,
+                    },
+                });
+                self.encode_linst(LInst::WriteBarrier {
+                    parent: GP::Rdi,
+                    value: src,
+                });
             }
             // Inline struct-member load: `r15 <- self.@slot` at a fixed field
             // offset on the receiver (rdi). Lowered to a field load whose
@@ -364,8 +377,25 @@ impl Codegen {
                     },
                 });
             }
+            // Inline struct-member store: field store + write barrier, with the
+            // stored value also returned in the accumulator (rax).
             AsmInst::StoreStructSlotInline { src, slot_index } => {
-                return self.emit_store_struct_slot_inline(src, slot_index);
+                let disp = slot_index as i32 * 8 + RVALUE_OFFSET_INLINE as i32;
+                self.encode_linst(LInst::Store {
+                    src,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp,
+                    },
+                });
+                self.encode_linst(LInst::WriteBarrier {
+                    parent: GP::Rdi,
+                    value: src,
+                });
+                self.encode_linst(LInst::Mov {
+                    dst: GP::Rax,
+                    src,
+                });
             }
             // Heap (Box-spilled) Struct member access: deref the heap pointer
             // first, then load/store the slot (aarch64 bails on a large offset).

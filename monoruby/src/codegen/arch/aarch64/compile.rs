@@ -1386,6 +1386,14 @@ impl Codegen {
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
                 self.a64_frame_store(src.a64().0, lfp, off);
             }
+            // [base + disp] <- src (object field; `a64_field_store` legalizes
+            // the positive displacement).
+            LInst::Store {
+                src,
+                mem: LMem::Field { base, disp },
+            } => {
+                self.a64_field_store(src.a64().0, base.a64().0, disp as u32);
+            }
             // [lfp - slot] <- imm. aarch64 has no store-immediate, so the
             // immediate is staged through scratch x9 (no allocated GP clobbered),
             // then stored via the legalizing `a64_frame_store`.
@@ -1484,6 +1492,10 @@ impl Codegen {
             LInst::BranchIfNonzero { target } => {
                 let rax = GP::Rax.a64().0;
                 monoasm_arm64!(&mut self.jit, cbnz x(rax), target;);
+            }
+            // GC write barrier (aarch64 takes the parent register explicitly).
+            LInst::WriteBarrier { parent, value } => {
+                self.emit_write_barrier(parent, value);
             }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
@@ -2953,30 +2965,6 @@ impl Codegen {
             cmp x(r15), #(0u32);
             csel x(r15), x(r15), x9, ne;   // unset slot (0) -> nil
         );
-        true
-    }
-
-    /// Store the accumulator-side `src` into an inline instance-variable slot.
-    pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
-        let off = RVALUE_OFFSET_KIND as u32 + ivarid.get() as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let s = src.a64().0;
-        self.a64_field_store(s, rdi, off);
-        // Write barrier: rdi = the object (parent), src = stored value.
-        self.emit_write_barrier(GP::Rdi, src);
-        true
-    }
-
-    /// Store `src` into an inline Struct member slot (also returned in rax/x0).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
-        let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let s = src.a64().0;
-        let rax = GP::Rax.a64().0;
-        self.a64_field_store(s, rdi, off);
-        // Write barrier: rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier(GP::Rdi, src);
-        monoasm_arm64!(&mut self.jit, mov x(rax), x(s););
         true
     }
 

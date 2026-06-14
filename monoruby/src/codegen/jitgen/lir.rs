@@ -228,6 +228,12 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// Branch to `target` if the accumulator is non-zero (e.g. an already-set
     /// local slot).
     BranchIfNonzero { target: DestLabel },
+    /// Generational-GC write barrier after storing `value` into a field of the
+    /// heap object `parent`: if `parent` is an old object not yet remembered and
+    /// `value` is a heap pointer, record `parent` in the remembered set. A
+    /// macro-op — the encoder emits the arch's inline fast-path + slow-path call
+    /// (x86 fixes `parent` in rdi).
+    WriteBarrier { parent: GP, value: GP },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

@@ -291,6 +291,16 @@ impl Codegen {
                     movq [rbp - (rbp_local(slot))], R(r);
                 );
             }
+            // [base + disp] <- src (object field; no immediate-range limit on x86)
+            LInst::Store {
+                src,
+                mem: LMem::Field { base, disp },
+            } => {
+                let (s, b) = (src as u64, base as u64);
+                monoasm!( &mut self.jit,
+                    movq [R(b) + (disp)], R(s);
+                );
+            }
             // [lfp - slot] <- imm. Legalization: a 64-bit immediate that does
             // not fit x86's imm32 store form is staged through rax (mirrors
             // `literal_to_stack`).
@@ -374,6 +384,11 @@ impl Codegen {
                     testq rax, rax;
                     jnz  target;
                 }
+            }
+            // GC write barrier (parent is fixed in rdi on x86).
+            LInst::WriteBarrier { parent, value } => {
+                debug_assert_eq!(parent, GP::Rdi, "x86 write barrier expects parent in rdi");
+                self.emit_write_barrier_rdi(value);
             }
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
@@ -1496,18 +1511,6 @@ impl Codegen {
     /// substituting nil for an unset slot.
     pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
         self.load_ivar_inline(ivarid);
-        true
-    }
-
-    /// Store the accumulator-side `src` into an inline instance-variable slot.
-    pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
-        self.store_ivar_object_inline(src, ivarid);
-        true
-    }
-
-    /// Store `src` into an inline Struct member slot (also returned in rax).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
-        self.store_struct_slot_inline(src, slot_index);
         true
     }
 
