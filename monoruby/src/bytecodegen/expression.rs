@@ -259,7 +259,7 @@ impl<'a> BytecodeGen<'a> {
                 self.gen_method_call(method, None, arglist, safe_nav, UseMode2::Store(dst), loc)?;
             }
             NodeKind::Return(box val) => {
-                if self.is_block() {
+                if self.is_escaping_block() {
                     return self.gen_method_return(val, UseMode2::Store(dst));
                 } else {
                     return self.gen_return(val, UseMode2::Store(dst));
@@ -581,8 +581,13 @@ impl<'a> BytecodeGen<'a> {
                 } = match self.loops.last() {
                     Some(data) => data.clone(),
                     None => {
-                        if self.is_block() {
+                        if self.is_escaping_block() {
                             self.gen_block_break(val, use_mode)?;
+                            return Ok(());
+                        } else if self.outer.is_some() {
+                            // `break` in a lambda exits the lambda with the
+                            // value, like `return` (not a non-local break).
+                            self.gen_return(val, use_mode)?;
                             return Ok(());
                         } else {
                             return Err(self.escape_from_eval("break", loc));
@@ -652,7 +657,7 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::Return(box val) => {
-                if self.is_block() {
+                if self.is_escaping_block() {
                     self.gen_method_return(val, use_mode)?;
                 } else {
                     self.gen_return(val, use_mode)?;

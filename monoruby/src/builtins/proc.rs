@@ -1049,6 +1049,33 @@ mod tests {
         ]);
     }
 
+    /// `return` semantics: a (non-lambda) Proc's `return` is a non-local
+    /// return to the method that created it (if still on the stack — else
+    /// LocalJumpError); a lambda's `return` exits the lambda itself.
+    #[test]
+    fn proc_return_semantics() {
+        run_tests(&[
+            // proc created & called in the same method: non-local return.
+            "def m; proc { return 7 }.call; 99; end; m",
+            // return from a block via `each`: non-local.
+            "def m; [1].each { return 5 }; 99; end; m",
+            // lambda return is local; the method continues.
+            "def m; lambda { return 8 }.call; 99; end; m",
+            "def m; ->(){ return 8 }.call; 99; end; m",
+            // a `lambda { }` brace block promoted by Kernel#lambda still
+            // returns locally.
+            "f = lambda { return 8 }; [f.call, 99]",
+            "g = ->(x){ return x*2; 999 }; g.call(5)",
+            // detached proc whose creation site already returned.
+            "def make; proc { return 3 }; end; (make.call rescue $!.class)",
+            // long return flowing through an intervening Proc#call.
+            "def inner; b = proc { return :good }; pr = ->x{ x.call }; pr.call(b); :bad; end; inner",
+            // break in a lambda exits the lambda with the value.
+            "->(){ break 11 }.call",
+            "lambda { break 12 }.call",
+        ]);
+    }
+
     /// `&:sym` passed as a block should materialize a Proc only
     /// on demand; capturing it back as `&blk` must work (used to
     /// fail with `not yet implemented: block handler …`).

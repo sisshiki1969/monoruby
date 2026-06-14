@@ -2019,10 +2019,19 @@ impl Executor {
         )
         .ok_or_else(|| {
             let err = self.take_error();
-            // MethodReturn that escapes a Proc#call means the target method
-            // has already returned — convert to LocalJumpError.
-            if let MonorubyErrKind::MethodReturn(val, _) = err.kind() {
-                MonorubyErr::localjumperr_with_val("unexpected return", *val)
+            // A `return` inside a (non-lambda) Proc unwinds to the method
+            // that created it. If that method's frame is still on the
+            // stack, let the `MethodReturn` keep propagating so it exits
+            // there (a non-local return — `proc { return }.call`, or a
+            // "long return" flowing through an intervening `Proc#call`).
+            // If the creation-site method has already returned, the frame
+            // is gone and the return is a `LocalJumpError`.
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() {
+                if self.is_frame_on_stack(*target_lfp) {
+                    err
+                } else {
+                    MonorubyErr::localjumperr_with_val("unexpected return", *val)
+                }
             } else {
                 err
             }

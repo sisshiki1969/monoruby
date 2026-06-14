@@ -203,6 +203,28 @@ impl Executor {
             (vm, cfp) = Self::try_prev_cfp(vm, cfp)?;
         }
     }
+
+    /// Whether `target` is the LFP of a frame still live on the current
+    /// control-frame chain (walking parent fibers too). Used to decide
+    /// whether a `MethodReturn` escaping a `Proc#call` can still unwind
+    /// to its creation-site method (a non-local return) or whether that
+    /// method has already returned — in which case the return is a
+    /// `LocalJumpError`. A promoted (heap) home frame is matched because
+    /// `move_frame_to_heap` redirects its on-stack `cfp.lfp()` to the
+    /// heap copy.
+    pub(crate) fn is_frame_on_stack(&self, target: Lfp) -> bool {
+        let mut vm: &Executor = self;
+        let mut cfp = self.cfp();
+        loop {
+            if cfp.lfp() == target {
+                return true;
+            }
+            match Self::try_prev_cfp(vm, cfp) {
+                Some((v, prev)) => (vm, cfp) = (v, prev),
+                None => return false,
+            }
+        }
+    }
 }
 
 ///

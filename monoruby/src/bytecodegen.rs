@@ -495,6 +495,11 @@ struct BytecodeGen<'a> {
     mother: (ISeqId, ParamsInfo, usize),
     /// ID of the outer iseq.
     outer: Option<ISeqId>,
+    /// Whether this iseq is a *block* (block-style) rather than a lambda
+    /// or method. A block's `return`/`break` escape to the enclosing
+    /// method (non-local); a lambda's are local. Both have an `outer`,
+    /// so this is what distinguishes them.
+    block_style: bool,
     /// bytecode IR.
     ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
@@ -547,12 +552,14 @@ impl<'a> BytecodeGen<'a> {
         let func_id = info.func_id();
         let sourceinfo = info.sourceinfo.clone();
         let outer = info.outer;
+        let block_style = store[func_id].is_block_style();
         let mut codegen = Self {
             store,
             iseq_id,
             func_id,
             mother: (mother, mother_params, mother_outer),
             outer,
+            block_style,
             ir: vec![],
             sp: vec![],
             labels: BytecodeLabels::new(), // The first label is for redo.
@@ -693,6 +700,13 @@ impl<'a> BytecodeGen<'a> {
 
     fn is_block(&self) -> bool {
         self.outer.is_some()
+    }
+
+    /// A *real* block (not a lambda or method): its `return` / `break`
+    /// transfer control non-locally to the enclosing method. A lambda
+    /// has an `outer` too but returns/breaks locally, like a method.
+    fn is_escaping_block(&self) -> bool {
+        self.outer.is_some() && self.block_style
     }
 
     fn add_method(
