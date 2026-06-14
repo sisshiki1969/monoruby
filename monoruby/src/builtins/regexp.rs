@@ -136,31 +136,37 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // ends up with `encoding == UTF-8` and `fixed_encoding? == true`.
     // `raw_option()` doesn't carry KCODE/NOENCODING/FIXEDENCODING
     // bits (those live in `RegexpInner`, not in Onigmo's option word).
-    let (string, default_option, source_encoding, default_kcode) = if let Some(re) = arg0.is_regex()
-    {
-        let kc = if re.fixed_encoding() {
-            kcode_from_encoding(re.declared_encoding())
+    let (string, default_option, source_encoding, default_kcode, source_bytes) =
+        if let Some(re) = arg0.is_regex() {
+            let kc = if re.fixed_encoding() {
+                kcode_from_encoding(re.declared_encoding())
+            } else {
+                None
+            };
+            let mut opt = re.raw_option();
+            if let Some(bits) = kc {
+                opt |= bits;
+            }
+            (
+                re.as_str().to_string(),
+                Some(opt),
+                Some(re.declared_encoding()),
+                kc,
+                // Preserve the original Regexp's source verbatim.
+                Some(re.source_bytes().to_vec()),
+            )
         } else {
-            None
+            // The matching engine needs a UTF-8 view, so escape non-UTF-8
+            // bytes (`coerce_to_string`), but keep the *raw* bytes for
+            // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
+            let s = arg0.coerce_to_string(vm, globals)?;
+            let raw = arg0.is_rstring_inner().map(|r| r.as_bytes().to_vec());
+            let enc = arg0
+                .is_rstring_inner()
+                .map(|r| r.encoding())
+                .unwrap_or(crate::value::Encoding::Utf8);
+            (s, None, Some(enc), None, raw)
         };
-        let mut opt = re.raw_option();
-        if let Some(bits) = kc {
-            opt |= bits;
-        }
-        (
-            re.as_str().to_string(),
-            Some(opt),
-            Some(re.declared_encoding()),
-            kc,
-        )
-    } else {
-        let s = arg0.coerce_to_string(vm, globals)?;
-        let enc = arg0
-            .is_rstring_inner()
-            .map(|r| r.encoding())
-            .unwrap_or(crate::value::Encoding::Utf8);
-        (s, None, Some(enc), None)
-    };
     let option_provided = lfp.try_arg(1).is_some_and(|v| !v.is_nil());
     if arg0.is_regex().is_some() && option_provided {
         // CRuby emits "warning: flags ignored" (without raising) when
@@ -202,8 +208,14 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         default_kcode
     };
-    let regexp =
-        RegexpInner::with_option_kcode(string, option, encoding, kcode, source_encoding)?;
+    let regexp = RegexpInner::with_option_kcode_source(
+        string,
+        option,
+        encoding,
+        kcode,
+        source_encoding,
+        source_bytes,
+    )?;
     Ok(Value::regexp(regexp))
 }
 
@@ -515,7 +527,7 @@ impl UnionEnc {
 /// non-fixed US-ASCII bucket.
 fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     if let Some(re) = arg.is_regex() {
-        let ascii_only = re.as_str().bytes().all(|b| b < 0x80);
+        let ascii_only = re.source_bytes().iter().all(|&b| b < 0x80);
         return ArgEnc {
             encoding: re.declared_encoding(),
             fixed: re.fixed_encoding(),
@@ -696,7 +708,7 @@ fn regexp_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if !rhs.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let same_source = lhs.as_str() == rhs.as_str();
+    let same_source = lhs.source_bytes() == rhs.source_bytes();
     let same_options =
         (lhs.raw_option() & REGEXP_EQ_OPTION_MASK) == (rhs.raw_option() & REGEXP_EQ_OPTION_MASK);
     let same_encoding = lhs.declared_encoding() == rhs.declared_encoding();
@@ -715,7 +727,7 @@ fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_ = lfp.self_val();
     let re = self_.as_regexp_inner();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    re.as_str().hash(&mut h);
+    re.source_bytes().hash(&mut h);
     (re.raw_option() & REGEXP_EQ_OPTION_MASK).hash(&mut h);
     Ok(Value::integer(h.finish() as i64))
 }
@@ -819,7 +831,6 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let re = self_.is_regex().unwrap();
-    let src = re.as_str();
     // CRuby's `Regexp#source.encoding`: a regexp whose encoding is pinned
     // (the `u`/`e`/`s` modifiers, a non-ASCII `\u{}` escape, or non-ASCII
     // source bytes) carries that encoding; an unpinned, 7-bit-only source
@@ -830,7 +841,7 @@ fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
         crate::value::Encoding::UsAscii
     };
     Ok(Value::string_from_inner(
-        crate::value::rvalue::RStringInner::from_encoding_scanned(src.as_bytes(), enc),
+        crate::value::rvalue::RStringInner::from_encoding_scanned(re.source_bytes(), enc),
     ))
 }
 
@@ -1917,6 +1928,20 @@ mod tests {
         run_test(
             "[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) != 0 }",
         );
+    }
+
+    #[test]
+    fn regexp_source_bytes_preserved() {
+        // A non-UTF-8 (Shift_JIS) source survives in #source / #encoding.
+        run_test(
+            r#"s = "\x82\xa0".dup.force_encoding(Encoding::Shift_JIS); r = Regexp.new(s);
+               [r.encoding.to_s, r.source.encoding.to_s, r.source.bytes]"#,
+        );
+        // `\u{}` source is kept as written (not expanded), distinct from
+        // its decoded form.
+        run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
+        // A Regexp argument preserves the original source verbatim.
+        run_test(r#"Regexp.new(/\u{61}/).source"#);
     }
 
     #[test]
