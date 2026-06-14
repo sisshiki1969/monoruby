@@ -5,14 +5,19 @@ between `AsmIR` and the per-arch `monoasm!` / `monoasm_arm64!` byte emission.
 This is **Phase-1 item ①** ("a low-level IR that describes amd64 and aarch64
 uniformly").
 
-Status: **actively migrating `AsmInst` families onto LIR, family by family.**
-The model lives in
+Status: **the great majority of `AsmInst` families now lower through
+`encode_linst`.** The model lives in
 [`monoruby/src/codegen/jitgen/lir.rs`](../monoruby/src/codegen/jitgen/lir.rs);
 the per-arch encoder is `Codegen::encode_linst`, defined once in each
 `arch/<arch>/compile/…` file. As of this writing the integer + control-flow
 core, all addressing modes, the GC write barrier, the common guard/check family,
-fixnum arithmetic (with overflow deopt), and the first floating-point family are
-all lowered through `encode_linst`.
+fixnum arithmetic (with overflow deopt), the **whole floating-point family**,
+the bounds-checked heap-ivar load/store, and the large **runtime-call macro-op**
+families (array/hash/string/range construction, `defined?`, generic binops,
+class/method definition, exceptions, `yield`, the method-prologue guards, …) are
+all lowered through `encode_linst`. What remains in the dispatcher is the set of
+arms that need `&Store` or live frame state (the method-call argument-setup
+family) and the specialized inlined-frame family — see §8.
 
 ---
 
@@ -64,7 +69,11 @@ selects the right encoder.
 
 Defined in `lir.rs`. Branch and side-exit targets carry a **resolved monoasm
 `DestLabel`** (the encoder runs after label resolution), so `LInst` is
-`#[derive(Debug, Clone, PartialEq)]` — `DestLabel` is `Clone` but not `Copy`.
+`#[derive(Debug, Clone)]` — `DestLabel` is `Clone` but not `Copy`. `PartialEq`
+is intentionally **not** derived: several payload types reached by the macro-op
+variants (`WriteBack`, `AsmEvict`, `FnInitInfo`, …) are not `PartialEq`, and
+deriving it would force a `PartialEq` cascade across unrelated types for no
+benefit. The `lir.rs` unit test uses `matches!` instead of `==`.
 
 ### Operands
 
@@ -88,11 +97,27 @@ Defined in `lir.rs`. Branch and side-exit targets carry a **resolved monoasm
 | Branch | `Label`, `Br`, `CondBr { cond: LCond, … }`, `BranchTruthy { negate }`, `BranchIfNil`, `BranchIfNonzero` |
 | GC / nil | `WriteBarrier { parent, value }`, `NilIfZero { reg }` |
 | Guards (carry a side-exit `deopt`) | `GuardClass`, `GuardArrayTy`, `GuardFrozen`, `GuardConstBaseClass`, `GuardConstVersion`, `GuardCapture`, `CheckBOP` |
-| Arithmetic w/ deopt | `IntegerBinOp { kind, mode, lhs, rhs, deopt }` |
-| Floating-point | `FprMove`, `F64ToFpr`, `FixnumToFpr`, `FprToStack` (carry the spill `base`) |
+| Integer arithmetic | `IntegerBinOp { …, deopt }`, `IntegerCmp`, `FixnumNeg { …, deopt }`, `FixnumBitNot` |
+| Floating-point | `FprMove`, `F64ToFpr`, `FixnumToFpr`, `FprToStack`, `FprSwap`, `FloatToFpr` (deopt), `I64ToBoth`, `FloatBinOp`, `FloatUnOp`, `FloatCmp`, `FloatCmpBr`, `XmmSave`, `XmmRestore`, `CFunc_F_F`, `CFunc_FF_F` (FP ops carry the spill `base`) |
+| Heap ivar (macro-op) | `LoadIVarHeap`, `StoreIVarHeap` |
+| Construction (macro-op) | `CreateArray`, `NewArray`, `NewHash`, `HashInsert`, `ArrayConcat`, `NewRange`, `ConcatStr`, `ConcatRegexp`, `ToA`, `DeepCopyLit`, `ExpandArray` |
+| Variables (macro-op) | `StoreConstant`, `LoadGVar`, `StoreGVar`, `LoadCVar`, `CheckCVar`, `StoreCVar`, `LoadDynVar`, `StoreDynVar`, `AliasGvar` |
+| `defined?` (macro-op) | `DefinedYield`, `DefinedSuper`, `DefinedGvar`, `DefinedCvar`, `DefinedConst`, `DefinedMethod`, `DefinedIvar` |
+| Dispatch helpers (macro-op) | `GenericBinOp`, `OptEqCmp`, `ArrayTEq`, `CheckKwRest`, `RestKw` |
+| Definition (macro-op) | `MethodDef`, `SingletonMethodDef`, `ClassDef`, `SingletonClassDef`, `AliasMethod`, `UndefMethod` |
+| Method-prologue guards (macro-op) | `GuardClassVersion`, `RecompileDeopt`, `CheckStack`, `ExecGc`, `Init`, `LoopJitRspBump` |
+| Control flow / exceptions (macro-op) | `Ret`, `MethodRet`, `BlockBreak`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `BlockArgProxy`, `BlockArg`, `ImmediateEvict`, `Deopt`, `HandleError`, `Unreachable` |
 
 `Lir` is a thin `Vec<LInst>` builder used where a multi-instruction sequence is
 convenient.
+
+The macro-op variants do not lower to primitives inside `encode_linst`; instead
+each backend's `encode_linst` ends with `other => self.encode_linst_macro(other)`,
+and the **arch-neutral** `encode_linst_macro`
+([compile_shared.rs](../monoruby/src/codegen/jitgen/asmir/compile_shared.rs))
+delegates each macro-op to the existing per-arch `emit_*` helper. This keeps the
+delegation in one place (rather than duplicating it in both backends) while
+still funnelling *all* emission through `encode_linst`. See §5.
 
 ### The legalization contract (the core idea)
 
@@ -141,11 +166,20 @@ prior code:
   (whose spill-aware bodies were *moved* from `emit_*` into the encoder arms,
   deleting those `emit_*`).
 - **Macro-op delegation** — a single `LInst` whose encoder calls an existing
-  per-arch helper that stays (the tag-test / page-split / tagged-arith logic is
-  irreducibly per-arch). Used by the guards (delegate to `guard_class`,
-  `a64_guard_class`, `guard_capture`, …) and `IntegerBinOp` (delegate to
-  `integer_binop` / `a64_integer_binop`, which keep the x86 cold-page overflow
-  handler). The thin `emit_*` wrappers are deleted; the substantive helper stays.
+  per-arch helper that stays (the tag-test / page-split / tagged-arith / C-call
+  sequence is irreducibly per-arch). Two sub-cases:
+  - *decomposed-style delegation* (guards, `IntegerBinOp`): the per-arch
+    `encode_linst` matches the variant directly and calls the substantive helper
+    (`guard_class` / `a64_guard_class`, `integer_binop` / `a64_integer_binop`, …);
+    the thin `emit_*` wrapper is deleted.
+  - *`encode_linst_macro`-style delegation* (the large runtime-call families):
+    the variant falls through each backend's `other =>` arm into the
+    **arch-neutral** `encode_linst_macro`, which calls the per-arch `emit_*`
+    helper. The `emit_*` helper is retained verbatim, so the migration is a pure
+    routing change — the dispatcher arm now builds an `LInst` and hands it to
+    `encode_linst` instead of calling `emit_*` directly. This is how the
+    construction / variable / `defined?` / definition / control-flow families
+    were migrated (batches A and B).
 
 ---
 
@@ -174,6 +208,14 @@ accumulator).
 | 3-C | const-base-class / const-version / capture / BOP guards | |
 | 3-D | fixnum `IntegerBinOp` (overflow deopt) | hottest arithmetic path |
 | 3-E | FP transfer/convert (`FprMove` / `F64ToFpr` / `FixnumToFpr` / `FprToStack`) | first FP family; real decomposition |
+| 3-F | FP swap / `FloatToFpr` (deopt) / `I64ToBoth` | |
+| 3-G | FP arithmetic & compare (`FloatBinOp` / `FloatUnOp` / `FloatCmp` / `FloatCmpBr`) | NaN-correct conditions |
+| 3-H | FP C-calls (`CFunc_F_F` / `CFunc_FF_F`) + `XmmSave` / `XmmRestore` | completes the FP family |
+| A | bounds-checked heap-ivar load/store (`LoadIVarHeap` / `StoreIVarHeap`) | first macro-op via `encode_linst_macro` |
+| B1 | variable + construction macro-ops (g/c/dyn-var, array/hash/range/str, `to_a`, `defined?`, generic binop, alias/undef, …) | bulk macro-op routing |
+| B2 | remaining construction / `defined?` / dispatch-helper macro-ops | |
+| B3 | control-flow / exception / definition macro-ops (`Ret`, `MethodRet`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `MethodDef`, `Init`, `CheckStack`, `ExecGc`, `IntegerCmp`, `BlockArg`, …) | `Raise`/`Retry`/`Redo`/`EnsureEnd` carry `loop_jit_spill_bytes` for the aarch64 loop-JIT sp unwind |
+| B4 | class-def + method-prologue guards (`ClassDef`, `SingletonClassDef`, `GuardClassVersion`, `RecompileDeopt`) | last non-store/non-frame arms |
 
 ---
 
@@ -202,23 +244,36 @@ preservation under a correct reference Ruby**:
 
 ## 8. Remaining work
 
-Families still lowered directly via `emit_*` (not yet through `encode_linst`):
+The arms still handled **directly in the `compile_asmir` dispatcher** (not routed
+through `encode_linst`) fall into three groups. The first two are a *deliberate*
+boundary — they are not pure machine-code emission — and the third is small:
 
-- **Floating point (rest):** `FprSwap`, `FloatToFpr` (deopt), `FloatBinOp` /
-  `FloatUnOp` / `FloatCmp` / `FloatCmpBr` (NaN-correct conditions), `I64ToBoth`,
-  the FP C-calls `CFunc_F_F` / `CFunc_FF_F`, and `XmmSave` / `XmmRestore`.
-- **Bounds-checked heap ivar** load/store (non-`self`): needs a bounds-check →
-  deopt/nil branch on top of the scratch model.
-- **Runtime-call macro-ops:** `NewArray` / `NewHash` / `ConcatStr` / `defined?`
-  family / `GenericBinOp` / class & method definition / the method-call prologue
-  (`SetupMethodFrame`, `SetArguments`, `Call`, `Init`) / exceptions / `Yield` /
-  the specialized inlined-frame family. These are large C-call sequences; most
-  would migrate as macro-ops carrying the relevant labels.
-- **Patch / recompile machinery** (return-address eviction, in-place recompile)
-  — the x86/aarch64 *non-coverage* asymmetry from `doc/arch_difference.md` §4;
-  the hardest to model.
+- **Store-/frame-dependent method-call family.** `SetupMethodFrame`,
+  `SetArguments`, `Call`, `Preparation`, `OptCase`, and
+  `SetArgumentsForwardedHelper` need `&Store` (callee metadata, arg shape,
+  frame offsets) or mutate the live `frame` (label resolution, sourcemap). They
+  are *argument-massage + dispatch* logic rather than a fixed machine-code
+  sequence, so `encode_linst` — which receives neither `&Store` nor `&mut frame`
+  — is the wrong seam for them. They stay in the dispatcher, which *does* have
+  that context and still calls `encode_linst` for every primitive it emits.
+- **Specialized inlined-frame family.** `MethodRetSpecialized`,
+  `BlockBreakSpecialized`, `SpecializedCall`, `SetupYieldFrame`,
+  `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
+  resolve frame-local labels and patch points and are dispatched to a per-arch
+  method of the same name (`arch/<arch>/compile/…`). Same rationale.
+- **Elementary moves.** The register/stack move leaves (`RegMove`, `RegToAcc`,
+  `AccToStack`, `RegToStack`, `StackToReg`, `LitToReg`, `LitToStack`, `RegAdd`,
+  `RegSub`) still call their `emit_*` leaf directly from the dispatcher. These
+  *could* be expressed as `LInst::{Mov,Load,Store,LoadImm,Alu}` and routed, but
+  they already bottom out in the very same `emit_*` leaves that the decomposed
+  `encode_linst` arms target, so the win is cosmetic; left as a follow-up.
 
-These extend, but do not invalidate, the model: each needs either a macro-op
-(carrying its labels) or, where the per-arch shape genuinely differs (FP spill,
-NaN compares, page-split deopt), a dedicated op whose encoder reproduces the
-arch sequence byte-for-byte.
+Beyond the dispatcher, the **patch / recompile machinery** (return-address
+eviction, in-place recompile) remains the x86/aarch64 *non-coverage* asymmetry
+described in `doc/arch_difference.md` §4 — the hardest piece to model and not yet
+unified.
+
+None of this invalidates the model: `encode_linst` (with `encode_linst_macro`)
+is now the single seam for emission, and the residual dispatcher arms either lack
+the right context to *be* emission-only or are elementary leaves trivially
+reachable from it.
