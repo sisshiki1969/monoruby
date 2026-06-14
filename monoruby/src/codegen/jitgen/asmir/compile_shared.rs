@@ -630,65 +630,61 @@ impl Codegen {
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an xmm pool register is live (no xmm save yet).
             AsmInst::UndefMethod { undef, using_xmm } => {
-                return self.emit_undef_method(undef, using_xmm);
+                self.encode_linst(LInst::UndefMethod { undef, using_xmm })
             }
             AsmInst::AliasGvar { new, old, using_xmm } => {
-                return self.emit_alias_gvar(new, old, using_xmm);
+                self.encode_linst(LInst::AliasGvar { new, old, using_xmm })
             }
-            // Runtime-call class-variable / method-alias ops. aarch64 bails
-            // when an xmm pool register is live (no xmm save yet).
+            // Runtime-call class-variable / method-alias ops.
             AsmInst::CheckCVar { name, using_xmm } => {
-                return self.emit_check_cvar(name, using_xmm);
+                self.encode_linst(LInst::CheckCVar { name, using_xmm })
             }
             AsmInst::StoreCVar { name, src, using_xmm } => {
-                return self.emit_store_cvar(name, src, using_xmm);
+                self.encode_linst(LInst::StoreCVar { name, src, using_xmm })
             }
             AsmInst::AliasMethod { new, old, using_xmm } => {
-                return self.emit_alias_method(new, old, using_xmm);
+                self.encode_linst(LInst::AliasMethod { new, old, using_xmm })
             }
-            // defined? runtime-call family (aarch64 bails on a live xmm pool reg
-            // or an out-of-range frame offset).
+            // defined? runtime-call family.
             AsmInst::DefinedYield { dst, using_xmm } => {
-                return self.emit_defined_yield(dst, using_xmm);
+                self.encode_linst(LInst::DefinedYield { dst, using_xmm })
             }
             AsmInst::DefinedSuper { dst, using_xmm } => {
-                return self.emit_defined_super(dst, using_xmm);
+                self.encode_linst(LInst::DefinedSuper { dst, using_xmm })
             }
             AsmInst::DefinedGvar { dst, name, using_xmm } => {
-                return self.emit_defined_gvar(dst, name, using_xmm);
+                self.encode_linst(LInst::DefinedGvar { dst, name, using_xmm })
             }
             AsmInst::DefinedCvar { dst, name, using_xmm } => {
-                return self.emit_defined_cvar(dst, name, using_xmm);
+                self.encode_linst(LInst::DefinedCvar { dst, name, using_xmm })
             }
             AsmInst::DefinedConst { dst, siteid, using_xmm } => {
-                return self.emit_defined_const(dst, siteid, using_xmm);
+                self.encode_linst(LInst::DefinedConst { dst, siteid, using_xmm })
             }
             AsmInst::DefinedMethod { dst, recv, name, using_xmm } => {
-                return self.emit_defined_method(dst, recv, name, using_xmm);
+                self.encode_linst(LInst::DefinedMethod { dst, recv, name, using_xmm })
             }
             AsmInst::DefinedIvar { dst, name, using_xmm } => {
-                return self.emit_defined_ivar(dst, name, using_xmm);
+                self.encode_linst(LInst::DefinedIvar { dst, name, using_xmm })
             }
-            // Generic binary-op / Array=== runtime calls (aarch64 bails on a
-            // live xmm pool reg or an out-of-range frame offset).
+            // Generic binary-op / Array=== runtime calls.
             AsmInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
-                return self.emit_generic_binop(lhs, rhs, func, using_xmm);
+                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, using_xmm })
             }
             AsmInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
-                return self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, using_xmm })
             }
             AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
-                return self.emit_array_teq(lhs, rhs, using_xmm);
+                self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_xmm })
             }
             // Regexp interpolation / keyword-rest fixup runtime calls.
             AsmInst::ConcatRegexp { arg, len, using_xmm } => {
-                return self.emit_concat_regexp(arg, len, using_xmm);
+                self.encode_linst(LInst::ConcatRegexp { arg, len, using_xmm })
             }
-            AsmInst::CheckKwRest(slot) => return self.emit_check_kw_rest(slot),
-            // Multiple-assignment array expansion (aarch64 bails on a live xmm
-            // pool reg or an out-of-range frame offset).
+            AsmInst::CheckKwRest(slot) => self.encode_linst(LInst::CheckKwRest { slot }),
+            // Multiple-assignment array expansion.
             AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
-                return self.emit_expand_array(dst, len, rest_pos, using_xmm);
+                self.encode_linst(LInst::ExpandArray { dst, len, rest_pos, using_xmm })
             }
             // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
             // around the call.
@@ -889,6 +885,60 @@ impl Codegen {
             }
             LInst::DeepCopyLit { v, using_xmm } => {
                 self.emit_deep_copy_lit(v, using_xmm);
+            }
+            LInst::UndefMethod { undef, using_xmm } => {
+                self.emit_undef_method(undef, using_xmm);
+            }
+            LInst::AliasGvar { new, old, using_xmm } => {
+                self.emit_alias_gvar(new, old, using_xmm);
+            }
+            LInst::CheckCVar { name, using_xmm } => {
+                self.emit_check_cvar(name, using_xmm);
+            }
+            LInst::StoreCVar { name, src, using_xmm } => {
+                self.emit_store_cvar(name, src, using_xmm);
+            }
+            LInst::AliasMethod { new, old, using_xmm } => {
+                self.emit_alias_method(new, old, using_xmm);
+            }
+            LInst::DefinedYield { dst, using_xmm } => {
+                self.emit_defined_yield(dst, using_xmm);
+            }
+            LInst::DefinedSuper { dst, using_xmm } => {
+                self.emit_defined_super(dst, using_xmm);
+            }
+            LInst::DefinedGvar { dst, name, using_xmm } => {
+                self.emit_defined_gvar(dst, name, using_xmm);
+            }
+            LInst::DefinedCvar { dst, name, using_xmm } => {
+                self.emit_defined_cvar(dst, name, using_xmm);
+            }
+            LInst::DefinedConst { dst, siteid, using_xmm } => {
+                self.emit_defined_const(dst, siteid, using_xmm);
+            }
+            LInst::DefinedMethod { dst, recv, name, using_xmm } => {
+                self.emit_defined_method(dst, recv, name, using_xmm);
+            }
+            LInst::DefinedIvar { dst, name, using_xmm } => {
+                self.emit_defined_ivar(dst, name, using_xmm);
+            }
+            LInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
+                self.emit_generic_binop(lhs, rhs, func, using_xmm);
+            }
+            LInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
+                self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+            }
+            LInst::ArrayTEq { lhs, rhs, using_xmm } => {
+                self.emit_array_teq(lhs, rhs, using_xmm);
+            }
+            LInst::ConcatRegexp { arg, len, using_xmm } => {
+                self.emit_concat_regexp(arg, len, using_xmm);
+            }
+            LInst::CheckKwRest { slot } => {
+                self.emit_check_kw_rest(slot);
+            }
+            LInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
+                self.emit_expand_array(dst, len, rest_pos, using_xmm);
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }

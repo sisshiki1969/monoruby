@@ -496,6 +496,96 @@ pub(in crate::codegen::jitgen) enum LInst {
         v: Value,
         using_xmm: UsingXmm,
     },
+    // Runtime-call definition / defined? / generic-op family.
+    UndefMethod {
+        undef: IdentId,
+        using_xmm: UsingXmm,
+    },
+    AliasGvar {
+        new: IdentId,
+        old: IdentId,
+        using_xmm: UsingXmm,
+    },
+    CheckCVar {
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    StoreCVar {
+        name: IdentId,
+        src: SlotId,
+        using_xmm: UsingXmm,
+    },
+    AliasMethod {
+        new: SlotId,
+        old: SlotId,
+        using_xmm: UsingXmm,
+    },
+    DefinedYield {
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    },
+    DefinedSuper {
+        dst: SlotId,
+        using_xmm: UsingXmm,
+    },
+    DefinedGvar {
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    DefinedCvar {
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    DefinedConst {
+        dst: SlotId,
+        siteid: ConstSiteId,
+        using_xmm: UsingXmm,
+    },
+    DefinedMethod {
+        dst: SlotId,
+        recv: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    DefinedIvar {
+        dst: SlotId,
+        name: IdentId,
+        using_xmm: UsingXmm,
+    },
+    GenericBinOp {
+        lhs: SlotId,
+        rhs: SlotId,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+    OptEqCmp {
+        lhs: SlotId,
+        rhs: SlotId,
+        kind: CmpKind,
+        func: crate::executor::BinaryOpFn,
+        using_xmm: UsingXmm,
+    },
+    ArrayTEq {
+        lhs: SlotId,
+        rhs: SlotId,
+        using_xmm: UsingXmm,
+    },
+    ConcatRegexp {
+        arg: SlotId,
+        len: u16,
+        using_xmm: UsingXmm,
+    },
+    CheckKwRest {
+        slot: SlotId,
+    },
+    ExpandArray {
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+        using_xmm: UsingXmm,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
