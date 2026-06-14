@@ -521,22 +521,6 @@ impl Codegen {
         }
     }
 
-    pub(super) fn cond_br(&mut self, branch_dest: DestLabel, brkind: BrKind) {
-        monoasm!( &mut self.jit,
-            orq  rax, 0x10;
-            cmpq rax, (FALSE_VALUE);
-            // if true, Z=0(not set).
-        );
-        match brkind {
-            BrKind::BrIf => monoasm! { &mut self.jit,
-                jnz branch_dest;
-            },
-            BrKind::BrIfNot => monoasm! { &mut self.jit,
-                jz  branch_dest;
-            },
-        }
-    }
-
     /// Float conditional branch with proper NaN (unordered) handling.
     ///
     /// ucomisd sets ZF=1, PF=1, CF=1 for NaN. We must check PF for Eq/Ne/Lt/Le

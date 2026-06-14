@@ -340,6 +340,31 @@ impl Codegen {
                 LCond::Gt => monoasm! { &mut self.jit, jgt target; },
                 LCond::Ge => monoasm! { &mut self.jit, jge target; },
             },
+            // Ruby-truthiness branch: `orq 0x10` folds nil(0x04)/false(0x14) to
+            // FALSE_VALUE; truthy (non-FALSE) takes jnz, falsy takes jz.
+            LInst::BranchTruthy { negate, target } => {
+                monoasm! { &mut self.jit,
+                    orq  rax, 0x10;
+                    cmpq rax, (FALSE_VALUE);
+                };
+                if negate {
+                    monoasm! { &mut self.jit, jz  target; }
+                } else {
+                    monoasm! { &mut self.jit, jnz target; }
+                }
+            }
+            LInst::BranchIfNil { target } => {
+                monoasm! { &mut self.jit,
+                    cmpq rax, (NIL_VALUE);
+                    jeq  target;
+                }
+            }
+            LInst::BranchIfNonzero { target } => {
+                monoasm! { &mut self.jit,
+                    testq rax, rax;
+                    jnz  target;
+                }
+            }
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -378,27 +403,6 @@ impl Codegen {
             mem: LMem::Slot(slot),
         });
         true
-    }
-
-    /// Conditional branch on the truthiness of the accumulator (rax).
-    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
-        self.cond_br(dest, brkind);
-    }
-
-    /// Branch to dest if the accumulator (rax) is nil.
-    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
-        monoasm!( &mut self.jit,
-            cmpq rax, (NIL_VALUE);
-            jeq  dest;
-        );
-    }
-
-    /// Branch to dest if the local (accumulator, rax) is already set (non-zero).
-    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
-        monoasm!( &mut self.jit,
-            testq rax, rax;
-            jnz  dest;
-        );
     }
 
     /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.

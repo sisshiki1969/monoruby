@@ -220,6 +220,14 @@ pub(in crate::codegen::jitgen) enum LInst {
     Br(DestLabel),
     /// Branch to `target` when the preceding `Cmp` satisfied `cond`.
     CondBr { cond: LCond, target: DestLabel },
+    /// Branch to `target` on the Ruby truthiness of the accumulator (everything
+    /// except `nil`/`false` is truthy). `negate` branches on *falsy* instead.
+    BranchTruthy { negate: bool, target: DestLabel },
+    /// Branch to `target` if the accumulator is `nil`.
+    BranchIfNil { target: DestLabel },
+    /// Branch to `target` if the accumulator is non-zero (e.g. an already-set
+    /// local slot).
+    BranchIfNonzero { target: DestLabel },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

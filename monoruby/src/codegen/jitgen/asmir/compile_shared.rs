@@ -59,18 +59,21 @@ impl Codegen {
             AsmInst::LitToStack(v, slot) => return self.emit_lit_to_stack(v, slot),
             // Conditional branch on the truthiness of the accumulator.
             AsmInst::CondBr(brkind, dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                self.emit_cond_br(dest, brkind);
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BranchTruthy {
+                    negate: brkind == BrKind::BrIfNot,
+                    target,
+                });
             }
             // Branch to dest if the accumulator is nil.
             AsmInst::NilBr(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                self.emit_nil_br(dest);
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BranchIfNil { target });
             }
             // Branch to dest if the local (accumulator) is already set (non-zero).
             AsmInst::CheckLocal(dest) => {
-                let dest = frame.resolve_label(&mut self.jit, dest);
-                self.emit_check_local(dest);
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BranchIfNonzero { target });
             }
             // Dense-integer `case`: range-check the (fixnum) condition against
             // `[min, max]`, then dispatch through a jump table of absolute

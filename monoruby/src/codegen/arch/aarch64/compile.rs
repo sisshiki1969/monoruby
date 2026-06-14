@@ -1451,6 +1451,31 @@ impl Codegen {
                 };
                 self.jit.bcond_label(c, &target);
             }
+            // Ruby-truthiness branch: `orr 0x10` folds nil(0x04)/false(0x14) to
+            // FALSE_VALUE; truthy (!= FALSE) takes Ne, falsy takes Eq.
+            LInst::BranchTruthy { negate, target } => {
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (0x10);
+                    orr x(rax), x(rax), x10;
+                    cmp x(rax), #(FALSE_VALUE as u32);
+                );
+                let cond = if negate {
+                    monoasm::Cond::Eq
+                } else {
+                    monoasm::Cond::Ne
+                };
+                self.jit.bcond_label(cond, &target);
+            }
+            LInst::BranchIfNil { target } => {
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit, cmp x(rax), #(NIL_VALUE as u32););
+                self.jit.bcond_label(monoasm::Cond::Eq, &target);
+            }
+            LInst::BranchIfNonzero { target } => {
+                let rax = GP::Rax.a64().0;
+                monoasm_arm64!(&mut self.jit, cbnz x(rax), target;);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1601,40 +1626,6 @@ impl Codegen {
             mem: LMem::Slot(slot),
         });
         true
-    }
-
-    /// Conditional branch on the truthiness of rax (x0). `orr 0x10` folds
-    /// nil(0x04) and false(0x14) to FALSE_VALUE(0x14); everything else stays
-    /// != FALSE_VALUE. BrIf jumps when truthy (Ne), BrIfNot when falsy (Eq).
-    /// Mirrors x86 `cond_br` and the VM's CondBr.
-    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
-        let rax = GP::Rax.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            mov x10, (0x10);
-            orr x(rax), x(rax), x10;
-            cmp x(rax), #(FALSE_VALUE as u32);
-        );
-        let cond = match brkind {
-            BrKind::BrIf => monoasm::Cond::Ne,
-            BrKind::BrIfNot => monoasm::Cond::Eq,
-        };
-        self.jit.bcond_label(cond, &dest);
-    }
-
-    /// Branch to dest if rax (x0) is nil. Mirrors x86 `cmpq rax, NIL_VALUE; jeq`.
-    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
-        let rax = GP::Rax.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            cmp x(rax), #(NIL_VALUE as u32);
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &dest);
-    }
-
-    /// Branch to dest if the local (rax/x0) is already set (non-zero).
-    /// Mirrors x86 `testq rax, rax; jnz dest`.
-    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
-        let rax = GP::Rax.a64().0;
-        monoasm_arm64!(&mut self.jit, cbnz x(rax), dest;);
     }
 
     /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
