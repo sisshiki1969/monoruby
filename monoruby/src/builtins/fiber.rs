@@ -94,6 +94,15 @@ fn fiber_yield_inline(
     if pos_num > 1 && jitgen::conv(args) as u32 > 4095 {
         return false;
     }
+    // `Fiber.yield` suspends this fiber: control returns to the resumer
+    // and arbitrary code (including GCs) runs while this frame stays live
+    // on the fiber's stack. Unlike a normal call, the inlined yield does
+    // not otherwise spill register/literal-resident slots, so the
+    // suspended frame would not be GC-complete and a collection in the
+    // resumer could free a value the frame still holds (e.g. an
+    // interpolation operand). Write the frame back (the standard GC
+    // safepoint) before yielding so every live slot is materialised.
+    state.exec_gc(ir, false);
     let using_xmm = state.get_using_xmm();
     let error = ir.new_error(state);
     ir.xmm_save(using_xmm);
