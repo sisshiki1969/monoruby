@@ -1766,6 +1766,40 @@ impl Codegen {
                 let cond = a64_float_cond_for_cmp(kind, brkind);
                 self.jit.bcond_label(cond, &dest);
             }
+            // ---- FP pool save/restore + FP C-calls ---------------------------
+            LInst::XmmSave { using_xmm, cont } => {
+                self.emit_xmm_save(using_xmm, cont);
+            }
+            LInst::XmmRestore { using_xmm, cont } => {
+                self.emit_xmm_restore(using_xmm, cont);
+            }
+            LInst::CFunc_F_F { f, src, dst, using_xmm, base } => {
+                let fp = f as u64;
+                monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+                self.emit_xmm_save(using_xmm, false);
+                self.a64_fpr_load(src, 0, base); // arg -> d0
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (fp);
+                    blr x9;            // result in d0
+                );
+                self.emit_xmm_restore(using_xmm, false);
+                monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+                self.a64_fpr_save(dst, 0, base); // result d0 -> dst
+            }
+            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm, base } => {
+                let fp = f as u64;
+                monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
+                self.emit_xmm_save(using_xmm, false);
+                self.a64_fpr_load(lhs, 0, base); // arg0 -> d0
+                self.a64_fpr_load(rhs, 1, base); // arg1 -> d1
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (fp);
+                    blr x9;            // result in d0
+                );
+                self.emit_xmm_restore(using_xmm, false);
+                monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
+                self.a64_fpr_save(dst, 0, base); // result d0 -> dst
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -3570,62 +3604,6 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
         done:
         );
-        true
-    }
-
-    /// Unary float C helper `f(f64) -> f64` (sin, sqrt, …): load the operand
-    /// into d0 (the first/only AAPCS f64 arg = return reg), call, store d0 into
-    /// dst. The live FP pool (d2-d7, caller-saved = clobbered by the callee) is
-    /// saved/restored around the call exactly like the x86 twin. A spilled
-    /// source/destination is handled by the spill-aware load/save helpers.
-    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
-        &mut self,
-        f: unsafe extern "C" fn(f64) -> f64,
-        src: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        let fp = f as u64;
-        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-        self.emit_xmm_save(using_xmm, false);
-        self.a64_fpr_load(src, 0, base); // arg -> d0 (spill slots are x29-relative)
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (fp);
-            blr x9;            // result in d0
-        );
-        self.emit_xmm_restore(using_xmm, false);
-        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
-        self.a64_fpr_save(dst, 0, base); // result d0 -> dst (after the pool restore)
-        true
-    }
-
-    /// Binary float C helper `f(f64, f64) -> f64` (atan2, hypot, …): load lhs
-    /// into d0 and rhs into d1 (the first two AAPCS f64 args), call, store the
-    /// d0 result into dst. Pool sources resolve to d2-d7 so they never alias the
-    /// d0/d1 scratch regs. Saves/restores the live FP pool like the x86 twin.
-    /// Bails if any operand or the destination is a spill slot.
-    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
-        &mut self,
-        f: extern "C" fn(f64, f64) -> f64,
-        lhs: FPReg,
-        rhs: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        let fp = f as u64;
-        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-        self.emit_xmm_save(using_xmm, false);
-        self.a64_fpr_load(lhs, 0, base); // arg0 -> d0
-        self.a64_fpr_load(rhs, 1, base); // arg1 -> d1
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (fp);
-            blr x9;            // result in d0
-        );
-        self.emit_xmm_restore(using_xmm, false);
-        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
-        self.a64_fpr_save(dst, 0, base); // result d0 -> dst (after the pool restore)
         true
     }
 

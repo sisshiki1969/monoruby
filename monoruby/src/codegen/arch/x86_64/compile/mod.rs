@@ -595,6 +595,30 @@ impl Codegen {
                 self.cmp_float((lhs, rhs), base);
                 self.condbr_float(kind, dest, brkind);
             }
+            // ---- FP pool save/restore + FP C-calls ---------------------------
+            LInst::XmmSave { using_xmm, cont } => self.xmm_save_with_cont(using_xmm, cont),
+            LInst::XmmRestore { using_xmm, cont } => self.xmm_restore_with_cont(using_xmm, cont),
+            LInst::CFunc_F_F { f, src, dst, using_xmm, base } => {
+                self.xmm_save(using_xmm);
+                self.load_fpr_into_xmm0(src, base);
+                monoasm!( &mut self.jit,
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                self.store_fpr_into_xmm(dst, base);
+            }
+            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm, base } => {
+                self.xmm_save(using_xmm);
+                self.load_fpr_into_xmm0(lhs, base);
+                self.load_fpr_into_xmm1(rhs, base);
+                monoasm!( &mut self.jit,
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                self.store_fpr_into_xmm(dst, base);
+            }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
@@ -1214,19 +1238,6 @@ impl Codegen {
         true
     }
 
-    /// Save the live FP pool registers before a C-call. Always succeeds on x86
-    /// (the bool result mirrors the aarch64 twin).
-    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        self.xmm_save_with_cont(using_xmm, cont);
-        true
-    }
-
-    /// Restore the live FP pool registers after a C-call.
-    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        self.xmm_restore_with_cont(using_xmm, cont);
-        true
-    }
-
     /// Integer comparison; result Value lands in the accumulator.
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
@@ -1704,51 +1715,6 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(using_xmm);
-        true
-    }
-
-    // ---- float C-function calls (the former per-arch arms, verbatim) ----
-
-    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
-        &mut self,
-        f: unsafe extern "C" fn(f64) -> f64,
-        src: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        self.xmm_save(using_xmm);
-        self.load_fpr_into_xmm0(src, base);
-        monoasm!( &mut self.jit,
-            movq rax, (f);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-        self.store_fpr_into_xmm(dst, base);
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
-        &mut self,
-        f: extern "C" fn(f64, f64) -> f64,
-        lhs: FPReg,
-        rhs: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        self.xmm_save(using_xmm);
-        // Load both args into xmm0/xmm1 (the SysV ABI passes f64 args
-        // in xmm0, xmm1, ...). Pool ids resolve to xmm2..xmm15, so a
-        // Phys source can never alias the scratch register written into.
-        self.load_fpr_into_xmm0(lhs, base);
-        self.load_fpr_into_xmm1(rhs, base);
-        monoasm!( &mut self.jit,
-            movq rax, (f);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-        self.store_fpr_into_xmm(dst, base);
         true
     }
 

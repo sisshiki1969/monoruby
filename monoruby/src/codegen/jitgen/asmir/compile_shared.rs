@@ -200,8 +200,12 @@ impl Codegen {
                 base: frame.base_stack_offset,
             }),
             // Save / restore live FP pool registers around a C-call.
-            AsmInst::XmmSave(using_xmm, cont) => return self.emit_xmm_save(using_xmm, cont),
-            AsmInst::XmmRestore(using_xmm, cont) => return self.emit_xmm_restore(using_xmm, cont),
+            AsmInst::XmmSave(using_xmm, cont) => {
+                self.encode_linst(LInst::XmmSave { using_xmm, cont })
+            }
+            AsmInst::XmmRestore(using_xmm, cont) => {
+                self.encode_linst(LInst::XmmRestore { using_xmm, cont })
+            }
             // Integer / float arithmetic fast paths. Each backend resolves the
             // same operands and dispatches to its own emission primitive
             // (aarch64 bails on an unsupported BinOpK, hence the bool results).
@@ -665,13 +669,24 @@ impl Codegen {
             AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
                 return self.emit_expand_array(dst, len, rest_pos, using_xmm);
             }
-            // Float C-function calls (Math.sqrt/sin/…). aarch64 saves the live
-            // FP pool (d2-d7) around the call and bails on a spilled operand.
-            AsmInst::CFunc_F_F { f, src, dst, using_xmm } => {
-                return self.emit_cfunc_f_f(f, src, dst, using_xmm, frame.base_stack_offset);
-            }
+            // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
+            // around the call.
+            AsmInst::CFunc_F_F { f, src, dst, using_xmm } => self.encode_linst(LInst::CFunc_F_F {
+                f,
+                src,
+                dst,
+                using_xmm,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm } => {
-                return self.emit_cfunc_ff_f(f, lhs, rhs, dst, using_xmm, frame.base_stack_offset);
+                self.encode_linst(LInst::CFunc_FF_F {
+                    f,
+                    lhs,
+                    rhs,
+                    dst,
+                    using_xmm,
+                    base: frame.base_stack_offset,
+                })
             }
             // Method definition (`def`). aarch64 bails on a live xmm pool reg.
             AsmInst::MethodDef { name, func_id, using_xmm, error } => {

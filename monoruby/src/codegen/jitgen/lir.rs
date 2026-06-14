@@ -378,6 +378,29 @@ pub(in crate::codegen::jitgen) enum LInst {
         dest: DestLabel,
         base: usize,
     },
+    /// Save the live FP pool registers before a C-call (`cont` reserves a
+    /// continuation frame).
+    XmmSave { using_xmm: UsingXmm, cont: bool },
+    /// Restore the live FP pool registers after a C-call.
+    XmmRestore { using_xmm: UsingXmm, cont: bool },
+    /// Call an `f64 -> f64` C function (e.g. `Math.sqrt`): save the FP pool, load
+    /// `src` into the arg register, call, restore, and store the result in `dst`.
+    CFunc_F_F {
+        f: unsafe extern "C" fn(f64) -> f64,
+        src: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    },
+    /// Call an `(f64, f64) -> f64` C function (e.g. `Math.atan2`).
+    CFunc_FF_F {
+        f: extern "C" fn(f64, f64) -> f64,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+        using_xmm: UsingXmm,
+        base: usize,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

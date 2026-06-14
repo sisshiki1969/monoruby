@@ -220,7 +220,7 @@ impl WriteBack {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct UsingXmm {
     inner: bitvec::prelude::BitArr!(for 14, in u16),
 }
