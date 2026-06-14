@@ -445,6 +445,10 @@ fn source_encoding_fallback(
     let fixed_flag = option & RegexpInner::FIXEDENCODING != 0;
     match source_encoding {
         Some(src) if has_non_ascii => (src, true),
+        // An ASCII-incompatible source encoding (UTF-16/32) is pinned
+        // even when the content is all 7-bit: such a string can never be
+        // re-interpreted as US-ASCII.
+        Some(src) if !src.is_ascii_compatible() => (src, true),
         Some(src) if fixed_flag => (src, true),
         Some(_) => (Encoding::UsAscii, false),
         None if has_non_ascii => (Encoding::Utf8, true),

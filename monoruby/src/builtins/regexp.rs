@@ -475,8 +475,17 @@ impl UnionEnc {
             }
         } else if prev_pinned {
             // Previous side is non-ASCII-compat; arg is anything
-            // else (even pure-ASCII). CRuby still rejects.
+            // else (even pure-ASCII). CRuby still rejects. When the
+            // other side is pure 7-bit ASCII, CRuby phrases it as
+            // "ASCII incompatible encoding: <enc>"; otherwise it names
+            // both encodings.
             if let UnionEnc::Pinned(prev) = self {
+                if arg.ascii_only {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "ASCII incompatible encoding: {}",
+                        prev.name()
+                    )));
+                }
                 return Err(MonorubyErr::argumenterr(format!(
                     "incompatible encodings: {} and {}",
                     prev.name(),
@@ -1942,6 +1951,28 @@ mod tests {
         run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
         // A Regexp argument preserves the original source verbatim.
         run_test(r#"Regexp.new(/\u{61}/).source"#);
+    }
+
+    #[test]
+    fn regexp_union_ascii_incompatible() {
+        // A single ASCII-incompatible (UTF-16) arg pins the result.
+        run_test(r#"Regexp.union("a".encode("UTF-16LE")).encoding.to_s"#);
+        run_test(r#"Regexp.new("a".encode("UTF-16LE")).encoding.to_s"#);
+        // ASCII-incompatible + ASCII-only -> "ASCII incompatible encoding".
+        run_test(
+            r#"(Regexp.union("a".encode("UTF-16LE"), "b".encode("UTF-8")); nil) rescue [$!.class, $!.message]"#,
+        );
+        run_test(
+            r#"(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-8"))); nil) rescue [$!.class, $!.message]"#,
+        );
+        // Two conflicting ASCII-incompatible encodings -> names both.
+        run_test(
+            r#"(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-16BE"))); nil) rescue [$!.class, $!.message]"#,
+        );
+        // ASCII-incompatible + non-ASCII content in a different encoding.
+        run_test(
+            r#"(Regexp.union("a".encode("UTF-16LE"), "©".encode("ISO-8859-1")); nil) rescue [$!.class, $!.message]"#,
+        );
     }
 
     #[test]
