@@ -10420,6 +10420,32 @@ mod tests {
     }
 
     #[test]
+    fn string_shared_root_old_to_young_gc() {
+        // Regression for a generational-GC use-after-free in the CoW
+        // shared-string root edge. When an already-old String is first
+        // turned into a sharer (`scan`/`lines`/`[]` taking a long view via
+        // `ensure_shared_root`), it gains an edge to a freshly allocated
+        // (young) hidden root. That store must be write-barriered, and
+        // `young_child_exists` must report the root — otherwise a minor GC
+        // reclaims the root while the old sharer still views its buffer, and
+        // a later mark walks the freed root ("Dead object"). Aging the
+        // parents first, then sharing, then churning young allocations is
+        // what exposes it under `--features gc-stress`/`gc-verify`.
+        run_test(
+            r##"
+            parents = []
+            300.times { |i| parents << ("hello world " * 12 + i.to_s) }
+            8.times { GC.start }
+            parents.each { |s| s.scan(/\w+/) }
+            junk = []
+            400.times { |i| junk << ("z" * 70 + i.to_s) }
+            GC.start
+            parents.map { |s| s.length }.sum
+            "##,
+        );
+    }
+
+    #[test]
     fn string_chomp_record_separator() {
         // No-argument chomp/chomp! use `$/` (default "\n") as the separator.
         run_test(r#""abc\n".chomp"#);

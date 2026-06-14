@@ -923,7 +923,18 @@ impl alloc::GCBox for RValue {
         // (see `is_promotable`); each accesses its matching union field.
         unsafe {
             match self.ty() {
-                ObjTy::STRING | ObjTy::BIGNUM | ObjTy::FLOAT => false,
+                // A shared (CoW) substring keeps its hidden frozen root
+                // alive — `mark_children` marks it, so `young_child_exists`
+                // MUST report it too. Otherwise a remembered old sharer with
+                // a still-young root is dropped from the remembered set and
+                // re-armed; a later minor GC then frees the unreachable root
+                // while the sharer still points at it, and the next major's
+                // `mark_children` walks that freed root ("Dead object").
+                ObjTy::STRING => self
+                    .as_rstring()
+                    .shared_root()
+                    .is_some_and(|root| is_young(root, alloc)),
+                ObjTy::BIGNUM | ObjTy::FLOAT => false,
                 ObjTy::OBJECT => self
                     .as_object()
                     .iter()
