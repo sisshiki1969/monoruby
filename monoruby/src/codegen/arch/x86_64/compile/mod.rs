@@ -11,6 +11,7 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
+use crate::codegen::jitgen::lir::LInst;
 
 impl Codegen {
     ///
@@ -230,11 +231,32 @@ impl Codegen {
 
     /// dst <- src (general-purpose register move; self-move is a no-op).
     pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
-        if src != dst {
-            let (src, dst) = (src as u64, dst as u64);
-            monoasm!( &mut self.jit,
-                movq R(dst), R(src);
-            );
+        self.encode_linst(LInst::Mov { dst, src });
+    }
+
+    ///
+    /// Per-arch (x86-64) LIR encoder seam (Phase-1 Stage 2).
+    ///
+    /// Lower one already-register-allocated `LInst` to machine code via
+    /// `monoasm!`, emitting byte-identical output to the hand-written `emit_*`
+    /// primitive it replaces. Only the migrated families are implemented; the
+    /// rest `todo!()` until their `AsmInst` family is ported onto LIR. See
+    /// `doc/lir.md`.
+    ///
+    pub(in crate::codegen::jitgen) fn encode_linst(&mut self, inst: LInst) {
+        match inst {
+            // dst <- src (elided when src == dst)
+            LInst::Mov { dst, src } => {
+                if src != dst {
+                    let (src, dst) = (src as u64, dst as u64);
+                    monoasm!( &mut self.jit,
+                        movq R(dst), R(src);
+                    );
+                }
+            }
+            other => {
+                todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
+            }
         }
     }
 

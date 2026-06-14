@@ -301,22 +301,20 @@ impl Lir {
     }
 }
 
-/// The per-arch lowering seam that Stage 2 implements on `Codegen`.
-///
-/// Each backend provides one `encode` that pattern-matches an `LInst` and emits
-/// the corresponding `monoasm!` / `monoasm_arm64!` bytes, performing immediate
-/// and displacement **legalization** in the process. It is declared here (and
-/// left unimplemented) so the intended contract is visible alongside the data
-/// model; no `impl` is provided yet, so this remains pure scaffolding.
-///
-/// ```ignore
-/// pub(in crate::codegen::jitgen) trait LirEncode {
-///     /// Emit one already-register-allocated `LInst`. The encoder may use the
-///     /// arch's reserved scratch registers (x9/x10 on aarch64) freely.
-///     fn encode(&mut self, inst: &LInst, labels: &SideExitLabels);
-/// }
-/// ```
-const _: () = ();
+// ## The per-arch lowering seam
+//
+// The encoder is an inherent `Codegen::encode_linst(inst: LInst)` method,
+// defined once per arch in the file that the `compile` module includes for the
+// active `target_arch` (`arch/x86_64/compile/mod.rs` emits via `monoasm!`;
+// `arch/aarch64/compile.rs` via `monoasm_arm64!`). Because only one of those
+// files compiles per target, no trait/dynamic dispatch is needed — the right
+// `encode_linst` is selected by `cfg`. Each backend pattern-matches an `LInst`,
+// performs immediate/displacement **legalization** (folding small immediates,
+// materializing large ones into scratch x9/x10 on aarch64), and emits
+// byte-identical output to the `emit_*` primitive it replaces.
+//
+// Stage 2-A wires only the `Mov` family (behind `emit_reg_move`); the remaining
+// variants `todo!()` until their `AsmInst` family is migrated.
 
 #[cfg(test)]
 mod tests {
