@@ -818,7 +818,20 @@ fn conv_index(i: i64, len: usize) -> Option<usize> {
 #[monoruby_builtin]
 fn source(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    Ok(Value::string_from_str(self_.is_regex().unwrap().as_str()))
+    let re = self_.is_regex().unwrap();
+    let src = re.as_str();
+    // CRuby's `Regexp#source.encoding`: a regexp whose encoding is pinned
+    // (the `u`/`e`/`s` modifiers, a non-ASCII `\u{}` escape, or non-ASCII
+    // source bytes) carries that encoding; an unpinned, 7-bit-only source
+    // is US-ASCII.
+    let enc = if re.fixed_encoding() {
+        re.declared_encoding()
+    } else {
+        crate::value::Encoding::UsAscii
+    };
+    Ok(Value::string_from_inner(
+        crate::value::rvalue::RStringInner::from_encoding_scanned(src.as_bytes(), enc),
+    ))
 }
 
 ///
@@ -1058,12 +1071,19 @@ fn regexp_linear_time_p(
     Ok(Value::bool(pattern_is_linear_time(&s)))
 }
 
+// The global `Regexp.timeout` (in seconds). monoruby does not enforce
+// per-match timeouts yet, but the accessor round-trips the value (CRuby
+// stores it as a Float), which user code and specs read back.
+thread_local!(
+    static REGEXP_TIMEOUT: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) }
+);
+
 ///
 /// ### Regexp.timeout
 /// - timeout -> Float | nil
 ///
-/// monoruby does not implement per-match timeouts; the global
-/// setting reads as `nil`.
+/// Returns the global timeout (a Float), or `nil` when unset. The value
+/// is stored but not yet enforced (no ReDoS interruption).
 #[monoruby_builtin]
 fn regexp_timeout_get(
     _: &mut Executor,
@@ -1071,23 +1091,30 @@ fn regexp_timeout_get(
     _: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::nil())
+    Ok(REGEXP_TIMEOUT.with(|t| t.get()).map_or_else(Value::nil, Value::float))
 }
 
 ///
 /// ### Regexp.timeout=
 /// - timeout=(sec) -> sec
 ///
-/// Accepted but not enforced — monoruby has no regex timeout
-/// implementation. Returns the argument so chained assignments work.
+/// Stores the global timeout (`nil` clears it). The value is coerced to a
+/// Float, as in CRuby. Not yet enforced during matching.
 #[monoruby_builtin]
 fn regexp_timeout_set(
-    _: &mut Executor,
-    _: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(lfp.arg(0))
+    let arg = lfp.arg(0);
+    let stored = if arg.is_nil() {
+        None
+    } else {
+        Some(arg.coerce_to_f64(vm, globals)?)
+    };
+    REGEXP_TIMEOUT.with(|t| t.set(stored));
+    Ok(arg)
 }
 
 ///
@@ -1508,9 +1535,12 @@ mod tests {
     #[test]
     fn regexp_timeout_accessors() {
         run_tests(&[
-            // monoruby has no per-match timeout; accessors are stubs.
-            r#"Regexp.timeout"#,
+            // `Regexp.timeout` round-trips the global value (a Float),
+            // `nil` clears it. (Reset first so the value is deterministic
+            // across the harness's repeated in-process evaluations.)
+            r#"Regexp.timeout = nil; Regexp.timeout"#,
             r#"(Regexp.timeout = 1.0)"#,
+            r#"Regexp.timeout = 3; r = Regexp.timeout; Regexp.timeout = nil; [r, Regexp.timeout]"#,
             r#"
             $_ = "input data"
             ~ /at/
@@ -1878,5 +1908,26 @@ mod tests {
         );
         // An arg that can't be coerced ⇒ TypeError.
         run_test_error(r#"Regexp.escape(5)"#);
+    }
+
+    #[test]
+    fn regexp_options_fixedencoding() {
+        // The `u`/`e`/`s` encoding modifiers pin the encoding, so
+        // `#options` exposes Regexp::FIXEDENCODING; a plain regexp does not.
+        run_test(
+            "[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) != 0 }",
+        );
+    }
+
+    #[test]
+    fn regexp_source_encoding() {
+        // A 7-bit, unpinned source is US-ASCII; a pinned encoding (u/e/s
+        // modifier, non-ASCII `\u{}` escape, non-ASCII source) carries
+        // that encoding.
+        run_test(
+            r#"[ /abc/, /abc/u, /abc/e, /\u{61}/, /\u{3042}/,
+                Regexp.new("abc"), Regexp.new("\u{ff}"), Regexp.new("ほげ") ]
+              .map { |r| r.source.encoding.to_s }"#,
+        );
     }
 }
