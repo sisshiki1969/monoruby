@@ -987,9 +987,6 @@ module Kernel
     nil
   end
 
-  def at_exit(&block)
-  end
-
   # Prevent CRuby's bundled_gems.rb from patching require with warning
   # logic.  monoruby provides its own implementations of formerly-bundled
   # gems (fiddle, strscan, etc.) so the warnings are not applicable.
@@ -1281,12 +1278,26 @@ module ObjectSpace
     0
   end
 
+  # Register a finalizer for +obj+. The finalizer (a callable or block,
+  # invoked with the object's id) is run at program termination. monoruby
+  # never runs finalizers asynchronously at GC time, which the spec
+  # explicitly permits. The actual registry lives in the runtime; the
+  # private +__register_finalizer+ primitive records the pair.
   def self.define_finalizer(obj, *args, &block)
-    [0, block || args.first]
+    callable = block || args[0]
+    if callable.nil?
+      raise ArgumentError, "wrong number of arguments (given 1, expected 2)"
+    end
+    unless callable.respond_to?(:call)
+      raise ArgumentError, "no _id2ref or finalizer is given; must respond to #call"
+    end
+    # The primitive returns the effective callable: the one already
+    # registered when an equal finalizer was given before, else +callable+.
+    [0, __register_finalizer(obj, callable)]
   end
 
   def self.undefine_finalizer(obj)
-    obj
+    __unregister_finalizer(obj)
   end
 
   def self.garbage_collect(**opts)

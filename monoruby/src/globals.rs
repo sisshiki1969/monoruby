@@ -149,6 +149,17 @@ pub struct Globals {
     /// signal runs a Ruby `Proc`, is ignored, or lowers to the default
     /// exception. See doc/signal_handling.md A7.
     pub(crate) signal_handlers: Vec<crate::codegen::signal_table::SignalDisposition>,
+    /// `Kernel#at_exit` handler Procs, run in LIFO order at program
+    /// termination. Held here as GC roots: they are reachable only from
+    /// this table yet must survive until the program exits.
+    pub(crate) at_exit_handlers: Vec<Value>,
+    /// `ObjectSpace.define_finalizer` finalizers: `(object identity,
+    /// callable)`. Keyed by the raw `Value` bits of the object (its
+    /// `object_id`); the callable is invoked with that id at program
+    /// termination. The callables are GC roots (see `mark`). monoruby
+    /// runs finalizers only at exit, never asynchronously at GC time,
+    /// which the spec explicitly permits.
+    pub(crate) finalizers: Vec<(u64, Value)>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -187,6 +198,15 @@ impl alloc::GC<RValue> for Globals {
             if let crate::codegen::signal_table::SignalDisposition::Handler(v) = disp {
                 v.mark(alloc);
             }
+        }
+        // `at_exit` handlers and `ObjectSpace` finalizer callables are GC
+        // roots: nothing else references them, yet they must survive until
+        // they run at program termination.
+        for v in &self.at_exit_handlers {
+            v.mark(alloc);
+        }
+        for (_, v) in &self.finalizers {
+            v.mark(alloc);
         }
     }
 }
@@ -370,6 +390,8 @@ impl Globals {
             },
             invokers,
             enum_block_arity: Vec::new(),
+            at_exit_handlers: Vec::new(),
+            finalizers: Vec::new(),
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
@@ -584,6 +606,13 @@ impl Globals {
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = executor.exec_script(self, code, path);
+        // Run `at_exit` handlers and `ObjectSpace` finalizers before the
+        // process leaves. This must happen even when `res` is a
+        // `SystemExit` (raised by `Kernel#exit`) or an uncaught
+        // exception — CRuby runs both on any normal-ish termination.
+        // `Kernel#exit!` / `Process.exit!` bypass this by calling
+        // `std::process::exit` directly and never returning here.
+        executor.run_exit_handlers(self);
         let _ = self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();

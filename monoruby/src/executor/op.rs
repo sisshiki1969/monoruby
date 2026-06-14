@@ -511,6 +511,58 @@ pub(crate) fn cmp_teq_values_bool_no_opt(
 }
 
 impl Executor {
+    /// Run `Kernel#at_exit` handlers (LIFO) and `ObjectSpace` finalizers
+    /// at program termination. Invoked once from `Globals::run` after the
+    /// script body finishes, regardless of how it finished.
+    ///
+    /// Each handler is dispatched via `#call`, matching CRuby: at_exit
+    /// blocks are Procs, finalizers may be any callable (Proc, Method, or
+    /// an object with `call`). Finalizers receive the object's id.
+    ///
+    /// Errors raised inside a handler do not abort the remaining ones:
+    /// a `SystemExit` (`exit` called from within a handler) is swallowed,
+    /// and any other exception is reported as a warning when `$VERBOSE`
+    /// is not `nil`, then execution continues with the next handler.
+    pub(crate) fn run_exit_handlers(&mut self, globals: &mut Globals) {
+        if globals.at_exit_handlers.is_empty() && globals.finalizers.is_empty() {
+            return;
+        }
+        let call = IdentId::get_id("call");
+        // at_exit handlers run in reverse registration order.
+        while let Some(handler) = globals.at_exit_handlers.pop() {
+            if let Err(err) = self.invoke_method_inner(globals, call, handler, &[], None, None) {
+                self.report_exit_handler_error(globals, err, "at_exit");
+            }
+        }
+        // Finalizers run last. Draining the vector (rather than iterating a
+        // snapshot) lets a finalizer define further finalizers that then
+        // run too, matching CRuby.
+        while let Some((id, callable)) = globals.finalizers.pop() {
+            let arg = Value::integer(id as i64);
+            if let Err(err) = self.invoke_method_inner(globals, call, callable, &[arg], None, None) {
+                self.report_exit_handler_error(globals, err, "finalizer");
+            }
+        }
+    }
+
+    /// Report (or swallow) an error escaping an `at_exit`/finalizer handler.
+    fn report_exit_handler_error(&mut self, globals: &mut Globals, err: MonorubyErr, kind: &str) {
+        // `exit` from within a handler simply stops that handler; the
+        // remaining handlers still run.
+        if matches!(err.kind(), MonorubyErrKind::SystemExit(_)) {
+            return;
+        }
+        // CRuby only warns about a finalizer exception when `$VERBOSE`
+        // is not `nil`.
+        let verbose = globals
+            .get_gvar(IdentId::get_id("$VERBOSE"))
+            .is_some_and(|v| !v.is_nil());
+        if verbose {
+            let msg = format!("warning: Exception in {kind}: {}", err.message());
+            let _ = self.ruby_warn(globals, &msg);
+        }
+    }
+
     /// Emit a Ruby warning by writing to `$stderr`.
     pub(crate) fn ruby_warn(&mut self, globals: &mut Globals, msg: &str) -> Result<()> {
         let stderr_id = IdentId::get_id("$stderr");
