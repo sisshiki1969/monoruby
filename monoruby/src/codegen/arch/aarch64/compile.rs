@@ -1534,6 +1534,33 @@ impl Codegen {
                     csel x(r), x(r), x9, ne;
                 );
             }
+            // Class guard: deopt unless `reg`'s runtime class matches.
+            LInst::GuardClass { reg, class, deopt } => {
+                self.a64_guard_class(reg, class, &deopt);
+            }
+            // Type guard: deopt unless `reg` is an Array (immediate check, then
+            // the RValue.ty byte).
+            LInst::GuardArrayTy { reg, deopt } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (0b111);
+                    and x9, x(r), x9;
+                    cbnz x9, deopt;                              // immediate -> deopt
+                    ldrb w9, [x(r), #(RVALUE_OFFSET_TY as u32)]; // RValue.ty (u8)
+                    cmp x9, #(ObjTy::ARRAY.get() as u32);
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+            }
+            // Deopt if the receiver (rdi) is frozen.
+            LInst::GuardFrozen { deopt } => {
+                let rdi = GP::Rdi.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    ldrb w9, [x(rdi), #(RVALUE_OFFSET_FLAG as u32)];
+                    mov x10, (0b10);
+                    and x9, x9, x10;       // isolate the frozen bit
+                    cbnz x9, deopt;        // frozen -> deopt
+                );
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1684,17 +1711,6 @@ impl Codegen {
             mem: LMem::Slot(slot),
         });
         true
-    }
-
-    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
-    /// Returns `false` (bail) for not-yet-supported class kinds.
-    pub(in crate::codegen::jitgen) fn emit_guard_class(
-        &mut self,
-        r: GP,
-        class: ClassId,
-        fail: &DestLabel,
-    ) -> bool {
-        self.a64_guard_class(r, class, fail)
     }
 
     /// Unconditional jump to a side-exit (deopt) label.
@@ -2877,34 +2893,6 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x9, (0u64);
             sub x(r), x9, x(r);    // -t  == tagged(~n)
-        );
-    }
-
-    /// Guard that `reg` is an Array RValue: deopt if it is an immediate (low 3
-    /// bits set) or its `ty` byte is not `ObjTy::ARRAY`.
-    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
-        let r = reg.a64().0;
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (0b111);
-            and x9, x(r), x9;
-            cbnz x9, deopt;                              // immediate -> deopt
-            ldrb w9, [x(r), #(RVALUE_OFFSET_TY as u32)]; // RValue.ty (u8)
-            cmp x9, #(ObjTy::ARRAY.get() as u32);
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-    }
-
-    /// Guard that the receiver in rdi (x-reg) is not frozen: deopt if the frozen
-    /// flag bit (0b10) is set.
-    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
-        let rdi = GP::Rdi.a64().0;
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit,
-            ldrb w9, [x(rdi), #(RVALUE_OFFSET_FLAG as u32)];
-            mov x10, (0b10);
-            and x9, x9, x10;       // isolate the frozen bit
-            cbnz x9, deopt;        // frozen -> deopt
         );
     }
 

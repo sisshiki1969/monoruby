@@ -257,6 +257,18 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// arches differ structurally — x86 branches over a `mov`, aarch64 uses a
     /// branchless `csel` — so this is its own op rather than a Load + branch.
     NilIfZero { reg: GP },
+    /// Class guard: branch to the side-exit `deopt` unless `reg`'s runtime class
+    /// is `class`. `deopt` is a resolved side-exit label (the deopt model:
+    /// guards carry the side-exit they fall through to).
+    GuardClass {
+        reg: GP,
+        class: ClassId,
+        deopt: DestLabel,
+    },
+    /// Type guard: deopt unless `reg` holds an `Array`.
+    GuardArrayTy { reg: GP, deopt: DestLabel },
+    /// Deopt if the receiver (rdi) is frozen.
+    GuardFrozen { deopt: DestLabel },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

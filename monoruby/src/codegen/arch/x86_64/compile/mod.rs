@@ -429,6 +429,10 @@ impl Codegen {
                 skip:
                 }
             }
+            // Type / class guards: deopt (jump to the side-exit) on a mismatch.
+            LInst::GuardClass { reg, class, deopt } => self.guard_class(reg, class, &deopt),
+            LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
+            LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -466,19 +470,6 @@ impl Codegen {
             imm: v.id(),
             mem: LMem::Slot(slot),
         });
-        true
-    }
-
-    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
-    /// Always succeeds on x86 (the bool result exists for the aarch64 twin,
-    /// which bails on not-yet-supported class kinds).
-    pub(in crate::codegen::jitgen) fn emit_guard_class(
-        &mut self,
-        r: GP,
-        class: ClassId,
-        fail: &DestLabel,
-    ) -> bool {
-        self.guard_class(r, class, fail);
         true
     }
 
@@ -1534,16 +1525,6 @@ impl Codegen {
             salq  R(r), 1;
             orq   R(r), 1;
         }
-    }
-
-    /// Guard that `reg` is an Array RValue; deopt otherwise.
-    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
-        self.guard_array_ty(reg, deopt);
-    }
-
-    /// Guard that the receiver in rdi is not frozen; deopt otherwise.
-    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
-        self.guard_frozen(deopt);
     }
 
     /// reg += i (no-op when i == 0).

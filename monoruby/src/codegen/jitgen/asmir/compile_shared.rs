@@ -85,10 +85,14 @@ impl Codegen {
                 else_label,
                 branch_labels,
             } => self.emit_opt_case(frame, max, min, else_label, branch_labels),
-            // Type guard: deopt if `r`'s runtime class is not `class`. (aarch64
-            // bails for not-yet-supported class kinds, hence the bool result.)
+            // Type guard: deopt if `r`'s runtime class is not `class`.
             AsmInst::GuardClass(r, class, deopt) => {
-                return self.emit_guard_class(r, class, &labels[deopt]);
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardClass {
+                    reg: r,
+                    class,
+                    deopt,
+                });
             }
             // Unconditional jump to a side-exit (deopt) label.
             AsmInst::Deopt(deopt) => self.emit_deopt(&labels[deopt]),
@@ -342,8 +346,14 @@ impl Codegen {
             AsmInst::FixnumBitNot { reg } => self.emit_fixnum_bit_not(reg),
             // Type guards: deopt unless `reg` is an Array / the receiver in rdi
             // is unfrozen.
-            AsmInst::GuardArrayTy(reg, deopt) => self.emit_guard_array_ty(reg, &labels[deopt]),
-            AsmInst::GuardFrozen { deopt } => self.emit_guard_frozen(&labels[deopt]),
+            AsmInst::GuardArrayTy(reg, deopt) => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardArrayTy { reg, deopt });
+            }
+            AsmInst::GuardFrozen { deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardFrozen { deopt });
+            }
             // Inline instance-variable / struct-member access on the receiver in
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
