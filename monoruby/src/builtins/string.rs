@@ -107,7 +107,7 @@ pub(super) fn init(globals: &mut Globals) {
         STRING_CLASS,
         "getbyte",
         getbyte,
-        inline_gen!(string_getbyte),
+        inline_gen2!(string_getbyte),
         1,
     );
     globals.define_builtin_func_with(STRING_CLASS, "byteslice", byteslice, 1, 2, false);
@@ -116,7 +116,7 @@ pub(super) fn init(globals: &mut Globals) {
         STRING_CLASS,
         "setbyte",
         setbyte,
-        inline_gen!(string_setbyte),
+        inline_gen2!(string_setbyte),
         2,
     );
     globals.define_builtin_func_with_kw(
@@ -4047,7 +4047,6 @@ fn setbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// otherwise — the interpreter handles `to_int` coercion / TypeError) and
 /// emits the load + bounds check inline. Out-of-range yields nil inline, so
 /// `while b = s.getbyte(i)` loops don't deopt at termination.
-#[cfg(target_arch = "x86_64")]
 fn string_getbyte(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -4077,7 +4076,6 @@ fn string_getbyte(
 /// JIT inliner for `String#setbyte`: guards both arguments to fixnums and
 /// emits the byte store inline. Frozen/chilled receivers and out-of-range
 /// indices deopt — the interpreter raises (or warns and unchills) there.
-#[cfg(target_arch = "x86_64")]
 fn string_setbyte(
     state: &mut AbstractState,
     ir: &mut AsmIr,

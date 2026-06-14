@@ -374,6 +374,76 @@ impl Codegen {
         );
     }
 
+    /// `Fiddle.___read` integer load: untag the pointer in rdi, deopt on NULL,
+    /// load a `width`-byte value (sign/zero-extended per `signed`), tag the
+    /// result as a fixnum in rax.
+    pub(crate) fn emit_fiddle_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+        monoasm! { &mut self.jit,
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+        }
+        match (width, signed) {
+            (1, true) => monoasm! { &mut self.jit, movsxb rax, [rdi]; },
+            (1, false) => monoasm! { &mut self.jit, movzxb rax, [rdi]; },
+            (2, true) => monoasm! { &mut self.jit, movsxw rax, [rdi]; },
+            (2, false) => monoasm! { &mut self.jit, movzxw rax, [rdi]; },
+            (4, true) => monoasm! { &mut self.jit, movsxl rax, [rdi]; },
+            (4, false) => monoasm! { &mut self.jit, movl rax, [rdi]; },
+            _ => unreachable!(),
+        }
+        // Tag as Fixnum: rax = (rax << 1) | 1.
+        monoasm! { &mut self.jit,
+            addq rax, rax;
+            orq rax, 1;
+        }
+    }
+
+    /// `Fiddle.___read` f64 load: untag the pointer in rdi, deopt on NULL, load
+    /// the double into `fret`.
+    pub(crate) fn emit_fiddle_read_f64(&mut self, fret: FPReg, deopt: &DestLabel, base: usize) {
+        monoasm! { &mut self.jit,
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            movq xmm0, [rdi];
+        }
+        self.store_fpr_into_xmm(fret, base);
+    }
+
+    /// `Fiddle.___write` integer store: save the tagged pointer (the return
+    /// value) in rax, untag the pointer in rdi, deopt on NULL, untag the value
+    /// in rsi and store its low `width` bytes.
+    pub(crate) fn emit_fiddle_write_int(&mut self, width: u8, deopt: &DestLabel) {
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            sarq rsi, 1;
+        }
+        match width {
+            1 => monoasm! { &mut self.jit, movb [rdi], rsi; },
+            2 => monoasm! { &mut self.jit, movw [rdi], rsi; },
+            4 => monoasm! { &mut self.jit, movl [rdi], rsi; },
+            _ => unreachable!(),
+        }
+    }
+
+    /// `Fiddle.___write` f64 store: load the source double into xmm0, save the
+    /// tagged pointer in rax, untag the pointer in rdi, deopt on NULL, store the
+    /// double.
+    pub(crate) fn emit_fiddle_write_f64(&mut self, xsrc: FPReg, deopt: &DestLabel, base: usize) {
+        self.load_fpr_into_xmm0(xsrc, base);
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+            sarq rdi, 1;
+            testq rdi, rdi;
+            jz deopt;
+            movq [rdi], xmm0;
+        }
+    }
+
     /// `Integer#%` by a positive power of two: `lhs & mask` on the tagged
     /// fixnum in rdi.
     pub(crate) fn emit_int_rem_pow2_mask(&mut self, mask: i64) {
