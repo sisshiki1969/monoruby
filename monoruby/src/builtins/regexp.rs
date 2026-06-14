@@ -536,7 +536,12 @@ impl UnionEnc {
 /// non-fixed US-ASCII bucket.
 fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     if let Some(re) = arg.is_regex() {
-        let ascii_only = re.source_bytes().iter().all(|&b| b < 0x80);
+        // A BINARY (`/.../n` with high `\xHH` escapes) regexp carries
+        // non-ASCII content even though its source *text* is 7-bit, so
+        // it must not be treated as ASCII-only (which would let
+        // `Regexp.union` downgrade the result to US-ASCII).
+        let ascii_only = re.declared_encoding() != crate::value::Encoding::Ascii8
+            && re.source_bytes().iter().all(|&b| b < 0x80);
         return ArgEnc {
             encoding: re.declared_encoding(),
             fixed: re.fixed_encoding(),
@@ -1951,6 +1956,18 @@ mod tests {
         run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
         // A Regexp argument preserves the original source verbatim.
         run_test(r#"Regexp.new(/\u{61}/).source"#);
+    }
+
+    #[test]
+    fn regexp_encoding_binary_noencoding() {
+        // `/.../n` with a high `\xHH` escape is BINARY; pure-ASCII /n is
+        // US-ASCII.
+        run_test(r#"[/\xc2\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\x7f/n.encoding.to_s]"#);
+        run_test(
+            r#"Regexp.new('([\x00-\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to_s"#,
+        );
+        // union keeps BINARY when a part is BINARY-with-non-ASCII.
+        run_test(r#"Regexp.union(/abc/, /[\x00-\x7f]/n, /[\x80-\xBF]/n).encoding.to_s"#);
     }
 
     #[test]

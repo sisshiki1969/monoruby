@@ -408,11 +408,13 @@ pub(crate) fn resolve_declared_encoding(
     // the matching engine sees.
     let has_non_ascii = source.iter().any(|&b| b >= 0x80);
     if option & RegexpInner::NOENCODING != 0 {
-        // `/.../n` (NOENCODING): BINARY when source has non-ASCII
-        // bytes, US-ASCII otherwise. CRuby's regex parser only
-        // pins to ASCII-8BIT when there's actual binary content
-        // — pure-ASCII patterns stay re-tag-free.
-        if has_non_ascii {
+        // `/.../n` (NOENCODING): BINARY when the source carries
+        // non-ASCII content — either raw bytes >= 0x80 or a `\xHH`
+        // escape decoding to one (`/\xc2\xa1/n` is BINARY) — US-ASCII
+        // otherwise. CRuby's regex parser only pins to ASCII-8BIT when
+        // there's actual binary content; pure-ASCII patterns stay
+        // re-tag-free.
+        if has_non_ascii || has_non_ascii_hex_escape(source) {
             return (Encoding::Ascii8, true);
         }
         return (Encoding::UsAscii, false);
@@ -454,6 +456,42 @@ fn source_encoding_fallback(
         None if has_non_ascii => (Encoding::Utf8, true),
         None => (Encoding::UsAscii, fixed_flag),
     }
+}
+
+/// Scan `source` for a `\xHH` hexadecimal escape whose byte value is
+/// non-ASCII (>= 0x80), e.g. `\xc2` or `\xFF`. Used by the `/.../n`
+/// (NOENCODING) path to pin the encoding to BINARY when the pattern
+/// embeds high bytes via escapes (`/\xc2\xa1/n.encoding == BINARY`).
+/// A literal escaped backslash (`\\`) is skipped so `\\xFF` is not
+/// mistaken for a high-byte escape.
+fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < source.len() {
+        if source[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        match source[i + 1] {
+            b'x' => {
+                let mut j = i + 2;
+                let mut val: u32 = 0;
+                let mut n = 0;
+                while j < source.len() && n < 2 && source[j].is_ascii_hexdigit() {
+                    val = val * 16 + (source[j] as char).to_digit(16).unwrap();
+                    j += 1;
+                    n += 1;
+                }
+                if n > 0 && val >= 0x80 {
+                    return true;
+                }
+                i = j;
+            }
+            // Any other escaped char (incl. `\\`) consumes both bytes,
+            // so an escaped backslash can't start a spurious `\x`.
+            _ => i += 2,
+        }
+    }
+    false
 }
 
 /// Scan `src` for a `\u` escape (`\uXXXX` or `\u{...}`) whose
