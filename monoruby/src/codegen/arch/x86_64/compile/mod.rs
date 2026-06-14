@@ -301,6 +301,16 @@ impl Codegen {
                     movq [R(b) + (disp)], R(s);
                 );
             }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- src (callee-frame arg slot)
+            LInst::Store {
+                src,
+                mem: LMem::RspRel { disp },
+            } => {
+                let s = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [rsp + (disp - RSP_LOCAL_FRAME)], R(s);
+                );
+            }
             // [lfp - slot] <- imm. Legalization: a 64-bit immediate that does
             // not fit x86's imm32 store form is staged through rax (mirrors
             // `literal_to_stack`).
@@ -318,6 +328,15 @@ impl Codegen {
                         movq [rbp - (rbp_local(slot))], rax;
                     );
                 }
+            }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- imm (callee-frame arg slot)
+            LInst::StoreImm {
+                imm,
+                mem: LMem::RspRel { disp },
+            } => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (disp - RSP_LOCAL_FRAME)], (imm);
+                );
             }
             // dst <op>= imm (in-place register/immediate ALU; the only Alu
             // shape produced so far, from RegAdd/RegSub). No-op when imm == 0.
@@ -1939,30 +1958,6 @@ impl Codegen {
     ) -> bool {
         let return_addr = self.gen_yield(callid, error);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
-        true
-    }
-
-    // ---- callee-frame argument stores (former per-arch arms) ----
-
-    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
-        );
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
-        );
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
-        );
         true
     }
 

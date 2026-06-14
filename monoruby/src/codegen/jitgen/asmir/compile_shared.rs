@@ -459,11 +459,20 @@ impl Codegen {
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
             AsmInst::LoopJitRspBump { offset } => return self.emit_loop_jit_rsp_bump(offset),
-            // Inline argument-setup stores into the callee frame (aarch64 bails
-            // on an out-of-range slot offset).
-            AsmInst::RegToRSPOffset(r, ofs) => return self.emit_reg_to_rsp_offset(r, ofs),
-            AsmInst::ZeroToRSPOffset(ofs) => return self.emit_zero_to_rsp_offset(ofs),
-            AsmInst::U64ToRSPOffset(i, ofs) => return self.emit_u64_to_rsp_offset(i, ofs),
+            // Inline argument-setup stores into the callee frame, at a
+            // (raw) rsp-relative offset the encoder legalizes per arch.
+            AsmInst::RegToRSPOffset(r, ofs) => self.encode_linst(LInst::Store {
+                src: r,
+                mem: LMem::RspRel { disp: ofs },
+            }),
+            AsmInst::ZeroToRSPOffset(ofs) => self.encode_linst(LInst::StoreImm {
+                imm: 0,
+                mem: LMem::RspRel { disp: ofs },
+            }),
+            AsmInst::U64ToRSPOffset(i, ofs) => self.encode_linst(LInst::StoreImm {
+                imm: i,
+                mem: LMem::RspRel { disp: ofs },
+            }),
             // Side-effect guard for block-passing calls: deopt if the frame was
             // captured/promoted.
             AsmInst::GuardCapture(deopt) => return self.emit_guard_capture(&labels[deopt]),

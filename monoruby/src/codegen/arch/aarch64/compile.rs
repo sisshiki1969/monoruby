@@ -1394,6 +1394,16 @@ impl Codegen {
             } => {
                 self.a64_field_store(src.a64().0, base.a64().0, disp as u32);
             }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- src (callee-frame arg slot).
+            // `a64_rsp_slot_addr` forms the address in scratch x10.
+            LInst::Store {
+                src,
+                mem: LMem::RspRel { disp },
+            } => {
+                self.a64_rsp_slot_addr(disp, 10);
+                let s = src.a64().0;
+                monoasm_arm64!(&mut self.jit, str x(s), [x10];);
+            }
             // [lfp - slot] <- imm. aarch64 has no store-immediate, so the
             // immediate is staged through scratch x9 (no allocated GP clobbered),
             // then stored via the legalizing `a64_frame_store`.
@@ -1405,6 +1415,15 @@ impl Codegen {
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
                 monoasm_arm64!(&mut self.jit, mov x9, (imm););
                 self.a64_frame_store(9, lfp, off);
+            }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- imm (callee-frame arg slot):
+            // address in x10, immediate staged through x9.
+            LInst::StoreImm {
+                imm,
+                mem: LMem::RspRel { disp },
+            } => {
+                self.a64_rsp_slot_addr(disp, 10);
+                monoasm_arm64!(&mut self.jit, mov x9, (imm); str x9, [x10];);
             }
             // dst <op>= imm (in-place register/immediate ALU; the only Alu
             // shape produced so far, from RegAdd/RegSub). The immediate is
@@ -4621,34 +4640,6 @@ impl Codegen {
 
     // ---- callee-frame argument stores ([sp + (ofs - RSP_LOCAL_FRAME)]) ------
     // Used by the inline argument-setup fast path (fetch_for_callee).
-
-    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- reg`
-    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
-        self.a64_rsp_slot_addr(ofs, 10);
-        let r = r.a64().0;
-        monoasm_arm64!(&mut self.jit, str x(r), [x10];);
-        true
-    }
-
-    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- 0`
-    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
-        self.a64_rsp_slot_addr(ofs, 10);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (0u64);
-            str x9, [x10];
-        );
-        true
-    }
-
-    /// `[sp + (ofs - RSP_LOCAL_FRAME)] <- imm`
-    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
-        self.a64_rsp_slot_addr(ofs, 10);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (i);
-            str x9, [x10];
-        );
-        true
-    }
 
     /// `&block` proxy: materialize the current method's block handler into
     /// `ret`. Walk `outer` outer-frame links to reach the method LFP (x0), load
