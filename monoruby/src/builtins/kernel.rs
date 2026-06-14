@@ -158,6 +158,17 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "abort", abort, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit", exit, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "exit!", exit_bang, 0, 1, false);
+    globals.define_builtin_module_func(kernel_class, "at_exit", at_exit, 0);
+    // Registry primitives backing `ObjectSpace.define_finalizer` /
+    // `undefine_finalizer` (the public methods live in startup.rb, which
+    // handles argument validation and the return value).
+    globals.define_private_builtin_func(kernel_class, "__register_finalizer", register_finalizer, 2);
+    globals.define_private_builtin_func(
+        kernel_class,
+        "__unregister_finalizer",
+        unregister_finalizer,
+        1,
+    );
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "warn",
@@ -3104,6 +3115,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         return Ok(dup_module.as_val());
     }
     let copy = self_val.dup();
+    copy_finalizers(globals, self_val.id(), copy.id());
     // Run the `initialize_dup` hook (default validates; a subclass may
     // override it). Root `copy` across the dispatch (it allocates).
     let temp = vm.temp_len();
@@ -3118,6 +3130,19 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     )?;
     vm.temp_clear(temp);
     Ok(copy)
+}
+
+/// Re-register every finalizer attached to `from` (an object id) onto
+/// `to`, so that `dup`/`clone` copies of an object inherit its
+/// finalizers, matching CRuby.
+fn copy_finalizers(globals: &mut Globals, from: u64, to: u64) {
+    let copied: Vec<(u64, Value)> = globals
+        .finalizers
+        .iter()
+        .filter(|(k, _)| *k == from)
+        .map(|(_, callable)| (to, *callable))
+        .collect();
+    globals.finalizers.extend(copied);
 }
 
 ///
@@ -3135,6 +3160,7 @@ fn clone_val(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let copy = self_val.clone_value();
+    copy_finalizers(globals, self_val.id(), copy.id());
     if self_val.is_class_or_module().is_some() {
         return Ok(copy);
     }
@@ -3152,6 +3178,98 @@ fn clone_val(
     )?;
     vm.temp_clear(temp);
     Ok(copy)
+}
+
+///
+/// ### Kernel#at_exit
+///
+/// - at_exit { ... } -> Proc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/at_exit.html]
+#[monoruby_builtin]
+fn at_exit(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::argumenterr("called without a block"));
+    };
+    let proc = vm.generate_proc(globals, bh, pc)?;
+    let proc = proc.as_val();
+    globals.at_exit_handlers.push(proc);
+    Ok(proc)
+}
+
+///
+/// `ObjectSpace.define_finalizer` registry primitive (private).
+///
+/// Validation of the callable (`respond_to?(:call)`) happens in the Ruby
+/// wrapper; here we reject non-reference objects, warn about a
+/// self-referencing finalizer, deduplicate, and record the `(object id,
+/// callable)` pair (run at program termination). Returns the effective
+/// callable — the originally-registered one when a duplicate is given.
+#[monoruby_builtin]
+fn register_finalizer(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    let callable = lfp.arg(1);
+    // Immediates (Integer, Symbol, Float-flonum, nil, true, false) have
+    // no stable per-object identity, so a finalizer cannot be attached.
+    if obj.is_packed_value() {
+        return Err(MonorubyErr::argumenterr(format!(
+            "cannot define finalizer for {}",
+            obj.get_real_class_name(&globals.store)
+        )));
+    }
+    // CRuby warns when the finalizer closes over (or is bound to) the very
+    // object being finalized, since that keeps it alive until exit.
+    let references_self = if let Some(p) = callable.is_proc() {
+        p.self_val().id() == obj.id()
+    } else if let Some(m) = callable.is_method() {
+        m.receiver().id() == obj.id()
+    } else {
+        false
+    };
+    if references_self {
+        vm.ruby_warn(globals, "warning: finalizer references object to be finalized")?;
+    }
+    // A finalizer `==` to one already registered for this object is
+    // recorded only once; the originally-registered callable is returned.
+    let id = obj.id();
+    let existing: Vec<Value> = globals
+        .finalizers
+        .iter()
+        .filter(|(k, _)| *k == id)
+        .map(|(_, c)| *c)
+        .collect();
+    for c in existing {
+        if vm.invoke_eq(globals, c, callable)? {
+            return Ok(c);
+        }
+    }
+    globals.finalizers.push((id, callable));
+    Ok(callable)
+}
+
+///
+/// `ObjectSpace.undefine_finalizer` registry primitive (private).
+///
+#[monoruby_builtin]
+fn unregister_finalizer(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    // CRuby refuses to mutate the finalizer set of a frozen object.
+    if obj.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, obj));
+    }
+    let id = obj.id();
+    globals.finalizers.retain(|(k, _)| *k != id);
+    Ok(obj)
 }
 
 /// ### Kernel#define_singleton_method
@@ -6243,5 +6361,41 @@ mod tests {
             o.inspect
             "#,
         );
+    }
+
+    #[test]
+    fn objectspace_define_finalizer() {
+        // Returns `[0, callable]`; `[0]` is comparable across runtimes.
+        run_test(r#"ObjectSpace.define_finalizer(Object.new, ->(id){ id })[0]"#);
+        run_test(r#"ObjectSpace.define_finalizer(Object.new){ |id| id }[0]"#);
+        // A bound method is an acceptable callable.
+        run_test(
+            r#"
+            h = Object.new
+            def h.finalize(id); end
+            ObjectSpace.define_finalizer(Object.new, h.method(:finalize))[0]
+            "#,
+        );
+        // undefine_finalizer returns its argument.
+        run_test(r#"o = Object.new; ObjectSpace.undefine_finalizer(o).equal?(o)"#);
+    }
+
+    #[test]
+    fn objectspace_define_finalizer_errors() {
+        // callable must respond to #call
+        run_test_error(r#"ObjectSpace.define_finalizer(Object.new, Object.new)"#);
+        // finalizer cannot be attached to a non-reference (immediate)
+        run_test_error(r#"ObjectSpace.define_finalizer(:sym){ 1 }"#);
+        // undefine on a frozen object raises FrozenError
+        run_test_error(r#"o = Object.new; o.freeze; ObjectSpace.undefine_finalizer(o)"#);
+    }
+
+    #[test]
+    fn kernel_at_exit() {
+        // `at_exit` returns the registered Proc.
+        run_test(r#"at_exit { }.is_a?(Proc)"#);
+        run_test(r#"at_exit { }.lambda?"#);
+        // `at_exit` without a block raises ArgumentError.
+        run_test_error(r#"at_exit"#);
     }
 }
