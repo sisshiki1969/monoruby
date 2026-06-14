@@ -673,6 +673,35 @@ pub(in crate::codegen::jitgen) enum LInst {
     RestKw {
         rest_kw: Vec<(SlotId, IdentId)>,
     },
+    GuardClassVersion {
+        class_version: DestLabel,
+        position: Option<BytecodePtr>,
+        with_recovery: bool,
+        deopt: DestLabel,
+    },
+    RecompileDeopt {
+        position: Option<BytecodePtr>,
+        deopt: DestLabel,
+        error: Option<DestLabel>,
+        reason: RecompileReason,
+    },
+    ClassDef {
+        base: Option<SlotId>,
+        superclass: Option<SlotId>,
+        dst: Option<SlotId>,
+        name: IdentId,
+        func_id: FuncId,
+        is_module: bool,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    },
+    SingletonClassDef {
+        base: SlotId,
+        dst: Option<SlotId>,
+        func_id: FuncId,
+        using_xmm: UsingXmm,
+        error: DestLabel,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

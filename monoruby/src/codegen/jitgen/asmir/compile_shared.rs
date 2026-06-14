@@ -367,7 +367,12 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
+                self.encode_linst(LInst::GuardClassVersion {
+                    class_version,
+                    position,
+                    with_recovery,
+                    deopt,
+                });
             }
             AsmInst::SetupMethodFrame {
                 meta,
@@ -393,7 +398,12 @@ impl Codegen {
                 reason,
             } => {
                 let error = error.map(|e| labels[e].clone());
-                self.emit_recompile_deopt(position, &labels[deopt], error.as_ref(), reason)
+                self.encode_linst(LInst::RecompileDeopt {
+                    position,
+                    deopt: labels[deopt].clone(),
+                    error,
+                    reason,
+                });
             }
             // The call itself. x86 records a return-address deopt patch point;
             // aarch64 has no branch patching (class-version guards cover it).
@@ -832,7 +842,7 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                return self.class_def(
+                self.encode_linst(LInst::ClassDef {
                     base,
                     superclass,
                     dst,
@@ -840,8 +850,8 @@ impl Codegen {
                     func_id,
                     is_module,
                     using_xmm,
-                    &labels[error],
-                );
+                    error: labels[error].clone(),
+                });
             }
             AsmInst::SingletonClassDef {
                 base,
@@ -850,7 +860,13 @@ impl Codegen {
                 using_xmm,
                 error,
             } => {
-                return self.singleton_class_def(base, dst, func_id, using_xmm, &labels[error]);
+                self.encode_linst(LInst::SingletonClassDef {
+                    base,
+                    dst,
+                    func_id,
+                    using_xmm,
+                    error: labels[error].clone(),
+                });
             }
             // Forwarding-trampoline helper frame setup (aarch64 bails on an
             // out-of-range frame offset).
@@ -1057,6 +1073,52 @@ impl Codegen {
             }
             LInst::RestKw { rest_kw } => {
                 self.emit_rest_kw(rest_kw);
+            }
+            LInst::GuardClassVersion {
+                class_version,
+                position,
+                with_recovery,
+                deopt,
+            } => {
+                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
+            }
+            LInst::RecompileDeopt {
+                position,
+                deopt,
+                error,
+                reason,
+            } => {
+                self.emit_recompile_deopt(position, &deopt, error.as_ref(), reason);
+            }
+            LInst::ClassDef {
+                base,
+                superclass,
+                dst,
+                name,
+                func_id,
+                is_module,
+                using_xmm,
+                error,
+            } => {
+                self.class_def(
+                    base,
+                    superclass,
+                    dst,
+                    name,
+                    func_id,
+                    is_module,
+                    using_xmm,
+                    &error,
+                );
+            }
+            LInst::SingletonClassDef {
+                base,
+                dst,
+                func_id,
+                using_xmm,
+                error,
+            } => {
+                self.singleton_class_def(base, dst, func_id, using_xmm, &error);
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }
