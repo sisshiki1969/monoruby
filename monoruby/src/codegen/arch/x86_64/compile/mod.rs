@@ -271,6 +271,16 @@ impl Codegen {
                     movq R(r), [rbp - (rbp_local(slot))];
                 );
             }
+            // dst <- [base + disp] (object field; no immediate-range limit on x86)
+            LInst::Load {
+                dst,
+                mem: LMem::Field { base, disp },
+            } => {
+                let (d, b) = (dst as u64, base as u64);
+                monoasm!( &mut self.jit,
+                    movq R(d), [R(b) + (disp)];
+                );
+            }
             // [lfp - slot] <- src
             LInst::Store {
                 src,
@@ -1492,12 +1502,6 @@ impl Codegen {
     /// Store the accumulator-side `src` into an inline instance-variable slot.
     pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
         self.store_ivar_object_inline(src, ivarid);
-        true
-    }
-
-    /// Load an inline Struct member slot into the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
-        self.load_struct_slot_inline(slot_index);
         true
     }
 

@@ -1368,6 +1368,15 @@ impl Codegen {
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
                 self.a64_frame_load(dst.a64().0, lfp, off);
             }
+            // dst <- [base + disp] (object field). `a64_field_load` legalizes
+            // the (positive) displacement: scaled ldr immediate, else scratch
+            // x10 materialization.
+            LInst::Load {
+                dst,
+                mem: LMem::Field { base, disp },
+            } => {
+                self.a64_field_load(dst.a64().0, base.a64().0, disp as u32);
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -2955,15 +2964,6 @@ impl Codegen {
         self.a64_field_store(s, rdi, off);
         // Write barrier: rdi = the object (parent), src = stored value.
         self.emit_write_barrier(GP::Rdi, src);
-        true
-    }
-
-    /// Load an inline Struct member slot into the accumulator (x23).
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
-        let off = RVALUE_OFFSET_INLINE as u32 + slot_index as u32 * 8;
-        let rdi = GP::Rdi.a64().0;
-        let r15 = GP::R15.a64().0;
-        self.a64_field_load(r15, rdi, off);
         true
     }
 

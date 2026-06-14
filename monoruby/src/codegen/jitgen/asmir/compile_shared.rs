@@ -11,7 +11,7 @@
 //! instruction family at a time; see `doc/aarch64-x86-jit-differences.md`.
 
 use super::*;
-use crate::codegen::jitgen::lir::{LCond, LInst, LOperand};
+use crate::codegen::jitgen::lir::{LCond, LInst, LMem, LOperand};
 
 impl Codegen {
     ///
@@ -351,8 +351,18 @@ impl Codegen {
             AsmInst::StoreIVarInline { src, ivarid } => {
                 return self.emit_store_ivar_inline(src, ivarid);
             }
+            // Inline struct-member load: `r15 <- self.@slot` at a fixed field
+            // offset on the receiver (rdi). Lowered to a field load whose
+            // (positive) displacement the encoder legalizes per arch.
             AsmInst::LoadStructSlotInline { slot_index } => {
-                return self.emit_load_struct_slot_inline(slot_index);
+                let disp = slot_index as i32 * 8 + RVALUE_OFFSET_INLINE as i32;
+                self.encode_linst(LInst::Load {
+                    dst: GP::R15,
+                    mem: LMem::Field {
+                        base: GP::Rdi,
+                        disp,
+                    },
+                });
             }
             AsmInst::StoreStructSlotInline { src, slot_index } => {
                 return self.emit_store_struct_slot_inline(src, slot_index);

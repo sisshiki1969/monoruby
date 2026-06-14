@@ -101,25 +101,6 @@ impl Codegen {
 
     ///
     /// Load slot `slot_index` of a `Struct` instance whose slot
-    /// vector is **inline** in the RValue's union (i.e. the class has
-    /// `≤ STRUCT_INLINE_SLOTS` members). Single mov, no Box deref.
-    ///
-    /// Receiver class is already guarded by the call-site cache, so
-    /// the JIT picks this variant statically based on the class's
-    /// member count.
-    ///
-    /// #### in
-    /// - rdi: &RValue (a STRUCT instance)
-    /// #### out
-    /// - r15: Value
-    pub(super) fn load_struct_slot_inline(&mut self, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq r15, [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)];
-        }
-    }
-
-    ///
-    /// Load slot `slot_index` of a `Struct` instance whose slot
     /// vector spilled to the **heap** (the class has more than
     /// `STRUCT_INLINE_SLOTS` members). Two movs.
     ///
