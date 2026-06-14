@@ -1970,6 +1970,17 @@ mod tests {
     }
 
     #[test]
+    fn regexp_interpolation_encoding() {
+        // An interpolated non-ASCII String upgrades the regexp's encoding.
+        run_test(r#"s = "文字化け".encode("euc-jp"); /#{s}/.encoding.to_s"#);
+        // A 7-bit interpolated String stays US-ASCII even if tagged EUC-JP.
+        run_test(r#"a = "abc".encode("euc-jp"); /#{a}/.encoding.to_s"#);
+        run_test(r#"/#{"あ"}/.encoding.to_s"#);
+        // Interpolation still matches.
+        run_test(r#"x = "wor"; "hello world" =~ /#{x}ld/"#);
+    }
+
+    #[test]
     fn regexp_match_invalid_encoding() {
         // Matching a subject that is invalid in its own encoding raises
         // ArgumentError (CRuby), instead of mis-matching or erroring.
