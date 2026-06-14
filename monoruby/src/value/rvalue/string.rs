@@ -2243,6 +2243,14 @@ fn ensure_shared_root(parent: &mut Value) -> (Value, *const u8) {
             root,
         },
     };
+    // `parent` now holds an edge to the freshly allocated (young) `root`.
+    // If `parent` is already old, this is an un-barriered old→young store:
+    // a later minor GC would reclaim `root` while `parent` still views its
+    // buffer, and a subsequent mark of `parent` would walk the freed root
+    // ("Dead object"). Record the edge — this (and a sharer's clone) is the
+    // only path that gives a String an outgoing reference, mirrored by
+    // `young_child_exists`/`is_promotable`.
+    parent.write_barrier(root);
     (root, ptr)
 }
 

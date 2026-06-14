@@ -1845,6 +1845,45 @@ impl Executor {
         Ok(())
     }
 
+    /// Like [`invoke_block_iter1`], but for an *eagerly materialised*
+    /// `Vec<Value>` of freshly allocated heap objects (e.g. the line views
+    /// built by `String#each_line` / `#lines`). Unlike a lazy iterator —
+    /// where each element is created just before it is yielded and only
+    /// the current one is live — every element here already exists, so the
+    /// not-yet-yielded ones must be kept reachable: a block allocation can
+    /// otherwise trigger a GC that sweeps a pending element, leaving a
+    /// dangling pointer once it is finally yielded. We root the whole batch
+    /// on the temp stack and index into it (re-reading through the rooted
+    /// slot each step, since `invoke_block` may itself push temps).
+    pub(crate) fn invoke_block_iter1_rooted(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        values: Vec<Value>,
+    ) -> Result<()> {
+        let base = self.temp_len();
+        for v in &values {
+            self.temp_push(*v);
+        }
+        let data = match self.get_block_data(globals, bh) {
+            Ok(data) => data,
+            Err(err) => {
+                self.temp_clear(base);
+                return Err(err);
+            }
+        };
+        let mut result = Ok(());
+        for i in 0..values.len() {
+            let val = self.temp_at(base + i);
+            if let Err(err) = self.invoke_block(globals, &data, &[val]) {
+                result = Err(err);
+                break;
+            }
+        }
+        self.temp_clear(base);
+        result
+    }
+
     /*pub(crate) fn invoke_block_iter_with_index1(
         &mut self,
         globals: &mut Globals,
@@ -1980,10 +2019,19 @@ impl Executor {
         )
         .ok_or_else(|| {
             let err = self.take_error();
-            // MethodReturn that escapes a Proc#call means the target method
-            // has already returned — convert to LocalJumpError.
-            if let MonorubyErrKind::MethodReturn(val, _) = err.kind() {
-                MonorubyErr::localjumperr_with_val("unexpected return", *val)
+            // A `return` inside a (non-lambda) Proc unwinds to the method
+            // that created it. If that method's frame is still on the
+            // stack, let the `MethodReturn` keep propagating so it exits
+            // there (a non-local return — `proc { return }.call`, or a
+            // "long return" flowing through an intervening `Proc#call`).
+            // If the creation-site method has already returned, the frame
+            // is gone and the return is a `LocalJumpError`.
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() {
+                if self.is_frame_on_stack(*target_lfp) {
+                    err
+                } else {
+                    MonorubyErr::localjumperr_with_val("unexpected return", *val)
+                }
             } else {
                 err
             }

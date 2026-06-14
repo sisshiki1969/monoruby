@@ -6,7 +6,19 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Proc", PROC_CLASS, ObjTy::PROC);
-    globals.define_builtin_class_func_with_effect(PROC_CLASS, "new", new, 0, 0, Effect::CAPTURE);
+    // `rest` so that `SubclassOfProc.new(*args) { }` forwards the
+    // positional args to the subclass's `#initialize`.
+    let proc_meta = globals.store.get_metaclass(PROC_CLASS).id();
+    globals.define_builtin_funcs_with_effect(
+        proc_meta,
+        "new",
+        &[],
+        new,
+        0,
+        0,
+        true,
+        Effect::CAPTURE,
+    );
     globals.store[PROC_CLASS].clear_alloc_func();
     globals.define_builtin_funcs_with_kw(
         PROC_CLASS,
@@ -21,6 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
+    globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
     globals.define_builtin_func_with_kw(
@@ -39,6 +52,141 @@ pub(super) fn init(globals: &mut Globals) {
     // trailing hash at the runtime level in a way that needs this marker,
     // so it's a safe no-op that returns the receiver.
     globals.define_builtin_func(PROC_CLASS, "ruby2_keywords", ruby2_keywords, 0);
+    globals.define_builtin_func_with(PROC_CLASS, "curry", curry, 0, 1, false);
+}
+
+/// Build a curry proc: a Proc backed by the shared native
+/// [`PROC_CURRY_BODY_FUNCID`] body, carrying its state — `[orig,
+/// collected, arity, lambda?]` — on the proc's `outer_lfp` self.
+pub(crate) fn make_curry_proc(
+    globals: &Globals,
+    orig: Value,
+    collected: Value,
+    arity: i64,
+    is_lambda: bool,
+    pc: BytecodePtr,
+) -> Value {
+    let state = Value::array_from_vec(vec![
+        orig,
+        collected,
+        Value::integer(arity),
+        Value::bool(is_lambda),
+    ]);
+    let frame = Lfp::heap_frame(state, globals[PROC_CURRY_BODY_FUNCID].meta());
+    Proc::from_outer(frame, PROC_CURRY_BODY_FUNCID, pc).into()
+}
+
+/// Whether `proc` reports `lambda? == true` (the curry procs inherit
+/// this from the proc they were built from). A curry proc reads its own
+/// stored flag; otherwise it is derived from the body's block-style.
+fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
+    if proc.func_id() == PROC_CURRY_BODY_FUNCID {
+        return proc.self_val().as_array()[3].as_bool();
+    }
+    !globals[proc.func_id()].is_block_style()
+}
+
+/// `Proc#arity`-equivalent for the curry-time default (mirrors
+/// `proc_arity`): a `Method#to_proc` proc reports the bound method's
+/// arity, everything else the func's arity.
+fn proc_arity_value(globals: &Globals, proc: &Proc) -> i64 {
+    if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        if m.method_missing_name().is_some() {
+            return -1;
+        }
+        return globals[m.func_id()].arity();
+    }
+    globals[proc.func_id()].arity()
+}
+
+///
+/// ### Proc#curry
+///
+/// - curry -> Proc
+/// - curry(arity) -> Proc
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/curry.html]
+#[monoruby_builtin]
+fn curry(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let proc = Proc::new(self_val);
+    let is_lambda = proc_is_lambda(globals, &proc);
+    let arity_given = lfp.try_arg(0).filter(|v| !v.is_nil());
+    let mut arity = match arity_given {
+        Some(v) => v.coerce_to_int_i64(vm, globals)?,
+        None => proc_arity_value(globals, &proc),
+    };
+    if arity < 0 {
+        arity = -arity - 1;
+    }
+    // A lambda only accepts an arity its own signature can satisfy.
+    if is_lambda && globals.store.resolve_iseq(proc.func_id()).is_some() {
+        let params = globals[proc.func_id()].params();
+        let req = (params.req_num() + params.post_num()) as i64;
+        let has_rest = params.is_rest().is_some() && !params.rest_is_implicit();
+        let max = if has_rest {
+            i64::MAX
+        } else {
+            req + params.opt_num() as i64
+        };
+        if arity < req || arity > max {
+            return Err(MonorubyErr::wrong_number_of_arg_range(
+                arity as usize,
+                req as usize..=max as usize,
+            ));
+        }
+    }
+    if arity <= 0 {
+        return Ok(self_val);
+    }
+    Ok(make_curry_proc(
+        globals,
+        self_val,
+        Value::array_empty(),
+        arity,
+        is_lambda,
+        pc,
+    ))
+}
+
+/// Shared body of curry procs (see [`PROC_CURRY_BODY_FUNCID`]). Appends
+/// the call arguments to the collected ones; once enough are gathered
+/// it calls the original proc, otherwise it returns a further-curried
+/// proc that captures the accumulated arguments.
+#[monoruby_builtin]
+pub(crate) fn proc_curry_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let state = lfp
+        .outer()
+        .expect("proc_curry_body called without outer_lfp")
+        .self_val();
+    let st = state.as_array();
+    let orig = st[0];
+    let collected = st[1].as_array();
+    let arity = st[2].try_fixnum().unwrap();
+    let is_lambda = st[3].as_bool();
+    let mut new_args: Vec<Value> = collected.iter().copied().collect();
+    new_args.extend(lfp.arg(0).as_array().iter().copied());
+    if (new_args.len() as i64) >= arity {
+        let call = IdentId::get_id("call");
+        let bh = lfp.block();
+        vm.invoke_method_inner(globals, call, orig, &new_args, bh, None)
+    } else {
+        Ok(make_curry_proc(
+            globals,
+            orig,
+            Value::array_from_vec(new_args),
+            arity,
+            is_lambda,
+            pc,
+        ))
+    }
 }
 
 /// `Proc#ruby2_keywords` — no-op marker that returns self.
@@ -55,12 +203,25 @@ fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/s/new.html]
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    if let Some(bh) = lfp.block() {
-        let p = vm.generate_proc(globals, bh, pc)?;
-        Ok(p.into())
-    } else {
-        Err(MonorubyErr::create_proc_no_block())
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::create_proc_no_block());
+    };
+    let p = vm.generate_proc(globals, bh, pc)?;
+    let class_id = lfp.self_val().as_class_id();
+    if class_id == PROC_CLASS {
+        return Ok(p.into());
     }
+    // A subclass of Proc: re-tag the freshly built proc with the
+    // subclass and run its `#initialize(*args)` (CRuby binds the block
+    // before `initialize`, so a custom `initialize` need not `super`).
+    let mut obj: Value = p.into();
+    obj.change_class(class_id);
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let temp = vm.temp_len();
+    vm.temp_push(obj);
+    vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, &args, None, None)?;
+    vm.temp_clear(temp);
+    Ok(obj)
 }
 
 ///
@@ -160,6 +321,56 @@ fn source_location(
 }
 
 ///
+/// ### Proc#to_s, Proc#inspect
+///
+/// - to_s -> String
+/// - inspect -> String
+///
+/// Returns `#<Proc:0xADDR FILE:LINE>` (plus ` (lambda)` for a lambda).
+/// The result has BINARY (ASCII-8BIT) encoding, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let proc = Proc::new(self_);
+    let func_id = proc.func_id();
+    let is_lambda = !globals[func_id].is_block_style();
+    // A Method#to_proc proc reports the method's source location.
+    let src_fid = if func_id == METHOD_TO_PROC_BODY_FUNCID
+        && let Some(m) = proc.self_val().is_method()
+    {
+        m.func_id()
+    } else {
+        func_id
+    };
+    let mut s = format!("#<Proc:0x{:016x}", self_.id());
+    if func_id == SYMBOL_TO_PROC_BODY_FUNCID
+        && let Some(sym) = proc.self_val().try_symbol()
+    {
+        // `:foo.to_proc` renders as `#<Proc:0x..(&:foo) (lambda)>`.
+        s.push_str(&format!("(&:{})", sym));
+    } else if let Some(iseq) = globals.store.resolve_iseq(src_fid) {
+        let info = &globals.store[iseq];
+        s.push_str(&format!(
+            " {}:{}",
+            info.sourceinfo.file_name(),
+            info.sourceinfo.get_line(&info.loc)
+        ));
+    }
+    if is_lambda {
+        s.push_str(" (lambda)");
+    }
+    s.push('>');
+    Ok(Value::string_from_inner(
+        crate::value::rvalue::RStringInner::from_encoding(
+            s.as_bytes(),
+            crate::value::Encoding::Ascii8,
+        ),
+    ))
+}
+
+///
 /// ### Proc#binding
 ///
 /// - binding -> Binding
@@ -168,6 +379,10 @@ fn source_location(
 #[monoruby_builtin]
 fn binding_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // Curry procs have no Ruby-level binding (CRuby raises ArgumentError).
+    if proc.func_id() == PROC_CURRY_BODY_FUNCID {
+        return Err(MonorubyErr::argumenterr("Can't create Binding from C level Proc"));
+    }
     // For a Method#to_proc proc, the outer self is the Method object;
     // its binding's receiver must be the *method's* receiver (CRuby).
     if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
@@ -185,8 +400,7 @@ fn binding_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn lambda_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
-    let func_id = proc.func_id();
-    Ok(Value::bool(!globals[func_id].is_block_style()))
+    Ok(Value::bool(proc_is_lambda(globals, &proc)))
 }
 
 /// ### Proc#parameters
@@ -244,7 +458,11 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
     let mut name_idx = 0;
     // required params
     for _ in 0..params.req_num() {
-        let entry = if let Some(Some(name)) = args_names.get(name_idx) {
+        // The implicit `it` parameter is reported anonymously
+        // (`[[:req]]` / `[[:opt]]`); an explicit `|it|` keeps its name.
+        let entry = if params.it_param() {
+            Value::array1(req_tag)
+        } else if let Some(Some(name)) = args_names.get(name_idx) {
             Value::array2(req_tag, Value::symbol(*name))
         } else {
             Value::array1(req_tag)
@@ -416,6 +634,42 @@ fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn proc_to_s() {
+        // The address differs per run, so check the stable invariants
+        // (CRuby: `#<Proc:0xADDR FILE:LINE [(lambda)]>`, BINARY encoding;
+        // `inspect` == `to_s`; `:sym.to_proc` shows `(&:sym)`).
+        run_test(r#"proc { }.to_s.encoding.to_s"#);
+        run_test(
+            r##"[proc { }.to_s.start_with?("#<Proc:0x"),
+               (-> () {}).to_s.include?(" (lambda)"),
+               :foo.to_proc.to_s.include?("(&:foo)"),
+               proc { }.inspect.start_with?("#<Proc:0x")]"##,
+        );
+    }
+
+    #[test]
+    fn proc_subclass_new() {
+        // A Proc subclass without a custom initialize.
+        run_test(r#"class PSubA < Proc; end; p = PSubA.new { 5 }; [p.is_a?(PSubA), p.call]"#);
+        // A subclass whose #initialize takes positional args (CRuby binds
+        // the block before #initialize, so it need not call super).
+        run_test(
+            r#"class PSubB < Proc; def initialize(a, b); @a = a; @b = b; end; attr_reader :a, :b; end
+               o = PSubB.new(:x, 2) { 9 }; [o.class.name, o.a, o.b, o.call]"#,
+        );
+        // dup / clone run initialize_dup / initialize_clone (and the
+        // result is an instance of the subclass).
+        run_test(
+            r#"class PSubC < Proc
+                 def initialize_dup(o); super; @tag = :dup; end
+                 def initialize_clone(o, **k); super; @tag = :clone; end
+                 attr_reader :tag
+               end
+               o = PSubC.new { 1 }; [o.dup.class.name, o.dup.tag, o.clone.tag]"#,
+        );
+    }
 
     #[test]
     fn proc_new() {
@@ -748,6 +1002,34 @@ mod tests {
             "proc {|a,b,c| a+b+c}.curry[1,2,3]",
             "->(a,b) { a + b }.curry[1][2]",
             "proc {|a,b,c| [a,b,c]}.curry(3)[1][2][3]",
+            // curry metadata: lambda-ness is inherited, parameters are
+            // anonymous rest, source_location is nil, arity is -1.
+            "->(a,b,c){}.curry.lambda?",
+            "proc {|a,b,c|}.curry.lambda?",
+            "->(a,b,c){}.curry(3).lambda?",
+            "->(a,b,c){}.curry.call(1).lambda?",
+            "proc {|a,b,c|}.curry.call(1).lambda?",
+            "->(a,b,c){}.curry.parameters",
+            "->(a,b,c){}.curry.source_location",
+            "->(a,b,c){}.curry.arity",
+            r#"(->(a,b,c){}.curry.binding rescue $!.class)"#,
+            // curry(arity) on a lambda validates the requested arity.
+            r#"(->(a,b,c){}.curry(2) rescue $!.class)"#,
+            r#"(->(a,b,c){}.curry(4) rescue $!.class)"#,
+            // proc curry tolerates extra args; lambda curry rejects them.
+            "proc {|a,b,c| (a||0)+(b||0)+(c||0)}.curry[1,2,3,4]",
+            r#"(->(a,b,c){ a+b+c }.curry[1,2,3,4] rescue $!.class)"#,
+            // `&-> {}` keeps the lambda-ness; `&proc {}` / a literal block
+            // stays a non-lambda.
+            "proc(&->{}).lambda?",
+            "proc(&proc{}).lambda?",
+            "Proc.new(&->(x){x}).lambda?",
+            "def amp(&b); b; end; amp(&->{}).lambda?",
+            "def amp2(&b); b; end; amp2 {}.lambda?",
+            // implicit `it` reports an anonymous parameter; explicit keeps it.
+            "eval('proc { it }').parameters",
+            "eval('lambda { it }').parameters",
+            "proc {|it| }.parameters",
             r#"->(&b) { b.call }.call { Integer }.equal?(Integer)"#,
             r#"
               step = ->(a, b, &blk) { a.step(b, &blk) }
@@ -764,6 +1046,33 @@ mod tests {
                 e.message
               end
             "#,
+        ]);
+    }
+
+    /// `return` semantics: a (non-lambda) Proc's `return` is a non-local
+    /// return to the method that created it (if still on the stack — else
+    /// LocalJumpError); a lambda's `return` exits the lambda itself.
+    #[test]
+    fn proc_return_semantics() {
+        run_tests(&[
+            // proc created & called in the same method: non-local return.
+            "def m; proc { return 7 }.call; 99; end; m",
+            // return from a block via `each`: non-local.
+            "def m; [1].each { return 5 }; 99; end; m",
+            // lambda return is local; the method continues.
+            "def m; lambda { return 8 }.call; 99; end; m",
+            "def m; ->(){ return 8 }.call; 99; end; m",
+            // a `lambda { }` brace block promoted by Kernel#lambda still
+            // returns locally.
+            "f = lambda { return 8 }; [f.call, 99]",
+            "g = ->(x){ return x*2; 999 }; g.call(5)",
+            // detached proc whose creation site already returned.
+            "def make; proc { return 3 }; end; (make.call rescue $!.class)",
+            // long return flowing through an intervening Proc#call.
+            "def inner; b = proc { return :good }; pr = ->x{ x.call }; pr.call(b); :bad; end; inner",
+            // break in a lambda exits the lambda with the value.
+            "->(){ break 11 }.call",
+            "lambda { break 12 }.call",
         ]);
     }
 

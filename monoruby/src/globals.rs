@@ -417,6 +417,14 @@ impl Globals {
             METHOD_TO_PROC_BODY_FUNCID,
             globals.define_builtin_func_rest(OBJECT_CLASS, "", method_to_proc_body)
         );
+        assert_eq!(
+            PROC_CURRY_BODY_FUNCID,
+            globals.define_builtin_func_rest(
+                OBJECT_CLASS,
+                "",
+                crate::builtins::proc::proc_curry_body
+            )
+        );
         globals.random.init_with_seed(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);

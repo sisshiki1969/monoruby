@@ -1382,8 +1382,21 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }
 
-pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let target_lfp = vm.cfp().outermost_lfp();
+pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Globals, val: Value) {
+    // `return` is only compiled to a method-return inside a block (a
+    // brace/`do` block — a lambda literal returns locally). At runtime
+    // the same block may have been promoted to a lambda by `Kernel#lambda`
+    // (`set_method_style`), in which case `return` exits the lambda
+    // itself rather than the creation-site method. So the unwind target
+    // is decided here from the frame's *current* style: a real block
+    // returns non-locally to its home method (`outermost_lfp`), a lambda
+    // returns from its own frame.
+    let cfp = vm.cfp();
+    let target_lfp = if globals[cfp.lfp().func_id()].is_block_style() {
+        cfp.outermost_lfp()
+    } else {
+        cfp.lfp()
+    };
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
