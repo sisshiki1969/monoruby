@@ -323,6 +323,28 @@ pub(in crate::codegen::jitgen) enum LInst {
         slot: SlotId,
         base: usize,
     },
+    /// Swap two FP registers (spill-aware).
+    FprSwap {
+        lhs: FPReg,
+        rhs: FPReg,
+        base: usize,
+    },
+    /// `dst <- decode_float(src)` — unbox a `Float` Value in GP `src` to f64;
+    /// deopt if `src` is not a Float.
+    FloatToFpr {
+        src: GP,
+        dst: FPReg,
+        deopt: DestLabel,
+        base: usize,
+    },
+    /// Materialize the constant integer `i` as both a boxed `Value` (into frame
+    /// `slot`) and an f64 (into FP register `dst`).
+    I64ToBoth {
+        i: i64,
+        slot: SlotId,
+        dst: FPReg,
+        base: usize,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

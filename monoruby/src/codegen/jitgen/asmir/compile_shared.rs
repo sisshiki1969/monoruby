@@ -170,7 +170,11 @@ impl Codegen {
                 dst,
                 base: frame.base_stack_offset,
             }),
-            AsmInst::FprSwap(l, r) => return self.emit_fpr_swap(l, r, frame.base_stack_offset),
+            AsmInst::FprSwap(l, r) => self.encode_linst(LInst::FprSwap {
+                lhs: l,
+                rhs: r,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::F64ToFpr(f, x) => self.encode_linst(LInst::F64ToFpr {
                 f,
                 dst: x,
@@ -182,7 +186,13 @@ impl Codegen {
                 base: frame.base_stack_offset,
             }),
             AsmInst::FloatToFpr(reg, x, deopt) => {
-                return self.emit_float_to_fpr(reg, x, &labels[deopt], frame.base_stack_offset);
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::FloatToFpr {
+                    src: reg,
+                    dst: x,
+                    deopt,
+                    base: frame.base_stack_offset,
+                });
             }
             AsmInst::FprToStack(x, slot) => self.encode_linst(LInst::FprToStack {
                 src: x,
@@ -270,9 +280,12 @@ impl Codegen {
             }
             // [slot] <- Value::integer(i) and fpr(x) <- i as f64 (constant int
             // materialized as both a boxed integer and a double).
-            AsmInst::I64ToBoth(i, slot, x) => {
-                return self.emit_i64_to_both(i, slot, x, frame.base_stack_offset);
-            }
+            AsmInst::I64ToBoth(i, slot, x) => self.encode_linst(LInst::I64ToBoth {
+                i,
+                slot,
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
             // Float comparison. NaN compares false (except `!=`); each backend
             // picks NaN-correct condition codes (x86 ucomisd + setp tricks,
             // aarch64 fcmp + MI/LS conditions).

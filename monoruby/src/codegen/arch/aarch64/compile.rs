@@ -1655,6 +1655,59 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
                 self.a64_frame_store(0, lfp, off);
             }
+            LInst::FprSwap { lhs, rhs, base } => {
+                // Force both values into scratch, then store back crossed.
+                self.a64_fpr_load(lhs, 0, base);
+                self.a64_fpr_load(rhs, 1, base);
+                self.a64_fpr_save(lhs, 1, base);
+                self.a64_fpr_save(rhs, 0, base);
+            }
+            LInst::FloatToFpr { src, dst, deopt, base } => {
+                let p = self.a64_fpr_wtmp(dst, 0, base);
+                let r = src.a64().0;
+                let heap = self.jit.label();
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    tbnz x(r), #(0), deopt;   // fixnum -> deopt (expected a Float)
+                    tbz x(r), #(1), heap;     // not flonum -> heap Float
+                    // flonum: handle 0.0, else decode.
+                    fmov d(p), xzr;
+                    mov x9, (FLOAT_ZERO);
+                    cmp x(r), x9;
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+                monoasm_arm64!(&mut self.jit,
+                    asr x9, x(r), #(63);      // sign: all-1s / all-0s
+                    add x9, x9, #(2);         // 2 - signbit  (1 or 2)
+                    lsr x10, x(r), #(2);
+                    lsl x10, x10, #(2);       // reg & ~3
+                    orr x10, x10, x9;
+                    ror x10, x10, #(3);       // rotate_right 3
+                    fmov d(p), x10;
+                    b exit;
+                    heap:
+                );
+                self.a64_guard_rvalue(r, FLOAT_CLASS, &deopt);
+                monoasm_arm64!(&mut self.jit,
+                    ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
+                    exit:
+                );
+                self.a64_fpr_commit(dst, 0, base);
+            }
+            LInst::I64ToBoth { i, slot, dst, base } => {
+                let p = self.a64_fpr_wtmp(dst, 0, base);
+                let lfp = GP::R14.a64().0;
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                let id = Value::integer(i).id();
+                let bits = (i as f64).to_bits();
+                monoasm_arm64!(&mut self.jit, mov x9, (id););
+                self.a64_frame_store(9, lfp, off);
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (bits);
+                    fmov d(p), x9;
+                );
+                self.a64_fpr_commit(dst, 0, base);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -2276,62 +2329,6 @@ impl Codegen {
     // `_wtmp`/`_load`/`_save`/`_commit`). All return bool; `base` is the spill
     // base.
 
-    /// swap two FP registers (via scratch D0/D1, spill-aware).
-    pub(in crate::codegen::jitgen) fn emit_fpr_swap(&mut self, l: FPReg, r: FPReg, base: usize) -> bool {
-        // Force both values into scratch, then store back crossed. (When both
-        // are pool-resident this is the old `fmov`-through-d0 swap.)
-        self.a64_fpr_load(l, 0, base);
-        self.a64_fpr_load(r, 1, base);
-        self.a64_fpr_save(l, 1, base);
-        self.a64_fpr_save(r, 0, base);
-        true
-    }
-
-    /// dst(f64) <- Float Value in GP `reg`; deopt if `reg` is not a Float.
-    /// Mirrors x86 float_to_f64 / float_val_to_f64 (flonum decode + heap-Float
-    /// load). `and`/`ror` have no immediate form / the macro grew `ror`, so the
-    /// rotate uses `ror` and the mask uses shifts.
-    pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
-        &mut self,
-        reg: GP,
-        x: FPReg,
-        deopt: &DestLabel,
-        base: usize,
-    ) -> bool {
-        let p = self.a64_fpr_wtmp(x, 0, base);
-        let deopt = deopt.clone();
-        let r = reg.a64().0;
-        let heap = self.jit.label();
-        let exit = self.jit.label();
-        monoasm_arm64!(&mut self.jit,
-            tbnz x(r), #(0), deopt;   // fixnum -> deopt (expected a Float)
-            tbz x(r), #(1), heap;     // not flonum -> heap Float
-            // flonum: handle 0.0, else decode.
-            fmov d(p), xzr;
-            mov x9, (FLOAT_ZERO);
-            cmp x(r), x9;
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
-        monoasm_arm64!(&mut self.jit,
-            asr x9, x(r), #(63);      // sign: all-1s / all-0s
-            add x9, x9, #(2);         // 2 - signbit  (1 or 2)
-            lsr x10, x(r), #(2);
-            lsl x10, x10, #(2);       // reg & ~3
-            orr x10, x10, x9;
-            ror x10, x10, #(3);       // rotate_right 3
-            fmov d(p), x10;
-            b exit;
-            heap:
-        );
-        self.a64_guard_rvalue(r, FLOAT_CLASS, &deopt);
-        monoasm_arm64!(&mut self.jit,
-            ldr d(p), [x(r), #(RVALUE_OFFSET_KIND as u32)];
-            exit:
-        );
-        self.a64_fpr_commit(x, 0, base);
-        true
-    }
-
     /// Save the live FP pool registers (D2..) below sp before a C-call.
     pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
         if using_xmm.not_any() && !cont {
@@ -2452,25 +2449,6 @@ impl Codegen {
             // Float unary ops are only Neg/Pos (BitNot is integer-only).
             _ => unreachable!(),
         }
-        true
-    }
-
-    /// `[lfp - slot*8 - LFP_SELF] <- Value::integer(i)` and `fpr(x) <- i as f64`
-    /// (a constant int materialized as both a boxed integer and a double).
-    /// Bails (`false`) if the FP destination is not lowerable (spilled).
-    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
-        let p = self.a64_fpr_wtmp(x, 0, base);
-        let lfp = GP::R14.a64().0;
-        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        let id = Value::integer(i).id();
-        let bits = (i as f64).to_bits();
-        monoasm_arm64!(&mut self.jit, mov x9, (id););
-        self.a64_frame_store(9, lfp, off);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (bits);
-            fmov d(p), x9;
-        );
-        self.a64_fpr_commit(x, 0, base);
         true
     }
 

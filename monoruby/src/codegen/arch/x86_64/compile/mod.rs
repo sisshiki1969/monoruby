@@ -502,6 +502,60 @@ impl Codegen {
             LInst::FprToStack { src, slot, base } => {
                 self.fpr_to_stack(src, &[slot], base);
             }
+            LInst::FprSwap { lhs, rhs, base } => {
+                if lhs != rhs {
+                    match (lhs.loc(base), rhs.loc(base)) {
+                        (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
+                            movq xmm0, xmm(lp);
+                            movq xmm(lp), xmm(rp);
+                            movq xmm(rp), xmm0;
+                        ),
+                        (FPRegLoc::Xmm(lp), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (r_off)];
+                            movq [rbp - (r_off)], xmm(lp);
+                            movq xmm(lp), xmm0;
+                        ),
+                        (FPRegLoc::Spill(l_off), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (l_off)];
+                            movq [rbp - (l_off)], xmm(rp);
+                            movq xmm(rp), xmm0;
+                        ),
+                        (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (l_off)];
+                            movq xmm1, [rbp - (r_off)];
+                            movq [rbp - (r_off)], xmm0;
+                            movq [rbp - (l_off)], xmm1;
+                        ),
+                    }
+                }
+            }
+            LInst::FloatToFpr { src, dst, deopt, base } => {
+                let (work, spill_off) = match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => (p, None),
+                    FPRegLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.float_to_f64(src, work, &deopt);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
+            }
+            LInst::I64ToBoth { i, slot, dst, base } => {
+                let f = self.jit.const_f64(i as f64);
+                monoasm! {&mut self.jit,
+                    movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
+                }
+                match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f];
+                    ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
+            }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
@@ -1121,74 +1175,6 @@ impl Codegen {
         true
     }
 
-    ///
-    /// Spill-aware xmm-to-xmm move. Each operand may live in a phys
-    /// xmm or a spill slot; we emit the cheapest form for each
-    /// combination and avoid the round-trip through xmm0 that the
-    /// generic `expand_spills` wrapping would otherwise produce.
-    ///
-    ///
-    /// Spill-aware xmm swap. When both operands are spilled we swap
-    /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
-    /// nothing in the surrounding code's GP state is disturbed).
-    ///
-    pub(in crate::codegen::jitgen) fn emit_fpr_swap(
-        &mut self,
-        l: FPReg,
-        r: FPReg,
-        base: usize,
-    ) -> bool {
-        if l == r {
-            return true;
-        }
-        match (l.loc(base), r.loc(base)) {
-            (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
-                movq xmm0, xmm(lp);
-                movq xmm(lp), xmm(rp);
-                movq xmm(rp), xmm0;
-            ),
-            (FPRegLoc::Xmm(lp), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (r_off)];
-                movq [rbp - (r_off)], xmm(lp);
-                movq xmm(lp), xmm0;
-            ),
-            (FPRegLoc::Spill(l_off), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (l_off)];
-                movq [rbp - (l_off)], xmm(rp);
-                movq xmm(rp), xmm0;
-            ),
-            (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (l_off)];
-                movq xmm1, [rbp - (r_off)];
-                movq [rbp - (r_off)], xmm0;
-                movq [rbp - (l_off)], xmm1;
-            ),
-        }
-        true
-    }
-
-    /// xmm(x) <- the Float Value in GP `reg`, decoded to f64; deopt if `reg` is
-    /// not a Float. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
-        &mut self,
-        reg: GP,
-        x: FPReg,
-        deopt: &DestLabel,
-        base: usize,
-    ) -> bool {
-        let (work, spill_off) = match x.loc(base) {
-            FPRegLoc::Xmm(p) => (p, None),
-            FPRegLoc::Spill(off) => (0u64, Some(off)),
-        };
-        self.float_to_f64(reg, work, deopt);
-        if let Some(off) = spill_off {
-            monoasm!( &mut self.jit,
-                movq [rbp - (off)], xmm(work);
-            );
-        }
-        true
-    }
-
     /// Save the live FP pool registers before a C-call. Always succeeds on x86
     /// (the bool result mirrors the aarch64 twin).
     pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
@@ -1245,24 +1231,6 @@ impl Codegen {
             }
             UnOpK::Pos => {}
             _ => unreachable!(),
-        }
-        true
-    }
-
-    /// [slot] <- box(i) (integer Value) and fpr(x) <- i as f64.
-    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
-        let f = self.jit.const_f64(i as f64);
-        monoasm! {&mut self.jit,
-            movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
-        }
-        match x.loc(base) {
-            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                movq xmm(p), [rip + f];
-            ),
-            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                movq xmm0, [rip + f];
-                movq [rbp - (off)], xmm0;
-            ),
         }
         true
     }
