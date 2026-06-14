@@ -1,8 +1,7 @@
 use std::ffi::c_void;
 
 use super::*;
-#[cfg(target_arch = "x86_64")]
-use jitgen::JitContext;
+use jitgen::{AbstractState, JitContext};
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 
 // ---------------------------------------------------------------------------
@@ -422,8 +421,6 @@ enum ReadKind {
     F64,
 }
 
-#[cfg(target_arch = "x86_64")]
-
 fn fiddle_read_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -463,38 +460,22 @@ fn fiddle_read_inline(
         ReadKind::F64 => {
             let fret = state.def_F(dst);
             ir.inline(move |r#gen, _, labels, base| {
-                let deopt_label = &labels[deopt];
-                monoasm! { &mut r#gen.jit,
-                    sarq rdi, 1;
-                    testq rdi, rdi;
-                    jz deopt_label;
-                    movq xmm0, [rdi];
-                };
-                r#gen.store_fpr_into_xmm(fret, base);
+                r#gen.emit_fiddle_read_f64(fret, &labels[deopt], base);
             });
         }
         _ => {
+            // (byte width, signed) for the typed integer load.
+            let (width, signed) = match kind {
+                ReadKind::I8 => (1, true),
+                ReadKind::U8 => (1, false),
+                ReadKind::I16 => (2, true),
+                ReadKind::U16 => (2, false),
+                ReadKind::I32 => (4, true),
+                ReadKind::U32 => (4, false),
+                ReadKind::F64 => unreachable!(),
+            };
             ir.inline(move |r#gen, _, labels, _| {
-                let deopt_label = &labels[deopt];
-                monoasm! { &mut r#gen.jit,
-                    sarq rdi, 1;
-                    testq rdi, rdi;
-                    jz deopt_label;
-                };
-                match kind {
-                    ReadKind::I8 => monoasm! { &mut r#gen.jit, movsxb rax, [rdi]; },
-                    ReadKind::U8 => monoasm! { &mut r#gen.jit, movzxb rax, [rdi]; },
-                    ReadKind::I16 => monoasm! { &mut r#gen.jit, movsxw rax, [rdi]; },
-                    ReadKind::U16 => monoasm! { &mut r#gen.jit, movzxw rax, [rdi]; },
-                    ReadKind::I32 => monoasm! { &mut r#gen.jit, movsxl rax, [rdi]; },
-                    ReadKind::U32 => monoasm! { &mut r#gen.jit, movl rax, [rdi]; },
-                    ReadKind::F64 => unreachable!(),
-                };
-                // Tag as Fixnum: rax = (rax << 1) | 1.
-                monoasm! { &mut r#gen.jit,
-                    addq rax, rax;
-                    orq rax, 1;
-                };
+                r#gen.emit_fiddle_read_int(width, signed, &labels[deopt]);
             });
             state.def_reg2acc_fixnum(ir, GP::Rax, dst);
         }
@@ -509,8 +490,6 @@ enum WriteKind {
     Int32,
     F64,
 }
-
-#[cfg(target_arch = "x86_64")]
 
 fn fiddle_write_inline(
     state: &mut AbstractState,
@@ -546,35 +525,20 @@ fn fiddle_write_inline(
             let xsrc = state.load_xmm(ir, val_slot);
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
-                let deopt_label = &labels[deopt];
-                r#gen.load_fpr_into_xmm0(xsrc, base);
-                monoasm! { &mut r#gen.jit,
-                    movq rax, rdi;
-                    sarq rdi, 1;
-                    testq rdi, rdi;
-                    jz deopt_label;
-                    movq [rdi], xmm0;
-                };
+                r#gen.emit_fiddle_write_f64(xsrc, &labels[deopt], base);
             });
         }
         _ => {
             state.load_fixnum(ir, val_slot, GP::Rsi);
             let deopt = ir.new_deopt(state);
+            let width = match kind {
+                WriteKind::Int8 => 1,
+                WriteKind::Int16 => 2,
+                WriteKind::Int32 => 4,
+                WriteKind::F64 => unreachable!(),
+            };
             ir.inline(move |r#gen, _, labels, _| {
-                let deopt_label = &labels[deopt];
-                monoasm! { &mut r#gen.jit,
-                    movq rax, rdi;
-                    sarq rdi, 1;
-                    testq rdi, rdi;
-                    jz deopt_label;
-                    sarq rsi, 1;
-                };
-                match kind {
-                    WriteKind::Int8 => monoasm! { &mut r#gen.jit, movb [rdi], rsi; },
-                    WriteKind::Int16 => monoasm! { &mut r#gen.jit, movw [rdi], rsi; },
-                    WriteKind::Int32 => monoasm! { &mut r#gen.jit, movl [rdi], rsi; },
-                    WriteKind::F64 => unreachable!(),
-                };
+                r#gen.emit_fiddle_write_int(width, &labels[deopt]);
             });
         }
     }
@@ -675,14 +639,14 @@ pub(super) fn init(globals: &mut Globals) {
         fiddle,
         "___read",
         fiddle_read,
-        inline_gen!(fiddle_read_inline),
+        inline_gen2!(fiddle_read_inline),
         2,
     );
     globals.define_builtin_module_inline_func(
         fiddle,
         "___write",
         fiddle_write,
-        inline_gen!(fiddle_write_inline),
+        inline_gen2!(fiddle_write_inline),
         3,
     );
     globals.define_builtin_module_func(fiddle, "___read_string", fiddle_read_string, 1);

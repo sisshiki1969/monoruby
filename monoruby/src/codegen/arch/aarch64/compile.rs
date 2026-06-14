@@ -4276,6 +4276,201 @@ impl Codegen {
         );
     }
 
+    /// `Integer#succ` / `#next`: fixnum in Rdi (x4); tagged `+1` is `+2` on the
+    /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum). aarch64
+    /// twin of x86 `addq;jo`.
+    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            adds x(rdi), x(rdi), #(2u32);   // set NZCV
+        );
+        self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // overflow -> deopt
+    }
+
+    /// `String#getbyte`: receiver String in Rdi (x4), fixnum index in Rsi (x3) →
+    /// Rax (x0) = byte tagged as a fixnum, or nil when the (negative-adjusted)
+    /// index is out of range. aarch64 twin of x86 `emit_string_getbyte`
+    /// (`cmovgt` → `csel`, `jae` → `b.ls` on the swapped operands; `ldrb`/`strb`
+    /// have no register-offset form here so the address is materialised first).
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x2 (Rdx), x3 (Rsi), x9
+    pub(crate) fn emit_string_getbyte(&mut self) {
+        let exit = self.jit.label();
+        // x4=recv(Rdi), x3=index(Rsi), x0=result(Rax), x1=data ptr(Rcx),
+        // x2=tmp(Rdx), x9=scratch
+        monoasm_arm64!(&mut self.jit,
+            asr x3, x3, #(1);                                // untag index
+            // len -> x0 (inline capa vs heap_len select)
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, #(STRING_INLINE_CAP as u32);
+            csel x0, x9, x0, gt;                             // capa>cap -> heap_len
+            // data ptr -> x1 (flags from the cmp above still live)
+            add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            csel x1, x9, x1, gt;                             // capa>cap -> heap_ptr
+            // negative index counts back from the end
+            add x2, x3, x0;                                  // idx + len
+            cmp x3, #(0);
+            csel x3, x2, x3, lt;                             // idx<0 -> idx+len
+            // unsigned bound check (also catches a still-negative index)
+            cmp x0, x3;                                      // len vs idx
+            mov x0, #(NIL_VALUE);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &exit); // len<=idx (unsigned) -> nil
+        monoasm_arm64!(&mut self.jit,
+            add x1, x1, x3;                                  // &data[idx]
+            ldrb w0, [x1];
+            lsl x0, x0, #(1);
+            add x0, x0, #(1);
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// `String#setbyte`: receiver String in Rdi (x4), fixnum index in Rsi (x3),
+    /// fixnum byte value in Rdx (x2). Deopts when the receiver is frozen or
+    /// chilled, copy-on-write shared, or the index is out of range (the
+    /// interpreter raises / warns there). Keeps the cached code-range
+    /// classification consistent with `RStringInner::set_byte`. aarch64 twin of
+    /// x86 `emit_string_setbyte`.
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x3 (Rsi), x9
+    pub(crate) fn emit_string_setbyte(&mut self, deopt: &DestLabel) {
+        let exit = self.jit.label();
+        let set_unknown = self.jit.label();
+        let deopt = deopt.clone();
+        // frozen (0b010) or chilled (0b100) -> deopt
+        monoasm_arm64!(&mut self.jit,
+            ldrh w0, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+            mov x9, (0b110u64);
+            tst x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+        monoasm_arm64!(&mut self.jit,
+            asr x3, x3, #(1);                                // untag index
+            asr x2, x2, #(1);                                // untag byte value
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
+            // shared (copy-on-write) buffer -> deopt (interpreter detaches)
+            mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
+            cmp x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &deopt);
+        monoasm_arm64!(&mut self.jit,
+            // len -> x0, data ptr -> x1 (inline vs heap select)
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, #(STRING_INLINE_CAP as u32);
+            csel x0, x9, x0, gt;
+            add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            csel x1, x9, x1, gt;
+            // negative index counts back from the end
+            add x9, x3, x0;                                  // idx + len
+            cmp x3, #(0);
+            csel x3, x9, x3, lt;                             // idx<0 -> idx+len
+            // out of range (unsigned, covers still-negative) -> deopt
+            cmp x0, x3;                                      // len vs idx
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &deopt); // len<=idx (unsigned)
+        monoasm_arm64!(&mut self.jit,
+            add x1, x1, x3;                                  // &data[idx]
+            strb w2, [x1];
+            // code range cache: poking an ASCII byte into a SevenBit string
+            // keeps SevenBit; anything else degrades to Unknown.
+            ldrb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+            cmp x9, #(crate::rvalue::CodeRange::SevenBit as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &set_unknown);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0x80u64);
+            tst x2, x9;                                      // high bit set?
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit); // ASCII -> stays SevenBit
+        self.jit.bind_label(set_unknown);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #(crate::rvalue::CodeRange::Unknown as u32);
+            strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// `Fiddle.___read` integer load: untag the pointer in Rdi (x4), deopt on
+    /// NULL, load a `width`-byte value (sign/zero-extended per `signed`), tag
+    /// the result as a fixnum in Rax (x0). aarch64 twin of x86
+    /// `emit_fiddle_read_int`; signed byte/half loads sign-extend via lsl+asr
+    /// since the macro has no `ldrsb`/`ldrsh`.
+    pub(crate) fn emit_fiddle_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            asr x4, x4, #(1);     // untag ptr (Rdi == x4)
+            cbz x4, deopt;        // NULL -> deopt
+        );
+        match (width, signed) {
+            (1, true) => monoasm_arm64!(&mut self.jit,
+                ldrb w0, [x4]; lsl x0, x0, #(56); asr x0, x0, #(56);),
+            (1, false) => monoasm_arm64!(&mut self.jit, ldrb w0, [x4];),
+            (2, true) => monoasm_arm64!(&mut self.jit,
+                ldrh w0, [x4]; lsl x0, x0, #(48); asr x0, x0, #(48);),
+            (2, false) => monoasm_arm64!(&mut self.jit, ldrh w0, [x4];),
+            (4, true) => monoasm_arm64!(&mut self.jit, ldrsw x0, [x4];),
+            (4, false) => monoasm_arm64!(&mut self.jit, ldr w0, [x4];),
+            _ => unreachable!(),
+        }
+        // Tag as Fixnum: x0 = (x0 << 1) | 1.
+        monoasm_arm64!(&mut self.jit,
+            lsl x0, x0, #(1);
+            add x0, x0, #(1);
+        );
+    }
+
+    /// `Fiddle.___read` f64 load: untag the pointer in Rdi (x4), deopt on NULL,
+    /// load the double into `fret`. aarch64 twin of x86 `emit_fiddle_read_f64`.
+    pub(crate) fn emit_fiddle_read_f64(&mut self, fret: FPReg, deopt: &DestLabel, base: usize) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            asr x4, x4, #(1);
+            cbz x4, deopt;
+            ldr d0, [x4];
+        );
+        self.a64_d0_into_fpr(fret, base);
+    }
+
+    /// `Fiddle.___write` integer store: save the tagged pointer (the return
+    /// value) in Rax (x0), untag the pointer in Rdi (x4), deopt on NULL, untag
+    /// the value in Rsi (x3) and store its low `width` bytes. aarch64 twin of
+    /// x86 `emit_fiddle_write_int`.
+    pub(crate) fn emit_fiddle_write_int(&mut self, width: u8, deopt: &DestLabel) {
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x4;           // rax = tagged ptr (return value)
+            asr x4, x4, #(1);     // untag ptr
+            cbz x4, deopt;        // NULL -> deopt
+            asr x3, x3, #(1);     // untag value (Rsi == x3)
+        );
+        match width {
+            1 => monoasm_arm64!(&mut self.jit, strb w3, [x4];),
+            2 => monoasm_arm64!(&mut self.jit, strh w3, [x4];),
+            4 => monoasm_arm64!(&mut self.jit, str w3, [x4];),
+            _ => unreachable!(),
+        }
+    }
+
+    /// `Fiddle.___write` f64 store: load the source double into d0, save the
+    /// tagged pointer in Rax (x0), untag the pointer in Rdi (x4), deopt on NULL,
+    /// store the double. aarch64 twin of x86 `emit_fiddle_write_f64`.
+    pub(crate) fn emit_fiddle_write_f64(&mut self, xsrc: FPReg, deopt: &DestLabel, base: usize) {
+        let deopt = deopt.clone();
+        self.a64_fpr_into_d0(xsrc, base);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x4;           // rax = tagged ptr (return value)
+            asr x4, x4, #(1);     // untag ptr
+            cbz x4, deopt;        // NULL -> deopt
+            str d0, [x4];
+        );
+    }
+
     /// `def name; … end` — runtime::define_method(vm, globals, name, func_id).
     /// The Option<Value> result (None == error) is checked by the trailing
     /// HandleError. Bails when an xmm pool register is live (no save around the
