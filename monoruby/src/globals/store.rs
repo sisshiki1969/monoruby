@@ -436,6 +436,7 @@ impl Store {
             body: Box::new(result.node),
             lvar: LvarCollector::new(),
             loc: Loc::default(),
+            is_lambda: false,
         };
         let compile_info = Store::handle_args(info, vec![])?;
         let fid = self.new_iseq_method(
@@ -528,6 +529,7 @@ impl Store {
             body: Box::new(result.node),
             lvar: LvarCollector::new(),
             loc,
+            is_lambda: false,
         };
         let compile_info = Store::handle_args(info, vec![])?;
         self.new_block(outer, compile_info, false, loc, result.source_info)
@@ -996,6 +998,7 @@ impl Store {
         let mut block_param = None;
         let mut for_param_info = vec![];
         let mut forwarding = false;
+        let mut it_param = false;
         for (dst_outer, dst_reg, _name) in for_params {
             for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
             args_names.push(None);
@@ -1006,6 +1009,14 @@ impl Store {
                 ParamKind::Param(name) => {
                     args_names.push(Some(IdentId::get_id_from_string(name)));
                     required_num += 1;
+                }
+                ParamKind::ItParam => {
+                    // Implicit `it`: bind a required local named `it` (so
+                    // the body's `it` reads resolve), but flag it so
+                    // `#parameters` omits the name.
+                    args_names.push(Some(IdentId::get_id("it")));
+                    required_num += 1;
+                    it_param = true;
                 }
                 ParamKind::Destruct(names) => {
                     expand.push((args_names.len(), destruct_args.len(), names.len()));
@@ -1096,6 +1107,7 @@ impl Store {
             kw_rest_param,
             block_param,
             forwarding,
+            it_param,
         );
         let compile_info = CompileInfo::new(
             body,

@@ -166,6 +166,13 @@ pub struct BlockInfo {
     pub body: Box<Node>,
     pub lvar: LvarCollector,
     pub loc: Loc,
+    /// `true` when this block came from a lambda literal (`-> { ... }` /
+    /// `lambda { ... }`-style), `false` for an ordinary brace/`do` block,
+    /// method body, or class body. Both a lambda literal and a brace block
+    /// lower to `NodeKind::Lambda(BlockInfo)`, so this is the only signal
+    /// that distinguishes `foo(&-> {...})` (must stay a lambda) from
+    /// `foo {...}` when a block argument is compiled.
+    pub is_lambda: bool,
 }
 
 impl BlockInfo {
@@ -175,6 +182,7 @@ impl BlockInfo {
             body: Box::new(body),
             lvar,
             loc,
+            is_lambda: false,
         }
     }
 }
@@ -247,6 +255,12 @@ impl FormalParam {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamKind {
     Param(String),
+    /// The implicit Ruby 3.4 `it` parameter (`proc { it }` /
+    /// `-> { it }`). Binds a single required local named `it` exactly
+    /// like `Param("it")`, but is flagged so `#parameters` reports it
+    /// anonymously (`[[:opt]]` / `[[:req]]`), matching CRuby — an
+    /// *explicit* `|it|` keeps its name.
+    ItParam,
     Post(Option<String>),
     Optional(String, Box<Node>), // name, default expr
     Rest(Option<String>),
@@ -924,10 +938,9 @@ impl Node {
         lvar: LvarCollector,
         loc: Loc,
     ) -> Self {
-        Node::new(
-            NodeKind::Lambda(Box::new(BlockInfo::new(params, body, lvar, loc))),
-            loc,
-        )
+        let mut info = BlockInfo::new(params, body, lvar, loc);
+        info.is_lambda = true;
+        Node::new(NodeKind::Lambda(Box::new(info)), loc)
     }
 
     pub fn is_splat(&self) -> bool {

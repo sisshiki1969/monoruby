@@ -959,6 +959,7 @@ impl<'pr> Lowerer<'pr> {
                             body: Box::new(body),
                             lvar: LvarCollector::new(),
                             loc: body_loc,
+                            is_lambda: false,
                         }),
                     },
                     loc,
@@ -1722,6 +1723,7 @@ impl<'pr> Lowerer<'pr> {
                     body: Box::new(body),
                     lvar: class_lvars,
                     loc,
+                    is_lambda: false,
                 })
             }
             Err(e) => {
@@ -2891,6 +2893,7 @@ impl<'pr> Lowerer<'pr> {
                     body: Box::new(body),
                     lvar: method_lvars,
                     loc,
+                    is_lambda: false,
                 });
                 let kind = match singleton_receiver {
                     Some(recv) => NodeKind::SingletonMethodDef(Box::new(recv), name, info),
@@ -2946,7 +2949,7 @@ impl<'pr> Lowerer<'pr> {
                             let ip_loc = location_to_loc(&ip.location());
                             this.lvars.insert("it");
                             vec![crate::ast::FormalParam {
-                                kind: ParamKind::Param("it".to_string()),
+                                kind: ParamKind::ItParam,
                                 loc: ip_loc,
                             }]
                         }
@@ -2973,6 +2976,7 @@ impl<'pr> Lowerer<'pr> {
                         body: Box::new(body),
                         lvar: lambda_lvars,
                         loc,
+                        is_lambda: true,
                     })),
                     loc,
                 })
@@ -3048,7 +3052,7 @@ impl<'pr> Lowerer<'pr> {
                             let ip_loc = location_to_loc(&ip.location());
                             this.lvars.insert("it");
                             vec![crate::ast::FormalParam {
-                                kind: ParamKind::Param("it".to_string()),
+                                kind: ParamKind::ItParam,
                                 loc: ip_loc,
                             }]
                         }
@@ -3075,6 +3079,7 @@ impl<'pr> Lowerer<'pr> {
                         body: Box::new(body),
                         lvar: block_lvars,
                         loc,
+                        is_lambda: false,
                     })),
                     loc,
                 })

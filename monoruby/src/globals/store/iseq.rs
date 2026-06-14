@@ -682,6 +682,9 @@ pub(crate) struct ParamsInfo {
     pub kw_rest: Option<SlotId>,
     pub block_param: Option<IdentId>,
     forwarding: bool,
+    /// `true` when the sole parameter is the implicit `it` (Ruby 3.4).
+    /// `#parameters` then reports it without a name.
+    it_param: bool,
 }
 
 impl ParamsInfo {
@@ -697,6 +700,7 @@ impl ParamsInfo {
         kw_rest: Option<SlotId>,
         block_param: Option<IdentId>,
         forwarding: bool,
+        it_param: bool,
     ) -> Self {
         ParamsInfo {
             required_num,
@@ -710,7 +714,14 @@ impl ParamsInfo {
             kw_rest,
             block_param,
             forwarding,
+            it_param,
         }
+    }
+
+    /// Whether the sole parameter is the implicit `it` (reported
+    /// anonymously by `#parameters`).
+    pub(crate) fn it_param(&self) -> bool {
+        self.it_param
     }
 
     pub fn new_attr_reader() -> Self {
@@ -730,6 +741,7 @@ impl ParamsInfo {
             kw_rest: None,
             block_param: None,
             forwarding: false,
+            it_param: false,
         }
     }
 
@@ -763,6 +775,7 @@ impl ParamsInfo {
             },
             block_param: None,
             forwarding: false,
+            it_param: false,
         }
     }
 

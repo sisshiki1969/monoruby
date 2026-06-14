@@ -273,7 +273,20 @@ impl<'a> BytecodeGen<'a> {
 
     fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
         match block.kind {
-            NodeKind::Lambda(box block) => return Ok(Some(self.handle_block(vec![], block)?)),
+            // A brace/`do` block *and* a lambda literal both lower to
+            // `NodeKind::Lambda`. When the source was a lambda literal
+            // passed as a block argument (`foo(&-> { ... })`) it must stay
+            // a *lambda* (method-style func) so the resulting block/Proc
+            // reports `lambda? == true` and keeps strict arity; an ordinary
+            // block stays block-style. (See core/proc/lambda_spec "preserved
+            // when passing a Proc with & ...".)
+            NodeKind::Lambda(box block) => {
+                return Ok(Some(if block.is_lambda {
+                    self.handle_lambda(block)?
+                } else {
+                    self.handle_block(vec![], block)?
+                }));
+            }
             NodeKind::LocalVar(0, proc_local) => {
                 let dst = self.push().into();
                 if let Some(local) = self.refer_local(&proc_local) {

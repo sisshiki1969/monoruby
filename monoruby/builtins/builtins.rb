@@ -407,25 +407,6 @@ class File
 end
 
 class Proc
-  def curry(arity = nil)
-    arity ||= self.arity
-    arity = -arity - 1 if arity < 0
-    return self if arity == 0
-    orig = self
-    curried = nil
-    curried = lambda do |collected_args|
-      lambda do |*args|
-        new_args = collected_args + args
-        if new_args.size >= arity
-          orig.call(*new_args)
-        else
-          curried.call(new_args)
-        end
-      end
-    end
-    curried.call([])
-  end
-
   def >>(g)
     unless g.is_a?(Proc) || g.is_a?(Method) || g.respond_to?(:call, true)
       raise TypeError, "callable object is expected"

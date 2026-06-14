@@ -369,6 +369,16 @@ pub(crate) const SYMBOL_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(3);
 ///
 pub(crate) const METHOD_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(4);
 
+///
+/// Pre-assigned FuncId for the shared body of the procs produced by
+/// `Proc#curry` / `Method#curry`. The curry state — `[orig, collected,
+/// arity, lambda?]` — lives on the proc's `outer_lfp` self; the body
+/// (`crate::builtins::proc::proc_curry_body`) reads it, appends the call
+/// args, and either invokes `orig` or returns a further-curried proc.
+/// A constant FuncId lets `#lambda?` / `#binding` recognise curry procs.
+///
+pub(crate) const PROC_CURRY_BODY_FUNCID: FuncId = FuncId::new(5);
+
 #[monoruby_builtin]
 pub(crate) fn enum_yielder(
     vm: &mut Executor,

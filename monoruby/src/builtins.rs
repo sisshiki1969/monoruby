@@ -32,7 +32,7 @@ mod module;
 mod nil_class;
 mod numeric;
 mod object;
-mod proc;
+pub(crate) mod proc;
 mod process;
 mod random;
 mod range;
