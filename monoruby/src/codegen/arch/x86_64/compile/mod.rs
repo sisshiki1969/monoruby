@@ -11,7 +11,7 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
-use crate::codegen::jitgen::lir::LInst;
+use crate::codegen::jitgen::lir::{LInst, LMem};
 
 impl Codegen {
     ///
@@ -254,6 +254,51 @@ impl Codegen {
                     );
                 }
             }
+            // dst <- imm (full 64-bit immediate; x86 movq r64, imm64)
+            LInst::LoadImm { dst, imm } => {
+                let r = dst as u64;
+                monoasm!( &mut self.jit,
+                    movq R(r), (imm);
+                );
+            }
+            // dst <- [lfp - slot]
+            LInst::Load {
+                dst,
+                mem: LMem::Slot(slot),
+            } => {
+                let r = dst as u64;
+                monoasm!( &mut self.jit,
+                    movq R(r), [rbp - (rbp_local(slot))];
+                );
+            }
+            // [lfp - slot] <- src
+            LInst::Store {
+                src,
+                mem: LMem::Slot(slot),
+            } => {
+                let r = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [rbp - (rbp_local(slot))], R(r);
+                );
+            }
+            // [lfp - slot] <- imm. Legalization: a 64-bit immediate that does
+            // not fit x86's imm32 store form is staged through rax (mirrors
+            // `literal_to_stack`).
+            LInst::StoreImm {
+                imm,
+                mem: LMem::Slot(slot),
+            } => {
+                if i32::try_from(imm as i64).is_ok() {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (rbp_local(slot))], (imm);
+                    );
+                } else {
+                    monoasm!( &mut self.jit,
+                        movq rax, (imm);
+                        movq [rbp - (rbp_local(slot))], rax;
+                    );
+                }
+            }
             other => {
                 todo!("LIR encode (x86-64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -262,32 +307,35 @@ impl Codegen {
 
     /// [lfp - slot] <- reg
     pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq [rbp - (rbp_local(slot))], R(r);
-        );
+        self.encode_linst(LInst::Store {
+            src: r,
+            mem: LMem::Slot(slot),
+        });
     }
 
     /// reg <- [lfp - slot]
     pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq R(r), [rbp - (rbp_local(slot))];
-        );
+        self.encode_linst(LInst::Load {
+            dst: r,
+            mem: LMem::Slot(slot),
+        });
     }
 
     /// reg <- literal Value (immediate)
     pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq R(r), (v.id());
-        );
+        self.encode_linst(LInst::LoadImm {
+            dst: r,
+            imm: v.id(),
+        });
     }
 
     /// [lfp - slot] <- literal Value. Always succeeds on x86 (no immediate-range
     /// limit); the bool result exists for the aarch64 twin.
     pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
-        self.literal_to_stack(slot, v);
+        self.encode_linst(LInst::StoreImm {
+            imm: v.id(),
+            mem: LMem::Slot(slot),
+        });
         true
     }
 

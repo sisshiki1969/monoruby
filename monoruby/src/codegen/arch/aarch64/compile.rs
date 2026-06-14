@@ -12,7 +12,7 @@ use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::LInst;
+use crate::codegen::jitgen::lir::{LInst, LMem};
 use monoasm_macro::monoasm_arm64;
 
 ///
@@ -1351,6 +1351,44 @@ impl Codegen {
                     monoasm_arm64!(&mut self.jit, mov x(d), x(s););
                 }
             }
+            // dst <- imm (monoasm_arm64! expands a 64-bit immediate to the
+            // movz/movk sequence as needed)
+            LInst::LoadImm { dst, imm } => {
+                let d = dst.a64().0;
+                monoasm_arm64!(&mut self.jit, mov x(d), (imm););
+            }
+            // dst <- [lfp - slot]. `a64_frame_load` legalizes the (negative)
+            // frame displacement: it folds small offsets into `ldur` and
+            // materializes large ones through scratch x10.
+            LInst::Load {
+                dst,
+                mem: LMem::Slot(slot),
+            } => {
+                let lfp = GP::R14.a64().0;
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                self.a64_frame_load(dst.a64().0, lfp, off);
+            }
+            // [lfp - slot] <- src (legalized like `Load`).
+            LInst::Store {
+                src,
+                mem: LMem::Slot(slot),
+            } => {
+                let lfp = GP::R14.a64().0;
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                self.a64_frame_store(src.a64().0, lfp, off);
+            }
+            // [lfp - slot] <- imm. aarch64 has no store-immediate, so the
+            // immediate is staged through scratch x9 (no allocated GP clobbered),
+            // then stored via the legalizing `a64_frame_store`.
+            LInst::StoreImm {
+                imm,
+                mem: LMem::Slot(slot),
+            } => {
+                let lfp = GP::R14.a64().0;
+                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+                monoasm_arm64!(&mut self.jit, mov x9, (imm););
+                self.a64_frame_store(9, lfp, off);
+            }
             other => {
                 todo!("LIR encode (aarch64): {other:?} not yet migrated (Phase-1 Stage > 2-A)")
             }
@@ -1470,34 +1508,36 @@ impl Codegen {
 
     /// [lfp - slot*8 - LFP_SELF] <- reg
     pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
-        let lfp = GP::R14.a64().0;
-        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        self.a64_frame_store(r.a64().0, lfp, off);
+        self.encode_linst(LInst::Store {
+            src: r,
+            mem: LMem::Slot(slot),
+        });
     }
 
     /// reg <- [lfp - slot*8 - LFP_SELF]
     pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
-        let lfp = GP::R14.a64().0;
-        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        self.a64_frame_load(r.a64().0, lfp, off);
+        self.encode_linst(LInst::Load {
+            dst: r,
+            mem: LMem::Slot(slot),
+        });
     }
 
     /// reg <- literal Value (immediate)
     pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
-        let dst = r.a64().0;
-        let imm = v.id();
-        monoasm_arm64!(&mut self.jit, mov x(dst), (imm););
+        self.encode_linst(LInst::LoadImm {
+            dst: r,
+            imm: v.id(),
+        });
     }
 
     /// [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
     /// materialized in a scratch reg (aarch64 has no store-immediate), so no GP
     /// register is clobbered. Mirrors x86 `literal_to_stack`.
     pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
-        let lfp = GP::R14.a64().0;
-        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-        let imm = v.id();
-        monoasm_arm64!(&mut self.jit, mov x9, (imm););
-        self.a64_frame_store(9, lfp, off);
+        self.encode_linst(LInst::StoreImm {
+            imm: v.id(),
+            mem: LMem::Slot(slot),
+        });
         true
     }
 
