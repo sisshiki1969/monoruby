@@ -532,7 +532,12 @@ impl Store {
             is_lambda: false,
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        self.new_block(outer, compile_info, false, loc, result.source_info)
+        // eval'd code is block-style: a `return` / `break` in the string
+        // escapes to the enclosing method, like a block (not locally like
+        // a lambda). eval bodies and lambdas are otherwise both
+        // method-style (no own params), so this flag is what keeps their
+        // non-local-vs-local `return` semantics apart.
+        self.new_block(outer, compile_info, true, loc, result.source_info)
     }
 
     pub(crate) fn new_builtin_func(
