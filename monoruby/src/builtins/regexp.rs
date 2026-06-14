@@ -55,7 +55,14 @@ pub(crate) fn init(globals: &mut Globals) {
     // - `TypeError` otherwise (CRuby treats every monoruby Regexp as
     //   "already initialized" since `Regexp.new` is the sole entry
     //   point and produces a fully-built instance).
-    let init_id = globals.define_private_builtin_func(REGEXP_CLASS, "initialize", regexp_initialize, 1);
+    let init_id = globals.define_private_builtin_func_with(
+        REGEXP_CLASS,
+        "initialize",
+        regexp_initialize,
+        1,
+        2,
+        false,
+    );
     let _ = init_id;
     globals.store[REGEXP_CLASS].set_alloc_func(regexp_alloc_func);
 }
@@ -96,24 +103,39 @@ pub(crate) extern "C" fn regexp_alloc_func(class_id: ClassId, _: &mut Globals) -
     Value::regexp_with_class(regexp, class_id)
 }
 
-/// Private `Regexp#initialize` that always rejects re-initialisation.
-/// `Regexp.new` builds a fully-formed instance via the alloc function +
-/// internal construction path, so any subsequent `.send(:initialize, …)`
-/// must be either a frozen literal (FrozenError) or an already-built
-/// instance (TypeError "already initialized regexp"). matches CRuby
-/// (the `< 4.1` branch of `initialize_spec.rb`).
+/// Private `Regexp#initialize`. On a freshly-`allocate`d (uninitialized)
+/// receiver — the path taken by `SubclassOfRegexp.new` and an explicit
+/// `super` from an overridden `#initialize` — it compiles the source and
+/// fills in the instance. Re-initialising an already-built regexp is
+/// rejected: `FrozenError` for a frozen literal, otherwise `TypeError`
+/// "already initialized regexp" (matches CRuby).
 #[monoruby_builtin]
 fn regexp_initialize(
-    _: &mut Executor,
-    _: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.self_val();
+    let mut self_ = lfp.self_val();
     if self_.is_frozen() {
         return Err(MonorubyErr::frozenerr("can't modify frozen Regexp"));
     }
-    Err(MonorubyErr::typeerr("already initialized regexp"))
+    if self_.as_regexp_inner().initialized() {
+        return Err(MonorubyErr::typeerr("already initialized regexp"));
+    }
+    // Root the receiver and the source/option args across the allocating
+    // build below: this runs from `super` in an overridden `#initialize`,
+    // whose frame slots aren't otherwise reachable by the GC here.
+    let temp = vm.temp_len();
+    vm.temp_push(self_);
+    vm.temp_push(lfp.arg(0));
+    if let Some(a1) = lfp.try_arg(1) {
+        vm.temp_push(a1);
+    }
+    let inner = build_regexp_inner(vm, globals, lfp)?;
+    *self_.as_regexp_inner_mut() = inner;
+    vm.temp_clear(temp);
+    Ok(Value::nil())
 }
 
 ///
@@ -124,6 +146,44 @@ fn regexp_initialize(
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
 fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    if class_id == REGEXP_CLASS {
+        // Fast path for the base class: build directly.
+        return Ok(Value::regexp(build_regexp_inner(vm, globals, lfp)?));
+    }
+    // A subclass: allocate an instance of it, then initialize. Root the
+    // fresh instance across the construction below, which allocates (and
+    // may GC) before the instance is reachable from the Ruby stack.
+    let mut obj = regexp_alloc_func(class_id, globals);
+    let temp = vm.temp_len();
+    vm.temp_push(obj);
+    let init_fid = vm.find_method(globals, obj, IdentId::INITIALIZE, true)?;
+    if globals.store[init_fid].is_iseq().is_some() {
+        // The subclass overrides `#initialize` (a Ruby method): run it so
+        // its `super` reaches `Regexp#initialize` and its own body (e.g.
+        // `@args = args`) executes.
+        let args: Vec<Value> = match lfp.try_arg(1) {
+            Some(opt) => vec![lfp.arg(0), opt],
+            None => vec![lfp.arg(0)],
+        };
+        vm.invoke_func_inner(globals, init_fid, obj, &args, None, None)?;
+    } else {
+        // Inherited `Regexp#initialize`: build the data directly into the
+        // freshly-allocated instance.
+        let inner = build_regexp_inner(vm, globals, lfp)?;
+        *obj.as_regexp_inner_mut() = inner;
+    }
+    vm.temp_clear(temp);
+    Ok(obj)
+}
+
+/// Parse `Regexp.new`/`#initialize` arguments (source + optional option)
+/// into a fully-built `RegexpInner`.
+fn build_regexp_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<RegexpInner> {
     let arg0 = lfp.arg(0);
     // When given an existing Regexp, carry over both source and
     // options so `Regexp.new(/abc/i) == /abc/i`. CRuby's `rb_reg_init`
@@ -216,7 +276,7 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         source_encoding,
         source_bytes,
     )?;
-    Ok(Value::regexp(regexp))
+    Ok(regexp)
 }
 
 /// Map a Ruby-visible encoding to the matching KCODE_* bit, mirroring
@@ -1967,6 +2027,21 @@ mod tests {
         run_test(r#"[/\u{61}/.source, /\u{61}/.inspect, (/\u{61}/ == /a/)]"#);
         // A Regexp argument preserves the original source verbatim.
         run_test(r#"Regexp.new(/\u{61}/).source"#);
+    }
+
+    #[test]
+    fn regexp_subclass_new() {
+        // A subclass with an overridden #initialize: the override runs
+        // (its `super` builds the regexp, its body sets @args), and the
+        // result is an instance of the subclass.
+        run_test(
+            r#"class ReSubA < Regexp; def initialize(*a); super; @a = a; end; attr_reader :a; end
+               r = ReSubA.new("hi"); [r.is_a?(ReSubA), r.a.first, r.source, r.match("xhiy")[0]]"#,
+        );
+        // A subclass without an overridden #initialize.
+        run_test(r#"class ReSubB < Regexp; end; r = ReSubB.new("hi"); [r.is_a?(ReSubB), r.source]"#);
+        // Re-initializing an already-built regexp still raises.
+        run_test(r#"(Regexp.new("x").send(:initialize, "y"); nil) rescue $!.class"#);
     }
 
     #[test]
