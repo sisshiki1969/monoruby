@@ -1348,11 +1348,6 @@ impl Codegen {
         );
     }
 
-    /// dst <- src (general-purpose register move; self-move is a no-op).
-    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
-        self.encode_linst(LInst::Mov { dst, src });
-    }
-
     ///
     /// Per-arch (aarch64) LIR encoder seam (Phase-1 Stage 2).
     ///
@@ -1939,41 +1934,6 @@ impl Codegen {
                 mov sp, x10;
             );
         }
-    }
-
-    /// [lfp - slot*8 - LFP_SELF] <- reg
-    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
-        self.encode_linst(LInst::Store {
-            src: r,
-            mem: LMem::Slot(slot),
-        });
-    }
-
-    /// reg <- [lfp - slot*8 - LFP_SELF]
-    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
-        self.encode_linst(LInst::Load {
-            dst: r.into(),
-            mem: LMem::Slot(slot),
-        });
-    }
-
-    /// reg <- literal Value (immediate)
-    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
-        self.encode_linst(LInst::LoadImm {
-            dst: r,
-            imm: v.id(),
-        });
-    }
-
-    /// [lfp - slot*8 - LFP_SELF] <- literal Value. The immediate is
-    /// materialized in a scratch reg (aarch64 has no store-immediate), so no GP
-    /// register is clobbered. Mirrors x86 `literal_to_stack`.
-    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
-        self.encode_linst(LInst::StoreImm {
-            imm: v.id(),
-            mem: LMem::Slot(slot),
-        });
-        true
     }
 
     /// Unconditional jump to a side-exit (deopt) label.
@@ -2932,26 +2892,6 @@ impl Codegen {
     /// `ldr`/`str` use a 12-bit scaled (×8) immediate offset; bail above that.
     fn a64_field_off_ok(off: u32) -> bool {
         off <= 32760 && off % 8 == 0
-    }
-
-    /// reg += i (no-op when i == 0). `i` is materialized so any i32 works.
-    pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
-        self.encode_linst(LInst::Alu {
-            op: LAluOp::Add,
-            dst: reg,
-            lhs: reg,
-            rhs: LOperand::Imm(i as i64),
-        });
-    }
-
-    /// reg -= i (no-op when i == 0).
-    pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
-        self.encode_linst(LInst::Alu {
-            op: LAluOp::Sub,
-            dst: reg,
-            lhs: reg,
-            rhs: LOperand::Imm(i as i64),
-        });
     }
 
     /// Loop-JIT entry stack bump (large bumps go through `a64_sp_sub`).

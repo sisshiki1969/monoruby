@@ -216,6 +216,7 @@ accumulator).
 | B2 | remaining construction / `defined?` / dispatch-helper macro-ops | |
 | B3 | control-flow / exception / definition macro-ops (`Ret`, `MethodRet`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `MethodDef`, `Init`, `CheckStack`, `ExecGc`, `IntegerCmp`, `BlockArg`, …) | `Raise`/`Retry`/`Redo`/`EnsureEnd` carry `loop_jit_spill_bytes` for the aarch64 loop-JIT sp unwind |
 | B4 | class-def + method-prologue guards (`ClassDef`, `SingletonClassDef`, `GuardClassVersion`, `RecompileDeopt`) | last non-store/non-frame arms |
+| B5 | elementary moves (`RegMove`/`RegToAcc`/`AccToStack`/`RegToStack`/`StackToReg`/`LitToReg`/`LitToStack`/`RegAdd`/`RegSub`) | dispatcher lowers straight to `LInst`; the thin `emit_*` move wrappers deleted from both backends |
 
 ---
 
@@ -261,12 +262,13 @@ boundary — they are not pure machine-code emission — and the third is small:
   `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
   resolve frame-local labels and patch points and are dispatched to a per-arch
   method of the same name (`arch/<arch>/compile/…`). Same rationale.
-- **Elementary moves.** The register/stack move leaves (`RegMove`, `RegToAcc`,
-  `AccToStack`, `RegToStack`, `StackToReg`, `LitToReg`, `LitToStack`, `RegAdd`,
-  `RegSub`) still call their `emit_*` leaf directly from the dispatcher. These
-  *could* be expressed as `LInst::{Mov,Load,Store,LoadImm,Alu}` and routed, but
-  they already bottom out in the very same `emit_*` leaves that the decomposed
-  `encode_linst` arms target, so the win is cosmetic; left as a follow-up.
+The elementary register/stack moves (`RegMove`, `RegToAcc`, `AccToStack`,
+`RegToStack`, `StackToReg`, `LitToReg`, `LitToStack`, `RegAdd`, `RegSub`) are
+now lowered to `LInst::{Mov,Load,Store,LoadImm,Alu}` straight in the dispatcher;
+the thin `emit_reg_move` / `emit_reg_to_stack` / `emit_stack_to_reg` /
+`emit_lit_to_reg` / `emit_lit_to_stack` / `emit_reg_add` / `emit_reg_sub`
+wrappers (which only forwarded to `encode_linst`) were removed from both
+backends.
 
 Beyond the dispatcher, the **patch / recompile machinery** (return-address
 eviction, in-place recompile) remains the x86/aarch64 *non-coverage* asymmetry

@@ -238,11 +238,6 @@ impl Codegen {
         );
     }
 
-    /// dst <- src (general-purpose register move; self-move is a no-op).
-    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
-        self.encode_linst(LInst::Mov { dst, src });
-    }
-
     ///
     /// Per-arch (x86-64) LIR encoder seam (Phase-1 Stage 2).
     ///
@@ -668,39 +663,6 @@ impl Codegen {
     }
 
     /// [lfp - slot] <- reg
-    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
-        self.encode_linst(LInst::Store {
-            src: r,
-            mem: LMem::Slot(slot),
-        });
-    }
-
-    /// reg <- [lfp - slot]
-    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
-        self.encode_linst(LInst::Load {
-            dst: r.into(),
-            mem: LMem::Slot(slot),
-        });
-    }
-
-    /// reg <- literal Value (immediate)
-    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
-        self.encode_linst(LInst::LoadImm {
-            dst: r,
-            imm: v.id(),
-        });
-    }
-
-    /// [lfp - slot] <- literal Value. Always succeeds on x86 (no immediate-range
-    /// limit); the bool result exists for the aarch64 twin.
-    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
-        self.encode_linst(LInst::StoreImm {
-            imm: v.id(),
-            mem: LMem::Slot(slot),
-        });
-        true
-    }
-
     /// Unconditional jump to a side-exit (deopt) label.
     pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
         monoasm!( &mut self.jit,
@@ -1449,26 +1411,6 @@ impl Codegen {
             self.jit.select_page(0);
         }
         true
-    }
-
-    /// reg += i (no-op when i == 0).
-    pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
-        self.encode_linst(LInst::Alu {
-            op: LAluOp::Add,
-            dst: reg,
-            lhs: reg,
-            rhs: LOperand::Imm(i as i64),
-        });
-    }
-
-    /// reg -= i (no-op when i == 0).
-    pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
-        self.encode_linst(LInst::Alu {
-            op: LAluOp::Sub,
-            dst: reg,
-            lhs: reg,
-            rhs: LOperand::Imm(i as i64),
-        });
     }
 
     /// Loop-JIT entry: reserve the loop body's spill area on the native stack.

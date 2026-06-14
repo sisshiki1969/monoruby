@@ -196,13 +196,13 @@ impl LAluOp {
 
 /// One arch-neutral low-level instruction.
 ///
-/// The set intentionally starts small — it covers the integer move / memory /
-/// ALU / compare-branch core that Stage 2 migrates first (the families behind
-/// `emit_reg_move`, `emit_reg_to_stack`, `emit_stack_to_reg`, `emit_lit_to_reg`,
-/// `emit_lit_to_stack`, `emit_reg_add/sub`, `emit_integer_cmp_br`). FP
-/// transfer/compare, runtime calls (with FP-pool save/restore), and the
-/// patch/recompile machinery are added in later stages as their `AsmInst`
-/// families are ported onto LIR.
+/// The set began with the integer move / memory / ALU / compare-branch core
+/// (register moves, slot/field load-store, reg-imm ALU) and has since grown to
+/// cover the GC write barrier, the guard/check family, fixnum + float
+/// arithmetic, and the large runtime-call macro-ops (construction, variable
+/// access, `defined?`, definition, control flow / exceptions). The remaining
+/// gap is the patch/recompile machinery (return-address eviction, in-place
+/// recompile). See `doc/lir.md` for the migration log.
 ///
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
 /// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
@@ -873,10 +873,9 @@ impl Lir {
 // `encode_linst` is selected by `cfg`. Each backend pattern-matches an `LInst`,
 // performs immediate/displacement **legalization** (folding small immediates,
 // materializing large ones into scratch x9/x10 on aarch64), and emits
-// byte-identical output to the `emit_*` primitive it replaces.
-//
-// Stage 2-A wires only the `Mov` family (behind `emit_reg_move`); the remaining
-// variants `todo!()` until their `AsmInst` family is migrated.
+// byte-identical output to the hand-written primitive it replaces. Macro-op
+// variants that still wrap a substantive per-arch helper fall through each
+// backend's `other =>` arm into the arch-neutral `encode_linst_macro`.
 
 #[cfg(test)]
 mod tests {

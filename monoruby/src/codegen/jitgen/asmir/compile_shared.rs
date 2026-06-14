@@ -4,14 +4,16 @@
 //! The AsmIR→machine-code lowering used to be two fully parallel matches —
 //! `arch/x86_64/compile/*.rs` (x86, `monoasm!`) and `arch/aarch64/compile.rs`
 //! (aarch64, `monoasm_arm64!`). Instructions whose lowering is identical in
-//! *structure* (only the emitted bytes differ) are handled here ONCE and call
-//! tiny per-arch **emission primitives** (`emit_reg_move`, `emit_reg_to_stack`,
-//! `emit_stack_to_reg`, `emit_lit_to_reg`). Everything else is forwarded to the
-//! per-arch `compile_asmir_arch`. Coverage of the shared match grows one
-//! instruction family at a time; see `doc/aarch64-x86-jit-differences.md`.
+//! *structure* (only the emitted bytes differ) are handled here ONCE: each is
+//! lowered to one or more arch-neutral `LInst`s and handed to the per-arch
+//! `Codegen::encode_linst` (the single machine-code emission seam; see
+//! `doc/lir.md`). Macro-op `LInst`s that still wrap a substantive per-arch
+//! helper are routed through `encode_linst_macro` below. Everything else is
+//! forwarded to the per-arch `compile_asmir_arch`. Coverage of the shared match
+//! grows one instruction family at a time; see `doc/arch_difference.md`.
 
 use super::*;
-use crate::codegen::jitgen::lir::{LCond, LInst, LMem, LOperand, LReg};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
 
 impl Codegen {
     ///
@@ -43,20 +45,38 @@ impl Codegen {
                 self.jit.bind_label(label);
             }
             // dst <- src
-            AsmInst::RegMove(src, dst) => self.emit_reg_move(src, dst),
+            AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov { dst, src }),
             // acc <- reg
-            AsmInst::RegToAcc(r) => self.emit_reg_move(r, GP::R15),
+            AsmInst::RegToAcc(r) => self.encode_linst(LInst::Mov {
+                dst: GP::R15,
+                src: r,
+            }),
             // [slot] <- acc
-            AsmInst::AccToStack(slot) => self.emit_reg_to_stack(GP::R15, slot),
+            AsmInst::AccToStack(slot) => self.encode_linst(LInst::Store {
+                src: GP::R15,
+                mem: LMem::Slot(slot),
+            }),
             // [slot] <- reg
-            AsmInst::RegToStack(r, slot) => self.emit_reg_to_stack(r, slot),
+            AsmInst::RegToStack(r, slot) => self.encode_linst(LInst::Store {
+                src: r,
+                mem: LMem::Slot(slot),
+            }),
             // reg <- [slot]
-            AsmInst::StackToReg(slot, r) => self.emit_stack_to_reg(slot, r),
+            AsmInst::StackToReg(slot, r) => self.encode_linst(LInst::Load {
+                dst: r.into(),
+                mem: LMem::Slot(slot),
+            }),
             // reg <- literal Value (immediate)
-            AsmInst::LitToReg(v, r) => self.emit_lit_to_reg(v, r),
-            // [slot] <- literal Value (aarch64 bails if the frame offset
-            // exceeds the 12-bit immediate range, hence the bool result).
-            AsmInst::LitToStack(v, slot) => return self.emit_lit_to_stack(v, slot),
+            AsmInst::LitToReg(v, r) => self.encode_linst(LInst::LoadImm {
+                dst: r,
+                imm: v.id(),
+            }),
+            // [slot] <- literal Value. The encoder legalizes the immediate
+            // (aarch64 stages an over-large frame offset through a scratch reg).
+            AsmInst::LitToStack(v, slot) => self.encode_linst(LInst::StoreImm {
+                imm: v.id(),
+                mem: LMem::Slot(slot),
+            }),
             // Conditional branch on the truthiness of the accumulator.
             AsmInst::CondBr(brkind, dest) => {
                 let target = frame.resolve_label(&mut self.jit, dest);
@@ -555,8 +575,18 @@ impl Codegen {
                 });
             }
             // reg += i / reg -= i (no-op when i == 0).
-            AsmInst::RegAdd(reg, i) => self.emit_reg_add(reg, i),
-            AsmInst::RegSub(reg, i) => self.emit_reg_sub(reg, i),
+            AsmInst::RegAdd(reg, i) => self.encode_linst(LInst::Alu {
+                op: LAluOp::Add,
+                dst: reg,
+                lhs: reg,
+                rhs: LOperand::Imm(i as i64),
+            }),
+            AsmInst::RegSub(reg, i) => self.encode_linst(LInst::Alu {
+                op: LAluOp::Sub,
+                dst: reg,
+                lhs: reg,
+                rhs: LOperand::Imm(i as i64),
+            }),
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
             AsmInst::LoopJitRspBump { offset } => self.encode_linst(LInst::LoopJitRspBump { offset }),
