@@ -975,6 +975,18 @@ impl Codegen {
         }
     }
 
+    /// Spill an FP-pool register to `slot` as a boxed Float `Value` (via
+    /// `f64_to_val`), r14(x22)-relative. Shared by the `FprToStack` LIR op and
+    /// the deopt write-back.
+    fn emit_fpr_to_stack(&mut self, src: FPReg, slot: SlotId, base: usize) {
+        let lfp = GP::R14.a64().0;
+        let f64_to_val = self.f64_to_val.clone();
+        let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+        self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
+        monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+        self.a64_frame_store(0, lfp, off);
+    }
+
     /// Store physical D-register `dreg` into `dst` unconditionally (`fmov` for a
     /// pool register, a frame store for a spill slot).
     fn a64_fpr_save(&mut self, dst: FPReg, dreg: u32, base: usize) {
@@ -1665,12 +1677,7 @@ impl Codegen {
                 self.a64_fpr_commit(dst, 0, base);
             }
             LInst::FprToStack { src, slot, base } => {
-                let lfp = GP::R14.a64().0;
-                let f64_to_val = self.f64_to_val.clone();
-                let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-                self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
-                monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
-                self.a64_frame_store(0, lfp, off);
+                self.emit_fpr_to_stack(src, slot, base);
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 // Force both values into scratch, then store back crossed.

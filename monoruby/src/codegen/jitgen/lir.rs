@@ -211,17 +211,32 @@ impl LAluOp {
 #[derive(Debug, Clone)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
-    Mov { dst: GP, src: GP },
+    Mov {
+        dst: GP,
+        src: GP,
+    },
     /// `dst <- imm` — materialize a full 64-bit immediate (e.g. a tagged
     /// `Value`'s bit pattern) into a register.
-    LoadImm { dst: GP, imm: u64 },
+    LoadImm {
+        dst: GP,
+        imm: u64,
+    },
     /// `dst <- [mem]`. `dst` may be the scratch pointer (intermediate deref).
-    Load { dst: LReg, mem: LMem },
+    Load {
+        dst: LReg,
+        mem: LMem,
+    },
     /// `[mem] <- src`.
-    Store { src: GP, mem: LMem },
+    Store {
+        src: GP,
+        mem: LMem,
+    },
     /// `[mem] <- imm`. aarch64 has no store-immediate, so the encoder routes it
     /// through a scratch register without clobbering any allocated GP.
-    StoreImm { imm: u64, mem: LMem },
+    StoreImm {
+        imm: u64,
+        mem: LMem,
+    },
     /// `dst <- lhs <op> rhs`.
     Alu {
         op: LAluOp,
@@ -232,31 +247,49 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// Set condition flags from `lhs - rhs` (no result register written). The
     /// immediate of an `Imm` rhs is the operand's raw bit pattern (e.g. a tagged
     /// fixnum `Value`), compared against the raw register bits.
-    Cmp { lhs: GP, rhs: LOperand },
+    Cmp {
+        lhs: GP,
+        rhs: LOperand,
+    },
     /// Bind `label` at the current code position.
     Label(DestLabel),
     /// Unconditional branch to `target`.
     Br(DestLabel),
     /// Branch to `target` when the preceding `Cmp` satisfied `cond`.
-    CondBr { cond: LCond, target: DestLabel },
+    CondBr {
+        cond: LCond,
+        target: DestLabel,
+    },
     /// Branch to `target` on the Ruby truthiness of the accumulator (everything
     /// except `nil`/`false` is truthy). `negate` branches on *falsy* instead.
-    BranchTruthy { negate: bool, target: DestLabel },
+    BranchTruthy {
+        negate: bool,
+        target: DestLabel,
+    },
     /// Branch to `target` if the accumulator is `nil`.
-    BranchIfNil { target: DestLabel },
+    BranchIfNil {
+        target: DestLabel,
+    },
     /// Branch to `target` if the accumulator is non-zero (e.g. an already-set
     /// local slot).
-    BranchIfNonzero { target: DestLabel },
+    BranchIfNonzero {
+        target: DestLabel,
+    },
     /// Generational-GC write barrier after storing `value` into a field of the
     /// heap object `parent`: if `parent` is an old object not yet remembered and
     /// `value` is a heap pointer, record `parent` in the remembered set. A
     /// macro-op — the encoder emits the arch's inline fast-path + slow-path call
     /// (x86 fixes `parent` in rdi).
-    WriteBarrier { parent: GP, value: GP },
+    WriteBarrier {
+        parent: GP,
+        value: GP,
+    },
     /// `reg <- nil` if `reg == 0` (an unset inline-ivar slot reads as 0). The
     /// arches differ structurally — x86 branches over a `mov`, aarch64 uses a
     /// branchless `csel` — so this is its own op rather than a Load + branch.
-    NilIfZero { reg: GP },
+    NilIfZero {
+        reg: GP,
+    },
     /// Class guard: branch to the side-exit `deopt` unless `reg`'s runtime class
     /// is `class`. `deopt` is a resolved side-exit label (the deopt model:
     /// guards carry the side-exit they fall through to).
@@ -266,9 +299,14 @@ pub(in crate::codegen::jitgen) enum LInst {
         deopt: DestLabel,
     },
     /// Type guard: deopt unless `reg` holds an `Array`.
-    GuardArrayTy { reg: GP, deopt: DestLabel },
+    GuardArrayTy {
+        reg: GP,
+        deopt: DestLabel,
+    },
     /// Deopt if the receiver (rdi) is frozen.
-    GuardFrozen { deopt: DestLabel },
+    GuardFrozen {
+        deopt: DestLabel,
+    },
     /// Constant-load guard: deopt unless the cached base class (in the
     /// accumulator) equals `base_class`.
     GuardConstBaseClass {
@@ -283,9 +321,13 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     /// Block-passing side-effect guard: deopt if the current frame was captured
     /// or invalidated.
-    GuardCapture { deopt: DestLabel },
+    GuardCapture {
+        deopt: DestLabel,
+    },
     /// Basic-operator-redefinition guard: deopt if any BOP was redefined.
-    CheckBOP { deopt: DestLabel },
+    CheckBOP {
+        deopt: DestLabel,
+    },
     /// Fixnum fast-path arithmetic (`lhs <op> rhs`) on tagged integers, with an
     /// overflow side-exit to `deopt`. A macro-op: the encoder emits the arch's
     /// tagged-arith sequence and overflow handler (x86 outlines the handler to a
@@ -300,9 +342,14 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     /// Fixnum unary negate on the tagged value in `reg`; deopt on i63 overflow
     /// (e.g. `-i63::MIN`).
-    FixnumNeg { reg: GP, deopt: DestLabel },
+    FixnumNeg {
+        reg: GP,
+        deopt: DestLabel,
+    },
     /// Fixnum bitwise-not on the tagged value in `reg` (cannot overflow).
-    FixnumBitNot { reg: GP },
+    FixnumBitNot {
+        reg: GP,
+    },
     // ---- floating-point transfer / convert -----------------------------------
     // FP operands are virtual `FPReg`s (physical xmm/d-reg or a stack spill); the
     // encoders resolve the spill via `FPReg::loc(base)`, so these carry the
@@ -314,7 +361,11 @@ pub(in crate::codegen::jitgen) enum LInst {
         base: usize,
     },
     /// `dst <- f` — materialize an f64 constant into an FP register.
-    F64ToFpr { f: f64, dst: FPReg, base: usize },
+    F64ToFpr {
+        f: f64,
+        dst: FPReg,
+        base: usize,
+    },
     /// `dst <- (src as fixnum) as f64` — untag and convert.
     FixnumToFpr {
         src: GP,
@@ -385,11 +436,18 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     /// Save the live FP pool registers before a C-call (`cont` reserves a
     /// continuation frame).
-    XmmSave { using_xmm: UsingXmm, cont: bool },
+    XmmSave {
+        using_xmm: UsingXmm,
+        cont: bool,
+    },
     /// Restore the live FP pool registers after a C-call.
-    XmmRestore { using_xmm: UsingXmm, cont: bool },
+    XmmRestore {
+        using_xmm: UsingXmm,
+        cont: bool,
+    },
     /// Call an `f64 -> f64` C function (e.g. `Math.sqrt`): save the FP pool, load
     /// `src` into the arg register, call, restore, and store the result in `dst`.
+    #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,
         src: FPReg,
@@ -398,6 +456,7 @@ pub(in crate::codegen::jitgen) enum LInst {
         base: usize,
     },
     /// Call an `(f64, f64) -> f64` C function (e.g. `Math.atan2`).
+    #[allow(non_camel_case_types)]
     CFunc_FF_F {
         f: extern "C" fn(f64, f64) -> f64,
         lhs: FPReg,
@@ -742,7 +801,11 @@ impl Lir {
         self.push(LInst::LoadImm { dst, imm })
     }
 
-    pub(in crate::codegen::jitgen) fn load(&mut self, dst: impl Into<LReg>, mem: LMem) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn load(
+        &mut self,
+        dst: impl Into<LReg>,
+        mem: LMem,
+    ) -> &mut Self {
         self.push(LInst::Load {
             dst: dst.into(),
             mem,
@@ -772,7 +835,11 @@ impl Lir {
         })
     }
 
-    pub(in crate::codegen::jitgen) fn cmp(&mut self, lhs: GP, rhs: impl Into<LOperand>) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn cmp(
+        &mut self,
+        lhs: GP,
+        rhs: impl Into<LOperand>,
+    ) -> &mut Self {
         self.push(LInst::Cmp {
             lhs,
             rhs: rhs.into(),
@@ -787,7 +854,11 @@ impl Lir {
         self.push(LInst::Br(target))
     }
 
-    pub(in crate::codegen::jitgen) fn cond_br(&mut self, cond: LCond, target: DestLabel) -> &mut Self {
+    pub(in crate::codegen::jitgen) fn cond_br(
+        &mut self,
+        cond: LCond,
+        target: DestLabel,
+    ) -> &mut Self {
         self.push(LInst::CondBr { cond, target })
     }
 }
