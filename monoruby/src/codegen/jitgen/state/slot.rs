@@ -37,8 +37,8 @@ pub(crate) struct SlotState {
 impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{ ")?;
-        for (i, state) in self.slots.iter().enumerate() {
-            write!(f, "[%{i}: {state:?}] ")?;
+        for i in self.all_regs() {
+            write!(f, "[%{}: {:?}] ", i.0, self.mode(i))?;
         }
         write!(f, "}}")?;
         Ok(())
@@ -84,7 +84,7 @@ impl SlotState {
             for (i, arg) in args.iter().enumerate() {
                 match arg {
                     LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
-                        ctx.slots[i] = arg.clone();
+                        ctx.set_mode(SlotId(i as u16), *arg);
                     }
                     _ => {}
                 }
@@ -128,11 +128,9 @@ impl SlotState {
     }
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
-        assert_eq!(self.slots.len(), other.slots.len());
-        self.slots
-            .iter()
-            .zip(other.slots.iter())
-            .all(|(lhs, rhs)| lhs.equiv(rhs))
+        assert_eq!(self.slots_len(), other.slots_len());
+        self.all_regs()
+            .all(|i| self.mode(i).equiv(&other.mode(i)))
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
@@ -178,11 +176,11 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn all_regs(&self) -> std::ops::Range<SlotId> {
-        SlotId(0)..SlotId(self.slots.len() as u16)
+        SlotId(0)..SlotId(self.slots_len() as u16)
     }
 
     fn temps(&self) -> std::ops::Range<SlotId> {
-        self.temp_start()..SlotId(self.slots.len() as u16)
+        self.temp_start()..SlotId(self.slots_len() as u16)
     }
 
     pub(super) fn temp_start(&self) -> SlotId {
@@ -910,7 +908,7 @@ impl SlotState {
             self.r15 = None;
             ir.acc2stack(slot);
         }
-        assert!(!self.slots.iter().any(|link| matches!(link, LinkMode::G(_))));
+        assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_))));
         assert!(self.r15.is_none());
     }
 
@@ -992,7 +990,13 @@ impl AbstractFrame {
             return;
         }
         let class_guarded = Guarded::from_class(class);
-        match &mut self.slots[slot.0 as usize] {
+        // Operate on a local copy and write it back, so the per-slot state goes
+        // through `mode`/`set_mode` rather than a direct `slots` borrow (item ②
+        // encapsulation; `LinkMode` is `Copy`, so this is identical to the prior
+        // in-place mutation). The `return`s below skip both the write-back and
+        // the guard emission, exactly as before.
+        let mut mode = self.mode(slot);
+        match &mut mode {
             LinkMode::S(guarded) | LinkMode::G(guarded) => {
                 if class_guarded == *guarded {
                     return;
@@ -1039,11 +1043,11 @@ impl AbstractFrame {
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!(
                     "guard_class(): current:{:?} given:{:?}",
-                    self.mode(slot),
-                    class_guarded
+                    mode, class_guarded
                 );
             }
         }
+        self.set_mode(slot, mode);
         ir.push(AsmInst::GuardClass(r, class, deopt));
     }
 
@@ -1099,8 +1103,8 @@ impl AbstractFrame {
     fn xmm_swap(&mut self, l: FPReg, r: FPReg) {
         let mut guarded_l = None;
         let mut guarded_r = None;
-        for link in self.slots.iter() {
-            match link {
+        for slot in self.all_regs() {
+            match &self.mode(slot) {
                 LinkMode::F(x) => {
                     if *x == l {
                         if let Some(g) = guarded_l {
@@ -1131,32 +1135,38 @@ impl AbstractFrame {
             }
         }
         self.vfpr.swap(l.0 as usize, r.0 as usize);
-        self.slots.iter_mut().for_each(|link| match link {
-            LinkMode::Sf(x, guarded) => {
-                if *x == l {
-                    *x = r;
-                    *guarded = guarded_r.unwrap();
-                } else if *x == r {
-                    *x = l;
-                    *guarded = guarded_l.unwrap();
+        // Local-copy RMW per slot (item ② encapsulation; `LinkMode` is `Copy`,
+        // so identical to the prior `slots.iter_mut()`).
+        for slot in self.all_regs() {
+            let mut link = self.mode(slot);
+            match &mut link {
+                LinkMode::Sf(x, guarded) => {
+                    if *x == l {
+                        *x = r;
+                        *guarded = guarded_r.unwrap();
+                    } else if *x == r {
+                        *x = l;
+                        *guarded = guarded_l.unwrap();
+                    }
                 }
-            }
-            LinkMode::F(x) => {
-                if *x == l {
-                    *x = r;
-                    assert_eq!(guarded_r, Some(SfGuarded::Float));
-                } else if *x == r {
-                    *x = l;
-                    assert_eq!(guarded_l, Some(SfGuarded::Float));
+                LinkMode::F(x) => {
+                    if *x == l {
+                        *x = r;
+                        assert_eq!(guarded_r, Some(SfGuarded::Float));
+                    } else if *x == r {
+                        *x = l;
+                        assert_eq!(guarded_l, Some(SfGuarded::Float));
+                    }
                 }
+                LinkMode::S(_)
+                | LinkMode::C(_)
+                | LinkMode::G(_)
+                | LinkMode::V
+                | LinkMode::MaybeNone
+                | LinkMode::None => {}
             }
-            LinkMode::S(_)
-            | LinkMode::C(_)
-            | LinkMode::G(_)
-            | LinkMode::V
-            | LinkMode::MaybeNone
-            | LinkMode::None => {}
-        });
+            self.set_mode(slot, link);
+        }
     }
 
     fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(FPReg, Vec<SlotId>)> {
@@ -1183,22 +1193,18 @@ impl AbstractFrame {
     }
 
     fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Value, SlotId)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, link)| match link {
-                LinkMode::C(v) if f(SlotId(idx as u16)) => Some((*v, SlotId(idx as u16))),
+        self.all_regs()
+            .filter_map(|idx| match self.mode(idx) {
+                LinkMode::C(v) if f(idx) => Some((v, idx)),
                 _ => None,
             })
             .collect()
     }
 
     fn wb_void(&self) -> Vec<SlotId> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, link)| match link {
-                LinkMode::V => Some(SlotId(idx as u16)),
+        self.all_regs()
+            .filter_map(|idx| match self.mode(idx) {
+                LinkMode::V => Some(idx),
                 _ => None,
             })
             .collect()
