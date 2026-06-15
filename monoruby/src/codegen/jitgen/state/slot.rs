@@ -1223,6 +1223,39 @@ impl Into<Guarded> for SfGuarded {
 }
 
 ///
+/// The *location / representation* half of a [`LinkMode`], with the type/class
+/// (`Guarded`) factored out — the dual of [`LinkMode::guarded`].
+///
+/// Part of item ② (separating value placement from type analysis; see
+/// `doc/regalloc_separation.md`). For the boxed cases (`Stack` / `Gp`) the type
+/// is dropped entirely and lives only in `Guarded`; the FP cases keep their
+/// `FPReg` (and `Sf`'s representation refinement), and `Const` keeps the value.
+/// `LinkMode::from_parts(self.placement(), self.guarded())` reconstructs the
+/// original `LinkMode` (verified by a unit test).
+///
+// Scaffolding for item ②: consumed by the round-trip test now and by the
+// storage split (step 0b) next; not yet wired into the live state.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum Placement {
+    None,
+    MaybeNone,
+    /// void (temp slot above sp)
+    Void,
+    /// boxed `Value` in its stack home
+    Stack,
+    /// boxed `Value` in the GP accumulator (r15)
+    Gp,
+    /// unboxed f64 in an xmm (type is implicitly `Float`)
+    Xmm(FPReg),
+    /// unboxed f64 in an xmm + a read-only boxed cache on the stack; carries the
+    /// representation refinement (`Fixnum` / `Float` / `FixnumOrFloat`)
+    XmmStack(FPReg, SfGuarded),
+    /// compile-time constant (no register / stack location)
+    Const(Value),
+}
+
+///
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1298,6 +1331,44 @@ impl LinkMode {
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
+        }
+    }
+
+    ///
+    /// The location/representation half of this mode (the dual of
+    /// [`Self::guarded`]). See [`Placement`].
+    ///
+    #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
+    fn placement(&self) -> Placement {
+        match self {
+            LinkMode::None => Placement::None,
+            LinkMode::MaybeNone => Placement::MaybeNone,
+            LinkMode::V => Placement::Void,
+            LinkMode::S(_) => Placement::Stack,
+            LinkMode::G(_) => Placement::Gp,
+            LinkMode::F(x) => Placement::Xmm(*x),
+            LinkMode::Sf(x, g) => Placement::XmmStack(*x, *g),
+            LinkMode::C(v) => Placement::Const(*v),
+        }
+    }
+
+    ///
+    /// Recombine a placement with a type guard into a `LinkMode` — the inverse
+    /// of [`Self::placement`] + [`Self::guarded`]. The `guarded` is used only by
+    /// the boxed `Stack` / `Gp` cases (the FP / `Const` / sentinel placements
+    /// carry their own type), so it is ignored for the others.
+    ///
+    #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
+    fn from_parts(place: Placement, guarded: Guarded) -> Self {
+        match place {
+            Placement::None => LinkMode::None,
+            Placement::MaybeNone => LinkMode::MaybeNone,
+            Placement::Void => LinkMode::V,
+            Placement::Stack => LinkMode::S(guarded),
+            Placement::Gp => LinkMode::G(guarded),
+            Placement::Xmm(x) => LinkMode::F(x),
+            Placement::XmmStack(x, g) => LinkMode::Sf(x, g),
+            Placement::Const(v) => LinkMode::C(v),
         }
     }
 
@@ -1714,5 +1785,34 @@ mod tests {
         test
         "###,
         );
+    }
+
+    /// Item ②: `LinkMode` decomposes losslessly into a `Placement` (location /
+    /// representation) and a `Guarded` (type), and recombines via `from_parts`.
+    #[test]
+    fn linkmode_placement_roundtrip() {
+        use super::*;
+        let x = FPReg(0);
+        // Value-carrying modes: from_parts(placement(), guarded()) == self.
+        let value_modes = [
+            LinkMode::S(Guarded::Value),
+            LinkMode::S(Guarded::Fixnum),
+            LinkMode::S(Guarded::Float),
+            LinkMode::S(Guarded::Class(NIL_CLASS)),
+            LinkMode::G(Guarded::Fixnum),
+            LinkMode::F(x),
+            LinkMode::Sf(x, SfGuarded::Float),
+            LinkMode::Sf(x, SfGuarded::Fixnum),
+            LinkMode::Sf(x, SfGuarded::FixnumOrFloat),
+            LinkMode::C(Value::nil()),
+            LinkMode::C(Value::i32(7)),
+        ];
+        for lm in value_modes {
+            assert_eq!(LinkMode::from_parts(lm.placement(), lm.guarded()), lm);
+        }
+        // Sentinels carry no type; placement() round-trips with any guard.
+        for lm in [LinkMode::None, LinkMode::MaybeNone, LinkMode::V] {
+            assert_eq!(LinkMode::from_parts(lm.placement(), Guarded::Value), lm);
+        }
     }
 }

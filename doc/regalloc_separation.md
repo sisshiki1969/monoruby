@@ -148,14 +148,16 @@ comes last, after the data is already decoupled.
 
 | Step | Change | Risk |
 | ---- | ------ | ---- |
-| **0. Data split** | Inside `SlotState`, replace the fused `Vec<LinkMode>` with two parallel views: `ty: Vec<AbstractType>` (lattice) and `place: Vec<Placement>` (Stack / Gp / Xmm(FPReg) / XmmStack(FPReg)). `LinkMode` becomes a derived accessor. `join` splits into `join_ty` + `reconcile_place`. **No behaviour change.** | low |
+| **0a. Decomposition + test** ✅ | Add `Placement` (the location/representation dual of the existing `Guarded` type lattice) + `LinkMode::{placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, Guarded)`. Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
+| **0b. Storage split** | Replace `SlotState.slots: Vec<LinkMode>` with `ty: Vec<Guarded>` + `place: Vec<Placement>`; `mode()`/`set_*` become `from_parts`/decompose shims. `join` splits into `join_ty` (pure lattice meet) + `reconcile_place`. Behaviour-identical. | med |
 | **1. Allocator seam** | Route `alloc_xmm` / `def_F` / `pin_xmm` / spill sizing through one `Allocator` abstraction (default = today's greedy). Inference calls the seam instead of mutating `vfpr` directly. | low–med |
-| **2. Standalone analysis** | Run the layer-① fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
+| **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
 | **3. AsmIR → LIR (goal 1)** | The lowering pass emits `LInst` directly; retire `AsmInst` as a distinct stream (its `AsmIr` bookkeeping — `side_exit`, flags — moves to the lowering driver). | med |
 | **4. Two allocators (goal 3 enabler)** | Add the fixed-convention VM `Allocator`; spike VM-residual generation for one bytecode. | research |
 
-Steps 0–1 are mechanical decoupling that pay off immediately (clearer code,
-testable lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
+Step 0a is shipped (`Placement` + projections + round-trip test). Steps 0b–1
+are mechanical decoupling that pay off immediately (clearer code, testable
+lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
 
 ---
 
@@ -180,10 +182,16 @@ testable lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
 
 ---
 
-## 6. Recommendation
+## 6. Progress
 
-Start with **step 0 (data split)**: factor `LinkMode` into a type lattice +
-a placement map *without* changing the single-pass control flow. It is low-risk,
-keeps the suite at 1702/0, and immediately yields a reusable `AbstractType`
-lattice — the exact artifact goal 3's partial evaluator will consume. Steps 1–2
-then follow with the structural separation, and goals 1/3 fall out of step 3–4.
+**Step 0a is done.** `LinkMode` now has the `placement()` / `from_parts()`
+projections, and a unit test (`linkmode_placement_roundtrip`) proves it is
+isomorphic to `(Placement, Guarded)`. The type lattice already existed as
+`Guarded` (`Value`=⊤, `Fixnum`, `Float`, `Class(c)`) with a `join`; step 0a
+adds its location dual. No live state changed; suite at 1703/0.
+
+**Next: step 0b (storage split)** — back `SlotState` with separate `Vec<Guarded>`
++ `Vec<Placement>` and split `join` into a pure type meet plus a placement
+reconciler, keeping behaviour identical. Then the `Allocator` seam (step 1) and
+the standalone analysis pass (step 2), after which goals 1/3 fall out of
+steps 3–4.
