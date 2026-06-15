@@ -17,9 +17,10 @@ families (array/hash/string/range construction, `defined?`, generic binops,
 class/method definition, exceptions, `yield`, the method-prologue guards, …) are
 all lowered through `encode_linst`, as is the **entire** method-call family —
 argument setup *and* the call itself (the dispatcher pre-resolves the
-store/frame-dependent values and the encoder stays store-free). What remains in
-the dispatcher is the specialized inlined-frame family and the patch/recompile
-bookkeeping that is *not* byte emission — see §8.
+store/frame-dependent values and the encoder stays store-free) — and the cold
+**deopt side-exit handler** blocks. What remains outside is the specialized
+inlined-frame family, the `AsmInst::Inline` escape hatch, and the zero-byte
+patch/recompile bookkeeping that is *not* byte emission — see §8.
 
 ---
 
@@ -221,6 +222,7 @@ accumulator).
 | B5 | elementary moves (`RegMove`/`RegToAcc`/`AccToStack`/`RegToStack`/`StackToReg`/`LitToReg`/`LitToStack`/`RegAdd`/`RegSub`) | dispatcher lowers straight to `LInst`; the thin `emit_*` move wrappers deleted from both backends |
 | B6 | method-call / argument-setup (`SetupMethodFrame`, `SetArguments`, `SetArgumentsForwardedHelper`, `Preparation`, `OptCase`) | dispatcher pre-resolves the store/frame-dependent values (offset, block info, heap-ivar length, jump-table labels) into the `LInst`; per-arch helpers made store-free |
 | B7 | the call itself (`Call`) | dispatcher pre-resolves `codeptr` / `is_iseq` / callee+call-site pcs / x86 JIT entry (`get_jit_entry`); `do_call`/`a64_do_call` made store-free. x86 still records the return-address patch point inside the call's encoder (it is captured at the emission point); aarch64 ignores the x86-only fields |
+| B8 | cold side-exit / deopt handlers (`LInst::SideExit { kind }`) | both `gen_asm` side-exit loops build an `LInst::SideExit` and route through `encode_linst`; the per-arch encoder dispatches on `LSideExitKind` (Deopt / Evict / RecompileDeopt / Error) to the existing handler emitters (x86 `gen_*_with_label` / `gen_handle_error`; aarch64 `a64_gen_deopt` / `a64_gen_handle_error`, which collapse Evict/RecompileDeopt to a plain deopt) |
 
 ---
 
@@ -262,26 +264,32 @@ return-address patch point, which is captured *at* the emission point and so
 belongs with the call's emission. (The elementary register/stack moves were
 likewise inlined into the dispatcher in B5, deleting their forwarding wrappers.)
 
-The arms still handled **directly in the `compile_asmir` dispatcher**:
+The **cold side-exit / deopt handler blocks** that guards branch *to* — laid
+out by `gen_asm` *before* the main instruction loop, not by an `AsmInst` — are
+also byte emission, and as of B8 they route through `encode_linst` via
+`LInst::SideExit` (write-back + sp-unwind + VM-resume / unwind). Both arches'
+`gen_asm` side-exit loops now build an `LInst::SideExit` and the per-arch
+encoder dispatches on `LSideExitKind`.
+
+The remaining things handled **directly** (not through `encode_linst`):
 
 - **Specialized inlined-frame family.** `MethodRetSpecialized`,
   `BlockBreakSpecialized`, `SpecializedCall`, `SetupYieldFrame`,
   `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
   resolve frame-local labels and patch points and are dispatched to a per-arch
   method of the same name (`arch/<arch>/compile/…`).
+- **The `AsmInst::Inline` escape hatch.** Builtin inline generators (e.g.
+  `emit_math_sqrt`) run a closure that emits arch asm directly via `gen`.
+- **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
+  asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
+  goes through LIR (above); what stays out is the part that **emits no bytes**:
+  `ImmediateEvict` records a `return_addr_table` patch point (zero bytes), and
+  the actual return-address overwrite happens at BOP-redefinition time, not at
+  compile time. The clean invariant is therefore:
 
-Beyond the dispatcher, the **patch / recompile machinery** (return-address
-eviction, in-place recompile) is the x86/aarch64 *non-coverage* asymmetry
-described in `doc/arch_difference.md` §4. This is **explicitly out of scope** for
-LIR: it does not *emit bytes* — it records code-position metadata
-(`return_addr_table` patch points, which emit zero bytes), mutates `Codegen`
-tables, and triggers recompilation. Forcing it into `LInst` would add zero-byte
-"instructions" that only touch side tables, degrading the machine-op
-abstraction. The clean invariant is therefore:
-
-> `encode_linst` is the single seam for byte **emission**; code-position
-> metadata / patch / recompile bookkeeping is *not* emission and stays in the
-> dispatcher / `Codegen`.
+> `encode_linst` is the single seam for byte **emission**; zero-byte
+> code-position metadata / runtime patch bookkeeping is *not* emission and stays
+> in the dispatcher / `Codegen`.
 
 None of this invalidates the model: `encode_linst` (with `encode_linst_macro`)
 is the single seam for byte emission. The only arms still handled directly in

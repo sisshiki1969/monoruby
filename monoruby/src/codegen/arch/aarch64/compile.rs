@@ -12,7 +12,7 @@ use super::*;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
 
 /// Resolve a LIR register operand to its aarch64 register number. The scratch
 /// pointer is `x9`.
@@ -132,7 +132,14 @@ impl Codegen {
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Evict,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes: bump,
+                        base: frame.base_stack_offset,
+                    });
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -141,7 +148,14 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.a64_gen_deopt(key.0, &key.1, label.clone(), bump, frame.base_stack_offset);
+                        self.encode_linst(LInst::SideExit {
+                            kind: LSideExitKind::Deopt,
+                            pc: key.0,
+                            wb: key.1.clone(),
+                            entry: label.clone(),
+                            loop_jit_spill_bytes: bump,
+                            base: frame.base_stack_offset,
+                        });
                         deopt_table.insert(key, label.clone());
                         label
                     }
@@ -149,14 +163,28 @@ impl Codegen {
                 // Treat recompile-deopt as a plain deopt for now: fall back to
                 // the interpreter without the counter-gated recompile (still
                 // correct, just not yet self-optimizing).
-                SideExit::RecompileDeoptimize(pc, wb, _reason, _position) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.a64_gen_deopt(pc, &wb, label.clone(), bump, frame.base_stack_offset);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::RecompileDeopt { reason, position },
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes: bump,
+                        base: frame.base_stack_offset,
+                    });
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.a64_gen_handle_error(pc, &wb, label.clone(), bump, frame.base_stack_offset);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Error,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes: bump,
+                        base: frame.base_stack_offset,
+                    });
                     label
                 }
                 // Evict(None) is a placeholder always overwritten with
@@ -1820,6 +1848,25 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
+            // Cold side-exit (deopt) handler blocks. aarch64 has no recompiler,
+            // so Evict / RecompileDeopt collapse to a plain deopt.
+            LInst::SideExit {
+                kind,
+                pc,
+                wb,
+                entry,
+                loop_jit_spill_bytes,
+                base,
+            } => match kind {
+                LSideExitKind::Deopt
+                | LSideExitKind::Evict
+                | LSideExitKind::RecompileDeopt { .. } => {
+                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                LSideExitKind::Error => {
+                    self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+            },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
             other => self.encode_linst_macro(other),

@@ -11,7 +11,7 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
 /// pointer is `rdx`.
@@ -656,6 +656,34 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
+            // Cold side-exit (deopt) handler blocks. Dispatch on the kind to the
+            // existing x86 handler emitters (defined in `jitgen.rs`).
+            LInst::SideExit {
+                kind,
+                pc,
+                wb,
+                entry,
+                loop_jit_spill_bytes,
+                base,
+            } => match kind {
+                LSideExitKind::Deopt => {
+                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                LSideExitKind::Evict => {
+                    self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                LSideExitKind::RecompileDeopt { reason, position } => self
+                    .gen_recompile_deopt_with_label(
+                        pc,
+                        &wb,
+                        reason,
+                        position,
+                        entry,
+                        loop_jit_spill_bytes,
+                        base,
+                    ),
+                LSideExitKind::Error => self.gen_handle_error(pc, wb, entry, base),
+            },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
             other => self.encode_linst_macro(other),

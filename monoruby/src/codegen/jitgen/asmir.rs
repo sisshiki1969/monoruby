@@ -1,4 +1,5 @@
 use crate::bytecodegen::BinOpK;
+use crate::codegen::jitgen::lir::{LInst, LSideExitKind};
 
 use super::*;
 
@@ -2012,7 +2013,14 @@ impl Codegen {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes, base);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Evict,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    });
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -2021,33 +2029,40 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(
-                            pc,
-                            &t.1,
-                            label.clone(),
+                        self.encode_linst(LInst::SideExit {
+                            kind: LSideExitKind::Deopt,
+                            pc: t.0,
+                            wb: t.1.clone(),
+                            entry: label.clone(),
                             loop_jit_spill_bytes,
                             base,
-                        );
+                        });
                         deopt_table.insert(t, label.clone());
                         label
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.gen_recompile_deopt_with_label(
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::RecompileDeopt { reason, position },
                         pc,
-                        &wb,
-                        reason,
-                        position,
-                        label.clone(),
+                        wb,
+                        entry: label.clone(),
                         loop_jit_spill_bytes,
                         base,
-                    );
+                    });
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.gen_handle_error(pc, wb, label.clone(), base);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Error,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    });
                     label
                 }
                 _ => unreachable!("unexpected {side_exit:?}"),

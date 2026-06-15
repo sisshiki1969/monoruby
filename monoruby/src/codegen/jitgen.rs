@@ -864,7 +864,13 @@ impl JitModule {
 
 #[cfg(target_arch = "x86_64")]
 impl Codegen {
-    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
+    pub(in crate::codegen) fn gen_handle_error(
+        &mut self,
+        pc: BytecodePtr,
+        wb: WriteBack,
+        entry: DestLabel,
+        base: usize,
+    ) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -885,7 +891,7 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_deopt_with_label(
+    pub(in crate::codegen) fn gen_deopt_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,
@@ -905,7 +911,7 @@ impl Codegen {
     /// monomorphic-compiled BinCmp sites so they flip to the
     /// non-deopting polymorphic path (Part B).
     ///
-    fn gen_recompile_deopt_with_label(
+    pub(in crate::codegen) fn gen_recompile_deopt_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,
@@ -929,7 +935,7 @@ impl Codegen {
     ///
     /// Get *DestLabel* for fallback to interpreter by immediate eviction.
     ///
-    fn gen_evict_with_label(
+    pub(in crate::codegen) fn gen_evict_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,

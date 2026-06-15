@@ -204,6 +204,27 @@ impl LAluOp {
 /// gap is the patch/recompile machinery (return-address eviction, in-place
 /// recompile). See `doc/lir.md` for the migration log.
 ///
+/// Which kind of cold side-exit (deopt) handler an `LInst::SideExit` emits. The
+/// handler writes all live Ruby values back to the LFP (so the frame is
+/// GC-consistent) and resumes the interpreter / unwinds; this mirrors the
+/// `SideExit` cases the JIT records while building `AsmIr`.
+#[derive(Debug, Clone)]
+pub(in crate::codegen::jitgen) enum LSideExitKind {
+    /// Plain deoptimization back to the VM fetch loop.
+    Deopt,
+    /// Immediate eviction (BOP redefinition) — same shape as `Deopt`, with a
+    /// distinct `cfg(deopt/profile)` log reason.
+    Evict,
+    /// Deopt that, once a miss counter is exhausted, recompiles the method/loop
+    /// (x86 only; aarch64 treats it as a plain `Deopt`).
+    RecompileDeopt {
+        reason: RecompileReason,
+        position: Option<BytecodePtr>,
+    },
+    /// Error handler: write back then jump to the raise/`handle_error` path.
+    Error,
+}
+
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
 /// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
 /// primitives already receive `DestLabel`s. `DestLabel` is `Clone` but not
@@ -810,6 +831,19 @@ pub(in crate::codegen::jitgen) enum LInst {
         jit_entry: Option<DestLabel>,
         evict: AsmEvict,
         evict_label: DestLabel,
+    },
+    /// A cold side-exit (deopt) handler block: bind `entry`, undo any loop-JIT
+    /// sp bump, write `wb` back to the LFP, then resume the VM / unwind. The
+    /// per-arch encoder dispatches on `kind` to the existing handler emitter
+    /// (x86 `gen_*_with_label` / `gen_handle_error`; aarch64 `a64_gen_deopt` /
+    /// `a64_gen_handle_error`).
+    SideExit {
+        kind: LSideExitKind,
+        pc: BytecodePtr,
+        wb: WriteBack,
+        entry: DestLabel,
+        loop_jit_spill_bytes: usize,
+        base: usize,
     },
 }
 
