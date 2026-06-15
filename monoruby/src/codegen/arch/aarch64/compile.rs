@@ -833,10 +833,13 @@ impl Codegen {
     /// patching (`set_deopt_with_return_addr`) is x86-only (runtime branch
     /// patching), so it is skipped — class-version changes are caught by
     /// `GuardClassVersion` deopts instead.
-    fn a64_do_call(&mut self, store: &Store, callee_fid: FuncId, call_site_bc_ptr: BytecodePtr) {
-        let callee = &store[callee_fid];
-        let is_iseq = callee.is_iseq().is_some();
-        let (_meta, codeptr, pc) = callee.get_data();
+    fn a64_do_call(
+        &mut self,
+        codeptr: CodePtr,
+        is_iseq: bool,
+        callee_pc: Option<BytecodePtrBase>,
+        call_site_bc_ptr: BytecodePtr,
+    ) {
         let codeptr_addr = codeptr.as_ptr() as u64;
         // set_lfp + push_frame (EXEC=x19, LFP=x22).
         monoasm_arm64!(&mut self.jit,
@@ -849,7 +852,7 @@ impl Codegen {
         );
         if is_iseq {
             // iseq: PC <- callee pc (read by the VM tier / prologue).
-            if let Some(pc) = pc {
+            if let Some(pc) = callee_pc {
                 let pc_ptr = pc.as_ptr() as u64;
                 monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr););
             }
@@ -2721,16 +2724,20 @@ impl Codegen {
     /// The call itself. aarch64 has no runtime branch patching, so the `evict`
     /// return-address patch point is not registered (class-version guards cover
     /// the staleness it would otherwise catch); the x86-only params are unused.
+    /// aarch64 always calls `codeptr` directly (no JIT-entry dispatch or
+    /// return-address patching — class-version guards cover invalidation), so
+    /// `jit_entry` / `evict` / `evict_label` are unused here.
     pub(in crate::codegen::jitgen) fn emit_call(
         &mut self,
-        store: &Store,
-        callee_fid: FuncId,
-        _recv_class: ClassId,
+        codeptr: CodePtr,
+        is_iseq: bool,
+        callee_pc: Option<BytecodePtrBase>,
+        call_site_bc_ptr: BytecodePtr,
+        _jit_entry: Option<DestLabel>,
         _evict: AsmEvict,
         _evict_label: &DestLabel,
-        pc: BytecodePtr,
     ) {
-        self.a64_do_call(store, callee_fid, pc);
+        self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr);
     }
 
     /// Method prologue: establish fp/lr, reserve the local frame, and nil-fill

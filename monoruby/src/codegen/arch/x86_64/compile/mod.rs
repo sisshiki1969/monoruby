@@ -1341,21 +1341,6 @@ impl Codegen {
         self.recompile_and_deopt(position, deopt, reason);
     }
 
-    /// The call itself: enter the callee and record a return-address deopt
-    /// patch point for `evict`.
-    pub(in crate::codegen::jitgen) fn emit_call(
-        &mut self,
-        store: &Store,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        evict: AsmEvict,
-        evict_label: &DestLabel,
-        pc: BytecodePtr,
-    ) {
-        let return_addr = self.do_call(store, callee_fid, recv_class, pc);
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
-    }
-
     /// Method prologue. Always succeeds on x86 (the bool result mirrors the
     /// aarch64 twin, which bails on an over-large frame).
     pub(in crate::codegen::jitgen) fn emit_init(

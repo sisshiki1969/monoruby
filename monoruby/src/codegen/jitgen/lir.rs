@@ -793,6 +793,24 @@ pub(in crate::codegen::jitgen) enum LInst {
         else_dest: DestLabel,
         branch_dests: Box<[DestLabel]>,
     },
+    /// The call itself. Store/frame-dependent target info is pre-resolved by the
+    /// dispatcher. x86 dispatches to a JIT entry (`jit_entry`) when present and
+    /// records a return-address deopt patch point (`evict` / `evict_label`);
+    /// aarch64 always calls `codeptr` and ignores those fields (class-version
+    /// guards cover it).
+    Call {
+        /// callee entry code pointer (`store[callee_fid].get_data()`).
+        codeptr: CodePtr,
+        is_iseq: bool,
+        /// callee's own pc (iseq callees), used when there is no JIT entry.
+        callee_pc: Option<BytecodePtrBase>,
+        /// call-site bytecode pointer (passed to with-pc builtins).
+        call_site_bc_ptr: BytecodePtr,
+        /// x86 JIT entry for this recv_class (`store[iseq].get_jit_entry`).
+        jit_entry: Option<DestLabel>,
+        evict: AsmEvict,
+        evict_label: DestLabel,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)

@@ -460,7 +460,21 @@ impl Codegen {
                 pc,
             } => {
                 let evict_label = labels[evict].clone();
-                self.emit_call(store, callee_fid, recv_class, evict, &evict_label, pc);
+                let callee = &store[callee_fid];
+                let is_iseq = callee.is_iseq();
+                let (_, codeptr, callee_pc) = callee.get_data();
+                // x86 JIT-entry lookup (aarch64 ignores it; the lookup is a
+                // side-effect-free table read, so pre-resolving here is safe).
+                let jit_entry = is_iseq.and_then(|iseq| store[iseq].get_jit_entry(recv_class));
+                self.encode_linst(LInst::Call {
+                    codeptr,
+                    is_iseq: is_iseq.is_some(),
+                    callee_pc,
+                    call_site_bc_ptr: pc,
+                    jit_entry,
+                    evict,
+                    evict_label,
+                });
             }
             // Method prologue: establish fp/lr, reserve the local frame, nil-fill
             // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
@@ -1225,6 +1239,25 @@ impl Codegen {
                 branch_dests,
             } => {
                 self.emit_opt_case(max, min, else_dest, branch_dests);
+            }
+            LInst::Call {
+                codeptr,
+                is_iseq,
+                callee_pc,
+                call_site_bc_ptr,
+                jit_entry,
+                evict,
+                evict_label,
+            } => {
+                self.emit_call(
+                    codeptr,
+                    is_iseq,
+                    callee_pc,
+                    call_site_bc_ptr,
+                    jit_entry,
+                    evict,
+                    &evict_label,
+                );
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }
