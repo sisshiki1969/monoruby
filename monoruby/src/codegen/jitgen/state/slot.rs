@@ -987,11 +987,23 @@ impl SlotState {
     ///
     /// The slot is set to LinkMode::Stack.
     ///
+    ///
+    /// Analysis half of [`Self::writeback_acc`] (item ②, step-2 spike): evict
+    /// the accumulator (`r15`) owner to its stack home in the *abstract state*
+    /// only, returning the evicted slot so the emission half can store it. This
+    /// is the pure state transition — a standalone analysis pass calls this and
+    /// never touches `AsmIr`; codegen calls `writeback_acc` (this + the store).
+    ///
+    fn writeback_acc_state(&mut self) -> Option<SlotId> {
+        let slot = self.r15?;
+        let guarded = self.guarded(slot);
+        self.set_mode(slot, LinkMode::S(guarded));
+        self.r15 = None;
+        Some(slot)
+    }
+
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.r15 {
-            let guarded = self.guarded(slot);
-            self.set_mode(slot, LinkMode::S(guarded));
-            self.r15 = None;
+        if let Some(slot) = self.writeback_acc_state() {
             ir.acc2stack(slot);
         }
         assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_))));
