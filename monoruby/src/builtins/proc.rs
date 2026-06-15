@@ -36,6 +36,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
+    // `==` / `eql?` compare the underlying block; `eql?` is registered as
+    // an alias so they share the same FuncId (ruby/spec requires
+    // `instance_method(:eql?) == instance_method(:==)`).
+    globals.define_builtin_funcs(PROC_CLASS, "==", &["eql?"], proc_eq, 1);
+    globals.define_builtin_func(PROC_CLASS, "hash", proc_hash, 0);
     globals.define_builtin_func_with_kw(
         PROC_CLASS,
         "parameters",
@@ -99,6 +104,60 @@ fn proc_arity_value(globals: &Globals, proc: &Proc) -> i64 {
         return globals[m.func_id()].arity();
     }
     globals[proc.func_id()].arity()
+}
+
+///
+/// ### Proc#==
+/// ### Proc#eql?
+///
+/// - self == other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/=3d=3d.html]
+///
+/// Two procs are equal when they are the same object, or when one is a
+/// `dup`/`clone` of the other. CRuby compares the underlying block —
+/// iseq, captured environment, lambda flag and class — all of which a
+/// shallow copy shares. Independently-created procs differ in their
+/// `FuncId` (a distinct block literal) or in their captured frame, so
+/// they compare unequal even with identical bodies and enclosing scope.
+#[monoruby_builtin]
+fn proc_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.id() == other.id() {
+        return Ok(Value::bool(true));
+    }
+    let Some(rhs) = other.is_proc() else {
+        return Ok(Value::bool(false));
+    };
+    let lhs = Proc::new(self_val);
+    // lambda-ness is a property of the FuncId, so equal FuncIds already
+    // imply an equal lambda flag; the class check separates Proc from its
+    // subclasses.
+    let eq = self_val.class() == other.class()
+        && lhs.func_id() == rhs.func_id()
+        && lhs.outer_lfp() == rhs.outer_lfp()
+        && lhs.self_val().id() == rhs.self_val().id()
+        && lhs.source() == rhs.source();
+    Ok(Value::bool(eq))
+}
+
+///
+/// ### Proc#hash
+///
+/// - hash -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/hash.html]
+///
+/// Hashes on a subset of the equality components (`FuncId` + captured
+/// `self`) so that `==`-equal procs are guaranteed to hash equal.
+#[monoruby_builtin]
+fn proc_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let proc = Proc::new(lfp.self_val());
+    let h = (proc.func_id().get() as u64)
+        .wrapping_mul(31)
+        .wrapping_add(proc.self_val().id());
+    Ok(Value::integer(h as i64))
 }
 
 ///
@@ -669,6 +728,24 @@ mod tests {
                end
                o = PSubC.new { 1 }; [o.dup.class.name, o.dup.tag, o.clone.tag]"#,
         );
+    }
+
+    #[test]
+    fn proc_equal() {
+        // same object, and a dup/clone of it, are equal.
+        run_test(r#"def m; proc{|x| x}; end; p = m; [p == p, p == p.dup, p == p.clone]"#);
+        run_test(r#"l = ->(x){ x }; [l == l, l == l.dup, l == l.clone]"#);
+        // distinct procs/lambdas — even with the same body and frame — differ;
+        // a proc never equals a lambda; a proc never equals a non-Proc.
+        run_test(
+            r#"a = proc{ :foo }; b = proc{ :foo }
+               [a == b, (->(){:x}) == (->(){:x}), proc{:y} == ->(){:y}, a == [], a == nil]"#,
+        );
+        // two invocations capture different frames -> unequal.
+        run_test(r#"def g; proc{ 1 }; end; g == g"#);
+        // eql? mirrors ==; a dup hashes equal.
+        run_test(r#"def m; proc{|x| x}; end; p = m; [p.dup.eql?(p), p.dup.hash == p.hash]"#);
+        run_test(r#"proc{ 1 + 1 }.hash.is_a?(Integer)"#);
     }
 
     #[test]
