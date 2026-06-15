@@ -158,7 +158,8 @@ comes last, after the data is already decoupled.
 | Step | Change | Risk |
 | ---- | ------ | ---- |
 | **0a. Decomposition + test** ✅ | Add the location-only `Placement` enum, plus `LinkMode::{placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, Guarded)`. The type lattice is the existing `Guarded` (no new type — per review, `Sf` is a representation mark, not a type; its `SfGuarded` refinement is recovered from the paired `Guarded`). Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
-| **0b. Storage split** | Replace `SlotState.slots: Vec<LinkMode>` with `ty: Vec<Guarded>` + `place: Vec<Placement>`; `mode()`/`set_*` become `from_parts`/decompose shims. `join` splits into `join_ty` (pure lattice meet) + `reconcile_place`. Behaviour-identical. | med |
+| **0b. Storage split** ✅ | (0b-i) Encapsulate every `self.slots` access behind `mode()`/`set_mode()`/`all_regs()`/`slots_len()` (the two in-place mutations become local-copy RMW). (0b-ii) Replace `SlotState.slots: Vec<LinkMode>` with `place: Vec<Placement>` + `ty: Vec<Guarded>`; `mode()` composes via `from_parts`, `set_mode()` decomposes. Behaviour-identical. *Done; suite 1703/0.* | done |
+| **0c. Split `join`** | Split `AbstractFrame::join` / `bridge` into a pure `ty` lattice meet (`Guarded::join`) plus a `place` reconciler (the register/φ reconciliation). Behaviour-identical. | med |
 | **1. Allocator seam** | Route `alloc_xmm` / `def_F` / `pin_xmm` / spill sizing through one `Allocator` abstraction (default = today's greedy). Inference calls the seam instead of mutating `vfpr` directly. | low–med |
 | **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
 | **3. AsmIR → LIR (goal 1)** | The lowering pass emits `LInst` directly; retire `AsmInst` as a distinct stream (its `AsmIr` bookkeeping — `side_exit`, flags — moves to the lowering driver). | med |
@@ -204,8 +205,11 @@ existing `Guarded`; `Sf` is treated as a representation mark (the `XmmStack`
 placement), not a type, with its refinement recovered from the paired `Guarded`.
 No live state changed; suite at 1703/0.
 
-**Next: step 0b (storage split)** — back `SlotState` with separate `Vec<Guarded>`
-+ `Vec<Placement>` and split `join` into a pure type meet plus a placement
-reconciler, keeping behaviour identical. Then the `Allocator` seam (step 1) and
+**Step 0b is done.** `SlotState` is now backed by `place: Vec<Placement>` +
+`ty: Vec<Guarded>` (via `mode`/`set_mode` compose/decompose), so the type
+lattice is a standalone per-slot vector. Suite at 1703/0, behaviour-identical.
+
+**Next: step 0c** — split `AbstractFrame::join` / `bridge` into a pure `ty`
+lattice meet plus a `place` reconciler. Then the `Allocator` seam (step 1) and
 the standalone analysis pass (step 2), after which goals 1/3 fall out of
 steps 3–4.
