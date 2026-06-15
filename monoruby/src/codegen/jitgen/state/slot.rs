@@ -132,6 +132,22 @@ impl SlotState {
         self.place.len()
     }
 
+    /// The pure type-lattice meet over the per-slot `ty` vectors — the
+    /// analysis-layer join (item ②, the reusable primitive for the standalone
+    /// analysis pass in step 2). Element-wise `Guarded::join`; placement /
+    /// sentinel reconciliation is a separate concern that the fused
+    /// `AbstractFrame::join` still owns today. For non-sentinel slots this equals
+    /// the fused join's resulting type (verified arm-by-arm; see
+    /// `doc/regalloc_separation.md`).
+    #[allow(dead_code)] // wired in by step 2 (standalone analysis pass)
+    pub(super) fn join_ty(&self, other: &SlotState) -> Vec<Guarded> {
+        self.ty
+            .iter()
+            .zip(other.ty.iter())
+            .map(|(a, b)| a.join(b))
+            .collect()
+    }
+
     pub(super) fn no_r15(&self) -> bool {
         self.r15.is_none()
     }
@@ -1547,6 +1563,14 @@ impl Guarded {
             Guarded::Float => FLOAT_CLASS,
             Guarded::Class(c) => *c,
         })
+    }
+
+    /// Type-lattice meet (item ②): two equal types stay; disagreement widens to
+    /// `Value` (⊤). This is the *type* component of `AbstractFrame::join` — the
+    /// fused join's resulting type equals this meet for every non-sentinel slot
+    /// (placement reconciliation is the rest of `join`).
+    pub(super) fn join(&self, other: &Self) -> Self {
+        if self == other { *self } else { Guarded::Value }
     }
 }
 

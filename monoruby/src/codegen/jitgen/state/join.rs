@@ -164,9 +164,3 @@ impl IsUsed {
         };
     }
 }
-
-impl Guarded {
-    fn join(&self, other: &Self) -> Self {
-        if self == other { *self } else { Guarded::Value }
-    }
-}

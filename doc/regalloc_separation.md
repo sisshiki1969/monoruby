@@ -159,7 +159,7 @@ comes last, after the data is already decoupled.
 | ---- | ------ | ---- |
 | **0a. Decomposition + test** ✅ | Add the location-only `Placement` enum, plus `LinkMode::{placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, Guarded)`. The type lattice is the existing `Guarded` (no new type — per review, `Sf` is a representation mark, not a type; its `SfGuarded` refinement is recovered from the paired `Guarded`). Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
 | **0b. Storage split** ✅ | (0b-i) Encapsulate every `self.slots` access behind `mode()`/`set_mode()`/`all_regs()`/`slots_len()` (the two in-place mutations become local-copy RMW). (0b-ii) Replace `SlotState.slots: Vec<LinkMode>` with `place: Vec<Placement>` + `ty: Vec<Guarded>`; `mode()` composes via `from_parts`, `set_mode()` decomposes. Behaviour-identical. *Done; suite 1703/0.* | done |
-| **0c. Split `join`** | Split `AbstractFrame::join` / `bridge` into a pure `ty` lattice meet (`Guarded::join`) plus a `place` reconciler (the register/φ reconciliation). Behaviour-identical. | med |
+| **0c. Factor the type meet** ✅ | Extract the analysis-layer join as a reusable primitive: relocate `Guarded::join` next to `Guarded` and add `SlotState::join_ty` (element-wise `Guarded::join` over the `ty` vec). Verified arm-by-arm that the fused `AbstractFrame::join`'s resulting *type* equals this meet for every non-sentinel slot, so the fused join's remaining work is purely placement reconciliation (which carries the allocation side-effects and moves to the `Allocator` in steps 1–2). *Done; suite 1703/0.* | done |
 | **1. Allocator seam** | Route `alloc_xmm` / `def_F` / `pin_xmm` / spill sizing through one `Allocator` abstraction (default = today's greedy). Inference calls the seam instead of mutating `vfpr` directly. | low–med |
 | **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
 | **3. AsmIR → LIR (goal 1)** | The lowering pass emits `LInst` directly; retire `AsmInst` as a distinct stream (its `AsmIr` bookkeeping — `side_exit`, flags — moves to the lowering driver). | med |
@@ -205,11 +205,17 @@ existing `Guarded`; `Sf` is treated as a representation mark (the `XmmStack`
 placement), not a type, with its refinement recovered from the paired `Guarded`.
 No live state changed; suite at 1703/0.
 
-**Step 0b is done.** `SlotState` is now backed by `place: Vec<Placement>` +
-`ty: Vec<Guarded>` (via `mode`/`set_mode` compose/decompose), so the type
-lattice is a standalone per-slot vector. Suite at 1703/0, behaviour-identical.
+**Steps 0a–0c are done.** `SlotState` is backed by `place: Vec<Placement>` +
+`ty: Vec<Guarded>`; the type lattice is a standalone per-slot vector with a
+reusable meet (`join_ty`). Crucially, the fused `AbstractFrame::join`'s *type*
+result is exactly that meet for every non-sentinel slot — so the join's residual
+work is **purely placement reconciliation** (the register/φ reconciliation that
+carries allocation side-effects). That confirms the clean split point: the type
+analysis is already separable; what remains entangled is allocation, which is
+precisely what steps 1–2 pull out.
 
-**Next: step 0c** — split `AbstractFrame::join` / `bridge` into a pure `ty`
-lattice meet plus a `place` reconciler. Then the `Allocator` seam (step 1) and
-the standalone analysis pass (step 2), after which goals 1/3 fall out of
+**Next: step 1 (Allocator seam)** — route `alloc_xmm` / `def_F` / `pin_xmm` /
+spill sizing through one `Allocator` abstraction (default = today's greedy), so
+the placement reconciliation stops mutating `vfpr` directly. Then step 2 (the
+standalone analysis pass consuming `join_ty`), after which goals 1/3 fall out of
 steps 3–4.
