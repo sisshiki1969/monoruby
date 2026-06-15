@@ -797,6 +797,14 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
+    /// Emit `dst <- [base + disp]` (load a heap-object field into a GP register).
+    /// A typed alternative to `inline` for trivial field-reader inline builtins,
+    /// so their codegen flows through LIR (`LInst::Load { Field }`) instead of
+    /// hand-written per-arch asm.
+    pub(crate) fn load_field_to_reg(&mut self, dst: GP, base: GP, disp: i32) {
+        self.inst.push(AsmInst::LoadFieldToReg { dst, base, disp });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1328,6 +1336,16 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline(InlineProcedure),
+    /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
+    /// A typed replacement for the `ir.inline(|gen| gen.emit_*())` escape hatch
+    /// used by trivial field-reader inline builtins (e.g. `Range#begin/end`),
+    /// so their codegen is expressed once in arch-neutral LIR rather than as
+    /// per-arch hand-written asm. Lowers to `LInst::Load { mem: Field }`.
+    LoadFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
     #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,

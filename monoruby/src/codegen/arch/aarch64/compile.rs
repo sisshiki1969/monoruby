@@ -3645,20 +3645,6 @@ impl Codegen {
         }
     }
 
-    /// `Range#begin`: load the start Value from the receiver in Rdi (x4) → Rax.
-    pub(crate) fn emit_range_begin(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(crate::rvalue::RANGE_START_OFFSET as u32)];
-        );
-    }
-
-    /// `Range#end`: load the end Value from the receiver in Rdi (x4) → Rax.
-    pub(crate) fn emit_range_end(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(crate::rvalue::RANGE_END_OFFSET as u32)];
-        );
-    }
-
     /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, then add
     /// FALSE_VALUE (whose bit 3 is clear, so `add` == `or`): 0→FALSE_VALUE,
     /// 8→0x1c=TRUE_VALUE. Receiver in Rdi (x4) → Rax (x0).

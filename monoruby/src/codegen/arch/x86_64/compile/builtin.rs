@@ -9,20 +9,6 @@
 use super::*;
 
 impl Codegen {
-    /// `Range#begin`: load the start Value from the receiver in rdi → rax.
-    pub(crate) fn emit_range_begin(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (crate::rvalue::RANGE_START_OFFSET as i32)];
-        }
-    }
-
-    /// `Range#end`: load the end Value from the receiver in rdi → rax.
-    pub(crate) fn emit_range_end(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (crate::rvalue::RANGE_END_OFFSET as i32)];
-        }
-    }
-
     /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, OR with
     /// FALSE_VALUE so 0→FALSE_VALUE and 1→TRUE_VALUE. Receiver in rdi → rax.
     pub(crate) fn emit_range_exclude_end(&mut self) {

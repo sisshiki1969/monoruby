@@ -278,8 +278,14 @@ The remaining things handled **directly** (not through `encode_linst`):
   `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
   resolve frame-local labels and patch points and are dispatched to a per-arch
   method of the same name (`arch/<arch>/compile/…`).
-- **The `AsmInst::Inline` escape hatch.** Builtin inline generators (e.g.
-  `emit_math_sqrt`) run a closure that emits arch asm directly via `gen`.
+- **The `AsmInst::Inline` escape hatch.** Most builtin inline generators (e.g.
+  `emit_math_sqrt`) still run a closure that emits arch asm directly via `gen`.
+  Migrating these onto LIR is **goal 2** of the long-term plan ("express the
+  inline-builtin codegen once, arch-neutrally"). First proof: `Range#begin/end`
+  now lower through the typed `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg`
+  → existing `LInst::Load { Field }` (no new LIR op, byte-identical on both
+  arches, hand-written `emit_range_begin/end` deleted). The remaining
+  generators need a few new FP/branch LIR primitives (e.g. for `sqrt`).
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:

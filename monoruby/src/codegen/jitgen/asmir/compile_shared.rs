@@ -912,6 +912,16 @@ impl Codegen {
             // Inlined builtin method body: the generator closure emits the
             // arch-appropriate asm directly.
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
+            // Typed field-load (replaces the `ir.inline` escape hatch for trivial
+            // field-reader inline builtins). Goal-2 proof: an inline builtin's
+            // codegen expressed once in arch-neutral LIR via an existing op.
+            AsmInst::LoadFieldToReg { dst, base, disp } => self.encode_linst(LInst::Load {
+                dst: dst.into(),
+                mem: LMem::Field {
+                    base: base.into(),
+                    disp,
+                },
+            }),
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live xmm pool reg / out-of-range frame offset.
