@@ -1223,61 +1223,18 @@ impl Into<Guarded> for SfGuarded {
 }
 
 ///
-/// The *abstract type / analysis state* half of a [`LinkMode`] — the boxed
-/// value's class lattice (`Guarded`: `Value`=⊤ / `Fixnum` / `Float` /
-/// `Class(c)`) **plus** `FixnumOrFloat`, the def-use-derived state of a slot
-/// that is an Integer-or-Float kept coerced-to-`f64` for its float uses (the
-/// abstract state the `Sf` linkage represents — see review note in
-/// `doc/regalloc_separation.md`).
-///
-/// This is layer ① of item ②: a pure analysis lattice with **no** location
-/// information. Paired with a [`Placement`] it reconstructs a `LinkMode` via
-/// [`LinkMode::from_parts`].
-///
-#[allow(dead_code)] // step-0a scaffolding; the live lattice in step 0b
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::codegen::jitgen) enum AbstractType {
-    Value,
-    Fixnum,
-    Float,
-    Class(ClassId),
-    /// Integer-or-Float coerced to `f64` (only ever xmm-backed).
-    FixnumOrFloat,
-}
-
-#[allow(dead_code)]
-impl AbstractType {
-    fn from_guarded(g: Guarded) -> Self {
-        match g {
-            Guarded::Value => AbstractType::Value,
-            Guarded::Fixnum => AbstractType::Fixnum,
-            Guarded::Float => AbstractType::Float,
-            Guarded::Class(c) => AbstractType::Class(c),
-        }
-    }
-
-    /// Project back to the coarse `Guarded` class lattice (the coercion state
-    /// `FixnumOrFloat` widens to `Value`, matching `SfGuarded::into`).
-    fn to_guarded(self) -> Guarded {
-        match self {
-            AbstractType::Value | AbstractType::FixnumOrFloat => Guarded::Value,
-            AbstractType::Fixnum => Guarded::Fixnum,
-            AbstractType::Float => Guarded::Float,
-            AbstractType::Class(c) => Guarded::Class(c),
-        }
-    }
-}
-
-///
-/// The *location / representation* half of a [`LinkMode`], with the abstract
-/// type factored out — the dual of [`AbstractType`].
+/// The *location / representation* half of a [`LinkMode`], with the type/class
+/// (`Guarded`) factored out — the dual of [`LinkMode::guarded`].
 ///
 /// Part of item ② (separating value placement from type analysis; see
-/// `doc/regalloc_separation.md`). It records only *where the live copies are*:
-/// the boxed cases (`Stack` / `Gp`) drop the type entirely, the FP cases keep
-/// their `FPReg`, and `Const` keeps the value.
-/// `LinkMode::from_parts(self.placement(), self.abstract_type())` reconstructs
-/// the original `LinkMode` (verified by a unit test).
+/// `doc/regalloc_separation.md`). It records only *where the live copies are*.
+/// The `Sf` linkage is the `XmmStack` placement: per review, `Sf` is **not** a
+/// type — it is a representation chosen for "Integer def'd / Float use'd" slots
+/// by a dedicated def-use + loop analysis. Its `SfGuarded` refinement is exactly
+/// the boxed value's class, so it is recovered from the paired `Guarded` (the
+/// `SfGuarded → Guarded` map is injective: `FixnumOrFloat ↔ Value`).
+/// `LinkMode::from_parts(self.placement(), self.guarded())` reconstructs the
+/// original `LinkMode` (verified by a unit test).
 ///
 // Scaffolding for item ②: consumed by the round-trip test now and by the
 // storage split (step 0b) next; not yet wired into the live state.
@@ -1295,7 +1252,7 @@ pub(in crate::codegen::jitgen) enum Placement {
     /// unboxed f64 in an xmm (type is implicitly `Float`)
     Xmm(FPReg),
     /// unboxed f64 in an xmm + a read-only boxed cache on the stack (the `Sf`
-    /// linkage; its Int/Float refinement lives in [`AbstractType`])
+    /// linkage); the Int/Float refinement is recovered from the paired `Guarded`
     XmmStack(FPReg),
     /// compile-time constant (no register / stack location)
     Const(Value),
@@ -1381,27 +1338,8 @@ impl LinkMode {
     }
 
     ///
-    /// The abstract-type / analysis-state half of this mode — the dual of
-    /// [`Self::placement`]. Unlike [`Self::guarded`] it preserves the `Sf`
-    /// coercion state (`FixnumOrFloat`). See [`AbstractType`].
-    ///
-    #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
-    fn abstract_type(&self) -> AbstractType {
-        match self {
-            LinkMode::S(g) | LinkMode::G(g) => AbstractType::from_guarded(*g),
-            LinkMode::F(_) => AbstractType::Float,
-            LinkMode::Sf(_, SfGuarded::Float) => AbstractType::Float,
-            LinkMode::Sf(_, SfGuarded::Fixnum) => AbstractType::Fixnum,
-            LinkMode::Sf(_, SfGuarded::FixnumOrFloat) => AbstractType::FixnumOrFloat,
-            LinkMode::C(v) => AbstractType::from_guarded(Guarded::from_concrete_value(*v)),
-            LinkMode::V => AbstractType::Class(NIL_CLASS),
-            LinkMode::None | LinkMode::MaybeNone => unreachable!("{:?}", self),
-        }
-    }
-
-    ///
     /// The location/representation half of this mode (the dual of
-    /// [`Self::abstract_type`]). See [`Placement`].
+    /// [`Self::guarded`]). See [`Placement`].
     ///
     #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
     fn placement(&self) -> Placement {
@@ -1418,27 +1356,27 @@ impl LinkMode {
     }
 
     ///
-    /// Recombine a placement with an abstract type into a `LinkMode` — the
-    /// inverse of [`Self::placement`] + [`Self::abstract_type`]. The type is
-    /// used by the boxed `Stack` / `Gp` cases and to pick the `Sf` refinement
-    /// for `XmmStack`; the `Xmm` / `Const` / sentinel placements carry their own
-    /// type, so it is ignored for them.
+    /// Recombine a placement with a type guard into a `LinkMode` — the inverse
+    /// of [`Self::placement`] + [`Self::guarded`]. The `guarded` types the boxed
+    /// `Stack` / `Gp` cases and picks the `Sf` refinement for `XmmStack` (the
+    /// `Guarded → SfGuarded` inverse: `Value → FixnumOrFloat`); the `Xmm` /
+    /// `Const` / sentinel placements carry their own type, so it is ignored.
     ///
     #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
-    fn from_parts(place: Placement, ty: AbstractType) -> Self {
+    fn from_parts(place: Placement, guarded: Guarded) -> Self {
         match place {
             Placement::None => LinkMode::None,
             Placement::MaybeNone => LinkMode::MaybeNone,
             Placement::Void => LinkMode::V,
-            Placement::Stack => LinkMode::S(ty.to_guarded()),
-            Placement::Gp => LinkMode::G(ty.to_guarded()),
+            Placement::Stack => LinkMode::S(guarded),
+            Placement::Gp => LinkMode::G(guarded),
             Placement::Xmm(x) => LinkMode::F(x),
             Placement::XmmStack(x) => {
-                let sf = match ty {
-                    AbstractType::Float => SfGuarded::Float,
-                    AbstractType::Fixnum => SfGuarded::Fixnum,
-                    AbstractType::FixnumOrFloat => SfGuarded::FixnumOrFloat,
-                    _ => unreachable!("XmmStack with non-float-coercible type {ty:?}"),
+                let sf = match guarded {
+                    Guarded::Float => SfGuarded::Float,
+                    Guarded::Fixnum => SfGuarded::Fixnum,
+                    Guarded::Value => SfGuarded::FixnumOrFloat,
+                    Guarded::Class(_) => unreachable!("XmmStack with class guard {guarded:?}"),
                 };
                 LinkMode::Sf(x, sf)
             }
@@ -1862,13 +1800,13 @@ mod tests {
     }
 
     /// Item ②: `LinkMode` decomposes losslessly into a `Placement` (location /
-    /// representation) and an `AbstractType` (analysis state, incl. the `Sf`
-    /// coercion), and recombines via `from_parts`.
+    /// representation) and a `Guarded` (type), and recombines via `from_parts`.
+    /// The `Sf` (`XmmStack`) refinement is recovered from the paired `Guarded`.
     #[test]
     fn linkmode_placement_roundtrip() {
         use super::*;
         let x = FPReg(0);
-        // Value-carrying modes: from_parts(placement(), abstract_type()) == self.
+        // Value-carrying modes: from_parts(placement(), guarded()) == self.
         let value_modes = [
             LinkMode::S(Guarded::Value),
             LinkMode::S(Guarded::Fixnum),
@@ -1884,11 +1822,11 @@ mod tests {
             LinkMode::V,
         ];
         for lm in value_modes {
-            assert_eq!(LinkMode::from_parts(lm.placement(), lm.abstract_type()), lm);
+            assert_eq!(LinkMode::from_parts(lm.placement(), lm.guarded()), lm);
         }
-        // None / MaybeNone carry no type; placement() round-trips with any type.
+        // None / MaybeNone carry no type; placement() round-trips with any guard.
         for lm in [LinkMode::None, LinkMode::MaybeNone] {
-            assert_eq!(LinkMode::from_parts(lm.placement(), AbstractType::Value), lm);
+            assert_eq!(LinkMode::from_parts(lm.placement(), Guarded::Value), lm);
         }
     }
 }

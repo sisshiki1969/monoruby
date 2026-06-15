@@ -99,7 +99,7 @@ Three layers, with a typed IR in the middle:
 TraceIR
   │  ① analysis pass  (fixpoint; types + liveness only — NO locations)
   ▼
-Typed IR            per-slot AbstractType lattice + liveness; operands are
+Typed IR            per-slot `Guarded` type lattice + liveness; operands are
   │                 (slot, representation) — still virtual, no phys regs
   │  ② allocation + lowering pass  (pluggable Allocator)
   ▼
@@ -107,29 +107,33 @@ LIR (LInst)         concrete regs/spills; emitted straight to encode_linst
   ▼  encode_linst → bytes
 ```
 
-### Layer ① — the type / analysis-state lattice
+### Layer ① — the type lattice (analysis)
 
-A pure lattice element per slot, *no* location. The existing `Guarded` class
-lattice (`Value`=⊤ / `Fixnum` / `Float` / `Class(c)`) plus one extra state:
+A pure lattice element per slot, *no* location. This is the **existing**
+`Guarded` enum — no new type is needed:
 
 ```rust
-enum AbstractType {          // implemented in step 0a
-    Value,                   // ⊤ (unknown class)
-    Fixnum,
-    Float,
-    Class(ClassId),
-    FixnumOrFloat,           // Integer-or-Float kept coerced-to-f64 (the `Sf` state)
-}
+enum Guarded { Value /*⊤*/, Fixnum, Float, Class(ClassId) }
 ```
 
-`FixnumOrFloat` is the key insight from review: the `Sf` linkage is not a mere
-"xmm + stack cache" *placement*, it is a **def-use-derived abstract state** —
-"this slot holds an Integer (or Float) that is *coerced to `f64`* at its use
-sites." So its refinement (`SfGuarded`) belongs to the *type* layer, not
-placement; `Placement::XmmStack` carries only the `FPReg`. `join` over
-`AbstractType` is a *pure* lattice meet — no register churn. Liveness stays here.
-This is exactly what goal 3's partial evaluator parameterizes (feed ⊤ for the VM
-residual, IC-narrowed types for the JIT residual).
+`join` over `Guarded` is a *pure* lattice meet (`Guarded::join` already exists) —
+no register churn. Liveness stays here. This is what goal 3's partial evaluator
+parameterizes (feed ⊤ for the VM residual, IC-narrowed types for the JIT
+residual).
+
+**`Sf` is not a type.** Per review, the `Sf` linkage ("Integer def'd, Float
+use'd, kept coerced to `f64`") is **not** a lattice element but a *representation
+decision* taken by a separate analysis. In the typed IR an `Sf` slot lowers to
+its plain boxed type (`Fixnum`); a dedicated def-use + loop pass then *marks* it
+for the xmm-coerced representation when:
+
+> the slot is def'd as Integer **and** use'd as Float, **and** it is a
+> constant/literal **or** def'd outside a loop and use'd inside it
+> (i.e. the coercion is loop-invariant and worth hoisting into an xmm).
+
+That mark *is* the `XmmStack` placement. Keeping it out of the type lattice is
+what lets the VM residual (no marks, everything boxed) and the JIT residual
+(marks applied) share one analysis.
 
 ### Layer ② — representation + allocation
 
@@ -153,7 +157,7 @@ comes last, after the data is already decoupled.
 
 | Step | Change | Risk |
 | ---- | ------ | ---- |
-| **0a. Decomposition + test** ✅ | Add the layer-① `AbstractType` lattice (`Guarded` + `FixnumOrFloat`) and the location-only `Placement`, plus `LinkMode::{abstract_type, placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, AbstractType)`. Per review, the `Sf` coercion refinement lives in `AbstractType`, not `Placement`. Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
+| **0a. Decomposition + test** ✅ | Add the location-only `Placement` enum, plus `LinkMode::{placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, Guarded)`. The type lattice is the existing `Guarded` (no new type — per review, `Sf` is a representation mark, not a type; its `SfGuarded` refinement is recovered from the paired `Guarded`). Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
 | **0b. Storage split** | Replace `SlotState.slots: Vec<LinkMode>` with `ty: Vec<Guarded>` + `place: Vec<Placement>`; `mode()`/`set_*` become `from_parts`/decompose shims. `join` splits into `join_ty` (pure lattice meet) + `reconcile_place`. Behaviour-identical. | med |
 | **1. Allocator seam** | Route `alloc_xmm` / `def_F` / `pin_xmm` / spill sizing through one `Allocator` abstraction (default = today's greedy). Inference calls the seam instead of mutating `vfpr` directly. | low–med |
 | **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
@@ -175,11 +179,14 @@ lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
   effectively turns the fused greedy pass into a proper linear-scan / SSA
   allocator with edge fixups. Codegen quality must not regress (the current
   greedy is decent on the FP-heavy benchmarks).
-- **`Sf` (xmm + stack cache).** *Resolved in review:* `Sf` is a def-use abstract
-  state ("Integer/Float coerced to `f64`"), so its `SfGuarded` refinement is part
-  of `AbstractType` (the `FixnumOrFloat` element), and `Placement::XmmStack`
-  carries only the `FPReg`. The *demote-on-pressure* logic (`try_alloc_xmm` phase
-  1) remains an allocation policy that must move into the `Allocator`.
+- **`Sf` (xmm + stack cache).** *Resolved in review:* `Sf` is a representation
+  decision, not a type. The typed IR carries the plain boxed type (`Fixnum`); a
+  separate def-use + loop analysis marks the slot for the xmm-coerced
+  representation (the `XmmStack` placement) using the heuristic in §3. The
+  *demote-on-pressure* logic (`try_alloc_xmm` phase 1) is a further allocation
+  policy that moves into the `Allocator`. (In the current fused state the
+  `SfGuarded` refinement still round-trips losslessly through the paired
+  `Guarded`, since `SfGuarded → Guarded` is injective.)
 - **`r15` accumulator.** The single GP "accumulator" slot is its own tiny
   allocation problem fused into `SlotState.r15`; it follows the same split
   (type vs placement) but is simpler than the xmm pool.
@@ -190,13 +197,12 @@ lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
 
 ## 6. Progress
 
-**Step 0a is done** (revised per review). `LinkMode` now has the
-`abstract_type()` / `placement()` / `from_parts()` projections, and a unit test
-(`linkmode_placement_roundtrip`) proves it is isomorphic to
-`(Placement, AbstractType)`. `AbstractType` extends the existing `Guarded`
-lattice with `FixnumOrFloat` so the `Sf` def-use coercion state is carried on
-the *type* side, leaving `Placement` purely about location. No live state
-changed; suite at 1703/0.
+**Step 0a is done** (revised per review). `LinkMode` now has the `placement()` /
+`from_parts()` projections, and a unit test (`linkmode_placement_roundtrip`)
+proves it is isomorphic to `(Placement, Guarded)`. The type lattice is the
+existing `Guarded`; `Sf` is treated as a representation mark (the `XmmStack`
+placement), not a type, with its refinement recovered from the paired `Guarded`.
+No live state changed; suite at 1703/0.
 
 **Next: step 0b (storage split)** — back `SlotState` with separate `Vec<Guarded>`
 + `Vec<Placement>` and split `join` into a pure type meet plus a placement
