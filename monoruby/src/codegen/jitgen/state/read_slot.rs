@@ -46,9 +46,42 @@ impl XmmLoad {
     }
 }
 
+///
+/// A GP-register load produced by `load` (item ②, step 2): how to materialize a
+/// slot's boxed `Value` into a general-purpose register. Like the other typed-IR
+/// records, the *what* is decided by the analysis half (`load_state`) and
+/// emitted by the codegen half via [`GpLoad::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GpLoad {
+    /// `F` slot: box the xmm to its stack home (leaving the boxed value in rax),
+    /// then move rax into `dst`. `fpr2stack(fpr, slot); reg_move(rax, dst)`.
+    FprBox(FPReg, SlotId, GP),
+    /// `lit2reg(value, dst)`
+    Lit(Value, GP),
+    /// `stack2reg(slot, dst)`
+    Stack(SlotId, GP),
+    /// `reg_move(r15, dst)`
+    Acc(GP),
+}
+
+impl GpLoad {
+    fn emit(self, ir: &mut AsmIr) {
+        match self {
+            GpLoad::FprBox(fpr, slot, dst) => {
+                ir.fpr2stack(fpr, slot);
+                ir.reg_move(GP::Rax, dst);
+            }
+            GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
+            GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
+            GpLoad::Acc(dst) => ir.reg_move(GP::R15, dst),
+        }
+    }
+}
+
 impl AbstractFrame {
     ///
-    /// load *slot* into *r*.
+    /// load *slot* into *dst*.
     ///
     /// ### destroy
     /// - rax, rcx
@@ -57,6 +90,15 @@ impl AbstractFrame {
     /// - if *slot* is V or None.
     ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
+        self.load_state(slot, dst).emit(ir);
+    }
+
+    ///
+    /// Analysis half of [`Self::load`] (item ②, step 2): the abstract-state
+    /// transition (only the `F` arm changes state, to `Sf`) plus the GP load to
+    /// emit. Pure state.
+    ///
+    fn load_state(&mut self, slot: SlotId, dst: GP) -> GpLoad {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::F(fpr) => {
@@ -64,28 +106,23 @@ impl AbstractFrame {
                     assert!(self.no_r15());
                 }
                 // F -> Sf
-                ir.fpr2stack(fpr, slot);
-                ir.reg_move(GP::Rax, dst);
                 self.set_Sf_float(slot, fpr);
+                GpLoad::FprBox(fpr, slot, dst)
             }
             LinkMode::C(v) => {
                 if dst == GP::R15 {
                     assert!(self.no_r15());
                 }
-                ir.lit2reg(v, dst);
+                GpLoad::Lit(v, dst)
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) => {
                 if dst == GP::R15 {
                     assert!(self.no_r15());
                 }
-                ir.stack2reg(slot, dst);
+                GpLoad::Stack(slot, dst)
             }
-            LinkMode::G(_) => {
-                ir.reg_move(GP::R15, dst);
-            }
-            LinkMode::MaybeNone => {
-                ir.stack2reg(slot, dst);
-            }
+            LinkMode::G(_) => GpLoad::Acc(dst),
+            LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
             }
