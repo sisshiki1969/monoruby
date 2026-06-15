@@ -321,3 +321,12 @@ analysis-precomputed placement at that point; the typed IR records the deopt
 program point (pc), not a frozen `AsmDeopt`. This is the main wrinkle that
 distinguishes the FP-load transfers from the simple evictions, and it is where
 the typed IR must carry per-point placement (which the analysis already tracks).
+
+**Resolved (`load_xmm` split).** `load_xmm` / `load_xmm_fixnum` now split into a
+`load_xmm_state` half (allocate the xmm, bind the slot) returning an `XmmLoad`
+record (`None` / `FromStack` / `FromAcc` / `FromF64` / `FromFixnum`), plus a
+wrapper that creates the deopt **first** (so its write-back snapshot is the
+pre-load placement) and passes it as `Option<AsmDeopt>` to `XmmLoad::emit`. The
+deopt is therefore supplied by the codegen side, **not** frozen into the record;
+the guard-free numeric variants pass `None`. This confirms the resolution above
+concretely — behaviour-identical at 1703/0.

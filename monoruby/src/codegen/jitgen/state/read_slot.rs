@@ -1,5 +1,51 @@
 use super::*;
 
+///
+/// A deopt-carrying unbox load produced by `load_xmm` (item ②, step 2): the
+/// conversion to emit when materializing a slot's value into an FP register.
+///
+/// The `FromStack` / `FromAcc` variants need a guard (their `float_to_fpr`
+/// deopts if the boxed value is not actually a `Float`); the deopt is supplied
+/// by the codegen wrapper, **not** frozen in the record — the analysis half only
+/// decided the conversion, while the codegen side creates the side-exit from the
+/// placement state at this point (see doc/regalloc_separation.md §9). The
+/// numeric-literal variants are guard-free.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum XmmLoad {
+    /// already in an xmm (`Sf` / `F`) — nothing to emit
+    None,
+    /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
+    FromStack(FPReg),
+    /// `reg2stack(R15, slot); float_to_fpr(R15, x, deopt)`
+    FromAcc(FPReg),
+    /// `f64_to_fpr(f, x)` (guard-free)
+    FromF64(f64, FPReg),
+    /// `i64_to_stack_and_fpr(i, slot, x)` (guard-free)
+    FromFixnum(i64, FPReg),
+}
+
+impl XmmLoad {
+    /// `deopt` is required by the guarded (`FromStack` / `FromAcc`) variants and
+    /// ignored by the guard-free ones; the guard-free `load_xmm_from_C_state`
+    /// path passes `None`.
+    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<AsmDeopt>) {
+        match self {
+            XmmLoad::None => {}
+            XmmLoad::FromStack(x) => {
+                ir.stack2reg(slot, GP::Rdi);
+                ir.float_to_fpr(GP::Rdi, x, deopt.unwrap());
+            }
+            XmmLoad::FromAcc(x) => {
+                ir.reg2stack(GP::R15, slot);
+                ir.float_to_fpr(GP::R15, x, deopt.unwrap());
+            }
+            XmmLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
+            XmmLoad::FromFixnum(i, x) => ir.i64_to_stack_and_fpr(i, slot, x),
+        }
+    }
+}
+
 impl AbstractFrame {
     ///
     /// load *slot* into *r*.
@@ -113,7 +159,12 @@ impl AbstractFrame {
                 ir.fixnum2fpr(GP::R15, x);
                 x
             }
-            LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
+            LinkMode::C(v) => {
+                // Guard-free (numeric literal): no deopt needed.
+                let (x, load) = self.load_xmm_from_C_state(slot, v);
+                load.emit(ir, slot, None);
+                x
+            }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_xmm_fixnum() {:?}", self.mode(slot));
             }
@@ -128,25 +179,37 @@ impl AbstractFrame {
     ///
     ///
     pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
+        // The deopt is created *before* the state transition, so its write-back
+        // snapshot (`get_write_back`) is the pre-load placement — see the
+        // deopt-carrying-transfer note in doc/regalloc_separation.md §9. The
+        // record carries only the conversion; the deopt is supplied here (the
+        // codegen side), not frozen into the record.
         let deopt = ir.new_deopt(self);
+        let (x, load) = self.load_xmm_state(slot);
+        load.emit(ir, slot, Some(deopt));
+        x
+    }
+
+    ///
+    /// Analysis half of [`Self::load_xmm`] (item ②, step 2): perform the
+    /// abstract-state transition (allocate the xmm, bind the slot) and return
+    /// the allocated register plus the conversion to emit. Pure state.
+    ///
+    fn load_xmm_state(&mut self, slot: SlotId) -> (FPReg, XmmLoad) {
         self.use_as_float(slot);
         match self.mode(slot) {
-            LinkMode::Sf(x, _) | LinkMode::F(x) => x,
+            LinkMode::Sf(x, _) | LinkMode::F(x) => (x, XmmLoad::None),
             LinkMode::S(_) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
-                ir.stack2reg(slot, GP::Rdi);
-                ir.float_to_fpr(GP::Rdi, x, deopt);
-                x
+                (x, XmmLoad::FromStack(x))
             }
             LinkMode::G(_) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
-                ir.reg2stack(GP::R15, slot);
-                ir.float_to_fpr(GP::R15, x, deopt);
-                x
+                (x, XmmLoad::FromAcc(x))
             }
-            LinkMode::C(v) => self.load_xmm_from_C(ir, slot, v),
+            LinkMode::C(v) => self.load_xmm_from_C_state(slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_xmm() {:?}", self.mode(slot));
             }
@@ -154,31 +217,25 @@ impl AbstractFrame {
     }
 
     #[allow(non_snake_case)]
-    fn load_xmm_from_C(&mut self, ir: &mut AsmIr, slot: SlotId, v: Value) -> FPReg {
+    fn load_xmm_from_C_state(&mut self, slot: SlotId, v: Value) -> (FPReg, XmmLoad) {
         // `LinkMode::C` may hold any Value; xmm loads only ever come from
         // numeric literals (fixnum / float / heap Float), so anything else
         // is a bug at the call site.
         match v.unpack() {
             RV::Float(f) => {
                 // -> F
-                self.load_xmm_from_f64(ir, slot, f)
+                let x = self.set_new_F(slot);
+                (x, XmmLoad::FromF64(f, x))
             }
             RV::Fixnum(i) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                ir.i64_to_stack_and_fpr(i, slot, x);
-                x
+                (x, XmmLoad::FromFixnum(i, x))
             }
             _ => {
                 unreachable!("load_xmm_from_C() {:?}", v);
             }
         }
-    }
-
-    fn load_xmm_from_f64(&mut self, ir: &mut AsmIr, slot: SlotId, f: f64) -> FPReg {
-        let x = self.set_new_F(slot);
-        ir.f64_to_fpr(f, x);
-        x
     }
 }
 
