@@ -108,7 +108,32 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
+        // Is this block reachable by fall-through from the code emitted just
+        // before it? See `gen_machine_code`. When `false`, the body label binds
+        // *after* the handlers and is the only way in, so the `b skip` that
+        // jumps over the handlers is dead and we omit it.
+        fallthrough_in: bool,
     ) {
+        // Pure-deopt block (e.g. a loop's natural exit): its whole body is
+        // `[Label(bb), Deopt(d)]`, i.e. a bare jump to its deopt handler. Emit
+        // the deopt inline *at* the block label instead of laying a cold
+        // handler and branching to it. Combined with the empty-bridge threading
+        // in `gen_machine_code`, the predecessor's branch then lands straight on
+        // the deopt code with no intervening `b`. Only the plain main-block case
+        // (no `entry`/`exit` wrapper) is handled; anything else falls through to
+        // the ordinary path. (The block's `BcIndex` source-position marker is
+        // dropped here — perf/emit-asm cosmetic only, no machine-code effect.)
+        if entry.is_none()
+            && exit.is_none()
+            && let Some((bb, deopt)) = ir.as_pure_deopt()
+            && let Some((pc, wb)) = ir.pure_deopt_target(deopt)
+        {
+            let wb = wb.clone();
+            let bb_label = frame.resolve_label(&mut self.jit, bb);
+            self.a64_gen_deopt(pc, &wb, bb_label, frame.loop_jit_spill_bytes, frame.base_stack_offset);
+            return;
+        }
+
         // Generate the block's side-exit (deopt/evict/error) handlers. They are
         // cold, so we lay them out here but jump over them (`b skip`); guards in
         // the main body branch *back* to them (short-range b.cond). aarch64 has
@@ -119,7 +144,12 @@ impl Codegen {
         } else {
             Some(self.jit.label())
         };
-        if let Some(skip) = &skip {
+        // Only guard against fall-through into the handlers when the block can
+        // actually be entered that way; a block reached solely by branches to
+        // its (post-handler) body label needs no `b skip`.
+        if let Some(skip) = &skip
+            && fallthrough_in
+        {
             monoasm_arm64!(&mut self.jit, b skip;);
         }
         let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack), DestLabel> =

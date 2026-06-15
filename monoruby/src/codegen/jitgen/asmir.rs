@@ -166,6 +166,66 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
+    ///
+    /// Does this block's instruction stream end with an unconditional
+    /// terminator (so the code physically following it is not reached by
+    /// fall-through)? See [`AsmInst::is_unconditional_terminator`]; the
+    /// answer is conservative (an empty stream, or one ending in any
+    /// non-terminator, is treated as fall-through).
+    ///
+    pub(super) fn ends_unconditionally(&self) -> bool {
+        self.inst
+            .last()
+            .is_some_and(AsmInst::is_unconditional_terminator)
+    }
+
+    ///
+    /// If this block's whole body is a label, optional source-position
+    /// markers, and a single trailing `Deopt` (e.g. a loop's natural exit
+    /// block, which only deopts to the interpreter), return the block label
+    /// and the deopt. Such a block is a pure indirection to its deopt handler,
+    /// so the aarch64 backend emits the deopt inline at the block label rather
+    /// than laying a cold handler and branching to it — letting predecessors
+    /// land straight on the deopt code. `BcIndex` markers emit no machine code
+    /// (they only feed the perf/emit-asm source map) and are ignored here.
+    ///
+    /// aarch64-only: x86 lays deopt handlers on the cold page and has no
+    /// inline-handler indirection to collapse.
+    ///
+    #[cfg(target_arch = "aarch64")]
+    pub(super) fn as_pure_deopt(&self) -> Option<(JitLabel, AsmDeopt)> {
+        let (first, rest) = self.inst.split_first()?;
+        let AsmInst::Label(bb) = first else {
+            return None;
+        };
+        let (last, middle) = rest.split_last()?;
+        let AsmInst::Deopt(deopt) = last else {
+            return None;
+        };
+        middle
+            .iter()
+            .all(|i| matches!(i, AsmInst::BcIndex(_)))
+            .then_some((*bb, *deopt))
+    }
+
+    ///
+    /// The single `SideExit` of a pure-deopt block (see [`Self::as_pure_deopt`])
+    /// when it is a plain `Deoptimize(pc, write_back)` and the block's only side
+    /// exit, returned as `(pc, write_back)`. `None` otherwise (e.g. an evict /
+    /// recompile-deopt, or extra side exits), so callers fall back to the
+    /// ordinary cold-handler path. aarch64-only (see [`Self::as_pure_deopt`]).
+    ///
+    #[cfg(target_arch = "aarch64")]
+    pub(super) fn pure_deopt_target(&self, deopt: AsmDeopt) -> Option<(BytecodePtr, &WriteBack)> {
+        if self.side_exit.len() == 1
+            && let SideExit::Deoptimize(pc, wb) = &self.side_exit[deopt.0]
+        {
+            Some((*pc, wb))
+        } else {
+            None
+        }
+    }
+
     pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
@@ -1889,6 +1949,36 @@ pub(super) enum AsmInst {
 
 impl AsmInst {
     ///
+    /// Does this instruction unconditionally transfer control away, so that
+    /// the instruction physically following it is *not* reached by
+    /// fall-through?
+    ///
+    /// Conservative: returns `true` only for variants that are definitely
+    /// unconditional terminators. Anything uncertain returns `false` (the
+    /// caller then assumes the next block *is* fall-through reachable). A
+    /// false negative only keeps a harmless `b skip` over the aarch64
+    /// inline side-exit handlers; a false positive would drop a *needed*
+    /// `b skip` and let control fall into the cold handlers, so the bias
+    /// must stay on the safe side.
+    ///
+    pub(super) fn is_unconditional_terminator(&self) -> bool {
+        matches!(
+            self,
+            Self::Ret
+                | Self::BlockBreak(_)
+                | Self::MethodRet(_)
+                | Self::BlockBreakSpecialized { .. }
+                | Self::MethodRetSpecialized { .. }
+                | Self::Raise
+                | Self::Retry(_)
+                | Self::Redo(_)
+                | Self::Deopt(_)
+                | Self::RecompileDeopt { .. }
+                | Self::RecompileDeoptSpecialized { .. }
+        )
+    }
+
+    ///
     /// Enumerate every `VirtFPReg` operand referenced by this
     /// instruction (in any role — read, write, or read-write).
     /// Used by `pop_frame` to compute the frame's max
@@ -2022,6 +2112,11 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
+        // Whether this block is fall-through reachable. Only the aarch64 backend
+        // acts on it (to drop a dead `b skip` over inline side-exit handlers);
+        // x86 lays its handlers on the cold page via `select_page`, so there is
+        // no skip branch to elide and the flag is unused here.
+        _fallthrough_in: bool,
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
