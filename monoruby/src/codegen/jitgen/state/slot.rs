@@ -732,29 +732,34 @@ impl SlotState {
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    /// Analysis half (item ②, step 2): perform the abstract-state transition and
+    /// return the pending stack write-back as a [`Spill`] record, without
+    /// touching `AsmIr`. The codegen wrapper [`Self::write_back_slot`] emits it.
+    fn write_back_slot_state(&mut self, slot: SlotId) -> Spill {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 // F -> Sf
                 self.set_Sf_float(slot, xmm);
-                ir.fpr2stack(xmm, slot);
+                Spill::Fpr(xmm, slot)
             }
-            LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
-            }
+            LinkMode::C(v) => Spill::Lit(v, slot),
             LinkMode::G(guarded) => {
                 // G -> S
-                ir.acc2stack(slot);
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S(guarded));
+                Spill::Acc(slot)
             }
-            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => {}
+            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => Spill::None,
             LinkMode::V | LinkMode::None => {
                 eprintln!("{:?}", self);
                 unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
             }
         }
+    }
+
+    pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        self.write_back_slot_state(slot).emit(ir);
     }
 
     ///
@@ -765,28 +770,27 @@ impl SlotState {
     /// ### destroy
     /// - rax, rcx
     ///
+    /// Analysis half (item ②, step 2): see [`Self::write_back_slot_state`].
     #[allow(non_snake_case)]
-    pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                ir.fpr2stack(xmm, slot);
-            }
-            LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
-            }
-            LinkMode::G(_) => {
-                ir.acc2stack(slot);
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {}
-            LinkMode::V => {
-                ir.lit2stack(Value::nil(), slot);
-            }
+    fn to_S_unguarded_state(&mut self, slot: SlotId) -> Spill {
+        let spill = match self.mode(slot) {
+            LinkMode::F(xmm) => Spill::Fpr(xmm, slot),
+            LinkMode::C(v) => Spill::Lit(v, slot),
+            LinkMode::G(_) => Spill::Acc(slot),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => Spill::None,
+            LinkMode::V => Spill::Lit(Value::nil(), slot),
             LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("to_S_unguarded() {:?}", self.mode(slot));
             }
-        }
+        };
         self.clear(slot);
         self.set_mode(slot, LinkMode::S(Guarded::Value));
+        spill
+    }
+
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        self.to_S_unguarded_state(slot).emit(ir);
     }
 }
 
@@ -987,11 +991,23 @@ impl SlotState {
     ///
     /// The slot is set to LinkMode::Stack.
     ///
+    ///
+    /// Analysis half of [`Self::writeback_acc`] (item ②, step-2 spike): evict
+    /// the accumulator (`r15`) owner to its stack home in the *abstract state*
+    /// only, returning the evicted slot so the emission half can store it. This
+    /// is the pure state transition — a standalone analysis pass calls this and
+    /// never touches `AsmIr`; codegen calls `writeback_acc` (this + the store).
+    ///
+    fn writeback_acc_state(&mut self) -> Option<SlotId> {
+        let slot = self.r15?;
+        let guarded = self.guarded(slot);
+        self.set_mode(slot, LinkMode::S(guarded));
+        self.r15 = None;
+        Some(slot)
+    }
+
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.r15 {
-            let guarded = self.guarded(slot);
-            self.set_mode(slot, LinkMode::S(guarded));
-            self.r15 = None;
+        if let Some(slot) = self.writeback_acc_state() {
             ir.acc2stack(slot);
         }
         assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_))));
@@ -1334,6 +1350,59 @@ pub(in crate::codegen::jitgen) enum Placement {
     XmmStack(FPReg),
     /// compile-time constant (no register / stack location)
     Const(Value),
+}
+
+///
+/// A pending stack write-back produced by a transfer/eviction primitive
+/// (item ②, step 2): the *what* of an eviction, decided by the primitive's
+/// analysis (state) half and emitted by the codegen half. This is the first
+/// concrete "typed IR record" — a standalone analysis pass collects these
+/// instead of pushing `AsmInst`, and the lowering pass replays them via
+/// [`Spill::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Spill {
+    None,
+    /// `ir.fpr2stack(xmm, slot)`
+    Fpr(FPReg, SlotId),
+    /// `ir.lit2stack(value, slot)`
+    Lit(Value, SlotId),
+    /// `ir.acc2stack(slot)`
+    Acc(SlotId),
+}
+
+impl Spill {
+    fn emit(self, ir: &mut AsmIr) {
+        match self {
+            Spill::None => {}
+            Spill::Fpr(xmm, slot) => ir.fpr2stack(xmm, slot),
+            Spill::Lit(v, slot) => ir.lit2stack(v, slot),
+            Spill::Acc(slot) => ir.acc2stack(slot),
+        }
+    }
+}
+
+///
+/// An FP-register transfer produced by a transfer primitive (item ②, step 2):
+/// either a move into a vacant register or a swap of two live registers. Like
+/// [`Spill`], the *what* is decided by a primitive's analysis half and emitted
+/// by the codegen half via [`FpXfer::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum FpXfer {
+    /// `ir.fpr_move(l, r)`
+    Move(FPReg, FPReg),
+    /// `ir.push(AsmInst::FprSwap(l, r))`
+    Swap(FPReg, FPReg),
+}
+
+impl FpXfer {
+    fn emit(self, ir: &mut AsmIr) {
+        match self {
+            FpXfer::Move(l, r) => ir.fpr_move(l, r),
+            FpXfer::Swap(l, r) => ir.push(AsmInst::FprSwap(l, r)),
+        }
+    }
 }
 
 ///
@@ -1746,13 +1815,21 @@ impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+    /// Analysis half (item ②, step 2): bind `slot` to `r` as `Sf` and return the
+    /// FP-register transfer to emit (a move into a vacant `r`, or a swap when
+    /// `r` is occupied). Pure state; codegen wrapper [`Self::to_sf`] emits it.
+    fn to_sf_state(&mut self, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) -> FpXfer {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
-            ir.fpr_move(l, r);
+            FpXfer::Move(l, r)
         } else {
-            self.gen_xmm_swap(ir, l, r);
+            self.xmm_swap(l, r);
+            FpXfer::Swap(l, r)
         }
+    }
+
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+        self.to_sf_state(slot, l, r, guarded).emit(ir);
     }
 
     ///

@@ -161,7 +161,7 @@ comes last, after the data is already decoupled.
 | **0b. Storage split** ✅ | (0b-i) Encapsulate every `self.slots` access behind `mode()`/`set_mode()`/`all_regs()`/`slots_len()` (the two in-place mutations become local-copy RMW). (0b-ii) Replace `SlotState.slots: Vec<LinkMode>` with `place: Vec<Placement>` + `ty: Vec<Guarded>`; `mode()` composes via `from_parts`, `set_mode()` decomposes. Behaviour-identical. *Done; suite 1703/0.* | done |
 | **0c. Factor the type meet** ✅ | Extract the analysis-layer join as a reusable primitive: relocate `Guarded::join` next to `Guarded` and add `SlotState::join_ty` (element-wise `Guarded::join` over the `ty` vec). Verified arm-by-arm that the fused `AbstractFrame::join`'s resulting *type* equals this meet for every non-sentinel slot, so the fused join's remaining work is purely placement reconciliation (which carries the allocation side-effects and moves to the `Allocator` in steps 1–2). *Done; suite 1703/0.* | done |
 | **1. Allocator seam** ✅ | Extract `vfpr` + `pinned_vfpr` and the pure pool primitives into an `XmmAllocator` struct owned by `SlotState`; the `xmm_*` methods delegate to it. The policy (`try_alloc_xmm`/`alloc_xmm`) stays on `SlotState` (it also mutates slot placements). *Done; suite 1703/0.* | done |
-| **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. | high |
+| **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. **Spike done** — see §9. | high |
 | **3. AsmIR → LIR (goal 1)** | The lowering pass emits `LInst` directly; retire `AsmInst` as a distinct stream (its `AsmIr` bookkeeping — `side_exit`, flags — moves to the lowering driver). | med |
 | **4. Two allocators (goal 3 enabler)** | Add the fixed-convention VM `Allocator`; spike VM-residual generation for one bytecode. | research |
 
@@ -223,3 +223,101 @@ still sits on `SlotState`.
 as its own pass (consuming `join_ty`) producing a typed IR, before the
 allocation+lowering pass. This is the high-risk structural change; goals 1/3
 fall out of steps 3–4 afterward.
+
+---
+
+## 9. Step-2 spike: where the analysis/emission fusion actually lives
+
+Before committing to step 2 (the big rewrite), a spike traced exactly *how*
+analysis and emission are entangled in `compile_instruction`. The finding
+reshapes the plan.
+
+### What the spike found
+
+The bytecode handlers (`compile_instruction`, ~100 `TraceIr` arms) are **not**
+where analysis and emission are knotted together. A handler like `LoadGvar` is
+just `discard(dst); push(LoadGVar); def_rax2acc(dst)`. Following that down:
+
+```
+def_rax2acc → def_reg2acc_guarded → def_G → writeback_acc
+```
+
+the *only* emission on the whole chain is at the very bottom, in a handful of
+**transfer / eviction primitives** — `writeback_acc` (evict the `r15`
+accumulator owner to its stack home), the xmm spill/swap emitters, etc. Almost
+everything else (the `Guarded` lattice, liveness, placement bookkeeping in
+`place`/`ty`/`XmmAllocator`) is *already pure state*.
+
+And those transfer primitives split **cleanly**. `writeback_acc` was:
+
+```rust
+fn writeback_acc(&mut self, ir) {
+    if let Some(slot) = self.r15 {
+        self.set_mode(slot, S(self.guarded(slot)));  // state
+        self.r15 = None;                              // state
+        ir.acc2stack(slot);                           // emission
+    }
+}
+```
+
+The spike split it into `writeback_acc_state() -> Option<SlotId>` (the pure
+state transition, returns *which* slot was evicted) and the residual
+`writeback_acc` = `if let Some(slot) = self.writeback_acc_state() { ir.acc2stack(slot) }`.
+The emission is fully determined by the slot the state half returns — i.e. the
+transfer primitive is `(state-mutation that yields a transfer record) + (emit
+from that record)`. Behaviour-identical; suite 1703/0.
+
+### How this reshapes step 2
+
+Step 2 is therefore **not** "split ~100 op handlers". It is:
+
+1. Split each **transfer/eviction primitive** (a bounded set — `writeback_acc`,
+   the xmm spill/swap/`float_to_fpr` emitters, `def_*`'s eviction step) into a
+   state half that *returns a transfer record* and an emit half that consumes
+   it. The records are exactly the **typed IR** the analysis pass produces.
+2. The standalone **analysis pass** runs the handlers with the state halves and
+   collects the transfer records (no `AsmIr`). It already exists in skeleton
+   form: `analyse_basic_block` reuses `compile_instruction` but discards its
+   `AsmIr` — today that discard is wasteful (it builds `AsmInst` only to drop
+   them); after the split it would call the state halves and skip emission.
+3. The **lowering pass** replays the records, emitting `LInst` via the emit
+   halves + `encode_linst`.
+
+This is a far more bounded and mechanical change than a per-handler rewrite, and
+each primitive split is independently shippable and behaviour-verifiable at
+1703/0 (the `writeback_acc` split is the first). It also subsumes goal 1: once
+lowering is its own pass, it emits `LInst` directly and `AsmInst` retires.
+
+### Progress on the transfer-primitive split
+
+Split so far, each behaviour-identical at 1703/0:
+
+- **Stack writebacks** → the `Spill` record (`None` / `Fpr` / `Lit` / `Acc`):
+  `writeback_acc`, `write_back_slot`, `to_S_unguarded`.
+- **FP-register transfers** → the `FpXfer` record (`Move` / `Swap`): `to_sf`
+  (`gen_xmm_swap` was already a clean state-line + emit-line).
+
+Each primitive now has a `*_state` half that performs the abstract-state
+transition and returns the record, plus a thin codegen wrapper `record.emit(ir)`.
+The records (`Spill`, `FpXfer`) are the growing **typed IR** vocabulary.
+
+### The hard tail: deopt-carrying transfers
+
+The unbox loads (`load_xmm` and friends) are *not* a clean `(state) + (record →
+emit)` split, because they create a **deopt side-exit** mid-flight:
+
+```rust
+let deopt = ir.new_deopt(self);     // captures state.get_write_back() — a
+self.use_as_float(slot);            // SNAPSHOT of the live placement state
+match self.mode(slot) { S(_) => { let x = self.set_new_Sf(..); 
+    ir.stack2reg(slot, Rdi); ir.float_to_fpr(Rdi, x, deopt); x } … }
+```
+
+`new_deopt` snapshots `get_write_back()` — *which* values are unboxed/in-acc and
+must be restored to the stack if the float guard fails. That snapshot is the
+placement state **at this program point**. So in the separated design the deopt
+is created by the **codegen pass**, reconstructing the write-back from the
+analysis-precomputed placement at that point; the typed IR records the deopt
+program point (pc), not a frozen `AsmDeopt`. This is the main wrinkle that
+distinguishes the FP-load transfers from the simple evictions, and it is where
+the typed IR must carry per-point placement (which the analysis already tracks).
