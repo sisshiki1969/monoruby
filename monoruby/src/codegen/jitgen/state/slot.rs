@@ -2,8 +2,12 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
-    /// Slot states.
-    slots: Vec<LinkMode>,
+    /// Per-slot location / representation (the `LinkMode` split into its two
+    /// halves; item ②). Paired index-for-index with `ty`.
+    place: Vec<Placement>,
+    /// Per-slot abstract type (the class lattice). The `Sf` refinement is
+    /// recovered from this via `LinkMode::from_parts`. Paired with `place`.
+    ty: Vec<Guarded>,
     /// Liveness information.
     liveness: Vec<IsUsed>,
     /// Information for VirtFPReg slots. Indices 0..14 map to physical
@@ -50,8 +54,13 @@ impl SlotState {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
+        let default_ty = match default {
+            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
+            o => o.guarded(),
+        };
         let mut ctx = SlotState {
-            slots: vec![default; total_reg_num],
+            place: vec![default.placement(); total_reg_num],
+            ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             vfpr: (0..PHYS_XMM_POOL).map(|_| vec![]).collect(),
             r15: None,
@@ -120,7 +129,7 @@ impl SlotState {
     }
 
     pub(super) fn slots_len(&self) -> usize {
-        self.slots.len()
+        self.place.len()
     }
 
     pub(super) fn no_r15(&self) -> bool {
@@ -188,7 +197,8 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn mode(&self, slot: SlotId) -> LinkMode {
-        self.slots[slot.0 as usize]
+        let i = slot.0 as usize;
+        LinkMode::from_parts(self.place[i], self.ty[i])
     }
 
     pub(in crate::codegen::jitgen) fn guarded(&self, slot: SlotId) -> Guarded {
@@ -217,7 +227,13 @@ impl SlotState {
 
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
-        self.slots[slot.0 as usize] = mode;
+        let i = slot.0 as usize;
+        self.place[i] = mode.placement();
+        // Sentinels carry no type; `from_parts` ignores `ty` for them.
+        self.ty[i] = match mode {
+            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
+            o => o.guarded(),
+        };
     }
 
     /// D1: if `slot` is the deferred forwarding-rest slot, return its
@@ -1242,9 +1258,6 @@ impl Into<Guarded> for SfGuarded {
 /// `LinkMode::from_parts(self.placement(), self.guarded())` reconstructs the
 /// original `LinkMode` (verified by a unit test).
 ///
-// Scaffolding for item ②: consumed by the round-trip test now and by the
-// storage split (step 0b) next; not yet wired into the live state.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::codegen::jitgen) enum Placement {
     None,
@@ -1347,7 +1360,6 @@ impl LinkMode {
     /// The location/representation half of this mode (the dual of
     /// [`Self::guarded`]). See [`Placement`].
     ///
-    #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
     fn placement(&self) -> Placement {
         match self {
             LinkMode::None => Placement::None,
@@ -1368,7 +1380,6 @@ impl LinkMode {
     /// `Guarded → SfGuarded` inverse: `Value → FixnumOrFloat`); the `Xmm` /
     /// `Const` / sentinel placements carry their own type, so it is ignored.
     ///
-    #[allow(dead_code)] // step-0a scaffolding; wired in by the storage split
     fn from_parts(place: Placement, guarded: Guarded) -> Self {
         match place {
             Placement::None => LinkMode::None,
