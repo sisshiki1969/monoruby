@@ -1383,6 +1383,29 @@ impl Spill {
 }
 
 ///
+/// An FP-register transfer produced by a transfer primitive (item ②, step 2):
+/// either a move into a vacant register or a swap of two live registers. Like
+/// [`Spill`], the *what* is decided by a primitive's analysis half and emitted
+/// by the codegen half via [`FpXfer::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum FpXfer {
+    /// `ir.fpr_move(l, r)`
+    Move(FPReg, FPReg),
+    /// `ir.push(AsmInst::FprSwap(l, r))`
+    Swap(FPReg, FPReg),
+}
+
+impl FpXfer {
+    fn emit(self, ir: &mut AsmIr) {
+        match self {
+            FpXfer::Move(l, r) => ir.fpr_move(l, r),
+            FpXfer::Swap(l, r) => ir.push(AsmInst::FprSwap(l, r)),
+        }
+    }
+}
+
+///
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1792,13 +1815,21 @@ impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+    /// Analysis half (item ②, step 2): bind `slot` to `r` as `Sf` and return the
+    /// FP-register transfer to emit (a move into a vacant `r`, or a swap when
+    /// `r` is occupied). Pure state; codegen wrapper [`Self::to_sf`] emits it.
+    fn to_sf_state(&mut self, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) -> FpXfer {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
-            ir.fpr_move(l, r);
+            FpXfer::Move(l, r)
         } else {
-            self.gen_xmm_swap(ir, l, r);
+            self.xmm_swap(l, r);
+            FpXfer::Swap(l, r)
         }
+    }
+
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+        self.to_sf_state(slot, l, r, guarded).emit(ir);
     }
 
     ///

@@ -287,3 +287,37 @@ This is a far more bounded and mechanical change than a per-handler rewrite, and
 each primitive split is independently shippable and behaviour-verifiable at
 1703/0 (the `writeback_acc` split is the first). It also subsumes goal 1: once
 lowering is its own pass, it emits `LInst` directly and `AsmInst` retires.
+
+### Progress on the transfer-primitive split
+
+Split so far, each behaviour-identical at 1703/0:
+
+- **Stack writebacks** → the `Spill` record (`None` / `Fpr` / `Lit` / `Acc`):
+  `writeback_acc`, `write_back_slot`, `to_S_unguarded`.
+- **FP-register transfers** → the `FpXfer` record (`Move` / `Swap`): `to_sf`
+  (`gen_xmm_swap` was already a clean state-line + emit-line).
+
+Each primitive now has a `*_state` half that performs the abstract-state
+transition and returns the record, plus a thin codegen wrapper `record.emit(ir)`.
+The records (`Spill`, `FpXfer`) are the growing **typed IR** vocabulary.
+
+### The hard tail: deopt-carrying transfers
+
+The unbox loads (`load_xmm` and friends) are *not* a clean `(state) + (record →
+emit)` split, because they create a **deopt side-exit** mid-flight:
+
+```rust
+let deopt = ir.new_deopt(self);     // captures state.get_write_back() — a
+self.use_as_float(slot);            // SNAPSHOT of the live placement state
+match self.mode(slot) { S(_) => { let x = self.set_new_Sf(..); 
+    ir.stack2reg(slot, Rdi); ir.float_to_fpr(Rdi, x, deopt); x } … }
+```
+
+`new_deopt` snapshots `get_write_back()` — *which* values are unboxed/in-acc and
+must be restored to the stack if the float guard fails. That snapshot is the
+placement state **at this program point**. So in the separated design the deopt
+is created by the **codegen pass**, reconstructing the write-back from the
+analysis-precomputed placement at that point; the typed IR records the deopt
+program point (pc), not a frozen `AsmDeopt`. This is the main wrinkle that
+distinguishes the FP-load transfers from the simple evictions, and it is where
+the typed IR must carry per-point placement (which the analysis already tracks).
