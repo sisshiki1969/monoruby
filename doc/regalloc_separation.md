@@ -610,3 +610,134 @@ behaviour-changing switch — an allocator that assigns φ registers (reusing a
 predecessor's where it lowers edge-move cost) instead of `apply_join`'s inline
 `TryFresh*` grab — which is benchmark-gated (codegen quality must not regress) and
 will diverge from the stage-1 placement shadow by construction.
+
+## 13. §5 stage 3 design: lifting allocation out of the dataflow (the high-risk core)
+
+Stages 1–2 finished the *de-fusion inside the merge*: the meet is now
+`decide_join` (pure, allocation-free, type result proven `== join_ty`) + a
+recorded `apply_join` placement-allocation stream. Stage 3 is the architectural
+switch — the §10-item-1 / §4-step-2 core — and it is **behaviour-changing and
+benchmark-gated**: the stage-1/2 shadows are necessary scaffolding for it but
+stop applying the moment placements are allowed to diverge.
+
+### 13.1 What the bridge investigation changed about the plan
+
+A read of the edge-move machinery (`AbstractFrame::bridge`, slot.rs:1707; driver
+`gen_bridge`, state.rs:89; merge in merge.rs:60–116) settled the key question:
+
+- **Edge moves already exist.** The actual φ-reconciliation MOVs/swaps/spills are
+  emitted by `bridge`, *not* by the merge. `bridge` pattern-matches
+  `(pred.mode(slot), target.mode(slot))` and has both placements in hand.
+- **The merge is commutative and predecessor-blind.** `decide_join` sees only the
+  two `LinkMode`s; it does **not** know which predecessor carried `F(xmm2)` vs
+  `F(xmm3)`, nor how many predecessors there are. So a "reuse predecessor *p*'s
+  register" policy is **not expressible at merge time** — only the bridge, or a
+  later pass with per-predecessor placement, can express it.
+
+Consequence: the quick "prefer-keep-`l` instead of grab-fresh" heuristic in the
+`TryFresh*` arms is a *weak, commutative* lever (it biases toward whichever frame
+happens to be `self`), not the principled fix. **We do not pursue it as stage 3.**
+The principled fix is to move allocation to a pass that runs after the
+type/liveness fixpoint and can see global/per-predecessor placement — exactly the
+§3 Layer ② `Allocator`.
+
+### 13.2 What stage 3 actually is
+
+Today *both* compile passes call `AbstractFrame::join` = `decide_join` (types) +
+`apply_join` (allocation):
+
+- the **analysis pre-pass** (`loop_analysis`, `codegen_mode:false`, context.rs:687)
+  allocates with emission suppressed — so it is "analysis **+** allocation," not
+  pure type/liveness;
+- the **codegen pass** (`codegen_mode:true`) allocates *and* emits in one walk,
+  and `bridge` turns the per-edge placement deltas into MOVs.
+
+Stage 2 proved the analysis pass does not *need* `apply_join`: its type result is
+exactly `join_ty`. Stage 3 acts on that:
+
+> **The analysis pre-pass computes only `join_ty` + liveness (no `apply_join`,
+> no xmm allocation). The codegen pass owns *all* placement/allocation, and the
+> existing `bridge` already turns the resulting per-edge placement deltas into
+> edge moves.**
+
+This is the de-fusion §10 item 1 calls "the high-risk core; codegen quality (the
+greedy xmm policy) must not regress."
+
+### 13.3 Decomposition (re-narrowing the safe regime)
+
+The naive view is "stage 3 is all benchmark-gated." It is not — one more slice
+stays shadow-able:
+
+- **3a — safe / shadow-able: the analysis fixpoint is allocation-independent.**
+  Extend the stage-2 result from a single merge to the loop *fixpoint*: run the
+  analysis pre-pass both with and without `apply_join` allocation and assert the
+  resulting **type + liveness** fixpoint (the back-edge `AbstractState`'s
+  `Guarded` per slot + the `Liveness` sets) is identical. This proves stripping
+  allocation from the analysis pass does not perturb what that pass exists to
+  compute. Debug-only, no behaviour change; promotes stage 2 to the fixpoint
+  level. *This is the next implementable step.*
+
+- **3b — benchmark-gated: actually strip allocation from the analysis pass.**
+  Make `loop_analysis` (and any other `codegen_mode:false` walk) call the
+  type-only meet; let the codegen pass allocate from a type-only loop-entry
+  frame. The final asm *will* differ (the codegen pass no longer inherits the
+  pre-pass's placements), so the stage-1 placement shadow is expected to diverge
+  and must be scoped off for the `codegen_mode:false` path. Gate: §13.4.
+
+- **3c — benchmark-gated: improve the allocator with its new global view.** Only
+  now is "reuse a predecessor's register / minimise edge moves" expressible,
+  because the allocator pass can see per-predecessor placements (the
+  `BranchEntry` states, jitgen.rs:114) instead of the commutative merge. Linear
+  scan over the type/liveness result; spill = today's `try_alloc_xmm` phase-1
+  demotion generalised. Each policy change is an independent benchmark-gated diff.
+
+### 13.4 The benchmark gate
+
+Baseline must be captured **before** any 3b change, from a `--release` build (the
+debug shadows compile out, so they do not affect it):
+
+1. `cargo build --release` at the pre-3b commit; record `bin/bench` numbers and
+   `optcarrot` fps for the standard set (`benchmark/*.rb`: `app_fib`, the binary-
+   trees / so_* set, optcarrot). M1 `bin/test` already passing is the correctness
+   baseline; the gate adds the *speed* baseline.
+2. Acceptance for promoting 3b/3c to default: **no benchmark regresses beyond
+   noise (≈2 %)** vs baseline, and the headline JIT benchmarks (optcarrot,
+   app_fib) are within noise or better. A regression that is real and not
+   quickly recoverable parks the change behind a runtime flag (mirroring
+   `--no-jit`) rather than flipping the default.
+3. Run on both backends (x86-64 CI + M1 aarch64) before default-flip, since the
+   bridge emits per-arch and the aarch64 backend deopts on unported insts.
+
+### 13.5 Where the existing harness applies / stops
+
+- Stage-2 type-meet assertion: **still valid through 3a/3b** — types never depend
+  on allocation, so it keeps guarding the analysis pass after allocation is
+  stripped. Keep it.
+- Stage-1 placement replay shadow: **valid until 3b** — it asserts the recorded
+  stream reproduces *the current* placements; once the analysis pass stops
+  allocating, the `codegen_mode:false` path has no placement stream to replay, so
+  the shadow is scoped to the codegen pass only (or retired). It is *not* a
+  correctness oracle for 3b's intended divergence.
+- Net: 3a is covered by shadows; 3b/3c are covered by the benchmark gate plus the
+  full CRuby-diff suite (output correctness is still an exact oracle — only
+  *speed/codegen* is what the gate watches).
+
+### 13.6 Open questions / risks
+
+1. **Deopt as a program point.** §10 item 2 / §9's deopt note: once placement is
+   decided in a later pass, a deopt must be reconstructed from the analysis-
+   precomputed placement at that pc, not the frozen `AsmDeopt` the records carry.
+   3b can sidestep this only if the codegen pass still decides placement in its
+   own forward walk (it does today) — i.e. 3b strips allocation from *analysis*
+   but keeps codegen single-walk. Full Layer-② extraction (allocation as a
+   distinct pass feeding codegen) is a later step and is where the deopt-program-
+   point work lands.
+2. **Loop-entry placement quality.** The pre-pass's allocation currently seeds the
+   loop body with sensible xmm bindings; a type-only fixpoint hands codegen a
+   placement-free entry, so the codegen pass must pick loop-carried xmm bindings
+   itself. This is the most likely source of a 3b regression (loop bodies are the
+   hot JIT path) and is what the optcarrot/app_fib gate specifically watches.
+3. **Phase-1 demotion as spill.** The cross-slot demotion (stage-1 finding) is the
+   allocator's only spill mechanism today; a linear-scan allocator (3c) subsumes
+   it but must preserve the "stack is canonical, dropping the xmm cache needs no
+   asm" property that makes demotion free.
