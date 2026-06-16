@@ -759,3 +759,37 @@ debug shadows compile out, so they do not affect it):
    allocator's only spill mechanism today; a linear-scan allocator (3c) subsumes
    it but must preserve the "stack is canonical, dropping the xmm cache needs no
    asm" property that makes demotion free.
+
+### 13.7 §5 stage 3b: landed behind a default-off feature
+
+3b is implemented as the `loop-type-only-entry` cargo feature (default off, so the
+shipping build is bit-identical). When on, `incoming_context` strips the analysis
+pass's loop-carried `backedge` frame to a type-only projection
+(`AbstractState::strip_xmm_to_stack`: every `F`/`Sf` slot → `S(guarded)`) before
+`target.join(&backedge)`, so the codegen pass re-derives the loop-entry xmm
+bindings itself via the liveness pass (`liveness_analysis` → `use_float`'s
+`try_set_new_Sf`) instead of inheriting them. This is the minimal, reversible lever
+for "the codegen pass owns allocation; the analysis pass contributes only types +
+liveness."
+
+Verified:
+- **Default (off): unchanged** — the strip is `#[cfg]`-compiled out; the join takes
+  the placed backedge verbatim.
+- **Feature on: correct** — suite 1704/0 (stage-1/2 shadows active) and the sample
+  programs match CRuby (`249750.0`, `1249925000.0`).
+- **Codegen neutral on the canonical float loop** — `emit-asm` for the
+  `x += i*0.5` while-loop is *identical* off vs on: the loop-carried accumulator
+  was already `Sf` (boxed per iteration) in the baseline, and `use_float`
+  re-promotes it to the same `Sf`, so the analysis-pass backedge placement was
+  redundant with liveness-driven promotion here. This is the intended
+  behaviour-preserving result — 3b removes the analysis-pass allocation without
+  regressing this hot path.
+
+What 3b does **not** do: it does not *improve* the per-iteration box (keeping the
+float in an xmm across the back-edge is the 3c allocator-policy change). 3b only
+establishes that de-fusing analysis-pass allocation is codegen-neutral on the
+canonical case. Cases where liveness-promotion and the analysis backedge diverge
+(the regression risk surface) are what the broad benchmark A/B on M1 must probe;
+build `--release` twice (with/without the feature) and compare `bin/bench` +
+optcarrot before considering a default flip / removing the analysis-pass
+allocation outright.

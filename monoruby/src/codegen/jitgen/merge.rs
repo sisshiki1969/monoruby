@@ -82,7 +82,19 @@ impl<'a> JitContext<'a> {
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 if let Some(backedge) = backedge {
-                    target.join(&backedge);
+                    // §5 stage 3b: under `loop-type-only-entry`, strip the
+                    // analysis pass's allocation from the loop-carried frame so
+                    // the codegen pass re-derives xmm bindings via liveness below
+                    // (`liveness_analysis` → `use_float`) instead of inheriting
+                    // it. Default build joins the placed backedge unchanged.
+                    #[cfg(not(feature = "loop-type-only-entry"))]
+                    target.join(backedge);
+                    #[cfg(feature = "loop-type-only-entry")]
+                    {
+                        let mut backedge = backedge.clone();
+                        backedge.strip_xmm_to_stack();
+                        target.join(&backedge);
+                    }
                 }
 
                 target.liveness_analysis(liveness);

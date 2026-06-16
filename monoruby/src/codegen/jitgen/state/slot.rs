@@ -541,6 +541,24 @@ impl SlotState {
     }
 
     ///
+    /// Demote every xmm-resident slot (`F`/`Sf`) to its boxed stack home (`S`),
+    /// keeping each slot's `Guarded` type (`set_S_with_guard` clears the xmm
+    /// binding). The `loop-type-only-entry` experiment (doc §13 stage 3b) uses
+    /// this to hand the codegen pass a placement-free, type-only loop-carried
+    /// frame, so it re-derives xmm bindings itself via liveness (`use_float`)
+    /// instead of inheriting the analysis pass's allocation.
+    ///
+    #[cfg(feature = "loop-type-only-entry")]
+    pub(in crate::codegen::jitgen) fn strip_xmm_to_stack(&mut self) {
+        for slot in self.all_regs() {
+            if matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)) {
+                let g = self.guarded(slot);
+                self.set_S_with_guard(slot, g);
+            }
+        }
+    }
+
+    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
