@@ -587,3 +587,26 @@ replays `apply_join` in order, demotions included). This rules out the naive
 "decide-all then allocate-all" staging and tells us the allocator pass must model
 the pool as evolving across the merge's slots (a linear-scan-style sweep), not a
 batch assignment — the constraint that shapes stage 2.
+
+### §5 stage 2: type-meet separability is now a standing invariant
+
+Stage 2 promotes doc §6's once-checked claim — "the fused join's type result is
+exactly `join_ty` for every non-sentinel slot" — to a **standing debug
+assertion** in `verify_join_replay`: after each merge, `self.guarded(i)` equals
+the standalone `join_ty(pre, other)[i]` (the allocation-free `Guarded` meet) for
+every non-sentinel slot. Verified arm-by-arm and then across the whole suite
+(1703/0): every meet arm's result type is `join_ty`, because the `SfGuarded →
+Guarded` projection is a **join homomorphism** (`FixnumOrFloat ↦ Value`, matching
+`join_ty(Fixnum, Float) = Value`), so even the `Sf` arms that look like they
+refine the type actually agree with the plain `Guarded` meet.
+
+This nails down the type/placement split *at the merge*: a standalone
+type+liveness analysis pass — running `join_ty` with **no xmm allocation** —
+computes types identical to the fused meet, and all allocation is isolated in
+`apply_join`. Combined with §5 stage 1 (the merge is a replayable record stream)
+the merge is now cleanly factored into (a) a separable, allocation-free type meet
+and (b) a recorded placement-allocation stream. What remains for stage 3 is the
+behaviour-changing switch — an allocator that assigns φ registers (reusing a
+predecessor's where it lowers edge-move cost) instead of `apply_join`'s inline
+`TryFresh*` grab — which is benchmark-gated (codegen quality must not regress) and
+will diverge from the stage-1 placement shadow by construction.

@@ -76,29 +76,58 @@ impl AbstractFrame {
     }
 
     ///
-    /// Stage-1 shadow check: replay the recorded `JoinAction` stream from the
-    /// pre-merge frame and assert it reproduces the merged placement (the
-    /// resulting `LinkMode` of every slot). Proves the decision stream +
-    /// `apply_join` is a complete, replayable record of the meet — including its
-    /// cross-slot coupling (a `TryFresh*` allocation can demote *other* slots'
-    /// `Sf` bindings via `try_alloc_xmm`'s phase 1, and the replay reproduces
-    /// that). Debug-only.
+    /// Stage-1 + stage-2 shadow checks (debug-only), given the pre-merge frame
+    /// `pre` (consumed as the replay target) and the recorded action stream:
+    ///
+    /// **Stage 2 — type-meet separability.** Assert the fused meet's *type*
+    /// result (`self.guarded(i)`) equals the standalone `join_ty` pass —
+    /// `join_ty` computes `Guarded`s with **no allocation**. Proven arm-by-arm:
+    /// every non-sentinel arm's result type is `join_ty(self, other)` (the
+    /// `SfGuarded → Guarded` map is a join homomorphism, so the `Sf` arms agree
+    /// too). This is the type/placement split at the merge — a standalone
+    /// type+liveness analysis pass computes identical types, with allocation
+    /// peeled off into `apply_join` (doc §10 item 1, doc §12).
+    ///
+    /// **Stage 1 — placement record completeness.** Replay the recorded
+    /// `JoinAction` stream from `pre` and assert it reproduces the merged
+    /// placement (every slot's `LinkMode`), including the `try_alloc_xmm` phase-1
+    /// cross-slot demotions.
     ///
     #[cfg(debug_assertions)]
     fn verify_join_replay(
         &self,
         other: &AbstractFrame,
-        mut replay: AbstractFrame,
+        mut pre: AbstractFrame,
         actions: &[(SlotId, JoinAction)],
     ) {
-        replay.invariants.join(&other.invariants);
+        // Stage 2: the fused meet's type result == the allocation-free `join_ty`
+        // pass, for every non-sentinel slot (`guarded()` is undefined on the
+        // None/MaybeNone/V sentinels, and the meet leaves sentinel-involved slots
+        // untyped).
+        let is_sentinel =
+            |m| matches!(m, LinkMode::None | LinkMode::MaybeNone | LinkMode::V);
+        let expected_ty = pre.slot_state().join_ty(other.slot_state());
+        for i in self.all_regs() {
+            if is_sentinel(pre.mode(i)) || is_sentinel(other.mode(i)) || is_sentinel(self.mode(i))
+            {
+                continue;
+            }
+            debug_assert_eq!(
+                self.guarded(i),
+                expected_ty[i.0 as usize],
+                "type-meet separability broken at {i:?}",
+            );
+        }
+
+        // Stage 1: replay the action stream from `pre` and check placement.
+        pre.invariants.join(&other.invariants);
         for &(i, action) in actions {
-            replay.is_used_mut(i).join(other.is_used(i));
-            replay.apply_join(i, action);
+            pre.is_used_mut(i).join(other.is_used(i));
+            pre.apply_join(i, action);
         }
         for i in self.all_regs() {
             debug_assert_eq!(
-                replay.mode(i),
+                pre.mode(i),
                 self.mode(i),
                 "JoinAction replay mismatch at {i:?}",
             );
