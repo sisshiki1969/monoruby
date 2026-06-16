@@ -302,6 +302,14 @@ pub struct ClassInfo {
     /// dispatch costs a load instead of a method-table probe per call.
     ///
     match_method_at: std::cell::Cell<Option<(u32, FuncId)>>,
+    ///
+    /// Version-stamped memo: as of class_version `v`, this class (its whole
+    /// ancestor chain) uses the *default* `initialize_copy` /
+    /// `initialize_dup` / `initialize_clone` builtins (i.e. none is
+    /// user-overridden), so `Kernel#dup` / `#clone` may skip the no-op
+    /// copy-hook dispatch and return the raw shallow copy.
+    ///
+    default_copy_at: std::cell::Cell<Option<u32>>,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -395,6 +403,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            default_copy_at: std::cell::Cell::new(None),
         }
     }
 
@@ -416,6 +425,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            default_copy_at: std::cell::Cell::new(None),
         }
     }
 
@@ -445,6 +455,14 @@ impl ClassInfo {
 
     pub(super) fn set_match_method_at(&self, version: u32, fid: FuncId) {
         self.match_method_at.set(Some((version, fid)));
+    }
+
+    pub(super) fn default_copy_at(&self) -> Option<u32> {
+        self.default_copy_at.get()
+    }
+
+    pub(super) fn set_default_copy_at(&self, version: u32) {
+        self.default_copy_at.set(Some(version));
     }
 
     pub(crate) fn set_alloc_func(&mut self, f: AllocFunc) {

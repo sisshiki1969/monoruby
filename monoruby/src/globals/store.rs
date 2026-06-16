@@ -81,6 +81,11 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
+    /// FuncIds of the default `initialize_copy` / `initialize_dup` /
+    /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
+    /// class's resolved hooks against these to recognize the no-op case
+    /// and skip the copy-hook dispatch. Set once during builtin init.
+    default_copy_hooks: Option<[FuncId; 3]>,
     /// Global method cache: memoizes `name` × `class` → method-table
     /// entry lookups, cleared as a whole when class_version moves on.
     /// In a `RefCell` because lookups happen behind `&Store` (including
@@ -200,6 +205,7 @@ impl Store {
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
             default_neq: None,
+            default_copy_hooks: None,
             method_cache: RefCell::new(GlobalMethodCache::default()),
         }
     }
@@ -772,6 +778,47 @@ impl Store {
     ///
     pub(crate) fn set_default_neq(&mut self, fid: FuncId) {
         self.default_neq = Some(fid);
+    }
+
+    /// Record the FuncIds of the default `initialize_copy` /
+    /// `initialize_dup` / `initialize_clone` builtins (see
+    /// `uses_default_copy_hooks`).
+    pub(crate) fn set_default_copy_hooks(&mut self, copy: FuncId, dup: FuncId, clone: FuncId) {
+        self.default_copy_hooks = Some([copy, dup, clone]);
+    }
+
+    ///
+    /// `class_id` (its whole ancestor chain) uses the *default*
+    /// `initialize_copy` / `initialize_dup` / `initialize_clone` builtins,
+    /// i.e. none of them is user-overridden. When true, `Kernel#dup` /
+    /// `#clone` can return the raw shallow copy without dispatching the
+    /// (no-op) copy hook — a hot-path win for `String#dup` and friends.
+    ///
+    /// Memoized per class_version (same pattern as `no_to_str`): any
+    /// method (re)definition bumps class_version and invalidates the memo.
+    /// `version` must be the current class_version.
+    ///
+    pub(crate) fn uses_default_copy_hooks(&self, class_id: ClassId, version: u32) -> bool {
+        if self[class_id].default_copy_at() == Some(version) {
+            return true;
+        }
+        let Some([copy, dup, clone]) = self.default_copy_hooks else {
+            return false;
+        };
+        let resolves_to = |name: IdentId, default: FuncId| {
+            self.search_method_by_class_id(class_id, name)
+                .and_then(|e| e.func_id())
+                == Some(default)
+        };
+        if resolves_to(IdentId::INITIALIZE_COPY, copy)
+            && resolves_to(IdentId::INITIALIZE_DUP, dup)
+            && resolves_to(IdentId::INITIALIZE_CLONE, clone)
+        {
+            self[class_id].set_default_copy_at(version);
+            true
+        } else {
+            false
+        }
     }
 
     ///
