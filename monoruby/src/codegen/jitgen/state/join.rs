@@ -44,7 +44,18 @@ impl AbstractFrame {
     ///
     /// ~~~
     fn join(&mut self, other: &AbstractFrame) {
+        // §5 allocator de-fusion, stage 1: record the per-slot `JoinAction`
+        // stream as we merge, then (debug) replay it from the pre-merge frame and
+        // assert it reproduces the identical placement. This locks the property
+        // the separated allocator pass relies on — the (allocation-free) decision
+        // stream plus `apply_join` is a *complete* record of the meet's placement
+        // work — and is the regression harness future allocator changes shadow
+        // against. See doc/regalloc_separation.md §12.
+        #[cfg(debug_assertions)]
+        let pre = self.clone();
         self.invariants.join(&other.invariants);
+        #[cfg(debug_assertions)]
+        let mut actions = Vec::new();
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));
             // De-fuse the meet (§5): `decide_join` is a pure read-only function
@@ -56,7 +67,41 @@ impl AbstractFrame {
             // `apply_join` allocating inline. Behaviour is identical to the old
             // fused per-slot match.
             let action = self.decide_join(other, i);
+            #[cfg(debug_assertions)]
+            actions.push((i, action));
             self.apply_join(i, action);
+        }
+        #[cfg(debug_assertions)]
+        self.verify_join_replay(other, pre, &actions);
+    }
+
+    ///
+    /// Stage-1 shadow check: replay the recorded `JoinAction` stream from the
+    /// pre-merge frame and assert it reproduces the merged placement (the
+    /// resulting `LinkMode` of every slot). Proves the decision stream +
+    /// `apply_join` is a complete, replayable record of the meet — including its
+    /// cross-slot coupling (a `TryFresh*` allocation can demote *other* slots'
+    /// `Sf` bindings via `try_alloc_xmm`'s phase 1, and the replay reproduces
+    /// that). Debug-only.
+    ///
+    #[cfg(debug_assertions)]
+    fn verify_join_replay(
+        &self,
+        other: &AbstractFrame,
+        mut replay: AbstractFrame,
+        actions: &[(SlotId, JoinAction)],
+    ) {
+        replay.invariants.join(&other.invariants);
+        for &(i, action) in actions {
+            replay.is_used_mut(i).join(other.is_used(i));
+            replay.apply_join(i, action);
+        }
+        for i in self.all_regs() {
+            debug_assert_eq!(
+                replay.mode(i),
+                self.mode(i),
+                "JoinAction replay mismatch at {i:?}",
+            );
         }
     }
 }

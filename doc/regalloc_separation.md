@@ -565,3 +565,25 @@ allocating inline during the meet. The `decide`/`apply` boundary is exactly wher
 that pass plugs in. Not yet done: turning the `TryFresh*` inline allocations into
 allocator-assigned φ registers (the SSA-φ edge-move rewrite) — but the meet is
 now cleanly type-decision (`decide_join`) vs placement-allocation (`apply_join`).
+
+### §5 stage 1: the merge as a replayable record stream
+
+With the meet split into `decide_join` / `apply_join`, stage 1 of the safe
+allocator de-fusion records the per-slot `JoinAction` stream as the merge runs,
+then (debug) **replays it from a clone of the pre-merge frame and asserts it
+reproduces the identical placement** (every slot's resulting `LinkMode`). This is
+the allocation analog of the transfer shadow harness: it locks the property the
+separated allocator pass relies on — the decision stream plus `apply_join` is a
+*complete*, replayable record of the meet — and becomes the regression harness
+future allocator changes shadow against. Suite 1703/0, no replay mismatches.
+
+**Key finding for the allocator design — the meet has cross-slot coupling.** A
+`TryFresh*` action's allocation (`try_alloc_xmm` phase 1) can **demote other
+slots'** `Sf` bindings to `S` to free a physical xmm. So a later slot's
+`decide_join` may read a `LinkMode` that an earlier slot's `apply_join` mutated:
+`decide` and `apply` are *not* separable into two clean passes over the slots —
+they must interleave. The replay shadow confirms this reproduces faithfully (it
+replays `apply_join` in order, demotions included). This rules out the naive
+"decide-all then allocate-all" staging and tells us the allocator pass must model
+the pool as evolving across the merge's slots (a linear-scan-style sweep), not a
+batch assignment — the constraint that shapes stage 2.
