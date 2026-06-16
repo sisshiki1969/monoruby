@@ -112,6 +112,14 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
     }
 }
 
+/// Element-wise `Debug`-string equality, the `transfer` shadow check's
+/// comparator: neither `AsmInst` nor `SideExit` is `PartialEq` (they carry
+/// non-comparable payloads such as boxed closures), but both are `Debug`.
+#[cfg(debug_assertions)]
+fn dbg_slice_eq<T: std::fmt::Debug>(a: &[T], b: &[T]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| format!("{x:?}") == format!("{y:?}"))
+}
+
 // private interface
 impl AsmIr {
     fn new_label(&mut self, side_exit: SideExit) -> usize {
@@ -142,33 +150,41 @@ impl AsmIr {
     /// the prior direct `record.emit(ir, …)`; collection is purely additive.
     ///
     /// In debug builds a **shadow check** replays the record alone into a scratch
-    /// buffer and asserts it reproduces exactly the `AsmInst`s this call appended.
-    /// That proves `TransferIR::emit` is a pure function of the record (no hidden
-    /// dependence on `self`/frame state) — the self-containment that record-driven
-    /// lowering relies on, and a guard against future transfers that read state.
+    /// buffer and asserts it reproduces exactly the `AsmInst`s *and* `SideExit`s
+    /// this call appended. That proves `TransferIR::emit` is a pure function of
+    /// the record and the current `side_exit` cursor — its only codegen input,
+    /// since a guarded record materializes its deopt as `AsmDeopt(side_exit.len())`
+    /// (the scratch is pre-padded to the same length so the index matches). This
+    /// is the self-containment record-driven lowering relies on, and a standing
+    /// guard against a future transfer that reads other frame/codegen state.
     ///
     pub(super) fn transfer(&mut self, t: TransferIR) {
         if !self.codegen_mode {
             t.emit(self);
             return;
         }
-        self.transfers.push(t);
-        #[cfg(debug_assertions)]
-        let start = self.inst.len();
+        self.transfers.push(t.clone());
+        #[cfg(not(debug_assertions))]
         t.emit(self);
         #[cfg(debug_assertions)]
         {
+            let (inst_start, se_start) = (self.inst.len(), self.side_exit.len());
+            t.clone().emit(self);
+            // Replay into a scratch whose deopt cursor (`side_exit.len()`) matches,
+            // so a materialized `AsmDeopt` index is identical.
             let mut scratch = AsmIr::shadow_scratch();
-            t.emit(&mut scratch);
-            let produced = &self.inst[start..];
+            scratch
+                .side_exit
+                .resize_with(se_start, || SideExit::Evict(None));
+            t.clone().emit(&mut scratch);
             debug_assert!(
-                produced.len() == scratch.inst.len()
-                    && produced
-                        .iter()
-                        .zip(&scratch.inst)
-                        .all(|(a, b)| format!("{a:?}") == format!("{b:?}")),
-                "TransferIR replay mismatch: {t:?}\n  real:   {produced:?}\n  replay: {:?}",
-                scratch.inst
+                dbg_slice_eq(&self.inst[inst_start..], &scratch.inst)
+                    && dbg_slice_eq(&self.side_exit[se_start..], &scratch.side_exit[se_start..]),
+                "TransferIR replay mismatch: {t:?}\n  real inst:    {:?}\n  replay inst:  {:?}\n  real exit:    {:?}\n  replay exit:  {:?}",
+                &self.inst[inst_start..],
+                &scratch.inst,
+                &self.side_exit[se_start..],
+                &scratch.side_exit[se_start..],
             );
         }
     }
@@ -333,6 +349,21 @@ impl AsmIr {
     pub(crate) fn new_deopt(&mut self, state: &AbstractFrame) -> AsmDeopt {
         let pc = state.pc();
         self.new_deopt_with_pc(state, pc)
+    }
+
+    ///
+    /// Materialize a guarded transfer record's deopt **program point** (a
+    /// [`DeoptPoint`], recorded by the analysis half — doc §9) into a `side_exit`
+    /// label, returning its `AsmDeopt`. The emit/codegen half calls this so that
+    /// `side_exit` construction lives entirely on the codegen side and the
+    /// `TransferIR` stream stays codegen-independent. Equivalent to `new_deopt`,
+    /// but driven by the recorded `(pc, write_back)` rather than reading the live
+    /// `AbstractFrame`.
+    ///
+    pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(point.pc(), point.write_back().clone()));
+        self.had_deopt = true;
+        AsmDeopt(i)
     }
 
     ///

@@ -1,14 +1,46 @@
 use super::*;
 
 ///
+/// The **deopt program point** a guarded transfer record carries (doc §9): the
+/// bytecode `pc` and the write-back placement snapshot needed to rebuild the
+/// side-exit if the float/Integer guard fails.
+///
+/// This is the codegen-*independent* replacement for a frozen `AsmDeopt` (an
+/// index into the codegen pass's `side_exit` table). The analysis half records
+/// the point (pure values it already tracks); the emit/codegen half materializes
+/// the actual side-exit from it via [`AsmIr::deopt_from_point`]. With this the
+/// `TransferIR` stream no longer embeds any codegen-pass state — the prerequisite
+/// for replaying it from a standalone lowering pass.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::codegen::jitgen) struct DeoptPoint {
+    pc: BytecodePtr,
+    write_back: WriteBack,
+}
+
+impl DeoptPoint {
+    pub(super) fn new(pc: BytecodePtr, write_back: WriteBack) -> Self {
+        Self { pc, write_back }
+    }
+
+    pub(in crate::codegen::jitgen) fn pc(&self) -> BytecodePtr {
+        self.pc
+    }
+
+    pub(in crate::codegen::jitgen) fn write_back(&self) -> &WriteBack {
+        &self.write_back
+    }
+}
+
+///
 /// A deopt-carrying unbox load produced by `load_xmm` (item ②, step 2): the
 /// conversion to emit when materializing a slot's value into an FP register.
 ///
 /// The `FromStack` / `FromAcc` variants need a guard (their `float_to_fpr`
-/// deopts if the boxed value is not actually a `Float`); the deopt is supplied
-/// by the codegen wrapper, **not** frozen in the record — the analysis half only
-/// decided the conversion, while the codegen side creates the side-exit from the
-/// placement state at this point (see doc/regalloc_separation.md §9). The
+/// deopts if the boxed value is not actually a `Float`); the emit half
+/// materializes the side-exit from the record's [`DeoptPoint`] program point,
+/// **not** a frozen `AsmDeopt` — the analysis half only decided the conversion
+/// and recorded the point (see doc/regalloc_separation.md §9). The
 /// numeric-literal variants are guard-free.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,19 +58,23 @@ pub(in crate::codegen::jitgen) enum XmmLoad {
 }
 
 impl XmmLoad {
-    /// `deopt` is required by the guarded (`FromStack` / `FromAcc`) variants and
-    /// ignored by the guard-free ones; the guard-free `load_xmm_from_C_state`
-    /// path passes `None`.
-    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<AsmDeopt>) {
+    /// `deopt` (the program point) is required by the guarded (`FromStack` /
+    /// `FromAcc`) variants and ignored by the guard-free ones; the guard-free
+    /// `load_xmm_from_C_state` path passes `None`. The side-exit is materialized
+    /// here (codegen side) via [`AsmIr::deopt_from_point`], matching the old
+    /// "create the deopt first" order so the `side_exit` table is identical.
+    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             XmmLoad::None => {}
             XmmLoad::FromStack(x) => {
+                let deopt = ir.deopt_from_point(deopt.unwrap());
                 ir.stack2reg(slot, GP::Rdi);
-                ir.float_to_fpr(GP::Rdi, x, deopt.unwrap());
+                ir.float_to_fpr(GP::Rdi, x, deopt);
             }
             XmmLoad::FromAcc(x) => {
+                let deopt = ir.deopt_from_point(deopt.unwrap());
                 ir.reg2stack(GP::R15, slot);
-                ir.float_to_fpr(GP::R15, x, deopt.unwrap());
+                ir.float_to_fpr(GP::R15, x, deopt);
             }
             XmmLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
             XmmLoad::FromFixnum(i, x) => ir.i64_to_stack_and_fpr(i, slot, x),
@@ -107,12 +143,16 @@ pub(in crate::codegen::jitgen) enum XmmFixnumLoad {
 }
 
 impl XmmFixnumLoad {
-    /// `deopt` is required by the guarded (`FromStack` / `FromAcc` with the bool
-    /// set) variants and `None` for the guard-free ones.
-    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<AsmDeopt>) {
+    /// `deopt` (the program point) is `Some` for the guarded `S`/`G` arms and
+    /// `None` for the guard-free ones. The side-exit is materialized for the
+    /// `S`/`G` arms whenever the point is `Some` — even if `guard` is false, so
+    /// the `side_exit` table stays identical to the pre-split wrapper, which
+    /// created the deopt unconditionally for those arms.
+    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             XmmFixnumLoad::None => {}
             XmmFixnumLoad::FromStack(x, guard) => {
+                let deopt = deopt.map(|p| ir.deopt_from_point(p));
                 ir.stack2reg(slot, GP::Rdi);
                 if guard {
                     ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
@@ -120,6 +160,7 @@ impl XmmFixnumLoad {
                 ir.fixnum2fpr(GP::Rdi, x);
             }
             XmmFixnumLoad::FromAcc(x, guard) => {
+                let deopt = deopt.map(|p| ir.deopt_from_point(p));
                 ir.reg2stack(GP::R15, slot);
                 if guard {
                     ir.push(AsmInst::GuardClass(GP::R15, INTEGER_CLASS, deopt.unwrap()));
@@ -138,11 +179,13 @@ impl XmmFixnumLoad {
 /// the record (building the typed-IR stream that record-driven lowering will
 /// replay) and emits it via [`TransferIR::emit`].
 ///
-/// The deopt is still a frozen `AsmDeopt` here (the `XmmLoad` / `XmmFixnumLoad`
-/// guarded variants). Lifting it to a program point — so the stream is fully
-/// codegen-independent — is the next step (see doc/regalloc_separation.md §9).
+/// The guarded variants (`XmmLoad` / `XmmFixnumLoad`) carry the deopt as a
+/// [`DeoptPoint`] program point, **not** a frozen `AsmDeopt` index — so the
+/// stream is now fully codegen-independent (the emit half materializes the
+/// side-exit). `TransferIR` is therefore `Clone` but not `Copy` (a `DeoptPoint`
+/// owns a `WriteBack`).
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::codegen::jitgen) enum TransferIR {
     Spill(Spill),
     FpXfer(FpXfer),
@@ -151,14 +194,14 @@ pub(in crate::codegen::jitgen) enum TransferIR {
     XmmLoad {
         load: XmmLoad,
         slot: SlotId,
-        deopt: AsmDeopt,
+        deopt: DeoptPoint,
     },
     /// `load_xmm_fixnum`: unbox Integer to float; `deopt` present only for the
     /// guarded `S`/`G` arms.
     XmmFixnumLoad {
         load: XmmFixnumLoad,
         slot: SlotId,
-        deopt: Option<AsmDeopt>,
+        deopt: Option<DeoptPoint>,
     },
 }
 
@@ -168,8 +211,8 @@ impl TransferIR {
             TransferIR::Spill(s) => s.emit(ir),
             TransferIR::FpXfer(f) => f.emit(ir),
             TransferIR::GpLoad(g) => g.emit(ir),
-            TransferIR::XmmLoad { load, slot, deopt } => load.emit(ir, slot, Some(deopt)),
-            TransferIR::XmmFixnumLoad { load, slot, deopt } => load.emit(ir, slot, deopt),
+            TransferIR::XmmLoad { load, slot, deopt } => load.emit(ir, slot, Some(&deopt)),
+            TransferIR::XmmFixnumLoad { load, slot, deopt } => load.emit(ir, slot, deopt.as_ref()),
         }
     }
 }
@@ -273,15 +316,15 @@ impl AbstractFrame {
     /// - rdi
     ///
     pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
-        // Only the `S`/`G` arms guard, so a deopt is created only for them — and
-        // *before* the state transition, so its write-back snapshot is the
-        // pre-load placement (cf. `load_xmm`). `use_as_value` (below, in the
-        // state half) only touches liveness, so this peek is stable; and the
+        // Only the `S`/`G` arms guard, so a deopt point is recorded only for
+        // them — and *before* the state transition, so its write-back snapshot
+        // is the pre-load placement (cf. `load_xmm`). `use_as_value` (below, in
+        // the state half) only touches liveness, so this peek is stable; and the
         // later `stack2reg`/`reg2stack` are pure emits that don't perturb the
-        // snapshot. The guard-free `Sf`/`F`/`C` arms create no deopt, exactly as
-        // before.
-        let deopt = matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_))
-            .then(|| ir.new_deopt(self));
+        // snapshot. The guard-free `Sf`/`F`/`C` arms record no deopt, exactly as
+        // before. The side-exit itself is materialized in the emit half.
+        let deopt =
+            matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_)).then(|| self.deopt_point());
         let (x, load) = self.load_xmm_fixnum_state(slot);
         ir.transfer(TransferIR::XmmFixnumLoad { load, slot, deopt });
         x
@@ -329,15 +372,28 @@ impl AbstractFrame {
     ///
     ///
     pub(crate) fn load_xmm(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
-        // The deopt is created *before* the state transition, so its write-back
-        // snapshot (`get_write_back`) is the pre-load placement — see the
-        // deopt-carrying-transfer note in doc/regalloc_separation.md §9. The
-        // record carries only the conversion; the deopt is supplied here (the
-        // codegen side), not frozen into the record.
-        let deopt = ir.new_deopt(self);
+        // The deopt point is recorded *before* the state transition, so its
+        // write-back snapshot (`get_write_back`) is the pre-load placement — see
+        // doc/regalloc_separation.md §9. The record carries the program point
+        // (pc + write-back), not a frozen `AsmDeopt`; the emit half materializes
+        // the side-exit from it.
+        let deopt = self.deopt_point();
         let (x, load) = self.load_xmm_state(slot);
         ir.transfer(TransferIR::XmmLoad { load, slot, deopt });
         x
+    }
+
+    ///
+    /// Capture the deopt **program point** at the current placement state (item
+    /// ②, step 2 — deopt program-point-ification, doc §9): the bytecode `pc`
+    /// plus the write-back snapshot `get_write_back()` — *which* values are
+    /// unboxed/in-acc and must be restored to the stack if a guard fails. This is
+    /// pure analysis state; the codegen half turns it into an `AsmDeopt`
+    /// side-exit via [`AsmIr::deopt_from_point`]. Mirrors `AsmIr::new_deopt`'s
+    /// snapshot, minus the `side_exit` push.
+    ///
+    fn deopt_point(&self) -> DeoptPoint {
+        DeoptPoint::new(self.pc(), self.get_write_back())
     }
 
     ///

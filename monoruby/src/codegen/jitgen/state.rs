@@ -7,7 +7,7 @@ mod slot;
 
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
-pub(super) use read_slot::TransferIR;
+pub(super) use read_slot::{DeoptPoint, TransferIR};
 use slot::SfGuarded;
 use slot::{FpXfer, Spill};
 pub(super) use slot::{Guarded, LinkMode, SlotState};

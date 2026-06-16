@@ -482,3 +482,35 @@ stream with no analysis frame in hand), and the assert is a standing guard
 against a future transfer whose emit sneaks in a state dependence. All transfer
 emit helpers are single deterministic `push`es, so the check holds for the whole
 suite (1703/0, debug build, every codegen-mode transfer exercised).
+
+### Deopt program-point-ification: the stream is now codegen-independent
+
+The one remaining codegen dependence in the `TransferIR` stream was the frozen
+`AsmDeopt` (an index into the codegen pass's `side_exit` table) carried by the
+guarded `XmmLoad` / `XmmFixnumLoad` records. That index is meaningless without
+the exact `side_exit` table it points into — so a standalone lowering pass could
+not replay the stream.
+
+Resolved as doc §9 foretold: the records now carry a **`DeoptPoint`** — the
+program point `(pc, write_back)`, both pure analysis values the frame already
+tracks (`get_write_back()` is the placement snapshot restored on guard failure).
+The analysis half (`load_xmm` / `load_xmm_fixnum` wrappers) records the point via
+`deopt_point()` (no `side_exit` push); the **emit half** materializes the actual
+side-exit via `AsmIr::deopt_from_point`, so `side_exit` construction lives
+entirely on the codegen side. `new_deopt` is no longer called from the transfer
+wrappers.
+
+Ordering is preserved exactly: within `load_xmm{,_fixnum}` the only `side_exit`
+push was this one deopt, created "first" — `deopt_from_point` runs at the top of
+the emit arm, at the same relative position, so the `side_exit` table is
+byte-identical. The guarded-but-`guard == false` `S`/`G` arms still materialize
+the (dead) deopt, matching the pre-split wrapper.
+
+`TransferIR` is consequently `Clone` (not `Copy` — a `DeoptPoint` owns a
+`WriteBack`). The shadow harness was strengthened accordingly: emit is now a pure
+function of the record **and the `side_exit` cursor** (a guarded record
+materializes `AsmDeopt(side_exit.len())`), so the replay pre-pads the scratch's
+`side_exit` to the same length and asserts both the produced `AsmInst`s *and* the
+produced `SideExit`s match (Debug-compared; neither is `PartialEq`). Suite
+1703/0, no replay mismatches — the stream is now fully codegen-independent, the
+last prerequisite for record-driven lowering (step 3).
