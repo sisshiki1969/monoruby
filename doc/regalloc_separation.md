@@ -514,3 +514,27 @@ materializes `AsmDeopt(side_exit.len())`), so the replay pre-pads the scratch's
 produced `SideExit`s match (Debug-compared; neither is `PartialEq`). Suite
 1703/0, no replay mismatches — the stream is now fully codegen-independent, the
 last prerequisite for record-driven lowering (step 3).
+
+### Analysis pass skips emission (doc §9 step 2, realized)
+
+With the deopt program-point-ified, `AsmIr::transfer` now **returns immediately
+in analysis mode** (`codegen_mode == false`). The abstract-state mutation already
+happened in the wrapper's `*_state` half; `emit` only writes to `ir`, and the
+loop pre-pass discards its local `AsmIr` (`analyse_basic_block` drops it — the
+`loop_analysis` context "emits AsmIr only for analysis, it is never codegen'd",
+context.rs:692). So emission in analysis mode was pure dead work — and, since
+`new_deopt`/`deopt_from_point` are not `push`-gated, it also grew a `side_exit`
+table nobody reads (the waste §10 flagged).
+
+This is provably safe: `emit`'s signature, `fn emit(self, ir: &mut AsmIr)`, cannot
+touch frame/abstract state — the same property the shadow check independently
+verifies. So the analysis pass now literally "calls the state halves and skips
+emission" for every transfer primitive, exactly the §9-step-2 shape. The §10
+deopt wrinkle ("the open wrinkle is the deopt … frozen `AsmDeopt`") is closed:
+the records carry a `DeoptPoint`, and the only thing left fusing analysis and
+codegen for the *transfer primitives* is gone. Suite 1703/0.
+
+What remains for full record-driven lowering is the §10-item-1 core (de-fuse
+allocation from the join — the SSA-φ edge-move rewrite) and lowering the *op
+handlers'* direct emissions through records too; the transfer primitives are
+done.

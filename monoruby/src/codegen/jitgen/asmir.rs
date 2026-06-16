@@ -149,6 +149,17 @@ impl AsmIr {
     /// lock-step with the gated `inst`) and emit it. The emission is identical to
     /// the prior direct `record.emit(ir, …)`; collection is purely additive.
     ///
+    /// **Analysis mode** (`codegen_mode == false`, the loop pre-pass) returns
+    /// immediately: the abstract-state mutation already happened in the wrapper's
+    /// `*_state` half, and `emit` only writes to `ir` — which the analysis pass
+    /// discards (`analyse_basic_block` drops its local `AsmIr`). This is doc §9
+    /// step 2's "the analysis pass calls the state halves and **skips
+    /// emission**", and it stops the dead `side_exit` growth a guarded record's
+    /// `deopt_from_point` would otherwise cause (the waste doc §10 flagged). It is
+    /// provably safe: `emit`'s signature (`fn emit(self, ir: &mut AsmIr)`) cannot
+    /// touch frame/abstract state, as the shadow check below independently relies
+    /// on.
+    ///
     /// In debug builds a **shadow check** replays the record alone into a scratch
     /// buffer and asserts it reproduces exactly the `AsmInst`s *and* `SideExit`s
     /// this call appended. That proves `TransferIR::emit` is a pure function of
@@ -160,7 +171,6 @@ impl AsmIr {
     ///
     pub(super) fn transfer(&mut self, t: TransferIR) {
         if !self.codegen_mode {
-            t.emit(self);
             return;
         }
         self.transfers.push(t.clone());
