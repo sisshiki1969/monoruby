@@ -441,3 +441,31 @@ is (1) then (2). (1) is the architectural fork — re-execution-based (generaliz
 the `codegen_mode` pre-pass to all code, feeding precomputed states forward) vs.
 record-stream-based (collect records, lower from them) — and is the decision to
 take deliberately, since it sets how allocation is staged.
+
+## 11. Record collection: the `TransferIR` stream
+
+The first concrete step of record-driven lowering (chosen over the §5 allocation
+de-fusing as the lower-risk groundwork): collect the transfer records into a
+stream so a later pass can replay them.
+
+- **Unified element.** The five per-primitive records (`Spill`, `FpXfer`,
+  `GpLoad`, `XmmLoad`, `XmmFixnumLoad`) now share one enum
+  `TransferIR` (`state/read_slot.rs`) with a single `emit` dispatch. The two
+  deopt-carrying variants still freeze an `AsmDeopt` (lifting it to a program
+  point is §9's open item, the next wall).
+- **One funnel.** `AsmIr::transfer(t)` is the sole sink: it pushes `t` onto the
+  new `transfers: Vec<TransferIR>` (codegen mode only, so it stays in lock-step
+  with the `codegen_mode`-gated `inst`) and then emits via `t.emit(self)`. Every
+  transfer/eviction wrapper (`load`, `load_xmm`, `load_xmm_fixnum`,
+  `write_back_slot`, `to_S_unguarded`, `to_sf`) now calls `ir.transfer(...)`
+  instead of `record.emit(ir, …)`.
+- **Faithful by construction.** The collected `t` *is* the record that gets
+  emitted (same value, same call), so the stream is exactly the emitted transfer
+  sequence — no shadow comparison needed; the suite (1703/0) confirms emission is
+  byte-identical. `save`/`restore` truncates `transfers` alongside `inst`, so the
+  stream survives speculative-emit rollback intact.
+
+The `transfers` stream is **collected but not yet consumed** — that is the
+groundwork. The next steps are (1) lift the deopt to a program point so the
+stream is codegen-independent, then (2) drive lowering from the stream (replay
+`TransferIR` → `LInst`) and retire the corresponding direct `AsmInst` emission.

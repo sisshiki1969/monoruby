@@ -26,7 +26,7 @@ impl std::fmt::Debug for InlineProcedure {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AsmDeopt(usize);
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +90,12 @@ pub(crate) struct AsmIr {
     /// generic / native callee). Producer skips `create_array` only
     /// when `deferred_rest && !needs_rest_array`.
     needs_rest_array: bool,
+    /// Item ② step 2 (record collection): the typed-IR transfer stream, grown
+    /// in lock-step with `inst` whenever a transfer/eviction primitive funnels
+    /// through [`Self::transfer`] (codegen mode only). Not yet consumed — this
+    /// is the faithful record stream that record-driven lowering will replay.
+    /// Truncated alongside `inst` by `save`/`restore`.
+    transfers: Vec<TransferIR>,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -125,7 +131,21 @@ impl AsmIr {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
+            transfers: vec![],
         }
+    }
+
+    ///
+    /// Funnel a transfer/eviction primitive's typed-IR record (item ② step 2):
+    /// collect it into the `transfers` stream (codegen mode only, so it stays in
+    /// lock-step with the gated `inst`) and emit it. The emission is identical to
+    /// the prior direct `record.emit(ir, …)`; collection is purely additive.
+    ///
+    pub(super) fn transfer(&mut self, t: TransferIR) {
+        if self.codegen_mode {
+            self.transfers.push(t);
+        }
+        t.emit(self);
     }
 
     pub(super) fn had_deopt(&self) -> bool {
@@ -226,9 +246,10 @@ impl AsmIr {
         }
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
+    pub(super) fn save(&mut self) -> (usize, usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
+            self.transfers.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
@@ -239,7 +260,8 @@ impl AsmIr {
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+        (inst, transfers, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+            usize,
             usize,
             usize,
             bool,
@@ -249,6 +271,7 @@ impl AsmIr {
         ),
     ) {
         self.inst.truncate(inst);
+        self.transfers.truncate(transfers);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;

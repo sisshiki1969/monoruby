@@ -759,7 +759,8 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        self.write_back_slot_state(slot).emit(ir);
+        let s = self.write_back_slot_state(slot);
+        ir.transfer(TransferIR::Spill(s));
     }
 
     ///
@@ -790,7 +791,8 @@ impl SlotState {
 
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        self.to_S_unguarded_state(slot).emit(ir);
+        let s = self.to_S_unguarded_state(slot);
+        ir.transfer(TransferIR::Spill(s));
     }
 }
 
@@ -1373,7 +1375,7 @@ pub(in crate::codegen::jitgen) enum Placement {
 /// [`Spill::emit`].
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Spill {
+pub(in crate::codegen::jitgen) enum Spill {
     None,
     /// `ir.fpr2stack(xmm, slot)`
     Fpr(FPReg, SlotId),
@@ -1384,7 +1386,7 @@ pub(super) enum Spill {
 }
 
 impl Spill {
-    fn emit(self, ir: &mut AsmIr) {
+    pub(super) fn emit(self, ir: &mut AsmIr) {
         match self {
             Spill::None => {}
             Spill::Fpr(xmm, slot) => ir.fpr2stack(xmm, slot),
@@ -1401,7 +1403,7 @@ impl Spill {
 /// by the codegen half via [`FpXfer::emit`].
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum FpXfer {
+pub(in crate::codegen::jitgen) enum FpXfer {
     /// `ir.fpr_move(l, r)`
     Move(FPReg, FPReg),
     /// `ir.push(AsmInst::FprSwap(l, r))`
@@ -1409,7 +1411,7 @@ pub(super) enum FpXfer {
 }
 
 impl FpXfer {
-    fn emit(self, ir: &mut AsmIr) {
+    pub(super) fn emit(self, ir: &mut AsmIr) {
         match self {
             FpXfer::Move(l, r) => ir.fpr_move(l, r),
             FpXfer::Swap(l, r) => ir.push(AsmInst::FprSwap(l, r)),
@@ -1841,7 +1843,8 @@ impl AbstractFrame {
     }
 
     fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
-        self.to_sf_state(slot, l, r, guarded).emit(ir);
+        let f = self.to_sf_state(slot, l, r, guarded);
+        ir.transfer(TransferIR::FpXfer(f));
     }
 
     ///

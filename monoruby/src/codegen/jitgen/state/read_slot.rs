@@ -12,7 +12,7 @@ use super::*;
 /// numeric-literal variants are guard-free.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum XmmLoad {
+pub(in crate::codegen::jitgen) enum XmmLoad {
     /// already in an xmm (`Sf` / `F`) — nothing to emit
     None,
     /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
@@ -53,7 +53,7 @@ impl XmmLoad {
 /// emitted by the codegen half via [`GpLoad::emit`].
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum GpLoad {
+pub(in crate::codegen::jitgen) enum GpLoad {
     /// `F` slot: box the xmm to its stack home (leaving the boxed value in rax),
     /// then move rax into `dst`. `fpr2stack(fpr, slot); reg_move(rax, dst)`.
     FprBox(FPReg, SlotId, GP),
@@ -95,7 +95,7 @@ impl GpLoad {
 /// half pushes `GuardClass` with the wrapper-supplied deopt.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum XmmFixnumLoad {
+pub(in crate::codegen::jitgen) enum XmmFixnumLoad {
     /// already in an xmm (`Sf` / `F`) — nothing to emit
     None,
     /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
@@ -131,6 +131,49 @@ impl XmmFixnumLoad {
     }
 }
 
+///
+/// The unified **typed-IR stream element** (item ②, step 2 — record collection).
+/// Every transfer/eviction primitive's analysis half produces one of these; the
+/// codegen pass funnels them through [`AsmIr::transfer`], which both *collects*
+/// the record (building the typed-IR stream that record-driven lowering will
+/// replay) and emits it via [`TransferIR::emit`].
+///
+/// The deopt is still a frozen `AsmDeopt` here (the `XmmLoad` / `XmmFixnumLoad`
+/// guarded variants). Lifting it to a program point — so the stream is fully
+/// codegen-independent — is the next step (see doc/regalloc_separation.md §9).
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum TransferIR {
+    Spill(Spill),
+    FpXfer(FpXfer),
+    GpLoad(GpLoad),
+    /// `load_xmm`: deopt-carrying unbox-to-float (always guarded).
+    XmmLoad {
+        load: XmmLoad,
+        slot: SlotId,
+        deopt: AsmDeopt,
+    },
+    /// `load_xmm_fixnum`: unbox Integer to float; `deopt` present only for the
+    /// guarded `S`/`G` arms.
+    XmmFixnumLoad {
+        load: XmmFixnumLoad,
+        slot: SlotId,
+        deopt: Option<AsmDeopt>,
+    },
+}
+
+impl TransferIR {
+    pub(in crate::codegen::jitgen) fn emit(self, ir: &mut AsmIr) {
+        match self {
+            TransferIR::Spill(s) => s.emit(ir),
+            TransferIR::FpXfer(f) => f.emit(ir),
+            TransferIR::GpLoad(g) => g.emit(ir),
+            TransferIR::XmmLoad { load, slot, deopt } => load.emit(ir, slot, Some(deopt)),
+            TransferIR::XmmFixnumLoad { load, slot, deopt } => load.emit(ir, slot, deopt),
+        }
+    }
+}
+
 impl AbstractFrame {
     ///
     /// load *slot* into *dst*.
@@ -142,7 +185,8 @@ impl AbstractFrame {
     /// - if *slot* is V or None.
     ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
-        self.load_state(slot, dst).emit(ir);
+        let g = self.load_state(slot, dst);
+        ir.transfer(TransferIR::GpLoad(g));
     }
 
     ///
@@ -239,7 +283,7 @@ impl AbstractFrame {
         let deopt = matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_))
             .then(|| ir.new_deopt(self));
         let (x, load) = self.load_xmm_fixnum_state(slot);
-        load.emit(ir, slot, deopt);
+        ir.transfer(TransferIR::XmmFixnumLoad { load, slot, deopt });
         x
     }
 
@@ -292,7 +336,7 @@ impl AbstractFrame {
         // codegen side), not frozen into the record.
         let deopt = ir.new_deopt(self);
         let (x, load) = self.load_xmm_state(slot);
-        load.emit(ir, slot, Some(deopt));
+        ir.transfer(TransferIR::XmmLoad { load, slot, deopt });
         x
     }
 
