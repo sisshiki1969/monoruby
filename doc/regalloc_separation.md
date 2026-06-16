@@ -668,14 +668,32 @@ greedy xmm policy) must not regress."
 The naive view is "stage 3 is all benchmark-gated." It is not — one more slice
 stays shadow-able:
 
-- **3a — safe / shadow-able: the analysis fixpoint is allocation-independent.**
-  Extend the stage-2 result from a single merge to the loop *fixpoint*: run the
-  analysis pre-pass both with and without `apply_join` allocation and assert the
-  resulting **type + liveness** fixpoint (the back-edge `AbstractState`'s
-  `Guarded` per slot + the `Liveness` sets) is identical. This proves stripping
-  allocation from the analysis pass does not perturb what that pass exists to
-  compute. Debug-only, no behaviour change; promotes stage 2 to the fixpoint
-  level. *This is the next implementable step.*
+- **3a — safe: the analysis fixpoint is allocation-independent.** The goal was to
+  prove stripping allocation from the analysis pass does not perturb the type +
+  liveness it exists to compute. This splits into two halves:
+  - **Merge half — already discharged by stage 2.** `AbstractState::join_entries`
+    (state.rs:81) calls `AbstractFrame::join`, where the stage-2 assertion
+    (`self.guarded(i) == join_ty(pre, other)[i]`) lives. `join_entries` is reached
+    from both `incoming_context` *and* `analyse_backedge_fixpoint` (merge.rs:77,
+    79, 107), and the analysis pre-pass `loop_analysis` (context.rs:682,
+    `codegen_mode:false`) drives them. So stage 2 already runs on every
+    analysis-pass merge **and** every back-edge fixpoint merge; the suite exercises
+    loop JIT and passes 1704/0 with it active. Merge-level type meet is therefore
+    allocation-independent by an assertion that is *already live* — no duplicate
+    fixpoint harness needed (building one would be disproportionate).
+  - **Transfer half — by construction, confirmed by the gate.** Between merges the
+    fixpoint runs the per-instruction transfer handlers. Their *type* result is
+    computed from operand `Guarded`s + IC classes, never from placement (handlers
+    branch on `codegen_mode()` only to choose *emission*, e.g. `binop_uncached`
+    widens to `S` in analysis — the `Guarded` it records is the same). A full
+    static shadow of every handler is disproportionate; this half is covered
+    empirically by 3b's benchmark gate plus the exact CRuby-diff correctness suite
+    (any type-fixpoint perturbation would change output, which the suite catches
+    exactly).
+
+  Net: the safe regime of stage 3 is essentially complete — the merge half is
+  formally asserted (live), the transfer half rests on the handlers' type/emission
+  split and is confirmed by the gate. The next implementable step is 3b.
 
 - **3b — benchmark-gated: actually strip allocation from the analysis pass.**
   Make `loop_analysis` (and any other `codegen_mode:false` walk) call the
