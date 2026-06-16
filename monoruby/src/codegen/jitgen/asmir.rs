@@ -141,11 +141,51 @@ impl AsmIr {
     /// lock-step with the gated `inst`) and emit it. The emission is identical to
     /// the prior direct `record.emit(ir, …)`; collection is purely additive.
     ///
+    /// In debug builds a **shadow check** replays the record alone into a scratch
+    /// buffer and asserts it reproduces exactly the `AsmInst`s this call appended.
+    /// That proves `TransferIR::emit` is a pure function of the record (no hidden
+    /// dependence on `self`/frame state) — the self-containment that record-driven
+    /// lowering relies on, and a guard against future transfers that read state.
+    ///
     pub(super) fn transfer(&mut self, t: TransferIR) {
-        if self.codegen_mode {
-            self.transfers.push(t);
+        if !self.codegen_mode {
+            t.emit(self);
+            return;
         }
+        self.transfers.push(t);
+        #[cfg(debug_assertions)]
+        let start = self.inst.len();
         t.emit(self);
+        #[cfg(debug_assertions)]
+        {
+            let mut scratch = AsmIr::shadow_scratch();
+            t.emit(&mut scratch);
+            let produced = &self.inst[start..];
+            debug_assert!(
+                produced.len() == scratch.inst.len()
+                    && produced
+                        .iter()
+                        .zip(&scratch.inst)
+                        .all(|(a, b)| format!("{a:?}") == format!("{b:?}")),
+                "TransferIR replay mismatch: {t:?}\n  real:   {produced:?}\n  replay: {:?}",
+                scratch.inst
+            );
+        }
+    }
+
+    /// An empty codegen-mode `AsmIr` for the [`Self::transfer`] shadow check —
+    /// the replay target. Needs no `JitContext`.
+    #[cfg(debug_assertions)]
+    fn shadow_scratch() -> Self {
+        Self {
+            codegen_mode: true,
+            inst: vec![],
+            side_exit: vec![],
+            had_deopt: false,
+            deferred_rest: false,
+            needs_rest_array: false,
+            transfers: vec![],
+        }
     }
 
     pub(super) fn had_deopt(&self) -> bool {

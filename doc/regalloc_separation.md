@@ -469,3 +469,16 @@ The `transfers` stream is **collected but not yet consumed** — that is the
 groundwork. The next steps are (1) lift the deopt to a program point so the
 stream is codegen-independent, then (2) drive lowering from the stream (replay
 `TransferIR` → `LInst`) and retire the corresponding direct `AsmInst` emission.
+
+### Shadow harness: the records are self-contained
+
+A debug-only shadow check in `AsmIr::transfer` replays each record alone into a
+fresh scratch `AsmIr` and asserts it reproduces *exactly* the `AsmInst`s the real
+emit just appended (compared via `Debug`, since `AsmInst` is not `PartialEq`).
+This proves `TransferIR::emit` is a **pure function of the record** — it reads
+nothing from `self`/the frame beyond the record's own payload. That self-
+containment is precisely what record-driven lowering needs (it will replay the
+stream with no analysis frame in hand), and the assert is a standing guard
+against a future transfer whose emit sneaks in a state dependence. All transfer
+emit helpers are single deterministic `push`es, so the check holds for the whole
+suite (1703/0, debug build, every codegen-mode transfer exercised).
