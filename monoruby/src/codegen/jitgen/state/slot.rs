@@ -1213,61 +1213,23 @@ impl AbstractFrame {
     }
 
     fn xmm_swap(&mut self, l: FPReg, r: FPReg) {
-        let mut guarded_l = None;
-        let mut guarded_r = None;
-        for slot in self.all_regs() {
-            match &self.mode(slot) {
-                LinkMode::F(x) => {
-                    if *x == l {
-                        if let Some(g) = guarded_l {
-                            assert_eq!(g, SfGuarded::Float);
-                        }
-                        guarded_l = Some(SfGuarded::Float);
-                    } else if *x == r {
-                        if let Some(g) = guarded_r {
-                            assert_eq!(g, SfGuarded::Float);
-                        }
-                        guarded_r = Some(SfGuarded::Float);
-                    }
-                }
-                LinkMode::Sf(x, guarded) => {
-                    if *x == l {
-                        if let Some(g) = guarded_l {
-                            assert_eq!(g, *guarded);
-                        }
-                        guarded_l = Some(*guarded);
-                    } else if *x == r {
-                        if let Some(g) = guarded_r {
-                            assert_eq!(g, *guarded);
-                        }
-                        guarded_r = Some(*guarded);
-                    }
-                }
-                _ => {}
-            }
-        }
         self.xmm_alloc.swap(l, r);
-        // Local-copy RMW per slot (item ② encapsulation; `LinkMode` is `Copy`,
-        // so identical to the prior `slots.iter_mut()`).
+        // A physical xmm swap (`FprSwap`) only changes *which register* holds
+        // each live value; every slot keeps its own representation and
+        // refinement. The two registers need not share a refinement — e.g. the
+        // bridge's `F(l) -> F(r)` arm swaps a pure-Float `F` slot in `l` with
+        // whatever occupies `r`, which may be a Fixnum-refined `Sf` slot. So just
+        // relabel each slot's register index; do not cross-assign refinements
+        // (the `Sf` refinement rides along in `ty`, untouched here).
+        // Local-copy RMW per slot (item ② encapsulation; `LinkMode` is `Copy`).
         for slot in self.all_regs() {
             let mut link = self.mode(slot);
             match &mut link {
-                LinkMode::Sf(x, guarded) => {
+                LinkMode::F(x) | LinkMode::Sf(x, _) => {
                     if *x == l {
                         *x = r;
-                        *guarded = guarded_r.unwrap();
                     } else if *x == r {
                         *x = l;
-                        *guarded = guarded_l.unwrap();
-                    }
-                }
-                LinkMode::F(x) => {
-                    if *x == l {
-                        *x = r;
-                        assert_eq!(guarded_r, Some(SfGuarded::Float));
-                    } else if *x == r {
-                        *x = l;
-                        assert_eq!(guarded_l, Some(SfGuarded::Float));
                     }
                 }
                 LinkMode::S(_)
@@ -1907,6 +1869,38 @@ mod tests {
           res
         end
         test
+        "###,
+        );
+    }
+
+    /// Regression test for the `xmm_swap` mixed-refinement panic. A diamond
+    /// (`if/else`) inside a loop that updates a `Float` accumulator on both arms
+    /// drives the back-edge bridge to `gen_xmm_swap` a pure-`Float` `F` register
+    /// against a Fixnum-refined `Sf` register (the loop counter coerced to f64).
+    /// `xmm_swap` used to `assert_eq!(guarded_r, Some(Float))` / cross-assign the
+    /// partner register's refinement, assuming both swapped registers shared a
+    /// refinement — so this aborted the process at `slot.rs` with
+    /// `left: Some(Fixnum), right: Some(Float)` in both debug and release. The
+    /// swap only relabels register indices now, so each slot keeps its own
+    /// refinement. Expected result: `1249925000.0`.
+    #[test]
+    fn test_xmm_swap_mixed_refinement() {
+        run_test(
+            r###"
+        def f(n)
+          x = 0.0
+          i = 0
+          while i < n
+            if i.even?
+              x += i * 0.5
+            else
+              x -= 1.0
+            end
+            i += 1
+          end
+          x
+        end
+        f(100000)
         "###,
         );
     }
