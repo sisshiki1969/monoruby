@@ -1088,20 +1088,32 @@ impl AbstractFrame {
         class: ClassId,
         deopt: AsmDeopt,
     ) {
+        if self.guard_class_state(slot, class) {
+            ir.push(AsmInst::GuardClass(r, class, deopt));
+        }
+    }
+
+    ///
+    /// Analysis half of [`Self::guard_class`] (item ②, step 2): refine the
+    /// slot's abstract type to `class` and return whether a runtime guard must
+    /// be emitted (`false` when the type already statically matches, so no guard
+    /// — and no state change — is needed). Pure state; the codegen wrapper emits
+    /// `GuardClass` with the `deopt`, which it (the caller) created *before* this
+    /// runs so the deopt's write-back snapshot is the pre-guard placement.
+    ///
+    fn guard_class_state(&mut self, slot: SlotId, class: ClassId) -> bool {
         if self.class(slot) == Some(class) {
-            return;
+            return false;
         }
         let class_guarded = Guarded::from_class(class);
-        // Operate on a local copy and write it back, so the per-slot state goes
-        // through `mode`/`set_mode` rather than a direct `slots` borrow (item ②
-        // encapsulation; `LinkMode` is `Copy`, so this is identical to the prior
-        // in-place mutation). The `return`s below skip both the write-back and
-        // the guard emission, exactly as before.
+        // Operate on a local copy and write it back (item ② encapsulation;
+        // `LinkMode` is `Copy`). The `return false`s below skip both the
+        // write-back and the guard emission, exactly as the prior `return`s did.
         let mut mode = self.mode(slot);
         match &mut mode {
             LinkMode::S(guarded) | LinkMode::G(guarded) => {
                 if class_guarded == *guarded {
-                    return;
+                    return false;
                 } else if *guarded == Guarded::Value {
                     *guarded = class_guarded;
                 } else {
@@ -1112,7 +1124,7 @@ impl AbstractFrame {
             LinkMode::Sf(_, guarded) => {
                 match (*guarded, class_guarded) {
                     (SfGuarded::Fixnum, Guarded::Fixnum) | (SfGuarded::Float, Guarded::Float) => {
-                        return;
+                        return false;
                     }
                     (SfGuarded::FixnumOrFloat, Guarded::Fixnum) => {
                         *guarded = SfGuarded::Fixnum;
@@ -1125,19 +1137,19 @@ impl AbstractFrame {
             }
             LinkMode::F(_) => {
                 if class_guarded == Guarded::Float {
-                    return;
+                    return false;
                 }
                 // in this case, Guard will always fail
             }
             LinkMode::C(v) => {
                 if class == INTEGER_CLASS {
                     if v.is_fixnum() {
-                        return;
+                        return false;
                     }
                     // If v is Bignum, Guard will fail
                 } else {
                     if v.class() == class {
-                        return;
+                        return false;
                     }
                     // in this case, Guard will always fail
                 }
@@ -1150,7 +1162,7 @@ impl AbstractFrame {
             }
         }
         self.set_mode(slot, mode);
-        ir.push(AsmInst::GuardClass(r, class, deopt));
+        true
     }
 
     pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {

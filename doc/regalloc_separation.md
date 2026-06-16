@@ -330,3 +330,33 @@ pre-load placement) and passes it as `Option<AsmDeopt>` to `XmmLoad::emit`. The
 deopt is therefore supplied by the codegen side, **not** frozen into the record;
 the guard-free numeric variants pass `None`. This confirms the resolution above
 concretely — behaviour-identical at 1703/0.
+
+### The guard primitive, and the limit of single-record splits
+
+`guard_class` (the guard primitive behind `guard_fixnum` / `load_fixnum` /
+`load_array_ty`) splits into `guard_class_state(slot, class) -> bool` (refine the
+slot's type; return whether a runtime guard must be emitted) plus the emit
+`if guard_class_state { ir.push(GuardClass(r, class, deopt)) }`. `load_fixnum`
+and `load_array_ty` then *compose* split primitives (`load` + the guard).
+
+`load_xmm_fixnum`'s `S`/`G` arms are the case that **does not** reduce to a
+single `(state) + (record → emit)` pair. They interleave as:
+
+```
+stack2reg(Rdi)            // emit
+new_deopt                 // deopt — must be AFTER the load, BEFORE set_new_Sf
+guard_class_state         // state (type)
+push GuardClass(deopt)    // emit
+set_new_Sf                // state (placement — allocates the xmm)
+fixnum2fpr(Rdi, x)        // emit
+```
+
+The deopt snapshot must precede the placement change (`set_new_Sf`), but the
+load (`stack2reg`) must precede the deopt — so emission, deopt, and *two* state
+mutations are interleaved and cannot be hoisted into one state half + one emit
+half. This is exactly the general shape the **analysis pass** handles: the typed
+IR is a *sequence* of emission records, and the analysis walks the primitive
+mutating state while *appending* records at each emission point (codegen then
+replays the sequence). So fully splitting `load_xmm_fixnum` *is* the analysis-pass
+wiring — the single-record splits above are its tractable subset, and this is the
+natural boundary between "split the transfer primitives" and "wire the two-pass".
