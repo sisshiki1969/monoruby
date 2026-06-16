@@ -538,3 +538,30 @@ What remains for full record-driven lowering is the §10-item-1 core (de-fuse
 allocation from the join — the SSA-φ edge-move rewrite) and lowering the *op
 handlers'* direct emissions through records too; the transfer primitives are
 done.
+
+## 12. §5 crux, first cut: de-fusing allocation from the join
+
+The §5 crux is that `AbstractFrame::join` *allocates* (`try_set_new_F` /
+`try_set_new_Sf`) during the meet — fusing register allocation into the
+dataflow. First de-fusion step, mirroring the transfer state/emit split:
+
+The per-slot meet table is now split into
+- **`decide_join(other, i) -> JoinAction`** — a pure, read-only function of the
+  two predecessors' `LinkMode`s: the merge *decision*; and
+- **`apply_join(i, action)`** — which performs the placement mutation and is the
+  **only** place the meet allocates an xmm.
+
+`JoinAction` reifies the nine meet outcomes (`Nop` / `SetMaybeNone` / `Discard` /
+`TryFreshFKeep` / `TryFreshFElseS` / `SetSf` / `TryFreshSfElseKeep` /
+`TryFreshSfElseS` / `SetS`). The fresh-xmm rebinds (`TryFresh*`) are the
+join-time reallocation §5 targets; they are now isolated in `apply_join`, behind
+one seam. Behaviour is identical (the same operations, reorganized) — suite
+1703/0.
+
+This is the structural prerequisite for the real change: an allocator pass that
+consumes the `JoinAction` stream and assigns registers + inserts edge moves
+(`bridge` already emits the FprMove/swap edge fixups), instead of `apply_join`
+allocating inline during the meet. The `decide`/`apply` boundary is exactly where
+that pass plugs in. Not yet done: turning the `TryFresh*` inline allocations into
+allocator-assigned φ registers (the SSA-φ edge-move rewrite) — but the meet is
+now cleanly type-decision (`decide_join`) vs placement-allocation (`apply_join`).
