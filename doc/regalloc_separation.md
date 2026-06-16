@@ -378,3 +378,66 @@ a record-replaying emit half. That completes the prerequisite for the two-pass
 wiring: the analysis pass calls the `*_state` halves and collects the records;
 codegen replays `record.emit(...)`. The remaining step is plumbing those two
 passes through `compile_instruction` / `analyse_basic_block`.
+
+## 10. The analysis/codegen seam already exists: `codegen_mode`
+
+Before building a two-pass from scratch, a closer read of the driver shows the
+seam is **already present**, which reframes step 2.
+
+### What is actually there
+
+`AsmIr` carries `codegen_mode: bool` (`asmir.rs:76`), seeded from
+`JitContext::codegen_mode()`. Crucially **`AsmIr::push` is already gated on it**:
+
+```rust
+fn push(&mut self, inst: AsmInst) {
+    if self.codegen_mode { self.inst.push(inst); }   // no-op in analysis mode
+}
+```
+
+Two passes already run the *same* `compile_instruction` under the two modes:
+
+- **Loop-analysis pre-pass** — `JitContext::loop_analysis` sets
+  `codegen_mode: false` (`context.rs:687`). `analyse_backedge_fixpoint` →
+  `analyse_basic_block` runs the handlers to compute the loop's back-edge /
+  liveness fix-point. `push` is suppressed, so **no `AsmInst` is built** — it
+  produces *abstract state*, not an instruction stream.
+- **Codegen pass** — `traceir_to_asmir` → `compile_basic_block` runs with
+  `codegen_mode: true`, doing analysis **and** emission in one fused walk.
+
+Handlers that must diverge between the two modes already branch on
+`self.codegen_mode()` (e.g. `binop_uncached` in `binary_op.rs:25` widens to `S`
+during analysis but emits a per-instruction deopt+recompile during codegen).
+
+**Correction to §9:** the claim that the analysis pass "builds `AsmInst` only to
+drop them" is wrong — `push` is gated, so analysis never accumulates the stream.
+The only residual analysis-mode waste is computing a transfer record and then
+calling its no-op `emit`, plus ungated `side_exit` growth (`new_deopt` /
+`new_label` are not gated, but their results are unused in analysis).
+
+### What this means for step 2
+
+The separation is **not** "introduce an analysis pass" — that exists. It is two
+remaining, independent pieces:
+
+1. **De-fuse allocation from the dataflow (the §5 crux).** Today *both* passes
+   allocate: `alloc_xmm` / `join`'s register reconciliation mutate placement
+   *inside* the abstract-interpretation walk. So the loop pre-pass is "analysis +
+   allocation with emission suppressed," not pure type/liveness analysis. The real
+   work is pulling placement out of the join — turning join-time reallocation into
+   SSA-φ **edge moves** — so the analysis pass computes *only* `Guarded` + liveness
+   and the allocator runs as the second pass over that result. This is the
+   high-risk core; codegen quality (the greedy xmm policy) must not regress.
+2. **Record-driven lowering (goal 1).** Once allocation is its own pass, the
+   codegen walk replays the typed-IR records (`Spill` / `FpXfer` / `XmmLoad` /
+   `GpLoad` / `XmmFixnumLoad` / guard) emitting `LInst` directly, and `AsmInst`
+   retires. The transfer-primitive split (now complete) is exactly what makes the
+   replay possible; the open wrinkle is the deopt, which must become a *program
+   point* reconstructed from the analysis-precomputed placement at that pc rather
+   than the frozen `AsmDeopt` the records carry today (§9 deopt note).
+
+So the two-mode `compile_instruction` is the chassis; the remaining engineering
+is (1) then (2). (1) is the architectural fork — re-execution-based (generalize
+the `codegen_mode` pre-pass to all code, feeding precomputed states forward) vs.
+record-stream-based (collect records, lower from them) — and is the decision to
+take deliberately, since it sets how allocation is staged.
