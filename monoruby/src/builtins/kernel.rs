@@ -215,9 +215,15 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
     globals.define_builtin_func_with(kernel_class, "clone", clone_val, 0, 1, false);
-    globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
-    globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
-    globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
+    let init_copy_fid =
+        globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
+    let init_clone_fid =
+        globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
+    let init_dup_fid =
+        globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
+    globals
+        .store
+        .set_default_copy_hooks(init_copy_fid, init_dup_fid, init_clone_fid);
     globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func_rest(kernel_class, "extend", extend);
     globals.define_builtin_inline_func(
@@ -3116,13 +3122,25 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let copy = self_val.dup();
     copy_finalizers(globals, self_val.id(), copy.id());
+    // When the class uses the default (no-op) copy hooks, skip the hook
+    // dispatch entirely and return the raw shallow copy — `dup` always
+    // produces a same-class copy, so the default `initialize_copy`
+    // validation would always pass. This is the hot path for
+    // `String#dup`, `Object#dup`, … (CRuby skips it the same way).
+    let version = Globals::class_version();
+    if globals
+        .store
+        .uses_default_copy_hooks(copy.class(), version)
+    {
+        return Ok(copy);
+    }
     // Run the `initialize_dup` hook (default validates; a subclass may
     // override it). Root `copy` across the dispatch (it allocates).
     let temp = vm.temp_len();
     vm.temp_push(copy);
     vm.invoke_method_inner(
         globals,
-        IdentId::get_id("initialize_dup"),
+        IdentId::INITIALIZE_DUP,
         copy,
         &[self_val],
         None,
@@ -3164,13 +3182,22 @@ fn clone_val(
     if self_val.is_class_or_module().is_some() {
         return Ok(copy);
     }
+    // Skip the no-op copy-hook dispatch when the class uses the default
+    // hooks (see `dup` / `uses_default_copy_hooks`).
+    let version = Globals::class_version();
+    if globals
+        .store
+        .uses_default_copy_hooks(copy.class(), version)
+    {
+        return Ok(copy);
+    }
     // Run the `initialize_clone` hook (default validates; a subclass may
     // override it). Root `copy` across the dispatch (it allocates).
     let temp = vm.temp_len();
     vm.temp_push(copy);
     vm.invoke_method_inner(
         globals,
-        IdentId::get_id("initialize_clone"),
+        IdentId::INITIALIZE_CLONE,
         copy,
         &[self_val],
         None,
@@ -6397,5 +6424,35 @@ mod tests {
         run_test(r#"at_exit { }.lambda?"#);
         // `at_exit` without a block raises ArgumentError.
         run_test_error(r#"at_exit"#);
+    }
+
+    #[test]
+    fn dup_clone_copy_hooks() {
+        // Default-hook classes copy correctly (the fast path that skips
+        // the no-op `initialize_copy`/`dup`/`clone` dispatch).
+        run_test(r#"s = +"abc"; t = s.dup; t << "d"; [s, t]"#);
+        run_test(r#"["x".freeze.dup.frozen?, "x".freeze.clone.frozen?]"#);
+        // A class with custom copy hooks still has them invoked.
+        run_test(
+            r#"class CH
+                 attr_accessor :tag
+                 def initialize_dup(o); super; @tag = :dup; end
+                 def initialize_clone(o, **); super; @tag = :clone; end
+               end
+               c = CH.new
+               [c.dup.tag, c.clone.tag]"#,
+        );
+        // A custom `initialize_copy` (reached via both dup and clone) runs.
+        run_test(
+            r#"class CC
+                 attr_accessor :n
+                 def initialize_copy(o); super; @n = (o.n || 0) + 1; end
+               end
+               c = CC.new; c.n = 10
+               [c.dup.n, c.clone.n]"#,
+        );
+        // Array's builtin `initialize_copy` (alias of replace) keeps dup a
+        // shallow, independent copy.
+        run_test(r#"a = [1, 2, 3]; b = a.dup; b << 4; [a, b]"#);
     }
 }
