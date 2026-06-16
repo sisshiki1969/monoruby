@@ -1101,7 +1101,7 @@ impl AbstractFrame {
     /// `GuardClass` with the `deopt`, which it (the caller) created *before* this
     /// runs so the deopt's write-back snapshot is the pre-guard placement.
     ///
-    fn guard_class_state(&mut self, slot: SlotId, class: ClassId) -> bool {
+    pub(super) fn guard_class_state(&mut self, slot: SlotId, class: ClassId) -> bool {
         if self.class(slot) == Some(class) {
             return false;
         }

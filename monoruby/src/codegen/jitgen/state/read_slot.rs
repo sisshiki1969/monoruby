@@ -79,6 +79,58 @@ impl GpLoad {
     }
 }
 
+///
+/// A deopt-carrying *fixnum* unbox load produced by `load_xmm_fixnum` (item ②,
+/// step 2). Mirrors [`XmmLoad`] but the boxed value is known to be an `Integer`,
+/// so the conversion is `fixnum2fpr` (no float reinterpret) preceded by an
+/// explicit `Integer` class guard.
+///
+/// This is the case doc §9 once flagged as "needs the sequence model": its
+/// `S`/`G` arms interleave a load (`stack2reg`), a `new_deopt`, a guard and the
+/// conversion. The interleaving dissolves because `stack2reg`/`reg2stack` are
+/// *pure emits* on `ir` that never touch the frame's placement state, so
+/// `new_deopt` **commutes** with them — the deopt can be created up front (as in
+/// `load_xmm`) and the load deferred into this record's emit half. The guard is
+/// folded in as a bool (`guard_class_state`'s verdict); when set, the codegen
+/// half pushes `GuardClass` with the wrapper-supplied deopt.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum XmmFixnumLoad {
+    /// already in an xmm (`Sf` / `F`) — nothing to emit
+    None,
+    /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
+    FromStack(FPReg, bool),
+    /// `reg2stack(R15, slot); [GuardClass(R15)]; fixnum2fpr(R15, x)`
+    FromAcc(FPReg, bool),
+    /// guard-free numeric literal (`LinkMode::C`) — reuses the [`XmmLoad`] record
+    Numeric(XmmLoad),
+}
+
+impl XmmFixnumLoad {
+    /// `deopt` is required by the guarded (`FromStack` / `FromAcc` with the bool
+    /// set) variants and `None` for the guard-free ones.
+    fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<AsmDeopt>) {
+        match self {
+            XmmFixnumLoad::None => {}
+            XmmFixnumLoad::FromStack(x, guard) => {
+                ir.stack2reg(slot, GP::Rdi);
+                if guard {
+                    ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
+                }
+                ir.fixnum2fpr(GP::Rdi, x);
+            }
+            XmmFixnumLoad::FromAcc(x, guard) => {
+                ir.reg2stack(GP::R15, slot);
+                if guard {
+                    ir.push(AsmInst::GuardClass(GP::R15, INTEGER_CLASS, deopt.unwrap()));
+                }
+                ir.fixnum2fpr(GP::R15, x);
+            }
+            XmmFixnumLoad::Numeric(load) => load.emit(ir, slot, None),
+        }
+    }
+}
+
 impl AbstractFrame {
     ///
     /// load *slot* into *dst*.
@@ -177,30 +229,47 @@ impl AbstractFrame {
     /// - rdi
     ///
     pub(crate) fn load_xmm_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
+        // Only the `S`/`G` arms guard, so a deopt is created only for them — and
+        // *before* the state transition, so its write-back snapshot is the
+        // pre-load placement (cf. `load_xmm`). `use_as_value` (below, in the
+        // state half) only touches liveness, so this peek is stable; and the
+        // later `stack2reg`/`reg2stack` are pure emits that don't perturb the
+        // snapshot. The guard-free `Sf`/`F`/`C` arms create no deopt, exactly as
+        // before.
+        let deopt = matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_))
+            .then(|| ir.new_deopt(self));
+        let (x, load) = self.load_xmm_fixnum_state(slot);
+        load.emit(ir, slot, deopt);
+        x
+    }
+
+    ///
+    /// Analysis half of [`Self::load_xmm_fixnum`] (item ②, step 2): refine the
+    /// slot to `Integer`, allocate the xmm and bind the slot, returning the
+    /// register plus the conversion (and whether a runtime guard is needed) to
+    /// emit. Pure state.
+    ///
+    fn load_xmm_fixnum_state(&mut self, slot: SlotId) -> (FPReg, XmmFixnumLoad) {
         self.use_as_value(slot);
         match self.mode(slot) {
-            LinkMode::Sf(x, _) | LinkMode::F(x) => x,
+            LinkMode::Sf(x, _) | LinkMode::F(x) => (x, XmmFixnumLoad::None),
             LinkMode::S(_) => {
-                // S -> Sf
-                ir.stack2reg(slot, GP::Rdi);
-                self.guard_fixnum(ir, slot, GP::Rdi);
+                // S -> Sf. Refine the type first (its guard verdict) then take
+                // the placement; `set_new_Sf` overwrites the refined `S` guarded
+                // with `Sf(Fixnum)`, exactly as `guard_fixnum` + `set_new_Sf` did.
+                let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                ir.fixnum2fpr(GP::Rdi, x);
-                x
+                (x, XmmFixnumLoad::FromStack(x, guard))
             }
             LinkMode::G(_) => {
                 // G -> Sf
-                ir.reg2stack(GP::R15, slot);
-                self.guard_fixnum(ir, slot, GP::R15);
+                let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                ir.fixnum2fpr(GP::R15, x);
-                x
+                (x, XmmFixnumLoad::FromAcc(x, guard))
             }
             LinkMode::C(v) => {
-                // Guard-free (numeric literal): no deopt needed.
                 let (x, load) = self.load_xmm_from_C_state(slot, v);
-                load.emit(ir, slot, None);
-                x
+                (x, XmmFixnumLoad::Numeric(load))
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_xmm_fixnum() {:?}", self.mode(slot));

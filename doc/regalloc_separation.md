@@ -331,7 +331,7 @@ deopt is therefore supplied by the codegen side, **not** frozen into the record;
 the guard-free numeric variants pass `None`. This confirms the resolution above
 concretely — behaviour-identical at 1703/0.
 
-### The guard primitive, and the limit of single-record splits
+### The guard primitive
 
 `guard_class` (the guard primitive behind `guard_fixnum` / `load_fixnum` /
 `load_array_ty`) splits into `guard_class_state(slot, class) -> bool` (refine the
@@ -339,24 +339,42 @@ slot's type; return whether a runtime guard must be emitted) plus the emit
 `if guard_class_state { ir.push(GuardClass(r, class, deopt)) }`. `load_fixnum`
 and `load_array_ty` then *compose* split primitives (`load` + the guard).
 
-`load_xmm_fixnum`'s `S`/`G` arms are the case that **does not** reduce to a
-single `(state) + (record → emit)` pair. They interleave as:
+### `load_xmm_fixnum`: the interleaving dissolves (single record after all)
+
+`load_xmm_fixnum`'s `S`/`G` arms *looked* like the case that could not reduce to
+a single `(state) + (record → emit)` pair, because they interleave a load, a
+`new_deopt`, a guard and the conversion:
 
 ```
-stack2reg(Rdi)            // emit
-new_deopt                 // deopt — must be AFTER the load, BEFORE set_new_Sf
+stack2reg(Rdi)            // emit  — load the boxed value
+new_deopt                 // deopt
 guard_class_state         // state (type)
-push GuardClass(deopt)    // emit
+push GuardClass(deopt)    // emit  — Integer guard
 set_new_Sf                // state (placement — allocates the xmm)
-fixnum2fpr(Rdi, x)        // emit
+fixnum2fpr(Rdi, x)        // emit  — int → f64
 ```
 
-The deopt snapshot must precede the placement change (`set_new_Sf`), but the
-load (`stack2reg`) must precede the deopt — so emission, deopt, and *two* state
-mutations are interleaved and cannot be hoisted into one state half + one emit
-half. This is exactly the general shape the **analysis pass** handles: the typed
-IR is a *sequence* of emission records, and the analysis walks the primitive
-mutating state while *appending* records at each emission point (codegen then
-replays the sequence). So fully splitting `load_xmm_fixnum` *is* the analysis-pass
-wiring — the single-record splits above are its tractable subset, and this is the
-natural boundary between "split the transfer primitives" and "wire the two-pass".
+The deopt snapshot (`get_write_back`) must precede the placement change
+(`set_new_Sf`). The apparent obstacle was that the load (`stack2reg`) "must"
+precede the deopt. But **`stack2reg`/`reg2stack` are pure emits on `ir`** — they
+push an `AsmInst` and never touch the frame's placement state — so `new_deopt`
+**commutes** with them. Reordered, the dependency chain is just
+`new_deopt → {guard_class_state, set_new_Sf}`, the same shape `load_xmm` already
+solved: create the deopt up front, run the (now reorderable) state half, defer
+all emission into the record. The guard folds into the record as a bool
+(`guard_class_state`'s verdict). So `load_xmm_fixnum` splits into
+`load_xmm_fixnum_state -> (FPReg, XmmFixnumLoad)` plus a wrapper that creates the
+deopt *only* for the guarded `S`/`G` arms (peeking the mode — `use_as_value`
+only marks liveness, so the peek is stable) and supplies it to `XmmFixnumLoad::emit`.
+Behaviour-identical at 1703/0.
+
+The lesson: **a "pure emit" instruction between a state mutation and a `new_deopt`
+is not a true interleaving** — it commutes out to the emit half. The
+single-record model is therefore more general than first thought, and with this
+split *every* transfer/eviction primitive in the table is now decomposed into a
+`*_state` analysis half returning a typed-IR record (`Spill` / `FpXfer` /
+`XmmLoad` / `GpLoad` / `XmmFixnumLoad`, plus the `guard_class_state` verdict) and
+a record-replaying emit half. That completes the prerequisite for the two-pass
+wiring: the analysis pass calls the `*_state` halves and collects the records;
+codegen replays `record.emit(...)`. The remaining step is plumbing those two
+passes through `compile_instruction` / `analyse_basic_block`.
