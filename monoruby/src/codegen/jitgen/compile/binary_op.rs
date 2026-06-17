@@ -547,7 +547,13 @@ impl AbstractFrame {
             return;
         };
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        ir.integer_cmp(mode, kind, lhs, rhs);
+        // §19 (B): route the comparison through the record stream.
+        ir.transfer(TransferIR::IntegerCmp {
+            mode,
+            kind,
+            lhs,
+            rhs,
+        });
         self.def_rax2acc(ir, dst);
     }
 
