@@ -103,9 +103,15 @@ impl<'a> JitContext<'a> {
                         matches!(m, LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _))
                             || matches!(m, LinkMode::C(v) if v.is_float())
                     };
-                    target.keep_backedge_floats(be, |i| {
-                        entries.iter().all(|e| float_bridgeable(e.state.mode(i)))
-                    });
+                    // Adoption policy (Layer-② representation decision, §16): which
+                    // loop-carried slots re-adopt the back-edge fixpoint's `F`.
+                    // Today it reads the fixpoint's *placement* (`mode == F`) — the
+                    // remaining dependence on the analysis-pass allocation that
+                    // L2-1 will replace with a type+liveness policy.
+                    let adopt = |i| matches!(be.mode(i), LinkMode::F(_));
+                    let promotable =
+                        |i| entries.iter().all(|e| float_bridgeable(e.state.mode(i)));
+                    target.keep_backedge_floats(adopt, promotable);
                 }
             }
             #[cfg(feature = "jit-debug")]

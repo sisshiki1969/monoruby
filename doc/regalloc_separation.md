@@ -1316,3 +1316,61 @@ change, and the one remaining benchmark-gated risk is the loop-entry placement
 quality the analysis pre-pass currently seeds (§13.8) — now partly de-risked
 because §15.7's `keep_backedge_floats` already reconstructs the load-bearing
 loop-carried-`F` placement at the loop header from the back-edge frame.
+
+## 16. Layer-② extraction: the concrete increment plan
+
+§15 closed the *performance* line: the merge-representation lever shipped (§15.7)
+and the allocator-policy lever is provably neutral (§15.9). What remains is the
+**structural** separation goal — §4 step 2 / §3 Layer ② — and it is now the only
+place "abstract interpretation + fixpoint search" and "physical register
+allocation" are still interleaved: the single forward codegen walk, and the loop
+**analysis pre-pass** that allocates while it computes types + liveness.
+
+### 16.1 The target and the blocker
+
+> **Target.** The analysis pass computes **types + liveness only** (no xmm
+> allocation), producing a typed IR; a **distinct** allocation/lowering pass
+> consumes it. The fixpoint searches over `Guarded` types (stage-2-proven
+> allocation-independent); placement becomes a separate layer.
+
+> **Blocker (why 3b regressed 2.5×, §13.8).** The analysis pre-pass's allocation
+> is not dead — it computes the loop-carried **placement** (the back-edge frame),
+> which the codegen pass consumes in two places:
+> - **(a) float adoption** — `keep_backedge_floats` reads `backedge.mode(i) == F`
+>   (§15.7);
+> - **(b) placement reconciliation** — `target.join(backedge)` folds the
+>   back-edge placement into the loop-entry target (the φ/edge-move seed).
+>
+> Naively stripping the allocation (3b) forced codegen to re-derive (a)+(b) from
+> liveness alone, which is worse — hence the regression.
+
+### 16.2 Strategy: decouple the consumers, then strip
+
+Reroute each consumer of the analysis-pass **placement** to read the analysis-pass
+**types + liveness** instead (both allocation-free, stage-2-proven). When *every*
+consumer reads only types+liveness, the analysis-pass allocation has no consumer
+and can be removed — at which point the analysis pass is the pure Layer-① pass.
+
+| Increment | Change | Risk / gate |
+|---|---|---|
+| **L2-0** ✅ | Split `keep_backedge_floats` into *mechanism* + a caller-supplied *adoption policy* (`adopt(i)`). Default policy = placement-based (`mode == F`), **byte-identical**. | none (behaviour-preserving; suite) |
+| **L2-1** | Swap the adoption policy (a) to **type + liveness**: adopt `F` when the back-edge type is `Float` **and** the slot is used-as-float in the loop (`Liveness::loop_used_as_float`), instead of reading `mode == F`. Decouples consumer (a) from the analysis-pass placement. | benchmark-gated (default-off flag → M1 bench → flip); §13.4 |
+| **L2-2** | Decouple consumer (b): reconstruct the loop-carried xmm bindings in the **codegen** pass from types + liveness (a loop-aware allocation that matches the fixpoint's quality — the 3b regression surface). This is where the real linear-scan / loop-aware allocation lives; §15.9 (phase-1 protects every `F`) + L2-1's typed float adoption are the tools that make it tractable now. | benchmark-gated; high |
+| **L2-3** | With (a)+(b) reading only types+liveness, make `analyse_loop` **type + liveness only** (drop `apply_join` allocation and the handlers' `def_F`/`load_xmm` placement). It returns `(Liveness, backedge_types)` — a pure typed IR. Deopt-as-program-point (§13.6) lands here. | benchmark-gated; high |
+| **L2-4** | Standalone allocation/lowering pass emitting `LInst` (goal 1); add the VM-residual fixed-convention allocator (goal 3, the reason the `AllocCtx` seam exists — §15.9). | research |
+
+Each increment is correctness-verified by the exact CRuby-diff suite here; the
+behaviour-changing ones (L2-1/2/3) are benchmark-gated on M1 (mandelbrot / nbody /
+optcarrot, no >2 % regression, §13.4) before any default flip. The order keeps the
+high-risk placement reconstruction (L2-2) behind the cheap, well-understood float
+decoupling (L2-1), and the irreversible analysis-pass strip (L2-3) last.
+
+### 16.3 L2-0 landed (this step)
+
+`keep_backedge_floats` no longer hard-codes the adoption condition: it takes an
+`adopt: impl Fn(SlotId) -> bool` policy from the caller and applies the mechanism
+("adopt `F` for a loop-carried slot the boxed loop-entry left `S`/`Sf`, when a
+physical xmm is free"). `incoming_context` supplies the current placement-based
+policy (`be.mode(i) == F`), so the result is byte-identical — but the
+representation **decision** is now a named, swappable policy at the call site,
+exactly the Layer-② seam L2-1 plugs the type+liveness policy into. Suite green.

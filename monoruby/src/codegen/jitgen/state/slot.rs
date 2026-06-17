@@ -628,13 +628,23 @@ impl SlotState {
     /// bridge (`F`/`S`/`Sf`/float-`C`) — otherwise a non-float-`C` path would hit
     /// the `C -> F` `unreachable!` and `F` would be unsound for it.
     ///
+    /// **Layer-② policy/mechanism split (doc §16, increment L2-0).** This method
+    /// is the *mechanism* — "for each loop-carried slot the boxed loop-entry left
+    /// `S`/`Sf`, adopt `F` if a physical xmm is free." The *adoption policy*
+    /// `adopt(i)` — which slots should re-adopt `F` — is supplied by the caller.
+    /// Today the caller's policy reads the analysis-pass fixpoint's **placement**
+    /// (`backedge.mode(i) == F`); L2-1 swaps in a type+liveness policy
+    /// (`backedge` type `Float` ∧ used-as-float-in-loop) to decouple this consumer
+    /// from the analysis-pass allocation — the first step of making the analysis
+    /// pass allocation-free.
+    ///
     pub(in crate::codegen::jitgen) fn keep_backedge_floats(
         &mut self,
-        backedge: &SlotState,
+        adopt: impl Fn(SlotId) -> bool,
         promotable: impl Fn(SlotId) -> bool,
     ) {
         for i in self.all_regs() {
-            if matches!(backedge.mode(i), LinkMode::F(_))
+            if adopt(i)
                 && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
                 && promotable(i)
             {
