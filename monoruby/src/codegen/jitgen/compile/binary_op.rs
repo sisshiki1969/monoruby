@@ -4,6 +4,21 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+///
+/// §18 handler separation: the allocation-free **decision** a float binary op
+/// reduces to (the Layer-① result of `plan_binop_float`). `binop_float` then
+/// executes it (Layer-② allocation + emission). Holding the decision as a value —
+/// rather than branching straight into `def_C_float` / `load_binary_ret_xmm` —
+/// is what makes the type/representation choice separable from the placement.
+///
+enum FloatBinOpPlan {
+    /// Both operands are constant floats and the folded result is a flonum
+    /// immediate: a pure constant, no xmm. Carries the folded `f64`.
+    Fold(f64),
+    /// The xmm path: load operands into xmm, allocate the destination, emit.
+    XmmOp,
+}
+
 impl<'a> JitContext<'a> {
     ///
     /// Outcome of a binary op whose operand class is unknown *and* whose
@@ -470,17 +485,41 @@ impl AbstractFrame {
         })
     }
 
-    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
+    ///
+    /// §18 handler separation: the **decision** half of `binop_float`, a pure
+    /// (`&self`, allocation-free) function of the operand state — the Layer-①
+    /// part. It chooses between a constant fold (both operands constant floats and
+    /// the result is a flonum immediate) and the xmm path, *without* allocating an
+    /// xmm or emitting. `binop_float` then *executes* the chosen plan (the Layer-②
+    /// allocation + emission). Separating the two is the template for un-welding
+    /// each float-op handler's type/representation decision from its
+    /// allocation+emission.
+    ///
+    fn plan_binop_float(&self, kind: BinOpK, info: FBinOpInfo) -> FloatBinOpPlan {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
-            && self.def_C_float(dst, result)
+            && Immediate::flonum(result).is_some()
         {
-            return;
-        };
+            FloatBinOpPlan::Fold(result)
+        } else {
+            FloatBinOpPlan::XmmOp
+        }
+    }
 
-        let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);
-        if let Some(dst) = dst {
-            ir.fpr_binop(kind, lhs, rhs, dst);
+    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
+        match self.plan_binop_float(kind, info) {
+            FloatBinOpPlan::Fold(result) => {
+                // `plan_binop_float` already verified `Immediate::flonum`, so this
+                // always succeeds — a pure Layer-① constant, no xmm.
+                let folded = self.def_C_float(dst, result);
+                debug_assert!(folded);
+            }
+            FloatBinOpPlan::XmmOp => {
+                let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);
+                if let Some(dst) = dst {
+                    ir.fpr_binop(kind, lhs, rhs, dst);
+                }
+            }
         }
     }
 

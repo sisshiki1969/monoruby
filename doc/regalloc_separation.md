@@ -1586,3 +1586,45 @@ de-fuses the merge and the allocation seam (data-model split `place`/`ty`,
 mechanism/policy split); the remaining handler-level un-welding is a large,
 IR-introducing refactor whose value, with goal 3 deferred, is architectural
 cleanliness rather than a feature. That trade-off is the open decision.
+
+## 18. Handler-level separation (JIT-internal, behaviour-preserving)
+
+With goal-3 deferred (§17.4), the remaining fusion is *inside* the per-instruction
+handlers: each float-op handler interleaves the **type/representation decision**
+(what the result is, what representation) with **allocation** (which xmm) and
+**emission** (the AsmInst). Un-welding these — behaviour-preserving, the current
+greedy placement unchanged — is the last structural step of §4-step-2 done as a
+refactor.
+
+### 18.1 The template: decision (Layer-①) vs execution (Layer-②), on `binop_float`
+
+`binop_float` is split into a pure decision and an execution:
+
+- `plan_binop_float(&self, …) -> FloatBinOpPlan` — a **pure, `&self`,
+  allocation-free** function (Layer-①): it decides `Fold(f64)` (both operands
+  const floats, result a flonum immediate) vs `XmmOp`, **without** allocating an
+  xmm or emitting.
+- `binop_float` — **executes** the plan (Layer-②): `Fold` → `def_C_float` (a pure
+  constant, no xmm); `XmmOp` → `load_binary_ret_xmm` (alloc) + `fpr_binop` (emit).
+
+What this concretely fixes: the original folded the *decision* and a *side effect*
+together — `… && self.def_C_float(dst, result)` put the constant **definition**
+inside the `if` condition (the fold "succeeded" only if `def_C_float` mutated the
+slot). The split lifts the flonum-representability check into the pure `plan_*`
+(`Immediate::flonum(result).is_some()`) so the decision is a value with no side
+effect, and the definition happens only in the execute half. Behaviour-identical
+(suite 1671 passed, baseline-identical failure set; the 34 are the env mismatches).
+
+### 18.2 Scope: the fold decision separates cleanly; the xmm path needs a virtual-operand IR
+
+This lifts out the **fold** decision (a pure Layer-① constant). The `XmmOp`
+execution still fuses allocation and emission *internally*: `load_binary_ret_xmm`
+both *allocates* an xmm per operand/dest **and** *emits* the load, with the xmm
+identities threading through (operand pins, `dst == lhs` aliasing). Separating
+alloc from emit there requires a **virtual-operand IR** — the float op recorded
+with *slot* operands, lowered to physical xmm by a distinct allocation pass —
+because the allocation *produces* the operands the emission consumes. That is the
+substantial next step; this increment establishes the decision/execution seam and
+the `FloatBinOpPlan` value that a virtual-operand lowering would carry. The same
+`plan_*`/execute shape applies to the other handlers that fold-or-emit
+(`gen_cmp_*`, `binop_integer`) as they are migrated.
