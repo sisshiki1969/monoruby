@@ -1167,3 +1167,33 @@ the loop-carried-float type precision fix. (aarch64 unverified here — no cross
 toolchain in this container; the new bridge arms reuse `float_to_fpr` / `fpr_move`,
 which both backends already lower, so they are arch-neutral by construction, but
 this needs an M1 `bin/test` to confirm.)
+
+### 15.5 Root cause + sound fix: loop-JIT conservative entry typing
+
+The "type loss" is **not** a literal-handling bug. `jit-debug` on a loop-JIT
+(`start:[:loop_start]`) shows the loop-entry forward state has *every* local as
+`S(Value)` — because a **loop JIT does not see the values produced before the
+loop** (`x = 0.0` ran in the VM). So a loop-carried float necessarily enters from
+the VM as a conservative boxed `S(Value)`, even though the back-edge fixpoint
+proves it is a `Float (F)`. The merge `join(S(Value), F)` → `S(Value)` then forces
+the body to decode+rebox it every iteration (§15.3/§15.4).
+
+**Sound fix (`loop-keep-float`, suite 1704/0, default-off).** At the loop header,
+adopt the back-edge fixpoint's `F` for such a slot. The forward entry is unboxed
+**once** at the pre-header by the new `S -> F` bridge arm, whose `float_to_fpr`
+carries the **runtime float guard** (deopt if the VM value is not a float) — so the
+specialization is sound for a runtime value. Soundness across *all* predecessors
+is enforced by `keep_backedge_floats`'s `promotable(i)` gate: promote only when
+every predecessor entry has a valid `_ -> F` bridge (`F`/`S`/`Sf`/float-`C`); a
+non-float-`C` path is genuinely not a float, so it is left boxed (this is the gate
+the earlier `guarded == Float` over-approximated, which made it a no-op — §15.4).
+
+Result on the mandelbrot kernel: **`call float_to_value` 16 → 0**, the hot inner
+loop becomes pure xmm, and the per-iteration flonum decode collapses to a single
+guarded pre-header unbox. Correct on the whole suite (1704/0), including the
+`xmm_swap`/bridge regression cases. Static `do_it` grows 340 → 450 (the decodes
+move to the per-loop-entry pre-headers), so the win is dynamic (hot loop) — to be
+confirmed by an M1 `--release` bench A/B (and aarch64, which reuses the same
+`float_to_fpr`/`fpr_move` AsmIR ops). This is the first measured *improvement* over
+base in the §5 line, and it lands as a guarded loop-entry type specialization —
+the same shape YJIT uses — rather than a new allocator.

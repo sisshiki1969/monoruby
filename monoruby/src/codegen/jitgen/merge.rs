@@ -110,7 +110,19 @@ impl<'a> JitContext<'a> {
 
                 #[cfg(feature = "loop-keep-float")]
                 if let Some(be) = &backedge_for_floats {
-                    target.keep_backedge_floats(be);
+                    // A slot is promotable to `F` only if every predecessor entry
+                    // has a valid `_ -> F` bridge: `F`/`S`/`Sf`, or a float `C`.
+                    // A non-float `C` (or `G`/`V`/sentinel) path could not bridge
+                    // and would not actually be a float, so leave it boxed.
+                    let float_bridgeable = |m: LinkMode| {
+                        matches!(
+                            m,
+                            LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _)
+                        ) || matches!(m, LinkMode::C(v) if v.is_float())
+                    };
+                    target.keep_backedge_floats(be, |i| {
+                        entries.iter().all(|e| float_bridgeable(e.state.mode(i)))
+                    });
                 }
             }
             #[cfg(feature = "jit-debug")]

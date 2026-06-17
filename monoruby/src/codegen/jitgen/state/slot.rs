@@ -581,23 +581,30 @@ impl SlotState {
     }
 
     ///
-    /// §15.3 prototype (`loop-keep-float`): adopt the back-edge's `F` placement
-    /// for loop-carried floats that the loop-entry merge collapsed to `S`/`Sf`.
-    /// The fixpoint already proved `F` is sound for the loop body; re-establishing
-    /// it keeps the body unboxed (the forward-entry box is unboxed *once* at the
-    /// pre-header by the new `S -> F` bridge arm; the back-edge `F -> F` bridge
-    /// moves into the fresh xmm). With no register pressure this is the latent
-    /// per-iteration box removed (§15.3).
+    /// §15.3/§15.5 (`loop-keep-float`): adopt the back-edge fixpoint's `F` for a
+    /// loop-carried float the loop-entry merge collapsed to `S`. In a *loop* JIT
+    /// the value enters from the VM as a conservative boxed `S(Value)` even when
+    /// the fixpoint proves it is a `Float`; left as `S` the body decodes+reboxes
+    /// it every iteration (§15.4). Re-establishing `F` keeps the body unboxed;
+    /// the forward entry is unboxed *once* at the pre-header by the `S -> F`
+    /// bridge, whose `float_to_fpr` carries the runtime float **guard** (deopt if
+    /// the VM value is not a float), so the specialization is sound.
+    ///
+    /// `promotable(i)` (computed by the caller from the actual predecessor
+    /// entries) gates each slot: every predecessor must have a valid `_ -> F`
+    /// bridge (`F`/`S`/`Sf`/float-`C`) — otherwise a non-float-`C` path would hit
+    /// the `C -> F` `unreachable!` and `F` would be unsound for it.
     ///
     #[cfg(feature = "loop-keep-float")]
-    pub(in crate::codegen::jitgen) fn keep_backedge_floats(&mut self, backedge: &SlotState) {
+    pub(in crate::codegen::jitgen) fn keep_backedge_floats(
+        &mut self,
+        backedge: &SlotState,
+        promotable: impl Fn(SlotId) -> bool,
+    ) {
         for i in self.all_regs() {
-            // Sound only when every path agrees the slot is a `Float`: a forward
-            // predecessor holding a non-float `C`/`S` would have no `_ -> F`
-            // bridge. `guarded == Float` is exactly that agreement.
             if matches!(backedge.mode(i), LinkMode::F(_))
-                && self.guarded(i) == Guarded::Float
                 && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
+                && promotable(i)
             {
                 self.set_new_F(i);
             }
