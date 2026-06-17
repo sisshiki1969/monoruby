@@ -17,11 +17,52 @@ mod alloc_policy {
     use super::*;
 
     ///
+    /// §5 stage 3c-i increment 2 — the analysis-derived facts the register
+    /// allocation policy consults, threaded **explicitly** so the placement
+    /// decision no longer reaches into the fused dataflow state ad hoc.
+    ///
+    /// Today this is the *seam only*: the default greedy policy ranks phase-1
+    /// spill victims purely by physical-pool index, which reproduces the prior
+    /// "first all-`Sf` register" choice exactly, so placements stay byte-
+    /// identical (the doc §15 increment-2 contract). The loop-aware policy
+    /// (3c-ii, §14.3) plugs in at [`AllocCtx::victim_rank`]: it ranks by
+    /// furthest-next-use / non-loop-carried preference instead of index, using
+    /// the live-interval + loop-membership info this struct will carry — without
+    /// touching any allocation call site (they all funnel through here).
+    ///
+    #[derive(Default)]
+    pub(super) struct AllocCtx;
+
+    impl AllocCtx {
+        ///
+        /// Spill-victim priority for [`try_alloc_xmm`] phase 1: the candidate with
+        /// the **smallest** rank is demoted first. The default greedy policy ranks
+        /// purely by physical-pool index, so `min_by_key` reproduces the historical
+        /// lowest-index-first choice (behaviour-identical). 3c-ii overrides this
+        /// with a furthest-next-use / non-loop-carried key derived from the
+        /// (future) live-interval fields.
+        ///
+        fn victim_rank(&self, xmm: FPReg) -> usize {
+            xmm.0
+        }
+    }
+
+    ///
     /// Returns `None` if every xmm holds at least one `F` slot (a real spill;
     /// use [`alloc_xmm`] from a context that has access to `AsmIr`).
     ///
     pub(super) fn try_alloc_xmm(state: &mut SlotState) -> Option<FPReg> {
-        // Phase 0: a vacant xmm.
+        try_alloc_xmm_ctx(state, &AllocCtx::default())
+    }
+
+    ///
+    /// As [`try_alloc_xmm`], but with an explicit [`AllocCtx`] driving the phase-1
+    /// spill-victim choice. The two-phase structure (vacant first, then an
+    /// all-`Sf` demote) is policy-invariant; only the *victim ranking* is
+    /// pluggable.
+    ///
+    pub(super) fn try_alloc_xmm_ctx(state: &mut SlotState, ctx: &AllocCtx) -> Option<FPReg> {
+        // Phase 0: a vacant xmm (lowest index, as before).
         for i in 0..state.xmm_alloc.len() {
             let xmm = FPReg(i);
             if state.xmm_alloc.is_pinned(xmm) {
@@ -31,36 +72,37 @@ mod alloc_policy {
                 return Some(xmm);
             }
         }
-        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
-        for i in 0..state.xmm_alloc.len() {
-            let xmm = FPReg(i);
-            if state.xmm_alloc.is_pinned(xmm) || state.xmm_alloc.is_vacant(xmm) {
-                continue;
-            }
-            let all_sf = state
-                .xmm_alloc
-                .slots(xmm)
-                .iter()
-                .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)));
-            if !all_sf {
-                continue;
-            }
-            let to_demote: Vec<(SlotId, SfGuarded)> = state
-                .xmm_alloc
-                .slots(xmm)
-                .iter()
-                .map(|&s| match state.mode(s) {
-                    LinkMode::Sf(_, g) => (s, g),
-                    _ => unreachable!(),
-                })
-                .collect();
-            state.xmm_alloc.clear(xmm);
-            for (s, g) in to_demote {
-                state.set_mode(s, LinkMode::S(g.into()));
-            }
-            return Some(xmm);
+        // Phase 1: among the xmms whose linked slots are *all* `Sf` (stack already
+        // holds the canonical value, the xmm is a read-only cache), pick the one
+        // the policy ranks lowest and demote its slots to `S`. No asm is emitted —
+        // the stack is canonical. The default `victim_rank` is the pool index, so
+        // `min_by_key` selects the same register the prior `for 0..len { return
+        // first }` scan did.
+        let victim = (0..state.xmm_alloc.len())
+            .map(FPReg)
+            .filter(|&xmm| !state.xmm_alloc.is_pinned(xmm) && !state.xmm_alloc.is_vacant(xmm))
+            .filter(|&xmm| {
+                state
+                    .xmm_alloc
+                    .slots(xmm)
+                    .iter()
+                    .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)))
+            })
+            .min_by_key(|&xmm| ctx.victim_rank(xmm))?;
+        let to_demote: Vec<(SlotId, SfGuarded)> = state
+            .xmm_alloc
+            .slots(victim)
+            .iter()
+            .map(|&s| match state.mode(s) {
+                LinkMode::Sf(_, g) => (s, g),
+                _ => unreachable!(),
+            })
+            .collect();
+        state.xmm_alloc.clear(victim);
+        for (s, g) in to_demote {
+            state.set_mode(s, LinkMode::S(g.into()));
         }
-        None
+        Some(victim)
     }
 
     ///

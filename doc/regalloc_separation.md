@@ -1226,3 +1226,48 @@ unconditional. The two experimental features (`loop-keep-float`,
 `loop-type-only-entry`'s lesson (the analysis-pass backedge is load-bearing — a
 naive type-only strip regresses 2.5×) is retained in §13–14 as the calibration
 that led here. Added `test_loop_carried_float_kept_unboxed`.
+
+### 15.8 §5 stage 3c-i increment 2: the allocator consults an explicit `AllocCtx`
+
+Increment 1 (§15, commit `37ac994`) extracted the two universal xmm-allocation
+primitives into the `alloc_policy` module. Increment 2 takes the next planned
+step: thread an explicit **`AllocCtx`** into the policy so the spill-victim
+decision consults a *named analysis-facts input* instead of reaching into the
+fused `SlotState` ad hoc — the structural shape the Layer-② allocator needs.
+
+Concretely, `try_alloc_xmm` phase 1 ("demote the first xmm whose linked slots are
+all `Sf`") is refactored from a `for 0..len { … return first }` scan into
+
+```rust
+candidates.min_by_key(|&xmm| ctx.victim_rank(xmm))
+```
+
+The default `AllocCtx::victim_rank` is the physical-pool index, so `min_by_key`
+selects the same lowest-index register the prior scan returned — **placements are
+byte-identical**. Phase 0 (vacant) and phase 2 (spill) are policy-invariant and
+unchanged. This is exactly the seam 3c-ii's loop-aware policy plugs in:
+`victim_rank` becomes a furthest-next-use / non-loop-carried key fed by the
+live-interval + loop-membership fields `AllocCtx` will carry, and **no allocation
+call site changes** (operand loads, defs, and the merge's `apply_join` all funnel
+through `set_new_*`/`try_set_new_*` → these two primitives).
+
+**Verified behaviour-identical.** Built under `stress-spill-pool` (forces
+`PHYS_XMM_POOL` to 2, so almost every Float-resident slot is driven through the
+phase-1 demote path this refactor touches) and ran the lib suite with and without
+the change: the pass/fail set is identical — 1671 passed; the 34 failures are the
+pre-existing environment mismatches (CRuby version / timezone / missing
+`bigdecimal` gem), present in both runs, the only `diff` being the wall-clock
+line. So the refactor exercises the touched path under maximal pressure and does
+not perturb a single placement.
+
+**Honest scope note.** §15.1's two no-op probes already established that a
+per-call spill-victim change is neutral on mandelbrot — the per-iteration box was
+the *merge* discarding the fixpoint's `F` (fixed in §15.5–15.7), not the
+allocator's victim order. So increment 3's *measured* win is likely small or
+subsumed by the shipped merge fix; the value of increments 2–3 is the **structural
+separation** (a swappable allocator fed by an explicit analysis-facts input,
+decoupled from the placement state), not a fresh benchmark delta. The remaining
+headline §5 arc stays the larger Layer-② extraction (§4 step 2): a type-only +
+liveness fixpoint feeding a *distinct* allocation/lowering pass, which is where
+"abstract interpretation + fixpoint search" is finally, fully separated from
+physical register allocation.
