@@ -1496,3 +1496,70 @@ selection as a standalone allocation pass, then strip the analysis-pass allocati
 is a large, perf-neutral, regression-risky refactor whose only return is the
 research-grade goal-3. That is a deliberate investment decision, not an incremental
 win — recorded here so the call is explicit rather than drifted into.
+
+## 17. L2-2 design: the swappable allocator for goal 3 (the right scoping)
+
+The user chose to invest in L2-2 for **goal 3** (VM-residual codegen / the unified
+interpreter-JIT DSL). The first design task is scoping it correctly, because the
+naïve scope hits the §16.6 wall and goal 3 does not require crossing it.
+
+### 17.1 Key reframing: goal 3 does not need to reproduce the fixpoint's selection
+
+§16.6 proved that reproducing the JIT fixpoint's loop-carried-`F` selection
+*allocation-free* is hard (it is greedy/emergent) and perf-neutral. But that is the
+requirement of **§4-step-2 for the JIT** (eliminate the JIT's own fixpoint), which
+is *not* goal 3. Goal 3 needs a **swappable allocation strategy** so a *different*
+policy plugs in; the JIT keeps its fixpoint as the default strategy. Two strategies:
+
+- **`JitGreedy` (default)** — today's behaviour: the xmm pool + the greedy fixpoint
+  selection (`F`/`Sf` where profitable, `S` otherwise). Must stay byte-identical.
+- **`VmResidual`** — the VM's fixed convention: **no pool, no unboxed
+  representation; every value lives boxed in its stack home** (`S`). There is *no
+  selection problem* here — it is the trivial "always `S`" policy. This is the
+  residual the partial-evaluator emits for the VM (⊤ types, no IC narrowing).
+
+So L2-2 is **not** "reimplement the fixpoint's selection." It is "thread an
+allocation **strategy** through the representation/placement decisions; default
+`JitGreedy` (byte-identical); add `VmResidual`." The §16.6 reproduction problem is
+sidestepped — the JIT keeps its fixpoint.
+
+### 17.2 Where the strategy must be consulted
+
+`VmResidual` is a **representation-level** decision, not just a pool-size knob: it
+must prevent *any* `F`/`Sf` from being created, so every value stays `S`. The sites
+that create an unboxed float representation, and what each does under `VmResidual`:
+
+| Site | `JitGreedy` (today) | `VmResidual` |
+|---|---|---|
+| `try_set_new_F` / `try_set_new_Sf` | allocate xmm if free | return `None` → caller keeps `S` |
+| `def_F` / `def_Sf_float` (mandatory) | `alloc_xmm` (pool or spill) | **must not exist** — the float-op handler emits the *boxed* op (VM-style) instead |
+| `use_float` (liveness promotion) | `try_set_new_Sf` | no-op (skip promotion) |
+| merge `apply_join` `TryFresh*` / `keep_backedge_floats` | allocate / adopt `F` | skip (stay `S`) |
+
+The `try_*` and merge sites are easy (they already have a "stay `S`" fallback). The
+hard one is **`def_F`**: a float binary op currently *commits* to `F` and emits xmm
+arithmetic. Under `VmResidual` the same handler must emit the boxed path (the VM's
+`float + float → boxed Float`). That is exactly generating VM-equivalent code — the
+goal-3 payoff — and it touches every float-op handler. So the bulk of L2-2 is
+giving the float-op handlers a `VmResidual` lowering, gated so `JitGreedy` is
+untouched.
+
+### 17.3 Increment plan (each `JitGreedy`-byte-identical; M1-gated)
+
+- **L2-2.1** — define `AllocStrategy { JitGreedy, VmResidual }` and thread it on
+  `AllocCtx` (default `JitGreedy`). Route the *easy* sites (`try_set_new_*`,
+  `use_float`, the merge `TryFresh*`/`keep_backedge_floats`) through it: under
+  `VmResidual` they skip xmm creation. `JitGreedy` byte-identical. `VmResidual`
+  not yet constructed (so float-op handlers still `def_F` — incomplete, but the
+  representation seam exists and is exercised by a unit smoke test).
+- **L2-2.2** — give the float-op handlers (`binop_float`, `gen_cmp_float`, the
+  unary/`def_F` consumers) a `VmResidual` boxed lowering, selected by the strategy.
+  This is the bulk; `JitGreedy` path unchanged at each.
+- **L2-2.3** — goal-3 spike: drive a `VmResidual` codegen for one float bytecode and
+  validate its output equals the VM's, end to end.
+- **L2-3** (separate, optional, *not* goal 3) — only if we later want the JIT
+  fixpoint gone: the §16.6 loop-aware reproduction. Parked behind goal 3.
+
+This order delivers goal 3's swappable allocator without paying the §16.6 cost, and
+keeps every step a `JitGreedy`-byte-identical, M1-benchable diff. L2-2.1 is the next
+code increment.
