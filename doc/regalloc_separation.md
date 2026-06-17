@@ -1197,3 +1197,18 @@ confirmed by an M1 `--release` bench A/B (and aarch64, which reuses the same
 `float_to_fpr`/`fpr_move` AsmIR ops). This is the first measured *improvement* over
 base in the §5 line, and it lands as a guarded loop-entry type specialization —
 the same shape YJIT uses — rather than a new allocator.
+
+### 15.6 Confirmed on both arches
+
+M1 (`bin/bench`, i/s) base vs `loop-keep-float`: **mandelbrot 24.326 → 27.372
+(+12.5 %)**, everything else flat (fib/nbody/aobench/bf/nqueen/sudoku within
+noise). Matches the x86-64 local `--release` result (mandelbrot ~0.80 s → ~0.70 s,
+~12 %). So the guarded loop-entry float specialization is a real, arch-neutral win
+(the `S -> F` / `Sf -> F` bridge arms reuse `float_to_fpr` / `fpr_move`, which both
+backends already lower — confirmed on aarch64). `fib -1.6 %` is noise: fib has no
+float loop, so `keep_backedge_floats` never fires and its codegen is byte-identical.
+
+Remaining before default-on: a full `bin/bench` incl. **optcarrot** (headline) and
+the other float loops (matmul/bedcov, which may also improve), confirming no
+regression; then flip the cargo `default` to include the feature (and fold the
+`S -> F` / `Sf -> F` bridge arms in unconditionally, as they are general-purpose).
