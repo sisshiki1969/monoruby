@@ -587,7 +587,12 @@ impl SlotState {
                 && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
                 && promotable(i)
             {
-                self.set_new_F(i);
+                // `try_set_new_F` (no phase-2 spill): only specialize to `F` when
+                // a physical xmm is actually free. Spilling a *speculative*
+                // loop-entry promotion into a `VirtFPReg` is not worth it and is
+                // exercised wrongly under register pressure (the `stress-spill-pool`
+                // path); leave the slot boxed in that case.
+                self.try_set_new_F(i);
             }
         }
     }
