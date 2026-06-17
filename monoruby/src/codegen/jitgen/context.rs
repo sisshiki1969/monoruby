@@ -165,6 +165,15 @@ pub(super) struct AsmInfo {
     /// Destination labels for each BasicBlock.
     ///
     basic_block_labels: HashMap<BasicBlockId, JitLabel>,
+    ///
+    /// Jump-threading aliases: a `JitLabel` mapped here resolves to its
+    /// target instead of itself. Populated for the entry labels of
+    /// *empty* outline bridges (a `Side` edge whose write-back glue is a
+    /// no-op): rather than emit a one-instruction `b dest_bb` forwarder,
+    /// the branch that targeted the bridge resolves straight to the
+    /// destination block. `resolve_label` chases the chain.
+    ///
+    label_alias: HashMap<JitLabel, JitLabel>,
 
     ///
     /// Generated AsmIr.
@@ -236,6 +245,7 @@ impl AsmInfo {
             self_ty: self.self_ty,
             labels: self.labels.clone(),
             basic_block_labels: self.basic_block_labels.clone(),
+            label_alias: HashMap::default(),
             ir: vec![],
             outline_bridges: vec![],
             inline_bridges: HashMap::default(),
@@ -262,6 +272,18 @@ impl AsmInfo {
     /// Resolve *JitLabel* and return *DestLabel*.
     ///
     pub(super) fn resolve_label(&mut self, jit: &mut JitMemory, label: JitLabel) -> DestLabel {
+        // Follow jump-threading aliases first (bounded: aliases only ever
+        // point at a real BB label, which is never itself aliased, so the
+        // chain is at most one hop — the loop is just defensive).
+        let mut label = label;
+        let mut guard = self.label_alias.len() + 1;
+        while let Some(&next) = self.label_alias.get(&label) {
+            label = next;
+            guard -= 1;
+            if guard == 0 {
+                break;
+            }
+        }
         match &self.labels[label.0] {
             Some(l) => l.clone(),
             None => {
@@ -270,6 +292,28 @@ impl AsmInfo {
                 l
             }
         }
+    }
+
+    ///
+    /// Partition the outline bridges into *empty* (no write-back glue) and
+    /// the rest. For each empty one, install a jump-threading alias from the
+    /// bridge's entry label to its destination block, so the branch that
+    /// targeted the bridge resolves straight through (the empty `b dest_bb`
+    /// forwarder is never emitted). Returns the non-empty bridges, which the
+    /// caller still emits.
+    ///
+    pub(super) fn thread_empty_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
+        let bridges = std::mem::take(&mut self.outline_bridges);
+        let mut keep = Vec::with_capacity(bridges.len());
+        for (ir, dest, bbid) in bridges {
+            if ir.is_empty() {
+                let target = self.basic_block_labels.get(&bbid).copied().unwrap();
+                self.label_alias.insert(dest, target);
+            } else {
+                keep.push((ir, dest, bbid));
+            }
+        }
+        keep
     }
 
     pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
@@ -282,10 +326,6 @@ impl AsmInfo {
     }
 
     // bridge operations
-
-    pub(super) fn detach_outline_bridges(&mut self) -> Vec<(AsmIr, JitLabel, BasicBlockId)> {
-        std::mem::take(&mut self.outline_bridges)
-    }
 
     pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
         self.inline_bridges.contains_key(&Some(src_bb))
@@ -491,6 +531,7 @@ impl JitStackFrame {
                 self_ty,
                 labels,
                 basic_block_labels,
+                label_alias: HashMap::default(),
                 ir: vec![],
                 outline_bridges: vec![],
                 inline_bridges: HashMap::default(),

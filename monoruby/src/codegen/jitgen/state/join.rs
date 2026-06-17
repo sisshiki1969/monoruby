@@ -44,92 +44,222 @@ impl AbstractFrame {
     ///
     /// ~~~
     fn join(&mut self, other: &AbstractFrame) {
+        // §5 allocator de-fusion, stage 1: record the per-slot `JoinAction`
+        // stream as we merge, then (debug) replay it from the pre-merge frame and
+        // assert it reproduces the identical placement. This locks the property
+        // the separated allocator pass relies on — the (allocation-free) decision
+        // stream plus `apply_join` is a *complete* record of the meet's placement
+        // work — and is the regression harness future allocator changes shadow
+        // against. See doc/regalloc_separation.md §12.
+        #[cfg(debug_assertions)]
+        let pre = self.clone();
         self.invariants.join(&other.invariants);
+        #[cfg(debug_assertions)]
+        let mut actions = Vec::new();
         for i in self.all_regs() {
             self.is_used_mut(i).join(other.is_used(i));
-            match (self.mode(i), other.mode(i)) {
-                (LinkMode::None, LinkMode::None) => {}
-                (LinkMode::MaybeNone, _) => {}
-                (_, LinkMode::MaybeNone) => {
-                    self.set_MaybeNone(i);
+            // De-fuse the meet (§5): `decide_join` is a pure read-only function
+            // of the two input `LinkMode`s (the merge *decision*); `apply_join`
+            // performs the placement mutation — and is the *only* place the meet
+            // allocates an xmm (`try_set_new_F` / `try_set_new_Sf`). This is the
+            // seam the allocator pass will own: it will consume the `JoinAction`
+            // stream and assign registers + emit edge moves, instead of
+            // `apply_join` allocating inline. Behaviour is identical to the old
+            // fused per-slot match.
+            let action = self.decide_join(other, i);
+            #[cfg(debug_assertions)]
+            actions.push((i, action));
+            self.apply_join(i, action);
+        }
+        #[cfg(debug_assertions)]
+        self.verify_join_replay(other, pre, &actions);
+    }
+
+    ///
+    /// Stage-1 + stage-2 shadow checks (debug-only), given the pre-merge frame
+    /// `pre` (consumed as the replay target) and the recorded action stream:
+    ///
+    /// **Stage 2 — type-meet separability.** Assert the fused meet's *type*
+    /// result (`self.guarded(i)`) equals the standalone `join_ty` pass —
+    /// `join_ty` computes `Guarded`s with **no allocation**. Proven arm-by-arm:
+    /// every non-sentinel arm's result type is `join_ty(self, other)` (the
+    /// `SfGuarded → Guarded` map is a join homomorphism, so the `Sf` arms agree
+    /// too). This is the type/placement split at the merge — a standalone
+    /// type+liveness analysis pass computes identical types, with allocation
+    /// peeled off into `apply_join` (doc §10 item 1, doc §12).
+    ///
+    /// **Stage 1 — placement record completeness.** Replay the recorded
+    /// `JoinAction` stream from `pre` and assert it reproduces the merged
+    /// placement (every slot's `LinkMode`), including the `try_alloc_xmm` phase-1
+    /// cross-slot demotions.
+    ///
+    #[cfg(debug_assertions)]
+    fn verify_join_replay(
+        &self,
+        other: &AbstractFrame,
+        mut pre: AbstractFrame,
+        actions: &[(SlotId, JoinAction)],
+    ) {
+        // Stage 2: the fused meet's type result == the allocation-free `join_ty`
+        // pass, for every non-sentinel slot (`guarded()` is undefined on the
+        // None/MaybeNone/V sentinels, and the meet leaves sentinel-involved slots
+        // untyped).
+        let is_sentinel =
+            |m| matches!(m, LinkMode::None | LinkMode::MaybeNone | LinkMode::V);
+        let expected_ty = pre.slot_state().join_ty(other.slot_state());
+        for i in self.all_regs() {
+            if is_sentinel(pre.mode(i)) || is_sentinel(other.mode(i)) || is_sentinel(self.mode(i))
+            {
+                continue;
+            }
+            debug_assert_eq!(
+                self.guarded(i),
+                expected_ty[i.0 as usize],
+                "type-meet separability broken at {i:?}",
+            );
+        }
+
+        // Stage 1: replay the action stream from `pre` and check placement.
+        pre.invariants.join(&other.invariants);
+        for &(i, action) in actions {
+            pre.is_used_mut(i).join(other.is_used(i));
+            pre.apply_join(i, action);
+        }
+        for i in self.all_regs() {
+            debug_assert_eq!(
+                pre.mode(i),
+                self.mode(i),
+                "JoinAction replay mismatch at {i:?}",
+            );
+        }
+    }
+}
+
+///
+/// The per-slot merge decision (§5 de-fusion): a pure function of the two
+/// predecessors' `LinkMode`s, computed by [`AbstractFrame::decide_join`] and
+/// executed by [`AbstractFrame::apply_join`]. Reifying the decision separates
+/// the *meet* (analysis) from the *placement mutation + xmm allocation*
+/// (codegen/allocation) — the prerequisite for moving allocation into its own
+/// pass that lowers these actions to register assignments + edge moves.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum JoinAction {
+    /// keep `self`'s binding unchanged
+    Nop,
+    /// `_ -> MaybeNone`
+    SetMaybeNone,
+    /// `_ -> V`
+    Discard,
+    /// registers disagree across branches: try to rebind to a fresh xmm so each
+    /// bridge is a single move; keep the current `F` binding if no phys xmm is
+    /// free (the bridge then swaps). [`F`/`F` arm]
+    TryFreshFKeep,
+    /// try fresh-xmm `F`; fall back to `S(Float)` if no phys xmm is free.
+    /// [`C`/`F` and `C`/`C`-both-float arms]
+    TryFreshFElseS,
+    /// rebind to `Sf(x, guarded)` with the current xmm `x` (registers agree, or
+    /// the `Sf`/`C` arm folding a literal into the guard).
+    SetSf(FPReg, SfGuarded),
+    /// try fresh-xmm `Sf(guarded)`; keep `Sf(x, guarded)` if no phys xmm is free.
+    /// [`F`|`Sf` / `Sf`|`F` arm, registers disagree]
+    TryFreshSfElseKeep(FPReg, SfGuarded),
+    /// try fresh-xmm `Sf(guarded)`; fall back to `S(guarded)` if no phys xmm.
+    /// [`C` / `Sf` arm]
+    TryFreshSfElseS(SfGuarded),
+    /// `_ -> S(guarded)`
+    SetS(Guarded),
+}
+
+impl AbstractFrame {
+    ///
+    /// Decide the merge action for slot *i* from the two predecessors' modes
+    /// (the meet table in [`Self::join`]). Pure: reads `self`/`other` only.
+    ///
+    fn decide_join(&self, other: &AbstractFrame, i: SlotId) -> JoinAction {
+        use JoinAction::*;
+        match (self.mode(i), other.mode(i)) {
+            (LinkMode::None, LinkMode::None) => Nop,
+            (LinkMode::MaybeNone, _) => Nop,
+            (_, LinkMode::MaybeNone) => SetMaybeNone,
+            (LinkMode::V, _) => Nop,
+            (_, LinkMode::V) => Discard,
+            (LinkMode::F(l), LinkMode::F(r)) => {
+                if l != r {
+                    TryFreshFKeep
+                } else {
+                    Nop
                 }
-                (LinkMode::V, _) => {}
-                (_, LinkMode::V) => {
-                    self.discard(i);
+            }
+            (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => Nop,
+            (LinkMode::F(x), LinkMode::Sf(_, _))
+            | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
+                let mut guarded = match self.mode(i) {
+                    LinkMode::F(_) => SfGuarded::Float,
+                    LinkMode::Sf(_, guarded) => guarded,
+                    _ => unreachable!(),
+                };
+                let (other_xmm, other_g) = match other.mode(i) {
+                    LinkMode::F(y) => (y, SfGuarded::Float),
+                    LinkMode::Sf(y, guarded) => (y, guarded),
+                    _ => unreachable!(),
+                };
+                guarded.join(other_g);
+                if x == other_xmm {
+                    SetSf(x, guarded)
+                } else {
+                    TryFreshSfElseKeep(x, guarded)
                 }
-                (LinkMode::F(l), LinkMode::F(r)) => {
-                    if l != r {
-                        // Registers differ across branches. Keeping `F(l)`
-                        // here would force the `F(r)` side's bridge to swap
-                        // `l <-> r`, which displaces any other slot bound to
-                        // `l` in that source state (a common occurrence when
-                        // the `F(l)` side reached the merge via the zero-cost
-                        // alias created by `copy_slot`). Rebind to a fresh
-                        // xmm that no slot in the merge context uses, so
-                        // each bridge can emit a single `xmm_move` instead.
-                        // No AsmIr here — if a Phase-2 spill would be needed,
-                        // fall back to keeping `F(l)` and let the bridge swap.
-                        let _ = self.try_set_new_F(i);
-                    }
+            }
+            (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
+                guarded.join(SfGuarded::from_concrete_value(r));
+                SetSf(x, guarded)
+            }
+            (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => TryFreshFElseS,
+            (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
+                let mut guarded = SfGuarded::from_concrete_value(v);
+                guarded.join(r);
+                TryFreshSfElseS(guarded)
+            }
+            (LinkMode::C(l), LinkMode::C(r)) if l == r => Nop,
+            (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => TryFreshFElseS,
+            _ => SetS(self.guarded(i).join(&other.guarded(i))),
+        }
+    }
+
+    ///
+    /// Apply a merge action to slot *i*. The **only** place [`Self::join`]
+    /// mutates placement or allocates an xmm.
+    ///
+    fn apply_join(&mut self, i: SlotId, action: JoinAction) {
+        match action {
+            JoinAction::Nop => {}
+            JoinAction::SetMaybeNone => self.set_MaybeNone(i),
+            JoinAction::Discard => self.discard(i),
+            JoinAction::TryFreshFKeep => {
+                // No AsmIr here — if a Phase-2 spill would be needed,
+                // fall back to keeping `F(l)` and let the bridge swap.
+                let _ = self.try_set_new_F(i);
+            }
+            JoinAction::TryFreshFElseS => {
+                if self.try_set_new_F(i).is_none() {
+                    // Fall back to S — bridge materialises from the concrete
+                    // literal on the C side and from xmm on the F side.
+                    self.set_S_with_guard(i, Guarded::Float);
                 }
-                (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => {}
-                (LinkMode::F(x), LinkMode::Sf(_, _))
-                | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
-                    let mut guarded = match self.mode(i) {
-                        LinkMode::F(_) => SfGuarded::Float,
-                        LinkMode::Sf(_, guarded) => guarded,
-                        _ => unreachable!(),
-                    };
-                    let (other_xmm, other_g) = match other.mode(i) {
-                        LinkMode::F(y) => (y, SfGuarded::Float),
-                        LinkMode::Sf(y, guarded) => (y, guarded),
-                        _ => unreachable!(),
-                    };
-                    guarded.join(other_g);
-                    if x == other_xmm {
-                        self.set_Sf(i, x, guarded);
-                    } else {
-                        // Same reasoning as the F/F arm: register disagreement
-                        // across branches would force bridge-time swaps that
-                        // trample partner slots created by `copy_slot`'s
-                        // zero-cost alias. Rebind to a fresh xmm if possible;
-                        // otherwise keep the current Sf binding and let the
-                        // bridge handle the swap.
-                        if self.try_set_new_Sf(i, guarded).is_none() {
-                            self.set_Sf(i, x, guarded);
-                        }
-                    }
+            }
+            JoinAction::SetSf(x, guarded) => self.set_Sf(i, x, guarded),
+            JoinAction::TryFreshSfElseKeep(x, guarded) => {
+                if self.try_set_new_Sf(i, guarded).is_none() {
+                    self.set_Sf(i, x, guarded);
                 }
-                (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
-                    guarded.join(SfGuarded::from_concrete_value(r));
-                    self.set_Sf(i, x, guarded)
+            }
+            JoinAction::TryFreshSfElseS(guarded) => {
+                if self.try_set_new_Sf(i, guarded).is_none() {
+                    self.set_S_with_guard(i, guarded.into());
                 }
-                (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => {
-                    if self.try_set_new_F(i).is_none() {
-                        // Fall back to S — bridge will materialise from the
-                        // concrete literal on the C side and from xmm on the
-                        // F side.
-                        self.set_S_with_guard(i, Guarded::Float);
-                    }
-                }
-                (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
-                    let mut guarded = SfGuarded::from_concrete_value(v);
-                    guarded.join(r);
-                    if self.try_set_new_Sf(i, guarded).is_none() {
-                        self.set_S_with_guard(i, guarded.into());
-                    }
-                }
-                (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
-                (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => {
-                    if self.try_set_new_F(i).is_none() {
-                        self.set_S_with_guard(i, Guarded::Float);
-                    }
-                }
-                _ => {
-                    let guarded = self.guarded(i).join(&other.guarded(i));
-                    self.set_S_with_guard(i, guarded);
-                }
-            };
+            }
+            JoinAction::SetS(guarded) => self.set_S_with_guard(i, guarded),
         }
     }
 }
@@ -162,11 +292,5 @@ impl IsUsed {
             (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
             _ => IsUsed::ND,
         };
-    }
-}
-
-impl Guarded {
-    fn join(&self, other: &Self) -> Self {
-        if self == other { *self } else { Guarded::Value }
     }
 }

@@ -1,44 +1,186 @@
 use super::*;
 
+///
+/// §5 stage 3c-i — the register-allocation **policy** seam.
+///
+/// Every xmm allocation in the JIT funnels through these two primitives (operand
+/// loads `load_xmm*` / `fetch_float*`, destination defs `def_F` / `def_Sf*`, and
+/// the merge's `apply_join` `TryFresh*` all reach them via `set_new_*` /
+/// `try_set_new_*`). Isolating them as a named unit is the Layer-② allocator
+/// seam: the body here is today's greedy policy verbatim, and a future loop-aware
+/// policy (3c-ii) plugs in here — its furthest-next-use spill-victim choice
+/// replaces phase 1's "first all-`Sf` register". The functions take `&mut
+/// SlotState` because the policy reads/mutates slot placements (the phase-1
+/// demotion). Behaviour-identical to the prior `SlotState` methods.
+///
+mod alloc_policy {
+    use super::*;
+
+    ///
+    /// Returns `None` if every xmm holds at least one `F` slot (a real spill;
+    /// use [`alloc_xmm`] from a context that has access to `AsmIr`).
+    ///
+    pub(super) fn try_alloc_xmm(state: &mut SlotState) -> Option<FPReg> {
+        // Phase 0: a vacant xmm.
+        for i in 0..state.xmm_alloc.len() {
+            let xmm = FPReg(i);
+            if state.xmm_alloc.is_pinned(xmm) {
+                continue;
+            }
+            if state.xmm_alloc.is_vacant(xmm) {
+                return Some(xmm);
+            }
+        }
+        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
+        for i in 0..state.xmm_alloc.len() {
+            let xmm = FPReg(i);
+            if state.xmm_alloc.is_pinned(xmm) || state.xmm_alloc.is_vacant(xmm) {
+                continue;
+            }
+            let all_sf = state
+                .xmm_alloc
+                .slots(xmm)
+                .iter()
+                .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)));
+            if !all_sf {
+                continue;
+            }
+            let to_demote: Vec<(SlotId, SfGuarded)> = state
+                .xmm_alloc
+                .slots(xmm)
+                .iter()
+                .map(|&s| match state.mode(s) {
+                    LinkMode::Sf(_, g) => (s, g),
+                    _ => unreachable!(),
+                })
+                .collect();
+            state.xmm_alloc.clear(xmm);
+            for (s, g) in to_demote {
+                state.set_mode(s, LinkMode::S(g.into()));
+            }
+            return Some(xmm);
+        }
+        None
+    }
+
+    ///
+    /// Allocate a new VirtFPReg. Phase 0 (vacant phys) and Phase 1 (Sf-only
+    /// demote) first; if both fail, a fresh phase-2 spill slot (`VirtFPReg(N)`,
+    /// `N >= PHYS_XMM_POOL`) that lives on the stack and is swapped in at use.
+    ///
+    pub(super) fn alloc_xmm(state: &mut SlotState) -> FPReg {
+        if let Some(x) = try_alloc_xmm(state) {
+            return x;
+        }
+        state.xmm_alloc.push_spill()
+    }
+}
+
+///
+/// The xmm-register allocation state (item ②, step 1): the reverse map from
+/// physical/spill FP registers to the slots bound to them, plus the pin set.
+/// `SlotState` owns one of these and drives it through its `xmm_*` methods; the
+/// allocation *policy* (`alloc_policy::try_alloc_xmm` / `alloc_xmm`) takes `&mut
+/// SlotState` because it also reads/mutates slot placements. Indices
+/// `0..PHYS_XMM_POOL` map to physical `xmm2..xmm15`; `>= PHYS_XMM_POOL` are stack
+/// spills.
+///
+#[derive(Clone, Default)]
+pub(super) struct XmmAllocator {
+    vfpr: Vec<Vec<SlotId>>,
+    /// xmm registers that must not be reused by `alloc_xmm` until unpinned.
+    pinned: Vec<FPReg>,
+}
+
+impl XmmAllocator {
+    fn new() -> Self {
+        Self {
+            vfpr: (0..PHYS_XMM_POOL).map(|_| vec![]).collect(),
+            pinned: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.vfpr.len()
+    }
+
+    fn slots(&self, xmm: FPReg) -> &[SlotId] {
+        &self.vfpr[xmm.0 as usize]
+    }
+
+    fn is_vacant(&self, xmm: FPReg) -> bool {
+        self.vfpr[xmm.0 as usize].is_empty()
+    }
+
+    fn is_pinned(&self, xmm: FPReg) -> bool {
+        self.pinned.contains(&xmm)
+    }
+
+    fn add(&mut self, slot: SlotId, xmm: FPReg) {
+        self.vfpr[xmm.0 as usize].push(slot);
+    }
+
+    fn remove(&mut self, slot: SlotId, xmm: FPReg) {
+        self.vfpr[xmm.0 as usize].retain(|e| *e != slot);
+    }
+
+    fn clear(&mut self, xmm: FPReg) {
+        self.vfpr[xmm.0 as usize].clear();
+    }
+
+    fn grow_to(&mut self, new_len: usize) {
+        while self.vfpr.len() < new_len {
+            self.vfpr.push(vec![]);
+        }
+    }
+
+    /// Append a fresh spill slot beyond the physical pool and return its id.
+    fn push_spill(&mut self) -> FPReg {
+        let new_id = self.vfpr.len();
+        self.vfpr.push(vec![]);
+        FPReg(new_id)
+    }
+
+    fn pin(&mut self, xmm: FPReg) {
+        if !self.pinned.contains(&xmm) {
+            self.pinned.push(xmm);
+        }
+    }
+
+    fn unpin(&mut self, xmm: FPReg) {
+        if let Some(pos) = self.pinned.iter().position(|x| *x == xmm) {
+            self.pinned.swap_remove(pos);
+        }
+    }
+
+    fn swap(&mut self, l: FPReg, r: FPReg) {
+        self.vfpr.swap(l.0 as usize, r.0 as usize);
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
-    /// Slot states.
-    slots: Vec<LinkMode>,
+    /// Per-slot location / representation (the `LinkMode` split into its two
+    /// halves; item ②). Paired index-for-index with `ty`.
+    place: Vec<Placement>,
+    /// Per-slot abstract type (the class lattice). The `Sf` refinement is
+    /// recovered from this via `LinkMode::from_parts`. Paired with `place`.
+    ty: Vec<Guarded>,
     /// Liveness information.
     liveness: Vec<IsUsed>,
-    /// Information for VirtFPReg slots. Indices 0..14 map to physical
-    /// xmm2..xmm15; indices >= 14 are spilled (live on stack — at use
-    /// time the codegen swaps them with a scratch xmm).
-    vfpr: Vec<Vec<SlotId>>,
+    /// xmm-register allocation state (item ②, step 1).
+    xmm_alloc: XmmAllocator,
     r15: Option<SlotId>,
     local_num: usize,
-    /// xmm registers that must not be reused by `alloc_xmm` /
-    /// `try_alloc_xmm_demote`. Used by callers that have just produced
-    /// an xmm-resident value but have not yet emitted the consuming
-    /// instruction — without this, a subsequent allocation can pick
-    /// that same xmm as a spill victim (e.g. demote its `Sf` slot to
-    /// `S`) and hand the same physical register back, so the consumer
-    /// ends up reading both operands from the same register.
-    pinned_vfpr: Vec<FPReg>,
-    /// D1 forwarding-rest deferral: `Some((dst, src, len))` means the
-    /// rest-parameter slot `dst` of a forwarding-trampoline frame has
-    /// not been materialized as an `Array` on the fast path; its
-    /// positional source args live at `src .. src + len` in the
-    /// (outermost, non-specialized) caller frame. The slot's `LinkMode`
-    /// is kept at `C(nil)` (always GC-safe); this annotation only
-    /// (a) routes the single forwarding consumer to copy straight from
-    /// the source range and (b) adds an `Array` materialization to every
-    /// deopt `WriteBack` while it is live. Strictly transient: produced
-    /// at trampoline-frame entry, cleared at the single forwarding
-    /// consume; gated so it never crosses a basic-block join.
+    /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
 }
 
 impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{ ")?;
-        for (i, state) in self.slots.iter().enumerate() {
-            write!(f, "[%{i}: {state:?}] ")?;
+        for i in self.all_regs() {
+            write!(f, "[%{}: {:?}] ", i.0, self.mode(i))?;
         }
         write!(f, "}}")?;
         Ok(())
@@ -50,13 +192,17 @@ impl SlotState {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
+        let default_ty = match default {
+            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
+            o => o.guarded(),
+        };
         let mut ctx = SlotState {
-            slots: vec![default; total_reg_num],
+            place: vec![default.placement(); total_reg_num],
+            ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
-            vfpr: (0..PHYS_XMM_POOL).map(|_| vec![]).collect(),
+            xmm_alloc: XmmAllocator::new(),
             r15: None,
             local_num,
-            pinned_vfpr: Vec::new(),
             deferred_rest: None,
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
@@ -84,7 +230,7 @@ impl SlotState {
             for (i, arg) in args.iter().enumerate() {
                 match arg {
                     LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
-                        ctx.slots[i] = arg.clone();
+                        ctx.set_mode(SlotId(i as u16), *arg);
                     }
                     _ => {}
                 }
@@ -120,7 +266,23 @@ impl SlotState {
     }
 
     pub(super) fn slots_len(&self) -> usize {
-        self.slots.len()
+        self.place.len()
+    }
+
+    /// The pure type-lattice meet over the per-slot `ty` vectors — the
+    /// analysis-layer join (item ②, the reusable primitive for the standalone
+    /// analysis pass in step 2). Element-wise `Guarded::join`; placement /
+    /// sentinel reconciliation is a separate concern that the fused
+    /// `AbstractFrame::join` still owns today. For non-sentinel slots this equals
+    /// the fused join's resulting type (verified arm-by-arm; see
+    /// `doc/regalloc_separation.md`).
+    #[allow(dead_code)] // wired in by step 2 (standalone analysis pass)
+    pub(super) fn join_ty(&self, other: &SlotState) -> Vec<Guarded> {
+        self.ty
+            .iter()
+            .zip(other.ty.iter())
+            .map(|(a, b)| a.join(b))
+            .collect()
     }
 
     pub(super) fn no_r15(&self) -> bool {
@@ -128,11 +290,9 @@ impl SlotState {
     }
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
-        assert_eq!(self.slots.len(), other.slots.len());
-        self.slots
-            .iter()
-            .zip(other.slots.iter())
-            .all(|(lhs, rhs)| lhs.equiv(rhs))
+        assert_eq!(self.slots_len(), other.slots_len());
+        self.all_regs()
+            .all(|i| self.mode(i).equiv(&other.mode(i)))
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
@@ -178,11 +338,11 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn all_regs(&self) -> std::ops::Range<SlotId> {
-        SlotId(0)..SlotId(self.slots.len() as u16)
+        SlotId(0)..SlotId(self.slots_len() as u16)
     }
 
     fn temps(&self) -> std::ops::Range<SlotId> {
-        self.temp_start()..SlotId(self.slots.len() as u16)
+        self.temp_start()..SlotId(self.slots_len() as u16)
     }
 
     pub(super) fn temp_start(&self) -> SlotId {
@@ -190,7 +350,8 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn mode(&self, slot: SlotId) -> LinkMode {
-        self.slots[slot.0 as usize]
+        let i = slot.0 as usize;
+        LinkMode::from_parts(self.place[i], self.ty[i])
     }
 
     pub(in crate::codegen::jitgen) fn guarded(&self, slot: SlotId) -> Guarded {
@@ -219,7 +380,13 @@ impl SlotState {
 
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
-        self.slots[slot.0 as usize] = mode;
+        let i = slot.0 as usize;
+        self.place[i] = mode.placement();
+        // Sentinels carry no type; `from_parts` ignores `ty` for them.
+        self.ty[i] = match mode {
+            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
+            o => o.guarded(),
+        };
     }
 
     /// D1: if `slot` is the deferred forwarding-rest slot, return its
@@ -250,7 +417,7 @@ impl SlotState {
     }
 
     fn xmm(&self, xmm: FPReg) -> &[SlotId] {
-        &self.vfpr[xmm.0 as usize]
+        self.xmm_alloc.slots(xmm)
     }
 
     ///
@@ -259,7 +426,7 @@ impl SlotState {
     /// `xmm` vec up to the target's width before merge bridging.
     ///
     pub(super) fn xmm_len(&self) -> usize {
-        self.vfpr.len()
+        self.xmm_alloc.len()
     }
 
     ///
@@ -271,17 +438,15 @@ impl SlotState {
     /// vacant binding, which `is_xmm_vacant` correctly reports.
     ///
     pub(super) fn grow_xmm_to(&mut self, new_len: usize) {
-        while self.vfpr.len() < new_len {
-            self.vfpr.push(vec![]);
-        }
+        self.xmm_alloc.grow_to(new_len);
     }
 
     fn xmm_add(&mut self, slot: SlotId, xmm: FPReg) {
-        self.vfpr[xmm.0 as usize].push(slot);
+        self.xmm_alloc.add(slot, xmm);
     }
 
     fn xmm_remove(&mut self, slot: SlotId, xmm: FPReg) {
-        self.vfpr[xmm.0 as usize].retain(|e| *e != slot);
+        self.xmm_alloc.remove(slot, xmm);
     }
 
     /// Mark *xmm* off-limits for subsequent `alloc_xmm` /
@@ -292,15 +457,11 @@ impl SlotState {
     /// freshly-loaded xmm as a spill victim and reuse it for an unrelated
     /// value.
     pub(in crate::codegen::jitgen) fn pin_xmm(&mut self, xmm: FPReg) {
-        if !self.pinned_vfpr.contains(&xmm) {
-            self.pinned_vfpr.push(xmm);
-        }
+        self.xmm_alloc.pin(xmm);
     }
 
     pub(in crate::codegen::jitgen) fn unpin_xmm(&mut self, xmm: FPReg) {
-        if let Some(pos) = self.pinned_vfpr.iter().position(|x| *x == xmm) {
-            self.pinned_vfpr.swap_remove(pos);
-        }
+        self.xmm_alloc.unpin(xmm);
     }
 
     ///
@@ -317,66 +478,11 @@ impl SlotState {
     /// `AsmIr`).
     ///
     fn try_alloc_xmm(&mut self) -> Option<FPReg> {
-        let pinned = &self.pinned_vfpr;
-        // Phase 0: a vacant xmm.
-        for (i, xmm) in self.vfpr.iter().enumerate() {
-            if pinned.contains(&FPReg(i as usize)) {
-                continue;
-            }
-            if xmm.is_empty() {
-                return Some(FPReg(i as usize));
-            }
-        }
-        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
-        for i in 0..self.vfpr.len() {
-            if self.pinned_vfpr.contains(&FPReg(i as usize)) {
-                continue;
-            }
-            if self.vfpr[i].is_empty() {
-                continue;
-            }
-            let all_sf = self.vfpr[i]
-                .iter()
-                .all(|&s| matches!(self.mode(s), LinkMode::Sf(_, _)));
-            if !all_sf {
-                continue;
-            }
-            let to_demote: Vec<(SlotId, SfGuarded)> = self.vfpr[i]
-                .iter()
-                .map(|&s| match self.mode(s) {
-                    LinkMode::Sf(_, g) => (s, g),
-                    _ => unreachable!(),
-                })
-                .collect();
-            self.vfpr[i].clear();
-            for (s, g) in to_demote {
-                self.set_mode(s, LinkMode::S(g.into()));
-            }
-            return Some(FPReg(i as usize));
-        }
-        None
+        alloc_policy::try_alloc_xmm(self)
     }
 
-    ///
-    /// Allocate a new VirtFPReg.
-    ///
-    /// Tries Phase 0 (vacant phys) and Phase 1 (Sf-only demote) first. If both
-    /// fail, allocates a fresh spill slot — a `VirtFPReg(N)` where `N >=
-    /// PHYS_XMM_POOL`. The spill slot lives on the stack (the frame's
-    /// `stack_offset` grows by 8 bytes for each spill); at code generation,
-    /// any operation that uses such a `VirtFPReg` swaps a scratch xmm with
-    /// the stack slot to do its work.
-    ///
     fn alloc_xmm(&mut self) -> FPReg {
-        if let Some(x) = self.try_alloc_xmm() {
-            return x;
-        }
-        // Phase 2: spill — append a new slot beyond the physical pool. The
-        // existing F / Sf bindings are left in place; the value lives on the
-        // stack and gets swapped in at use time.
-        let new_id = self.vfpr.len();
-        self.vfpr.push(vec![]);
-        FPReg(new_id)
+        alloc_policy::alloc_xmm(self)
     }
 
     ///
@@ -454,6 +560,41 @@ impl SlotState {
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn set_S(&mut self, slot: SlotId) {
         self.set_S_with_guard(slot, Guarded::Value);
+    }
+
+    ///
+    /// §15.3/§15.5 (`loop-keep-float`): adopt the back-edge fixpoint's `F` for a
+    /// loop-carried float the loop-entry merge collapsed to `S`. In a *loop* JIT
+    /// the value enters from the VM as a conservative boxed `S(Value)` even when
+    /// the fixpoint proves it is a `Float`; left as `S` the body decodes+reboxes
+    /// it every iteration (§15.4). Re-establishing `F` keeps the body unboxed;
+    /// the forward entry is unboxed *once* at the pre-header by the `S -> F`
+    /// bridge, whose `float_to_fpr` carries the runtime float **guard** (deopt if
+    /// the VM value is not a float), so the specialization is sound.
+    ///
+    /// `promotable(i)` (computed by the caller from the actual predecessor
+    /// entries) gates each slot: every predecessor must have a valid `_ -> F`
+    /// bridge (`F`/`S`/`Sf`/float-`C`) — otherwise a non-float-`C` path would hit
+    /// the `C -> F` `unreachable!` and `F` would be unsound for it.
+    ///
+    pub(in crate::codegen::jitgen) fn keep_backedge_floats(
+        &mut self,
+        backedge: &SlotState,
+        promotable: impl Fn(SlotId) -> bool,
+    ) {
+        for i in self.all_regs() {
+            if matches!(backedge.mode(i), LinkMode::F(_))
+                && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
+                && promotable(i)
+            {
+                // `try_set_new_F` (no phase-2 spill): only specialize to `F` when
+                // a physical xmm is actually free. Spilling a *speculative*
+                // loop-entry promotion into a `VirtFPReg` is not worth it and is
+                // exercised wrongly under register pressure (the `stress-spill-pool`
+                // path); leave the slot boxed in that case.
+                self.try_set_new_F(i);
+            }
+        }
     }
 
     ///
@@ -648,29 +789,35 @@ impl SlotState {
     /// ### destroy
     /// - rax, rcx
     ///
-    pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    /// Analysis half (item ②, step 2): perform the abstract-state transition and
+    /// return the pending stack write-back as a [`Spill`] record, without
+    /// touching `AsmIr`. The codegen wrapper [`Self::write_back_slot`] emits it.
+    fn write_back_slot_state(&mut self, slot: SlotId) -> Spill {
         match self.mode(slot) {
             LinkMode::F(xmm) => {
                 // F -> Sf
                 self.set_Sf_float(slot, xmm);
-                ir.fpr2stack(xmm, slot);
+                Spill::Fpr(xmm, slot)
             }
-            LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
-            }
+            LinkMode::C(v) => Spill::Lit(v, slot),
             LinkMode::G(guarded) => {
                 // G -> S
-                ir.acc2stack(slot);
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S(guarded));
+                Spill::Acc(slot)
             }
-            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => {}
+            LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => Spill::None,
             LinkMode::V | LinkMode::None => {
                 eprintln!("{:?}", self);
                 unreachable!("write_back_slot() {slot:?} {:?}", self.mode(slot));
             }
         }
+    }
+
+    pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        let s = self.write_back_slot_state(slot);
+        ir.transfer(TransferIR::Spill(s));
     }
 
     ///
@@ -681,28 +828,28 @@ impl SlotState {
     /// ### destroy
     /// - rax, rcx
     ///
+    /// Analysis half (item ②, step 2): see [`Self::write_back_slot_state`].
     #[allow(non_snake_case)]
-    pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
-        match self.mode(slot) {
-            LinkMode::F(xmm) => {
-                ir.fpr2stack(xmm, slot);
-            }
-            LinkMode::C(v) => {
-                ir.lit2stack(v, slot);
-            }
-            LinkMode::G(_) => {
-                ir.acc2stack(slot);
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {}
-            LinkMode::V => {
-                ir.lit2stack(Value::nil(), slot);
-            }
+    fn to_S_unguarded_state(&mut self, slot: SlotId) -> Spill {
+        let spill = match self.mode(slot) {
+            LinkMode::F(xmm) => Spill::Fpr(xmm, slot),
+            LinkMode::C(v) => Spill::Lit(v, slot),
+            LinkMode::G(_) => Spill::Acc(slot),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => Spill::None,
+            LinkMode::V => Spill::Lit(Value::nil(), slot),
             LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("to_S_unguarded() {:?}", self.mode(slot));
             }
-        }
+        };
         self.clear(slot);
         self.set_mode(slot, LinkMode::S(Guarded::Value));
+        spill
+    }
+
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        let s = self.to_S_unguarded_state(slot);
+        ir.transfer(TransferIR::Spill(s));
     }
 }
 
@@ -903,14 +1050,26 @@ impl SlotState {
     ///
     /// The slot is set to LinkMode::Stack.
     ///
+    ///
+    /// Analysis half of [`Self::writeback_acc`] (item ②, step-2 spike): evict
+    /// the accumulator (`r15`) owner to its stack home in the *abstract state*
+    /// only, returning the evicted slot so the emission half can store it. This
+    /// is the pure state transition — a standalone analysis pass calls this and
+    /// never touches `AsmIr`; codegen calls `writeback_acc` (this + the store).
+    ///
+    fn writeback_acc_state(&mut self) -> Option<SlotId> {
+        let slot = self.r15?;
+        let guarded = self.guarded(slot);
+        self.set_mode(slot, LinkMode::S(guarded));
+        self.r15 = None;
+        Some(slot)
+    }
+
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.r15 {
-            let guarded = self.guarded(slot);
-            self.set_mode(slot, LinkMode::S(guarded));
-            self.r15 = None;
+        if let Some(slot) = self.writeback_acc_state() {
             ir.acc2stack(slot);
         }
-        assert!(!self.slots.iter().any(|link| matches!(link, LinkMode::G(_))));
+        assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_))));
         assert!(self.r15.is_none());
     }
 
@@ -988,14 +1147,32 @@ impl AbstractFrame {
         class: ClassId,
         deopt: AsmDeopt,
     ) {
+        if self.guard_class_state(slot, class) {
+            ir.push(AsmInst::GuardClass(r, class, deopt));
+        }
+    }
+
+    ///
+    /// Analysis half of [`Self::guard_class`] (item ②, step 2): refine the
+    /// slot's abstract type to `class` and return whether a runtime guard must
+    /// be emitted (`false` when the type already statically matches, so no guard
+    /// — and no state change — is needed). Pure state; the codegen wrapper emits
+    /// `GuardClass` with the `deopt`, which it (the caller) created *before* this
+    /// runs so the deopt's write-back snapshot is the pre-guard placement.
+    ///
+    pub(super) fn guard_class_state(&mut self, slot: SlotId, class: ClassId) -> bool {
         if self.class(slot) == Some(class) {
-            return;
+            return false;
         }
         let class_guarded = Guarded::from_class(class);
-        match &mut self.slots[slot.0 as usize] {
+        // Operate on a local copy and write it back (item ② encapsulation;
+        // `LinkMode` is `Copy`). The `return false`s below skip both the
+        // write-back and the guard emission, exactly as the prior `return`s did.
+        let mut mode = self.mode(slot);
+        match &mut mode {
             LinkMode::S(guarded) | LinkMode::G(guarded) => {
                 if class_guarded == *guarded {
-                    return;
+                    return false;
                 } else if *guarded == Guarded::Value {
                     *guarded = class_guarded;
                 } else {
@@ -1006,7 +1183,7 @@ impl AbstractFrame {
             LinkMode::Sf(_, guarded) => {
                 match (*guarded, class_guarded) {
                     (SfGuarded::Fixnum, Guarded::Fixnum) | (SfGuarded::Float, Guarded::Float) => {
-                        return;
+                        return false;
                     }
                     (SfGuarded::FixnumOrFloat, Guarded::Fixnum) => {
                         *guarded = SfGuarded::Fixnum;
@@ -1019,19 +1196,19 @@ impl AbstractFrame {
             }
             LinkMode::F(_) => {
                 if class_guarded == Guarded::Float {
-                    return;
+                    return false;
                 }
                 // in this case, Guard will always fail
             }
             LinkMode::C(v) => {
                 if class == INTEGER_CLASS {
                     if v.is_fixnum() {
-                        return;
+                        return false;
                     }
                     // If v is Bignum, Guard will fail
                 } else {
                     if v.class() == class {
-                        return;
+                        return false;
                     }
                     // in this case, Guard will always fail
                 }
@@ -1039,12 +1216,12 @@ impl AbstractFrame {
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!(
                     "guard_class(): current:{:?} given:{:?}",
-                    self.mode(slot),
-                    class_guarded
+                    mode, class_guarded
                 );
             }
         }
-        ir.push(AsmInst::GuardClass(r, class, deopt));
+        self.set_mode(slot, mode);
+        true
     }
 
     pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
@@ -1056,15 +1233,11 @@ impl AbstractFrame {
         let mut b = UsingXmm::new();
         // Only physical pool slots need save/restore at call
         // boundaries; spill slots already live on the stack.
-        self.vfpr
-            .iter()
-            .enumerate()
-            .take(PHYS_XMM_POOL)
-            .for_each(|(i, v)| {
-                if !v.is_empty() {
-                    b.set(i, true);
-                }
-            });
+        for i in 0..PHYS_XMM_POOL {
+            if !self.xmm_alloc.is_vacant(FPReg(i)) {
+                b.set(i, true);
+            }
+        }
         b
     }
 
@@ -1097,108 +1270,65 @@ impl AbstractFrame {
     }
 
     fn xmm_swap(&mut self, l: FPReg, r: FPReg) {
-        let mut guarded_l = None;
-        let mut guarded_r = None;
-        for link in self.slots.iter() {
-            match link {
-                LinkMode::F(x) => {
+        self.xmm_alloc.swap(l, r);
+        // A physical xmm swap (`FprSwap`) only changes *which register* holds
+        // each live value; every slot keeps its own representation and
+        // refinement. The two registers need not share a refinement — e.g. the
+        // bridge's `F(l) -> F(r)` arm swaps a pure-Float `F` slot in `l` with
+        // whatever occupies `r`, which may be a Fixnum-refined `Sf` slot. So just
+        // relabel each slot's register index; do not cross-assign refinements
+        // (the `Sf` refinement rides along in `ty`, untouched here).
+        // Local-copy RMW per slot (item ② encapsulation; `LinkMode` is `Copy`).
+        for slot in self.all_regs() {
+            let mut link = self.mode(slot);
+            match &mut link {
+                LinkMode::F(x) | LinkMode::Sf(x, _) => {
                     if *x == l {
-                        if let Some(g) = guarded_l {
-                            assert_eq!(g, SfGuarded::Float);
-                        }
-                        guarded_l = Some(SfGuarded::Float);
+                        *x = r;
                     } else if *x == r {
-                        if let Some(g) = guarded_r {
-                            assert_eq!(g, SfGuarded::Float);
-                        }
-                        guarded_r = Some(SfGuarded::Float);
+                        *x = l;
                     }
                 }
-                LinkMode::Sf(x, guarded) => {
-                    if *x == l {
-                        if let Some(g) = guarded_l {
-                            assert_eq!(g, *guarded);
-                        }
-                        guarded_l = Some(*guarded);
-                    } else if *x == r {
-                        if let Some(g) = guarded_r {
-                            assert_eq!(g, *guarded);
-                        }
-                        guarded_r = Some(*guarded);
-                    }
-                }
-                _ => {}
+                LinkMode::S(_)
+                | LinkMode::C(_)
+                | LinkMode::G(_)
+                | LinkMode::V
+                | LinkMode::MaybeNone
+                | LinkMode::None => {}
             }
+            self.set_mode(slot, link);
         }
-        self.vfpr.swap(l.0 as usize, r.0 as usize);
-        self.slots.iter_mut().for_each(|link| match link {
-            LinkMode::Sf(x, guarded) => {
-                if *x == l {
-                    *x = r;
-                    *guarded = guarded_r.unwrap();
-                } else if *x == r {
-                    *x = l;
-                    *guarded = guarded_l.unwrap();
-                }
-            }
-            LinkMode::F(x) => {
-                if *x == l {
-                    *x = r;
-                    assert_eq!(guarded_r, Some(SfGuarded::Float));
-                } else if *x == r {
-                    *x = l;
-                    assert_eq!(guarded_l, Some(SfGuarded::Float));
-                }
-            }
-            LinkMode::S(_)
-            | LinkMode::C(_)
-            | LinkMode::G(_)
-            | LinkMode::V
-            | LinkMode::MaybeNone
-            | LinkMode::None => {}
-        });
     }
 
     fn wb_xmm(&self, f: impl Fn(SlotId) -> bool) -> Vec<(FPReg, Vec<SlotId>)> {
-        self.vfpr
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if v.is_empty() {
-                    None
-                } else {
-                    let v: Vec<_> = self.vfpr[i]
-                        .iter()
-                        .filter(|reg| f(**reg) && matches!(self.mode(**reg), LinkMode::F(_)))
-                        .cloned()
-                        .collect();
-                    if v.is_empty() {
-                        None
-                    } else {
-                        Some((FPReg::new(i as usize), v))
-                    }
-                }
+        (0..self.xmm_alloc.len())
+            .filter_map(|i| {
+                let reg = FPReg::new(i);
+                let v: Vec<_> = self
+                    .xmm_alloc
+                    .slots(reg)
+                    .iter()
+                    .filter(|s| f(**s) && matches!(self.mode(**s), LinkMode::F(_)))
+                    .cloned()
+                    .collect();
+                if v.is_empty() { None } else { Some((reg, v)) }
             })
             .collect()
     }
 
     fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Value, SlotId)> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, link)| match link {
-                LinkMode::C(v) if f(SlotId(idx as u16)) => Some((*v, SlotId(idx as u16))),
+        self.all_regs()
+            .filter_map(|idx| match self.mode(idx) {
+                LinkMode::C(v) if f(idx) => Some((v, idx)),
                 _ => None,
             })
             .collect()
     }
 
     fn wb_void(&self) -> Vec<SlotId> {
-        self.slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, link)| match link {
-                LinkMode::V => Some(SlotId(idx as u16)),
+        self.all_regs()
+            .filter_map(|idx| match self.mode(idx) {
+                LinkMode::V => Some(idx),
                 _ => None,
             })
             .collect()
@@ -1218,6 +1348,92 @@ impl Into<Guarded> for SfGuarded {
             SfGuarded::Fixnum => Guarded::Fixnum,
             SfGuarded::Float => Guarded::Float,
             SfGuarded::FixnumOrFloat => Guarded::Value,
+        }
+    }
+}
+
+///
+/// The *location / representation* half of a [`LinkMode`], with the type/class
+/// (`Guarded`) factored out — the dual of [`LinkMode::guarded`].
+///
+/// Part of item ② (separating value placement from type analysis; see
+/// `doc/regalloc_separation.md`). It records only *where the live copies are*.
+/// The `Sf` linkage is the `XmmStack` placement: per review, `Sf` is **not** a
+/// type — it is a representation chosen for "Integer def'd / Float use'd" slots
+/// by a dedicated def-use + loop analysis. Its `SfGuarded` refinement is exactly
+/// the boxed value's class, so it is recovered from the paired `Guarded` (the
+/// `SfGuarded → Guarded` map is injective: `FixnumOrFloat ↔ Value`).
+/// `LinkMode::from_parts(self.placement(), self.guarded())` reconstructs the
+/// original `LinkMode` (verified by a unit test).
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum Placement {
+    None,
+    MaybeNone,
+    /// void (temp slot above sp)
+    Void,
+    /// boxed `Value` in its stack home
+    Stack,
+    /// boxed `Value` in the GP accumulator (r15)
+    Gp,
+    /// unboxed f64 in an xmm (type is implicitly `Float`)
+    Xmm(FPReg),
+    /// unboxed f64 in an xmm + a read-only boxed cache on the stack (the `Sf`
+    /// linkage); the Int/Float refinement is recovered from the paired `Guarded`
+    XmmStack(FPReg),
+    /// compile-time constant (no register / stack location)
+    Const(Value),
+}
+
+///
+/// A pending stack write-back produced by a transfer/eviction primitive
+/// (item ②, step 2): the *what* of an eviction, decided by the primitive's
+/// analysis (state) half and emitted by the codegen half. This is the first
+/// concrete "typed IR record" — a standalone analysis pass collects these
+/// instead of pushing `AsmInst`, and the lowering pass replays them via
+/// [`Spill::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum Spill {
+    None,
+    /// `ir.fpr2stack(xmm, slot)`
+    Fpr(FPReg, SlotId),
+    /// `ir.lit2stack(value, slot)`
+    Lit(Value, SlotId),
+    /// `ir.acc2stack(slot)`
+    Acc(SlotId),
+}
+
+impl Spill {
+    pub(super) fn emit(self, ir: &mut AsmIr) {
+        match self {
+            Spill::None => {}
+            Spill::Fpr(xmm, slot) => ir.fpr2stack(xmm, slot),
+            Spill::Lit(v, slot) => ir.lit2stack(v, slot),
+            Spill::Acc(slot) => ir.acc2stack(slot),
+        }
+    }
+}
+
+///
+/// An FP-register transfer produced by a transfer primitive (item ②, step 2):
+/// either a move into a vacant register or a swap of two live registers. Like
+/// [`Spill`], the *what* is decided by a primitive's analysis half and emitted
+/// by the codegen half via [`FpXfer::emit`].
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum FpXfer {
+    /// `ir.fpr_move(l, r)`
+    Move(FPReg, FPReg),
+    /// `ir.push(AsmInst::FprSwap(l, r))`
+    Swap(FPReg, FPReg),
+}
+
+impl FpXfer {
+    pub(super) fn emit(self, ir: &mut AsmIr) {
+        match self {
+            FpXfer::Move(l, r) => ir.fpr_move(l, r),
+            FpXfer::Swap(l, r) => ir.push(AsmInst::FprSwap(l, r)),
         }
     }
 }
@@ -1298,6 +1514,51 @@ impl LinkMode {
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
+        }
+    }
+
+    ///
+    /// The location/representation half of this mode (the dual of
+    /// [`Self::guarded`]). See [`Placement`].
+    ///
+    fn placement(&self) -> Placement {
+        match self {
+            LinkMode::None => Placement::None,
+            LinkMode::MaybeNone => Placement::MaybeNone,
+            LinkMode::V => Placement::Void,
+            LinkMode::S(_) => Placement::Stack,
+            LinkMode::G(_) => Placement::Gp,
+            LinkMode::F(x) => Placement::Xmm(*x),
+            LinkMode::Sf(x, _) => Placement::XmmStack(*x),
+            LinkMode::C(v) => Placement::Const(*v),
+        }
+    }
+
+    ///
+    /// Recombine a placement with a type guard into a `LinkMode` — the inverse
+    /// of [`Self::placement`] + [`Self::guarded`]. The `guarded` types the boxed
+    /// `Stack` / `Gp` cases and picks the `Sf` refinement for `XmmStack` (the
+    /// `Guarded → SfGuarded` inverse: `Value → FixnumOrFloat`); the `Xmm` /
+    /// `Const` / sentinel placements carry their own type, so it is ignored.
+    ///
+    fn from_parts(place: Placement, guarded: Guarded) -> Self {
+        match place {
+            Placement::None => LinkMode::None,
+            Placement::MaybeNone => LinkMode::MaybeNone,
+            Placement::Void => LinkMode::V,
+            Placement::Stack => LinkMode::S(guarded),
+            Placement::Gp => LinkMode::G(guarded),
+            Placement::Xmm(x) => LinkMode::F(x),
+            Placement::XmmStack(x) => {
+                let sf = match guarded {
+                    Guarded::Float => SfGuarded::Float,
+                    Guarded::Fixnum => SfGuarded::Fixnum,
+                    Guarded::Value => SfGuarded::FixnumOrFloat,
+                    Guarded::Class(_) => unreachable!("XmmStack with class guard {guarded:?}"),
+                };
+                LinkMode::Sf(x, sf)
+            }
+            Placement::Const(v) => LinkMode::C(v),
         }
     }
 
@@ -1448,6 +1709,14 @@ impl Guarded {
             Guarded::Class(c) => *c,
         })
     }
+
+    /// Type-lattice meet (item ②): two equal types stay; disagreement widens to
+    /// `Value` (⊤). This is the *type* component of `AbstractFrame::join` — the
+    /// fused join's resulting type equals this meet for every non-sentinel slot
+    /// (placement reconciliation is the rest of `join`).
+    pub(super) fn join(&self, other: &Self) -> Self {
+        if self == other { *self } else { Guarded::Value }
+    }
 }
 
 impl AbstractFrame {
@@ -1517,6 +1786,35 @@ impl AbstractFrame {
                     self.gen_xmm_swap(ir, x, tmp);
                 }
             }
+            (LinkMode::S(_), LinkMode::F(x)) => {
+                // S -> F: one-time unbox of a boxed float into a pure-xmm
+                // binding (no boxed cache) — a loop pre-header entry adopting the
+                // back-edge's `F` placement (§15.3). Mirrors the `S -> Sf` arm but
+                // sets `F`; reuses `float_to_fpr`, which both backends lower.
+                ir.stack2reg(slot, GP::Rax);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                if self.is_xmm_vacant(x) {
+                    ir.float_to_fpr(GP::Rax, x, deopt);
+                    self.set_F(slot, x);
+                } else {
+                    let tmp = self.set_new_F(slot);
+                    ir.float_to_fpr(GP::Rax, tmp, deopt);
+                    self.gen_xmm_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::Sf(l, _), LinkMode::F(r)) => {
+                // Sf -> F: the value is already unboxed in xmm `l`; drop the
+                // boxed cache and rebind as pure `F`. Mirrors the `F -> F` arm.
+                if l == r {
+                    self.set_F(slot, l);
+                } else if self.is_xmm_vacant(r) {
+                    self.set_F(slot, r);
+                    ir.fpr_move(l, r);
+                } else {
+                    self.gen_xmm_swap(ir, l, r);
+                    self.set_F(slot, r);
+                }
+            }
             (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // G -> Sf
                 let deopt = ir.new_deopt_with_pc(&self, pc + 1);
@@ -1579,13 +1877,22 @@ impl AbstractFrame {
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+    /// Analysis half (item ②, step 2): bind `slot` to `r` as `Sf` and return the
+    /// FP-register transfer to emit (a move into a vacant `r`, or a swap when
+    /// `r` is occupied). Pure state; codegen wrapper [`Self::to_sf`] emits it.
+    fn to_sf_state(&mut self, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) -> FpXfer {
         if self.is_xmm_vacant(r) {
             self.set_Sf(slot, r, guarded);
-            ir.fpr_move(l, r);
+            FpXfer::Move(l, r)
         } else {
-            self.gen_xmm_swap(ir, l, r);
+            self.xmm_swap(l, r);
+            FpXfer::Swap(l, r)
         }
+    }
+
+    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+        let f = self.to_sf_state(slot, l, r, guarded);
+        ir.transfer(TransferIR::FpXfer(f));
     }
 
     ///
@@ -1652,6 +1959,63 @@ mod tests {
         );
     }
 
+    /// Regression test for the `xmm_swap` mixed-refinement panic. A diamond
+    /// (`if/else`) inside a loop that updates a `Float` accumulator on both arms
+    /// drives the back-edge bridge to `gen_xmm_swap` a pure-`Float` `F` register
+    /// against a Fixnum-refined `Sf` register (the loop counter coerced to f64).
+    /// `xmm_swap` used to `assert_eq!(guarded_r, Some(Float))` / cross-assign the
+    /// partner register's refinement, assuming both swapped registers shared a
+    /// refinement — so this aborted the process at `slot.rs` with
+    /// `left: Some(Fixnum), right: Some(Float)` in both debug and release. The
+    /// swap only relabels register indices now, so each slot keeps its own
+    /// refinement. Expected result: `1249925000.0`.
+    #[test]
+    fn test_xmm_swap_mixed_refinement() {
+        run_test(
+            r###"
+        def f(n)
+          x = 0.0
+          i = 0
+          while i < n
+            if i.even?
+              x += i * 0.5
+            else
+              x -= 1.0
+            end
+            i += 1
+          end
+          x
+        end
+        f(100000)
+        "###,
+        );
+    }
+
+    /// §15.5: a loop-carried float enters a loop JIT from the VM as a boxed
+    /// `S(Value)`, but the back-edge fixpoint proves it is a `Float`. The
+    /// loop-entry specialization re-adopts `F` (the `S -> F` bridge unboxes the
+    /// forward entry once, guarded), so the body stays unboxed. Correctness
+    /// regression for that path + the `keep_backedge_floats` promotion gate.
+    #[test]
+    fn test_loop_carried_float_kept_unboxed() {
+        run_test(
+            r###"
+        def f(n)
+          x = 0.0
+          y = 1.0
+          i = 0
+          while i < n
+            x = x * 1.5 + i * 0.5
+            y = y - x * 0.25
+            i += 1
+          end
+          [x, y]
+        end
+        f(1000)
+        "###,
+        );
+    }
+
     /// Regression test for the `alloc_xmm` aliasing bug. When `load_binary_xmm`
     /// loaded `lhs` into xmm `A` and then loaded `rhs`, Phase-1 of
     /// `try_alloc_xmm_demote` could demote `A`'s `Sf` slot back to `S` and hand
@@ -1714,5 +2078,36 @@ mod tests {
         test
         "###,
         );
+    }
+
+    /// Item ②: `LinkMode` decomposes losslessly into a `Placement` (location /
+    /// representation) and a `Guarded` (type), and recombines via `from_parts`.
+    /// The `Sf` (`XmmStack`) refinement is recovered from the paired `Guarded`.
+    #[test]
+    fn linkmode_placement_roundtrip() {
+        use super::*;
+        let x = FPReg(0);
+        // Value-carrying modes: from_parts(placement(), guarded()) == self.
+        let value_modes = [
+            LinkMode::S(Guarded::Value),
+            LinkMode::S(Guarded::Fixnum),
+            LinkMode::S(Guarded::Float),
+            LinkMode::S(Guarded::Class(NIL_CLASS)),
+            LinkMode::G(Guarded::Fixnum),
+            LinkMode::F(x),
+            LinkMode::Sf(x, SfGuarded::Float),
+            LinkMode::Sf(x, SfGuarded::Fixnum),
+            LinkMode::Sf(x, SfGuarded::FixnumOrFloat),
+            LinkMode::C(Value::nil()),
+            LinkMode::C(Value::i32(7)),
+            LinkMode::V,
+        ];
+        for lm in value_modes {
+            assert_eq!(LinkMode::from_parts(lm.placement(), lm.guarded()), lm);
+        }
+        // None / MaybeNone carry no type; placement() round-trips with any guard.
+        for lm in [LinkMode::None, LinkMode::MaybeNone] {
+            assert_eq!(LinkMode::from_parts(lm.placement(), Guarded::Value), lm);
+        }
     }
 }

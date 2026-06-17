@@ -337,7 +337,7 @@ impl FnInitInfo {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct DynVar {
     pub reg: SlotId,
     pub outer: usize,

@@ -81,11 +81,32 @@ impl<'a> JitContext<'a> {
 
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
+                let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
-                    target.join(&backedge);
+                    target.join(backedge);
                 }
 
                 target.liveness_analysis(liveness);
+
+                // §15.5 loop-entry float specialization: a loop JIT enters a
+                // loop-carried float from the VM as a conservative boxed
+                // `S(Value)` even though the back-edge fixpoint proved it is a
+                // `Float (F)`; `join(S(Value), F)` keeps `S`, so the body would
+                // decode+rebox it every iteration. Re-adopt the back-edge's `F`
+                // (the forward entry is unboxed once at the pre-header by the
+                // `S -> F` bridge, whose `float_to_fpr` carries the runtime float
+                // guard). Promote a slot only when every predecessor entry has a
+                // valid `_ -> F` bridge (`F`/`S`/`Sf`/float-`C`); a non-float-`C`
+                // path is genuinely not a float, so it is left boxed.
+                if let Some(be) = &backedge_for_floats {
+                    let float_bridgeable = |m: LinkMode| {
+                        matches!(m, LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _))
+                            || matches!(m, LinkMode::C(v) if v.is_float())
+                    };
+                    target.keep_backedge_floats(be, |i| {
+                        entries.iter().all(|e| float_bridgeable(e.state.mode(i)))
+                    });
+                }
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());

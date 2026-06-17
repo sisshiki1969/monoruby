@@ -3,30 +3,6 @@ use crate::codegen::jitgen::asmir::compile_shared::set_ivar;
 
 impl Codegen {
     ///
-    /// Load ivar embedded to RValue. (only for object type)
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    /// #### out
-    /// - r15: Value
-    ///
-    /// #### destroy
-    /// - rdi
-    ///
-    pub(super) fn load_ivar_inline(&mut self, ivarid: IvarId) {
-        let exit = self.jit.label();
-        monoasm! {&mut self.jit,
-            movq r15, [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)];
-            // We must check whether the ivar slot is None.
-            testq r15, r15;
-            jne  exit;
-            movq r15, (NIL_VALUE);
-        exit:
-        }
-    }
-
-    ///
     /// Load ivar on `var_table`.
     ///
     /// #### in
@@ -87,98 +63,6 @@ impl Codegen {
     }
 
     ///
-    /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    pub(super) fn store_ivar_object_inline(&mut self, src: GP, ivarid: IvarId) {
-        monoasm!( &mut self.jit,
-            movq [rdi + (RVALUE_OFFSET_KIND as i32 + (ivarid.get() as i32) * 8)], R(src as _);
-        );
-        self.emit_write_barrier_rdi(src);
-    }
-
-    ///
-    /// Load slot `slot_index` of a `Struct` instance whose slot
-    /// vector is **inline** in the RValue's union (i.e. the class has
-    /// `≤ STRUCT_INLINE_SLOTS` members). Single mov, no Box deref.
-    ///
-    /// Receiver class is already guarded by the call-site cache, so
-    /// the JIT picks this variant statically based on the class's
-    /// member count.
-    ///
-    /// #### in
-    /// - rdi: &RValue (a STRUCT instance)
-    /// #### out
-    /// - r15: Value
-    pub(super) fn load_struct_slot_inline(&mut self, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq r15, [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)];
-        }
-    }
-
-    ///
-    /// Load slot `slot_index` of a `Struct` instance whose slot
-    /// vector spilled to the **heap** (the class has more than
-    /// `STRUCT_INLINE_SLOTS` members). Two movs.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// #### out
-    /// - r15: Value
-    /// #### destroy
-    /// - rdi
-    pub(super) fn load_struct_slot_heap(&mut self, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
-            movq r15, [rdi + ((slot_index as i32) * 8)];
-        }
-    }
-
-    ///
-    /// Store *src* into inline slot `slot_index` of `rdi`. Single mov.
-    /// Caller must have emitted `GuardFrozen` already.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// - src: Value to store
-    /// #### out
-    /// - rax: src (return value of the writer)
-    pub(super) fn store_struct_slot_inline(&mut self, src: GP, slot_index: u16) {
-        monoasm! {&mut self.jit,
-            movq [rdi + ((slot_index as i32) * 8 + RVALUE_OFFSET_INLINE as i32)], R(src as _);
-        }
-        // Write barrier: rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier_rdi(src);
-        monoasm! {&mut self.jit,
-            movq rax, R(src as _);
-        }
-    }
-
-    ///
-    /// Store *src* into heap slot `slot_index` of `rdi`. Two movs.
-    /// Caller must have emitted `GuardFrozen` already.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    /// - src: Value to store
-    /// #### out
-    /// - rax: src
-    /// #### destroy
-    /// - rdi
-    pub(super) fn store_struct_slot_heap(&mut self, src: GP, slot_index: u16) {
-        // Write barrier before `rdi` is repointed at the heap buffer:
-        // rdi = the struct (parent), src = stored value.
-        self.emit_write_barrier_rdi(src);
-        monoasm! {&mut self.jit,
-            movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR as i32)];
-            movq [rdi + ((slot_index as i32) * 8)], R(src as _);
-            movq rax, R(src as _);
-        }
-    }
-
-    ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in
@@ -195,19 +79,6 @@ impl Codegen {
         using: UsingXmm,
     ) {
         self.store_ivar_heap_inner(src, ivarid, is_object_ty, Some(using));
-    }
-
-    ///
-    /// Store *src* in an instance var *ivarid* of the object *rdi*.
-    ///
-    /// #### in
-    /// - rdi: &RValue
-    ///
-    /// #### destroy
-    /// - rdx
-    ///
-    pub(super) fn store_self_ivar_heap(&mut self, src: GP, ivarid: IvarId, is_object_ty: bool) {
-        self.store_ivar_heap_inner(src, ivarid, is_object_ty, None);
     }
 
     ///

@@ -11,6 +11,16 @@ mod method_call;
 mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
+
+/// Resolve a LIR register operand to its x86 register number. The scratch
+/// pointer is `rdx`.
+fn x86_lreg(r: LReg) -> u64 {
+    match r {
+        LReg::Gp(g) => g as u64,
+        LReg::Scratch => GP::Rdx as u64,
+    }
+}
 
 impl Codegen {
     ///
@@ -150,6 +160,7 @@ impl Codegen {
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
+            | AsmInst::LoadFieldToReg { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -228,81 +239,459 @@ impl Codegen {
         );
     }
 
-    /// dst <- src (general-purpose register move; self-move is a no-op).
-    pub(in crate::codegen::jitgen) fn emit_reg_move(&mut self, src: GP, dst: GP) {
-        if src != dst {
-            let (src, dst) = (src as u64, dst as u64);
-            monoasm!( &mut self.jit,
-                movq R(dst), R(src);
-            );
+    ///
+    /// Per-arch (x86-64) LIR encoder seam (Phase-1 Stage 2).
+    ///
+    /// Lower one already-register-allocated `LInst` to machine code via
+    /// `monoasm!`, emitting byte-identical output to the hand-written `emit_*`
+    /// primitive it replaces. Only the migrated families are implemented; the
+    /// rest `todo!()` until their `AsmInst` family is ported onto LIR. See
+    /// `doc/lir.md`.
+    ///
+    pub(in crate::codegen::jitgen) fn encode_linst(&mut self, inst: LInst) {
+        match inst {
+            // dst <- src (elided when src == dst)
+            LInst::Mov { dst, src } => {
+                if src != dst {
+                    let (src, dst) = (src as u64, dst as u64);
+                    monoasm!( &mut self.jit,
+                        movq R(dst), R(src);
+                    );
+                }
+            }
+            // dst <- imm (full 64-bit immediate; x86 movq r64, imm64)
+            LInst::LoadImm { dst, imm } => {
+                let r = dst as u64;
+                monoasm!( &mut self.jit,
+                    movq R(r), (imm);
+                );
+            }
+            // dst <- [lfp - slot]
+            LInst::Load {
+                dst,
+                mem: LMem::Slot(slot),
+            } => {
+                let r = x86_lreg(dst);
+                monoasm!( &mut self.jit,
+                    movq R(r), [rbp - (rbp_local(slot))];
+                );
+            }
+            // dst <- [base + disp] (object field; no immediate-range limit on x86)
+            LInst::Load {
+                dst,
+                mem: LMem::Field { base, disp },
+            } => {
+                let (d, b) = (x86_lreg(dst), x86_lreg(base));
+                monoasm!( &mut self.jit,
+                    movq R(d), [R(b) + (disp)];
+                );
+            }
+            // [lfp - slot] <- src
+            LInst::Store {
+                src,
+                mem: LMem::Slot(slot),
+            } => {
+                let r = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [rbp - (rbp_local(slot))], R(r);
+                );
+            }
+            // [base + disp] <- src (object field; no immediate-range limit on x86)
+            LInst::Store {
+                src,
+                mem: LMem::Field { base, disp },
+            } => {
+                let (s, b) = (src as u64, x86_lreg(base));
+                monoasm!( &mut self.jit,
+                    movq [R(b) + (disp)], R(s);
+                );
+            }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- src (callee-frame arg slot)
+            LInst::Store {
+                src,
+                mem: LMem::RspRel { disp },
+            } => {
+                let s = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [rsp + (disp - RSP_LOCAL_FRAME)], R(s);
+                );
+            }
+            // [lfp - slot] <- imm. Legalization: a 64-bit immediate that does
+            // not fit x86's imm32 store form is staged through rax (mirrors
+            // `literal_to_stack`).
+            LInst::StoreImm {
+                imm,
+                mem: LMem::Slot(slot),
+            } => {
+                if i32::try_from(imm as i64).is_ok() {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (rbp_local(slot))], (imm);
+                    );
+                } else {
+                    monoasm!( &mut self.jit,
+                        movq rax, (imm);
+                        movq [rbp - (rbp_local(slot))], rax;
+                    );
+                }
+            }
+            // [rsp + (disp - RSP_LOCAL_FRAME)] <- imm (callee-frame arg slot)
+            LInst::StoreImm {
+                imm,
+                mem: LMem::RspRel { disp },
+            } => {
+                monoasm!( &mut self.jit,
+                    movq [rsp + (disp - RSP_LOCAL_FRAME)], (imm);
+                );
+            }
+            // dst <op>= imm (in-place register/immediate ALU; the only Alu
+            // shape produced so far, from RegAdd/RegSub). No-op when imm == 0.
+            LInst::Alu {
+                op,
+                dst,
+                lhs,
+                rhs: LOperand::Imm(i),
+            } if dst == lhs => {
+                if i != 0 {
+                    let r = dst as u64;
+                    let imm = i as i32;
+                    match op {
+                        LAluOp::Add => monoasm! { &mut self.jit, addq R(r), (imm); },
+                        LAluOp::Sub => monoasm! { &mut self.jit, subq R(r), (imm); },
+                        _ => todo!(
+                            "LIR encode (x86-64): Alu {op:?} imm not yet migrated (Phase-1 Stage > 2-C)"
+                        ),
+                    }
+                }
+            }
+            // Set flags from `lhs - rhs`. An `Imm` is the operand's raw bit
+            // pattern (a tagged fixnum), passed as u64 so the encoding matches
+            // the hand-written `cmp_integer`.
+            LInst::Cmp { lhs, rhs } => {
+                let l = lhs as u64;
+                match rhs {
+                    LOperand::Reg(r) => monoasm! { &mut self.jit, cmpq R(l), R(r as u64); },
+                    LOperand::Imm(i) => monoasm! { &mut self.jit, cmpq R(l), (i as u64); },
+                }
+            }
+            // Signed conditional branch on the preceding `Cmp` (mirrors
+            // `condbr_int`; the BrKind inversion is folded into `cond` by the
+            // builder).
+            LInst::CondBr { cond, target } => match cond {
+                LCond::Eq => monoasm! { &mut self.jit, jeq target; },
+                LCond::Ne => monoasm! { &mut self.jit, jne target; },
+                LCond::Lt => monoasm! { &mut self.jit, jlt target; },
+                LCond::Le => monoasm! { &mut self.jit, jle target; },
+                LCond::Gt => monoasm! { &mut self.jit, jgt target; },
+                LCond::Ge => monoasm! { &mut self.jit, jge target; },
+            },
+            // Ruby-truthiness branch: `orq 0x10` folds nil(0x04)/false(0x14) to
+            // FALSE_VALUE; truthy (non-FALSE) takes jnz, falsy takes jz.
+            LInst::BranchTruthy { negate, target } => {
+                monoasm! { &mut self.jit,
+                    orq  rax, 0x10;
+                    cmpq rax, (FALSE_VALUE);
+                };
+                if negate {
+                    monoasm! { &mut self.jit, jz  target; }
+                } else {
+                    monoasm! { &mut self.jit, jnz target; }
+                }
+            }
+            LInst::BranchIfNil { target } => {
+                monoasm! { &mut self.jit,
+                    cmpq rax, (NIL_VALUE);
+                    jeq  target;
+                }
+            }
+            LInst::BranchIfNonzero { target } => {
+                monoasm! { &mut self.jit,
+                    testq rax, rax;
+                    jnz  target;
+                }
+            }
+            // GC write barrier (parent is fixed in rdi on x86).
+            LInst::WriteBarrier { parent, value } => {
+                debug_assert_eq!(parent, GP::Rdi, "x86 write barrier expects parent in rdi");
+                self.emit_write_barrier_rdi(value);
+            }
+            // reg <- nil if reg == 0 (x86: branch over the nil mov).
+            LInst::NilIfZero { reg } => {
+                let r = reg as u64;
+                let skip = self.jit.label();
+                monoasm! { &mut self.jit,
+                    testq R(r), R(r);
+                    jne  skip;
+                    movq R(r), (NIL_VALUE);
+                skip:
+                }
+            }
+            // Type / class guards: deopt (jump to the side-exit) on a mismatch.
+            LInst::GuardClass { reg, class, deopt } => self.guard_class(reg, class, &deopt),
+            LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
+            LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
+            // Constant-load base-class guard: deopt unless the accumulator equals
+            // the cached base class.
+            LInst::GuardConstBaseClass { base_class, deopt } => {
+                let cached_base_class = self.jit.const_i64(base_class.id() as _);
+                monoasm! { &mut self.jit,
+                    cmpq rax, [rip + cached_base_class];
+                    jne  deopt;
+                }
+            }
+            LInst::GuardConstVersion { const_version, deopt } => {
+                self.guard_const_version(const_version, &deopt);
+            }
+            // Fixnum fast-path arithmetic with an overflow deopt.
+            LInst::IntegerBinOp {
+                kind,
+                mode,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                self.integer_binop(lhs, rhs, &mode, kind, &deopt);
+            }
+            // Fixnum unary negate (tagged); deopt on i63 overflow.
+            LInst::FixnumNeg { reg, deopt } => {
+                let r = reg as u64;
+                monoasm! { &mut self.jit,
+                    sarq  R(r), 1;
+                    negq  R(r);
+                    jo    deopt;
+                    addq  R(r), R(r);
+                    jo    deopt;
+                    orq   R(r), 1;
+                }
+            }
+            // Fixnum bitwise-not (tagged); cannot overflow.
+            LInst::FixnumBitNot { reg } => {
+                let r = reg as u64;
+                monoasm! { &mut self.jit,
+                    sarq  R(r), 1;
+                    notq  R(r);
+                    salq  R(r), 1;
+                    orq   R(r), 1;
+                }
+            }
+            // ---- FP transfer / convert (spill-aware) -------------------------
+            LInst::FprMove { src, dst, base } => {
+                if src != dst {
+                    match (src.loc(base), dst.loc(base)) {
+                        (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
+                            movq xmm(d), xmm(s);
+                        ),
+                        (FPRegLoc::Xmm(s), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                            movq [rbp - (d_off)], xmm(s);
+                        ),
+                        (FPRegLoc::Spill(s_off), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
+                            movq xmm(d), [rbp - (s_off)];
+                        ),
+                        (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (s_off)];
+                            movq [rbp - (d_off)], xmm0;
+                        ),
+                    }
+                }
+            }
+            LInst::F64ToFpr { f, dst, base } => {
+                let f_const = self.jit.const_f64(f);
+                match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f_const];
+                    ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f_const];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
+            }
+            LInst::FixnumToFpr { src, dst, base } => {
+                let (work, spill_off) = match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => (p, None),
+                    FPRegLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.integer_val_to_f64(src, work);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
+            }
+            LInst::FprToStack { src, slot, base } => {
+                self.fpr_to_stack(src, &[slot], base);
+            }
+            LInst::FprSwap { lhs, rhs, base } => {
+                if lhs != rhs {
+                    match (lhs.loc(base), rhs.loc(base)) {
+                        (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
+                            movq xmm0, xmm(lp);
+                            movq xmm(lp), xmm(rp);
+                            movq xmm(rp), xmm0;
+                        ),
+                        (FPRegLoc::Xmm(lp), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (r_off)];
+                            movq [rbp - (r_off)], xmm(lp);
+                            movq xmm(lp), xmm0;
+                        ),
+                        (FPRegLoc::Spill(l_off), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (l_off)];
+                            movq [rbp - (l_off)], xmm(rp);
+                            movq xmm(rp), xmm0;
+                        ),
+                        (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
+                            movq xmm0, [rbp - (l_off)];
+                            movq xmm1, [rbp - (r_off)];
+                            movq [rbp - (r_off)], xmm0;
+                            movq [rbp - (l_off)], xmm1;
+                        ),
+                    }
+                }
+            }
+            LInst::FloatToFpr { src, dst, deopt, base } => {
+                let (work, spill_off) = match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => (p, None),
+                    FPRegLoc::Spill(off) => (0u64, Some(off)),
+                };
+                self.float_to_f64(src, work, &deopt);
+                if let Some(off) = spill_off {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], xmm(work);
+                    );
+                }
+            }
+            LInst::I64ToBoth { i, slot, dst, base } => {
+                let f = self.jit.const_f64(i as f64);
+                monoasm! {&mut self.jit,
+                    movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
+                }
+                match dst.loc(base) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                        movq xmm(p), [rip + f];
+                    ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                        movq xmm0, [rip + f];
+                        movq [rbp - (off)], xmm0;
+                    ),
+                }
+            }
+            // ---- FP arithmetic / comparison ----------------------------------
+            LInst::FloatBinOp { kind, lhs, rhs, dst, base } => {
+                self.float_binop(kind, dst, (lhs, rhs), base);
+            }
+            LInst::FloatUnOp { kind, dst, base } => match kind {
+                UnOpK::Neg => {
+                    let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
+                    match dst.loc(base) {
+                        FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
+                            xorps xmm(p), [rip + imm];
+                        ),
+                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
+                            movq  xmm0, [rbp - (off)];
+                            xorps xmm0, [rip + imm];
+                            movq  [rbp - (off)], xmm0;
+                        ),
+                    }
+                }
+                UnOpK::Pos => {}
+                _ => unreachable!(),
+            },
+            LInst::FloatCmp { kind, lhs, rhs, base } => {
+                monoasm! { &mut self.jit,
+                    xorq rax, rax;
+                };
+                self.cmp_float((lhs, rhs), base);
+                self.setflag_float(kind);
+            }
+            LInst::FloatCmpBr {
+                kind,
+                lhs,
+                rhs,
+                brkind,
+                dest,
+                base,
+            } => {
+                self.cmp_float((lhs, rhs), base);
+                self.condbr_float(kind, dest, brkind);
+            }
+            // ---- FP pool save/restore + FP C-calls ---------------------------
+            LInst::XmmSave { using_xmm, cont } => self.xmm_save_with_cont(using_xmm, cont),
+            LInst::XmmRestore { using_xmm, cont } => self.xmm_restore_with_cont(using_xmm, cont),
+            LInst::CFunc_F_F { f, src, dst, using_xmm, base } => {
+                self.xmm_save(using_xmm);
+                self.load_fpr_into_xmm0(src, base);
+                monoasm!( &mut self.jit,
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                self.store_fpr_into_xmm(dst, base);
+            }
+            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm, base } => {
+                self.xmm_save(using_xmm);
+                self.load_fpr_into_xmm0(lhs, base);
+                self.load_fpr_into_xmm1(rhs, base);
+                monoasm!( &mut self.jit,
+                    movq rax, (f);
+                    call rax;
+                );
+                self.xmm_restore(using_xmm);
+                self.store_fpr_into_xmm(dst, base);
+            }
+            LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
+            // BOP-redefinition guard: outline the deopt path (page 1) so the hot
+            // path is a single load + branch.
+            LInst::CheckBOP { deopt } => {
+                let bop_flag = self.bop_redefined_flags.clone();
+                let l1 = self.jit.label();
+                assert_eq!(0, self.jit.get_page());
+                monoasm!(
+                    &mut self.jit,
+                    cmpl [rip + bop_flag], 0;
+                    jnz l1;
+                );
+                self.jit.select_page(1);
+                monoasm!( &mut self.jit,
+                l1:
+                    movq rdi, (Value::symbol_from_str("_bop_guard").id());
+                    jmp  deopt;
+                );
+                self.jit.select_page(0);
+            }
+            // Cold side-exit (deopt) handler blocks. Dispatch on the kind to the
+            // existing x86 handler emitters (defined in `jitgen.rs`).
+            LInst::SideExit {
+                kind,
+                pc,
+                wb,
+                entry,
+                loop_jit_spill_bytes,
+                base,
+            } => match kind {
+                LSideExitKind::Deopt => {
+                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                LSideExitKind::Evict => {
+                    self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                LSideExitKind::RecompileDeopt { reason, position } => self
+                    .gen_recompile_deopt_with_label(
+                        pc,
+                        &wb,
+                        reason,
+                        position,
+                        entry,
+                        loop_jit_spill_bytes,
+                        base,
+                    ),
+                LSideExitKind::Error => self.gen_handle_error(pc, wb, entry, base),
+            },
+            // Macro-ops (irreducible runtime-call shapes) are delegated to the
+            // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
+            other => self.encode_linst_macro(other),
         }
     }
 
     /// [lfp - slot] <- reg
-    pub(in crate::codegen::jitgen) fn emit_reg_to_stack(&mut self, r: GP, slot: SlotId) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq [rbp - (rbp_local(slot))], R(r);
-        );
-    }
-
-    /// reg <- [lfp - slot]
-    pub(in crate::codegen::jitgen) fn emit_stack_to_reg(&mut self, slot: SlotId, r: GP) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq R(r), [rbp - (rbp_local(slot))];
-        );
-    }
-
-    /// reg <- literal Value (immediate)
-    pub(in crate::codegen::jitgen) fn emit_lit_to_reg(&mut self, v: Value, r: GP) {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq R(r), (v.id());
-        );
-    }
-
-    /// [lfp - slot] <- literal Value. Always succeeds on x86 (no immediate-range
-    /// limit); the bool result exists for the aarch64 twin.
-    pub(in crate::codegen::jitgen) fn emit_lit_to_stack(&mut self, v: Value, slot: SlotId) -> bool {
-        self.literal_to_stack(slot, v);
-        true
-    }
-
-    /// Conditional branch on the truthiness of the accumulator (rax).
-    pub(in crate::codegen::jitgen) fn emit_cond_br(&mut self, dest: DestLabel, brkind: BrKind) {
-        self.cond_br(dest, brkind);
-    }
-
-    /// Branch to dest if the accumulator (rax) is nil.
-    pub(in crate::codegen::jitgen) fn emit_nil_br(&mut self, dest: DestLabel) {
-        monoasm!( &mut self.jit,
-            cmpq rax, (NIL_VALUE);
-            jeq  dest;
-        );
-    }
-
-    /// Branch to dest if the local (accumulator, rax) is already set (non-zero).
-    pub(in crate::codegen::jitgen) fn emit_check_local(&mut self, dest: DestLabel) {
-        monoasm!( &mut self.jit,
-            testq rax, rax;
-            jnz  dest;
-        );
-    }
-
-    /// Type guard: deopt (jump to `fail`) if `r`'s class is not `class`.
-    /// Always succeeds on x86 (the bool result exists for the aarch64 twin,
-    /// which bails on not-yet-supported class kinds).
-    pub(in crate::codegen::jitgen) fn emit_guard_class(
-        &mut self,
-        r: GP,
-        class: ClassId,
-        fail: &DestLabel,
-    ) -> bool {
-        self.guard_class(r, class, fail);
-        true
-    }
-
     /// Unconditional jump to a side-exit (deopt) label.
     pub(in crate::codegen::jitgen) fn emit_deopt(&mut self, deopt: &DestLabel) {
         monoasm!( &mut self.jit,
@@ -337,29 +726,6 @@ impl Codegen {
     ) -> bool {
         self.jit_execute_gc(&write_back, error, base);
         true
-    }
-
-    /// Constant base-class guard: deopt if the accumulator (rax) is not the
-    /// cached base class.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_base_class(
-        &mut self,
-        base_class: Value,
-        deopt: &DestLabel,
-    ) {
-        let cached_base_class = self.jit.const_i64(base_class.id() as _);
-        monoasm! { &mut self.jit,
-            cmpq rax, [rip + cached_base_class];  // rax: base_class
-            jne  deopt;
-        }
-    }
-
-    /// Constant version guard: deopt if the global constant version moved.
-    pub(in crate::codegen::jitgen) fn emit_guard_const_version(
-        &mut self,
-        const_version: usize,
-        deopt: &DestLabel,
-    ) {
-        self.guard_const_version(const_version, deopt);
     }
 
     /// Store the accumulator to a constant and bump the global constant
@@ -885,166 +1251,6 @@ impl Codegen {
         true
     }
 
-    ///
-    /// Spill-aware xmm-to-xmm move. Each operand may live in a phys
-    /// xmm or a spill slot; we emit the cheapest form for each
-    /// combination and avoid the round-trip through xmm0 that the
-    /// generic `expand_spills` wrapping would otherwise produce.
-    ///
-    /// dst(f64) <- src. Spill-aware. Always succeeds on x86 (the bool result
-    /// exists for the aarch64 twin, which bails on an unlowerable FP register).
-    pub(in crate::codegen::jitgen) fn emit_fpr_move(
-        &mut self,
-        src: FPReg,
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        if src == dst {
-            return true;
-        }
-        match (src.loc(base), dst.loc(base)) {
-            (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
-                movq xmm(d), xmm(s);
-            ),
-            (FPRegLoc::Xmm(s), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
-                movq [rbp - (d_off)], xmm(s);
-            ),
-            (FPRegLoc::Spill(s_off), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
-                movq xmm(d), [rbp - (s_off)];
-            ),
-            (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (s_off)];
-                movq [rbp - (d_off)], xmm0;
-            ),
-        }
-        true
-    }
-
-    ///
-    /// Spill-aware xmm swap. When both operands are spilled we swap
-    /// the two memory slots through xmm0+xmm1 (avoiding rax/rcx so
-    /// nothing in the surrounding code's GP state is disturbed).
-    ///
-    pub(in crate::codegen::jitgen) fn emit_fpr_swap(
-        &mut self,
-        l: FPReg,
-        r: FPReg,
-        base: usize,
-    ) -> bool {
-        if l == r {
-            return true;
-        }
-        match (l.loc(base), r.loc(base)) {
-            (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
-                movq xmm0, xmm(lp);
-                movq xmm(lp), xmm(rp);
-                movq xmm(rp), xmm0;
-            ),
-            (FPRegLoc::Xmm(lp), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (r_off)];
-                movq [rbp - (r_off)], xmm(lp);
-                movq xmm(lp), xmm0;
-            ),
-            (FPRegLoc::Spill(l_off), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (l_off)];
-                movq [rbp - (l_off)], xmm(rp);
-                movq xmm(rp), xmm0;
-            ),
-            (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
-                movq xmm0, [rbp - (l_off)];
-                movq xmm1, [rbp - (r_off)];
-                movq [rbp - (r_off)], xmm0;
-                movq [rbp - (l_off)], xmm1;
-            ),
-        }
-        true
-    }
-
-    /// xmm(x) <- f64 constant `f`. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_f64_to_fpr(&mut self, f: f64, x: FPReg, base: usize) -> bool {
-        let f_const = self.jit.const_f64(f);
-        match x.loc(base) {
-            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                movq xmm(p), [rip + f_const];
-            ),
-            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                movq xmm0, [rip + f_const];
-                movq [rbp - (off)], xmm0;
-            ),
-        }
-        true
-    }
-
-    /// xmm(x) <- the fixnum in GP `r`, converted to f64. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_to_fpr(&mut self, r: GP, x: FPReg, base: usize) -> bool {
-        let (work, spill_off) = match x.loc(base) {
-            FPRegLoc::Xmm(p) => (p, None),
-            FPRegLoc::Spill(off) => (0u64, Some(off)),
-        };
-        self.integer_val_to_f64(r, work);
-        if let Some(off) = spill_off {
-            monoasm!( &mut self.jit,
-                movq [rbp - (off)], xmm(work);
-            );
-        }
-        true
-    }
-
-    /// xmm(x) <- the Float Value in GP `reg`, decoded to f64; deopt if `reg` is
-    /// not a Float. Spill-aware.
-    pub(in crate::codegen::jitgen) fn emit_float_to_fpr(
-        &mut self,
-        reg: GP,
-        x: FPReg,
-        deopt: &DestLabel,
-        base: usize,
-    ) -> bool {
-        let (work, spill_off) = match x.loc(base) {
-            FPRegLoc::Xmm(p) => (p, None),
-            FPRegLoc::Spill(off) => (0u64, Some(off)),
-        };
-        self.float_to_f64(reg, work, deopt);
-        if let Some(off) = spill_off {
-            monoasm!( &mut self.jit,
-                movq [rbp - (off)], xmm(work);
-            );
-        }
-        true
-    }
-
-    /// [slot] <- box(xmm(x)) (flonum-encode or heap-allocate the f64).
-    pub(in crate::codegen::jitgen) fn emit_fpr_to_stack(&mut self, x: FPReg, slot: SlotId, base: usize) -> bool {
-        self.fpr_to_stack(x, &[slot], base);
-        true
-    }
-
-    /// Save the live FP pool registers before a C-call. Always succeeds on x86
-    /// (the bool result mirrors the aarch64 twin).
-    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        self.xmm_save_with_cont(using_xmm, cont);
-        true
-    }
-
-    /// Restore the live FP pool registers after a C-call.
-    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        self.xmm_restore_with_cont(using_xmm, cont);
-        true
-    }
-
-    /// Integer binary op fast path (guarded; deopts to `deopt` on overflow /
-    /// type miss). Always succeeds on x86 (the bool mirrors the aarch64 twin).
-    pub(in crate::codegen::jitgen) fn emit_integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        kind: BinOpK,
-        deopt: DestLabel,
-    ) -> bool {
-        self.integer_binop(lhs, rhs, &mode, kind, &deopt);
-        true
-    }
-
     /// Integer comparison; result Value lands in the accumulator.
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
@@ -1057,97 +1263,6 @@ impl Codegen {
         true
     }
 
-    /// Fused integer compare + conditional branch to `branch_dest`.
-    pub(in crate::codegen::jitgen) fn emit_integer_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        mode: OpMode,
-        lhs: GP,
-        rhs: GP,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-    ) -> bool {
-        self.cmp_integer(&mode, lhs, rhs);
-        self.condbr_int(kind, branch_dest, brkind);
-        true
-    }
-
-    /// Float (four-arithmetic) binary op: dst <- lhs <op> rhs in FP registers.
-    pub(in crate::codegen::jitgen) fn emit_float_binop(
-        &mut self,
-        kind: BinOpK,
-        binary_xmm: (FPReg, FPReg),
-        dst: FPReg,
-        base: usize,
-    ) -> bool {
-        self.float_binop(kind, dst, binary_xmm, base);
-        true
-    }
-
-    /// Float unary op: negate (flip the sign bit) or unary-plus (no-op).
-    pub(in crate::codegen::jitgen) fn emit_float_unop(&mut self, kind: UnOpK, dst: FPReg, base: usize) -> bool {
-        match kind {
-            UnOpK::Neg => {
-                let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                match dst.loc(base) {
-                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                        xorps xmm(p), [rip + imm];
-                    ),
-                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                        movq  xmm0, [rbp - (off)];
-                        xorps xmm0, [rip + imm];
-                        movq  [rbp - (off)], xmm0;
-                    ),
-                }
-            }
-            UnOpK::Pos => {}
-            _ => unreachable!(),
-        }
-        true
-    }
-
-    /// [slot] <- box(i) (integer Value) and fpr(x) <- i as f64.
-    pub(in crate::codegen::jitgen) fn emit_i64_to_both(&mut self, i: i64, slot: SlotId, x: FPReg, base: usize) -> bool {
-        let f = self.jit.const_f64(i as f64);
-        monoasm! {&mut self.jit,
-            movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
-        }
-        match x.loc(base) {
-            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
-                movq xmm(p), [rip + f];
-            ),
-            FPRegLoc::Spill(off) => monoasm!( &mut self.jit,
-                movq xmm0, [rip + f];
-                movq [rbp - (off)], xmm0;
-            ),
-        }
-        true
-    }
-
-    /// Float comparison; NaN-correct boolean Value lands in the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_float_cmp(&mut self, kind: CmpKind, lhs: FPReg, rhs: FPReg, base: usize) -> bool {
-        monoasm! { &mut self.jit,
-            xorq rax, rax;
-        };
-        self.cmp_float((lhs, rhs), base);
-        self.setflag_float(kind);
-        true
-    }
-
-    /// Fused float compare + conditional branch (NaN compares false except `!=`).
-    pub(in crate::codegen::jitgen) fn emit_float_cmp_br(
-        &mut self,
-        kind: CmpKind,
-        lhs: FPReg,
-        rhs: FPReg,
-        brkind: BrKind,
-        branch_dest: DestLabel,
-        base: usize,
-    ) -> bool {
-        self.cmp_float((lhs, rhs), base);
-        self.condbr_float(kind, branch_dest, brkind);
-        true
-    }
 
     /// Method epilogue: tear down the frame and return.
     pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
@@ -1175,20 +1290,17 @@ impl Codegen {
     /// it with `cond - min`.
     pub(in crate::codegen::jitgen) fn emit_opt_case(
         &mut self,
-        frame: &mut AsmInfo,
         max: u16,
         min: u16,
-        else_label: JitLabel,
-        branch_labels: Box<[JitLabel]>,
+        else_dest: DestLabel,
+        branch_dests: Box<[DestLabel]>,
     ) {
         // generate a jump table.
         let jump_table = self.jit.const_align8();
-        for label in branch_labels.iter() {
-            let dest_label = frame.resolve_label(&mut self.jit, *label);
-            self.jit.abs_address(dest_label);
+        for dest_label in branch_dests.iter() {
+            self.jit.abs_address(dest_label.clone());
         }
 
-        let else_dest = frame.resolve_label(&mut self.jit, else_label);
         monoasm! {&mut self.jit,
             sarq rdi, 1;
             cmpq rdi, (max);
@@ -1221,49 +1333,27 @@ impl Codegen {
         self.guard_class_version(class_version, position, with_recovery, &deopt);
     }
 
-    /// Write the callee frame's meta/outer/block fields before a call.
+    /// Write the callee frame's meta/outer/block fields before a call. The
+    /// store-dependent block info is pre-resolved by the dispatcher.
     pub(in crate::codegen::jitgen) fn emit_setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
-        self.setup_method_frame(store, meta, callid, outer_lfp);
+        self.setup_method_frame(meta, outer_lfp, block_fid, block_arg);
     }
 
-    /// Marshal the call arguments into the callee frame. Always succeeds on x86
-    /// (the bool result mirrors the aarch64 twin, which bails on unsupported
-    /// argument shapes).
+    /// Marshal the call arguments into the callee frame (`offset` is the callee
+    /// scratch-area size, pre-resolved by the dispatcher).
     pub(in crate::codegen::jitgen) fn emit_set_arguments(
         &mut self,
-        store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-    ) -> bool {
-        let offset = store[callee_fid].get_offset();
+        offset: usize,
+    ) {
         self.jit_set_arguments(callid, callee_fid, offset);
-        true
-    }
-
-    /// Basic-operator-redefinition guard: deopt (via the `_bop_guard` symbol) if
-    /// any BOP has been redefined since compilation.
-    pub(in crate::codegen::jitgen) fn emit_check_bop(&mut self, deopt: &DestLabel) {
-        let bop_flag = self.bop_redefined_flags.clone();
-        let l1 = self.jit.label();
-        assert_eq!(0, self.jit.get_page());
-        monoasm!(
-            &mut self.jit,
-            cmpl [rip + bop_flag], 0;
-            jnz l1;
-        );
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        l1:
-            movq rdi, (Value::symbol_from_str("_bop_guard").id());
-            jmp  deopt;
-        );
-        self.jit.select_page(0);
     }
 
     /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
@@ -1280,21 +1370,6 @@ impl Codegen {
         self.recompile_and_deopt(position, deopt, reason);
     }
 
-    /// The call itself: enter the callee and record a return-address deopt
-    /// patch point for `evict`.
-    pub(in crate::codegen::jitgen) fn emit_call(
-        &mut self,
-        store: &Store,
-        callee_fid: FuncId,
-        recv_class: ClassId,
-        evict: AsmEvict,
-        evict_label: &DestLabel,
-        pc: BytecodePtr,
-    ) {
-        let return_addr = self.do_call(store, callee_fid, recv_class, pc);
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
-    }
-
     /// Method prologue. Always succeeds on x86 (the bool result mirrors the
     /// aarch64 twin, which bails on an over-large frame).
     pub(in crate::codegen::jitgen) fn emit_init(
@@ -1307,16 +1382,11 @@ impl Codegen {
     }
 
     /// Per-method ivar-cache preparation: ensure the heap ivar table is large
-    /// enough (extending it via a runtime call if not). No-op for frozen/
-    /// inline-only selves. Always succeeds on x86.
-    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, store: &Store, frame: &AsmInfo) -> bool {
-        if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
-            let ivar_len = store[frame.self_class].ivar_len();
-            let heap_len = if frame.self_ty == Some(ObjTy::OBJECT) {
-                ivar_len - OBJECT_INLINE_IVAR
-            } else {
-                ivar_len
-            };
+    /// enough (extending it via a runtime call if not). `heap_len` is `None`
+    /// for a frozen / inline-only self (no-op); the value is pre-resolved by the
+    /// dispatcher.
+    pub(in crate::codegen::jitgen) fn emit_preparation(&mut self, heap_len: Option<usize>) {
+        if let Some(heap_len) = heap_len {
             let fail = self.jit.label();
             let exit = self.jit.label();
             monoasm!(&mut self.jit,
@@ -1344,94 +1414,6 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-        true
-    }
-
-    /// Fixnum negate (tagged): untag, negate, re-tag; deopt on i63 overflow.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_neg(&mut self, reg: GP, deopt: &DestLabel) {
-        let r = reg as u64;
-        monoasm! { &mut self.jit,
-            sarq  R(r), 1;
-            negq  R(r);
-            jo    deopt;
-            addq  R(r), R(r);
-            jo    deopt;
-            orq   R(r), 1;
-        }
-    }
-
-    /// Fixnum bitwise-not (tagged): untag, complement, re-tag. Cannot overflow.
-    pub(in crate::codegen::jitgen) fn emit_fixnum_bit_not(&mut self, reg: GP) {
-        let r = reg as u64;
-        monoasm! { &mut self.jit,
-            sarq  R(r), 1;
-            notq  R(r);
-            salq  R(r), 1;
-            orq   R(r), 1;
-        }
-    }
-
-    /// Guard that `reg` is an Array RValue; deopt otherwise.
-    pub(in crate::codegen::jitgen) fn emit_guard_array_ty(&mut self, reg: GP, deopt: &DestLabel) {
-        self.guard_array_ty(reg, deopt);
-    }
-
-    /// Guard that the receiver in rdi is not frozen; deopt otherwise.
-    pub(in crate::codegen::jitgen) fn emit_guard_frozen(&mut self, deopt: &DestLabel) {
-        self.guard_frozen(deopt);
-    }
-
-    /// Load an inline (object-embedded) instance variable into the accumulator,
-    /// substituting nil for an unset slot.
-    pub(in crate::codegen::jitgen) fn emit_load_ivar_inline(&mut self, ivarid: IvarId) -> bool {
-        self.load_ivar_inline(ivarid);
-        true
-    }
-
-    /// Store the accumulator-side `src` into an inline instance-variable slot.
-    pub(in crate::codegen::jitgen) fn emit_store_ivar_inline(&mut self, src: GP, ivarid: IvarId) -> bool {
-        self.store_ivar_object_inline(src, ivarid);
-        true
-    }
-
-    /// Load an inline Struct member slot into the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_inline(&mut self, slot_index: u16) -> bool {
-        self.load_struct_slot_inline(slot_index);
-        true
-    }
-
-    /// Store `src` into an inline Struct member slot (also returned in rax).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_inline(&mut self, src: GP, slot_index: u16) -> bool {
-        self.store_struct_slot_inline(src, slot_index);
-        true
-    }
-
-    /// Load a heap-spilled Struct member slot into the accumulator.
-    pub(in crate::codegen::jitgen) fn emit_load_struct_slot_heap(&mut self, slot_index: u16) -> bool {
-        self.load_struct_slot_heap(slot_index);
-        true
-    }
-
-    /// Store `src` into a heap-spilled Struct member slot (also returned in rax).
-    pub(in crate::codegen::jitgen) fn emit_store_struct_slot_heap(&mut self, src: GP, slot_index: u16) -> bool {
-        self.store_struct_slot_heap(src, slot_index);
-        true
-    }
-
-    /// reg += i (no-op when i == 0).
-    pub(in crate::codegen::jitgen) fn emit_reg_add(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let r = reg as u64;
-            monoasm! { &mut self.jit, addq R(r), (i); }
-        }
-    }
-
-    /// reg -= i (no-op when i == 0).
-    pub(in crate::codegen::jitgen) fn emit_reg_sub(&mut self, reg: GP, i: i32) {
-        if i != 0 {
-            let r = reg as u64;
-            monoasm! { &mut self.jit, subq R(r), (i); }
-        }
     }
 
     /// Loop-JIT entry: reserve the loop body's spill area on the native stack.
@@ -1440,18 +1422,6 @@ impl Codegen {
         if bytes > 0 {
             monoasm! { &mut self.jit, subq rsp, (bytes as i32); }
         }
-        true
-    }
-
-    /// Store the accumulator-side `src` into a heap-spilled instance variable of
-    /// self (no bounds check; the table is pre-sized).
-    pub(in crate::codegen::jitgen) fn emit_store_self_ivar_heap(
-        &mut self,
-        src: GP,
-        ivarid: IvarId,
-        is_object_ty: bool,
-    ) -> bool {
-        self.store_self_ivar_heap(src, ivarid, is_object_ty);
         true
     }
 
@@ -1691,51 +1661,6 @@ impl Codegen {
         true
     }
 
-    // ---- float C-function calls (the former per-arch arms, verbatim) ----
-
-    pub(in crate::codegen::jitgen) fn emit_cfunc_f_f(
-        &mut self,
-        f: unsafe extern "C" fn(f64) -> f64,
-        src: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        self.xmm_save(using_xmm);
-        self.load_fpr_into_xmm0(src, base);
-        monoasm!( &mut self.jit,
-            movq rax, (f);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-        self.store_fpr_into_xmm(dst, base);
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_cfunc_ff_f(
-        &mut self,
-        f: extern "C" fn(f64, f64) -> f64,
-        lhs: FPReg,
-        rhs: FPReg,
-        dst: FPReg,
-        using_xmm: UsingXmm,
-        base: usize,
-    ) -> bool {
-        self.xmm_save(using_xmm);
-        // Load both args into xmm0/xmm1 (the SysV ABI passes f64 args
-        // in xmm0, xmm1, ...). Pool ids resolve to xmm2..xmm15, so a
-        // Phys source can never alias the scratch register written into.
-        self.load_fpr_into_xmm0(lhs, base);
-        self.load_fpr_into_xmm1(rhs, base);
-        monoasm!( &mut self.jit,
-            movq rax, (f);
-            call rax;
-        );
-        self.xmm_restore(using_xmm);
-        self.store_fpr_into_xmm(dst, base);
-        true
-    }
-
     // ---- method definition (the former per-arch arms, verbatim) ----
 
     pub(in crate::codegen::jitgen) fn emit_method_def(
@@ -1838,36 +1763,6 @@ impl Codegen {
         true
     }
 
-    // ---- callee-frame argument stores (former per-arch arms) ----
-
-    pub(in crate::codegen::jitgen) fn emit_reg_to_rsp_offset(&mut self, r: GP, ofs: i32) -> bool {
-        let r = r as u64;
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], R(r);
-        );
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_zero_to_rsp_offset(&mut self, ofs: i32) -> bool {
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], 0;
-        );
-        true
-    }
-
-    pub(in crate::codegen::jitgen) fn emit_u64_to_rsp_offset(&mut self, i: u64, ofs: i32) -> bool {
-        monoasm!( &mut self.jit,
-            movq [rsp + (ofs - RSP_LOCAL_FRAME)], (i);
-        );
-        true
-    }
-
-    // ---- block-passing side-effect guard (former per-arch arm) ----
-
-    pub(in crate::codegen::jitgen) fn emit_guard_capture(&mut self, deopt: &DestLabel) -> bool {
-        self.guard_capture(deopt);
-        true
-    }
 
     // ---- &block forwarding (former per-arch arms) ----
 

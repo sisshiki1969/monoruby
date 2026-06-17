@@ -16,7 +16,7 @@ use crate::{
 pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
-use state::{LinkMode, ReturnState};
+use state::{DeoptPoint, LinkMode, ReturnState, TransferIR};
 
 use super::*;
 use asmir::*;
@@ -38,6 +38,8 @@ mod guard;
 #[cfg(target_arch = "aarch64")]
 #[path = "arch/aarch64/guard.rs"]
 mod guard;
+// Unified low-level IR (Phase-1 Stage 1: data model only, not yet wired in).
+mod lir;
 mod merge;
 mod state;
 pub mod trace_ir;
@@ -80,7 +82,7 @@ enum CompileResult {
     Abort,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct JitLabel(usize);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -218,7 +220,7 @@ impl WriteBack {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct UsingXmm {
     inner: bitvec::prelude::BitArr!(for 14, in u16),
 }
@@ -428,6 +430,13 @@ impl Codegen {
 
         let ir_vec = frame.detach_ir();
 
+        // Jump-threading: drop empty outline-bridge forwarders and alias their
+        // entry labels straight to the destination block. Done *before* the
+        // main emission loop so the source branches (emitted there) resolve
+        // through the alias. The surviving non-empty bridges are emitted after
+        // the main loop as before.
+        let outline_bridges = frame.thread_empty_outline_bridges();
+
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
@@ -438,8 +447,21 @@ impl Codegen {
         });
 
         // generate machine code for a main context and inlined bridges.
+        //
+        // `fallthrough_in` tracks whether the next emission is reachable by
+        // fall-through from the code just laid down. The first block is
+        // entered from the prologue (which falls into it) and via
+        // `entry_label`, both of which land *before* the block's inline
+        // side-exit handlers, so it starts `true`. Once a block ends in an
+        // unconditional terminator (or a bridge ends in an unconditional
+        // `b exit`), the following block is reached only by branches to its
+        // body label — which bind *after* the handlers — so its `b skip`
+        // over those handlers is dead and `gen_asm` (aarch64) drops it.
+        let mut fallthrough_in = true;
         for (bbid, ir) in ir_vec.into_iter() {
-            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone());
+            let main_ends = ir.ends_unconditionally();
+            self.gen_asm(ir, store, &mut frame, None, None, class_version.clone(), fallthrough_in);
+            fallthrough_in = !main_ends;
             // generate machine code for the inlined bridge
             if let Some((ir, exit)) = frame.remove_inline_bridge(bbid) {
                 let exit = if let Some(bbid) = bbid {
@@ -453,12 +475,18 @@ impl Codegen {
                 } else {
                     None
                 };
-                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone());
+                let bridge_ends = exit.is_some() || ir.ends_unconditionally();
+                self.gen_asm(ir, store, &mut frame, None, exit, class_version.clone(), fallthrough_in);
+                fallthrough_in = !bridge_ends;
             }
         }
 
-        // generate machine code for outlined bridges
-        for (ir, entry, exit) in frame.detach_outline_bridges() {
+        // generate machine code for the surviving (non-empty) outlined
+        // bridges. Each is reached only via its `entry` label (it is
+        // *outlined* cold code, never fallen into) and ends in an
+        // unconditional `b exit`, so neither it nor its successor is
+        // fall-through reachable.
+        for (ir, entry, exit) in outline_bridges {
             let entry = frame.resolve_label(&mut self.jit, entry);
             self.gen_asm(
                 ir,
@@ -467,6 +495,7 @@ impl Codegen {
                 Some(entry),
                 Some(exit),
                 class_version.clone(),
+                false,
             );
         }
 
@@ -862,7 +891,13 @@ impl JitModule {
 
 #[cfg(target_arch = "x86_64")]
 impl Codegen {
-    fn gen_handle_error(&mut self, pc: BytecodePtr, wb: WriteBack, entry: DestLabel, base: usize) {
+    pub(in crate::codegen) fn gen_handle_error(
+        &mut self,
+        pc: BytecodePtr,
+        wb: WriteBack,
+        entry: DestLabel,
+        base: usize,
+    ) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -883,7 +918,7 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_deopt_with_label(
+    pub(in crate::codegen) fn gen_deopt_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,
@@ -903,7 +938,7 @@ impl Codegen {
     /// monomorphic-compiled BinCmp sites so they flip to the
     /// non-deopting polymorphic path (Part B).
     ///
-    fn gen_recompile_deopt_with_label(
+    pub(in crate::codegen) fn gen_recompile_deopt_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,
@@ -927,7 +962,7 @@ impl Codegen {
     ///
     /// Get *DestLabel* for fallback to interpreter by immediate eviction.
     ///
-    fn gen_evict_with_label(
+    pub(in crate::codegen) fn gen_evict_with_label(
         &mut self,
         pc: BytecodePtr,
         wb: &WriteBack,

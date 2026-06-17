@@ -159,12 +159,11 @@ impl Codegen {
     ///
     pub(super) fn setup_method_frame(
         &mut self,
-        store: &Store,
         meta: Meta,
-        callid: CallSiteId,
         outer_lfp: Option<Lfp>,
+        block_fid: Option<FuncId>,
+        block_arg: Option<SlotId>,
     ) {
-        let callsite = &store[callid];
         if let Some(outer_lfp) = outer_lfp {
             monoasm! { &mut self.jit,
                 movq rax, (outer_lfp.as_ptr());
@@ -185,7 +184,7 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         }
-        self.set_block(callsite.block_fid, callsite.block_arg);
+        self.set_block(block_fid, block_arg);
         monoasm! { &mut self.jit,
         }
     }
@@ -228,20 +227,25 @@ impl Codegen {
         };
     }
 
-    pub(super) fn do_call(
+    /// The call itself: enter the callee and record a return-address deopt
+    /// patch point for `evict`. Store/frame-dependent target info is pre-resolved
+    /// by the dispatcher (codeptr / is_iseq / pcs / JIT entry), so this is
+    /// store-free.
+    pub(in crate::codegen::jitgen) fn emit_call(
         &mut self,
-        store: &Store,
-        callee_fid: FuncId,
-        recv_class: ClassId,
+        codeptr: CodePtr,
+        is_iseq: bool,
+        callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
-    ) -> CodePtr {
-        let callee = &store[callee_fid];
-        let (_, codeptr, pc) = callee.get_data();
+        jit_entry: Option<DestLabel>,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
+    ) {
         self.set_lfp();
         self.push_frame();
 
-        if let Some(iseq) = callee.is_iseq() {
-            match store[iseq].get_jit_entry(recv_class) {
+        if is_iseq {
+            match jit_entry {
                 Some(dest) => {
                     monoasm! { &mut self.jit,
                         call dest;  // CALL_SITE
@@ -250,7 +254,7 @@ impl Codegen {
                 None => {
                     // set pc.
                     monoasm! { &mut self.jit,
-                        movq r13, (pc.unwrap().as_ptr());
+                        movq r13, (callee_pc.unwrap().as_ptr());
                     }
                     self.call_codeptr(codeptr);
                 }
@@ -266,7 +270,7 @@ impl Codegen {
         let return_addr = self.jit.get_current_address();
 
         self.pop_frame();
-        return_addr
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
     }
 
     pub(in crate::codegen::jitgen) fn do_specialized_call(

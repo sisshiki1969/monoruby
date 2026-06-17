@@ -104,7 +104,7 @@ fn range_begin(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_begin());
+    ir.load_field_to_reg(GP::Rax, GP::Rdi, crate::rvalue::RANGE_START_OFFSET as i32);
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true
@@ -142,7 +142,7 @@ fn range_end(
         }
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_end());
+    ir.load_field_to_reg(GP::Rax, GP::Rdi, crate::rvalue::RANGE_END_OFFSET as i32);
 
     state.def_reg2acc(ir, GP::Rax, dst);
     true

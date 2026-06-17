@@ -1,4 +1,5 @@
 use crate::bytecodegen::BinOpK;
+use crate::codegen::jitgen::lir::{LInst, LSideExitKind};
 
 use super::*;
 
@@ -25,7 +26,7 @@ impl std::fmt::Debug for InlineProcedure {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AsmDeopt(usize);
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +90,12 @@ pub(crate) struct AsmIr {
     /// generic / native callee). Producer skips `create_array` only
     /// when `deferred_rest && !needs_rest_array`.
     needs_rest_array: bool,
+    /// Item ② step 2 (record collection): the typed-IR transfer stream, grown
+    /// in lock-step with `inst` whenever a transfer/eviction primitive funnels
+    /// through [`Self::transfer`] (codegen mode only). Not yet consumed — this
+    /// is the faithful record stream that record-driven lowering will replay.
+    /// Truncated alongside `inst` by `save`/`restore`.
+    transfers: Vec<TransferIR>,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -103,6 +110,14 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
     fn index_mut(&mut self, index: AsmEvict) -> &mut Self::Output {
         &mut self.side_exit[index.0]
     }
+}
+
+/// Element-wise `Debug`-string equality, the `transfer` shadow check's
+/// comparator: neither `AsmInst` nor `SideExit` is `PartialEq` (they carry
+/// non-comparable payloads such as boxed closures), but both are `Debug`.
+#[cfg(debug_assertions)]
+fn dbg_slice_eq<T: std::fmt::Debug>(a: &[T], b: &[T]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| format!("{x:?}") == format!("{y:?}"))
 }
 
 // private interface
@@ -124,6 +139,78 @@ impl AsmIr {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
+            transfers: vec![],
+        }
+    }
+
+    ///
+    /// Funnel a transfer/eviction primitive's typed-IR record (item ② step 2):
+    /// collect it into the `transfers` stream (codegen mode only, so it stays in
+    /// lock-step with the gated `inst`) and emit it. The emission is identical to
+    /// the prior direct `record.emit(ir, …)`; collection is purely additive.
+    ///
+    /// **Analysis mode** (`codegen_mode == false`, the loop pre-pass) returns
+    /// immediately: the abstract-state mutation already happened in the wrapper's
+    /// `*_state` half, and `emit` only writes to `ir` — which the analysis pass
+    /// discards (`analyse_basic_block` drops its local `AsmIr`). This is doc §9
+    /// step 2's "the analysis pass calls the state halves and **skips
+    /// emission**", and it stops the dead `side_exit` growth a guarded record's
+    /// `deopt_from_point` would otherwise cause (the waste doc §10 flagged). It is
+    /// provably safe: `emit`'s signature (`fn emit(self, ir: &mut AsmIr)`) cannot
+    /// touch frame/abstract state, as the shadow check below independently relies
+    /// on.
+    ///
+    /// In debug builds a **shadow check** replays the record alone into a scratch
+    /// buffer and asserts it reproduces exactly the `AsmInst`s *and* `SideExit`s
+    /// this call appended. That proves `TransferIR::emit` is a pure function of
+    /// the record and the current `side_exit` cursor — its only codegen input,
+    /// since a guarded record materializes its deopt as `AsmDeopt(side_exit.len())`
+    /// (the scratch is pre-padded to the same length so the index matches). This
+    /// is the self-containment record-driven lowering relies on, and a standing
+    /// guard against a future transfer that reads other frame/codegen state.
+    ///
+    pub(super) fn transfer(&mut self, t: TransferIR) {
+        if !self.codegen_mode {
+            return;
+        }
+        self.transfers.push(t.clone());
+        #[cfg(not(debug_assertions))]
+        t.emit(self);
+        #[cfg(debug_assertions)]
+        {
+            let (inst_start, se_start) = (self.inst.len(), self.side_exit.len());
+            t.clone().emit(self);
+            // Replay into a scratch whose deopt cursor (`side_exit.len()`) matches,
+            // so a materialized `AsmDeopt` index is identical.
+            let mut scratch = AsmIr::shadow_scratch();
+            scratch
+                .side_exit
+                .resize_with(se_start, || SideExit::Evict(None));
+            t.clone().emit(&mut scratch);
+            debug_assert!(
+                dbg_slice_eq(&self.inst[inst_start..], &scratch.inst)
+                    && dbg_slice_eq(&self.side_exit[se_start..], &scratch.side_exit[se_start..]),
+                "TransferIR replay mismatch: {t:?}\n  real inst:    {:?}\n  replay inst:  {:?}\n  real exit:    {:?}\n  replay exit:  {:?}",
+                &self.inst[inst_start..],
+                &scratch.inst,
+                &self.side_exit[se_start..],
+                &scratch.side_exit[se_start..],
+            );
+        }
+    }
+
+    /// An empty codegen-mode `AsmIr` for the [`Self::transfer`] shadow check —
+    /// the replay target. Needs no `JitContext`.
+    #[cfg(debug_assertions)]
+    fn shadow_scratch() -> Self {
+        Self {
+            codegen_mode: true,
+            inst: vec![],
+            side_exit: vec![],
+            had_deopt: false,
+            deferred_rest: false,
+            needs_rest_array: false,
+            transfers: vec![],
         }
     }
 
@@ -165,9 +252,70 @@ impl AsmIr {
         self.inst.is_empty()
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
+    ///
+    /// Does this block's instruction stream end with an unconditional
+    /// terminator (so the code physically following it is not reached by
+    /// fall-through)? See [`AsmInst::is_unconditional_terminator`]; the
+    /// answer is conservative (an empty stream, or one ending in any
+    /// non-terminator, is treated as fall-through).
+    ///
+    pub(super) fn ends_unconditionally(&self) -> bool {
+        self.inst
+            .last()
+            .is_some_and(AsmInst::is_unconditional_terminator)
+    }
+
+    ///
+    /// If this block's whole body is a label, optional source-position
+    /// markers, and a single trailing `Deopt` (e.g. a loop's natural exit
+    /// block, which only deopts to the interpreter), return the block label
+    /// and the deopt. Such a block is a pure indirection to its deopt handler,
+    /// so the aarch64 backend emits the deopt inline at the block label rather
+    /// than laying a cold handler and branching to it — letting predecessors
+    /// land straight on the deopt code. `BcIndex` markers emit no machine code
+    /// (they only feed the perf/emit-asm source map) and are ignored here.
+    ///
+    /// aarch64-only: x86 lays deopt handlers on the cold page and has no
+    /// inline-handler indirection to collapse.
+    ///
+    #[cfg(target_arch = "aarch64")]
+    pub(super) fn as_pure_deopt(&self) -> Option<(JitLabel, AsmDeopt)> {
+        let (first, rest) = self.inst.split_first()?;
+        let AsmInst::Label(bb) = first else {
+            return None;
+        };
+        let (last, middle) = rest.split_last()?;
+        let AsmInst::Deopt(deopt) = last else {
+            return None;
+        };
+        middle
+            .iter()
+            .all(|i| matches!(i, AsmInst::BcIndex(_)))
+            .then_some((*bb, *deopt))
+    }
+
+    ///
+    /// The single `SideExit` of a pure-deopt block (see [`Self::as_pure_deopt`])
+    /// when it is a plain `Deoptimize(pc, write_back)` and the block's only side
+    /// exit, returned as `(pc, write_back)`. `None` otherwise (e.g. an evict /
+    /// recompile-deopt, or extra side exits), so callers fall back to the
+    /// ordinary cold-handler path. aarch64-only (see [`Self::as_pure_deopt`]).
+    ///
+    #[cfg(target_arch = "aarch64")]
+    pub(super) fn pure_deopt_target(&self, deopt: AsmDeopt) -> Option<(BytecodePtr, &WriteBack)> {
+        if self.side_exit.len() == 1
+            && let SideExit::Deoptimize(pc, wb) = &self.side_exit[deopt.0]
+        {
+            Some((*pc, wb))
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn save(&mut self) -> (usize, usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
+            self.transfers.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
@@ -178,7 +326,8 @@ impl AsmIr {
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+        (inst, transfers, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+            usize,
             usize,
             usize,
             bool,
@@ -188,6 +337,7 @@ impl AsmIr {
         ),
     ) {
         self.inst.truncate(inst);
+        self.transfers.truncate(transfers);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
@@ -209,6 +359,21 @@ impl AsmIr {
     pub(crate) fn new_deopt(&mut self, state: &AbstractFrame) -> AsmDeopt {
         let pc = state.pc();
         self.new_deopt_with_pc(state, pc)
+    }
+
+    ///
+    /// Materialize a guarded transfer record's deopt **program point** (a
+    /// [`DeoptPoint`], recorded by the analysis half — doc §9) into a `side_exit`
+    /// label, returning its `AsmDeopt`. The emit/codegen half calls this so that
+    /// `side_exit` construction lives entirely on the codegen side and the
+    /// `TransferIR` stream stays codegen-independent. Equivalent to `new_deopt`,
+    /// but driven by the recorded `(pc, write_back)` rather than reading the live
+    /// `AbstractFrame`.
+    ///
+    pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(point.pc(), point.write_back().clone()));
+        self.had_deopt = true;
+        AsmDeopt(i)
     }
 
     ///
@@ -796,6 +961,14 @@ impl AsmIr {
             .push(AsmInst::Inline(InlineProcedure { proc: Box::new(f) }));
     }
 
+    /// Emit `dst <- [base + disp]` (load a heap-object field into a GP register).
+    /// A typed alternative to `inline` for trivial field-reader inline builtins,
+    /// so their codegen flows through LIR (`LInst::Load { Field }`) instead of
+    /// hand-written per-arch asm.
+    pub(crate) fn load_field_to_reg(&mut self, dst: GP, base: GP, disp: i32) {
+        self.inst.push(AsmInst::LoadFieldToReg { dst, base, disp });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1327,6 +1500,16 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline(InlineProcedure),
+    /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
+    /// A typed replacement for the `ir.inline(|gen| gen.emit_*())` escape hatch
+    /// used by trivial field-reader inline builtins (e.g. `Range#begin/end`),
+    /// so their codegen is expressed once in arch-neutral LIR rather than as
+    /// per-arch hand-written asm. Lowers to `LInst::Load { mem: Field }`.
+    LoadFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
     #[allow(non_camel_case_types)]
     CFunc_F_F {
         f: unsafe extern "C" fn(f64) -> f64,
@@ -1870,6 +2053,36 @@ pub(super) enum AsmInst {
 
 impl AsmInst {
     ///
+    /// Does this instruction unconditionally transfer control away, so that
+    /// the instruction physically following it is *not* reached by
+    /// fall-through?
+    ///
+    /// Conservative: returns `true` only for variants that are definitely
+    /// unconditional terminators. Anything uncertain returns `false` (the
+    /// caller then assumes the next block *is* fall-through reachable). A
+    /// false negative only keeps a harmless `b skip` over the aarch64
+    /// inline side-exit handlers; a false positive would drop a *needed*
+    /// `b skip` and let control fall into the cold handlers, so the bias
+    /// must stay on the safe side.
+    ///
+    pub(super) fn is_unconditional_terminator(&self) -> bool {
+        matches!(
+            self,
+            Self::Ret
+                | Self::BlockBreak(_)
+                | Self::MethodRet(_)
+                | Self::BlockBreakSpecialized { .. }
+                | Self::MethodRetSpecialized { .. }
+                | Self::Raise
+                | Self::Retry(_)
+                | Self::Redo(_)
+                | Self::Deopt(_)
+                | Self::RecompileDeopt { .. }
+                | Self::RecompileDeoptSpecialized { .. }
+        )
+    }
+
+    ///
     /// Enumerate every `VirtFPReg` operand referenced by this
     /// instruction (in any role — read, write, or read-write).
     /// Used by `pop_frame` to compute the frame's max
@@ -2003,6 +2216,11 @@ impl Codegen {
         entry: Option<DestLabel>,
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
+        // Whether this block is fall-through reachable. Only the aarch64 backend
+        // acts on it (to drop a dead `b skip` over inline side-exit handlers);
+        // x86 lays its handlers on the cold page via `select_page`, so there is
+        // no skip branch to elide and the flag is unused here.
+        _fallthrough_in: bool,
     ) {
         let mut side_exits = SideExitLabels::new();
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
@@ -2012,7 +2230,14 @@ impl Codegen {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.gen_evict_with_label(pc, &wb, label.clone(), loop_jit_spill_bytes, base);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Evict,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    });
                     label
                 }
                 SideExit::Deoptimize(pc, wb) => {
@@ -2021,33 +2246,40 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.gen_deopt_with_label(
-                            pc,
-                            &t.1,
-                            label.clone(),
+                        self.encode_linst(LInst::SideExit {
+                            kind: LSideExitKind::Deopt,
+                            pc: t.0,
+                            wb: t.1.clone(),
+                            entry: label.clone(),
                             loop_jit_spill_bytes,
                             base,
-                        );
+                        });
                         deopt_table.insert(t, label.clone());
                         label
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.gen_recompile_deopt_with_label(
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::RecompileDeopt { reason, position },
                         pc,
-                        &wb,
-                        reason,
-                        position,
-                        label.clone(),
+                        wb,
+                        entry: label.clone(),
                         loop_jit_spill_bytes,
                         base,
-                    );
+                    });
                     label
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.gen_handle_error(pc, wb, label.clone(), base);
+                    self.encode_linst(LInst::SideExit {
+                        kind: LSideExitKind::Error,
+                        pc,
+                        wb,
+                        entry: label.clone(),
+                        loop_jit_spill_bytes,
+                        base,
+                    });
                     label
                 }
                 _ => unreachable!("unexpected {side_exit:?}"),
