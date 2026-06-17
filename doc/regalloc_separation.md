@@ -832,3 +832,102 @@ property (stage-1 finding) and the backedge fixpoint together are the bar 3c mus
 clear. Net: 3b is retained as a **negative result / regression probe** behind its
 feature flag; the next real step is designing 3c to match-or-beat the backedge,
 not to replace it with liveness promotion.
+
+## 14. §5 stage 3c design: a separable allocator that matches the backedge
+
+Stage 3b established the hard constraint: the analysis pre-pass's loop **backedge
+fixpoint** computes loop-carried xmm placements that are *load-bearing* for tight
+float loops (mandelbrot 1.9–2.6× slower without them), and a naive
+liveness-only re-derivation does not recover them. optcarrot was flat base-vs-3b,
+so the placement quality that matters is localized to tight loops carrying several
+live floats across the back-edge — that is the regression surface 3c must not
+touch.
+
+### 14.1 The realization: loop allocation is *already* a fixpoint
+
+`analyse_backedge_fixpoint` (compile/loop_analysis.rs) iterates `analyse_loop`
+(≤10 times) until the back-edge `AbstractState` stops changing (`be.equiv`). Each
+iteration runs the per-BB walk with `apply_join` allocation, so the loop's
+placement is the fixed point of the greedy per-merge allocator. The fusion is that
+this single fixpoint co-evolves **types** *and* **placements**. Stages 2/3a proved
+the type half is allocation-independent. So the separation is not "remove
+allocation from the loop" (3b's mistake) — it is **sequence two fixpoints instead
+of fusing one**:
+
+```
+fused today:     one fixpoint over (types + placements)        [analyse_loop ×N]
+3c target:       fixpoint-1 over (types + liveness)   — NO placement
+                 fixpoint-2 over (placements)         — greedy alloc on fixed types
+```
+
+Because fixpoint-2 runs the *same* greedy `apply_join` allocation, just sequenced
+after type analysis rather than interleaved with it, it converges to the **same
+loop-carried placements** — that is what makes the separation behaviour-preserving
+and shadow-verifiable. 3b failed precisely because it replaced fixpoint-2 with a
+single `use_float` liveness hint, not a placement fixpoint.
+
+### 14.2 Decomposition
+
+- **3c-i — safe / shadow-able: extract the allocation fixpoint as its own pass.**
+  Run a type+liveness-only fixpoint first (the §3 Layer-① analysis; the type meet
+  is already `join_ty`, the liveness is already separate), then run the greedy
+  allocation fixpoint over the frozen types to produce placements. The allocator
+  is now a distinct, pluggable component running today's greedy policy. Verify
+  with the stage-1 placement replay shadow that the placements equal the fused
+  result, slot-for-slot, including the backedge. No behaviour change — this is the
+  real Layer-② extraction, and the thing 3b should have been. *Next implementable
+  step (behind a feature until the shadow is green across the suite + benches).*
+
+- **3c-ii — benchmark-gated: swap the greedy fixpoint for linear scan.** With the
+  allocator extracted, replace the iterate-to-fixpoint greedy policy with a
+  loop-aware linear-scan over live intervals (below). Gate against the
+  mandelbrot/nbody bar (must match-or-beat the backedge) and optcarrot (must stay
+  flat). Each policy change is an independent gated diff.
+
+### 14.3 3c-ii allocator shape (the linear-scan)
+
+Inputs (all allocation-independent, already computed by Layer ①):
+- per-slot `Guarded` type at each program point;
+- the representation decision **kept separate from placement**: "this slot is used
+  as f64" (today's `use_float` liveness) decides *unboxed-float-ness*; the
+  allocator then decides *which* xmm (or spill) — splitting `Sf`'s two jobs (mark
+  vs register) per §3 Layer ②;
+- live intervals per slot, with **loop-carried intervals** (live across the
+  back-edge) flagged so the scan keeps them resident across the whole loop body —
+  this is what reproduces the backedge's "float stays in xmm across iterations."
+
+Output: a placement per (slot, point) + edge moves. The edge moves already exist —
+`AbstractFrame::bridge` emits the φ-reconciliation MOV/swap/spill from
+`(pred.mode, target.mode)`; the allocator only chooses the target registers and
+the bridge lowers them (so the recently-fixed `xmm_swap` and the F/Sf/S bridge
+arms are reused unchanged).
+
+Two properties the scan must preserve (both already in the codebase):
+1. **Free spill of read-only caches.** `try_alloc_xmm` phase-1 demotes an all-`Sf`
+   register to `S` with *no* asm (stack is canonical). A linear-scan spill of an
+   `Sf` interval must keep this — spilling a clean float cache costs nothing.
+2. **Loop-carried priority.** The fixpoint today keeps loop-carried floats in xmm
+   by construction; the scan must give intervals that span the back-edge higher
+   priority than intra-loop temporaries when registers are scarce, or it will
+   reintroduce the 3b regression.
+
+### 14.4 Hard parts carried over
+
+- **Deopt as a program point (§10 item 2).** Once placement is decided in
+  fixpoint-2, a deopt's register/stack map must be reconstructed from the
+  allocator's result at that pc, not the frozen `AsmDeopt` the transfer records
+  carry today. 3c-i sidesteps this only if fixpoint-2 still emits in a forward
+  walk that knows placements at each pc (it does, today). Full record-driven
+  lowering (goal 1) is where the deopt-program-point work lands.
+- **Representation vs placement split.** Today `Sf`/`F`/`S` bundle "unboxed?" with
+  "which register?". 3c separates them: liveness marks unboxed-float slots; the
+  allocator assigns registers. The typed IR carries the mark, not the register.
+
+### 14.5 Why this is the right order
+
+3c-i is the behaviour-preserving separation the whole §5 effort has been building
+toward (decide/apply split, record stream, type-meet invariant all feed it), and
+it is shadow-verifiable against the fused result. 3c-ii is the only step that may
+regress, and it is gated on the exact benchmarks 3b flagged. 3b is retained as the
+negative-result probe that calibrated the bar: any allocator that cannot match the
+backedge on mandelbrot/nbody is not ready to land.
