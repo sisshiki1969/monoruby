@@ -1065,3 +1065,31 @@ governs both the 3b regression *and* the latent base-case back-edge box. Increme
 win must come from the join arms, not the spill policy. The next concrete step is
 to read the loop-header join decision for a loop-carried float and determine
 whether keeping it `F` across the back-edge (no boxed cache) is sound and cheaper.
+
+### 15.2 jit-debug confirms: loop-carried floats *can* be `F`; pressure forces `S`
+
+`jit-debug` on the float kernel shows the same loop compiled two ways:
+
+- one specialization keeps the loop-carried floats `F(FPReg0)` / `F(FPReg1)` —
+  pure xmm, **no per-iteration box**, back-edge is an xmm move;
+- another puts them in `S(Value)` (boxed) while the loop-*invariant* operands take
+  the physical pool as `Sf` — so the loop-carried values lose the pool and box
+  every iteration.
+
+So `F` for a loop-carried float is achievable and is the good outcome. The `S`
+fallback comes from the loop-header join's `C/F` arm `TryFreshFElseS`
+(join.rs:228) and the `F/F` arm `TryFreshFKeep`: both *try* a fresh/kept xmm and
+**fall back to `S` only when no physical xmm is free**. The per-iteration box is
+exactly that fallback firing under register pressure — the loop-carried value
+losing the pool to other live values.
+
+This closes the diagnosis loop: every lever (use_float promotion, phase-1 spill
+victim, join arm) ultimately bottoms out at the same thing — **which live values
+hold the physical pool across the loop**. Today that is decided greedily in
+allocation order; the loop-carried/invariant floats must instead win the pool over
+short-lived temporaries. There is no cheaper intermediate fix (three no-op probes
+confirm it). 3c-ii is therefore necessarily the loop-aware **linear scan over live
+intervals** of §14.3: rank pool occupancy by interval length / loop membership,
+not allocation order. The seam (incr. 1) and the calibrated bar (mandelbrot/nbody
+regress, optcarrot flat) are in place; what remains is the interval analysis +
+the priority allocator, a substantial standalone implementation.
