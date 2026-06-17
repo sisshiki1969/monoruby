@@ -1676,3 +1676,48 @@ replay pass itself (the deferred two-pass). With goal 3 deferred (§17.4), this
 restructure's payoff is purely architectural. The boundary of the *primitive-level*
 separation has been reached; crossing into the deferred two-pass is the open,
 large-investment decision.
+
+## 19. (B) Record-driven lowering: toward a single ordered codegen record
+
+Per the user the goal is **clean architectural layering so optimization logic is
+easy to add**. The record stream (`TransferIR`, built by §9/§11) is the emerging IR
+layer between the handlers and the AsmIR/machine code. Today it covers
+value-movement *transfers* only; *operations* emit directly to `inst`, outside the
+stream (the §18.3 blocker). (B) unifies them into one ordered stream, then makes
+lowering **replay** it.
+
+### 19.1 Step 1: operations join the record stream (float binop)
+
+The first operation routed in: the float binary op. `binop_float`'s `XmmOp` arm now
+emits `TransferIR::FloatBinOp { kind, lhs, rhs, dst }` through `transfer()` instead
+of a direct `fpr_binop`. The record is **pure data** (Clone, no closure, no
+abstract-state read), so `transfer()` collects it into the `transfers` stream and
+the debug **shadow check replays it to the identical `AsmInst`** — exactly like the
+transfer records. Behaviour-preserving: lib suite 1671 passed (baseline-identical
+failure set), zero replay mismatches.
+
+This proves the pattern: **data-only operations can join the record stream and be
+shadow-verified.** In analysis mode `transfer()` skips emission (the op has no
+state half, and the pass discards its `AsmIr`), matching the prior behaviour.
+
+### 19.2 The plan to a replayable stream
+
+1. **Migrate the data-only operations to records** — float/integer arithmetic and
+   comparison (`FloatCmp`, `IntegerCmp`, `IntegerBinOp`, …). Each: add a record
+   variant, route the handler through `transfer()`, verify via the shadow check.
+   *(This step: float binop.)*
+2. **Generalize the type** — once it carries both transfers and ops, rename
+   `TransferIR` to a unified `LowerRecord` / `CodegenIR`; `Transfer` no longer fits.
+3. **Handle the closure-carrying ops** (inlined calls, C-func trampolines): these
+   variants of `AsmInst` are *not* `Clone` (they own `FnOnce` closures), so they
+   cannot be recorded the same way. Either represent the inlined body as a record
+   sub-stream (data), or keep a move-only escape-hatch variant the replay emits in
+   place. This is the hard part of the unification.
+4. **Build the replay (lowering) pass** — collect the full ordered stream during
+   the codegen walk, then emit `inst` by replaying the records, removing the inline
+   emit. The stream becomes the clean IR layer that optimization passes operate on
+   (the goal). Behaviour-preserving by the per-record shadow property.
+
+Each step (1) is behaviour-preserving and shadow/suite-verified; the risk
+concentrates in (3) and the (4) switch. Starting from the data-only ops keeps the
+early increments safe while the stream grows toward completeness.

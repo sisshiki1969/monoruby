@@ -1,4 +1,5 @@
 use super::*;
+use crate::bytecodegen::BinOpK;
 
 ///
 /// The **deopt program point** a guarded transfer record carries (doc §9): the
@@ -203,6 +204,18 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         slot: SlotId,
         deopt: Option<DeoptPoint>,
     },
+    /// §19 (B): a float binary **operation** — `lhs op rhs -> dst`, all operands
+    /// already placed in xmm. The first *operation* (vs value-movement) routed
+    /// through the record stream, so the stream is no longer transfers-only — the
+    /// step toward a single ordered, replayable codegen record (doc §18.3/§19).
+    /// Pure data (no closure, no abstract-state read), so it is `Clone` and
+    /// shadow-checkable like the transfer records.
+    FloatBinOp {
+        kind: BinOpK,
+        lhs: FPReg,
+        rhs: FPReg,
+        dst: FPReg,
+    },
 }
 
 impl TransferIR {
@@ -213,6 +226,12 @@ impl TransferIR {
             TransferIR::GpLoad(g) => g.emit(ir),
             TransferIR::XmmLoad { load, slot, deopt } => load.emit(ir, slot, Some(&deopt)),
             TransferIR::XmmFixnumLoad { load, slot, deopt } => load.emit(ir, slot, deopt.as_ref()),
+            TransferIR::FloatBinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+            } => ir.fpr_binop(kind, lhs, rhs, dst),
         }
     }
 }

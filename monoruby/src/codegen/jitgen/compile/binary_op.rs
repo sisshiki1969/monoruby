@@ -517,7 +517,11 @@ impl AbstractFrame {
             FloatBinOpPlan::XmmOp => {
                 let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);
                 if let Some(dst) = dst {
-                    ir.fpr_binop(kind, lhs, rhs, dst);
+                    // §19 (B): route the arithmetic through the record stream
+                    // (collect + inline-emit + shadow-check) instead of a direct
+                    // `fpr_binop`, so the operation joins the ordered codegen
+                    // record alongside its operand loads.
+                    ir.transfer(TransferIR::FloatBinOp { kind, lhs, rhs, dst });
                 }
             }
         }
