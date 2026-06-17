@@ -967,3 +967,35 @@ temporaries, i.e. choose spill victims by furthest next-use across the whole loo
 `use_float` does not. This is the property §14.3 named, now backed by the asm:
 optcarrot stayed flat because its hot loops do not exceed the float pool, so the
 spill choice never bites; mandelbrot/nbody do, so it dominates.
+
+### 14.7 Negative result: the cheap spill-policy lever does not fix 3b
+
+Tested the simplest 3c-ii lever directly: make `use_float`'s promotion spill an
+unboxed float (`set_new_Sf` → VirtFPReg) instead of leaving it boxed in `S` when
+the physical pool is full. **No-op** — the mandelbrot kernel's JIT asm was
+byte-identical to plain 3b (412 insts, same box count). So `try_alloc_xmm` was
+already succeeding for the slots `use_float` touches; the boxed-operand decodes
+that cause the regression do **not** originate from `use_float`'s best-effort
+fallback. Reverted.
+
+Two refinements this pins down:
+1. **The regression is specific to `for…in` loops.** A `while`-loop float kernel
+   (zr/zi loop-carried) produces *identical* asm base-vs-3b — no regression.
+   mandelbrot/nbody use `for…in` (inlined, multiple loop_starts within one iseq);
+   that is where the placement divergence lives. The earlier "simple float loop is
+   codegen-neutral" (§13.7) was right *and* misleading: the neutral case is the
+   `while` loop; the `for…in` case is where 3b loses.
+2. **It is not a local heuristic miss.** A point fix to the promotion policy
+   cannot recover it, because the boxed operands are not the ones the promotion
+   pass decides. The analysis-pass backedge fixpoint reaches a globally-consistent
+   loop placement that a single forward `use_float` pass over a stripped
+   (all-`S`) entry simply does not reconstruct.
+
+**Conclusion — abandon "strip + re-derive" (3b) as the separation mechanism.**
+3b's value was diagnostic (it calibrated the bar and proved the backedge is
+load-bearing). The behaviour-preserving separation is §14.2's **3c-i: extract the
+existing allocation fixpoint as its own pass, unchanged**, so the placements are
+*identical* to today (shadow-verified, zero regression) — not stripped and
+re-derived. A better *policy* (3c-ii linear scan) comes only after that seam
+exists and is benchmark-gated. The `loop-type-only-entry` feature stays as the
+negative-result probe.
