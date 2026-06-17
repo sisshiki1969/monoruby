@@ -1415,3 +1415,44 @@ benchmark probe (mirroring `loop-type-only-entry` in §13.8) until the M1
 mandelbrot / nbody / optcarrot A/B says whether the superset is neutral in
 practice; the likely outcome, per this finding, is that the next real increment is
 the `F`-preference annotation, after which both consumers decouple cleanly.
+
+### 16.5 Sharpening §16.4: the `F`-selection *is* allocation — the real fork
+
+§16.4 floated carrying the fixpoint's `F`-preference forward as an "allocation-free
+annotation (a bit computed during the fixpoint)." That phrasing is imprecise and
+worth correcting, because it changes what L2-1's bench actually decides.
+
+Two facts settle it:
+
+1. **Consumer (a) already reads the analysis *output*, not the live codegen
+   placement.** `incoming_context` derives the adoption set from
+   `loop_info(bbid)`'s stored back-edge frame (`be.mode(i) == F`) — the analysis
+   pre-pass's result, cloned into `backedge_for_floats`. So the dependency we are
+   trying to remove is specifically on the back-edge frame's *`F`-placement*.
+2. **That `F`-placement is produced by allocation, and §13.8 proved the selection
+   is load-bearing** (liveness re-derivation regresses 2.5×). The fixpoint chooses
+   *which* `Float`-typed, used-as-float slots win the limited pool — and that
+   choice *is* a register-allocation decision, not a type/liveness fact.
+
+So a "bit computed during the fixpoint" is just `be.mode(i) == F` renamed: it still
+requires the analysis pass to allocate. There is **no** allocation-free annotation
+that reproduces the selection byte-for-byte — the selection is allocation.
+
+**The real fork L2-1's M1 bench decides:**
+
+- **(i) Approximate, allocation-free** — accept L2-1's `type ∧ liveness` superset
+  (and let `try_set_new_F`'s self-limit bound the over-promotion). If the
+  mandelbrot / nbody / optcarrot A/B is within noise, this *is* the consumer-(a)
+  decoupling: the analysis pass no longer needs to allocate *for consumer (a)*.
+- **(ii) Exact, allocation-bearing** — if L2-1 regresses (the §16.4 over-promotion
+  finding predicts a mild one), the `F`-selection genuinely needs allocation
+  quality, so consumer (a) cannot be decoupled in isolation. It folds into **L2-2**:
+  the codegen-side loop-aware allocator reproduces the fixpoint's selection (a real
+  linear scan over the loop's live intervals), and *that* pass owns the `F` choice
+  for both consumers (a) and (b) at once.
+
+Either way the next concrete action is the **L2-1 A/B on M1**; its result picks
+(i) vs (ii) and is the first hard data on whether the loop-carried `F`-selection
+can be made allocation-free at all. (This supersedes §16.4's "shared `F`-preference
+annotation" as the immediate next step — there is no such free annotation; there
+is a bench that tells us whether we need the L2-2 allocator.)
