@@ -1130,3 +1130,40 @@ change to how `incoming_context` builds the target, not a new allocator — and 
 fixes the latent base-case box, not just the 3b regression. (The earlier no-op
 probes were no-ops precisely because they targeted the allocator/promotion, while
 the value was being boxed by the *merge* upstream of them.)
+
+### 15.4 Prototype result: the box CAN be eliminated, but it is blocked by a TYPE loss, not placement
+
+Prototyped the §15.3 fix (`loop-keep-float`): a new `S -> F` (and `Sf -> F`)
+bridge arm + `keep_backedge_floats`, which re-adopts the back-edge fixpoint's `F`
+for loop-carried floats the loop-entry merge collapsed.
+
+- **Concept proven (x86-64).** With an *unguarded* promotion, the mandelbrot do_it
+  loses **all** boxing: `call float_to_value` count 16 → **0**, the inner-loop
+  body becomes pure xmm (`movq xmm,xmm; mulsd`), and the per-iteration
+  flonum-decode moves to a single pre-header unbox. The optimisation is real.
+- **But it is unsound as written**, and that exposed the actual blocker. The
+  loop-carried float is typed **`S(Value)` at the loop-entry merge, not
+  `S(Float)`** (verified in `jit-debug`: the pre-header forward entry holds
+  `%3: S(Value)` even though it is `zr = 0.0`). The fixpoint correctly has it as
+  `F` (Float); the codegen merge `SetS(join(Value, Float)) = Value` degrades it.
+  Forcing `F` on a `Value`-typed slot then panics at the `C(non-float) -> F`
+  bridge (a *different* slot that genuinely is a non-float const in some path) —
+  and would be silently wrong for any slot that is actually sometimes non-float,
+  since an `F` slot carries no runtime guard.
+- **The sound guard (`guarded == Float`) makes it a no-op**, because the
+  loop-carried floats are `Value`-typed: suite 1704/0, but mandelbrot is byte-
+  identical to base (340/16). The placement fix has nothing to act on until the
+  *type* is `Float`.
+
+**So the lever is the type analysis, not placement or allocation.** A loop-carried
+pure float (`zr = 0.0` then float arithmetic) is typed `Value` at the loop-entry
+merge instead of `Float`; fix that precision loss and the (already-prototyped,
+sound) `guarded == Float` promotion fires and removes the box — on the shipping
+build, not just under 3b. This also finally explains the whole §15 thread: every
+allocator/placement lever was downstream of a value the *type meet* had already
+widened to `Value`. The `loop-keep-float` feature (default off, 1704/0) and the
+`S -> F` / `Sf -> F` bridge arms are kept as the staging ground; the next step is
+the loop-carried-float type precision fix. (aarch64 unverified here — no cross
+toolchain in this container; the new bridge arms reuse `float_to_fpr` / `fpr_move`,
+which both backends already lower, so they are arch-neutral by construction, but
+this needs an M1 `bin/test` to confirm.)

@@ -81,6 +81,15 @@ impl<'a> JitContext<'a> {
 
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
+                // §15.3 prototype: the loop fixpoint computed loop-carried
+                // floats as `F`, but `incoming.join(backedge)` collapses them to
+                // `S` (the boxed forward-entry initial value wins, since
+                // `decide_join` has no `S`/`F` arm), so the body boxes every
+                // iteration with the xmm pool free. Re-adopt the back-edge's `F`
+                // for those slots; the new `S -> F` bridge unboxes the forward
+                // entry once at the pre-header.
+                #[cfg(feature = "loop-keep-float")]
+                let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
                     // §5 stage 3b: under `loop-type-only-entry`, strip the
                     // analysis pass's allocation from the loop-carried frame so
@@ -98,6 +107,11 @@ impl<'a> JitContext<'a> {
                 }
 
                 target.liveness_analysis(liveness);
+
+                #[cfg(feature = "loop-keep-float")]
+                if let Some(be) = &backedge_for_floats {
+                    target.keep_backedge_floats(be);
+                }
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());

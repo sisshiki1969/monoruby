@@ -581,6 +581,30 @@ impl SlotState {
     }
 
     ///
+    /// §15.3 prototype (`loop-keep-float`): adopt the back-edge's `F` placement
+    /// for loop-carried floats that the loop-entry merge collapsed to `S`/`Sf`.
+    /// The fixpoint already proved `F` is sound for the loop body; re-establishing
+    /// it keeps the body unboxed (the forward-entry box is unboxed *once* at the
+    /// pre-header by the new `S -> F` bridge arm; the back-edge `F -> F` bridge
+    /// moves into the fresh xmm). With no register pressure this is the latent
+    /// per-iteration box removed (§15.3).
+    ///
+    #[cfg(feature = "loop-keep-float")]
+    pub(in crate::codegen::jitgen) fn keep_backedge_floats(&mut self, backedge: &SlotState) {
+        for i in self.all_regs() {
+            // Sound only when every path agrees the slot is a `Float`: a forward
+            // predecessor holding a non-float `C`/`S` would have no `_ -> F`
+            // bridge. `guarded == Float` is exactly that agreement.
+            if matches!(backedge.mode(i), LinkMode::F(_))
+                && self.guarded(i) == Guarded::Float
+                && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
+            {
+                self.set_new_F(i);
+            }
+        }
+    }
+
+    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
@@ -1767,6 +1791,35 @@ impl AbstractFrame {
                     let tmp = self.set_new_Sf(slot, SfGuarded::Float);
                     ir.float_to_fpr(GP::Rax, tmp, deopt);
                     self.gen_xmm_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::S(_), LinkMode::F(x)) => {
+                // S -> F: one-time unbox of a boxed float into a pure-xmm
+                // binding (no boxed cache) — a loop pre-header entry adopting the
+                // back-edge's `F` placement (§15.3). Mirrors the `S -> Sf` arm but
+                // sets `F`; reuses `float_to_fpr`, which both backends lower.
+                ir.stack2reg(slot, GP::Rax);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                if self.is_xmm_vacant(x) {
+                    ir.float_to_fpr(GP::Rax, x, deopt);
+                    self.set_F(slot, x);
+                } else {
+                    let tmp = self.set_new_F(slot);
+                    ir.float_to_fpr(GP::Rax, tmp, deopt);
+                    self.gen_xmm_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::Sf(l, _), LinkMode::F(r)) => {
+                // Sf -> F: the value is already unboxed in xmm `l`; drop the
+                // boxed cache and rebind as pure `F`. Mirrors the `F -> F` arm.
+                if l == r {
+                    self.set_F(slot, l);
+                } else if self.is_xmm_vacant(r) {
+                    self.set_F(slot, r);
+                    ir.fpr_move(l, r);
+                } else {
+                    self.gen_xmm_swap(ir, l, r);
+                    self.set_F(slot, r);
                 }
             }
             (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {

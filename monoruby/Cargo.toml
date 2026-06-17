@@ -50,6 +50,11 @@ dump-require = []
 # only); off by default. Build twice (with/without) to A/B-benchmark. See
 # doc/regalloc_separation.md §13.
 loop-type-only-entry = []
+# §15.3 prototype: at a loop header, adopt the back-edge fixpoint's `F` placement
+# for loop-carried floats the merge collapsed to `S` (the boxed forward-entry
+# initial value), so the loop body stays unboxed instead of decoding+reboxing the
+# float every iteration. Pairs with the `S -> F` bridge arm. Off by default.
+loop-keep-float = []
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
