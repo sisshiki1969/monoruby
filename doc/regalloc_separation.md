@@ -1456,3 +1456,43 @@ Either way the next concrete action is the **L2-1 A/B on M1**; its result picks
 can be made allocation-free at all. (This supersedes §16.4's "shared `F`-preference
 annotation" as the immediate next step — there is no such free annotation; there
 is a bench that tells us whether we need the L2-2 allocator.)
+
+### 16.6 L2-1 bench verdict (x86-64): REGRESSION — path (ii) confirmed
+
+x86-64 `--release` wall-clock A/B (default vs `layer2-float-by-type`, steady-state
+median of 6/5 runs, seconds, lower = faster):
+
+| benchmark | default | L2-1 | verdict |
+|---|---|---|---|
+| so_mandelbrot | ~0.181 | ~0.189 | **~4 % slower** |
+| so_nbody | ~0.254 | ~0.260 | **~2.4 % slower** |
+| app_fib (no float loop) | ~0.154 | ~0.150 | flat (noise; `keep_backedge_floats` never fires) |
+
+L2-1 fails the §13.4 gate (>2 %) on both float loops — exactly the §16.4
+over-promotion prediction, now measured. So **§16.5's fork resolves to (ii)**: the
+loop-carried `F`-selection genuinely needs allocation quality; the allocation-free
+`type ∧ liveness` superset cannot reproduce it (it promotes loop-invariant /
+fixpoint-rejected floats, adding pre-header unboxes that cost without body
+benefit). L2-1 stays **default-off as a negative-result probe** (mirroring
+`loop-type-only-entry`, §13.8), and `keep_backedge_floats`'s L2-0 mechanism/policy
+split is retained as the clean seam.
+
+**What this proves.** This is the *second* empirical confirmation — after §13.8 for
+consumer (b) — that the greedy fixpoint's loop-carried-`F` selection is
+load-bearing and **not reproducible allocation-free**. Both consumers (a) and (b)
+need it. So decoupling them is not "read types instead of placement"; it requires a
+**codegen-side loop-aware allocator that reproduces the fixpoint's selection**
+(L2-2). And critically, since the fixpoint's greedy selection is already good
+(§15.9: it never boxes an `F`; §15.7 shipped the merge win), L2-2 is **parity at
+best on perf** — its sole payoff is the goal-3 enabler (a swappable allocator for
+VM-residual codegen / the unified DSL), at real reimplementation risk (it must
+match the greedy fixpoint byte-for-byte on the hot float loops or regress).
+
+**Strategic state of the §5 line.** The perf wins are shipped (§15.7) and the two
+remaining fusion points (consumer (a) here, consumer (b) §13.8) are both proven to
+need allocation quality. The separation is therefore *complete as far as it pays
+for itself*: what remains (L2-2/L2-3 — reimplement the greedy loop-carried
+selection as a standalone allocation pass, then strip the analysis-pass allocation)
+is a large, perf-neutral, regression-risky refactor whose only return is the
+research-grade goal-3. That is a deliberate investment decision, not an incremental
+win — recorded here so the call is explicit rather than drifted into.
