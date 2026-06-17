@@ -1374,3 +1374,44 @@ physical xmm is free"). `incoming_context` supplies the current placement-based
 policy (`be.mode(i) == F`), so the result is byte-identical — but the
 representation **decision** is now a named, swappable policy at the call site,
 exactly the Layer-② seam L2-1 plugs the type+liveness policy into. Suite green.
+
+### 16.4 L2-1 landed behind `layer2-float-by-type` (benchmark probe + a design finding)
+
+L2-1 swaps consumer (a)'s adoption policy from placement (`be.mode(i) == F`) to
+the allocation-free **type + liveness** signal (`be.is_float_typed(i)` ∧ the slot
+is in `Liveness::loop_used_as_float`), behind a default-off feature so the shipping
+build stays byte-identical.
+
+Verified:
+- **Default (off): byte-identical** — the type policy is `#[cfg]`-compiled out.
+- **Feature on: correct** — full lib suite identical to baseline (1671 passed; the
+  34 failures are the pre-existing env mismatches), so the CRuby-diff oracle holds:
+  the type policy never produces a wrong result.
+- **It is not a no-op** — `emit-asm` on the canonical loop-carried-float kernel
+  (`x = x*1.5 + i*0.5; y = y - x*0.25`) differs (code 347 → 379 bytes,
+  ~176 normalised asm lines). Both keep the **hot loop body at zero boxing**
+  (`float_to_value` count 0 either way — §15.7 already won that); the diff is
+  entirely in the **pre-header**.
+
+**Design finding (why L2-1 is a *probe*, not an obvious win).** The type+liveness
+policy promotes the *superset* "`Float`-typed ∧ used-as-float," whereas the
+placement policy promotes exactly the floats the back-edge fixpoint *chose* to
+keep in `F`. On the no-pressure kernel the superset is strictly larger, so L2-1
+adds pre-header unboxes that buy nothing in the body — a *mild regression risk*. In
+other words, consumer (a) has the same load-bearing-placement property §13.8 found
+for consumer (b): the fixpoint's `F`-selection is real information, and a naive
+type+liveness re-derivation over-approximates it. `try_set_new_F`'s self-limiting
+(promote only when a physical xmm is free) bounds the damage but does not restore
+the selectivity.
+
+**Consequence for the plan.** A quality-preserving consumer-(a) decoupling must
+carry the fixpoint's per-slot **`F`-preference** forward as an explicit
+*allocation-free annotation* on the typed IR (a derived bit computed during the
+fixpoint), not re-derive it from `type ∧ liveness`. That annotation is the same
+object L2-2 needs for consumer (b) — so L2-1 and L2-2 share one missing piece: a
+**loop-carried-`F` preference set** produced by the analysis pass as typed-IR
+metadata (distinct from the live xmm placement). L2-1 stays a default-off
+benchmark probe (mirroring `loop-type-only-entry` in §13.8) until the M1
+mandelbrot / nbody / optcarrot A/B says whether the superset is neutral in
+practice; the likely outcome, per this finding, is that the next real increment is
+the `F`-preference annotation, after which both consumers decouple cleanly.

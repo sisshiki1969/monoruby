@@ -42,6 +42,12 @@ gc-verify = []
 stress-spill-pool = []
 profile = ["dump-bc", "dump-traceir"]
 perf = []
+# §5 Layer-② extraction L2-1 (doc §16): drive the loop-entry float adoption from
+# the analysis pass's *type + liveness* (back-edge type `Float` ∧ used-as-float in
+# the loop) instead of its *placement* (`mode == F`), decoupling that consumer
+# from the analysis-pass xmm allocation. Default-off (shipping build is
+# byte-identical); flip after the M1 mandelbrot/nbody/optcarrot bench gate clears.
+layer2-float-by-type = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

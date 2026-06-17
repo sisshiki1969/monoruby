@@ -105,13 +105,30 @@ impl<'a> JitContext<'a> {
                     };
                     // Adoption policy (Layer-② representation decision, §16): which
                     // loop-carried slots re-adopt the back-edge fixpoint's `F`.
-                    // Today it reads the fixpoint's *placement* (`mode == F`) — the
-                    // remaining dependence on the analysis-pass allocation that
-                    // L2-1 will replace with a type+liveness policy.
-                    let adopt = |i| matches!(be.mode(i), LinkMode::F(_));
+                    //
+                    // Default reads the fixpoint's *placement* (`mode == F`) — the
+                    // remaining dependence on the analysis-pass allocation. L2-1
+                    // (feature `layer2-float-by-type`) replaces it with the
+                    // allocation-free *type + liveness* signal: the back-edge type
+                    // is `Float` and the slot is used as float in the loop
+                    // (`Liveness::loop_used_as_float`). `try_set_new_F` (inside the
+                    // mechanism) still self-limits to a free physical xmm, so a
+                    // promotion the fixpoint could not place under pressure simply
+                    // does not fire.
                     let promotable =
                         |i| entries.iter().all(|e| float_bridgeable(e.state.mode(i)));
-                    target.keep_backedge_floats(adopt, promotable);
+                    #[cfg(not(feature = "layer2-float-by-type"))]
+                    {
+                        let adopt = |i| matches!(be.mode(i), LinkMode::F(_));
+                        target.keep_backedge_floats(adopt, promotable);
+                    }
+                    #[cfg(feature = "layer2-float-by-type")]
+                    {
+                        let loop_float: std::collections::HashSet<SlotId> =
+                            liveness.loop_used_as_float().map(|(s, _)| s).collect();
+                        let adopt = |i| be.is_float_typed(i) && loop_float.contains(&i);
+                        target.keep_backedge_floats(adopt, promotable);
+                    }
                 }
             }
             #[cfg(feature = "jit-debug")]

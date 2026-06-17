@@ -409,6 +409,13 @@ impl SlotState {
         self.mode(slot).guarded()
     }
 
+    /// True when *slot*'s abstract type is exactly `Float` — the allocation-free
+    /// (Layer-①) signal the L2-1 loop-entry float adoption policy reads in place
+    /// of the analysis-pass placement (`mode == F`). See doc §16.
+    pub(in crate::codegen::jitgen) fn is_float_typed(&self, slot: SlotId) -> bool {
+        matches!(self.guarded(slot), Guarded::Float)
+    }
+
     pub(in crate::codegen::jitgen) fn class(&self, slot: SlotId) -> Option<ClassId> {
         self.guarded(slot).class()
     }

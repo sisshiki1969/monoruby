@@ -41,7 +41,9 @@ impl Liveness {
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    pub(super) fn loop_used_as_float(&self) -> impl Iterator<Item = (SlotId, bool)> {
+    pub(in crate::codegen::jitgen) fn loop_used_as_float(
+        &self,
+    ) -> impl Iterator<Item = (SlotId, bool)> {
         self.0.iter().enumerate().flat_map(|(i, b)| match b {
             // `killed` means the slot was redefined before any post-kill use
             // updated `ty`. The recorded `ty` reflects pre-kill usage which
