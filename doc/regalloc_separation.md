@@ -1563,3 +1563,26 @@ untouched.
 This order delivers goal 3's swappable allocator without paying the §16.6 cost, and
 keeps every step a `JitGreedy`-byte-identical, M1-benchable diff. L2-2.1 is the next
 code increment.
+
+### 17.4 Deferred: goal-3 / `VmResidual` not pursued now (per user)
+
+Per the user, **VM support is not needed at this point**, so the goal-3 /
+`VmResidual` direction designed in §17.1–17.3 is **deferred**. The L2-2.1 code
+(the `AllocStrategy { JitGreedy, VmResidual }` enum, the `SlotState.alloc_strategy`
+field, the `try_alloc_xmm` VM gate, and the `force-vm-residual` validation feature)
+has been **reverted** to keep the tree focused on the JIT. §17.1–17.3 remain as the
+record of the goal-3 plan for whenever VM-residual codegen is revisited.
+
+**Refocus.** The active goal returns to the *JIT-internal*, behaviour-preserving
+separation of "abstract interpretation + fixpoint" from "physical register
+allocation" — §4 step 2 done as a **structural refactor that preserves the current
+greedy placement**, not the VM application. Consequence of deferring goal 3: the
+deepest remaining separation (un-welding the per-instruction handlers'
+type/representation decision from their allocation+emission — e.g. `binop_float` =
+`load_binary_ret_xmm` (alloc) + `fpr_binop` (emit)) loses its near-term *functional*
+payoff (it was the enabler for the swappable VM allocator). What is already done
+de-fuses the merge and the allocation seam (data-model split `place`/`ty`,
+`alloc_policy`/`AllocCtx`, `decide_join`/`apply_join`, the `keep_backedge_floats`
+mechanism/policy split); the remaining handler-level un-welding is a large,
+IR-introducing refactor whose value, with goal 3 deferred, is architectural
+cleanliness rather than a feature. That trade-off is the open decision.
