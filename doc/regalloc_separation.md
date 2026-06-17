@@ -931,3 +931,39 @@ it is shadow-verifiable against the fused result. 3c-ii is the only step that ma
 regress, and it is gated on the exact benchmarks 3b flagged. 3b is retained as the
 negative-result probe that calibrated the bar: any allocator that cannot match the
 backedge on mandelbrot/nbody is not ready to land.
+
+### 14.6 The 3b regression, diagnosed at the asm level (what 3c-ii must reproduce)
+
+Diffing the JIT asm of the mandelbrot kernel (`for dummy in 0..ITER` with several
+live floats) base-vs-3b pins the mechanism exactly. do_it grows from **340 → 412
+instructions (+21%)** under 3b. The delta is not the back-edge box (both box the
+same loop-carried results); it is the **operand loads inside the loop body**:
+
+- **base** keeps the loop-invariant / loop-carried floats (`cr`, `ci`, …) resident
+  in xmm across the loop, so each use is a direct `movq xmmA,xmmCr; mulsd …`:
+  ```
+  movq xmm9,xmm2 ; mulsd xmm9,xmm2      # cr already in xmm2
+  ```
+- **3b** demotes them to their boxed stack home, so *every use* re-loads and
+  re-decodes the flonum (~10 insts: tag tests + the `sar/add/and/or/rol/movq`
+  flonum-decode) before the `mulsd`:
+  ```
+  mov rdi,[rbp-N]; test rdi,1; jne…; test rdi,2; je…; …; rol rdi,0x3d; movq xmm2,rdi
+  movq xmm3,xmm2 ; mulsd xmm3,xmm2
+  ```
+
+Why `use_float` does not recover it: the inner loop has more simultaneously-live
+floats than the xmm pool, so the per-entry best-effort `try_set_new_Sf` promotion
+loses the race for some of them and they stay boxed — re-decoded every use. The
+backedge **fixpoint** instead converges on a stable assignment that keeps the
+hot floats resident. So the missing quality is not the `Sf` *mark* (liveness has
+it) but the *spill choice* under pressure.
+
+**Spec for 3c-ii, made concrete.** The loop-aware linear scan must keep floats
+whose live interval **spans the loop body** (loop-invariant operands and
+loop-carried accumulators) resident in xmm with priority over intra-iteration
+temporaries, i.e. choose spill victims by furthest next-use across the whole loop
+— exactly what the backedge fixpoint approximates and what greedy per-entry
+`use_float` does not. This is the property §14.3 named, now backed by the asm:
+optcarrot stayed flat because its hot loops do not exceed the float pool, so the
+spill choice never bites; mandelbrot/nbody do, so it dominates.
