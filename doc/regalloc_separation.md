@@ -1628,3 +1628,51 @@ substantial next step; this increment establishes the decision/execution seam an
 the `FloatBinOpPlan` value that a virtual-operand lowering would carry. The same
 `plan_*`/execute shape applies to the other handlers that fold-or-emit
 (`gen_cmp_*`, `binop_integer`) as they are migrated.
+
+### 18.3 Correction: the XmmOp alloc/emit is already split (§9/§11); (b) is record-driven lowering
+
+§18.2 claimed the `XmmOp` path "still fuses allocation and emission internally."
+Tracing it precisely, **that is wrong** — the primitive-level split is already done
+by the §9/§11 transfer work:
+
+- `load_xmm` / `load_xmm_fixnum` are each `(*_state)` + `transfer(TransferIR::…)`:
+  the **state half** (`load_xmm_state`) allocates the xmm and binds the slot (pure
+  abstract-state mutation, no emission); the **record** (`TransferIR::XmmLoad`,
+  carrying its deopt as a `DeoptPoint` *program point*) is what emits. `transfer()`
+  collects the record into `self.transfers` *and* (today) emits it inline, with a
+  debug **shadow check** proving the record replays to the identical
+  `AsmInst`/`SideExit` — i.e. the record is self-contained.
+- `def_F` (the dst) is **pure allocation** (no emission); `fpr_binop` is **pure
+  emission** (no allocation — its operands are already placed).
+
+So in `binop_float`'s `XmmOp` arm, every call is *either* allocation (state) *or*
+emission (a record / a pure `AsmInst`); they are not fused, only sequenced. And the
+handler already consumes **virtual operands** (`FBinOpInfo` = slots) and produces
+physical xmm — it *is* a virtual→physical lowering. §18.2's "needs a
+virtual-operand IR" mis-stated the situation.
+
+**What (b) actually is: record-driven lowering (the deferred two-pass).** The
+transfer records are *collected but not yet consumed* — emission still happens
+inline during the analysis/allocation walk. The remaining separation is to make
+emission a **distinct pass that replays the record stream**, instead of emitting
+inline. The records already carry everything needed (deopt program points; physical
+regs assigned during the walk), so replay is behaviour-preserving — the §11 shadow
+proves it per-call.
+
+**The one concrete blocker.** The stream is not yet *complete*: transfers
+(value-movements) are recorded, but **operations** (`fpr_binop`, `FloatCmp`, the
+integer ops) and dst-defs are emitted directly to `inst`, outside `transfers`. A
+deferred replay of `transfers` alone would drop the ops and lose their ordering
+relative to the loads. So the prerequisite for record-driven lowering is a
+**single ordered record stream that includes the operations**, after which a pass-2
+replay can emit the whole method from records.
+
+**Scope honesty.** This is a large, global restructure (route all emission through
+one ordered record stream; then split the codegen walk into collect-then-replay),
+not an op-by-op behaviour-preserving edit — the value-movement primitives are
+already split, so the increments left are (i) inert scaffolding (widen the record
+stream to cover ops, which does nothing until a replay pass exists) or (ii) the
+replay pass itself (the deferred two-pass). With goal 3 deferred (§17.4), this
+restructure's payoff is purely architectural. The boundary of the *primitive-level*
+separation has been reached; crossing into the deferred two-pass is the open,
+large-investment decision.
