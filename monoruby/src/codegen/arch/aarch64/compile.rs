@@ -9,6 +9,7 @@
 //! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
+use crate::codegen::jitgen::asmir::ArrayIndexKind;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
@@ -4000,6 +4001,82 @@ impl Codegen {
         self.emit_xmm_restore(using_xmm, false);
         self.emit_handle_error(error);
         self.jit.bind_label(exit); // generic C-call path falls through to exit
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **read** for `AsmInst::ArrayIndex`
+    /// (aarch64). The index-register setup + `array_index` call that used to live
+    /// in the `ir.inline(|gen| …)` closure, driven by the typed `ArrayIndexKind`.
+    ///
+    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let out_range = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    mov x3, (idx as u64);   // index (already non-negative)
+                }
+                self.array_index(&out_range);
+            }
+            ArrayIndexKind::Fixnum => {
+                // Single-page layout (no select_page — see Codegen::array_index):
+                // the negative-index normalization is laid out inline; a
+                // non-negative index branches straight to `checked`.
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    asr x3, x3, #1;         // untag index
+                    cmp x3, #0;
+                    b.pl checked;           // non-negative -> use as-is
+                }
+                self.get_array_length();    // x0 <- len, x4 (base) preserved
+                monoasm_arm64! { &mut self.jit,
+                    adds x3, x3, x0;        // index += len, set flags
+                    b.pl checked;           // normalized non-negative -> recheck
+                    b generic;              // past the start -> out of range
+                }
+                self.jit.bind_label(checked.clone());
+                self.array_index(&generic);
+            }
+        }
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **assign** for
+    /// `AsmInst::ArrayIndexAssign` (aarch64).
+    ///
+    pub(crate) fn gen_array_index_assign(
+        &mut self,
+        kind: ArrayIndexKind,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let generic = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    mov x3, (idx as u64);   // index (already non-negative)
+                }
+                self.array_index_assign(using_xmm, &generic, error);
+            }
+            ArrayIndexKind::Fixnum => {
+                // Single-page layout (no select_page — see array_index_assign).
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    asr x3, x3, #1;         // untag index
+                    cmp x3, #0;
+                    b.pl checked;           // non-negative -> use as-is
+                }
+                self.get_array_length();    // x0 <- len, x4 (base) preserved
+                monoasm_arm64! { &mut self.jit,
+                    adds x3, x3, x0;        // index += len, set flags
+                    b.pl checked;           // normalized non-negative -> recheck
+                    b generic;              // past the start -> out of range
+                }
+                self.jit.bind_label(checked.clone());
+                self.array_index_assign(using_xmm, &generic, error);
+            }
+        }
     }
 
     /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to

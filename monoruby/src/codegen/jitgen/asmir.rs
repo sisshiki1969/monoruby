@@ -32,6 +32,16 @@ pub(crate) struct AsmDeopt(usize);
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AsmError(usize);
 
+/// §20 (B): how an array index reached the `ArrayIndex`/`ArrayIndexAssign`
+/// records — a `u16` compile-time immediate, or a runtime `Fixnum` already loaded
+/// into the index register (Rsi / x3). The data the old `ir.inline` closures
+/// captured, now a plain `Clone` value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ArrayIndexKind {
+    U16(u16),
+    Fixnum,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AsmEvict(usize);
 
@@ -1500,6 +1510,22 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     Inline(InlineProcedure),
+    /// §20 (B): array integer-index **read** (`ary[idx]`), a typed data record
+    /// replacing the `ir.inline(|gen| …)` closure escape hatch — so `AsmInst`
+    /// carries no `FnOnce` and becomes `Clone` (the prerequisite for the unified,
+    /// shadow-checkable record stream). The per-arch index-register setup +
+    /// `array_index` call is dispatched in `gen_array_index`.
+    ArrayIndex {
+        kind: ArrayIndexKind,
+    },
+    /// §20 (B): array integer-index **assign** (`ary[idx] = src`). Typed twin of
+    /// `ArrayIndex`; carries the `using_xmm` save-set and the generic-path error
+    /// side-exit. Dispatched in `gen_array_index_assign`.
+    ArrayIndexAssign {
+        kind: ArrayIndexKind,
+        using_xmm: UsingXmm,
+        error: AsmError,
+    },
     /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
     /// A typed replacement for the `ir.inline(|gen| gen.emit_*())` escape hatch
     /// used by trivial field-reader inline builtins (e.g. `Range#begin/end`),

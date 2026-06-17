@@ -1,6 +1,5 @@
 use super::*;
-#[cfg(target_arch = "aarch64")]
-use monoasm_macro::monoasm_arm64;
+use crate::codegen::jitgen::asmir::ArrayIndexKind;
 
 impl<'a> JitContext<'a> {
     pub(super) fn index(
@@ -69,38 +68,13 @@ impl AbstractState {
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
-            ir.inline(move |r#gen, _, _, _| {
-                let out_range = r#gen.jit.label();
-                monoasm! { &mut r#gen.jit,
-                    movl rsi, (idx);
-                }
-                r#gen.array_index(&out_range);
+            ir.push(AsmInst::ArrayIndex {
+                kind: ArrayIndexKind::U16(idx),
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
-            ir.inline(move |r#gen, _, _, _| {
-                //r#gen.gen_array_index();
-
-                let generic = r#gen.jit.label();
-                let checked = r#gen.jit.label();
-                let negative = r#gen.jit.label();
-                monoasm! { &mut r#gen.jit,
-                    sarq  rsi, 1;
-                    testq rsi, rsi;
-                    js  negative;
-                checked:
-                }
-                r#gen.array_index(&generic);
-
-                r#gen.jit.select_page(1);
-                r#gen.jit.bind_label(negative);
-                r#gen.get_array_length();
-                monoasm! { &mut r#gen.jit,
-                    addq rsi, rax;
-                    jns  checked;
-                    jmp  generic;
-                }
-                r#gen.jit.select_page(0);
+            ir.push(AsmInst::ArrayIndex {
+                kind: ArrayIndexKind::Fixnum,
             });
         }
         self.def_rax2acc(ir, dst);
@@ -120,34 +94,13 @@ impl AbstractState {
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
-            ir.inline(move |r#gen, _, _, _| {
-                let out_range = r#gen.jit.label();
-                monoasm_arm64! { &mut r#gen.jit,
-                    mov x3, (idx as u64);   // Rsi <- index (already non-negative)
-                }
-                r#gen.array_index(&out_range);
+            ir.push(AsmInst::ArrayIndex {
+                kind: ArrayIndexKind::U16(idx),
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
-            ir.inline(move |r#gen, _, _, _| {
-                // Single-page layout (no select_page — see Codegen::array_index):
-                // the negative-index normalization is laid out inline; a
-                // non-negative index branches straight to `checked`.
-                let generic = r#gen.jit.label();
-                let checked = r#gen.jit.label();
-                monoasm_arm64! { &mut r#gen.jit,
-                    asr x3, x3, #1;         // untag index (Rsi)
-                    cmp x3, #0;
-                    b.pl checked;           // non-negative -> use as-is
-                }
-                r#gen.get_array_length();   // Rax <- len, Rdi (base) preserved
-                monoasm_arm64! { &mut r#gen.jit,
-                    adds x3, x3, x0;        // index += len, set flags
-                    b.pl checked;           // normalized non-negative -> recheck
-                    b generic;              // past the start -> out of range
-                }
-                r#gen.jit.bind_label(checked.clone());
-                r#gen.array_index(&generic);
+            ir.push(AsmInst::ArrayIndex {
+                kind: ArrayIndexKind::Fixnum,
             });
         }
         self.def_rax2acc(ir, dst);
@@ -177,39 +130,20 @@ impl AbstractState {
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels, _| {
-                let generic = r#gen.jit.label();
-                monoasm! { &mut r#gen.jit,
-                    movl rsi, (idx);
-                }
-                r#gen.array_index_assign(using_xmm, &generic, &labels[error]);
+            ir.push(AsmInst::ArrayIndexAssign {
+                kind: ArrayIndexKind::U16(idx),
+                using_xmm,
+                error,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels, _| {
-                let generic = r#gen.jit.label();
-                let checked = r#gen.jit.label();
-                let negative = r#gen.jit.label();
-                monoasm! { &mut r#gen.jit,
-                    sarq  rsi, 1;
-                    testq rsi, rsi;
-                    js   negative;
-                checked:
-                };
-                r#gen.array_index_assign(using_xmm, &generic, &labels[error]);
-
-                r#gen.jit.select_page(1);
-                r#gen.jit.bind_label(negative);
-                r#gen.get_array_length();
-                monoasm! { &mut r#gen.jit,
-                    addq rsi, rax;
-                    jns  checked;
-                    jmp  generic;
-                }
-                r#gen.jit.select_page(0);
+            ir.push(AsmInst::ArrayIndexAssign {
+                kind: ArrayIndexKind::Fixnum,
+                using_xmm,
+                error,
             });
         }
     }
@@ -232,35 +166,20 @@ impl AbstractState {
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels, _| {
-                let generic = r#gen.jit.label();
-                monoasm_arm64! { &mut r#gen.jit,
-                    mov x3, (idx as u64);   // Rsi <- index (already non-negative)
-                }
-                r#gen.array_index_assign(using_xmm, &generic, &labels[error]);
+            ir.push(AsmInst::ArrayIndexAssign {
+                kind: ArrayIndexKind::U16(idx),
+                using_xmm,
+                error,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
             let using_xmm = self.get_using_xmm();
             let error = ir.new_error(self);
-            ir.inline(move |r#gen, _, labels, _| {
-                // Single-page layout (no select_page — see array_index_assign).
-                let generic = r#gen.jit.label();
-                let checked = r#gen.jit.label();
-                monoasm_arm64! { &mut r#gen.jit,
-                    asr x3, x3, #1;         // untag index (Rsi)
-                    cmp x3, #0;
-                    b.pl checked;           // non-negative -> use as-is
-                }
-                r#gen.get_array_length();   // Rax <- len, Rdi (base) preserved
-                monoasm_arm64! { &mut r#gen.jit,
-                    adds x3, x3, x0;        // index += len, set flags
-                    b.pl checked;           // normalized non-negative -> recheck
-                    b generic;              // past the start -> out of range
-                }
-                r#gen.jit.bind_label(checked.clone());
-                r#gen.array_index_assign(using_xmm, &generic, &labels[error]);
+            ir.push(AsmInst::ArrayIndexAssign {
+                kind: ArrayIndexKind::Fixnum,
+                using_xmm,
+                error,
             });
         }
     }

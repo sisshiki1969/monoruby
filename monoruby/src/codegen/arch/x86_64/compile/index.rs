@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::asmir::ArrayIndexKind;
 use crate::codegen::jitgen::asmir::compile_shared::set_array_integer_index;
 
 impl Codegen {
@@ -115,6 +116,88 @@ impl Codegen {
             jmp  exit;
         };
         self.jit.select_page(0);
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **read** for `AsmInst::ArrayIndex`.
+    /// The index-register setup + `array_index` call that used to live in the
+    /// `ir.inline(|gen| …)` closure, now driven by the typed `ArrayIndexKind`.
+    ///
+    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let out_range = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movl rsi, (idx);
+                }
+                self.array_index(&out_range);
+            }
+            ArrayIndexKind::Fixnum => {
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                let negative = self.jit.label();
+                monoasm! { &mut self.jit,
+                    sarq  rsi, 1;
+                    testq rsi, rsi;
+                    js   negative;
+                checked:
+                };
+                self.array_index(&generic);
+
+                self.jit.select_page(1);
+                self.jit.bind_label(negative);
+                self.get_array_length();
+                monoasm! { &mut self.jit,
+                    addq rsi, rax;
+                    jns  checked;
+                    jmp  generic;
+                }
+                self.jit.select_page(0);
+            }
+        }
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **assign** for
+    /// `AsmInst::ArrayIndexAssign`.
+    ///
+    pub(crate) fn gen_array_index_assign(
+        &mut self,
+        kind: ArrayIndexKind,
+        using_xmm: UsingXmm,
+        error: &DestLabel,
+    ) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let generic = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movl rsi, (idx);
+                }
+                self.array_index_assign(using_xmm, &generic, error);
+            }
+            ArrayIndexKind::Fixnum => {
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                let negative = self.jit.label();
+                monoasm! { &mut self.jit,
+                    sarq  rsi, 1;
+                    testq rsi, rsi;
+                    js   negative;
+                checked:
+                };
+                self.array_index_assign(using_xmm, &generic, error);
+
+                self.jit.select_page(1);
+                self.jit.bind_label(negative);
+                self.get_array_length();
+                monoasm! { &mut self.jit,
+                    addq rsi, rax;
+                    jns  checked;
+                    jmp  generic;
+                }
+                self.jit.select_page(0);
+            }
+        }
     }
 
     ///

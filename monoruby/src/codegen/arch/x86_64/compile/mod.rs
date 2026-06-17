@@ -160,6 +160,8 @@ impl Codegen {
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
+            | AsmInst::ArrayIndex { .. }
+            | AsmInst::ArrayIndexAssign { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }

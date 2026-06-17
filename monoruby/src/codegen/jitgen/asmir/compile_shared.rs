@@ -912,6 +912,16 @@ impl Codegen {
             // Inlined builtin method body: the generator closure emits the
             // arch-appropriate asm directly.
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
+            // §20 (B): typed array integer-index read/assign (replaces the
+            // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
+            // index-register setup + `array_index*` call lives in
+            // `gen_array_index*`.
+            AsmInst::ArrayIndex { kind } => self.gen_array_index(kind),
+            AsmInst::ArrayIndexAssign {
+                kind,
+                using_xmm,
+                error,
+            } => self.gen_array_index_assign(kind, using_xmm, &labels[error]),
             // Typed field-load (replaces the `ir.inline` escape hatch for trivial
             // field-reader inline builtins). Goal-2 proof: an inline builtin's
             // codegen expressed once in arch-neutral LIR via an existing op.
