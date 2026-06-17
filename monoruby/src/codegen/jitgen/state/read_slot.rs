@@ -216,6 +216,14 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         rhs: FPReg,
         dst: FPReg,
     },
+    /// §19 (B): a float **comparison** — `lhs <cmp> rhs`, result left in `rax`
+    /// (the following `def_rax2acc` is a separate transfer). Pure data, like
+    /// `FloatBinOp`.
+    FloatCmp {
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: FPReg,
+    },
 }
 
 impl TransferIR {
@@ -232,6 +240,9 @@ impl TransferIR {
                 rhs,
                 dst,
             } => ir.fpr_binop(kind, lhs, rhs, dst),
+            TransferIR::FloatCmp { kind, lhs, rhs } => {
+                ir.push(AsmInst::FloatCmp { kind, lhs, rhs })
+            }
         }
     }
 }

@@ -563,7 +563,8 @@ impl AbstractFrame {
             return;
         };
         let binary_xmm = self.load_binary_xmm(ir, info);
-        ir.push(AsmInst::FloatCmp {
+        // §19 (B): route the comparison through the record stream.
+        ir.transfer(TransferIR::FloatCmp {
             kind,
             lhs: binary_xmm.0,
             rhs: binary_xmm.1,
