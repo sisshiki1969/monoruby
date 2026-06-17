@@ -1,6 +1,33 @@
 use super::*;
 
 ///
+/// §5 Layer-② L2-2 (doc §17): the swappable allocation **strategy**.
+///
+/// `JitGreedy` is today's JIT policy — the xmm pool plus the greedy fixpoint
+/// selection (`F`/`Sf` where profitable, `S` otherwise). `VmResidual` is the VM's
+/// fixed convention: **no pool, no unboxed representation; every value stays boxed
+/// in its stack home (`S`)** — the residual a goal-3 partial evaluator emits for
+/// the interpreter. The strategy is chosen per codegen invocation; the JIT always
+/// uses `JitGreedy`, so the default keeps the shipping build byte-identical.
+///
+/// L2-2.1 (this step) routes the *easy* representation sites through it: the
+/// chokepoint is `alloc_policy::try_alloc_xmm`, which returns `None` under
+/// `VmResidual` so every `try_set_new_F`/`try_set_new_Sf`/`use_float`/merge
+/// promotion falls back to `S`. The *hard* site — `def_F` in the float-op handlers,
+/// which currently commits to `F` — is given its boxed `VmResidual` lowering in
+/// L2-2.2.
+///
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(in crate::codegen::jitgen) enum AllocStrategy {
+    #[default]
+    JitGreedy,
+    /// Constructed by the goal-3 `VmResidual` codegen (L2-2.3); not yet wired, so
+    /// the JIT never selects it and the default build is `JitGreedy`-only.
+    #[allow(dead_code)]
+    VmResidual,
+}
+
+///
 /// §5 stage 3c-i — the register-allocation **policy** seam.
 ///
 /// Every xmm allocation in the JIT funnels through these two primitives (operand
@@ -61,6 +88,12 @@ mod alloc_policy {
     /// use [`alloc_xmm`] from a context that has access to `AsmIr`).
     ///
     pub(super) fn try_alloc_xmm(state: &mut SlotState) -> Option<FPReg> {
+        // §17 L2-2.1: under the VM-residual strategy the xmm pool is unavailable,
+        // so every `try_*`-based promotion falls back to a boxed `S`. `JitGreedy`
+        // (the default, and the JIT's only strategy today) is unaffected.
+        if state.alloc_strategy == AllocStrategy::VmResidual {
+            return None;
+        }
         try_alloc_xmm_ctx(state, &AllocCtx::default())
     }
 
@@ -225,6 +258,10 @@ pub(crate) struct SlotState {
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
+    /// §5 Layer-② L2-2 (doc §17): the active allocation strategy. Default
+    /// `JitGreedy` (the JIT); `VmResidual` makes the xmm pool unavailable
+    /// (`try_alloc_xmm` returns `None`) so every value stays boxed `S`.
+    alloc_strategy: AllocStrategy,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -255,6 +292,7 @@ impl SlotState {
             r15: None,
             local_num,
             deferred_rest: None,
+            alloc_strategy: AllocStrategy::default(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
