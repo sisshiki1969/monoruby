@@ -1093,3 +1093,40 @@ intervals** of §14.3: rank pool occupancy by interval length / loop membership,
 not allocation order. The seam (incr. 1) and the calibrated bar (mandelbrot/nbody
 regress, optcarrot flat) are in place; what remains is the interval analysis +
 the priority allocator, a substantial standalone implementation.
+
+### 15.3 CORRECTION: it is not register pressure — the loop-entry merge discards the fixpoint's `F`
+
+§15.2's "register pressure forces the `S` box" is **wrong**. Re-verified facts:
+
+- **No pressure.** The float kernel uses 2 of 14 physical xmm; base mandelbrot
+  uses 10 of 14. The pool is never exhausted.
+- **Spilling is unboxed by design.** `alloc_xmm` phase-2 (`push_spill`) hands back
+  a `VirtFPReg` that lives on the stack as a raw `f64` (`movsd`), never a boxed
+  `Value`. A spilled float is *not* re-decoded. So boxing ≠ spilling.
+
+The actual mechanism, from `jit-debug` on the kernel loop:
+
+```
+fixed: 1 { … [%3(zr): F(FPReg4)] [%4(zi): F(FPReg6)] … }   ← backedge fixpoint: F (good)
+target:  { … [%3(zr): S(Value)]  [%4(zi): S(Value)]  … }   ← codegen loop-entry: S (boxed!)
+```
+
+The **back-edge fixpoint already computes the loop-carried floats as `F` (pure
+xmm)** — the right answer. But codegen's loop-entry target is
+`incoming.join(backedge)` (merge.rs), and the forward entry (`incoming`, the first
+loop entry from outside) holds the loop-carried float as `S` — the boxed initial
+value (`zr = 0.0` materialised boxed). `decide_join` has **no `S`/`F` arm**, so
+`(S, F)` falls to the default `_ => SetS` → `S`. The merge therefore *discards the
+fixpoint's `F`* and collapses the whole loop body to boxed, decoding+re-boxing the
+loop-carried float every iteration — with 12 xmm sitting free.
+
+So the lever is neither the allocator, the spill policy, nor register pressure: it
+is the **loop-entry merge letting the forward entry's boxed initial value win over
+the back-edge's unboxed steady-state placement**. The fix is to make the loop
+header adopt the back-edge's `F`/`Sf` placement for loop-carried floats (a
+one-time unbox of the forward entry at the pre-header bridge, which the bridge's
+`S -> F`/`Sf` arms already emit) instead of `SetS`. This is a loop-header-local
+change to how `incoming_context` builds the target, not a new allocator — and it
+fixes the latent base-case box, not just the 3b regression. (The earlier no-op
+probes were no-ops precisely because they targeted the allocator/promotion, while
+the value was being boxed by the *merge* upstream of them.)
