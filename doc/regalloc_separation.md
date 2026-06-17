@@ -793,3 +793,42 @@ canonical case. Cases where liveness-promotion and the analysis backedge diverge
 build `--release` twice (with/without the feature) and compare `bin/bench` +
 optcarrot before considering a default flip / removing the analysis-pass
 allocation outright.
+
+### 13.8 §5 stage 3b benchmark verdict: REGRESSION — the analysis-pass backedge is load-bearing
+
+**Corrects §13.7.** The canonical `x += i*0.5` loop produced identical asm off/on,
+which I wrongly generalised to "codegen neutral." The real float-heavy benchmarks
+say otherwise. M1 `bin/bench` (iter/sec, higher = faster) and an independent
+x86-64 wall-clock A/B (seconds, lower = faster) both show 3b **regressing**:
+
+| benchmark | base | 3b | verdict |
+|---|---|---|---|
+| mandelbrot (M1, iter/s) | 24.903 | 9.716 | **2.56× slower** |
+| nbody (M1, iter/s) | 11.353 | 10.184 | ~10% slower |
+| mandelbrot (x86-64, wall-clock) | 0.792 s | 1.479 s | **1.87× slower** |
+| fib / aobench / bf / nqueen / sudoku / matmul / bedcov | — | — | flat |
+
+So 3b fails the §13.4 gate (>2% regression on the hot float path). It stays
+**default-off** — nothing shipped, and the gate did its job.
+
+**The finding (the experiment's real value).** The analysis pre-pass's backedge
+placement is **load-bearing** for float-heavy loops: it captures good loop-carried
+xmm bindings (floats kept in registers across the back-edge) that liveness-driven
+re-derivation (`use_float`) does **not** recover. The canonical loop was too
+trivial to show this (its accumulator was already `Sf`/boxed-per-iteration, so
+both paths agreed); mandelbrot/nbody carry several live floats across the loop
+where the fixpoint's placement genuinely beats a from-scratch `use_float` pass.
+This **refutes** the "backedge placement is redundant with liveness" hypothesis
+from §13.7.
+
+**Consequence for the architecture.** De-fusing allocation from the analysis pass
+cannot simply *discard* the loop-carried placement and re-derive it from liveness
+— that information is real and the greedy fixpoint computes it well. The allocator
+pass (stage 3c / §3 Layer ②) must **reconstruct or carry forward** at least the
+quality of the current analysis-pass backedge bindings, i.e. a proper loop-aware
+allocation (linear-scan with loop-carried liveness), not the liveness-hint
+promotion `use_float` does today. The keep-`Sf`-cache, drop-xmm-free demotion
+property (stage-1 finding) and the backedge fixpoint together are the bar 3c must
+clear. Net: 3b is retained as a **negative result / regression probe** behind its
+feature flag; the next real step is designing 3c to match-or-beat the backedge,
+not to replace it with liveness promotion.
