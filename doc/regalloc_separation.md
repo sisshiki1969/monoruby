@@ -1037,3 +1037,31 @@ computation from the operand-load/def handlers above) is the larger, later arc;
 3c-i increments 1–3 deliver the swappable allocator and the measured win first,
 since that is where the §14.6 regression and the latent base-case back-edge boxing
 both live.
+
+### 15.1 Two no-op experiments locate the lever: it is the merge, not the allocator
+
+Increment 1 gave a clean `alloc_policy` seam, but two targeted experiments behind
+it both came back **byte-identical** on the mandelbrot kernel:
+
+- **`use_float` spill fallback** (§14.7): promote a pool-full float to an unboxed
+  spill (`set_new_Sf`) instead of leaving it boxed `S`. No-op.
+- **`liveness-aware-spill`**: in `try_alloc_xmm` phase 1, prefer demoting a clean
+  `Sf` register whose slots are *dead* over one still *live* (using the `IsUsed`
+  liveness `SlotState` already carries). No-op (340→340 insts, same decode count).
+
+Two independent per-call allocation levers changing nothing means the
+per-iteration boxing of loop-carried floats is **not** decided in `alloc_policy`
+or `use_float`. It is decided at the **loop-header merge** — `decide_join` /
+`apply_join` choose the loop-carried float's mode (`F` pure-xmm vs `Sf`/`S`
+boxed-cache), and *that* is what the body inherits and re-decodes each iteration
+(§14.6). The allocator only places what the merge already decided to keep
+unboxed; it never gets the chance to keep a value the merge boxed.
+
+**Redirect for 3c-ii.** The lever is the loop-header join's float placement: why
+the meet demotes a loop-carried `F` to `Sf`/`S` instead of keeping it `F`. That is
+in the already-split `decide_join` table (the `F/F`, `F/Sf`, `F/S` arms) — and it
+governs both the 3b regression *and* the latent base-case back-edge box. Increment
+1's `alloc_policy` seam stays as valid structural cleanup, but 3c-ii's measured
+win must come from the join arms, not the spill policy. The next concrete step is
+to read the loop-header join decision for a loop-carried float and determine
+whether keeping it `F` across the back-edge (no boxed cache) is sound and cheaper.
