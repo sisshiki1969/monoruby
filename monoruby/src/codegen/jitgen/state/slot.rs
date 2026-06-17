@@ -17,18 +17,27 @@ mod alloc_policy {
     use super::*;
 
     ///
-    /// §5 stage 3c-i increment 2 — the analysis-derived facts the register
-    /// allocation policy consults, threaded **explicitly** so the placement
-    /// decision no longer reaches into the fused dataflow state ad hoc.
+    /// §5 stage 3c-i increment 2 — the explicit allocation-**policy** object the
+    /// xmm allocator consults, threaded so the placement decision is a first-class
+    /// parameter rather than logic hard-wired into the dataflow.
     ///
-    /// Today this is the *seam only*: the default greedy policy ranks phase-1
-    /// spill victims purely by physical-pool index, which reproduces the prior
-    /// "first all-`Sf` register" choice exactly, so placements stay byte-
-    /// identical (the doc §15 increment-2 contract). The loop-aware policy
-    /// (3c-ii, §14.3) plugs in at [`AllocCtx::victim_rank`]: it ranks by
-    /// furthest-next-use / non-loop-carried preference instead of index, using
-    /// the live-interval + loop-membership info this struct will carry — without
-    /// touching any allocation call site (they all funnel through here).
+    /// Today this is the *seam only*: the default policy ranks phase-1 spill
+    /// victims by physical-pool index, reproducing the prior "first all-`Sf`
+    /// register" choice exactly, so placements stay byte-identical.
+    ///
+    /// **Why a swappable policy at all (the honest framing — see doc §15.9).**
+    /// The seam is *not* here for a better spill-victim heuristic: §15.9 shows the
+    /// victim choice is inherently performance-neutral, because phase 1 only ever
+    /// demotes an all-`Sf` register (the stack already holds the canonical value,
+    /// so the demote is free and the value reloads lazily) and **never** an `F`
+    /// register — a pure unboxed float keeps its xmm through phase 1, and phase 2
+    /// spills it *unboxed* to a `VirtFPReg`. So no allocation choice ever boxes an
+    /// `F`; reshuffling which `Sf` cache is dropped cannot move the needle (every
+    /// victim-policy probe in §15.1 came back a no-op for exactly this reason).
+    /// The seam exists for goal 3 (§3 Layer ②): a *fundamentally different*
+    /// allocation **strategy** plugs in here — notably the VM-residual allocator's
+    /// "no pool, every value in its stack home" policy — not a tweaked JIT victim
+    /// rank. `victim_rank` is the minimal pluggable point that proves the seam.
     ///
     #[derive(Default)]
     pub(super) struct AllocCtx;
@@ -36,11 +45,11 @@ mod alloc_policy {
     impl AllocCtx {
         ///
         /// Spill-victim priority for [`try_alloc_xmm`] phase 1: the candidate with
-        /// the **smallest** rank is demoted first. The default greedy policy ranks
-        /// purely by physical-pool index, so `min_by_key` reproduces the historical
-        /// lowest-index-first choice (behaviour-identical). 3c-ii overrides this
-        /// with a furthest-next-use / non-loop-carried key derived from the
-        /// (future) live-interval fields.
+        /// the **smallest** rank is demoted first. The default policy ranks purely
+        /// by physical-pool index, so `min_by_key` reproduces the historical
+        /// lowest-index-first choice (behaviour-identical). A swapped-in policy
+        /// (e.g. the VM-residual allocator) overrides this; per §15.9 the override
+        /// is a strategy change, not a perf-victim tweak.
         ///
         fn victim_rank(&self, xmm: FPReg) -> usize {
             xmm.0

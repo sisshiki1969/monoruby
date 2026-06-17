@@ -1271,3 +1271,48 @@ headline §5 arc stays the larger Layer-② extraction (§4 step 2): a type-only
 liveness fixpoint feeding a *distinct* allocation/lowering pass, which is where
 "abstract interpretation + fixpoint search" is finally, fully separated from
 physical register allocation.
+
+### 15.9 Closing the allocator-policy axis: phase 1 already protects every `F`
+
+A precise reading of `try_alloc_xmm` (the universal allocation seam, §15) settles
+why **every** spill-victim probe in this thread (§14.7, §15.1's two no-ops) came
+back neutral — and retires the 3c-ii "loop-aware victim" line as a performance
+lever:
+
+- **Phase 1 demotes only an all-`Sf` register.** It scans for an xmm whose linked
+  slots are *all* `Sf` (Integer-def'd / Float-use'd, kept coerced — the stack
+  already holds the canonical boxed value), demotes them to `S`, and reuses the
+  freed xmm. The demote emits **no asm** (the stack is canonical) and the value
+  reloads lazily on its next float use. An xmm holding any `F` slot is **skipped**.
+- **An `F` (pure unboxed float) therefore never loses its xmm to phase 1**, and
+  when the pool is genuinely full, phase 2 (`push_spill`) hands back a `VirtFPReg`
+  that lives on the stack as a **raw `f64`** (`movsd`), still unboxed (§15.3). So
+  **no allocation decision ever boxes an `F`.**
+
+Consequently the only freedom the victim policy has is *which already-`Sf` cache
+to drop* — a free, reversible, lazily-reloaded choice among loop-invariant
+coerced operands. That cannot change the count of per-iteration boxes, which is
+why §15.1's dead-vs-live probe and §14.7's spill-fallback were both byte-for-byte
+no-ops. The per-iteration box was always upstream — the **merge** deciding a
+loop-carried value's *representation* (`F` vs `Sf` vs `S`), fixed in §15.5–15.7 by
+adopting the back-edge's `F` at the loop header.
+
+**Verdict.** The allocator-policy axis (3c-i increment 3 / 3c-ii furthest-next-use)
+is **closed as a performance lever**: it is provably neutral by the phase-1
+all-`Sf` restriction. The `AllocCtx` seam (increment 2) is retained, but its
+justification is corrected: it exists for **goal 3** (§3 Layer ②) — plugging in a
+*different allocation strategy*, namely the VM-residual allocator's fixed "no
+pool, every value in its stack home" convention — not a better JIT victim rank.
+
+**Where the §5 work goes from here.** With the merge-representation lever shipped
+(§15.7) and the allocator-policy lever shown neutral (this section), the remaining
+separation is purely structural, not perf-seeking: the Layer-② extraction (§4
+step 2) — run the `Guarded` + liveness fixpoint as a standalone, allocation-free
+pass producing a typed IR, then a distinct allocation/lowering pass consumes it.
+That is the last place "abstract interpretation + fixpoint search" and "physical
+register allocation" remain interleaved (in the single forward codegen walk). It
+is behaviour-preserving *by intent* (same final placements) but a large structural
+change, and the one remaining benchmark-gated risk is the loop-entry placement
+quality the analysis pre-pass currently seeds (§13.8) — now partly de-risked
+because §15.7's `keep_backedge_floats` already reconstructs the load-bearing
+loop-carried-`F` placement at the loop header from the back-edge frame.
