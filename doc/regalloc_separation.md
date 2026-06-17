@@ -999,3 +999,41 @@ existing allocation fixpoint as its own pass, unchanged**, so the placements are
 re-derived. A better *policy* (3c-ii linear scan) comes only after that seam
 exists and is benchmark-gated. The `loop-type-only-entry` feature stays as the
 negative-result probe.
+
+## 15. §5 stage 3c-i implementation plan: extract the allocator, unchanged
+
+The behaviour-preserving separation (per §14.7's conclusion). Surface map of where
+the JIT allocates an xmm today (outside the merge, which is already decide/apply
+split):
+
+- operand loads: `load_xmm` / `load_xmm_fixnum` / `load_binary_xmm` /
+  `fetch_float_assume` (state/read_slot.rs, compile/binary_op.rs) — allocate an
+  xmm for an operand and emit the load (the per-use flonum decode seen in §14.6);
+- destination defs: `def_F` / `def_Sf_float` (compile/binary_op.rs,
+  method_call.rs, variables.rs, compile.rs);
+- the merge: `apply_join`'s `TryFresh*` (already isolated, §5 stage 1).
+
+**Every one of these funnels through two primitives** — `SlotState::try_alloc_xmm`
+(phase-0 vacant / phase-1 Sf-demote) and `alloc_xmm` (+ phase-2 spill). So those
+two are the universal allocation seam, and the loop-aware spill-victim choice that
+3c-ii needs (demote/spill by furthest next-use across the loop, §14.3) lives
+exactly in phase-1 of `try_alloc_xmm`.
+
+Increment sequence (each behaviour-identical, suite + stage-1 shadow verified):
+
+1. **Extract the register-selection policy** into a named `alloc_policy` unit:
+   `try_alloc_xmm` / `alloc_xmm` move out of the `SlotState` impl into a child
+   module taking `&mut SlotState`; the methods delegate. No field, no dispatch
+   yet — the seam is the module boundary. *This increment.*
+2. **Thread an `AllocCtx`** (the live-interval / loop-membership info 3c-ii's
+   victim choice needs) into the policy, computed by the existing liveness pass.
+   Default greedy ignores it → identical placements.
+3. **Add the loop-aware policy** (3c-ii) behind the seam: phase-1 picks the
+   victim with the furthest next-use instead of the first all-`Sf` register;
+   gated on mandelbrot/nbody (match-or-beat backedge) + optcarrot (flat).
+
+The full Layer-② "type-only fixpoint then allocation pass" (un-welding the type
+computation from the operand-load/def handlers above) is the larger, later arc;
+3c-i increments 1–3 deliver the swappable allocator and the measured win first,
+since that is where the §14.6 regression and the latent base-case back-edge boxing
+both live.

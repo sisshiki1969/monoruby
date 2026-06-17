@@ -1,12 +1,89 @@
 use super::*;
 
 ///
+/// §5 stage 3c-i — the register-allocation **policy** seam.
+///
+/// Every xmm allocation in the JIT funnels through these two primitives (operand
+/// loads `load_xmm*` / `fetch_float*`, destination defs `def_F` / `def_Sf*`, and
+/// the merge's `apply_join` `TryFresh*` all reach them via `set_new_*` /
+/// `try_set_new_*`). Isolating them as a named unit is the Layer-② allocator
+/// seam: the body here is today's greedy policy verbatim, and a future loop-aware
+/// policy (3c-ii) plugs in here — its furthest-next-use spill-victim choice
+/// replaces phase 1's "first all-`Sf` register". The functions take `&mut
+/// SlotState` because the policy reads/mutates slot placements (the phase-1
+/// demotion). Behaviour-identical to the prior `SlotState` methods.
+///
+mod alloc_policy {
+    use super::*;
+
+    ///
+    /// Returns `None` if every xmm holds at least one `F` slot (a real spill;
+    /// use [`alloc_xmm`] from a context that has access to `AsmIr`).
+    ///
+    pub(super) fn try_alloc_xmm(state: &mut SlotState) -> Option<FPReg> {
+        // Phase 0: a vacant xmm.
+        for i in 0..state.xmm_alloc.len() {
+            let xmm = FPReg(i);
+            if state.xmm_alloc.is_pinned(xmm) {
+                continue;
+            }
+            if state.xmm_alloc.is_vacant(xmm) {
+                return Some(xmm);
+            }
+        }
+        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
+        for i in 0..state.xmm_alloc.len() {
+            let xmm = FPReg(i);
+            if state.xmm_alloc.is_pinned(xmm) || state.xmm_alloc.is_vacant(xmm) {
+                continue;
+            }
+            let all_sf = state
+                .xmm_alloc
+                .slots(xmm)
+                .iter()
+                .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)));
+            if !all_sf {
+                continue;
+            }
+            let to_demote: Vec<(SlotId, SfGuarded)> = state
+                .xmm_alloc
+                .slots(xmm)
+                .iter()
+                .map(|&s| match state.mode(s) {
+                    LinkMode::Sf(_, g) => (s, g),
+                    _ => unreachable!(),
+                })
+                .collect();
+            state.xmm_alloc.clear(xmm);
+            for (s, g) in to_demote {
+                state.set_mode(s, LinkMode::S(g.into()));
+            }
+            return Some(xmm);
+        }
+        None
+    }
+
+    ///
+    /// Allocate a new VirtFPReg. Phase 0 (vacant phys) and Phase 1 (Sf-only
+    /// demote) first; if both fail, a fresh phase-2 spill slot (`VirtFPReg(N)`,
+    /// `N >= PHYS_XMM_POOL`) that lives on the stack and is swapped in at use.
+    ///
+    pub(super) fn alloc_xmm(state: &mut SlotState) -> FPReg {
+        if let Some(x) = try_alloc_xmm(state) {
+            return x;
+        }
+        state.xmm_alloc.push_spill()
+    }
+}
+
+///
 /// The xmm-register allocation state (item ②, step 1): the reverse map from
 /// physical/spill FP registers to the slots bound to them, plus the pin set.
 /// `SlotState` owns one of these and drives it through its `xmm_*` methods; the
-/// allocation *policy* (`try_alloc_xmm` / `alloc_xmm`) stays on `SlotState`
-/// because it also reads/mutates slot placements. Indices `0..PHYS_XMM_POOL`
-/// map to physical `xmm2..xmm15`; `>= PHYS_XMM_POOL` are stack spills.
+/// allocation *policy* (`alloc_policy::try_alloc_xmm` / `alloc_xmm`) takes `&mut
+/// SlotState` because it also reads/mutates slot placements. Indices
+/// `0..PHYS_XMM_POOL` map to physical `xmm2..xmm15`; `>= PHYS_XMM_POOL` are stack
+/// spills.
 ///
 #[derive(Clone, Default)]
 pub(super) struct XmmAllocator {
@@ -401,66 +478,11 @@ impl SlotState {
     /// `AsmIr`).
     ///
     fn try_alloc_xmm(&mut self) -> Option<FPReg> {
-        // Phase 0: a vacant xmm.
-        for i in 0..self.xmm_alloc.len() {
-            let xmm = FPReg(i);
-            if self.xmm_alloc.is_pinned(xmm) {
-                continue;
-            }
-            if self.xmm_alloc.is_vacant(xmm) {
-                return Some(xmm);
-            }
-        }
-        // Phase 1: an xmm whose linked slots are all `Sf` — demote them.
-        for i in 0..self.xmm_alloc.len() {
-            let xmm = FPReg(i);
-            if self.xmm_alloc.is_pinned(xmm) || self.xmm_alloc.is_vacant(xmm) {
-                continue;
-            }
-            let all_sf = self
-                .xmm_alloc
-                .slots(xmm)
-                .iter()
-                .all(|&s| matches!(self.mode(s), LinkMode::Sf(_, _)));
-            if !all_sf {
-                continue;
-            }
-            let to_demote: Vec<(SlotId, SfGuarded)> = self
-                .xmm_alloc
-                .slots(xmm)
-                .iter()
-                .map(|&s| match self.mode(s) {
-                    LinkMode::Sf(_, g) => (s, g),
-                    _ => unreachable!(),
-                })
-                .collect();
-            self.xmm_alloc.clear(xmm);
-            for (s, g) in to_demote {
-                self.set_mode(s, LinkMode::S(g.into()));
-            }
-            return Some(xmm);
-        }
-        None
+        alloc_policy::try_alloc_xmm(self)
     }
 
-    ///
-    /// Allocate a new VirtFPReg.
-    ///
-    /// Tries Phase 0 (vacant phys) and Phase 1 (Sf-only demote) first. If both
-    /// fail, allocates a fresh spill slot — a `VirtFPReg(N)` where `N >=
-    /// PHYS_XMM_POOL`. The spill slot lives on the stack (the frame's
-    /// `stack_offset` grows by 8 bytes for each spill); at code generation,
-    /// any operation that uses such a `VirtFPReg` swaps a scratch xmm with
-    /// the stack slot to do its work.
-    ///
     fn alloc_xmm(&mut self) -> FPReg {
-        if let Some(x) = self.try_alloc_xmm() {
-            return x;
-        }
-        // Phase 2: spill — append a new slot beyond the physical pool. The
-        // existing F / Sf bindings are left in place; the value lives on the
-        // stack and gets swapped in at use time.
-        self.xmm_alloc.push_spill()
+        alloc_policy::alloc_xmm(self)
     }
 
     ///
