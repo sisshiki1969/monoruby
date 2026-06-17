@@ -81,44 +81,27 @@ impl<'a> JitContext<'a> {
 
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
-                // §15.3 prototype: the loop fixpoint computed loop-carried
-                // floats as `F`, but `incoming.join(backedge)` collapses them to
-                // `S` (the boxed forward-entry initial value wins, since
-                // `decide_join` has no `S`/`F` arm), so the body boxes every
-                // iteration with the xmm pool free. Re-adopt the back-edge's `F`
-                // for those slots; the new `S -> F` bridge unboxes the forward
-                // entry once at the pre-header.
-                #[cfg(feature = "loop-keep-float")]
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
-                    // §5 stage 3b: under `loop-type-only-entry`, strip the
-                    // analysis pass's allocation from the loop-carried frame so
-                    // the codegen pass re-derives xmm bindings via liveness below
-                    // (`liveness_analysis` → `use_float`) instead of inheriting
-                    // it. Default build joins the placed backedge unchanged.
-                    #[cfg(not(feature = "loop-type-only-entry"))]
                     target.join(backedge);
-                    #[cfg(feature = "loop-type-only-entry")]
-                    {
-                        let mut backedge = backedge.clone();
-                        backedge.strip_xmm_to_stack();
-                        target.join(&backedge);
-                    }
                 }
 
                 target.liveness_analysis(liveness);
 
-                #[cfg(feature = "loop-keep-float")]
+                // §15.5 loop-entry float specialization: a loop JIT enters a
+                // loop-carried float from the VM as a conservative boxed
+                // `S(Value)` even though the back-edge fixpoint proved it is a
+                // `Float (F)`; `join(S(Value), F)` keeps `S`, so the body would
+                // decode+rebox it every iteration. Re-adopt the back-edge's `F`
+                // (the forward entry is unboxed once at the pre-header by the
+                // `S -> F` bridge, whose `float_to_fpr` carries the runtime float
+                // guard). Promote a slot only when every predecessor entry has a
+                // valid `_ -> F` bridge (`F`/`S`/`Sf`/float-`C`); a non-float-`C`
+                // path is genuinely not a float, so it is left boxed.
                 if let Some(be) = &backedge_for_floats {
-                    // A slot is promotable to `F` only if every predecessor entry
-                    // has a valid `_ -> F` bridge: `F`/`S`/`Sf`, or a float `C`.
-                    // A non-float `C` (or `G`/`V`/sentinel) path could not bridge
-                    // and would not actually be a float, so leave it boxed.
                     let float_bridgeable = |m: LinkMode| {
-                        matches!(
-                            m,
-                            LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _)
-                        ) || matches!(m, LinkMode::C(v) if v.is_float())
+                        matches!(m, LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _))
+                            || matches!(m, LinkMode::C(v) if v.is_float())
                     };
                     target.keep_backedge_floats(be, |i| {
                         entries.iter().all(|e| float_bridgeable(e.state.mode(i)))

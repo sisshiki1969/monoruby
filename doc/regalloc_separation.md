@@ -1212,3 +1212,17 @@ Remaining before default-on: a full `bin/bench` incl. **optcarrot** (headline) a
 the other float loops (matmul/bedcov, which may also improve), confirming no
 regression; then flip the cargo `default` to include the feature (and fold the
 `S -> F` / `Sf -> F` bridge arms in unconditionally, as they are general-purpose).
+
+### 15.7 Landed: default-on
+
+Bench gate cleared on both arches, so the loop-entry float specialization is now
+**default** (no feature flag): mandelbrot +12.5 %, matmul +2.4 %, optcarrot
+184.8 → 186.2 fps (checksum unchanged, 59662), everything else flat, no
+regressions; suite **1705/0**, mandelbrot do_it `call float_to_value` 0 in the
+default build. `keep_backedge_floats` + the predecessor-gated promotion in
+`incoming_context`, and the `S -> F` / `Sf -> F` bridge arms, are now
+unconditional. The two experimental features (`loop-keep-float`,
+`loop-type-only-entry`) and the dead `strip_xmm_to_stack` probe are removed;
+`loop-type-only-entry`'s lesson (the analysis-pass backedge is load-bearing — a
+naive type-only strip regresses 2.5×) is retained in §13–14 as the calibration
+that led here. Added `test_loop_carried_float_kept_unboxed`.

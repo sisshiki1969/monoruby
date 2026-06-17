@@ -9,16 +9,6 @@ impl AbstractState {
             lhs.join(rhs);
         }
     }
-
-    /// Type-only projection of every frame: demote all xmm-resident slots to
-    /// their stack home (doc §13 stage 3b experiment). See
-    /// [`SlotState::strip_xmm_to_stack`].
-    #[cfg(feature = "loop-type-only-entry")]
-    pub(in crate::codegen::jitgen) fn strip_xmm_to_stack(&mut self) {
-        for frame in &mut self.frames {
-            frame.strip_xmm_to_stack();
-        }
-    }
 }
 
 impl Liveness {

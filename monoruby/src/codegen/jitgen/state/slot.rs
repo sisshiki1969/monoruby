@@ -563,24 +563,6 @@ impl SlotState {
     }
 
     ///
-    /// Demote every xmm-resident slot (`F`/`Sf`) to its boxed stack home (`S`),
-    /// keeping each slot's `Guarded` type (`set_S_with_guard` clears the xmm
-    /// binding). The `loop-type-only-entry` experiment (doc §13 stage 3b) uses
-    /// this to hand the codegen pass a placement-free, type-only loop-carried
-    /// frame, so it re-derives xmm bindings itself via liveness (`use_float`)
-    /// instead of inheriting the analysis pass's allocation.
-    ///
-    #[cfg(feature = "loop-type-only-entry")]
-    pub(in crate::codegen::jitgen) fn strip_xmm_to_stack(&mut self) {
-        for slot in self.all_regs() {
-            if matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)) {
-                let g = self.guarded(slot);
-                self.set_S_with_guard(slot, g);
-            }
-        }
-    }
-
-    ///
     /// §15.3/§15.5 (`loop-keep-float`): adopt the back-edge fixpoint's `F` for a
     /// loop-carried float the loop-entry merge collapsed to `S`. In a *loop* JIT
     /// the value enters from the VM as a conservative boxed `S(Value)` even when
@@ -595,7 +577,6 @@ impl SlotState {
     /// bridge (`F`/`S`/`Sf`/float-`C`) — otherwise a non-float-`C` path would hit
     /// the `C -> F` `unreachable!` and `F` would be unsound for it.
     ///
-    #[cfg(feature = "loop-keep-float")]
     pub(in crate::codegen::jitgen) fn keep_backedge_floats(
         &mut self,
         backedge: &SlotState,
@@ -2001,6 +1982,31 @@ mod tests {
           x
         end
         f(100000)
+        "###,
+        );
+    }
+
+    /// §15.5: a loop-carried float enters a loop JIT from the VM as a boxed
+    /// `S(Value)`, but the back-edge fixpoint proves it is a `Float`. The
+    /// loop-entry specialization re-adopts `F` (the `S -> F` bridge unboxes the
+    /// forward entry once, guarded), so the body stays unboxed. Correctness
+    /// regression for that path + the `keep_backedge_floats` promotion gate.
+    #[test]
+    fn test_loop_carried_float_kept_unboxed() {
+        run_test(
+            r###"
+        def f(n)
+          x = 0.0
+          y = 1.0
+          i = 0
+          while i < n
+            x = x * 1.5 + i * 0.5
+            y = y - x * 0.25
+            i += 1
+          end
+          [x, y]
+        end
+        f(1000)
         "###,
         );
     }
