@@ -232,6 +232,18 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         lhs: GP,
         rhs: GP,
     },
+    /// §19 (B): an integer binary **operation** with an overflow/`bignum` guard.
+    /// Like the guarded loads (`XmmLoad`), it carries its deopt as a
+    /// [`DeoptPoint`] program point (not a frozen `AsmDeopt`); the emit half
+    /// materializes the side-exit via `deopt_from_point`, keeping the record
+    /// codegen-independent.
+    IntegerBinOp {
+        kind: BinOpK,
+        lhs: GP,
+        rhs: GP,
+        mode: OpMode,
+        deopt: DeoptPoint,
+    },
 }
 
 impl TransferIR {
@@ -257,6 +269,16 @@ impl TransferIR {
                 lhs,
                 rhs,
             } => ir.integer_cmp(mode, kind, lhs, rhs),
+            TransferIR::IntegerBinOp {
+                kind,
+                lhs,
+                rhs,
+                mode,
+                deopt,
+            } => {
+                let deopt = ir.deopt_from_point(&deopt);
+                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+            }
         }
     }
 }
@@ -436,7 +458,7 @@ impl AbstractFrame {
     /// side-exit via [`AsmIr::deopt_from_point`]. Mirrors `AsmIr::new_deopt`'s
     /// snapshot, minus the `side_exit` push.
     ///
-    fn deopt_point(&self) -> DeoptPoint {
+    pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
         DeoptPoint::new(self.pc(), self.get_write_back())
     }
 

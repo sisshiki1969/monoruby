@@ -445,24 +445,26 @@ impl AbstractFrame {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_comm(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                // §19 (B): route the guarded integer op through the record stream,
+                // carrying its deopt as a program point (cf. the guarded loads).
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Sub => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_mode(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem
