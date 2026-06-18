@@ -48,6 +48,13 @@ perf = []
 # from the analysis-pass xmm allocation. Default-off (shipping build is
 # byte-identical); flip after the M1 mandelbrot/nbody/optcarrot bench gate clears.
 layer2-float-by-type = []
+# §5 Layer-② extraction: stage-1 *placement shadow*. Records, in emission order,
+# every physical FP placement that ③ commits (one entry per `PhysMap::resolve`),
+# producing a per-`jit_compile` fingerprint of the FPReg→FPRegLoc lowering. The
+# P2/P3 separation (① virtual-reg assignment vs ② physical allocation) is gated
+# on this fingerprint staying byte-identical between the baseline greedy
+# allocator and the separated ②. Default-off; zero cost in shipping builds.
+shadow-placement = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

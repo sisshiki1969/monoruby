@@ -1951,3 +1951,51 @@ The promotion gate must keep producing the *same* decisions, so:
 meet at a single oracle (`try_alloc_fpr`), so the job is to make that oracle a
 shared ② object rather than to re-derive a second allocator. The risk is confined
 to the promotion gate's perf, which the feature flag + M1 A/B gate-keeps.
+
+## 24. Stage-1 placement shadow (the P3 byte-identity oracle)
+
+Per §23.3, P2/P3 stay perf-neutral only if the separated ② emits the *same*
+physical placements as today's greedy allocator. §24 lands the **verification
+harness** for that, ahead of P2 (so the oracle exists before the risky change).
+
+### 24.1 What it captures
+
+The shadow records, **in emission order, every `FPRegLoc` that `PhysMap::resolve`
+returns** during a compilation — one entry per resolve at the §22.5 chokepoint.
+Because every arch emission site (all 22) funnels through `resolve`, this Vec is a
+faithful, order-preserving fingerprint of ③'s entire FP-placement output, on both
+x86-64 and aarch64, with **zero per-site plumbing**. API (codegen.rs,
+`placement_shadow`, feature `shadow-placement`, default-off):
+
+- `begin()` — start recording.
+- `record(loc)` — append (called inside `resolve` under `#[cfg]`; no-op when idle).
+- `take() -> Option<Vec<FPRegLoc>>` — stop and return the fingerprint.
+
+`FPRegLoc` now derives `PartialEq, Eq, Hash`, so two fingerprints compare with
+plain `Vec` equality.
+
+### 24.2 How P3 uses it
+
+```text
+baseline = { begin(); jit_compile(f, greedy ②);      take() }   // shipping
+candidate = { begin(); jit_compile(f, separated ②);   take() }   // P2/P3 build
+assert_eq!(baseline, candidate);   // byte-identical placement ⇒ perf-neutral
+```
+
+Today there is only one allocator, so the harness is validated on the **identity /
+determinism** case: `placement_shadow_fingerprint` (codegen.rs tests) asserts the
+fingerprint matches the resolve order exactly and is byte-identical across two
+passes, and that recording is correctly scoped (off after `take`). The full lib
+suite under `--features shadow-placement` builds and passes (1706 + the gated
+test); the default build is byte-for-byte untouched (the `record` call is
+`#[cfg]`-gated, `resolve` is otherwise unchanged).
+
+### 24.3 Why this shape
+
+The fingerprint is the *emission-order sequence of physical locations*, not a
+per-`FPReg` table, because that is precisely what must be invariant for ③ to
+produce identical machine code: P2/P3 may **renumber** virtual `FPReg`s freely (①
+assigns unbounded VRegs; ② maps them to physical), and renumbering is invisible to
+③ **iff** the resolved `FPRegLoc` stream is unchanged. Comparing the resolved
+stream — rather than the VReg ids — is therefore the right and minimal oracle: it
+permits VReg renumbering while pinning the observable placement.

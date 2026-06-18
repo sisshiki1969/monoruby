@@ -215,13 +215,16 @@ impl PhysMap {
     ///
     pub(crate) fn resolve(&self, reg: FPReg) -> FPRegLoc {
         let pool = PHYS_FPR_POOL;
-        if reg.0 < pool {
+        let loc = if reg.0 < pool {
             FPRegLoc::Xmm(reg.0 as u64 + 2)
         } else {
             let n = reg.0 - pool;
             let ofs = (self.base_stack_offset as i32) - 24 + 8 * (n as i32);
             FPRegLoc::Spill(ofs)
-        }
+        };
+        #[cfg(feature = "shadow-placement")]
+        placement_shadow::record(loc);
+        loc
     }
 }
 
@@ -233,10 +236,57 @@ impl PhysMap {
 /// asm based on this — e.g. `addsd xmm, mem` when the rhs operand is
 /// spilled, instead of forcing a scratch load.
 ///
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum FPRegLoc {
     Xmm(u64),
     Spill(i32),
+}
+
+///
+/// Stage-1 *placement shadow* (feature `shadow-placement`, off by default).
+///
+/// Records, in emission order, every physical FP placement that ③ commits — one
+/// entry per [`PhysMap::resolve`] call. A `begin`/`take` bracket around a
+/// `jit_compile` yields a `Vec<FPRegLoc>` fingerprint of that compilation's
+/// FPReg→FPRegLoc lowering. This is the oracle for the P2/P3 separation: the
+/// fingerprint produced by the baseline greedy allocator and by the separated ②
+/// must be byte-identical (`Vec` equality). Recording lives behind the single
+/// `resolve` chokepoint, so it captures *exactly* what the backends emit, on
+/// both arches, with zero plumbing.
+///
+#[cfg(feature = "shadow-placement")]
+pub(crate) mod placement_shadow {
+    use super::FPRegLoc;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SHADOW: RefCell<Option<Vec<FPRegLoc>>> = const { RefCell::new(None) };
+    }
+
+    ///
+    /// Start recording the ordered placement fingerprint. Pairs with [`take`].
+    ///
+    pub(crate) fn begin() {
+        SHADOW.with(|s| *s.borrow_mut() = Some(Vec::new()));
+    }
+
+    ///
+    /// Stop recording and return the fingerprint, or `None` if not recording.
+    ///
+    pub(crate) fn take() -> Option<Vec<FPRegLoc>> {
+        SHADOW.with(|s| s.borrow_mut().take())
+    }
+
+    ///
+    /// Append one placement to the active fingerprint (no-op when not recording).
+    ///
+    pub(crate) fn record(loc: FPRegLoc) {
+        SHADOW.with(|s| {
+            if let Some(log) = s.borrow_mut().as_mut() {
+                log.push(loc);
+            }
+        });
+    }
 }
 
 pub struct JitModule {
@@ -1241,6 +1291,44 @@ mod tests {
                 FPRegLoc::Xmm(_) => panic!("spill id {id} should be a stack slot"),
             }
         }
+    }
+
+    // Stage-1 placement-shadow harness check: `begin`/`record`/`take` must
+    // capture the exact ordered sequence of `PhysMap::resolve` outputs, and two
+    // identical resolve passes must produce identical fingerprints (the
+    // determinism the P3 baseline-vs-② byte-compare relies on).
+    #[cfg(feature = "shadow-placement")]
+    #[test]
+    fn placement_shadow_fingerprint() {
+        let pm = PhysMap::new(256);
+        let regs = [
+            FPReg(0),
+            FPReg(3),
+            FPReg(PHYS_FPR_POOL),
+            FPReg(PHYS_FPR_POOL + 2),
+            FPReg(1),
+        ];
+        // Reference fingerprint computed without recording.
+        let reference: Vec<FPRegLoc> = regs.iter().map(|&r| pm.resolve(r)).collect();
+
+        placement_shadow::begin();
+        for &r in &regs {
+            let _ = pm.resolve(r);
+        }
+        let first = placement_shadow::take().expect("recording was active");
+        assert_eq!(first, reference, "fingerprint must match resolve order");
+
+        // Determinism: a second pass yields a byte-identical fingerprint.
+        placement_shadow::begin();
+        for &r in &regs {
+            let _ = pm.resolve(r);
+        }
+        let second = placement_shadow::take().unwrap();
+        assert_eq!(first, second, "placement fingerprint must be deterministic");
+
+        // After `take`, recording is off: `resolve` must not panic or capture.
+        let _ = pm.resolve(FPReg(0));
+        assert!(placement_shadow::take().is_none());
     }
 
     #[test]
