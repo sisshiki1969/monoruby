@@ -184,14 +184,42 @@ impl FPReg {
     fn new(id: usize) -> Self {
         Self(id)
     }
+}
 
-    fn loc(self, base_stack_offset: usize) -> FPRegLoc {
+///
+/// Physical placement map: resolves a *virtual* [`FPReg`] to its concrete
+/// [`FPRegLoc`] (a physical `xmm` register or an f64 spill slot).
+///
+/// This is the single chokepoint where the **physical register allocation**
+/// phase (separation phase ②: virtual → physical) is expressed. Today it is the
+/// fixed pool-vs-spill *formula*, parameterised only by the frame's
+/// `base_stack_offset`: an id `< PHYS_FPR_POOL` lives in physical `xmm{id+2}`,
+/// any higher id spills to an 8-byte stack slot. Crucially a spilled float stays
+/// **unboxed f64 on the stack** (never boxed) — the box-avoidance that makes the
+/// spill cheap. A later allocator pass replaces the formula with an explicit
+/// per-`FPReg` assignment behind this same `resolve` seam, without touching any
+/// emission site.
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhysMap {
+    base_stack_offset: usize,
+}
+
+impl PhysMap {
+    pub(crate) fn new(base_stack_offset: usize) -> Self {
+        Self { base_stack_offset }
+    }
+
+    ///
+    /// Resolve a virtual FP register to its physical location.
+    ///
+    pub(crate) fn resolve(&self, reg: FPReg) -> FPRegLoc {
         let pool = PHYS_FPR_POOL;
-        if self.0 < pool {
-            FPRegLoc::Xmm(self.0 as u64 + 2)
+        if reg.0 < pool {
+            FPRegLoc::Xmm(reg.0 as u64 + 2)
         } else {
-            let n = self.0 - pool;
-            let ofs = (base_stack_offset as i32) - 24 + 8 * (n as i32);
+            let n = reg.0 - pool;
+            let ofs = (self.base_stack_offset as i32) - 24 + 8 * (n as i32);
             FPRegLoc::Spill(ofs)
         }
     }
@@ -1189,6 +1217,31 @@ extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Phase ② seam: `PhysMap::resolve` is the single point that maps a virtual
+    // `FPReg` to a physical location. It must reproduce the historical pool-vs-
+    // spill formula exactly — pool ids land in `xmm{id+2}`, and ids at/above the
+    // pool spill to f64 stack slots (8 bytes apart, never boxed).
+    #[test]
+    fn physmap_resolve_formula() {
+        let base = 256usize;
+        let pm = PhysMap::new(base);
+        // Pool ids → physical xmm{id+2}.
+        for id in 0..PHYS_FPR_POOL {
+            match pm.resolve(FPReg(id)) {
+                FPRegLoc::Xmm(x) => assert_eq!(x, id as u64 + 2),
+                FPRegLoc::Spill(_) => panic!("pool id {id} should be a physical xmm"),
+            }
+        }
+        // Spill ids → 8-byte-strided f64 stack slots based at `base`.
+        for n in 0..4usize {
+            let id = PHYS_FPR_POOL + n;
+            match pm.resolve(FPReg(id)) {
+                FPRegLoc::Spill(off) => assert_eq!(off, base as i32 - 24 + 8 * n as i32),
+                FPRegLoc::Xmm(_) => panic!("spill id {id} should be a stack slot"),
+            }
+        }
+    }
 
     #[test]
     fn guard_class() {

@@ -1787,3 +1787,92 @@ stream now has a layer boundary where real passes (peephole arithmetic identitie
 dead `FprSave`-pair removal, redundant load/store elision) attach with no further
 plumbing. Behaviour-preserving: lib suite **1705 passed, 0 failed**
 (this environment's CRuby-4.0.2 baseline), zero `transfer()` replay mismatches.
+
+## 22. The ①/②/③ reframing and the `PhysMap` seam (phase-0/1)
+
+A fresh framing of the whole §5 effort, stated as three phases:
+
+> **①** abstract interpretation + fixpoint subtyping **and assignment to virtual
+> registers** (types + liveness + representation + a *virtual* FP register per
+> value); **②** **physical** register allocation (virtual → the 14-wide `xmm`
+> pool ∪ spill slots); **③** machine-code generation.
+
+This is a better cut than §3's "analysis with NO locations vs allocation+lowering"
+because it puts the **representation decision in ①**, which dissolves the wall
+§13.8 and §16.6 hit twice.
+
+### 22.1 Why this cut dissolves the §13.8/§16.6 wall
+
+Those sections proved the fixpoint's loop-carried-`F` *selection* is load-bearing
+and **not** reproducible allocation-free (a liveness re-derivation regresses
+2.5×). But that "selection" fuses two decisions:
+
+- **(A) representation** — is a value *unboxed* (`F`/`Sf`) or *boxed* (`S`)? This
+  is the load-bearing part (§14.6: boxing → a ~10-inst flonum decode every use).
+- **(B) physical placement** — which `xmm`, and who spills under pressure? §15.9
+  proved this is **perf-neutral** (phase-1 only demotes all-`Sf` caches; an `F` is
+  never boxed; pool overflow spills `F` as **raw f64**, never re-decoded).
+
+The ①/②/③ cut keeps **(A) in ①** (the fixpoint, unchanged) and moves only the
+perf-neutral **(B) into ②**. We never try to reproduce the selection
+allocation-free — that was the 3b/L2-1 mistake. So the regression driver (boxing)
+is *structurally absent* from ②.
+
+### 22.2 The f64-spill axiom (②'s cost model)
+
+The defining Float constraint — *boxing/unboxing is expensive, so an overflowing
+unboxed float spills as f64 rather than boxing* — fixes ②'s spill cost model and
+its vocabulary. ② may place a value in {physical `xmm`, raw-f64 spill slot, or
+(for an `Sf` cache) drop-the-cache}; **boxing an `F` is not in ②'s vocabulary**:
+
+| ② action | cost now / on next use |
+|---|---|
+| box an `F` | **forbidden (∞)** |
+| drop an `Sf` coercion cache (→`S`) | 0 now / one flonum *decode* on next float use |
+| raw-f64 spill of an `F` | one `movsd` now / one `movsd` on next use |
+| keep loop-carried `F`/`Sf` resident | preferred under pressure (§14.6 bar) |
+
+The worst case ② can produce is therefore a `movsd` (or one decode for an `Sf`
+cache), **never** the per-use decode storm that sank 3b — the downside is capped
+by construction. Re-cast in canonical/cache terms, the three `LinkMode`s split
+cleanly across the layers: `F` = unboxed-canonical (① picks it; ② places it in
+`xmm` or f64-spill); `S`/`Sf` = boxed-canonical-with-optional-cache (① marks
+"float-used / cache-eligible"; **② decides whether the coercion cache is
+materialised in an `xmm` (`Sf`) or dropped (`S`)**).
+
+**Key soundness fact.** Because pressure never changes representation today
+(§15.9: spill ≠ box), `F`/`Sf`/`S` counts are already pressure-independent — which
+is *exactly* the precondition that lets "representation in ①, placement in ②" be
+behaviour-preserving. (Open check before P2: confirm the "`Sf` canonical = boxed"
+premise holds across all arms, incl. `keep_backedge_floats`'s `Sf→F` promotion,
+§15.7.)
+
+### 22.3 The linchpin: decouple `FPReg` from its physical slot
+
+The one structural blocker is that `FPReg(usize)` **conflates** the virtual id
+with the physical slot: `loc()` was `id < PHYS_FPR_POOL ? xmm(id+2) : spill`, so
+the pool-vs-spill decision *is* the `FPReg` number, chosen greedily inside the ①
+fixpoint by `try_alloc_fpr`. (This corrects §1's "`FPReg` is already a virtual
+register" — it is pool-number-encoded, not a true virtual register.) The fix is a
+`PhysMap: FPReg → FPRegLoc` produced by ②; ① assigns *unbounded* virtual
+`FPReg`s, ② maps them to physical, ③ resolves through the map.
+
+### 22.4 Increment plan
+
+| Step | Change | Risk |
+|---|---|---|
+| **P0** ✅ | Introduce `PhysMap` (codegen.rs): the single `resolve(FPReg) -> FPRegLoc` chokepoint, today the pool-vs-spill formula. | none |
+| **P1** ✅ | Route every emission-site `FPReg::loc(base)` (22 sites, both arches) through `PhysMap::resolve`; delete `FPReg::loc`. | none |
+| **P2** | Make ① assign *unbounded* virtual `FPReg`s (drop `try_alloc_fpr`'s pool/spill phases from the fixpoint); representation stays in ①. Paired with P3 behind a feature. | high · bench |
+| **P3** | ② = a distinct pass that reproduces today's greedy `FPReg→FPRegLoc` *exactly*; verify byte-identical via the stage-1 placement shadow. The real, zero-regression separation. | high · shadow + M1 bench |
+| **P4** | Swap ②'s greedy for a loop-aware **linear scan** over live intervals (the f64-spill cost model of §22.2; loop-carried priority §14.3). Parity-at-best on perf (§16.6). | bench-gated |
+| **P5** | Deopt-as-program-point (§13.6) now that placement is a ② product; extend ③'s `optimize_peephole` (§21) with post-allocation passes. | med |
+
+### 22.5 P0/P1 landed
+
+`PhysMap` is the lone `FPReg → FPRegLoc` resolver; all 22 arch emission sites call
+`PhysMap::new(base).resolve(reg)` instead of the deleted `FPReg::loc`. Pure
+seam-creation, behaviour-identical: both x86-64 and aarch64 build clean; lib suite
+**1706 passed, 0 failed** (1705 baseline + `physmap_resolve_formula`). ② will later
+swap the formula for an explicit per-`FPReg` table behind this same `resolve`,
+with no emission-site change.

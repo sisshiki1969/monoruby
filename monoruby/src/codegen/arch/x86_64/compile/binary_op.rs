@@ -350,9 +350,9 @@ impl Codegen {
         base_stack_offset: usize,
     ) {
         let (l, r) = binary_fpr;
-        let lhs_loc = l.loc(base_stack_offset);
-        let rhs_loc = r.loc(base_stack_offset);
-        let dst_loc = dst.loc(base_stack_offset);
+        let lhs_loc = PhysMap::new(base_stack_offset).resolve(l);
+        let rhs_loc = PhysMap::new(base_stack_offset).resolve(r);
+        let dst_loc = PhysMap::new(base_stack_offset).resolve(dst);
 
         // Step 1: pick `work` for `dst`.
         let (work, dst_spill_off) = match dst_loc {
@@ -438,8 +438,8 @@ macro_rules! cmp_main {
 impl Codegen {
     pub(super) fn cmp_float(&mut self, binary_fpr: (FPReg, FPReg), base_stack_offset: usize) {
         let (l, r) = binary_fpr;
-        let l_loc = l.loc(base_stack_offset);
-        let r_loc = r.loc(base_stack_offset);
+        let l_loc = PhysMap::new(base_stack_offset).resolve(l);
+        let r_loc = PhysMap::new(base_stack_offset).resolve(r);
         // ucomisd's first operand must be an xmm register; the second
         // can be xmm or memory. Pick the cheapest combination.
         match (l_loc, r_loc) {

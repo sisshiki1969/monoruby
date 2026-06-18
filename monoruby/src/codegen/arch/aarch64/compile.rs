@@ -1021,7 +1021,7 @@ impl Codegen {
     /// Place `src`'s value into physical D-register `dreg` unconditionally
     /// (`fmov` for a pool register, a frame load for a spill slot).
     fn a64_fpr_load(&mut self, src: FPReg, dreg: u32, base: usize) {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => {
                 if p as u32 != dreg {
                     monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32););
@@ -1050,7 +1050,7 @@ impl Codegen {
     /// Store physical D-register `dreg` into `dst` unconditionally (`fmov` for a
     /// pool register, a frame store for a spill slot).
     fn a64_fpr_save(&mut self, dst: FPReg, dreg: u32, base: usize) {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => {
                 if p as u32 != dreg {
                     monoasm_arm64!(&mut self.jit, fmov d(p as u32), d(dreg););
@@ -1068,7 +1068,7 @@ impl Codegen {
     /// resident (no code emitted), otherwise the spill loaded into scratch
     /// `dreg`.
     fn a64_fpr_read(&mut self, src: FPReg, dreg: u32, base: usize) -> u32 {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => p as u32,
             FPRegLoc::Spill(_) => {
                 self.a64_fpr_load(src, dreg, base);
@@ -1080,7 +1080,7 @@ impl Codegen {
     /// Register to write `dst` into: its pool register if resident, else scratch
     /// `dreg` (the caller must follow with `a64_fpr_commit`). Emits nothing.
     fn a64_fpr_wtmp(&self, dst: FPReg, dreg: u32, base: usize) -> u32 {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => p as u32,
             FPRegLoc::Spill(_) => dreg,
         }
@@ -1089,7 +1089,7 @@ impl Codegen {
     /// Flush scratch `dreg` back to `dst`'s spill slot; a no-op when `dst` is
     /// pool-resident (the op already wrote its pool register in place).
     fn a64_fpr_commit(&mut self, dst: FPReg, dreg: u32, base: usize) {
-        if let FPRegLoc::Spill(_) = dst.loc(base) {
+        if let FPRegLoc::Spill(_) = PhysMap::new(base).resolve(dst) {
             self.a64_fpr_save(dst, dreg, base);
         }
     }
@@ -3629,7 +3629,7 @@ impl Codegen {
     /// Load a `FPReg` (pool reg or spill slot) into the scratch register `dreg`
     /// (D0/D1, outside the D2-D15 pool). Spill-aware, so it never bails.
     fn a64_fpr_into_d(&mut self, src: FPReg, dreg: u32, base: usize) {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32);),
             FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
                 mov x10, (off as i64 as u64);
@@ -3641,7 +3641,7 @@ impl Codegen {
 
     /// Store `d0` into a `FPReg` (pool reg or spill slot).
     fn a64_d0_into_fpr(&mut self, dst: FPReg, base: usize) {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(p as u32), d0;),
             FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
                 mov x10, (off as i64 as u64);

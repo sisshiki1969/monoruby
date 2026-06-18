@@ -478,7 +478,7 @@ impl Codegen {
             // ---- FP transfer / convert (spill-aware) -------------------------
             LInst::FprMove { src, dst, base } => {
                 if src != dst {
-                    match (src.loc(base), dst.loc(base)) {
+                    match (PhysMap::new(base).resolve(src), PhysMap::new(base).resolve(dst)) {
                         (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
                             movq xmm(d), xmm(s);
                         ),
@@ -497,7 +497,7 @@ impl Codegen {
             }
             LInst::F64ToFpr { f, dst, base } => {
                 let f_const = self.jit.const_f64(f);
-                match dst.loc(base) {
+                match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                         movq xmm(p), [rip + f_const];
                     ),
@@ -508,7 +508,7 @@ impl Codegen {
                 }
             }
             LInst::FixnumToFpr { src, dst, base } => {
-                let (work, spill_off) = match dst.loc(base) {
+                let (work, spill_off) = match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
                 };
@@ -524,7 +524,7 @@ impl Codegen {
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {
-                    match (lhs.loc(base), rhs.loc(base)) {
+                    match (PhysMap::new(base).resolve(lhs), PhysMap::new(base).resolve(rhs)) {
                         (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
                             movq xmm0, xmm(lp);
                             movq xmm(lp), xmm(rp);
@@ -550,7 +550,7 @@ impl Codegen {
                 }
             }
             LInst::FloatToFpr { src, dst, deopt, base } => {
-                let (work, spill_off) = match dst.loc(base) {
+                let (work, spill_off) = match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
                 };
@@ -566,7 +566,7 @@ impl Codegen {
                 monoasm! {&mut self.jit,
                     movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
                 }
-                match dst.loc(base) {
+                match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                         movq xmm(p), [rip + f];
                     ),
@@ -583,7 +583,7 @@ impl Codegen {
             LInst::FloatUnOp { kind, dst, base } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                    match dst.loc(base) {
+                    match PhysMap::new(base).resolve(dst) {
                         FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                             xorps xmm(p), [rip + imm];
                         ),
