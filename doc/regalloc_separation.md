@@ -2177,3 +2177,59 @@ shadow `diff` becomes a delta *measurement*, M1 A/B is the gate):
 Stage 1 keeps the shipping build byte-identical while making Stage 2 a contained,
 fixpoint-local change behind `AllocCtx`, gated by the §24 shadow (now a delta
 meter) and real-hardware benchmarks.
+
+## 28. Stage 2b design: capacity-reservation, the real loop-aware lever
+
+Scoping the loop-aware policy pinned down *what actually moves the needle*, which
+is subtler than "pick a better vacant register".
+
+### 28.1 Why `pick_vacant`'s choice is (mostly) neutral, and what isn't
+
+Choosing *which* vacant pool register a value lands in is a renaming — perf-
+neutral (§15.9). And an already-resident `F` is never evicted (Phase 2 spills the
+*new* value; Phase 1 only drops `Sf` caches). So the **only** way a loop-carried
+float ends up non-resident is at *promotion* time: `keep_backedge_floats` →
+`try_set_new_F` → `try_alloc_fpr` returns `None` because the pool is full (no
+vacant, no all-`Sf` victim), so the slot stays boxed `S`/`Sf` and reloads every
+loop iteration. The lever is therefore **pool capacity at promotion**, not victim
+choice.
+
+### 28.2 The mechanism: reserve pool capacity for loop-carried floats
+
+The loop-carried-float set is already available at the back-edge merge
+(`liveness.loop_used_as_float()` ∧ `be.is_float_typed`, merge.rs ~118-130). A
+loop-aware `AllocCtx` uses the **previous fixpoint iteration's** set `L` (the loop
+re-runs to convergence, so the prior pass's `L` is known when allocating the
+current one) to:
+
+- **Reserve** the top `min(|L|, PHYS_FPR_POOL)` pool slots: `pick_vacant` for a
+  *non*-loop-carried allocation skips reserved slots (falls through to Phase 1/2,
+  i.e. spills a short-lived temporary instead of consuming a slot a loop-carried
+  value will need).
+- Loop-carried allocations may use any slot, so their `try_set_new_F` promotion
+  succeeds where it previously overflowed → resident across the loop → no per-
+  iteration reload.
+
+This needs the allocation entry points (`set_new_F`/`try_set_new_F`/… → `alloc_fpr`)
+to pass *which slot* / *is-loop-carried* into the policy — a signature widening of
+`alloc_fpr`/`try_alloc_fpr` and their ~10 callers (FPReg stays an opaque handle;
+only the policy reads the context).
+
+### 28.3 Correctness, convergence, verification
+
+- **Correctness:** reservation only changes *placement* (resident vs spilled-
+  unboxed / boxed), never representation soundness — a spilled or boxed float is
+  always a valid materialisation. The full suite must pass with the flag **on**
+  (different digests, still correct).
+- **Convergence:** the reserve count comes from the prior iteration's `L`; since
+  `L` is monotone over the back-edge fixpoint (§14.1) the reserve count stabilises
+  with it. Cap reservation at `PHYS_FPR_POOL - 1` so a degenerate `|L|` can never
+  starve the allocator into livelock.
+- **Risk:** over-reserving forces more temporary spills; net effect is empirical.
+  Gate: §24 shadow as a **delta meter** (placements changed, back-edge
+  `FprMove`/`FprSwap` removed) + **M1 A/B** on mandelbrot/nbody/optcarrot. Default-
+  on only on a win; this is the §16.6-class risk the experiment exists to test.
+
+Stage 1 (§27) already exposes the `pick_vacant` hook this rides on; Stage 2b is
+the contained `AllocCtx` body + the allocation-entry signature widening, behind a
+new default-off feature.
