@@ -2278,3 +2278,81 @@ Phase-0 seam) remains the byte-identical, shipping terminus. The Stage 2b seam
 (`should_reserve` + `target` threading + `loop_float`) is **kept, feature-gated and
 inert**, as the documented attachment point: a future two-pass `L`-surfacing pass
 plugs a binding policy in here, gated by the §24 shadow (delta meter) + M1 A/B.
+
+## 30. Correction: the bridge *can* spill — the bottleneck is the join's target policy
+
+§29 (and the prior explanation) leaned on "the merge has no AsmIr, so a
+pool-overflow loop float must stay boxed". **That framing is wrong**, and the
+correction reshapes the real lever.
+
+### 30.1 The bridge materialises S→F, spill included
+
+`AbstractFrame::bridge(ir: &mut AsmIr, target, slot, pc)` — the per-incoming-edge
+reconciliation stub — **has AsmIr** and already handles `S → F` (slot.rs:1957):
+
+```rust
+(LinkMode::S(_), LinkMode::F(x)) => {            // boxed home -> unboxed fpr
+    ir.stack2reg(slot, GP::Rax);
+    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+    if self.is_fpr_vacant(x) {
+        ir.float_to_fpr(GP::Rax, x, deopt);      // box→f64 decode, on the edge
+        self.set_F(slot, x);
+    } else {
+        let tmp = self.set_new_F(slot);          // ← spill-capable, WITH AsmIr
+        ir.float_to_fpr(GP::Rax, tmp, deopt);
+        self.gen_fpr_swap(ir, x, tmp);
+    }
+}
+```
+
+So the edge stub can decode a boxed float into an fpr — and into a **spilled** `F`
+(`set_new_F` → `push_spill`, line 1968) when no physical reg is free. Every
+incoming edge to a merge/back-edge gets such a stub. Materialisation of an
+f64-spill loop float is therefore fully supported infrastructure.
+
+### 30.2 The real division of labour
+
+- **join / `apply_join` / `keep_backedge_floats` (no AsmIr)** *decide the target
+  representation*. They use `try_set_new_F` (no Phase-2 spill): set the target to
+  `F` **only when a physical fpr is free**, otherwise leave it `S`/`Sf`.
+- **bridge (AsmIr)** *materialises* each edge into that target, spilling if needed.
+
+So a pool-overflow loop float stays boxed **because the join declined to make the
+target `F`**, not because materialisation is impossible. §28's "reserve a physical
+slot" was the wrong lever; the actual knob is the *target-representation policy* at
+the join.
+
+### 30.3 The correct Stage 2b retry (replaces §28)
+
+For a **known** loop float — `be.is_float_typed(i) ∧ loop_used_as_float(i)` (the
+non-speculative signal already wired in merge.rs:128, feature
+`layer2-float-by-type`) — commit the target to `F` via the **spill-capable** path
+rather than `try_set_new_F`:
+
+```rust
+// keep_backedge_floats, for confirmed loop floats only:
+self.set_new_F(i);            // instead of try_set_new_F(i)
+```
+
+Then the bridge's `S → F` arm materialises an **f64-spill resident** binding: one
+box→f64 decode per *edge* (loop pre-header + back-edge), and raw `movsd` f64 in the
+body — eliminating the §29 per-iteration decode at the boxed home. No physical
+reservation, no `L`-at-allocation-time problem (§29): the decision is at the
+back-edge, exactly where `L` is known.
+
+### 30.4 Risks to clear first
+
+- **The noted past bug.** `keep_backedge_floats` deliberately uses the no-spill
+  variant because spill-promotion was *"exercised wrongly under register pressure
+  (the `stress-spill-pool` path)"* (slot.rs:758-763). Diagnose that failure mode
+  before re-enabling — start by switching only the `layer2-float-by-type`
+  confirmed-loop-float arm and running the suite under `stress-spill-pool`.
+- **Cost trade.** Gains one f64-spill home (per-iteration `movsd`) but pays a
+  decode on each incoming edge and grows the spill region by `|overflow loop
+  floats|`. Net is empirical: gate on the §24 shadow (now a delta meter — expect
+  `S→F` edges to appear) + **M1 A/B** on float-heavy loops that overflow the
+  14-wide pool. Only such loops benefit; with ≤14 live floats nothing changes.
+
+This is the architecturally-supported lever the §28 reservation should have been:
+edge-materialised f64-spill residency for confirmed loop floats, driven by the
+back-edge `L` and the existing `S→F` bridge arm.
