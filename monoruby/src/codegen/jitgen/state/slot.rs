@@ -44,6 +44,22 @@ mod alloc_policy {
 
     impl AllocCtx {
         ///
+        /// Phase-0 placement: pick which *vacant* (non-pinned, empty) fpr a fresh
+        /// value is assigned to. This is the real performance lever (doc §27): the
+        /// physical register a value lands in, and — via the pool/spill boundary —
+        /// whether it stays in `xmm` or overflows. The default reproduces the
+        /// historical lowest-physical-index first-fit, so placements stay
+        /// byte-identical; a global (e.g. loop-aware linear-scan) policy overrides
+        /// it to keep loop-carried values resident. Zero extra cost on the default
+        /// path (it is the original Phase-0 scan).
+        ///
+        fn pick_vacant(&self, state: &SlotState) -> Option<FPReg> {
+            (0..state.fpr_alloc.len()).map(FPReg).find(|&fpr| {
+                !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr)
+            })
+        }
+
+        ///
         /// Spill-victim priority for [`try_alloc_fpr`] phase 1: the candidate with
         /// the **smallest** rank is demoted first. The default policy ranks purely
         /// by physical-pool index, so `min_by_key` reproduces the historical
@@ -71,15 +87,10 @@ mod alloc_policy {
     /// pluggable.
     ///
     pub(super) fn try_alloc_fpr_ctx(state: &mut SlotState, ctx: &AllocCtx) -> Option<FPReg> {
-        // Phase 0: a vacant fpr (lowest index, as before).
-        for i in 0..state.fpr_alloc.len() {
-            let fpr = FPReg(i);
-            if state.fpr_alloc.is_pinned(fpr) {
-                continue;
-            }
-            if state.fpr_alloc.is_vacant(fpr) {
-                return Some(fpr);
-            }
+        // Phase 0: a vacant fpr chosen by the policy (default: lowest index, as
+        // before — the real placement lever, doc §27).
+        if let Some(fpr) = ctx.pick_vacant(state) {
+            return Some(fpr);
         }
         // Phase 1: among the fprs whose linked slots are *all* `Sf` (stack already
         // holds the canonical value, the fpr is a read-only cache), pick the one

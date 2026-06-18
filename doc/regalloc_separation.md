@@ -2135,3 +2135,45 @@ real hardware to be worth the §16.6-class risk, and the shadow's role flips fro
 shadow diff = byte-identical step 2" framing (§22.4/§23.3) was wrong on this
 point: it assumed a stable mapping could reproduce greedy, but greedy has no
 stable mapping to reproduce.
+
+## 27. The real ② global allocator: constraints and staging
+
+Per the §26 decision to build a genuine global ② (not the byte-identical
+relabel), investigation fixed two hard constraints that shape *how*:
+
+### 27.1 Two constraints
+
+1. **Not as an AsmIR post-pass.** Re-deriving liveness/CFG from the flattened
+   AsmIR and allocating there is exactly the allocation-free re-derivation §13.8 /
+   §16.6 measured at a **2.5× regression**. The allocator must live **inside the ①
+   fixpoint**, where types, liveness and loop structure are already computed.
+2. **The lever is Phase 0/2, not victim_rank.** §15.9 (and the `AllocCtx` header)
+   prove the Phase-1 victim choice is performance-neutral: it only drops an `Sf`
+   *read-only cache*, never boxes an `F`. The decisions that move the needle are
+   **Phase 0** (which physical register a fresh value gets, hence pool-vs-spill at
+   the boundary) and **Phase 2** (spill vs. keep). A real ② must steer those.
+
+### 27.2 Stage 1 (landed): widen the seam to Phase 0
+
+`AllocCtx` gains `pick_vacant(state) -> Option<FPReg>` — the Phase-0 placement
+hook — alongside the existing `victim_rank`. The default reproduces the historical
+lowest-physical-index first-fit, so it is **byte-identical** (hot-float-loop
+digest `0x01531d81c82b05c4` unchanged; x86 lib suite 1706/0; aarch64 builds). The
+seam now covers the real lever: a global policy overrides `pick_vacant` to seat
+loop-carried values where they will not be evicted, with **zero** default-path
+cost (the default *is* the original Phase-0 scan).
+
+### 27.3 Stage 2+ (next): the loop-aware policy
+
+The perf-bearing work, all inside the fixpoint and all **non-byte-identical** (so
+shadow `diff` becomes a delta *measurement*, M1 A/B is the gate):
+
+| Stage | Work | Needs |
+|---|---|---|
+| 2a | Collect per-value **live intervals + loop-carried set** from the fixpoint's existing liveness / `keep_backedge_floats` predicates (the info §16.6's post-pass *lacked*). | fixpoint hook |
+| 2b | A loop-aware `AllocCtx` (`pick_vacant`/`victim_rank` driven by 2a) that pins loop-carried `F`/`Sf` in the pool and pushes short-lived temporaries to spill first — fewer in-loop reloads. | 2a |
+| 2c | Measure: shadow delta (placements changed, back-edge `FprMove`/`FprSwap` removed) + **M1 A/B** on mandelbrot/nbody/optcarrot. Default-on only if it wins. | M1 |
+
+Stage 1 keeps the shipping build byte-identical while making Stage 2 a contained,
+fixpoint-local change behind `AllocCtx`, gated by the §24 shadow (now a delta
+meter) and real-hardware benchmarks.
