@@ -1,8 +1,18 @@
 # Handoff — JIT codegen layering / record-driven lowering (Path 2)
 
 **Branch:** `claude/wizardly-bell-n3k3po` (develop + push here).
-**Latest commit:** `818c15c` (array-index `ir.inline` closures → typed `AsmInst` variants).
-**Design record:** `doc/regalloc_separation.md` §12–§20 — read it; this handoff is the summary.
+**Latest commit:** `60e613a` (§21: the AsmIR optimization seam over `inst`).
+**Design record:** `doc/regalloc_separation.md` §12–§21 — read it; this handoff is the summary.
+
+> **Update (this session):** §3's key insight was acted on — the optimization
+> **seam landed** (§21, commit `60e613a`). `AsmIr::optimize_peephole` now runs over
+> every main block and bridge in `gen_machine_code` after `detach_ir()`. The first
+> pass (self-move elimination) is wired but fires **0 times** (the allocator emits
+> no self-moves), exactly the predicted "safe first pass"; the **seam itself** is the
+> delivered layer boundary. Behaviour-preserving (lib suite **1705 passed, 0 failed**
+> on this env's CRuby-4.0.2 baseline — note: the old "1671/34" figure was pre-CRuby-4
+> install; with Ruby 4.0.2 + `bigdecimal` the suite is now fully green). The **new
+> next step is §5 below** (a peephole pass that actually fires).
 
 ---
 
@@ -84,36 +94,47 @@ Things that are therefore **NOT needed** (do not chase them):
 
 ---
 
-## 5. Concrete next step (Path 2, realized as the opt seam)
+## 5. Concrete next step — a peephole pass that actually fires
 
-1. **Add the AsmIR optimization seam.** In `Codegen::gen_machine_code`
-   (`monoruby/src/codegen/jitgen.rs`, just after `let ir_vec = frame.detach_ir();`,
-   before the emission loop), run an optimization pass over each `AsmIr`'s `inst`.
-   Add `AsmIr::optimize_peephole(&mut self)` in `asmir.rs` (the `inst` field is
-   private to the `asmir` module, so the pass lives there; expose `pub(super)`).
-2. **First safe pass: self-move elimination** — drop `AsmInst::RegMove(s, d) if s == d`
-   (and `FprMove` self-moves once the variant's src/dst order is confirmed). Safe
-   because: side-exit indices (`AsmDeopt`) index the **`side_exit` vec, not `inst`
-   positions**, so removing an inst does not break deopt; a self-move is a no-op with
-   no control-flow effect. Instrument with a count to confirm it fires; if it rarely
-   fires, the **seam** is still the deliverable and real passes (peephole / dead-code
-   / redundant `XmmSave`-pair removal) follow.
-3. Also optimize the inline/outline **bridge** `AsmIr`s (`frame.remove_inline_bridge`
-   / the outline bridges) for completeness, or note they are skipped.
-4. **Document as §21** in `doc/regalloc_separation.md`: the seam, why `inst` is the
-   stream, and that this is Path 2's realization.
+The seam (§21) is in place; `optimize_peephole` is the place to add passes. The
+self-move pass never fires, so the next increment is the **first pass with a real
+hit rate**, proving the seam pays off. Candidates (pick one, smallest first):
 
-This is small, behaviour-preserving, and delivers the actual goal (a place to add
-optimization logic over a typed, arch-neutral instruction stream).
+1. **Redundant store/reload elision** — a `RegToStack(r, s)` immediately followed by
+   `StackToReg(s, r)` (same slot, same reg, no intervening write to `s` or `r`) makes
+   the reload dead. This is the most likely frequent hit. Start with the strict
+   adjacent-pair form, then widen the window. Verify the no-intervening-write
+   guard against `AsmInst`'s slot/reg operands (the `xmm_operands` pattern shows how
+   to enumerate operands for a variant).
+2. **Dead `XmmSave`/`XmmRestore`-pair removal** — the handoff's other suggested pass;
+   needs the same "no use in between" liveness check over `inst`.
+3. **Arithmetic identity folds** on the typed `IntegerBinOp`/`FloatBinOp` records.
+
+Method: add the pass body inside `AsmIr::optimize_peephole` (asmir.rs), gate any
+counter behind `jit-log`, confirm it fires on a benchmark (`cargo run --features
+jit-log -- benchmark/app_fib.rb | grep peephole`), then verify `cargo test -p
+monoruby --lib` stays green (**1705 passed, 0 failed**) with zero replay mismatches.
+Record the pass under a new §22 (or extend §21.2) in `doc/regalloc_separation.md`.
+
+**De-closuring more ops** (orthogonal, lets passes see through more of the stream):
+§20 turned the 8 array-index closures into typed data; the same can be done for
+other arch-uniform `ir.inline` sites so optimization passes inspect them too. The
+~52 inline-builtin closures (`builtins/*.rs`) are the bulk and the hard part (§19.3).
 
 ---
 
 ## 6. Practical notes / gotchas
 
-- **Verify:** `cargo test -p monoruby --lib` → expect **`1671 passed; 34 failed`**. The
-  34 failures are **pre-existing environment mismatches** (CRuby version / timezone /
-  missing `bigdecimal` gem), present at baseline — NOT regressions. The fastest check
-  is the pass count (1671) + zero `replay mismatch` lines.
+- **Verify:** `cargo test -p monoruby --lib` → with **CRuby 4.0.2 + `bigdecimal`
+  installed** (now the case on this env) expect **`1705 passed; 0 failed`**. If you see
+  ~34 failures it means the env reverted to an older `ruby` / missing `bigdecimal`
+  (CRuby version / timezone / `bigdecimal` gem mismatches) — those are env, NOT
+  regressions. The fastest check is the pass count + zero `replay mismatch` lines.
+  **Flake note:** the full suite spawns a `ruby` subprocess per comparison test;
+  under parallel load a handful of `require`-heavy string tests (`string_to_r`,
+  `string_undump_*`, `string_unicode_normalized_p`) can transiently fail at
+  `tests.rs:208` (a *monoruby* run-Err, not an output mismatch). Re-running them in
+  isolation passes — treat an isolated-pass + clean re-run as green.
 - **`transfer()` shadow check** (debug builds) replays each `TransferIR` record into a
   scratch and asserts identical `AsmInst` + `SideExit`. Routing a new *data-only* op
   through `transfer()` is automatically shadow-verified. Deopt-carrying records
@@ -138,6 +159,7 @@ optimization logic over a typed, arch-neutral instruction stream).
 ## 7. Commit map (this branch, newest first)
 
 ```
+60e613a §21     AsmIR optimization seam over `inst` (+ self-move pass, 0 hits) ← HEAD
 818c15c §20 B  array-index ir.inline → typed AsmInst variants (8 sites, both arches)
 ed0e481 §19 B  guarded integer binop → TransferIR::IntegerBinOp (deopt program point)
 a62ae1c §19 B  integer cmp → TransferIR::IntegerCmp
