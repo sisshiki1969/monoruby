@@ -2356,3 +2356,53 @@ back-edge, exactly where `L` is known.
 This is the architecturally-supported lever the §28 reservation should have been:
 edge-materialised f64-spill residency for confirmed loop floats, driven by the
 back-edge `L` and the existing `S→F` bridge arm.
+
+## 31. Stage 2b/§30 result: inconclusive — confounded by a *pre-existing* layer2 bug
+
+§30 (edge f64-spill residency: `keep_backedge_floats` using the spill-capable
+`set_new_F` for confirmed loop floats) was implemented under `phys-loop-aware`. The
+meaningful test needs the **confirmed** loop-float signal, i.e. running together
+with `layer2-float-by-type`. Under
+`layer2-float-by-type,phys-loop-aware,stress-spill-pool`,
+`test_join_float_register_disagreement` failed with a garbage f64
+(`-1.0 != 6.9…e-310`, an uninitialised spill slot). I first attributed this to §30.
+
+**That attribution was wrong.** The same test fails with
+`layer2-float-by-type,stress-spill-pool` **without** `phys-loop-aware`, and — the
+decisive check — it fails identically at commit `bfc4ef1` (P0/P1, *before any of
+this Stage-2 work existed*). So:
+
+- **There is a pre-existing latent bug in `layer2-float-by-type` under register
+  pressure** (`stress-spill-pool`). The two flags are never combined in CI
+  (`stress-spill-pool` runs without `layer2-float-by-type`), so it went unnoticed.
+  `layer2-float-by-type`'s broader type+liveness adoption promotes more slots to
+  loop-carried `F`, and something in that path reads an uninitialised spill under
+  pool=2. This is independent of §28/§30 and is the real bug to file.
+- **§30's own soundness is therefore inconclusive.** Its only meaningful exercise
+  (the confirmed signal) is confounded by the layer2 bug, and without
+  `layer2-float-by-type` the `be.mode == F` adopt signal barely fires under
+  pressure, so §30 could not be cleanly evaluated either way. The §31-draft claim
+  that §30 was "architecturally unsound" was not actually demonstrated; the
+  ordering concern it raised (`keep_backedge_floats` overrides the loop entry
+  *after* `analyse_backedge_fixpoint` has frozen the body placements, merge.rs:79
+  vs 123) remains a real *risk hypothesis*, not a proven cause.
+
+### 31.1 Actions
+
+- §28 (reservation) and §30 (`set_new_F` at the back-edge) code are **reverted**;
+  the tree is restored to **§27 Stage 1** (③ policy-free, ② owns the placement
+  table, Phase-0 `pick_vacant` seam — byte-identical, shipping-safe). The
+  `phys-loop-aware` feature is removed.
+- The pre-existing `layer2-float-by-type` × `stress-spill-pool` failure is recorded
+  here as a separate bug to fix before that feature's M1 bench gate.
+
+### 31.2 Standing conclusion (§27–§31)
+
+§27 Stage 1 is the durable result of the whole "real ② allocator" effort. Three
+distinct attempts to make ② *beat* greedy failed, and a fourth was confounded:
+§28 (reservation) inert (`L` unknown at allocation, §29); §30 (entry spill-promote)
+inconclusive + risky (post-fixpoint override); §16.6 (post-pass) regressed. The
+robust invariant stands: **a better FP placement must be decided *inside* the
+back-edge fixpoint with its native type/liveness/CFG state.** Before any such work,
+the `layer2-float-by-type` pressure bug (§31) must be fixed, since that feature is
+the intended carrier of the confirmed loop-float signal.

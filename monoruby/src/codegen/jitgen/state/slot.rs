@@ -70,72 +70,14 @@ mod alloc_policy {
         fn victim_rank(&self, fpr: FPReg) -> usize {
             fpr.0
         }
-
-        ///
-        /// Stage 2b reservation predicate (doc §28/§29). Returns `true` when this
-        /// allocation should be pushed to a Phase-2 spill to reserve pool capacity
-        /// for the loop-carried float set. The default policy never reserves
-        /// (byte-identical). Under `phys-loop-aware`: reserve a **non**-loop-carried
-        /// `target` exactly when the pool is tight — i.e. the number of
-        /// allocatable pool slots (vacant or all-`Sf`, hence Phase 0/1-reachable)
-        /// is at or below the number of loop-carried floats not yet resident, and
-        /// that demand is itself satisfiable (`0 < need < pool`).
-        ///
-        /// **Empirically inert (doc §29).** `state.loop_float` is always empty at
-        /// allocation time, so this never fires: the loop-carried set `L` is only
-        /// known at the *back-edge* (`liveness_analysis`), but the body's float
-        /// allocations are already committed by then — the single-pass-body forward
-        /// fixpoint has no `L` at the decision point (the §13.8/§16.6 limitation,
-        /// now confirmed). The seam and threading are sound (full suite 1706/0 under
-        /// `stress-spill-pool,phys-loop-aware`); a *binding* policy needs per-loop
-        /// float liveness surfaced to the body walk — deeper plumbing carrying
-        /// §16.6 regression risk. Kept as the documented seam.
-        ///
-        #[allow(unused_variables)]
-        fn should_reserve(&self, state: &SlotState, target: SlotId) -> bool {
-            #[cfg(not(feature = "phys-loop-aware"))]
-            {
-                false
-            }
-            #[cfg(feature = "phys-loop-aware")]
-            {
-                let pool = PHYS_FPR_POOL;
-                if state.loop_float.contains(&target) {
-                    return false; // loop-carried: give it pool priority.
-                }
-                // Loop-carried floats still wanting a pool slot.
-                let need = state
-                    .loop_float
-                    .iter()
-                    .filter(|&&s| !matches!(state.mode(s), LinkMode::F(_) | LinkMode::Sf(_, _)))
-                    .count();
-                if need == 0 || need >= pool {
-                    return false; // nothing to reserve for, or unsatisfiable anyway.
-                }
-                // Pool slots Phase 0/1 could hand out (vacant or all-`Sf`), pool only.
-                let free_pool = (0..state.fpr_alloc.len().min(pool))
-                    .map(FPReg)
-                    .filter(|&fpr| {
-                        !state.fpr_alloc.is_pinned(fpr)
-                            && (state.fpr_alloc.is_vacant(fpr)
-                                || state
-                                    .fpr_alloc
-                                    .slots(fpr)
-                                    .iter()
-                                    .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _))))
-                    })
-                    .count();
-                free_pool <= need
-            }
-        }
     }
 
     ///
     /// Returns `None` if every fpr holds at least one `F` slot (a real spill;
     /// use [`alloc_fpr`] from a context that has access to `AsmIr`).
     ///
-    pub(super) fn try_alloc_fpr(state: &mut SlotState, target: SlotId) -> Option<FPReg> {
-        try_alloc_fpr_ctx(state, &AllocCtx::default(), target)
+    pub(super) fn try_alloc_fpr(state: &mut SlotState) -> Option<FPReg> {
+        try_alloc_fpr_ctx(state, &AllocCtx::default())
     }
 
     ///
@@ -144,19 +86,7 @@ mod alloc_policy {
     /// all-`Sf` demote) is policy-invariant; only the *victim ranking* is
     /// pluggable.
     ///
-    pub(super) fn try_alloc_fpr_ctx(
-        state: &mut SlotState,
-        ctx: &AllocCtx,
-        target: SlotId,
-    ) -> Option<FPReg> {
-        // Stage 2b (§28): reservation gate. When `target` is a non-loop-carried
-        // float and the pool is tight, decline Phase 0/1 entirely so the value
-        // takes a Phase-2 spill instead — preserving pool capacity (both vacant
-        // and `Sf`-demotable slots) for the loop-carried set's promotion. The
-        // default policy never reserves, so this is inert without the feature.
-        if ctx.should_reserve(state, target) {
-            return None;
-        }
+    pub(super) fn try_alloc_fpr_ctx(state: &mut SlotState, ctx: &AllocCtx) -> Option<FPReg> {
         // Phase 0: a vacant fpr chosen by the policy (default: lowest index, as
         // before — the real placement lever, doc §27).
         if let Some(fpr) = ctx.pick_vacant(state) {
@@ -200,8 +130,8 @@ mod alloc_policy {
     /// demote) first; if both fail, a fresh phase-2 spill slot (`VirtFPReg(N)`,
     /// `N >= PHYS_FPR_POOL`) that lives on the stack and is swapped in at use.
     ///
-    pub(super) fn alloc_fpr(state: &mut SlotState, target: SlotId) -> FPReg {
-        if let Some(x) = try_alloc_fpr(state, target) {
+    pub(super) fn alloc_fpr(state: &mut SlotState) -> FPReg {
+        if let Some(x) = try_alloc_fpr(state) {
             return x;
         }
         state.fpr_alloc.push_spill()
@@ -306,11 +236,6 @@ pub(crate) struct SlotState {
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
-    /// Stage 2b (doc §28): the loop-carried float set `L` captured at the
-    /// back-edge merge (`liveness_analysis`), carried into the next fixpoint
-    /// iteration's body so the allocator can reserve pool capacity for it.
-    #[cfg(feature = "phys-loop-aware")]
-    loop_float: Vec<SlotId>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -341,8 +266,6 @@ impl SlotState {
             r15: None,
             local_num,
             deferred_rest: None,
-            #[cfg(feature = "phys-loop-aware")]
-            loop_float: Vec::new(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -435,21 +358,9 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
-        #[cfg(feature = "phys-loop-aware")]
-        {
-            // Stage 2b (§28): capture the loop-carried float set `L` for the
-            // next iteration's reservation, then drive the (unchanged) promotion.
-            let used_as_float: Vec<(SlotId, bool)> = liveness.loop_used_as_float().collect();
-            self.loop_float = used_as_float.iter().map(|(s, _)| *s).collect();
-            self.use_float(used_as_float.into_iter());
-            self.kill_unused(liveness.killed());
-        }
-        #[cfg(not(feature = "phys-loop-aware"))]
-        {
-            let (used_as_float, killed) = (liveness.loop_used_as_float(), liveness.killed());
-            self.use_float(used_as_float);
-            self.kill_unused(killed);
-        }
+        let (used_as_float, killed) = (liveness.loop_used_as_float(), liveness.killed());
+        self.use_float(used_as_float);
+        self.kill_unused(killed);
     }
 
     fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
@@ -635,12 +546,12 @@ impl SlotState {
     /// a real spill; use [`Self::alloc_fpr`] from a context that has access to
     /// `AsmIr`).
     ///
-    fn try_alloc_fpr(&mut self, target: SlotId) -> Option<FPReg> {
-        alloc_policy::try_alloc_fpr(self, target)
+    fn try_alloc_fpr(&mut self) -> Option<FPReg> {
+        alloc_policy::try_alloc_fpr(self)
     }
 
-    fn alloc_fpr(&mut self, target: SlotId) -> FPReg {
-        alloc_policy::alloc_fpr(self, target)
+    fn alloc_fpr(&mut self) -> FPReg {
+        alloc_policy::alloc_fpr(self)
     }
 
     ///
@@ -790,7 +701,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn set_new_F(&mut self, slot: SlotId) -> FPReg {
-        let x = self.alloc_fpr(slot);
+        let x = self.alloc_fpr();
         self.set_F(slot, x);
         x
     }
@@ -801,7 +712,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn try_set_new_F(&mut self, slot: SlotId) -> Option<FPReg> {
-        let x = self.try_alloc_fpr(slot)?;
+        let x = self.try_alloc_fpr()?;
         self.set_F(slot, x);
         Some(x)
     }
@@ -811,7 +722,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> FPReg {
-        let x = self.alloc_fpr(slot);
+        let x = self.alloc_fpr();
         self.set_Sf(slot, x, guarded);
         x
     }
@@ -822,7 +733,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn try_set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> Option<FPReg> {
-        let x = self.try_alloc_fpr(slot)?;
+        let x = self.try_alloc_fpr()?;
         self.set_Sf(slot, x, guarded);
         Some(x)
     }
@@ -861,7 +772,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     pub(crate) fn def_F(&mut self, slot: SlotId) -> FPReg {
-        let fpr = self.alloc_fpr(slot);
+        let fpr = self.alloc_fpr();
         self.discard(slot);
         self.set_F(slot, fpr);
         fpr
@@ -880,7 +791,7 @@ impl SlotState {
     ///
     #[allow(non_snake_case)]
     fn def_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> FPReg {
-        let fpr = self.alloc_fpr(slot);
+        let fpr = self.alloc_fpr();
         self.discard(slot);
         self.set_Sf(slot, fpr, guarded);
         fpr
