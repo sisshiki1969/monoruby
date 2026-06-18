@@ -30,7 +30,7 @@
 //!   large one into a scratch register). A single legalizer replaces the ~two
 //!   dozen ad-hoc range checks currently spread across the aarch64 backend.
 //! - **Registers are already arch-neutral.** `GP` (general) and `FPReg`
-//!   (virtual FP, phys-xmm-or-spill) are defined in `codegen.rs` and map to
+//!   (virtual FP, phys-fpr-or-spill) are defined in `codegen.rs` and map to
 //!   physical registers per `target_arch`, so LIR reuses them as-is.
 //!
 //! The payoff is no longer closing aarch64 *bails* (the full port `#704`
@@ -372,7 +372,7 @@ pub(in crate::codegen::jitgen) enum LInst {
         reg: GP,
     },
     // ---- floating-point transfer / convert -----------------------------------
-    // FP operands are virtual `FPReg`s (physical xmm/d-reg or a stack spill); the
+    // FP operands are virtual `FPReg`s (physical fpr/d-reg or a stack spill); the
     // encoders resolve the spill via `FPReg::loc(base)`, so these carry the
     // frame's `base` spill offset.
     /// `dst <- src` between FP registers (spill-aware; no-op when equal).
@@ -457,13 +457,13 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     /// Save the live FP pool registers before a C-call (`cont` reserves a
     /// continuation frame).
-    XmmSave {
-        using_xmm: UsingXmm,
+    FprSave {
+        using_fpr: UsingFpr,
         cont: bool,
     },
     /// Restore the live FP pool registers after a C-call.
-    XmmRestore {
-        using_xmm: UsingXmm,
+    FprRestore {
+        using_fpr: UsingFpr,
         cont: bool,
     },
     /// Call an `f64 -> f64` C function (e.g. `Math.sqrt`): save the FP pool, load
@@ -473,7 +473,7 @@ pub(in crate::codegen::jitgen) enum LInst {
         f: unsafe extern "C" fn(f64) -> f64,
         src: FPReg,
         dst: FPReg,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         base: usize,
     },
     /// Call an `(f64, f64) -> f64` C function (e.g. `Math.atan2`).
@@ -483,7 +483,7 @@ pub(in crate::codegen::jitgen) enum LInst {
         lhs: FPReg,
         rhs: FPReg,
         dst: FPReg,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         base: usize,
     },
     // ---- macro-ops -----------------------------------------------------------
@@ -504,26 +504,26 @@ pub(in crate::codegen::jitgen) enum LInst {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     // Variable access (gvar/cvar via runtime call; dynvar walks the LFP chain).
     StoreConstant {
         id: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: DestLabel,
     },
     LoadGVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     StoreGVar {
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     LoadCVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     LoadDynVar {
         src: DynVar,
@@ -539,123 +539,123 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     NewArray {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     NewHash {
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     HashInsert {
         hash: SlotId,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ArrayConcat {
         dst: SlotId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     NewRange {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ConcatStr {
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ToA {
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DeepCopyLit {
         v: Value,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     // Runtime-call definition / defined? / generic-op family.
     UndefMethod {
         undef: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     AliasGvar {
         new: IdentId,
         old: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     CheckCVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     StoreCVar {
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     AliasMethod {
         new: SlotId,
         old: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedYield {
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedSuper {
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedGvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedCvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedConst {
         dst: SlotId,
         siteid: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedMethod {
         dst: SlotId,
         recv: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedIvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     GenericBinOp {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     OptEqCmp {
         lhs: SlotId,
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ArrayTEq {
         lhs: SlotId,
         rhs: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ConcatRegexp {
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     CheckKwRest {
         slot: SlotId,
@@ -664,7 +664,7 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     // Control flow / frame / exceptions / definitions.
     Deopt {
@@ -712,21 +712,21 @@ pub(in crate::codegen::jitgen) enum LInst {
     },
     BlockArg {
         ret: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: DestLabel,
     },
     MethodDef {
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: DestLabel,
     },
     SingletonMethodDef {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: DestLabel,
     },
     Raise {
@@ -772,14 +772,14 @@ pub(in crate::codegen::jitgen) enum LInst {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: DestLabel,
     },
     SingletonClassDef {
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: DestLabel,
     },
     // ---- method-call / argument-setup macro-ops ----------------------------

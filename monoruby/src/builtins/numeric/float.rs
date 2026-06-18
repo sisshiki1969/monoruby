@@ -206,7 +206,7 @@ fn float_toi(
         return false;
     }
     let CallSiteInfo { dst, recv, .. } = *callsite;
-    let fsrc = state.load_xmm(ir, recv);
+    let fsrc = state.load_fpr(ir, recv);
     let deopt = ir.new_deopt(state);
     if let Some(dst) = dst {
         ir.inline(move |r#gen, _, labels, base| {

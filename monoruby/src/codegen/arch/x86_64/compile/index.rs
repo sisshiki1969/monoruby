@@ -61,7 +61,7 @@ impl Codegen {
     ///
     pub(crate) fn array_index_assign(
         &mut self,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         generic: &DestLabel,
         error: &DestLabel,
     ) {
@@ -102,7 +102,7 @@ impl Codegen {
             jmp  exit;
         };
         self.jit.bind_label(generic.clone());
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq r8, rdx;
             movq rdx, rbx;
@@ -110,7 +110,7 @@ impl Codegen {
             movq rax, (set_array_integer_index);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         self.handle_error(&error);
         monoasm! { &mut self.jit,
             jmp  exit;
@@ -164,7 +164,7 @@ impl Codegen {
     pub(crate) fn gen_array_index_assign(
         &mut self,
         kind: ArrayIndexKind,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) {
         match kind {
@@ -173,7 +173,7 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movl rsi, (idx);
                 }
-                self.array_index_assign(using_xmm, &generic, error);
+                self.array_index_assign(using_fpr, &generic, error);
             }
             ArrayIndexKind::Fixnum => {
                 let generic = self.jit.label();
@@ -185,7 +185,7 @@ impl Codegen {
                     js   negative;
                 checked:
                 };
-                self.array_index_assign(using_xmm, &generic, error);
+                self.array_index_assign(using_fpr, &generic, error);
 
                 self.jit.select_page(1);
                 self.jit.bind_label(negative);

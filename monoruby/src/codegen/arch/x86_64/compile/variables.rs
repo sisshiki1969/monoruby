@@ -76,7 +76,7 @@ impl Codegen {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using: UsingXmm,
+        using: UsingFpr,
     ) {
         self.store_ivar_heap_inner(src, ivarid, is_object_ty, Some(using));
     }
@@ -97,7 +97,7 @@ impl Codegen {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using: Option<UsingXmm>,
+        using: Option<UsingFpr>,
     ) {
         let exit = self.jit.label();
         let generic = if let Some(using) = using {
@@ -136,12 +136,12 @@ impl Codegen {
                 movl rsi, (ivar);
                 movq rdx, R(src as _);
             );
-            self.xmm_save(using);
+            self.fpr_save(using);
             monoasm!( &mut self.jit,
                 movq rax, (set_ivar);
                 call rax;
             );
-            self.xmm_restore(using);
+            self.fpr_restore(using);
             monoasm!( &mut self.jit,
                 jmp  exit;
             );
@@ -266,8 +266,8 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(super) fn load_cvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn load_cvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -275,11 +275,11 @@ impl Codegen {
             movq rax, (runtime::get_class_var);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn check_cvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn check_cvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -287,11 +287,11 @@ impl Codegen {
             movq rax, (runtime::check_class_var);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn store_cvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn store_cvar(&mut self, name: IdentId, src: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -300,11 +300,11 @@ impl Codegen {
             movq rax, (runtime::set_class_var);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn load_gvar(&mut self, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn load_gvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -312,11 +312,11 @@ impl Codegen {
             movq rax, (runtime::get_global_var);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -325,7 +325,7 @@ impl Codegen {
             movq rax, (runtime::set_global_var);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 }
 

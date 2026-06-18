@@ -155,17 +155,17 @@ impl<'a> JitContext<'a> {
                         }
                     }
                     if let Some(dst) = dst {
-                        let src = state.load_xmm(ir, args);
-                        state.pin_xmm(src);
+                        let src = state.load_fpr(ir, args);
+                        state.pin_fpr(src);
                         state.discard(dst);
-                        let using_xmm = state.get_using_xmm();
+                        let using_fpr = state.get_using_fpr();
                         let dst = state.def_F(dst);
-                        state.unpin_xmm(src);
+                        state.unpin_fpr(src);
                         ir.push(AsmInst::CFunc_F_F {
                             f: *f,
                             src,
                             dst,
-                            using_xmm,
+                            using_fpr,
                         });
                     }
                     return Ok(CompileResult::Continue);
@@ -185,24 +185,24 @@ impl<'a> JitContext<'a> {
                     }
                     if let Some(dst) = dst {
                         // Pin lhs across rhs load and dst alloc; otherwise the
-                        // allocator can pick lhs's xmm as spill victim and the
+                        // allocator can pick lhs's fpr as spill victim and the
                         // consuming CFunc gets aliased operands. Same for rhs
                         // across the dst alloc.
-                        let lhs = state.load_xmm(ir, recv);
-                        state.pin_xmm(lhs);
-                        let rhs = state.load_xmm(ir, args);
-                        state.pin_xmm(rhs);
+                        let lhs = state.load_fpr(ir, recv);
+                        state.pin_fpr(lhs);
+                        let rhs = state.load_fpr(ir, args);
+                        state.pin_fpr(rhs);
                         state.discard(dst);
-                        let using_xmm = state.get_using_xmm();
+                        let using_fpr = state.get_using_fpr();
                         let dst = state.def_F(dst);
-                        state.unpin_xmm(rhs);
-                        state.unpin_xmm(lhs);
+                        state.unpin_fpr(rhs);
+                        state.unpin_fpr(lhs);
                         ir.push(AsmInst::CFunc_FF_F {
                             f: *f,
                             lhs,
                             rhs,
                             dst,
-                            using_xmm,
+                            using_fpr,
                         });
                     }
                     return Ok(CompileResult::Continue);
@@ -407,10 +407,10 @@ impl<'a> JitContext<'a> {
             callid,
         )?;
         state.exec_gc(ir, true);
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save_cont(using_xmm);
+        // -using_fpr.offset()
+        ir.fpr_save_cont(using_fpr);
         state.set_arguments(&self.store, ir, callid, callee_fid, false);
         state.discard(dst);
         state.clear_above_next_sp();
@@ -420,7 +420,7 @@ impl<'a> JitContext<'a> {
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
         ir.push(AsmInst::SpecializedYield { entry, evict });
-        ir.xmm_restore_cont(using_xmm);
+        ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -505,14 +505,14 @@ impl<'a> JitContext<'a> {
         ir.guard_frozen(deopt);
         let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid })
         } else {
             ir.push(AsmInst::StoreIVarHeap {
                 src,
                 ivarid,
-                using_xmm,
+                using_fpr,
                 is_object_ty,
             });
         }
@@ -821,10 +821,10 @@ impl AbstractState {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
         self.exec_gc(ir, true);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save_cont(using_xmm);
+        // -using_fpr.offset()
+        ir.fpr_save_cont(using_fpr);
         self.set_arguments(store, ir, callid, callee_fid, false);
         self.discard(dst);
         self.clear_above_next_sp();
@@ -842,7 +842,7 @@ impl AbstractState {
             evict,
             pc: self.pc(),
         });
-        ir.xmm_restore_cont(using_xmm);
+        ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);
@@ -872,10 +872,10 @@ impl AbstractState {
         // consume needs the real rest `Array`.
         let defer_rest = deferred_rest && !needs_rest_array;
         self.exec_gc(ir, true);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save_cont(using_xmm);
+        // -using_fpr.offset()
+        ir.fpr_save_cont(using_fpr);
         self.set_arguments(store, ir, callid, callee_fid, defer_rest);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
@@ -892,7 +892,7 @@ impl AbstractState {
             patch_point,
             evict,
         });
-        ir.xmm_restore_cont(using_xmm);
+        ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         self.unset_side_effect_guard();
     }
@@ -902,19 +902,19 @@ impl AbstractState {
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
         self.writeback_acc(ir);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         let evict = ir.new_evict();
         self.exec_gc(ir, true);
         // stack pointer adjustment
-        // -using_xmm.offset()
-        ir.xmm_save_cont(using_xmm);
+        // -using_fpr.offset()
+        ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::Yield {
             callid,
             error,
             evict,
         });
-        ir.xmm_restore_cont(using_xmm);
+        ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
         self.immediate_evict(ir, evict);

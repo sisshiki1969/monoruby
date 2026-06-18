@@ -254,10 +254,10 @@ pub(super) fn object_object_id(
     }
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     state.load(ir, recv, GP::Rdi);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_object_id());
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     state.def_rax2acc(ir, ret);
     true
 }

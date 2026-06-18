@@ -193,14 +193,14 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::Literal(dst, val) => {
                 state.discard(dst);
-                ir.deep_copy_lit(state.get_using_xmm(), val);
+                ir.deep_copy_lit(state.get_using_fpr(), val);
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
                 state.write_back_range(ir, args, pos_num as u16);
                 state.discard(dst);
-                ir.new_array(state.get_using_xmm(), callid);
+                ir.new_array(state.get_using_fpr(), callid);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { .. } => {
@@ -210,7 +210,7 @@ impl<'a> JitContext<'a> {
                 state.write_back_range(ir, args, len * 2);
                 state.discard(dst);
                 let error = ir.new_error(state);
-                ir.new_hash(state.get_using_xmm(), args, len as _);
+                ir.new_hash(state.get_using_fpr(), args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
             }
@@ -218,14 +218,14 @@ impl<'a> JitContext<'a> {
                 state.write_back_range(ir, args, len * 2);
                 state.write_back_slots(ir, &[hash]);
                 let error = ir.new_error(state);
-                ir.hash_insert(state.get_using_xmm(), hash, args, len as _);
+                ir.hash_insert(state.get_using_fpr(), hash, args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, hash);
             }
             TraceIr::ArrayConcat { dst, src } => {
                 state.write_back_slots(ir, &[dst, src]);
                 let error = ir.new_error(state);
-                ir.array_concat(state.get_using_xmm(), dst, src);
+                ir.array_concat(state.get_using_fpr(), dst, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
             }
@@ -238,8 +238,8 @@ impl<'a> JitContext<'a> {
                 state.write_back_slots(ir, &[start, end]);
                 state.discard(dst);
                 let error = ir.new_error(state);
-                let using_xmm = state.get_using_xmm();
-                ir.new_range(start, end, exclude_end, using_xmm, error);
+                let using_fpr = state.get_using_fpr();
+                ir.new_range(start, end, exclude_end, using_fpr, error);
                 state.def_rax2acc(ir, dst);
             }
 
@@ -397,10 +397,10 @@ impl<'a> JitContext<'a> {
                                 return Ok(CompileResult::Continue);
                             }
                         }
-                        let fsrc = state.load_xmm(ir, src);
-                        state.pin_xmm(fsrc);
+                        let fsrc = state.load_fpr(ir, src);
+                        state.pin_fpr(fsrc);
                         let dst = state.def_F(dst);
-                        state.unpin_xmm(fsrc);
+                        state.unpin_fpr(fsrc);
                         ir.fpr_move(fsrc, dst);
                         ir.push(AsmInst::FloatUnOp { kind, dst });
                     }
@@ -558,22 +558,22 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasGvar { new, old } => {
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::AliasGvar {
                     new,
                     old,
-                    using_xmm,
+                    using_fpr,
                 });
                 state.unset_side_effect_guard();
             }
 
             TraceIr::MethodDef { name, func_id } => {
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 let error = ir.new_error(state);
                 ir.push(AsmInst::MethodDef {
                     name,
                     func_id,
-                    using_xmm,
+                    using_fpr,
                     error,
                 });
                 ir.check_bop(state);
@@ -583,13 +583,13 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 state.write_back_slots(ir, &[obj]);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 let error = ir.new_error(state);
                 ir.push(AsmInst::SingletonMethodDef {
                     obj,
                     name,
                     func_id,
-                    using_xmm,
+                    using_fpr,
                     error,
                 });
                 ir.check_bop(state);
@@ -629,59 +629,59 @@ impl<'a> JitContext<'a> {
 
             TraceIr::DefinedYield { dst } => {
                 state.def_S(dst);
-                let using_xmm = state.get_using_xmm();
-                ir.push(AsmInst::DefinedYield { dst, using_xmm });
+                let using_fpr = state.get_using_fpr();
+                ir.push(AsmInst::DefinedYield { dst, using_fpr });
             }
             TraceIr::DefinedConst { dst, siteid } => {
                 state.to_S_unguarded(ir, dst);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::DefinedConst {
                     dst,
                     siteid,
-                    using_xmm,
+                    using_fpr,
                 });
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
                 state.write_back_slots(ir, &[recv]);
                 state.to_S_unguarded(ir, dst);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::DefinedMethod {
                     dst,
                     recv,
                     name,
-                    using_xmm,
+                    using_fpr,
                 });
             }
             TraceIr::DefinedSuper { dst } => {
                 state.def_S(dst);
-                let using_xmm = state.get_using_xmm();
-                ir.push(AsmInst::DefinedSuper { dst, using_xmm });
+                let using_fpr = state.get_using_fpr();
+                ir.push(AsmInst::DefinedSuper { dst, using_fpr });
             }
             TraceIr::DefinedGvar { dst, name } => {
                 state.def_S(dst);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::DefinedGvar {
                     dst,
                     name,
-                    using_xmm,
+                    using_fpr,
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
                 state.to_S_unguarded(ir, dst);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::DefinedIvar {
                     dst,
                     name,
-                    using_xmm,
+                    using_fpr,
                 });
             }
             TraceIr::DefinedCvar { dst, name } => {
                 state.def_S(dst);
-                let using_xmm = state.get_using_xmm();
+                let using_fpr = state.get_using_fpr();
                 ir.push(AsmInst::DefinedCvar {
                     dst,
                     name,
-                    using_xmm,
+                    using_fpr,
                 });
             }
 

@@ -697,7 +697,7 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
-    let fsrc = state.load_xmm(ir, args);
+    let fsrc = state.load_fpr(ir, args);
     // Create the deopt label before allocating `fret` so the write-back
     // state captured here does not include the (unmodified) dst slot.
     // On a negative argument we bail out to the interpreter, which will

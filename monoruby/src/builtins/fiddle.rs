@@ -522,7 +522,7 @@ fn fiddle_write_inline(
 
     match kind {
         WriteKind::F64 => {
-            let xsrc = state.load_xmm(ir, val_slot);
+            let xsrc = state.load_fpr(ir, val_slot);
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
                 r#gen.emit_fiddle_write_f64(xsrc, &labels[deopt], base);

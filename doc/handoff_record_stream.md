@@ -76,7 +76,7 @@ Things that are therefore **NOT needed** (do not chase them):
 
 ## 4. Findings that redirect future work (don't redo these)
 
-- **Allocator victim-policy is perf-neutral (§15.9).** `try_alloc_xmm` phase 1 only
+- **Allocator victim-policy is perf-neutral (§15.9).** `try_alloc_fpr` phase 1 only
   demotes an **all-`Sf`** register (stack is canonical → free, lazy reload); it never
   touches an `F`. Phase-2 spill is unboxed (`VirtFPReg`). So **no allocation choice
   ever boxes an `F`**, and every spill-victim probe (§14.7, §15.1) was a no-op. The
@@ -104,9 +104,9 @@ hit rate**, proving the seam pays off. Candidates (pick one, smallest first):
    `StackToReg(s, r)` (same slot, same reg, no intervening write to `s` or `r`) makes
    the reload dead. This is the most likely frequent hit. Start with the strict
    adjacent-pair form, then widen the window. Verify the no-intervening-write
-   guard against `AsmInst`'s slot/reg operands (the `xmm_operands` pattern shows how
+   guard against `AsmInst`'s slot/reg operands (the `fpr_operands` pattern shows how
    to enumerate operands for a variant).
-2. **Dead `XmmSave`/`XmmRestore`-pair removal** — the handoff's other suggested pass;
+2. **Dead `FprSave`/`FprRestore`-pair removal** — the handoff's other suggested pass;
    needs the same "no use in between" liveness check over `inst`.
 3. **Arithmetic identity folds** on the typed `IntegerBinOp`/`FloatBinOp` records.
 
@@ -138,7 +138,7 @@ other arch-uniform `ir.inline` sites so optimization passes inspect them too. Th
 - **`transfer()` shadow check** (debug builds) replays each `TransferIR` record into a
   scratch and asserts identical `AsmInst` + `SideExit`. Routing a new *data-only* op
   through `transfer()` is automatically shadow-verified. Deopt-carrying records
-  (`XmmLoad`, `IntegerBinOp`) carry a `DeoptPoint` program point (§9); `emit`
+  (`FprLoad`, `IntegerBinOp`) carry a `DeoptPoint` program point (§9); `emit`
   materializes the side-exit via `deopt_from_point`.
 - **aarch64:** this environment builds/tests **x86-64 only**. The user runs M1
   `bin/test` each turn to confirm aarch64. **Risk to confirm:** `818c15c`'s aarch64
@@ -165,7 +165,7 @@ ed0e481 §19 B  guarded integer binop → TransferIR::IntegerBinOp (deopt progra
 a62ae1c §19 B  integer cmp → TransferIR::IntegerCmp
 daf1cf9 §19 B  float cmp → TransferIR::FloatCmp
 8732ad6 §19 B  float binop → TransferIR::FloatBinOp (+ §19 plan)
-58171a7 §18.3   correction: XmmOp alloc/emit already split (§9/§11); (b) = record-driven lowering
+58171a7 §18.3   correction: FprOp alloc/emit already split (§9/§11); (b) = record-driven lowering
 bd46db8 §18     binop_float split into pure decision + execution
 69e318b §17.4   defer goal-3/VmResidual; refocus on JIT-internal separation
 3461edb         Revert L2-2.1 (AllocStrategy/VmResidual — goal-3, deferred)

@@ -409,7 +409,7 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 | `gc-log`            | Log GC statistics at exit                                              |
 | `gc-debug`          | GC debug assertions                                                    |
 | `gc-stress`         | GC on every allocation (stress test)                                   |
-| `stress-spill-pool` | Shrink `PHYS_XMM_POOL` to 2 to stress the FP-register spill paths      |
+| `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 to stress the FP-register spill paths      |
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |

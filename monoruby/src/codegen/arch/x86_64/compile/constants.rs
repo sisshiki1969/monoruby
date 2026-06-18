@@ -1,9 +1,9 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn store_constant(&mut self, id: ConstSiteId, using_xmm: UsingXmm) {
+    pub(super) fn store_constant(&mut self, id: ConstSiteId, using_fpr: UsingFpr) {
         let const_version = self.const_version_label();
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
           movq rdx, (id.0);  // name: ConstSiteId
           movq rcx, rax;  // val: Value
@@ -13,7 +13,7 @@ impl Codegen {
           movq rax, (runtime::set_constant);
           call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///

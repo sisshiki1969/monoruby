@@ -595,10 +595,10 @@ fn integer_tof(
         // Load `recv` BEFORE allocating `ret`'s xmm. When `ret == recv`
         // (a common slot-reuse pattern, e.g. `496.to_f` or chained
         // `v.x.to_f`), `def_F(ir, ret)` discards `recv`'s existing
-        // binding and sets the slot to `F(fresh_xmm)`. A subsequent
+        // binding and sets the slot to `F(fresh_fpr)`. A subsequent
         // `state.load(ir, recv, ..)` then sees the slot in `F` mode
-        // and emits an `xmm2stack` write-back of the *uninitialised*
-        // fresh xmm — so `rdi` ends up holding boxed-NaN garbage, the
+        // and emits an `fpr-to-stack` write-back of the *uninitialised*
+        // fresh fpr — so `rdi` ends up holding boxed-NaN garbage, the
         // `sarq` / `cvtsi2sdq` below produce NaN, and the caller sees
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
@@ -1106,16 +1106,16 @@ fn integer_rem_float_rhs(
         }
     }
 
-    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-    let rhs_xmm = state.load_xmm(ir, args);
+    let lhs_fpr = state.load_fpr_fixnum(ir, recv);
+    let rhs_fpr = state.load_fpr(ir, args);
     let Some(dst) = dst else {
         // Result discarded; no work needed (rem_ff is pure).
         return true;
     };
-    let dst_xmm = state.def_F(dst);
-    let using_xmm = state.get_using_xmm();
+    let dst_fpr = state.def_F(dst);
+    let using_fpr = state.get_using_fpr();
     ir.inline(move |r#gen, _, _, base| {
-        r#gen.gen_int_rem_if(lhs_xmm, rhs_xmm, dst_xmm, using_xmm, base)
+        r#gen.gen_int_rem_if(lhs_fpr, rhs_fpr, dst_fpr, using_fpr, base)
     });
     true
 }
@@ -1177,9 +1177,9 @@ fn integer_pow_int_rhs(
 
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
-    let using_xmm = state.get_using_xmm();
+    let using_fpr = state.get_using_fpr();
     let error = ir.new_error(state);
-    ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_pow(using_xmm, &labels[error]));
+    ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_pow(using_fpr, &labels[error]));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -1206,11 +1206,11 @@ fn integer_pow_float_rhs(
         // else: fall through to runtime call
     }
 
-    let lhs_xmm = state.load_xmm_fixnum(ir, recv);
-    let rhs_xmm = state.load_xmm(ir, args);
-    let using_xmm = state.get_using_xmm();
+    let lhs_fpr = state.load_fpr_fixnum(ir, recv);
+    let rhs_fpr = state.load_fpr(ir, args);
+    let using_fpr = state.get_using_fpr();
     ir.inline(move |r#gen, _, _, base| {
-        r#gen.gen_int_pow_if(lhs_xmm, rhs_xmm, using_xmm, base)
+        r#gen.gen_int_pow_if(lhs_fpr, rhs_fpr, using_fpr, base)
     });
     state.def_reg2acc(ir, GP::Rax, dst);
     true

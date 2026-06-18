@@ -114,7 +114,7 @@ impl AbstractState {
     /// - rdx: result Value
     ///
     /// ### destroy
-    /// - caller save registers except xmm's
+    /// - caller save registers except fpr's
     ///
 #[cfg(target_arch = "x86_64")]
     pub(crate) fn array_integer_index_assign(
@@ -128,21 +128,21 @@ impl AbstractState {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
-            let using_xmm = self.get_using_xmm();
+            let using_fpr = self.get_using_fpr();
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::U16(idx),
-                using_xmm,
+                using_fpr,
                 error,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
-            let using_xmm = self.get_using_xmm();
+            let using_fpr = self.get_using_fpr();
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::Fixnum,
-                using_xmm,
+                using_fpr,
                 error,
             });
         }
@@ -164,21 +164,21 @@ impl AbstractState {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
-            let using_xmm = self.get_using_xmm();
+            let using_fpr = self.get_using_fpr();
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::U16(idx),
-                using_xmm,
+                using_fpr,
                 error,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
-            let using_xmm = self.get_using_xmm();
+            let using_fpr = self.get_using_fpr();
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::Fixnum,
-                using_xmm,
+                using_fpr,
                 error,
             });
         }

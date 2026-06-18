@@ -22,10 +22,10 @@ impl Codegen {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         // r9 <- base: Option<Value>
         if let Some(base) = base {
             monoasm! { &mut self.jit, movq r9, [rbp - (rbp_local(base))]; }
@@ -53,7 +53,7 @@ impl Codegen {
         };
         self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -62,10 +62,10 @@ impl Codegen {
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdx, [rbp - (rbp_local(base))];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
@@ -75,12 +75,12 @@ impl Codegen {
         };
         self.handle_error(&error);
         self.jit_class_def_sub(func_id, dst, error);
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
-    pub(super) fn method_def(&mut self, name: IdentId, func_id: FuncId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn method_def(&mut self, name: IdentId, func_id: FuncId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &Globals
@@ -89,7 +89,7 @@ impl Codegen {
             movq rax, (runtime::define_method);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     pub(super) fn singleton_method_def(
@@ -97,9 +97,9 @@ impl Codegen {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &Globals
@@ -109,7 +109,7 @@ impl Codegen {
             movq rax, (runtime::singleton_define_method);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     fn jit_class_def_sub(&mut self, func_id: FuncId, dst: Option<SlotId>, error: &DestLabel) {

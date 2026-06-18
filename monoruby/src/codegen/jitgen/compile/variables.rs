@@ -151,7 +151,7 @@ impl AbstractState {
             self.set_const_version_guard();
         }
         // Heap-allocated Float: keep the Sf optimization so subsequent
-        // float ops can read the f64 from xmm without re-extracting it
+        // float ops can read the f64 from fpr without re-extracting it
         // from the RValue. Immediate flonums skip this path because
         // `def_C` is already cheaper than emitting an `Sf` materialization.
         if value.is_immediate().is_none()
@@ -186,11 +186,11 @@ impl AbstractState {
 
     pub(super) fn store_constant(&mut self, ir: &mut AsmIr, src: SlotId, id: ConstSiteId) {
         self.load(ir, src, GP::Rax);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreConstant {
             id,
-            using_xmm,
+            using_fpr,
             error,
         });
         // Storing a constant bumps the global const version, so any guard
@@ -201,47 +201,47 @@ impl AbstractState {
 
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::LoadGVar { name, using_xmm });
+        let using_fpr = self.get_using_fpr();
+        ir.push(AsmInst::LoadGVar { name, using_fpr });
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreGVar {
             name,
             src,
-            using_xmm,
+            using_fpr,
         });
         ir.handle_error(error);
     }
 
     pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
-        ir.push(AsmInst::LoadCVar { name, using_xmm });
+        ir.push(AsmInst::LoadCVar { name, using_fpr });
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_xmm = self.get_using_xmm();
-        ir.push(AsmInst::CheckCVar { name, using_xmm });
+        let using_fpr = self.get_using_fpr();
+        ir.push(AsmInst::CheckCVar { name, using_fpr });
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_cvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreCVar {
             name,
             src,
-            using_xmm,
+            using_fpr,
         });
         ir.handle_error(error);
     }

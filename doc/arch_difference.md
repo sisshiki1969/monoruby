@@ -85,7 +85,7 @@ identical families covered on both arches include:
   `FloatUnOp`, `FloatCmp`, `FloatCmpBr`, `FixnumNeg`, `FixnumBitNot`,
   `RegAdd`, `RegSub`.
 - FP transfer: `FprMove`, `FprSwap`, `F64ToFpr`, `FixnumToFpr`, `FloatToFpr`,
-  `FprToStack`, `I64ToBoth`, `XmmSave`, `XmmRestore`, `CFunc_F_F`,
+  `FprToStack`, `I64ToBoth`, `FprSave`, `FprRestore`, `CFunc_F_F`,
   `CFunc_FF_F`.
 - Allocation / C-call: `CreateArray`, `NewArray`, `NewHash`, `NewRange`,
   `ConcatStr`, `ToA`, `DeepCopyLit`, `ConcatRegexp`, `ExpandArray`,
@@ -119,7 +119,7 @@ handled, not declined:
 - **Float `FloatBinOp` / `FloatUnOp`** — the full `BinOpK` / `UnOpK` set is
   lowered (the old port handled only `Add|Sub|Mul|Div` / `Neg|Pos`).
 - **Live FP-pool register across a runtime call** — the runtime-call primitives
-  save/restore the live xmm pool (`emit_xmm_save` / `emit_xmm_restore`) around
+  save/restore the live xmm pool (`emit_fpr_save` / `emit_fpr_restore`) around
   the call, so they no longer bail on a live pool register.
 - **Deopt write-back & forwarded arguments** — the side-exit generator
   reconstructs live frame state for all shapes; the single unported shape (the

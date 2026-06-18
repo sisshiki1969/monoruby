@@ -456,25 +456,25 @@ impl AsmIr {
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment
-    /// - -`using_xmm`.offset()
+    /// - -`using_fpr`.offset()
     ///
-    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmSave(using_xmm, false));
+    pub(crate) fn fpr_save(&mut self, using_fpr: UsingFpr) {
+        self.push(AsmInst::FprSave(using_fpr, false));
     }
 
-    pub(crate) fn xmm_save_cont(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmSave(using_xmm, true));
+    pub(crate) fn fpr_save_cont(&mut self, using_fpr: UsingFpr) {
+        self.push(AsmInst::FprSave(using_fpr, true));
     }
 
     ///
     /// Restore floating point registers in use.
     ///
-    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmRestore(using_xmm, false));
+    pub(crate) fn fpr_restore(&mut self, using_fpr: UsingFpr) {
+        self.push(AsmInst::FprRestore(using_fpr, false));
     }
 
-    pub(crate) fn xmm_restore_cont(&mut self, using_xmm: UsingXmm) {
-        self.push(AsmInst::XmmRestore(using_xmm, true));
+    pub(crate) fn fpr_restore_cont(&mut self, using_fpr: UsingFpr) {
+        self.push(AsmInst::FprRestore(using_fpr, true));
     }
 
     ///
@@ -550,7 +550,7 @@ impl AsmIr {
     }
 
     ///
-    /// Generate convert code from xmm to stack slots.
+    /// Generate convert code from fpr to stack slots.
     ///
     /// ### out
     /// - rax: Value
@@ -581,7 +581,7 @@ impl AsmIr {
     /// - R(*reg*): Value
     ///
     /// ### out
-    /// - xmm(*xmm*)
+    /// - fpr(*fpr*)
     ///
     /// ### destroy
     /// - R(*reg*)
@@ -603,7 +603,7 @@ impl AsmIr {
     ///
     /// ### out
     ///
-    /// - xmm(*xmm*)
+    /// - fpr(*fpr*)
     ///
     /// ### destroy
     ///
@@ -636,8 +636,8 @@ impl AsmIr {
     /// ### destroy
     /// - caller save registers
     ///
-    pub(super) fn deep_copy_lit(&mut self, using_xmm: UsingXmm, val: Value) {
-        self.push(AsmInst::DeepCopyLit(val, using_xmm));
+    pub(super) fn deep_copy_lit(&mut self, using_fpr: UsingFpr, val: Value) {
+        self.push(AsmInst::DeepCopyLit(val, using_fpr));
     }
 
     pub(super) fn guard_array_ty(&mut self, r: GP, deopt: AsmDeopt) {
@@ -665,37 +665,37 @@ impl AsmIr {
         outer: usize,
         call_site_bc_ptr: BytecodePtr,
     ) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         let error = self.new_error(state);
         self.push(AsmInst::BlockArg {
             ret,
             _outer: outer,
-            using_xmm,
+            using_fpr,
             error,
             call_site_bc_ptr,
         });
     }
 
     pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
-        let using_xmm = state.get_using_xmm();
-        self.push(AsmInst::ToA { src, using_xmm });
+        let using_fpr = state.get_using_fpr();
+        self.push(AsmInst::ToA { src, using_fpr });
     }
 
     pub(super) fn concat_str(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         self.push(AsmInst::ConcatStr {
             arg,
             len,
-            using_xmm,
+            using_fpr,
         });
     }
 
     pub(super) fn concat_regexp(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         self.push(AsmInst::ConcatRegexp {
             arg,
             len,
-            using_xmm,
+            using_fpr,
         });
     }
 
@@ -706,14 +706,14 @@ impl AsmIr {
         len: u16,
         rest_pos: Option<u16>,
     ) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         let len = len as _;
         let rest_pos = rest_pos.map(|v| v as _);
         self.push(AsmInst::ExpandArray {
             dst,
             len,
             rest_pos,
-            using_xmm,
+            using_fpr,
         });
     }
 
@@ -731,11 +731,11 @@ impl AsmIr {
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
     ///
     pub(super) fn array_teq(&mut self, state: &AbstractFrame, lhs: SlotId, rhs: SlotId) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         self.push(AsmInst::ArrayTEq {
             lhs,
             rhs,
-            using_xmm,
+            using_fpr,
         });
     }
 
@@ -746,12 +746,12 @@ impl AsmIr {
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
     ) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         self.push(AsmInst::GenericBinOp {
             lhs,
             rhs,
             func,
-            using_xmm,
+            using_fpr,
         });
     }
 
@@ -771,30 +771,30 @@ impl AsmIr {
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
     ) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         self.push(AsmInst::OptEqCmp {
             lhs,
             rhs,
             kind,
             func,
-            using_xmm,
+            using_fpr,
         });
     }
 
     pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         let error = self.new_error(state);
-        self.push(AsmInst::UndefMethod { undef, using_xmm });
+        self.push(AsmInst::UndefMethod { undef, using_fpr });
         self.handle_error(error);
     }
 
     pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: SlotId, old: SlotId) {
-        let using_xmm = state.get_using_xmm();
+        let using_fpr = state.get_using_fpr();
         let error = self.new_error(state);
         self.push(AsmInst::AliasMethod {
             new,
             old,
-            using_xmm,
+            using_fpr,
         });
         self.handle_error(error);
     }
@@ -873,7 +873,7 @@ impl AsmIr {
     /// - depends on *mode*
     ///
     /// ### out
-    /// - xmm(*dst*): dst
+    /// - fpr(*dst*): dst
     ///
     /// ### destroy
     /// - caller save registers
@@ -882,7 +882,7 @@ impl AsmIr {
     pub(super) fn fpr_binop(&mut self, kind: BinOpK, lhs: FPReg, rhs: FPReg, dst: FPReg) {
         self.push(AsmInst::FloatBinOp {
             kind,
-            binary_xmm: (lhs, rhs),
+            binary_fpr: (lhs, rhs),
             dst,
         });
     }
@@ -924,14 +924,14 @@ impl AsmIr {
 
     pub(super) fn float_cmp_br(
         &mut self,
-        binary_xmm: (FPReg, FPReg),
+        binary_fpr: (FPReg, FPReg),
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
         self.push(AsmInst::FloatCmpBr {
-            lhs: binary_xmm.0,
-            rhs: binary_xmm.1,
+            lhs: binary_fpr.0,
+            rhs: binary_fpr.1,
             kind,
             brkind,
             branch_dest,
@@ -944,28 +944,28 @@ impl AsmIr {
 ///
 
 impl AsmIr {
-    pub(super) fn new_array(&mut self, using_xmm: UsingXmm, callid: CallSiteId) {
-        self.push(AsmInst::NewArray { callid, using_xmm });
+    pub(super) fn new_array(&mut self, using_fpr: UsingFpr, callid: CallSiteId) {
+        self.push(AsmInst::NewArray { callid, using_fpr });
     }
 
-    pub(super) fn new_hash(&mut self, using_xmm: UsingXmm, args: SlotId, len: usize) {
-        self.push(AsmInst::NewHash(args, len, using_xmm));
+    pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
+        self.push(AsmInst::NewHash(args, len, using_fpr));
     }
 
-    pub(super) fn hash_insert(&mut self, using_xmm: UsingXmm, hash: SlotId, args: SlotId, len: usize) {
+    pub(super) fn hash_insert(&mut self, using_fpr: UsingFpr, hash: SlotId, args: SlotId, len: usize) {
         self.push(AsmInst::HashInsert {
             hash,
             args,
             len,
-            using_xmm,
+            using_fpr,
         });
     }
 
-    pub(super) fn array_concat(&mut self, using_xmm: UsingXmm, dst: SlotId, src: SlotId) {
+    pub(super) fn array_concat(&mut self, using_fpr: UsingFpr, dst: SlotId, src: SlotId) {
         self.push(AsmInst::ArrayConcat {
             dst,
             src,
-            using_xmm,
+            using_fpr,
         });
     }
 
@@ -974,14 +974,14 @@ impl AsmIr {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     ) {
         self.push(AsmInst::NewRange {
             start,
             end,
             exclude_end,
-            using_xmm,
+            using_fpr,
         });
         self.handle_error(error);
     }
@@ -1025,14 +1025,14 @@ impl AsmIr {
 ///   pre-codegen pass into `sum(map[id])` — the frame *base* sizes.
 /// * `extra` — bytes captured at AsmIr emission time that the
 ///   per-frame map cannot reproduce after pop. Currently this is
-///   the cumulative `using_xmm.offset()` bump applied by every
+///   the cumulative `using_fpr.offset()` bump applied by every
 ///   active specialized call up the chain (each call temporarily
-///   `+=`s its `using_xmm.offset()` to the caller frame's
+///   `+=`s its `using_fpr.offset()` to the caller frame's
 ///   `stack_offset`; we capture `current - base` for every frame in
 ///   the chain and sum the differences). Once
 ///   [`JitContext::specialized_compile`] stops doing the dynamic
 ///   `+=`/`-=` (e.g. when VirtFPReg-aware spill replaces
-///   `using_xmm`), `extra` will be 0.
+///   `using_fpr`), `extra` will be 0.
 ///
 /// The pre-codegen resolve pass rewrites each `Hint` into
 /// `Concrete(sum(map[id]) + extra)`. Code generation asserts
@@ -1150,7 +1150,7 @@ pub(super) enum AsmInst {
     FprSwap(FPReg, FPReg),
     FloatBinOp {
         kind: BinOpK,
-        binary_xmm: (FPReg, FPReg),
+        binary_fpr: (FPReg, FPReg),
         dst: FPReg,
     },
     FloatUnOp {
@@ -1159,7 +1159,7 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// Move f64 to xmm.
+    /// Move f64 to fpr.
     ///
     F64ToFpr(f64, FPReg),
     ///
@@ -1192,7 +1192,7 @@ pub(super) enum AsmInst {
     /// ### destroy
     /// - caller save registers
     ///
-    DeepCopyLit(Value, UsingXmm),
+    DeepCopyLit(Value, UsingFpr),
     /*///
     /// Convert Value to f64.
     ///
@@ -1204,13 +1204,13 @@ pub(super) enum AsmInst {
     ///
     /// ### out
     ///
-    /// - xmm(*xmm*)
+    /// - fpr(*fpr*)
     ///
     /// ### destroy
     ///
     /// - rax, rdi, R(*reg*)
     ///
-    NumToXmm(GP, VirtFPReg, AsmDeopt),*/
+    NumToFpr(GP, VirtFPReg, AsmDeopt),*/
     ///
     /// Convert Fixnum to f64.
     ///
@@ -1218,7 +1218,7 @@ pub(super) enum AsmInst {
     /// - R(*reg*): Value
     ///
     /// ### out
-    /// - xmm(*xmm*)
+    /// - fpr(*fpr*)
     ///
     /// ### destroy
     /// - R(*reg*)
@@ -1237,7 +1237,7 @@ pub(super) enum AsmInst {
     ///
     /// ### out
     ///
-    /// - xmm(*xmm*)
+    /// - fpr(*fpr*)
     ///
     /// ### destroy
     ///
@@ -1377,13 +1377,13 @@ pub(super) enum AsmInst {
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment
-    /// - -`using_xmm`.offset()
+    /// - -`using_fpr`.offset()
     ///
-    XmmSave(UsingXmm, bool),
+    FprSave(UsingFpr, bool),
     ///
     /// Restore floating point registers in use.
     ///
-    XmmRestore(UsingXmm, bool),
+    FprRestore(UsingFpr, bool),
     ///
     /// Execute GC.
     ///
@@ -1546,11 +1546,11 @@ pub(super) enum AsmInst {
         kind: ArrayIndexKind,
     },
     /// §20 (B): array integer-index **assign** (`ary[idx] = src`). Typed twin of
-    /// `ArrayIndex`; carries the `using_xmm` save-set and the generic-path error
+    /// `ArrayIndex`; carries the `using_fpr` save-set and the generic-path error
     /// side-exit. Dispatched in `gen_array_index_assign`.
     ArrayIndexAssign {
         kind: ArrayIndexKind,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
     /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
@@ -1568,7 +1568,7 @@ pub(super) enum AsmInst {
         f: unsafe extern "C" fn(f64) -> f64,
         src: FPReg,
         dst: FPReg,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     #[allow(non_camel_case_types)]
     CFunc_FF_F {
@@ -1576,7 +1576,7 @@ pub(super) enum AsmInst {
         lhs: FPReg,
         rhs: FPReg,
         dst: FPReg,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Imnmediate eviction.
@@ -1676,7 +1676,7 @@ pub(super) enum AsmInst {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 
     ///
@@ -1690,7 +1690,7 @@ pub(super) enum AsmInst {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 
     ///
@@ -1701,7 +1701,7 @@ pub(super) enum AsmInst {
     ArrayTEq {
         lhs: SlotId,
         rhs: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 
     ///
@@ -1726,7 +1726,7 @@ pub(super) enum AsmInst {
     },
     StoreConstant {
         id: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
 
@@ -1743,12 +1743,12 @@ pub(super) enum AsmInst {
     ///
     NewArray {
         callid: CallSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Create a new Hash object and store it to *rax*
     ///
-    NewHash(SlotId, usize, UsingXmm),
+    NewHash(SlotId, usize, UsingFpr),
     ///
     /// Insert `len` key/value pairs at `args` into the Hash in `hash`
     /// (chunked Hash literal); the hash is returned in *rax*.
@@ -1757,7 +1757,7 @@ pub(super) enum AsmInst {
         hash: SlotId,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Concatenate the Array in `src` onto the Array in `dst` (chunked
@@ -1766,7 +1766,7 @@ pub(super) enum AsmInst {
     ArrayConcat {
         dst: SlotId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Create a new Range object and store it to *rax*
@@ -1775,21 +1775,21 @@ pub(super) enum AsmInst {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ToA {
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ConcatStr {
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ConcatRegexp {
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 
     BlockArgProxy {
@@ -1799,7 +1799,7 @@ pub(super) enum AsmInst {
     BlockArg {
         ret: SlotId,
         _outer: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
         call_site_bc_ptr: BytecodePtr,
     },
@@ -1848,7 +1848,7 @@ pub(super) enum AsmInst {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
@@ -1973,25 +1973,25 @@ pub(super) enum AsmInst {
     },
     LoadCVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     CheckCVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     StoreCVar {
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     LoadGVar {
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     StoreGVar {
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 
     ClassDef {
@@ -2001,27 +2001,27 @@ pub(super) enum AsmInst {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
     SingletonClassDef {
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
     MethodDef {
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
     SingletonMethodDef {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: AsmError,
     },
 
@@ -2029,7 +2029,7 @@ pub(super) enum AsmInst {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     CreateArray {
         src: SlotId,
@@ -2041,17 +2041,17 @@ pub(super) enum AsmInst {
 
     UndefMethod {
         undef: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     AliasMethod {
         new: SlotId,
         old: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     AliasGvar {
         new: IdentId,
         old: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Check if `yield` is callable.
@@ -2060,18 +2060,18 @@ pub(super) enum AsmInst {
     ///
     DefinedYield {
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedConst {
         dst: SlotId,
         siteid: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedMethod {
         dst: SlotId,
         recv: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Check if `super` is callable.
@@ -2080,7 +2080,7 @@ pub(super) enum AsmInst {
     ///
     DefinedSuper {
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     ///
     /// Check if global var `name` exists.
@@ -2090,17 +2090,17 @@ pub(super) enum AsmInst {
     DefinedGvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedIvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
     DefinedCvar {
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     },
 }
 
@@ -2158,11 +2158,11 @@ impl AsmInst {
     /// — once Phase 2's codegen-side spill expansion lands — to
     /// detect operands that need swap-load-swap-store.
     ///
-    pub(super) fn xmm_operands(&self) -> Vec<FPReg> {
+    pub(super) fn fpr_operands(&self) -> Vec<FPReg> {
         match self {
             Self::FprMove(a, b) | Self::FprSwap(a, b) => vec![*a, *b],
             Self::FloatBinOp {
-                binary_xmm: (l, r),
+                binary_fpr: (l, r),
                 dst,
                 ..
             } => vec![*l, *r, *dst],
@@ -2198,19 +2198,19 @@ impl AsmInst {
             Self::FprSwap(fp1, fp2) => format!("{:?} <-> {:?}", fp1, fp2),
             Self::FloatBinOp {
                 kind,
-                binary_xmm,
+                binary_fpr,
                 dst,
             } => format!(
                 "{:?} = {:?} {:?} {:?}",
-                dst, binary_xmm.0, kind, binary_xmm.1
+                dst, binary_fpr.0, kind, binary_fpr.1
             ),
             Self::FloatUnOp { kind, dst } => format!("{:?} = {:?} {:?}", dst, kind, dst),
 
             Self::F64ToFpr(f, dst) => format!("{:?} = {}", dst, f),
-            Self::I64ToBoth(i, slot, xmm) => format!("{:?}:{:?} = {i}", slot, xmm),
+            Self::I64ToBoth(i, slot, fpr) => format!("{:?}:{:?} = {i}", slot, fpr),
             Self::FprToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
-            Self::DeepCopyLit(val, _using_xmm) => format!("DeepCopyLiteral {}", val.debug(store)),
+            Self::DeepCopyLit(val, _using_fpr) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::FloatToFpr(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
             Self::GuardClassVersion {
                 position: _,
@@ -2244,8 +2244,8 @@ impl AsmInst {
                 format!("recompile_deopt {:?} {:?}", position, reason)
             }
             Self::HandleError(error) => format!("handle_error {:?}", error),
-            Self::XmmSave(using_xmm, cont) => format!("xmm_save {:?} {cont}", using_xmm),
-            Self::XmmRestore(using_xmm, cont) => format!("xmm_restore {:?} {cont}", using_xmm),
+            Self::FprSave(using_fpr, cont) => format!("fpr_save {:?} {cont}", using_fpr),
+            Self::FprRestore(using_fpr, cont) => format!("fpr_restore {:?} {cont}", using_fpr),
             Self::ExecGc {
                 write_back,
                 error: _,

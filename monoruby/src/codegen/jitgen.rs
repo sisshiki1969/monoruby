@@ -130,9 +130,9 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 }
 
 ///
-/// The struct holds information for writing back Value's in xmm registers or accumulator to the corresponding stack slots.
+/// The struct holds information for writing back Value's in fpr registers or accumulator to the corresponding stack slots.
 ///
-/// Currently supports `literal`s, `xmm` registers and a `R15` register (as an accumulator).
+/// Currently supports `literal`s, `fpr` registers and a `R15` register (as an accumulator).
 ///
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
@@ -221,11 +221,11 @@ impl WriteBack {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct UsingXmm {
+pub(crate) struct UsingFpr {
     inner: bitvec::prelude::BitArr!(for 14, in u16),
 }
 
-impl std::fmt::Debug for UsingXmm {
+impl std::fmt::Debug for UsingFpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
         for i in 0..14 {
@@ -233,24 +233,24 @@ impl std::fmt::Debug for UsingXmm {
                 s.push_str(&format!("%{i}"));
             }
         }
-        write!(f, "UsingXmm({})", s)
+        write!(f, "UsingFpr({})", s)
     }
 }
 
-impl std::ops::Deref for UsingXmm {
+impl std::ops::Deref for UsingFpr {
     type Target = bitvec::prelude::BitArr!(for 14, in u16);
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl std::ops::DerefMut for UsingXmm {
+impl std::ops::DerefMut for UsingFpr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl UsingXmm {
+impl UsingFpr {
     fn new() -> Self {
         Self {
             inner: bitvec::prelude::BitArray::new([0; 1]),
@@ -594,26 +594,26 @@ impl JitModule {
     load_store!(rcx);
     load_store!(r15);
 
-    pub(crate) fn xmm_save(&mut self, using_xmm: UsingXmm) {
-        self.xmm_save_with_cont(using_xmm, false);
+    pub(crate) fn fpr_save(&mut self, using_fpr: UsingFpr) {
+        self.fpr_save_with_cont(using_fpr, false);
     }
 
     ///
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment
-    /// - -`using_xmm`.offset()
+    /// - -`using_fpr`.offset()
     ///
-    fn xmm_save_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
-        if using_xmm.not_any() && !cont {
+    fn fpr_save_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
+        if using_fpr.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let sp_offset = using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
         let mut i = 0;
-        for (x, b) in using_xmm.iter().enumerate() {
+        for (x, b) in using_fpr.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
                     movq [rsp + (8 * i)], xmm(x as u64 + 2);
@@ -623,20 +623,20 @@ impl JitModule {
         }
     }
 
-    pub(crate) fn xmm_restore(&mut self, using_xmm: UsingXmm) {
-        self.xmm_restore_with_cont(using_xmm, false);
+    pub(crate) fn fpr_restore(&mut self, using_fpr: UsingFpr) {
+        self.fpr_restore_with_cont(using_fpr, false);
     }
 
     ///
     /// Restore floating point registers in use.
     ///
-    fn xmm_restore_with_cont(&mut self, using_xmm: UsingXmm, cont: bool) {
-        if using_xmm.not_any() && !cont {
+    fn fpr_restore_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
+        if using_fpr.not_any() && !cont {
             return;
         }
-        let sp_offset = using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let sp_offset = using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
         let mut i = 0;
-        for (x, b) in using_xmm.iter().enumerate() {
+        for (x, b) in using_fpr.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
                     movq xmm(x as u64 + 2), [rsp + (8 * i)];
@@ -650,7 +650,7 @@ impl JitModule {
     }
 
     ///
-    /// Convert xmm to stack slots *v*. Spill-aware: when *xmm* is
+    /// Convert fpr to stack slots *v*. Spill-aware: when *fpr* is
     /// pool-resident the value is moved into xmm0 directly; when it
     /// is spilled it is loaded from `[rbp - spill_off]` into xmm0
     /// before the call to f64_to_val.
@@ -661,13 +661,13 @@ impl JitModule {
     /// ### destroy
     /// - rcx
     ///
-    fn fpr_to_stack(&mut self, xmm: FPReg, v: &[SlotId], base: usize) {
+    fn fpr_to_stack(&mut self, fpr: FPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("      wb: {:?}->{:?}", xmm, v);
-        self.load_fpr_into_xmm0(xmm, base);
+        eprintln!("      wb: {:?}->{:?}", fpr, v);
+        self.load_fpr_into_xmm0(fpr, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
             call f64_to_val;
@@ -677,13 +677,13 @@ impl JitModule {
         }
     }
 
-    fn fpr_to_stack2(&mut self, xmm: FPReg, v: &[SlotId], base: usize) {
+    fn fpr_to_stack2(&mut self, fpr: FPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
         }
         #[cfg(feature = "jit-debug")]
-        eprintln!("      wb: {:?}->{:?}", xmm, v);
-        self.load_fpr_into_xmm0(xmm, base);
+        eprintln!("      wb: {:?}->{:?}", fpr, v);
+        self.load_fpr_into_xmm0(fpr, base);
         let f64_to_val = self.f64_to_val.clone();
         monoasm!( &mut self.jit,
             call f64_to_val;
@@ -698,18 +698,18 @@ impl JitModule {
     ///
     /// Move a `VirtFPReg` value into xmm0, choosing the cheapest
     /// instruction based on whether the operand is in the phys pool
-    /// or a spill slot. Used by call-trampoline preludes (xmm_to_stack
+    /// or a spill slot. Used by call-trampoline preludes (fpr_to_stack
     /// and CFunc_*) where the helper expects its argument in xmm0.
     ///
-    pub(crate) fn load_fpr_into_xmm0(&mut self, xmm: FPReg, base: usize) {
-        let pool = PHYS_XMM_POOL;
-        if xmm.0 < pool {
-            let p = xmm.0 as u64 + 2;
+    pub(crate) fn load_fpr_into_xmm0(&mut self, fpr: FPReg, base: usize) {
+        let pool = PHYS_FPR_POOL;
+        if fpr.0 < pool {
+            let p = fpr.0 as u64 + 2;
             monoasm!( &mut self.jit,
                 movq xmm0, xmm(p);
             );
         } else {
-            let n = xmm.0 - pool;
+            let n = fpr.0 - pool;
             let off = (base as i32) - 24 + 8 * (n as i32);
             monoasm!( &mut self.jit,
                 movq xmm0, [rbp - (off)];
@@ -722,15 +722,15 @@ impl JitModule {
     /// register, used by CFunc_FF_F. Pool ids resolve to xmm2..xmm15
     /// so a Phys source never aliases xmm1.
     ///
-    pub(crate) fn load_fpr_into_xmm1(&mut self, xmm: FPReg, base: usize) {
-        let pool = PHYS_XMM_POOL;
-        if xmm.0 < pool {
-            let p = xmm.0 as u64 + 2;
+    pub(crate) fn load_fpr_into_xmm1(&mut self, fpr: FPReg, base: usize) {
+        let pool = PHYS_FPR_POOL;
+        if fpr.0 < pool {
+            let p = fpr.0 as u64 + 2;
             monoasm!( &mut self.jit,
                 movq xmm1, xmm(p);
             );
         } else {
-            let n = xmm.0 - pool;
+            let n = fpr.0 - pool;
             let off = (base as i32) - 24 + 8 * (n as i32);
             monoasm!( &mut self.jit,
                 movq xmm1, [rbp - (off)];
@@ -742,15 +742,15 @@ impl JitModule {
     /// Store xmm0 (a C-call's f64 return value) into the destination
     /// `VirtFPReg`'s home — phys reg or spill slot.
     ///
-    pub(crate) fn store_fpr_into_xmm(&mut self, xmm: FPReg, base: usize) {
-        let pool = PHYS_XMM_POOL;
-        if xmm.0 < pool {
-            let p = xmm.0 as u64 + 2;
+    pub(crate) fn store_fpr_into_xmm(&mut self, fpr: FPReg, base: usize) {
+        let pool = PHYS_FPR_POOL;
+        if fpr.0 < pool {
+            let p = fpr.0 as u64 + 2;
             monoasm!( &mut self.jit,
                 movq xmm(p), xmm0;
             );
         } else {
-            let n = xmm.0 - pool;
+            let n = fpr.0 - pool;
             let off = (base as i32) - 24 + 8 * (n as i32);
             monoasm!( &mut self.jit,
                 movq [rbp - (off)], xmm0;
@@ -807,14 +807,14 @@ impl JitModule {
     /// ### destroy
     /// - caller save registers
     ///
-    fn deepcopy_literal(&mut self, v: Value, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn deepcopy_literal(&mut self, v: Value, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
           movq rdi, (v.id());
           movq rax, (Value::value_deep_copy);
           call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     //
@@ -830,17 +830,17 @@ impl JitModule {
     //}
 
     ///
-    /// Generate a code which write back all xmm registers to corresponding stack slots.
+    /// Generate a code which write back all fpr registers to corresponding stack slots.
     ///
-    /// xmms are not deallocated.
+    /// fprs are not deallocated.
     ///
     /// ### destroy
     ///
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack, base: usize) {
-        for (xmm, v) in &wb.fpr {
-            self.fpr_to_stack(*xmm, v, base);
+        for (fpr, v) in &wb.fpr {
+            self.fpr_to_stack(*fpr, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
@@ -856,19 +856,19 @@ impl JitModule {
     }
 
     ///
-    /// Generate a code which write back all xmm registers to corresponding stack slots for deopt.
+    /// Generate a code which write back all fpr registers to corresponding stack slots for deopt.
     ///
     /// We must use r14-based addressing here, because the local frame can be on the heap just after returning from a method.
     ///
-    /// xmms are not deallocated.
+    /// fprs are not deallocated.
     ///
     /// ### destroy
     ///
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
-        for (xmm, v) in &wb.fpr {
-            self.fpr_to_stack2(*xmm, v, base);
+        for (fpr, v) in &wb.fpr {
+            self.fpr_to_stack2(*fpr, v, base);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, *v);

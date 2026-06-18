@@ -52,9 +52,9 @@ struct SlotState {
 
 ### Allocation decisions are taken *inside* the dataflow
 
-- `alloc_xmm` (`slot.rs:370`) does greedy linear-scan allocation (find a vacant
-  physical xmm `0..PHYS_XMM_POOL`; else demote an `Sf` cache; else spill to
-  `FPReg(N≥PHYS_XMM_POOL)`).
+- `alloc_fpr` (`slot.rs:370`) does greedy linear-scan allocation (find a vacant
+  physical xmm `0..PHYS_FPR_POOL`; else demote an `Sf` cache; else spill to
+  `FPReg(N≥PHYS_FPR_POOL)`).
 - `def_F` / `def_Sf_*` (`slot.rs:554`) allocate a register **and** set the slot's
   type in one call.
 - `AbstractFrame::join` (`state/join.rs:46`) merges *type guards* and
@@ -131,7 +131,7 @@ for the xmm-coerced representation when:
 > constant/literal **or** def'd outside a loop and use'd inside it
 > (i.e. the coercion is loop-invariant and worth hoisting into an xmm).
 
-That mark *is* the `XmmStack` placement. Keeping it out of the type lattice is
+That mark *is* the `FprStack` placement. Keeping it out of the type lattice is
 what lets the VM residual (no marks, everything boxed) and the JIT residual
 (marks applied) share one analysis.
 
@@ -160,7 +160,7 @@ comes last, after the data is already decoupled.
 | **0a. Decomposition + test** ✅ | Add the location-only `Placement` enum, plus `LinkMode::{placement, from_parts}` projections, with a round-trip test proving `LinkMode ≅ (Placement, Guarded)`. The type lattice is the existing `Guarded` (no new type — per review, `Sf` is a representation mark, not a type; its `SfGuarded` refinement is recovered from the paired `Guarded`). Additive scaffolding — no live state touched. *Done; suite 1703/0.* | none |
 | **0b. Storage split** ✅ | (0b-i) Encapsulate every `self.slots` access behind `mode()`/`set_mode()`/`all_regs()`/`slots_len()` (the two in-place mutations become local-copy RMW). (0b-ii) Replace `SlotState.slots: Vec<LinkMode>` with `place: Vec<Placement>` + `ty: Vec<Guarded>`; `mode()` composes via `from_parts`, `set_mode()` decomposes. Behaviour-identical. *Done; suite 1703/0.* | done |
 | **0c. Factor the type meet** ✅ | Extract the analysis-layer join as a reusable primitive: relocate `Guarded::join` next to `Guarded` and add `SlotState::join_ty` (element-wise `Guarded::join` over the `ty` vec). Verified arm-by-arm that the fused `AbstractFrame::join`'s resulting *type* equals this meet for every non-sentinel slot, so the fused join's remaining work is purely placement reconciliation (which carries the allocation side-effects and moves to the `Allocator` in steps 1–2). *Done; suite 1703/0.* | done |
-| **1. Allocator seam** ✅ | Extract `vfpr` + `pinned_vfpr` and the pure pool primitives into an `XmmAllocator` struct owned by `SlotState`; the `xmm_*` methods delegate to it. The policy (`try_alloc_xmm`/`alloc_xmm`) stays on `SlotState` (it also mutates slot placements). *Done; suite 1703/0.* | done |
+| **1. Allocator seam** ✅ | Extract `vfpr` + `pinned_vfpr` and the pure pool primitives into an `FprAllocator` struct owned by `SlotState`; the `xmm_*` methods delegate to it. The policy (`try_alloc_fpr`/`alloc_fpr`) stays on `SlotState` (it also mutates slot placements). *Done; suite 1703/0.* | done |
 | **2. Standalone analysis** | Run the `Guarded`/liveness fixpoint as its own pass producing a typed IR, *before* the allocation+lowering pass consumes it. The lowering pass becomes `fn(typed_ir, &mut Allocator) -> Vec<LInst>`. This is the real separation. **Spike done** — see §9. | high |
 | **3. AsmIR → LIR (goal 1)** | The lowering pass emits `LInst` directly; retire `AsmInst` as a distinct stream (its `AsmIr` bookkeeping — `side_exit`, flags — moves to the lowering driver). | med |
 | **4. Two allocators (goal 3 enabler)** | Add the fixed-convention VM `Allocator`; spike VM-residual generation for one bytecode. | research |
@@ -183,15 +183,15 @@ lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
 - **`Sf` (xmm + stack cache).** *Resolved in review:* `Sf` is a representation
   decision, not a type. The typed IR carries the plain boxed type (`Fixnum`); a
   separate def-use + loop analysis marks the slot for the xmm-coerced
-  representation (the `XmmStack` placement) using the heuristic in §3. The
-  *demote-on-pressure* logic (`try_alloc_xmm` phase 1) is a further allocation
+  representation (the `FprStack` placement) using the heuristic in §3. The
+  *demote-on-pressure* logic (`try_alloc_fpr` phase 1) is a further allocation
   policy that moves into the `Allocator`. (In the current fused state the
   `SfGuarded` refinement still round-trips losslessly through the paired
   `Guarded`, since `SfGuarded → Guarded` is injective.)
 - **`r15` accumulator.** The single GP "accumulator" slot is its own tiny
   allocation problem fused into `SlotState.r15`; it follows the same split
   (type vs placement) but is simpler than the xmm pool.
-- **Spill-region sizing across joins** (`grow_xmm_to`, `gen_bridge`) becomes the
+- **Spill-region sizing across joins** (`grow_fpr_to`, `gen_bridge`) becomes the
   allocator's responsibility once placement is its own layer.
 
 ---
@@ -201,7 +201,7 @@ lattice) and de-risk step 2. Steps 3–4 are where goals 1 and 3 land.
 **Step 0a is done** (revised per review). `LinkMode` now has the `placement()` /
 `from_parts()` projections, and a unit test (`linkmode_placement_roundtrip`)
 proves it is isomorphic to `(Placement, Guarded)`. The type lattice is the
-existing `Guarded`; `Sf` is treated as a representation mark (the `XmmStack`
+existing `Guarded`; `Sf` is treated as a representation mark (the `FprStack`
 placement), not a type, with its refinement recovered from the paired `Guarded`.
 No live state changed; suite at 1703/0.
 
@@ -215,7 +215,7 @@ analysis is already separable; what remains entangled is allocation, which is
 precisely what steps 1–2 pull out.
 
 **Step 1 is done.** The xmm allocation state (`vfpr` + `pinned_vfpr`) and its
-pure pool primitives now live in an `XmmAllocator` struct owned by `SlotState`,
+pure pool primitives now live in an `FprAllocator` struct owned by `SlotState`,
 physically separated from the slot type/placement state. The allocation policy
 still sits on `SlotState`.
 
@@ -246,7 +246,7 @@ the *only* emission on the whole chain is at the very bottom, in a handful of
 **transfer / eviction primitives** — `writeback_acc` (evict the `r15`
 accumulator owner to its stack home), the xmm spill/swap emitters, etc. Almost
 everything else (the `Guarded` lattice, liveness, placement bookkeeping in
-`place`/`ty`/`XmmAllocator`) is *already pure state*.
+`place`/`ty`/`FprAllocator`) is *already pure state*.
 
 And those transfer primitives split **cleanly**. `writeback_acc` was:
 
@@ -295,7 +295,7 @@ Split so far, each behaviour-identical at 1703/0:
 - **Stack writebacks** → the `Spill` record (`None` / `Fpr` / `Lit` / `Acc`):
   `writeback_acc`, `write_back_slot`, `to_S_unguarded`.
 - **FP-register transfers** → the `FpXfer` record (`Move` / `Swap`): `to_sf`
-  (`gen_xmm_swap` was already a clean state-line + emit-line).
+  (`gen_fpr_swap` was already a clean state-line + emit-line).
 
 Each primitive now has a `*_state` half that performs the abstract-state
 transition and returns the record, plus a thin codegen wrapper `record.emit(ir)`.
@@ -303,7 +303,7 @@ The records (`Spill`, `FpXfer`) are the growing **typed IR** vocabulary.
 
 ### The hard tail: deopt-carrying transfers
 
-The unbox loads (`load_xmm` and friends) are *not* a clean `(state) + (record →
+The unbox loads (`load_fpr` and friends) are *not* a clean `(state) + (record →
 emit)` split, because they create a **deopt side-exit** mid-flight:
 
 ```rust
@@ -322,11 +322,11 @@ program point (pc), not a frozen `AsmDeopt`. This is the main wrinkle that
 distinguishes the FP-load transfers from the simple evictions, and it is where
 the typed IR must carry per-point placement (which the analysis already tracks).
 
-**Resolved (`load_xmm` split).** `load_xmm` / `load_xmm_fixnum` now split into a
-`load_xmm_state` half (allocate the xmm, bind the slot) returning an `XmmLoad`
+**Resolved (`load_fpr` split).** `load_fpr` / `load_fpr_fixnum` now split into a
+`load_fpr_state` half (allocate the xmm, bind the slot) returning an `FprLoad`
 record (`None` / `FromStack` / `FromAcc` / `FromF64` / `FromFixnum`), plus a
 wrapper that creates the deopt **first** (so its write-back snapshot is the
-pre-load placement) and passes it as `Option<AsmDeopt>` to `XmmLoad::emit`. The
+pre-load placement) and passes it as `Option<AsmDeopt>` to `FprLoad::emit`. The
 deopt is therefore supplied by the codegen side, **not** frozen into the record;
 the guard-free numeric variants pass `None`. This confirms the resolution above
 concretely — behaviour-identical at 1703/0.
@@ -339,9 +339,9 @@ slot's type; return whether a runtime guard must be emitted) plus the emit
 `if guard_class_state { ir.push(GuardClass(r, class, deopt)) }`. `load_fixnum`
 and `load_array_ty` then *compose* split primitives (`load` + the guard).
 
-### `load_xmm_fixnum`: the interleaving dissolves (single record after all)
+### `load_fpr_fixnum`: the interleaving dissolves (single record after all)
 
-`load_xmm_fixnum`'s `S`/`G` arms *looked* like the case that could not reduce to
+`load_fpr_fixnum`'s `S`/`G` arms *looked* like the case that could not reduce to
 a single `(state) + (record → emit)` pair, because they interleave a load, a
 `new_deopt`, a guard and the conversion:
 
@@ -359,13 +359,13 @@ The deopt snapshot (`get_write_back`) must precede the placement change
 precede the deopt. But **`stack2reg`/`reg2stack` are pure emits on `ir`** — they
 push an `AsmInst` and never touch the frame's placement state — so `new_deopt`
 **commutes** with them. Reordered, the dependency chain is just
-`new_deopt → {guard_class_state, set_new_Sf}`, the same shape `load_xmm` already
+`new_deopt → {guard_class_state, set_new_Sf}`, the same shape `load_fpr` already
 solved: create the deopt up front, run the (now reorderable) state half, defer
 all emission into the record. The guard folds into the record as a bool
-(`guard_class_state`'s verdict). So `load_xmm_fixnum` splits into
-`load_xmm_fixnum_state -> (FPReg, XmmFixnumLoad)` plus a wrapper that creates the
+(`guard_class_state`'s verdict). So `load_fpr_fixnum` splits into
+`load_fpr_fixnum_state -> (FPReg, FprFixnumLoad)` plus a wrapper that creates the
 deopt *only* for the guarded `S`/`G` arms (peeking the mode — `use_as_value`
-only marks liveness, so the peek is stable) and supplies it to `XmmFixnumLoad::emit`.
+only marks liveness, so the peek is stable) and supplies it to `FprFixnumLoad::emit`.
 Behaviour-identical at 1703/0.
 
 The lesson: **a "pure emit" instruction between a state mutation and a `new_deopt`
@@ -373,7 +373,7 @@ is not a true interleaving** — it commutes out to the emit half. The
 single-record model is therefore more general than first thought, and with this
 split *every* transfer/eviction primitive in the table is now decomposed into a
 `*_state` analysis half returning a typed-IR record (`Spill` / `FpXfer` /
-`XmmLoad` / `GpLoad` / `XmmFixnumLoad`, plus the `guard_class_state` verdict) and
+`FprLoad` / `GpLoad` / `FprFixnumLoad`, plus the `guard_class_state` verdict) and
 a record-replaying emit half. That completes the prerequisite for the two-pass
 wiring: the analysis pass calls the `*_state` halves and collects the records;
 codegen replays `record.emit(...)`. The remaining step is plumbing those two
@@ -421,7 +421,7 @@ The separation is **not** "introduce an analysis pass" — that exists. It is tw
 remaining, independent pieces:
 
 1. **De-fuse allocation from the dataflow (the §5 crux).** Today *both* passes
-   allocate: `alloc_xmm` / `join`'s register reconciliation mutate placement
+   allocate: `alloc_fpr` / `join`'s register reconciliation mutate placement
    *inside* the abstract-interpretation walk. So the loop pre-pass is "analysis +
    allocation with emission suppressed," not pure type/liveness analysis. The real
    work is pulling placement out of the join — turning join-time reallocation into
@@ -429,8 +429,8 @@ remaining, independent pieces:
    and the allocator runs as the second pass over that result. This is the
    high-risk core; codegen quality (the greedy xmm policy) must not regress.
 2. **Record-driven lowering (goal 1).** Once allocation is its own pass, the
-   codegen walk replays the typed-IR records (`Spill` / `FpXfer` / `XmmLoad` /
-   `GpLoad` / `XmmFixnumLoad` / guard) emitting `LInst` directly, and `AsmInst`
+   codegen walk replays the typed-IR records (`Spill` / `FpXfer` / `FprLoad` /
+   `GpLoad` / `FprFixnumLoad` / guard) emitting `LInst` directly, and `AsmInst`
    retires. The transfer-primitive split (now complete) is exactly what makes the
    replay possible; the open wrinkle is the deopt, which must become a *program
    point* reconstructed from the analysis-precomputed placement at that pc rather
@@ -449,14 +449,14 @@ de-fusing as the lower-risk groundwork): collect the transfer records into a
 stream so a later pass can replay them.
 
 - **Unified element.** The five per-primitive records (`Spill`, `FpXfer`,
-  `GpLoad`, `XmmLoad`, `XmmFixnumLoad`) now share one enum
+  `GpLoad`, `FprLoad`, `FprFixnumLoad`) now share one enum
   `TransferIR` (`state/read_slot.rs`) with a single `emit` dispatch. The two
   deopt-carrying variants still freeze an `AsmDeopt` (lifting it to a program
   point is §9's open item, the next wall).
 - **One funnel.** `AsmIr::transfer(t)` is the sole sink: it pushes `t` onto the
   new `transfers: Vec<TransferIR>` (codegen mode only, so it stays in lock-step
   with the `codegen_mode`-gated `inst`) and then emits via `t.emit(self)`. Every
-  transfer/eviction wrapper (`load`, `load_xmm`, `load_xmm_fixnum`,
+  transfer/eviction wrapper (`load`, `load_fpr`, `load_fpr_fixnum`,
   `write_back_slot`, `to_S_unguarded`, `to_sf`) now calls `ir.transfer(...)`
   instead of `record.emit(ir, …)`.
 - **Faithful by construction.** The collected `t` *is* the record that gets
@@ -487,20 +487,20 @@ suite (1703/0, debug build, every codegen-mode transfer exercised).
 
 The one remaining codegen dependence in the `TransferIR` stream was the frozen
 `AsmDeopt` (an index into the codegen pass's `side_exit` table) carried by the
-guarded `XmmLoad` / `XmmFixnumLoad` records. That index is meaningless without
+guarded `FprLoad` / `FprFixnumLoad` records. That index is meaningless without
 the exact `side_exit` table it points into — so a standalone lowering pass could
 not replay the stream.
 
 Resolved as doc §9 foretold: the records now carry a **`DeoptPoint`** — the
 program point `(pc, write_back)`, both pure analysis values the frame already
 tracks (`get_write_back()` is the placement snapshot restored on guard failure).
-The analysis half (`load_xmm` / `load_xmm_fixnum` wrappers) records the point via
+The analysis half (`load_fpr` / `load_fpr_fixnum` wrappers) records the point via
 `deopt_point()` (no `side_exit` push); the **emit half** materializes the actual
 side-exit via `AsmIr::deopt_from_point`, so `side_exit` construction lives
 entirely on the codegen side. `new_deopt` is no longer called from the transfer
 wrappers.
 
-Ordering is preserved exactly: within `load_xmm{,_fixnum}` the only `side_exit`
+Ordering is preserved exactly: within `load_fpr{,_fixnum}` the only `side_exit`
 push was this one deopt, created "first" — `deopt_from_point` runs at the top of
 the emit arm, at the same relative position, so the `side_exit` table is
 byte-identical. The guarded-but-`guard == false` `S`/`G` arms still materialize
@@ -578,7 +578,7 @@ separated allocator pass relies on — the decision stream plus `apply_join` is 
 future allocator changes shadow against. Suite 1703/0, no replay mismatches.
 
 **Key finding for the allocator design — the meet has cross-slot coupling.** A
-`TryFresh*` action's allocation (`try_alloc_xmm` phase 1) can **demote other
+`TryFresh*` action's allocation (`try_alloc_fpr` phase 1) can **demote other
 slots'** `Sf` bindings to `S` to free a physical xmm. So a later slot's
 `decide_join` may read a `LinkMode` that an earlier slot's `apply_join` mutated:
 `decide` and `apply` are *not* separable into two clean passes over the slots —
@@ -706,7 +706,7 @@ stays shadow-able:
   now is "reuse a predecessor's register / minimise edge moves" expressible,
   because the allocator pass can see per-predecessor placements (the
   `BranchEntry` states, jitgen.rs:114) instead of the commutative merge. Linear
-  scan over the type/liveness result; spill = today's `try_alloc_xmm` phase-1
+  scan over the type/liveness result; spill = today's `try_alloc_fpr` phase-1
   demotion generalised. Each policy change is an independent benchmark-gated diff.
 
 ### 13.4 The benchmark gate
@@ -765,7 +765,7 @@ debug shadows compile out, so they do not affect it):
 3b is implemented as the `loop-type-only-entry` cargo feature (default off, so the
 shipping build is bit-identical). When on, `incoming_context` strips the analysis
 pass's loop-carried `backedge` frame to a type-only projection
-(`AbstractState::strip_xmm_to_stack`: every `F`/`Sf` slot → `S(guarded)`) before
+(`AbstractState::strip_fpr_to_stack`: every `F`/`Sf` slot → `S(guarded)`) before
 `target.join(&backedge)`, so the codegen pass re-derives the loop-entry xmm
 bindings itself via the liveness pass (`liveness_analysis` → `use_float`'s
 `try_set_new_Sf`) instead of inheriting them. This is the minimal, reversible lever
@@ -899,11 +899,11 @@ Inputs (all allocation-independent, already computed by Layer ①):
 Output: a placement per (slot, point) + edge moves. The edge moves already exist —
 `AbstractFrame::bridge` emits the φ-reconciliation MOV/swap/spill from
 `(pred.mode, target.mode)`; the allocator only chooses the target registers and
-the bridge lowers them (so the recently-fixed `xmm_swap` and the F/Sf/S bridge
+the bridge lowers them (so the recently-fixed `fpr_swap` and the F/Sf/S bridge
 arms are reused unchanged).
 
 Two properties the scan must preserve (both already in the codebase):
-1. **Free spill of read-only caches.** `try_alloc_xmm` phase-1 demotes an all-`Sf`
+1. **Free spill of read-only caches.** `try_alloc_fpr` phase-1 demotes an all-`Sf`
    register to `S` with *no* asm (stack is canonical). A linear-scan spill of an
    `Sf` interval must keep this — spilling a clean float cache costs nothing.
 2. **Loop-carried priority.** The fixpoint today keeps loop-carried floats in xmm
@@ -973,7 +973,7 @@ spill choice never bites; mandelbrot/nbody do, so it dominates.
 Tested the simplest 3c-ii lever directly: make `use_float`'s promotion spill an
 unboxed float (`set_new_Sf` → VirtFPReg) instead of leaving it boxed in `S` when
 the physical pool is full. **No-op** — the mandelbrot kernel's JIT asm was
-byte-identical to plain 3b (412 insts, same box count). So `try_alloc_xmm` was
+byte-identical to plain 3b (412 insts, same box count). So `try_alloc_fpr` was
 already succeeding for the slots `use_float` touches; the boxed-operand decodes
 that cause the regression do **not** originate from `use_float`'s best-effort
 fallback. Reverted.
@@ -1006,23 +1006,23 @@ The behaviour-preserving separation (per §14.7's conclusion). Surface map of wh
 the JIT allocates an xmm today (outside the merge, which is already decide/apply
 split):
 
-- operand loads: `load_xmm` / `load_xmm_fixnum` / `load_binary_xmm` /
+- operand loads: `load_fpr` / `load_fpr_fixnum` / `load_binary_fpr` /
   `fetch_float_assume` (state/read_slot.rs, compile/binary_op.rs) — allocate an
   xmm for an operand and emit the load (the per-use flonum decode seen in §14.6);
 - destination defs: `def_F` / `def_Sf_float` (compile/binary_op.rs,
   method_call.rs, variables.rs, compile.rs);
 - the merge: `apply_join`'s `TryFresh*` (already isolated, §5 stage 1).
 
-**Every one of these funnels through two primitives** — `SlotState::try_alloc_xmm`
-(phase-0 vacant / phase-1 Sf-demote) and `alloc_xmm` (+ phase-2 spill). So those
+**Every one of these funnels through two primitives** — `SlotState::try_alloc_fpr`
+(phase-0 vacant / phase-1 Sf-demote) and `alloc_fpr` (+ phase-2 spill). So those
 two are the universal allocation seam, and the loop-aware spill-victim choice that
 3c-ii needs (demote/spill by furthest next-use across the loop, §14.3) lives
-exactly in phase-1 of `try_alloc_xmm`.
+exactly in phase-1 of `try_alloc_fpr`.
 
 Increment sequence (each behaviour-identical, suite + stage-1 shadow verified):
 
 1. **Extract the register-selection policy** into a named `alloc_policy` unit:
-   `try_alloc_xmm` / `alloc_xmm` move out of the `SlotState` impl into a child
+   `try_alloc_fpr` / `alloc_fpr` move out of the `SlotState` impl into a child
    module taking `&mut SlotState`; the methods delegate. No field, no dispatch
    yet — the seam is the module boundary. *This increment.*
 2. **Thread an `AllocCtx`** (the live-interval / loop-membership info 3c-ii's
@@ -1045,7 +1045,7 @@ it both came back **byte-identical** on the mandelbrot kernel:
 
 - **`use_float` spill fallback** (§14.7): promote a pool-full float to an unboxed
   spill (`set_new_Sf`) instead of leaving it boxed `S`. No-op.
-- **`liveness-aware-spill`**: in `try_alloc_xmm` phase 1, prefer demoting a clean
+- **`liveness-aware-spill`**: in `try_alloc_fpr` phase 1, prefer demoting a clean
   `Sf` register whose slots are *dead* over one still *live* (using the `IsUsed`
   liveness `SlotState` already carries). No-op (340→340 insts, same decode count).
 
@@ -1100,7 +1100,7 @@ the priority allocator, a substantial standalone implementation.
 
 - **No pressure.** The float kernel uses 2 of 14 physical xmm; base mandelbrot
   uses 10 of 14. The pool is never exhausted.
-- **Spilling is unboxed by design.** `alloc_xmm` phase-2 (`push_spill`) hands back
+- **Spilling is unboxed by design.** `alloc_fpr` phase-2 (`push_spill`) hands back
   a `VirtFPReg` that lives on the stack as a raw `f64` (`movsd`), never a boxed
   `Value`. A spilled float is *not* re-decoded. So boxing ≠ spilling.
 
@@ -1191,7 +1191,7 @@ the earlier `guarded == Float` over-approximated, which made it a no-op — §15
 Result on the mandelbrot kernel: **`call float_to_value` 16 → 0**, the hot inner
 loop becomes pure xmm, and the per-iteration flonum decode collapses to a single
 guarded pre-header unbox. Correct on the whole suite (1704/0), including the
-`xmm_swap`/bridge regression cases. Static `do_it` grows 340 → 450 (the decodes
+`fpr_swap`/bridge regression cases. Static `do_it` grows 340 → 450 (the decodes
 move to the per-loop-entry pre-headers), so the win is dynamic (hot loop) — to be
 confirmed by an M1 `--release` bench A/B (and aarch64, which reuses the same
 `float_to_fpr`/`fpr_move` AsmIR ops). This is the first measured *improvement* over
@@ -1222,7 +1222,7 @@ regressions; suite **1705/0**, mandelbrot do_it `call float_to_value` 0 in the
 default build. `keep_backedge_floats` + the predecessor-gated promotion in
 `incoming_context`, and the `S -> F` / `Sf -> F` bridge arms, are now
 unconditional. The two experimental features (`loop-keep-float`,
-`loop-type-only-entry`) and the dead `strip_xmm_to_stack` probe are removed;
+`loop-type-only-entry`) and the dead `strip_fpr_to_stack` probe are removed;
 `loop-type-only-entry`'s lesson (the analysis-pass backedge is load-bearing — a
 naive type-only strip regresses 2.5×) is retained in §13–14 as the calibration
 that led here. Added `test_loop_carried_float_kept_unboxed`.
@@ -1235,7 +1235,7 @@ step: thread an explicit **`AllocCtx`** into the policy so the spill-victim
 decision consults a *named analysis-facts input* instead of reaching into the
 fused `SlotState` ad hoc — the structural shape the Layer-② allocator needs.
 
-Concretely, `try_alloc_xmm` phase 1 ("demote the first xmm whose linked slots are
+Concretely, `try_alloc_fpr` phase 1 ("demote the first xmm whose linked slots are
 all `Sf`") is refactored from a `for 0..len { … return first }` scan into
 
 ```rust
@@ -1252,7 +1252,7 @@ call site changes** (operand loads, defs, and the merge's `apply_join` all funne
 through `set_new_*`/`try_set_new_*` → these two primitives).
 
 **Verified behaviour-identical.** Built under `stress-spill-pool` (forces
-`PHYS_XMM_POOL` to 2, so almost every Float-resident slot is driven through the
+`PHYS_FPR_POOL` to 2, so almost every Float-resident slot is driven through the
 phase-1 demote path this refactor touches) and ran the lib suite with and without
 the change: the pass/fail set is identical — 1671 passed; the 34 failures are the
 pre-existing environment mismatches (CRuby version / timezone / missing
@@ -1274,7 +1274,7 @@ physical register allocation.
 
 ### 15.9 Closing the allocator-policy axis: phase 1 already protects every `F`
 
-A precise reading of `try_alloc_xmm` (the universal allocation seam, §15) settles
+A precise reading of `try_alloc_fpr` (the universal allocation seam, §15) settles
 why **every** spill-victim probe in this thread (§14.7, §15.1's two no-ops) came
 back neutral — and retires the 3c-ii "loop-aware victim" line as a performance
 lever:
@@ -1356,7 +1356,7 @@ and can be removed — at which point the analysis pass is the pure Layer-① pa
 | **L2-0** ✅ | Split `keep_backedge_floats` into *mechanism* + a caller-supplied *adoption policy* (`adopt(i)`). Default policy = placement-based (`mode == F`), **byte-identical**. | none (behaviour-preserving; suite) |
 | **L2-1** | Swap the adoption policy (a) to **type + liveness**: adopt `F` when the back-edge type is `Float` **and** the slot is used-as-float in the loop (`Liveness::loop_used_as_float`), instead of reading `mode == F`. Decouples consumer (a) from the analysis-pass placement. | benchmark-gated (default-off flag → M1 bench → flip); §13.4 |
 | **L2-2** | Decouple consumer (b): reconstruct the loop-carried xmm bindings in the **codegen** pass from types + liveness (a loop-aware allocation that matches the fixpoint's quality — the 3b regression surface). This is where the real linear-scan / loop-aware allocation lives; §15.9 (phase-1 protects every `F`) + L2-1's typed float adoption are the tools that make it tractable now. | benchmark-gated; high |
-| **L2-3** | With (a)+(b) reading only types+liveness, make `analyse_loop` **type + liveness only** (drop `apply_join` allocation and the handlers' `def_F`/`load_xmm` placement). It returns `(Liveness, backedge_types)` — a pure typed IR. Deopt-as-program-point (§13.6) lands here. | benchmark-gated; high |
+| **L2-3** | With (a)+(b) reading only types+liveness, make `analyse_loop` **type + liveness only** (drop `apply_join` allocation and the handlers' `def_F`/`load_fpr` placement). It returns `(Liveness, backedge_types)` — a pure typed IR. Deopt-as-program-point (§13.6) lands here. | benchmark-gated; high |
 | **L2-4** | Standalone allocation/lowering pass emitting `LInst` (goal 1); add the VM-residual fixed-convention allocator (goal 3, the reason the `AllocCtx` seam exists — §15.9). | research |
 
 Each increment is correctness-verified by the exact CRuby-diff suite here; the
@@ -1532,7 +1532,7 @@ that create an unboxed float representation, and what each does under `VmResidua
 | Site | `JitGreedy` (today) | `VmResidual` |
 |---|---|---|
 | `try_set_new_F` / `try_set_new_Sf` | allocate xmm if free | return `None` → caller keeps `S` |
-| `def_F` / `def_Sf_float` (mandatory) | `alloc_xmm` (pool or spill) | **must not exist** — the float-op handler emits the *boxed* op (VM-style) instead |
+| `def_F` / `def_Sf_float` (mandatory) | `alloc_fpr` (pool or spill) | **must not exist** — the float-op handler emits the *boxed* op (VM-style) instead |
 | `use_float` (liveness promotion) | `try_set_new_Sf` | no-op (skip promotion) |
 | merge `apply_join` `TryFresh*` / `keep_backedge_floats` | allocate / adopt `F` | skip (stay `S`) |
 
@@ -1569,7 +1569,7 @@ code increment.
 Per the user, **VM support is not needed at this point**, so the goal-3 /
 `VmResidual` direction designed in §17.1–17.3 is **deferred**. The L2-2.1 code
 (the `AllocStrategy { JitGreedy, VmResidual }` enum, the `SlotState.alloc_strategy`
-field, the `try_alloc_xmm` VM gate, and the `force-vm-residual` validation feature)
+field, the `try_alloc_fpr` VM gate, and the `force-vm-residual` validation feature)
 has been **reverted** to keep the tree focused on the JIT. §17.1–17.3 remain as the
 record of the goal-3 plan for whenever VM-residual codegen is revisited.
 
@@ -1579,7 +1579,7 @@ allocation" — §4 step 2 done as a **structural refactor that preserves the cu
 greedy placement**, not the VM application. Consequence of deferring goal 3: the
 deepest remaining separation (un-welding the per-instruction handlers'
 type/representation decision from their allocation+emission — e.g. `binop_float` =
-`load_binary_ret_xmm` (alloc) + `fpr_binop` (emit)) loses its near-term *functional*
+`load_binary_ret_fpr` (alloc) + `fpr_binop` (emit)) loses its near-term *functional*
 payoff (it was the enabler for the swappable VM allocator). What is already done
 de-fuses the merge and the allocation seam (data-model split `place`/`ty`,
 `alloc_policy`/`AllocCtx`, `decide_join`/`apply_join`, the `keep_backedge_floats`
@@ -1602,10 +1602,10 @@ refactor.
 
 - `plan_binop_float(&self, …) -> FloatBinOpPlan` — a **pure, `&self`,
   allocation-free** function (Layer-①): it decides `Fold(f64)` (both operands
-  const floats, result a flonum immediate) vs `XmmOp`, **without** allocating an
+  const floats, result a flonum immediate) vs `FprOp`, **without** allocating an
   xmm or emitting.
 - `binop_float` — **executes** the plan (Layer-②): `Fold` → `def_C_float` (a pure
-  constant, no xmm); `XmmOp` → `load_binary_ret_xmm` (alloc) + `fpr_binop` (emit).
+  constant, no xmm); `FprOp` → `load_binary_ret_fpr` (alloc) + `fpr_binop` (emit).
 
 What this concretely fixes: the original folded the *decision* and a *side effect*
 together — `… && self.def_C_float(dst, result)` put the constant **definition**
@@ -1617,8 +1617,8 @@ effect, and the definition happens only in the execute half. Behaviour-identical
 
 ### 18.2 Scope: the fold decision separates cleanly; the xmm path needs a virtual-operand IR
 
-This lifts out the **fold** decision (a pure Layer-① constant). The `XmmOp`
-execution still fuses allocation and emission *internally*: `load_binary_ret_xmm`
+This lifts out the **fold** decision (a pure Layer-① constant). The `FprOp`
+execution still fuses allocation and emission *internally*: `load_binary_ret_fpr`
 both *allocates* an xmm per operand/dest **and** *emits* the load, with the xmm
 identities threading through (operand pins, `dst == lhs` aliasing). Separating
 alloc from emit there requires a **virtual-operand IR** — the float op recorded
@@ -1629,15 +1629,15 @@ the `FloatBinOpPlan` value that a virtual-operand lowering would carry. The same
 `plan_*`/execute shape applies to the other handlers that fold-or-emit
 (`gen_cmp_*`, `binop_integer`) as they are migrated.
 
-### 18.3 Correction: the XmmOp alloc/emit is already split (§9/§11); (b) is record-driven lowering
+### 18.3 Correction: the FprOp alloc/emit is already split (§9/§11); (b) is record-driven lowering
 
-§18.2 claimed the `XmmOp` path "still fuses allocation and emission internally."
+§18.2 claimed the `FprOp` path "still fuses allocation and emission internally."
 Tracing it precisely, **that is wrong** — the primitive-level split is already done
 by the §9/§11 transfer work:
 
-- `load_xmm` / `load_xmm_fixnum` are each `(*_state)` + `transfer(TransferIR::…)`:
-  the **state half** (`load_xmm_state`) allocates the xmm and binds the slot (pure
-  abstract-state mutation, no emission); the **record** (`TransferIR::XmmLoad`,
+- `load_fpr` / `load_fpr_fixnum` are each `(*_state)` + `transfer(TransferIR::…)`:
+  the **state half** (`load_fpr_state`) allocates the xmm and binds the slot (pure
+  abstract-state mutation, no emission); the **record** (`TransferIR::FprLoad`,
   carrying its deopt as a `DeoptPoint` *program point*) is what emits. `transfer()`
   collects the record into `self.transfers` *and* (today) emits it inline, with a
   debug **shadow check** proving the record replays to the identical
@@ -1645,7 +1645,7 @@ by the §9/§11 transfer work:
 - `def_F` (the dst) is **pure allocation** (no emission); `fpr_binop` is **pure
   emission** (no allocation — its operands are already placed).
 
-So in `binop_float`'s `XmmOp` arm, every call is *either* allocation (state) *or*
+So in `binop_float`'s `FprOp` arm, every call is *either* allocation (state) *or*
 emission (a record / a pure `AsmInst`); they are not fused, only sequenced. And the
 handler already consumes **virtual operands** (`FBinOpInfo` = slots) and produces
 physical xmm — it *is* a virtual→physical lowering. §18.2's "needs a
@@ -1688,7 +1688,7 @@ lowering **replay** it.
 
 ### 19.1 Step 1: operations join the record stream (float binop)
 
-The first operation routed in: the float binary op. `binop_float`'s `XmmOp` arm now
+The first operation routed in: the float binary op. `binop_float`'s `FprOp` arm now
 emits `TransferIR::FloatBinOp { kind, lhs, rhs, dst }` through `transfer()` instead
 of a direct `fpr_binop`. The record is **pure data** (Clone, no closure, no
 abstract-state read), so `transfer()` collects it into the `transfers` stream and
@@ -1784,6 +1784,6 @@ removed count.
 self-moves (its move-insertion guards against `src == dst`). That is the expected
 "safe first pass that rarely fires"; the **seam is the deliverable** — the typed
 stream now has a layer boundary where real passes (peephole arithmetic identities,
-dead `XmmSave`-pair removal, redundant load/store elision) attach with no further
+dead `FprSave`-pair removal, redundant load/store elision) attach with no further
 plumbing. Behaviour-preserving: lib suite **1705 passed, 0 failed**
 (this environment's CRuby-4.0.2 baseline), zero `transfer()` replay mismatches.

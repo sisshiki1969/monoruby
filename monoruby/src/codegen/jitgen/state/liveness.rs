@@ -39,7 +39,7 @@ impl Liveness {
 
     ///
     /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
+    /// *and* fpr-linked on the back-edge.
     ///
     pub(in crate::codegen::jitgen) fn loop_used_as_float(
         &self,

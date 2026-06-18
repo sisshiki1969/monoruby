@@ -112,7 +112,7 @@ impl<'a> JitContext<'a> {
                     // allocation-free *type + liveness* signal: the back-edge type
                     // is `Float` and the slot is used as float in the loop
                     // (`Liveness::loop_used_as_float`). `try_set_new_F` (inside the
-                    // mechanism) still self-limits to a free physical xmm, so a
+                    // mechanism) still self-limits to a free physical fpr, so a
                     // promotion the fixpoint could not place under pressure simply
                     // does not fire.
                     let promotable =

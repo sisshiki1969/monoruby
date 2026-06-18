@@ -26,7 +26,7 @@ impl AbstractState {
         if let Some(dst) = dst {
             self.def_S(dst);
         }
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         ir.push(AsmInst::ClassDef {
             base,
@@ -35,7 +35,7 @@ impl AbstractState {
             name,
             func_id,
             is_module,
-            using_xmm,
+            using_fpr,
             error,
         });
     }
@@ -54,13 +54,13 @@ impl AbstractState {
         if let Some(dst) = dst {
             self.def_S(dst);
         }
-        let using_xmm = self.get_using_xmm();
+        let using_fpr = self.get_using_fpr();
         let error = ir.new_error(self);
         ir.push(AsmInst::SingletonClassDef {
             base,
             dst,
             func_id,
-            using_xmm,
+            using_fpr,
             error,
         });
     }

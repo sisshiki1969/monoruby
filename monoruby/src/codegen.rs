@@ -160,16 +160,16 @@ impl GP {
     }
 }
 
-/// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
+/// `xmm{id+2}`; ids >= `PHYS_FPR_POOL` are spilled to a stack slot.
 ///
 /// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
 /// that nearly every F-mode allocation overflows into a spill slot
 /// — this exercises the LoadSpill / StoreSpill paths and the
 /// spill-aware AsmInst lowerings throughout the entire test suite.
 #[cfg(not(feature = "stress-spill-pool"))]
-const PHYS_XMM_POOL: usize = 14;
+const PHYS_FPR_POOL: usize = 14;
 #[cfg(feature = "stress-spill-pool")]
-const PHYS_XMM_POOL: usize = 2;
+const PHYS_FPR_POOL: usize = 2;
 
 ///
 /// Virtual floating-point register. The front-end (TraceIr → AsmIr)
@@ -186,7 +186,7 @@ impl FPReg {
     }
 
     fn loc(self, base_stack_offset: usize) -> FPRegLoc {
-        let pool = PHYS_XMM_POOL;
+        let pool = PHYS_FPR_POOL;
         if self.0 < pool {
             FPRegLoc::Xmm(self.0 as u64 + 2)
         } else {
