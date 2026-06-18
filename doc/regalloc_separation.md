@@ -2573,3 +2573,32 @@ The whole §27–§34 arc is recorded; the shipping result remains **§27 Stage 
 spill-aliasing Heisenbug (default-off, unflipped) is the precisely-scoped open
 item: it lives in the `pool=2` spill-slot lifetime/aliasing under that feature's
 loop-entry float promotion, *not* in the bridge generation (§33 corrected).
+
+## 35. Ruled out: it is *not* a stack-reservation / spill-clobber bug
+
+Tested the hypothesis that the compiler (or a callee) clobbers the spill region
+because the frame's `sub rsp` does not reserve enough — i.e. the spill slots sit
+at/below `rsp` and something writing below the frame corrupts them.
+
+**Test:** the method prologue is `sub rsp, 0xb0` (init_func, `prologue_bytes`),
+and the two spills land at `[rbp-0xa8]` / `[rbp-0xb0]` — the latter exactly at
+`rsp`. Added a 256-byte safety buffer below the frame
+(`sub rsp, prologue_bytes + 256`). Against the **reliable oracle** (the
+`cargo test … test_join_float_register_disagreement` run, which fails
+deterministically — unlike the standalone repro, which is an intermittent
+Heisenbug), the bug **still reproduces** (`-1.0 != 6.9…e-310`).
+
+So extending the frame *below* the spill region does not help: the spill slot is
+not being clobbered from below by an under-sized frame or by the compiler's stack
+(the compile trampolines already `sub rsp, 4088` before calling in, far below the
+`0xb0` frame). The hypothesis is **ruled out**.
+
+This *confirms* §34's framing: it is a genuine **read of an un-written spill slot**
+on a specific path, not a clobber. The side-branch `FprMove(FPReg0→FPReg2)` that
+should write `[rbp-0xa8]` is present and reaches emission (§34), yet the slot reads
+uninitialised — so the live suspects narrow to (a) the outline-bridge entry label
+not actually being where the `jbe` side exit lands (the store is emitted but
+jumped over), or (b) an allocation disagreement between the loop-JIT (partial) and
+method-JIT (whole) compiles that place `a` in different fprs, so one compile's read
+path expects the value where the other's store put it. Both are control-flow/label
+or cross-compile issues, not stack sizing. Code unchanged; tree clean.
