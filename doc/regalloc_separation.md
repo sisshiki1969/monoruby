@@ -1721,3 +1721,69 @@ state half, and the pass discards its `AsmIr`), matching the prior behaviour.
 Each step (1) is behaviour-preserving and shadow/suite-verified; the risk
 concentrates in (3) and the (4) switch. Starting from the data-only ops keeps the
 early increments safe while the stream grows toward completeness.
+
+## 20. (B) De-closuring the array-index codegen
+
+The array integer-index read/assign sites were the densest remaining
+`ir.inline(|gen| …)` closures on the hot path. The 8 closures (x86 + aarch64,
+read + assign, with/without bounds info) became **typed data records**
+`AsmInst::ArrayIndex` / `ArrayIndexAssign` (carrying an `ArrayIndexKind`), with
+the moved closure bodies living in per-arch `gen_array_index` /
+`gen_array_index_assign`. The two `array_integer_index{,_assign}` builders in
+`jitgen/compile/index.rs` are now cfg-gated twins that just `ir.push` the same
+arch-neutral variant.
+
+This is independently valuable (it removes opaque closures from `inst`, making
+those ops inspectable by any pass over the stream) and is the concrete precedent
+for §19's step (3): a closure-carrying op *can* be turned into inspectable data
+when its body is arch-uniform enough. Behaviour-preserving (lib suite identical,
+zero replay mismatches). Commit `818c15c`.
+
+## 21. The realization: `inst` already *is* the replayable stream — add the seam
+
+§19.2's step (4) sketched a *move-based rewrite* — records own the `AsmInst`s, a
+replay pass rebuilds `inst` — as the way to reach "a clean IR layer optimization
+passes operate on". That rewrite is **unnecessary**: `inst: Vec<AsmInst>` *is*
+already the ordered, replayable stream. Handlers build it during the
+analysis/codegen walk (`traceir_to_asmir`); `Codegen::gen_machine_code` replays it
+afterwards to emit machine code (`compile_asmir`, one match arm per `AsmInst`). The
+hot ops are already **typed** variants in it (`FloatBinOp`, `IntegerBinOp`,
+`IntegerCmp`, `ArrayIndex`, … — §19/§20), directly inspectable.
+
+So Path 2's actual goal — *a place to add optimization logic over a typed,
+arch-neutral instruction stream* — is reached simply by **adding an optimization
+hook over `inst` between AsmIR construction and emission**, not by the §19.2(4)
+rewrite, and not by making `AsmInst: Clone` (blocked anyway: ~52 inline-builtin
+closures across the `builtins/*.rs` use `ir.inline`, not the 8 array-index sites).
+
+### 21.1 The seam
+
+`AsmIr::optimize_peephole(&mut self) -> usize` (in `asmir.rs`, where `inst` is
+private) runs peephole passes over a block's stream and returns the count removed.
+`gen_machine_code` calls it just after `frame.detach_ir()` — over every main block
+*and* every inline/outline bridge `AsmIr` — before the emission loop. Optimizing
+the bridges before `thread_empty_outline_bridges` lets one that collapses to
+nothing be jump-threaded away as usual.
+
+**Soundness of dropping instructions here:** branch targets are *labels*
+(`JitLabel`); deopt targets index the `side_exit` vec (`AsmEvict` / `AsmDeopt`),
+**never `inst` positions**. So removing an instruction cannot perturb control-flow
+or deopt resolution. (`BcIndex` source-map markers are likewise emission-time, not
+position-indexed.) No block can be emptied by the pass — each carries a leading
+`Label` — so `live_bb` / `is_empty` accounting is unaffected.
+
+### 21.2 Pass 1: self-move elimination
+
+`AsmInst::is_self_move` flags `RegMove(r, r)` / `FprMove(r, r)` (`dst == src`); the
+pass `retain`s the rest. A self-move is inert (`mov r, r` does not even set flags;
+`movapd x, x` is a no-op). Under the `jit-log` feature the call site prints the
+removed count.
+
+**Observed:** across the lib suite and the benchmarks (`app_fib`, `so_nbody`,
+`app_aobench`, …) the count is **0** — the allocator does not currently emit
+self-moves (its move-insertion guards against `src == dst`). That is the expected
+"safe first pass that rarely fires"; the **seam is the deliverable** — the typed
+stream now has a layer boundary where real passes (peephole arithmetic identities,
+dead `XmmSave`-pair removal, redundant load/store elision) attach with no further
+plumbing. Behaviour-preserving: lib suite **1705 passed, 0 failed**
+(this environment's CRuby-4.0.2 baseline), zero `transfer()` replay mismatches.

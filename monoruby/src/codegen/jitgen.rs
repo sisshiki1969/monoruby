@@ -428,7 +428,34 @@ impl Codegen {
         #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         let pair = self.get_address_pair();
 
-        let ir_vec = frame.detach_ir();
+        let mut ir_vec = frame.detach_ir();
+
+        // §21 — AsmIR optimization seam (Path 2). `inst` is the ordered,
+        // replayable instruction stream; this is the arch-neutral layer where
+        // peephole/optimization passes run, between AsmIR construction
+        // (`traceir_to_asmir`) and machine-code emission below. The pass runs
+        // over every main block and over the inline/outline bridges (their own
+        // `AsmIr`s, still held by `frame`), so the seam covers every emitted
+        // stream. Optimizing the bridges *before* `thread_empty_outline_bridges`
+        // lets a bridge that collapses to nothing be jump-threaded away as usual.
+        let peephole_removed: usize = ir_vec
+            .iter_mut()
+            .map(|(_, ir)| ir.optimize_peephole())
+            .sum::<usize>()
+            + frame
+                .iter_outline_bridges_mut()
+                .map(|(ir, _, _)| ir.optimize_peephole())
+                .sum::<usize>()
+            + frame
+                .iter_inline_bridges_mut()
+                .map(|(ir, _)| ir.optimize_peephole())
+                .sum::<usize>();
+        #[cfg(feature = "jit-log")]
+        if peephole_removed > 0 {
+            eprintln!("  [peephole] removed {peephole_removed} self-move(s)");
+        }
+        #[cfg(not(feature = "jit-log"))]
+        let _ = peephole_removed;
 
         // Jump-threading: drop empty outline-bridge forwarders and alias their
         // entry labels straight to the destination block. Done *before* the

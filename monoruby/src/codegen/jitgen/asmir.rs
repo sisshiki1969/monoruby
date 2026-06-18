@@ -258,6 +258,33 @@ impl AsmIr {
         self.inst.iter()
     }
 
+    ///
+    /// §21 — the record-stream optimization seam (Path 2).
+    ///
+    /// `inst` *is* the ordered, replayable instruction stream: handlers build it
+    /// during the analysis/codegen walk (`traceir_to_asmir`) and
+    /// `gen_machine_code` replays it afterwards to emit machine code
+    /// (`compile_asmir` per `AsmInst`). This method is the arch-neutral layer
+    /// boundary where optimization passes over that typed stream belong — run
+    /// once per block (and per bridge) between AsmIR construction and emission.
+    /// `inst` is private to this module, so passes live here.
+    ///
+    /// Dropping instructions is sound: branch targets are *labels* (`JitLabel`)
+    /// and deopt targets index the `side_exit` vec (`AsmEvict`/`AsmDeopt`),
+    /// never `inst` positions, so a removal cannot perturb control-flow or
+    /// deopt resolution.
+    ///
+    /// **Pass 1 — self-move elimination.** A `RegMove`/`FprMove` whose source
+    /// and destination coincide is a no-op (see [`AsmInst::is_self_move`]).
+    /// Returns the number of instructions removed (instrumentation for the
+    /// `jit-log` feature, which confirms the seam fires).
+    ///
+    pub(super) fn optimize_peephole(&mut self) -> usize {
+        let before = self.inst.len();
+        self.inst.retain(|inst| !inst.is_self_move());
+        before - self.inst.len()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.inst.is_empty()
     }
@@ -2106,6 +2133,21 @@ impl AsmInst {
                 | Self::RecompileDeopt { .. }
                 | Self::RecompileDeoptSpecialized { .. }
         )
+    }
+
+    ///
+    /// Is this a register-to-itself move (`RegMove(r, r)` / `FprMove(r, r)`,
+    /// i.e. `dst == src`)? Such a move emits a no-op (`mov r, r` does not even
+    /// touch the flags; `movapd x, x` is likewise inert), so the §21 peephole
+    /// drops it. Both variants store their operands as `(src, dst)` — see the
+    /// `Debug` formatters that render them as `dst = src`.
+    ///
+    fn is_self_move(&self) -> bool {
+        match self {
+            Self::RegMove(src, dst) => src == dst,
+            Self::FprMove(src, dst) => src == dst,
+            _ => false,
+        }
     }
 
     ///
