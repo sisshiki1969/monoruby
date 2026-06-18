@@ -2466,3 +2466,60 @@ clears", so this latent bug ships to nobody. It is left as-is with this diagnosi
 fixing it is the same fixpoint-internal-placement work the §27–§31 arc converged
 on, and is the prerequisite for that feature (the intended carrier of the confirmed
 loop-float signal) ever being enabled.
+
+## 33. IR/asm-level root cause of the §32 bug: side-branch `F→Sf(spill)` not materialised
+
+Visualised the failing compile with `jit-debug` (per-instruction TraceIR + abstract
+states; note: `dump-traceir` alone is silent — the trace is gated on `jit-debug`,
+compile.rs:158) and `emit-asm` (machine code). The bug is now pinned to the exact
+instruction.
+
+### 33.1 The abstract-state divergence
+
+The body snippet is the diamond `a = -1.0 + i*0.5; a = endv if a > endv; res << a`.
+Under `layer2-float-by-type`, `keep_backedge_floats` promotes `endv` (%3) to
+`F(FPReg1)` at the **compilation** loop header (it fires in the compilation's
+`incoming_context` but not in the analysis/frame-sizing pass, whose `loop_info`
+isn't ready). With `endv` pinned to a physical reg under `stress-spill-pool`
+(pool 2), `a` (%4) at the `BB4` merge resolves to **`Sf(FPReg2)` — a spill** (its
+two predecessors are `BB2: F(FPReg0)` via the `condnotbr` side exit, and
+`BB3: Sf`).
+
+### 33.2 The faulting machine code
+
+```asm
+0000d5: ucomisd xmm3,xmm2        ; a(xmm3) > endv(xmm2)
+0000d9: jbe     0xffdf4fd        ; a<=endv: side-branch BB2->BB4  (a stays in xmm3)
+        ; BB3 (a>endv): a = endv
+0000df: movq    [rbp-0xa8],xmm2  ; endv -> a's FPReg2 spill slot   ✓ written here
+        ; BB4:
+0000fd: movq    xmm0,[rbp-0xa8]  ; read a for `res << a`           ← reads the spill
+```
+
+`a`'s spill slot `[rbp-0xa8]` is written **only on the `BB3` path**. On the
+`BB2→BB4` side exit (`a <= endv`, taken for `i=0`: `-1.0 <= 1.0`), `a` is live in
+`xmm3` (`F(FPReg0)`) and the side-branch bridge must store it to `[rbp-0xa8]`
+(`F → Sf(spill)`), but it does not — so `BB4` reads the uninitialised slot
+(`6.9e-310`). Only the first iteration is wrong because later iterations leave
+stale-but-plausible data there.
+
+### 33.3 Root cause and trigger
+
+- **Proximate bug:** the **side-exit (`condnotbr`) bridge does not materialise an
+  `F(physical) → Sf(spill)` value into the spill slot.** The normal `(F, Sf)` arm
+  (slot.rs:1916: `fpr2stack` + `to_sf`→`FprMove`) does emit the spill store
+  (`FprMove(Xmm→Spill)` lowers to `movsd [spill],xmm`), so the defect is in how the
+  *side-branch* stub is generated/reconciled, not in `FprMove` itself.
+- **Trigger:** `layer2-float-by-type`. Its type-based promotion of `endv` to a
+  physical `F` is what forces `a`'s merge onto a spill and thus exercises this
+  side-branch `F→Sf(spill)` path; the default adopt never creates it, which is why
+  `stress-spill-pool` alone (CI) is green. So this is a latent side-branch/spill
+  bridge bug, surfaced by layer2 under pressure — not unique to layer2.
+
+### 33.4 Status
+
+Precise, actionable diagnosis reached; **no code change** (thresholds restored,
+tree clean). The fix lives in the side-branch bridge generation (ensure a
+`condbr`/side-exit edge runs the full `F→Sf(spill)` materialisation, i.e. emits the
+`FprMove` to the spill slot). That is the concrete next task; it would fix the §32
+`layer2-float-by-type` corruption and harden the side-branch spill path generally.
