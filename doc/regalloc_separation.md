@@ -2602,3 +2602,45 @@ jumped over), or (b) an allocation disagreement between the loop-JIT (partial) a
 method-JIT (whole) compiles that place `a` in different fprs, so one compile's read
 path expects the value where the other's store put it. Both are control-flow/label
 or cross-compile issues, not stack sizing. Code unchanged; tree clean.
+
+## 36. Definitive: the machine code is correct — the store IS present
+
+The remaining question — does the emitted machine code load `a` from an
+*uninitialised* spill slot, or is the slot always written first? — is now answered
+**from the actual bytes** of the outline (cold-page) bridge, read via
+`get_label_address(&entry).as_ptr()` (emit-asm/dump_disas only lists the hot page,
+which is why the side bridge was never visible before):
+
+```
+66 0f d6 95 58 ff ff ff    movq [rbp-0xa8], xmm2     ; a -> FPReg2 spill slot
+e9 c2 0c 02 f0             jmp  BB4
+```
+
+`66 0F D6 /r` is `MOVQ m64, xmm`; ModRM `95` = `[rbp+disp32], xmm2`; `disp32 =
+0xffffff58 = -0xa8`. So the `BB2→BB4` side-exit bridge **does** store `a` to
+`[rbp-0xa8]` and then jumps to `BB4` — exactly the materialisation §33 wrongly
+suspected was missing. (The second fpr bridge is the symmetric
+`movq [rbp-0xa8], xmm3`.) And on the path into the bridge, `xmm2` holds `a`
+(`addsd xmm2,xmm1; ucomisd xmm2,xmm3; jbe <bridge>` — nothing clobbers `xmm2`
+between).
+
+**So the machine code is correct: every path to the `BB4` read writes the spill
+slot first.** It is *not* an uninitialised-load bug at the machine-code level.
+
+### 36.1 What this leaves
+
+Every artefact that can be *observed* — bridge IR, emission, `FprMove` lowering,
+and now the emitted bytes — is correct, yet the un-instrumented build still
+corrupts (`-1.0 != 6.9…e-310`) and *any* probe (emit-asm, jit-debug, an `eprintln`,
+even a stray `finalize`) makes it vanish. That is a textbook **layout-sensitive
+Heisenbug**: the observed build and the failing build differ in register/spill
+*layout*, and only the unobserved layout hits the fault. The correct machine code
+above is the *observed* layout; the failing layout is, by construction, the one we
+cannot print.
+
+Pinning it now requires a **non-perturbing** technique — e.g. poisoning every spill
+slot with a NaN sentinel in the prologue (changes data, not layout) and seeing
+which load returns the sentinel, or a hardware watchpoint on the slot — rather than
+any dump/trace, all of which move the layout. That is the precise, and only,
+remaining way forward. Code unchanged; tree clean; shipping result stays §27
+Stage 1.
