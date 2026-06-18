@@ -2081,3 +2081,57 @@ genuine decoupling, §22.3) — requires threading a `virt→phys` indirection t
 `FprAllocator`'s swap/pin/`vfpr` surface and every `LinkMode::F/Sf` store. With ③
 already policy-free and the table seam in place, that change is now confined to ①
 + `phys_alloc`, and its output stays checkable by the same shadow `diff`.
+
+## 26. P2 step 2 finding: true virtual-id decoupling is *not* byte-identical
+
+Designing step 2 (① assigns unbounded virtual ids; ② packs them into `PhysSlot`s)
+surfaced a hard fact that reshapes the roadmap.
+
+### 26.1 Greedy placement is time-varying
+
+`FPReg.0` is not just "physical" — a *live* value's physical register **changes
+over its lifetime**. At every control-flow merge / loop back-edge, the bridge
+reconciles the current state against the target block's expected assignment
+(slot.rs ~1806):
+
+```rust
+(LinkMode::F(l), LinkMode::F(r)) => if l != r {
+    if self.is_fpr_vacant(r) { self.set_F(slot, r); ir.fpr_move(l, r); }
+    else { self.gen_fpr_swap(ir, l, r); }   // move a LIVE value l -> r
+}
+```
+
+So a loop-carried float can occupy `xmm5` in the body and `xmm7` at the header,
+reconciled by an `FprMove`/`FprSwap` **mid-life**. The physical placement is a
+*function of program point*, not a single value per virtual register.
+
+### 26.2 Why that blocks a byte-identical step 2
+
+A genuine ② (the point of decoupling) assigns each virtual register **one**
+physical location for its whole live range — SSA/linear-scan style. That:
+
+- **eliminates** the back-edge `FprMove`/`FprSwap` reconciliations greedy emits
+  (a global assignment needs no per-edge shuffle for a value it pins), and
+- **changes** which physical register each value sits in.
+
+Both change ③'s emitted `FPRegLoc` stream. Therefore the §24 shadow `diff`
+**cannot** be empty for a real step 2 — byte-identity and decoupling are mutually
+exclusive here. (Reuse of a physical slot across *non-overlapping* lifetimes is
+fine for stable mapping; only the **mid-life moves** of §26.1 are the obstacle,
+and they are intrinsic to greedy's per-edge reconciliation.)
+
+### 26.3 Consequence: step 1 is the byte-identical terminus
+
+The separation splits cleanly into two regimes:
+
+| | byte-identical? | risk | gate |
+|---|---|---|---|
+| **Step 1** (③ policy-free, ② owns the placement table) — *done* | yes | low | shadow `diff` empty ✓ |
+| **Step 2** (① virtual ids, ② global allocation) | **no** — different placement + fewer swaps | high (§16.6 regressed before) | M1 perf A/B; shadow = *delta measurement*, not equality |
+
+Step 2 is thus a **perf experiment**, not a safe refactor: it must beat greedy on
+real hardware to be worth the §16.6-class risk, and the shadow's role flips from
+"prove zero change" to "quantify the placement delta". The earlier "feature flag +
+shadow diff = byte-identical step 2" framing (§22.4/§23.3) was wrong on this
+point: it assumed a stable mapping could reproduce greedy, but greedy has no
+stable mapping to reproduce.
