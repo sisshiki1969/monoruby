@@ -55,6 +55,13 @@ layer2-float-by-type = []
 # on this fingerprint staying byte-identical between the baseline greedy
 # allocator and the separated ②. Default-off; zero cost in shipping builds.
 shadow-placement = []
+# §5 Layer-② extraction, step P2: relocate the physical FP-placement *policy*
+# (pool-vs-spill) out of ③ (`PhysMap::resolve`) into an explicit ②
+# (`codegen::phys_alloc`) table-backed function, leaving ③ policy-free (look up
+# the virtual fpr's physical slot, apply the frame base). Byte-identical to the
+# formula it replaces (verified via `shadow-placement` digests); the seam where
+# P4's loop-aware allocator swaps in. Default-off until the M1 A/B gate clears.
+phys-table = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

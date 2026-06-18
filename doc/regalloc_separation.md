@@ -2030,3 +2030,54 @@ cargo run --features shadow-placement -- benchmark/so_nbody.rb 2>&1 \
 # … after P2/P3 land behind their flag, same command → candidate.txt
 diff baseline.txt candidate.txt   # must be empty ⇒ ② is byte-identical ⇒ perf-neutral
 ```
+
+## 25. P2 step 1: extract ②'s placement policy out of ③ (byte-identical)
+
+`FPReg(usize)` is *deeply* physical in ①: `FprAllocator.vfpr` is indexed by
+`fpr.0`, and `add`/`remove`/`clear`/`swap`/`pin` plus every `LinkMode::F(fpr)` /
+`Sf(fpr)` store the physical id. A full virtual-id renumbering of ① therefore
+touches a large, swap/pin-coupled surface and is deferred. P2 starts at the
+**other end** — the cheap, byte-identical half — by moving the *placement policy*
+to where ② will own it:
+
+### 25.1 What moved
+
+Before, `PhysMap::resolve` (③) hardcoded the rule `id < PHYS_FPR_POOL ?
+xmm(id+2) : spill(base-24+8·(id-POOL))`. Now:
+
+- **②** (`codegen::phys_alloc`) owns the rule as `policy(i) -> PhysSlot`, where
+  `PhysSlot` is a **frame-independent** placement (`Xmm(p)` or `Spill(n)`, the
+  `n`-th f64 slot). With feature `phys-table`, `policy` is memoised into an
+  explicit per-compilation table (`phys_alloc::slot`, grown lazily); without it,
+  `policy` is called directly. Both yield identical `PhysSlot`s.
+- **③** (`PhysMap::resolve`) is now **policy-free**: ask ② for the virtual fpr's
+  `PhysSlot`, then `apply_base` turns a `Spill(n)` into the frame's concrete
+  `[rbp/x29 - off]`. The frame base is the *only* thing ③ still contributes.
+
+This is the clean split the §22 framing wants: *which physical resource* is a ②
+decision (frame-independent), *where on this frame's stack* is a ③ mechanic
+(`base`-relative). P4 swaps `phys_alloc`'s table for a loop-aware allocation with
+**zero** change to ③ or the 22 emission sites.
+
+### 25.2 Why byte-identical, and the evidence
+
+`policy(i)` reproduces the old formula termwise (`Xmm(i+2)` for the pool;
+`Spill(i-POOL)` + `apply_base`'s `base-24+8n` for the rest), so the resolved
+`FPRegLoc` stream is unchanged. Verified with the §24 shadow:
+
+- hot float loop: `digest=0x01531d81c82b05c4` **identical** with and without
+  `phys-table`.
+- `so_nbody`: all 79 per-compilation fingerprints **byte-identical** across the
+  flag (`diff` empty).
+- x86-64 lib suite **1706 passed / 0 failed** with `--features phys-table`;
+  default build and aarch64 build both clean.
+
+### 25.3 What is *not* yet done (P2 step 2)
+
+① still hands out physical ids (`fpr.0` = pool/spill index); the `phys-table` is
+therefore still the identity policy. The remaining, riskier half — making ①
+assign *unbounded virtual* ids and having ② pack them into `PhysSlot`s (the
+genuine decoupling, §22.3) — requires threading a `virt→phys` indirection through
+`FprAllocator`'s swap/pin/`vfpr` surface and every `LinkMode::F/Sf` store. With ③
+already policy-free and the table seam in place, that change is now confined to ①
++ `phys_alloc`, and its output stays checkable by the same shadow `diff`.

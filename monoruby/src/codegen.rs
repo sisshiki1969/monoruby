@@ -213,19 +213,110 @@ impl PhysMap {
     ///
     /// Resolve a virtual FP register to its physical location.
     ///
+    /// ③ is **policy-free**: it asks ② ([`phys_alloc::slot`], feature
+    /// `phys-table`) for the virtual fpr's frame-independent physical slot, then
+    /// applies this frame's `base_stack_offset` to turn a spill-slot index into a
+    /// concrete `[rbp/x29 - off]`. Without the feature it falls back to the
+    /// historical inline formula (byte-identical).
+    ///
     pub(crate) fn resolve(&self, reg: FPReg) -> FPRegLoc {
-        let pool = PHYS_FPR_POOL;
-        let loc = if reg.0 < pool {
-            FPRegLoc::Xmm(reg.0 as u64 + 2)
-        } else {
-            let n = reg.0 - pool;
-            let ofs = (self.base_stack_offset as i32) - 24 + 8 * (n as i32);
-            FPRegLoc::Spill(ofs)
-        };
+        let loc = self.apply_base(physical_slot(reg));
         #[cfg(feature = "shadow-placement")]
         placement_shadow::record(loc);
         loc
     }
+
+    ///
+    /// Turn a frame-independent [`PhysSlot`] into a concrete [`FPRegLoc`] by
+    /// applying this frame's stack base to spill-slot indices.
+    ///
+    fn apply_base(&self, slot: PhysSlot) -> FPRegLoc {
+        match slot {
+            PhysSlot::Xmm(p) => FPRegLoc::Xmm(p),
+            PhysSlot::Spill(n) => {
+                FPRegLoc::Spill((self.base_stack_offset as i32) - 24 + 8 * (n as i32))
+            }
+        }
+    }
+}
+
+///
+/// A *frame-independent* physical placement for a virtual FP register: either a
+/// physical `xmm` register, or the `n`-th f64 spill slot (turned into a concrete
+/// `base`-relative offset by [`PhysMap::apply_base`]). This is the unit ②
+/// ([`phys_alloc`]) assigns; ③ ([`PhysMap::resolve`]) only applies the frame base.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PhysSlot {
+    Xmm(u64),
+    Spill(usize),
+}
+
+///
+/// ② physical-placement policy for a virtual fpr (P2). With feature `phys-table`
+/// this routes through the explicit table in [`phys_alloc`]; otherwise it is the
+/// inline pool-vs-spill formula. Both are byte-identical: id `< PHYS_FPR_POOL` →
+/// `xmm{id+2}`, else spill-slot `id - PHYS_FPR_POOL`.
+///
+#[inline]
+fn physical_slot(reg: FPReg) -> PhysSlot {
+    #[cfg(feature = "phys-table")]
+    {
+        phys_alloc::slot(reg.0)
+    }
+    #[cfg(not(feature = "phys-table"))]
+    {
+        phys_alloc::policy(reg.0)
+    }
+}
+
+///
+/// **②** — the physical FP-register allocation policy, extracted out of ③ (P2,
+/// §25). [`policy`] is the placement rule formerly hardcoded in
+/// `PhysMap::resolve`; with feature `phys-table` it is memoised into an explicit
+/// per-compilation table ([`slot`]) — the seam where P4's loop-aware allocator
+/// later installs a non-formula assignment, leaving ③ untouched.
+///
+mod phys_alloc {
+    use super::{PhysSlot, PHYS_FPR_POOL};
+
+    ///
+    /// The placement rule: virtual fpr `i` → its frame-independent physical slot.
+    ///
+    pub(super) fn policy(i: usize) -> PhysSlot {
+        if i < PHYS_FPR_POOL {
+            PhysSlot::Xmm(i as u64 + 2)
+        } else {
+            PhysSlot::Spill(i - PHYS_FPR_POOL)
+        }
+    }
+
+    #[cfg(feature = "phys-table")]
+    mod table {
+        use super::super::PhysSlot;
+        use std::cell::RefCell;
+
+        thread_local! {
+            /// ②'s explicit placement table, grown lazily by [`super::slot`]. The
+            /// formula part is frame-independent, so a single table serves a whole
+            /// compilation (and beyond — the policy is deterministic).
+            static TABLE: RefCell<Vec<PhysSlot>> = const { RefCell::new(Vec::new()) };
+        }
+
+        pub(in super::super) fn slot(i: usize) -> PhysSlot {
+            TABLE.with(|t| {
+                let mut t = t.borrow_mut();
+                while t.len() <= i {
+                    let n = t.len();
+                    t.push(super::policy(n));
+                }
+                t[i]
+            })
+        }
+    }
+
+    #[cfg(feature = "phys-table")]
+    pub(super) use table::slot;
 }
 
 ///
