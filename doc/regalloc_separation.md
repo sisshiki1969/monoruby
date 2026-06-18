@@ -1876,3 +1876,78 @@ seam-creation, behaviour-identical: both x86-64 and aarch64 build clean; lib sui
 **1706 passed, 0 failed** (1705 baseline + `physmap_resolve_formula`). ② will later
 swap the formula for an explicit per-`FPReg` table behind this same `resolve`,
 with no emission-site change.
+
+## 23. Pre-P2 verification: the premise holds, with one coupling to preserve
+
+Before touching the fixpoint (P2), §22.2's open check — *"is `Sf` always
+boxed-canonical, and does placement ever change representation?"* — was resolved
+against the code. Result: **the correctness premise holds unconditionally**, and
+there is **exactly one** representation↔placement coupling, which is perf-load-
+bearing (not correctness-bearing).
+
+### 23.1 Correctness premise — holds at the type level
+
+`LinkMode` (slot.rs) encodes the split directly:
+
+- `F(fpr)` — "*mutation of the fpr lazily affects the stack slot*": **unboxed-
+  canonical**, stack is stale. Canonical value lives in the fpr.
+- `Sf(fpr, _)` — "*on the stack slot **and** the fpr which is **read-only***":
+  **boxed-canonical** on the stack, fpr is a droppable read-only cache.
+- `S(_)` — boxed on the stack only.
+
+The placement phases (`alloc_policy::try_alloc_fpr`, slot.rs:73–127) respect this:
+
+| Phase | Action | Touches representation? |
+|---|---|---|
+| 0 vacant | return lowest-index free fpr | no |
+| 1 demote | victim filter is `slots.all(Sf)` (line 93–99); demote `Sf→S` losslessly, **no asm** (stack is canonical) | only drops a *cache* (`Sf→S`), never boxes/unboxes |
+| 2 spill | `push_spill` appends a **new** `FPReg(N≥POOL)` for the value *being* allocated | no — never evicts an existing `F` |
+
+So **no placement action ever boxes an `F`, unboxes anything, or evicts an `F`.**
+An `F` (stale-stack) is structurally excluded from Phase-1 victims, and Phase-2
+only ever hands a fresh spill slot to a *new* allocation. The `_ => unreachable!()`
+at slot.rs:107 is the live guard for "Phase-1 demotion only touches `Sf`"; the full
+x86-64 (1706) and aarch64 (22 float/numeric) suites exercise it without firing —
+the empirical confirmation. ② can therefore be split out with **zero correctness
+risk**.
+
+### 23.2 The one coupling: the promotion gate (perf-load-bearing)
+
+`keep_backedge_floats` (merge.rs:123/130 → slot.rs:648) is the loop-back-edge
+representation decision: for each loop-carried slot that is `S|Sf` and float-typed
+(`adopt && promotable`), promote it to **unboxed `F`** — *but only via*
+`try_set_new_F` → `try_alloc_fpr()?` (slot.rs:703), i.e. **Phase 0/1 only, no
+spill**. If only a Phase-2 spill could free an fpr, it returns `None` and the slot
+**stays boxed** (`S`/`Sf`).
+
+That is the crux: **① decides representation (box vs unbox) by querying ②'s
+physical-pool occupancy** ("can the greedy allocator seat this in `xmm2..15`
+without spilling?"). This is precisely the §13.8/§16.6 load-bearing *selection* —
+benign for correctness (the fallback "stay boxed" is always sound) but it
+determines *which* loop floats are unboxed, which is the entire perf delta.
+
+### 23.3 Consequence for P2 (refines §22.4)
+
+P2 is therefore **not** merely "drop the pool/spill encoding from `try_alloc_fpr`".
+The promotion gate must keep producing the *same* decisions, so:
+
+1. ① cannot ask a raw physical question ("is `FPReg(i)` vacant?") once VRegs are
+   unbounded. The gate must be re-expressed as a **virtual-pressure predicate**
+   that P3's greedy ② reproduces exactly: *"would ② seat this VReg in the
+   `PHYS_FPR_POOL`-wide pool rather than spill it, at this program point?"*
+2. The low-risk route to byte-identity: **share one allocator oracle.** Keep
+   `keep_backedge_floats` calling `try_alloc_fpr` (now ②'s policy object), let ①
+   record the tentative virtual assignment it returns, and have ② reuse that same
+   assignment. Since P3's ② *is* today's greedy `try_alloc_fpr`, ①'s gate and ②'s
+   placement read identical occupancy ⇒ byte-identical output by construction. The
+   `PhysMap` seam (§22.5) is what lets ②'s *final* physical slot later diverge from
+   the gate's tentative one without touching ① or ③.
+3. **Validation:** P2/P3 land behind a feature flag; perf-neutrality of the
+   promotion gate must be confirmed on **real Apple-silicon / x86 hardware** (qemu
+   gives no perf signal), A/B against the stage-1 placement shadow, before default-
+   on. Correctness is already covered by §23.1 + the shadow's byte-compare.
+
+**Net:** the separation is *more tractable than §16.6 feared* — ① and ② already
+meet at a single oracle (`try_alloc_fpr`), so the job is to make that oracle a
+shared ② object rather than to re-derive a second allocator. The risk is confined
+to the promotion gate's perf, which the feature flag + M1 A/B gate-keeps.
