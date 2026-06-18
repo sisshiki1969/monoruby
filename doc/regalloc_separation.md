@@ -1999,3 +1999,34 @@ assigns unbounded VRegs; ② maps them to physical), and renumbering is invisibl
 ③ **iff** the resolved `FPRegLoc` stream is unchanged. Comparing the resolved
 stream — rather than the VReg ids — is therefore the right and minimal oracle: it
 permits VReg renumbering while pinning the observable placement.
+
+### 24.4 Wired into `jit_compile`; validated on real emission
+
+The shadow is now bracketed around the whole ③ emission in `jit_compile`
+(jitgen.rs): `begin()` before `gen_machine_code`, `take()` after — and since the
+driver recurses into inlined callees, one bracket captures the entire compilation
+unit. Under `--features shadow-placement` each compile logs
+`[shadow] iseq=<id> type=entry|loop n=<len> digest=<fnv64>` (a compact FNV-1a-64
+of the fingerprint; order-sensitive, so any placement *or ordering* change shows
+up). M1 `bin/test` already runs the P0/P1 + shadow code green on real Apple
+silicon.
+
+Validated end-to-end on x86-64:
+
+- A hot float loop (`while i<N: s += i.to_f*1.5 + 0.25`) JITs to
+  `iseq=… type=loop n=12 digest=0x01531d81c82b05c4`, **byte-identical across
+  repeated runs** — the deterministic baseline a P3 candidate must reproduce.
+- Most non-float compilations log `n=0` (no FP placement emitted) — expected; the
+  fingerprint only grows where ③ actually lowers FP operands.
+- Default build (feature off) is byte-for-byte unchanged; the lib suite under the
+  feature passes (1706 + the gated `placement_shadow_fingerprint`, now also
+  asserting digest stability + order-sensitivity).
+
+**Baseline-capture recipe (run on M1 before P2 flips ② on):**
+
+```sh
+cargo run --features shadow-placement -- benchmark/so_nbody.rb 2>&1 \
+  | grep '\[shadow\]' | sort > baseline.txt
+# … after P2/P3 land behind their flag, same command → candidate.txt
+diff baseline.txt candidate.txt   # must be empty ⇒ ② is byte-identical ⇒ perf-neutral
+```

@@ -348,6 +348,11 @@ impl Codegen {
         // fall back to the interpreter).
         self.jit.finalize();
         let class_version_label = self.jit.const_i32(class_version as _);
+        // Stage-1 placement shadow (§24): bracket the whole ③ emission (the
+        // `gen_machine_code` driver recurses into inlined callees, so one
+        // begin/take pair captures the entire compilation unit's FP placement).
+        #[cfg(feature = "shadow-placement")]
+        crate::codegen::placement_shadow::begin();
         self.gen_machine_code(
             frame.asm_info,
             store,
@@ -355,6 +360,16 @@ impl Codegen {
             0,
             class_version_label.clone(),
         );
+        #[cfg(feature = "shadow-placement")]
+        if let Some(fp) = crate::codegen::placement_shadow::take() {
+            eprintln!(
+                "[shadow] iseq={:?} type={} n={} digest={:#018x}",
+                iseq_id,
+                if position.is_some() { "loop" } else { "entry" },
+                fp.len(),
+                crate::codegen::placement_shadow::digest(&fp),
+            );
+        }
         // x86 finalizes the freshly emitted code here (the old `gen_machine_code`
         // did this internally); aarch64's outer caller (`compile` /
         // `compile_partial` / `compile_patch`) finalizes after any trailing

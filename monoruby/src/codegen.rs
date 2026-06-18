@@ -287,6 +287,34 @@ pub(crate) mod placement_shadow {
             }
         });
     }
+
+    ///
+    /// Compact FNV-1a-64 digest of a placement fingerprint, for per-compilation
+    /// A/B logging (a full `Vec<FPRegLoc>` is unwieldy in stderr; the digest
+    /// diverges iff any placement diverges, which is all the P3 gate needs).
+    ///
+    pub(crate) fn digest(fp: &[FPRegLoc]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |x: u64| {
+            for b in x.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for loc in fp {
+            match *loc {
+                FPRegLoc::Xmm(x) => {
+                    mix(0);
+                    mix(x);
+                }
+                FPRegLoc::Spill(o) => {
+                    mix(1);
+                    mix(o as u64);
+                }
+            }
+        }
+        h
+    }
 }
 
 pub struct JitModule {
@@ -1329,6 +1357,20 @@ mod tests {
         // After `take`, recording is off: `resolve` must not panic or capture.
         let _ = pm.resolve(FPReg(0));
         assert!(placement_shadow::take().is_none());
+
+        // Digest: stable for equal streams, order-sensitive (so a reordered
+        // placement — which would change ③'s machine code — is detected).
+        assert_eq!(
+            placement_shadow::digest(&first),
+            placement_shadow::digest(&second)
+        );
+        let mut reordered = reference.clone();
+        reordered.reverse();
+        assert_ne!(
+            placement_shadow::digest(&reference),
+            placement_shadow::digest(&reordered),
+            "digest must be order-sensitive"
+        );
     }
 
     #[test]
