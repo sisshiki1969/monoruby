@@ -2233,3 +2233,48 @@ only the policy reads the context).
 Stage 1 (§27) already exposes the `pick_vacant` hook this rides on; Stage 2b is
 the contained `AllocCtx` body + the allocation-entry signature widening, behind a
 new default-off feature.
+
+## 29. Stage 2b result: the reservation policy is inert (forward-fixpoint limit)
+
+Stage 2b (§28) was implemented behind `phys-loop-aware`: `target: SlotId` threaded
+through the six FP allocation entry points → `alloc_fpr`/`try_alloc_fpr` →
+`AllocCtx::should_reserve`, a `loop_float` set captured in `liveness_analysis`, and
+the capacity-reservation gate at the top of `try_alloc_fpr_ctx`. It is **correct**
+(full lib suite **1706/0** under `stress-spill-pool,phys-loop-aware`; default build
+byte-identical, hot-float digest unchanged) — but **empirically inert**.
+
+### 29.1 The measurement
+
+`should_reserve` **never fires**. Instrumentation showed `state.loop_float` is
+**always empty** at every allocation, on every probe — `so_nbody` (pool 14), a
+16-accumulator loop, and a single-accumulator loop under `stress-spill-pool`
+(pool 2). Placement digests are identical with and without the feature in all
+cases (`diff` empty).
+
+### 29.2 Why — the same forward-fixpoint wall
+
+The loop-carried set `L` is produced by `liveness.loop_used_as_float()` and
+consumed at the **back-edge merge** (`liveness_analysis`, merge.rs:89). But the
+body's float registers are allocated **once**, during the forward body walk, which
+runs *before* the back-edge is reached. So at every allocation decision `L` is not
+yet known (`loop_float` empty); by the time `L` exists, the placements are
+committed. This is exactly the §13.8/§16.6 limitation — the information a better
+allocation needs is downstream of the point that needs it — now confirmed at the
+allocation seam itself. (And `loop_used_as_float` at that merge was empty for the
+probes anyway, a second symptom of the same ordering.)
+
+### 29.3 Consequence
+
+A *binding* loop-aware allocator cannot be a tweak inside the forward fixpoint; it
+needs `L` (per-loop float liveness) **surfaced to the body walk** — i.e. a
+preliminary liveness pass feeding the allocation pass. That is a two-pass
+re-architecture, and §16.6 measured a 2.5× regression for the nearest prior
+attempt at allocating with re-derived (rather than fixpoint-native) liveness. So
+Stage 2b's lever, as a forward-fixpoint reservation, **does not bind**, and the
+two-pass alternative is high-risk.
+
+**Standing decision:** Stage 1 (§27 — ③ policy-free, ② owns the placement table,
+Phase-0 seam) remains the byte-identical, shipping terminus. The Stage 2b seam
+(`should_reserve` + `target` threading + `loop_float`) is **kept, feature-gated and
+inert**, as the documented attachment point: a future two-pass `L`-surfacing pass
+plugs a binding policy in here, gated by the §24 shadow (delta meter) + M1 A/B.

@@ -62,6 +62,12 @@ shadow-placement = []
 # formula it replaces (verified via `shadow-placement` digests); the seam where
 # P4's loop-aware allocator swaps in. Default-off until the M1 A/B gate clears.
 phys-table = []
+# §5 Layer-② extraction, Stage 2b (doc §28): capacity-reservation loop-aware FP
+# allocation. Reserves pool slots for the loop-carried float set so their
+# promotion succeeds (resident across the loop) by steering non-loop temporaries
+# to spill first. Non-byte-identical (changes placement) — a perf experiment
+# gated on M1 A/B; default-off.
+phys-loop-aware = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 
