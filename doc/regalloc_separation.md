@@ -2406,3 +2406,63 @@ robust invariant stands: **a better FP placement must be decided *inside* the
 back-edge fixpoint with its native type/liveness/CFG state.** Before any such work,
 the `layer2-float-by-type` pressure bug (§31) must be fixed, since that feature is
 the intended carrier of the confirmed loop-float signal.
+
+## 32. Diagnosis of the pre-existing `layer2-float-by-type` × `stress-spill-pool` bug
+
+§31 flagged that `test_join_float_register_disagreement` fails under
+`layer2-float-by-type,stress-spill-pool` independently of §28/§30. This section
+roots it out.
+
+### 32.1 Reproduction and symptom
+
+Reproduced standalone by replicating `run_test`'s wrapper (`__res = (CODE); for
+__i in 0..24 { (CODE) }; (CODE)` — the outer `for` loop-JITs and the snippet
+redefines+calls `test` each iteration) with the test-mode thresholds. Only the
+**first** loop iteration's float is wrong: `res[0]` is a denormalised garbage f64
+(`6.9…e-310`) instead of `-1.0`; iterations 1–4 are correct. Default (pool 14) and
+default-adopt (no `layer2-float-by-type`) are both correct.
+
+### 32.2 Root cause: entry promotion inconsistent with the body fixpoint
+
+Instrumenting `keep_backedge_floats` shows the **only** difference: under
+`layer2-float-by-type` it promotes slot `%3` = `endv` (the loop-carried `1.0`)
+from `Sf(FPReg0)` to `F(FPReg1)`; the default adopt promotes nothing.
+
+`endv` is float-*typed* and used-as-float in the loop, so layer2's
+type+liveness `adopt` fires — **even though the back-edge fixpoint
+(`analyse_backedge_fixpoint`, merge.rs:79, run *before* `keep_backedge_floats` at
+:123) placed `endv` as `Sf`, not `F`.** The entry state is thus overridden to a
+representation (`F`) the already-frozen loop body was never analysed for. Under
+`stress-spill-pool` (pool 2) the freshly allocated `FPReg1` is exactly a register
+the body reuses for a temporary, so the loop-entry binding and the body disagree
+and the value is read before it is materialised → uninitialised garbage.
+
+This is the **§31.3 invariant**, now confirmed from the opposite direction: a
+loop-entry placement/representation must be a subset of what the body fixpoint
+produced. The default adopt (`be.mode == F`) is sound precisely because it only
+re-adopts placements the body *already* made `F`. `layer2-float-by-type`'s whole
+premise — decouple adoption from the analysis-pass placement, drive it from
+type+liveness — violates that invariant whenever the body kept the value boxed.
+
+### 32.3 Why the obvious fixes do not work
+
+- *Reuse the incumbent fpr* (`Sf(x) → F(x)` instead of allocating a fresh one):
+  tried, still corrupts. The fault is the **`F` vs `Sf` representation** mismatch
+  between entry and body, not which register.
+- *Restrict to free fprs* (`try_set_new_F`, already the case): does not help — the
+  body still treats `endv` as `Sf`.
+
+A correct fix must keep layer2's adoption **consistent with the body fixpoint's
+representation** — i.e. either re-run the body fixpoint after adoption, or only
+adopt slots the body's back-edge state already carries as `F`. The latter is
+essentially the default adopt, so `layer2-float-by-type` as specified cannot be
+made sound without folding the adoption decision *into* `analyse_backedge_fixpoint`
+(the §31.4 conclusion: placement lives inside the fixpoint).
+
+### 32.4 Status
+
+`layer2-float-by-type` is default-off and explicitly "flip after the M1 bench gate
+clears", so this latent bug ships to nobody. It is left as-is with this diagnosis;
+fixing it is the same fixpoint-internal-placement work the §27–§31 arc converged
+on, and is the prerequisite for that feature (the intended carrier of the confirmed
+loop-float signal) ever being enabled.
