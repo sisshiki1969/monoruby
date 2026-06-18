@@ -2523,3 +2523,53 @@ tree clean). The fix lives in the side-branch bridge generation (ensure a
 `condbr`/side-exit edge runs the full `F→Sf(spill)` materialisation, i.e. emits the
 `FprMove` to the spill slot). That is the concrete next task; it would fix the §32
 `layer2-float-by-type` corruption and harden the side-branch spill path generally.
+
+## 34. Correction to §33: the bridge IS correct — it is an uninitialised-spill Heisenbug
+
+Deeper IR/asm tracing (instrumenting `gen_bridge`, the outline-bridge emission
+loop, and the `FprMove` lowering) **corrects §33**. The side-branch `F→Sf(spill)`
+bridge is *not* missing — every link in the chain is individually correct:
+
+- **Bridge IR** (`gen_bridges_for_branches`, Side mode): the `BB2→BB4` side bridge
+  is `FprMove(FPReg0 → FPReg2)` — `a` (FPReg0, the `addsd` result) moved to its
+  spill `FPReg2`. Exactly the materialisation the target `Sf(FPReg2)` needs.
+- **Survives optimisation**: not a self-move (`0 != 2`), so `optimize_peephole`
+  keeps it; non-empty, so `thread_empty_outline_bridges` does not drop it.
+- **Reaches emission**: the outline-bridge loop emits it with `base=192`, so
+  `FPReg2` resolves to `Spill(192-24)=Spill(0xa8)` — the same `[rbp-0xa8]` the
+  `BB3` path writes and `BB4` reads.
+- **Lowering is correct**: `FprMove(Xmm(s), Spill(d))` → `movq [rbp-d], xmm(s)`
+  (x86_64/compile/mod.rs:485). So the bridge *does* store `a` to `[rbp-0xa8]`.
+
+So §33's "the side bridge does not materialise the value" was **wrong**.
+
+### 34.1 What it actually is
+
+The defect is an **uninitialised-spill Heisenbug**: adding *any* `eprintln`
+instrumentation (in `gen_bridge` or the emit loop) makes the corruption vanish
+(`run_test`'s mismatch stops firing). That is the signature of a read of
+uninitialised/aliased stack, perturbed by the extra code. Two corroborating facts:
+
+1. `a`'s spill slot `[rbp-0xa8]` (FPReg2) is **aliased** with the scratch staging
+   used to load the `0.5` and `-1.0` constants in the body (`movq [rbp-0xa8],xmm0`
+   appears for both the constant staging *and* as `a`'s home). Under `pool=2` the
+   spill region is tiny and heavily reused.
+2. `test` is JIT-compiled **twice** — a loop-JIT (partial) and a method-JIT
+   (whole) — and the two place `a` in *different* fprs (`FprMove(FPReg0,…)` vs
+   `FprMove(FPReg1,…)`). A deopt/transition between the two, or the first-iteration
+   pre-header path, reads the slot before the responsible store on that exact path.
+
+### 34.2 Status and honest limit
+
+This is a genuine uninitialised-memory/spill-aliasing bug, exposed only by
+`layer2-float-by-type` shifting `a` onto a `pool=2` spill, and it is a **Heisenbug**
+— instrumentation masks it, so the standard dump/trace tools cannot pin the
+faulting store/read ordering. Pinning it further needs a non-perturbing probe
+(e.g. poisoning spill slots with a sentinel and watching which read survives, or a
+single-stepped memory watch), which is beyond what jit-debug/emit-asm provide.
+
+The whole §27–§34 arc is recorded; the shipping result remains **§27 Stage 1**
+(byte-identical, default build clean, CI green). The `layer2-float-by-type`
+spill-aliasing Heisenbug (default-off, unflipped) is the precisely-scoped open
+item: it lives in the `pool=2` spill-slot lifetime/aliasing under that feature's
+loop-entry float promotion, *not* in the bridge generation (§33 corrected).
