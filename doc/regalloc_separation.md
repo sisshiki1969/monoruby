@@ -724,7 +724,8 @@ debug shadows compile out, so they do not affect it):
    quickly recoverable parks the change behind a runtime flag (mirroring
    `--no-jit`) rather than flipping the default.
 3. Run on both backends (x86-64 CI + M1 aarch64) before default-flip, since the
-   bridge emits per-arch and the aarch64 backend deopts on unported insts.
+   bridge emits per-arch and the two backends differ in deopt/recompile handling
+   (x86 recompiles-in-place for non-specialized misses; aarch64 deopts + re-JITs).
 
 ### 13.5 Where the existing harness applies / stops
 
