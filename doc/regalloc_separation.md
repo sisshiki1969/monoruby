@@ -3019,3 +3019,53 @@ under GC) is **2090/2090**. Default build unaffected (the field is an inert,
 **Status.** Stage 2a+2b are implemented and proven non-inert; 2c (M1 perf A/B on
 high-pressure float code) is the gate, and given the POOL=14 inertness it should be
 evaluated on whether any shipping benchmark has enough FP pressure to benefit.
+
+## 43. (2) the global-pin lever: headroom measured, win is *copy coalescing* (partial)
+
+Per the user's choice to pursue the §26 "eliminate back-edge moves" lever (which,
+unlike §42's pressure-gated policy, can bite under shipping `POOL=14`), the back-edge
+FP-reconciliation move count was measured (default build, POOL=14, per loop
+iteration):
+
+| benchmark | back-edge bridges w/ moves | total `FprMove`+`FprSwap` |
+|---|---|---|
+| kernel (complex iter) | 1 | 4 |
+| so_nbody | 1 | 7 |
+| so_mandelbrot (150) | 6 | 29 |
+
+So there **is** per-iteration headroom under POOL=14. But the emit-asm decomposition
+of the kernel's 4 fixes *what kind* of move, and it reshapes (2):
+
+```
+000265: movq xmm4,xmm9     ; zr (new, in xmm9) -> xmm4
+00026a: movq xmm5,xmm8     ; zi (new, in xmm8) -> xmm5
+000273: movq xmm6,xmm9     ; zr -> xmm6   ← duplicate copy of zr
+000278: movq xmm7,xmm8     ; zi -> xmm7   ← duplicate copy of zi
+```
+
+The 4 moves are **2 reconciliations** (`zr`,`zi` land in the header's regs) **+ 2
+duplications** (`zr` is kept in *two* regs `xmm4`/`xmm6`, `zi` in `xmm5`/`xmm7`,
+because two copy-aliased slots each got their own fpr).
+
+### 43.1 Only the duplications are eliminable
+
+- **The reconciliations are intrinsic.** `zr := tr` produces the new `zr` in `tr`'s
+  reg; landing it in the header's expected reg costs one move *somewhere*. Pinning
+  `zr` to a fixed reg merely relocates that move from the back-edge bridge into the
+  body assignment — same per-iteration cost (confirmed by the SSA model: a relabel
+  reconciliation cannot be moved off the critical path, only shifted).
+- **The duplications are coalescable.** `FprAllocator.vfpr` is `Vec<Vec<SlotId>>` —
+  one fpr *already* can hold several slots. The two `zr`-aliases sit in separate
+  fprs only because the parallel-assignment codegen split them. Coalescing
+  copy-aliased loop-carried floats into one fpr removes the duplicate back-edge move
+  (kernel 4 → 2).
+
+### 43.2 Consequence
+
+(2) is a **copy-coalescing** optimization, not a generic "global pin": it recovers
+~half the back-edge moves (the duplications), and the rest are intrinsic. That is a
+real but *partial* win, a substantial fixpoint-allocator change (coalesce decision
+threaded through `copy_slot` + the merge target), squarely in §16.6's regressed-
+before risk class, and still M1-gated. The cheaper §42 `phys-loop-aware` lever is
+orthogonal (pressure-gated); coalescing is the POOL=14-relevant one but pays only
+on copy-heavy loop-carried floats (the `a,b = c,d` swap/rotate shape).
