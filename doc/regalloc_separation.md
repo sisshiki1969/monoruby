@@ -2691,3 +2691,116 @@ sentinel in the prologue (data, not layout) and see whether `res[0]` returns the
 sentinel (⇒ a genuine pre-store read on the re-entry path) or unrelated garbage
 (⇒ cross-compile transition). Shipping result unchanged: §27 Stage 1; the bug is
 default-off (`layer2-float-by-type`), x86-only, never in CI.
+
+## 38. The NaN-poison probe fires — §37 is falsified; it is a boxed→F unbox gap
+
+§37's non-perturbing probe was run: `init_func`'s prologue now fills the JIT-grown
+spill region (every 8-byte slot below the last temp, before the nil-clear loop
+re-clears the temps) with the quiet-NaN sentinel `0x7ff8_0000_dead_beef`. This is
+**data, not layout**-only in spirit, but note it *does* add instructions — and
+**the bug still reproduced** under `cargo test --features
+layer2-float-by-type,stress-spill-pool test_join_float_register_disagreement`:
+
+```
+expected:[-1.0, -0.5, 0.0, 0.5, 1.0]
+actual  :[6.92321020550915e-310, -0.5, 0.0, 0.5, 1.0]
+```
+
+Two findings overturn §34–§37:
+
+1. **It is not a pure Heisenbug.** Adding the whole poison-fill prologue (a real
+   layout change) did **not** heal it. The "every probe heals it" claim was an
+   artefact of *where* the earlier probes sat (in the emit/print path), not a law.
+
+2. **§37's "uninitialised spill read" hypothesis is falsified.** If `res[0]` were a
+   pre-store read of a spilled `a`, the poison would surface as `NaN`. It does not.
+   `6.92321020550915e-310` has bits `0x0000_7f71_f000_1e02` — a `0x7f…` userspace
+   **pointer** (low nibble `0x2`, *not* 16-byte-aligned, so not a clean RValue ptr;
+   its low two bits `0b10` are the flonum tag). So `res[0]` is a heap `Float` whose
+   stored f64 is a **boxed `Value`'s pointer bits read as a raw IEEE-754 double**,
+   then re-boxed by `f64_to_val`/`float_heap`. The corruption is a **boxed↔unboxed
+   `LinkMode` disagreement**, not uninitialised memory and not a missing spill store.
+
+3. **Only `res[0]` (the forward-entry / first iteration) is wrong**; `res[1..4]`
+   (back-edge-resident iterations) are correct. So the defect is on the **forward
+   entry into the loop** — the pre-header `S → F` bridge fails to *unbox* a slot the
+   body then consumes as `F`, leaving the F home holding the raw boxed pointer. This
+   **vindicates §32** (entry-vs-body adopt-set mismatch) and retracts §34's walk-back.
+
+### 38.1 Where the seam is
+
+`merge.rs:incoming_context` builds the loop-entry `target` and, under
+`layer2-float-by-type`, adopts slot `i` as `F` iff `be.is_float_typed(i) &&
+loop_float.contains(&i)` (type+liveness) — a *different* set from the default
+`mode==F` (placement). `gen_bridges_for_branches` then reconciles each forward
+entry to `target` via `state.gen_bridge`. The hypothesis: layer2 adopts a
+loop-carried float (`endv`, or whichever slot aliases `a`'s physical home) whose
+forward-entry `gen_bridge` does **not** emit the guarded `float_to_fpr` unbox into
+the adopted F home (or emits it into the wrong home), so the i=0 body reads the
+still-boxed pointer. The poison rules the home **out of the spill file** (not NaN),
+so the mis-loaded F home is a **pool xmm**, narrowing the search to the
+`S/Sf/C(float) → F(pool)` forward-bridge path under the layer2 adopt set.
+
+### 38.2 The F home is actively mis-loaded, not read uninitialised
+
+Extending the probe to also poison the pool xmms (`movq xmm2..xmm15, NaN` at
+prologue) **did not** change the outcome: `res[0]` stays a fresh `0x7f…` pointer
+(`6.936…e-310`) every run, never the NaN. So the consumed F home is **not** read
+before a store — a raw **boxed pointer is actively moved into it** (a `movq xmm,
+[r14-conv(slot)]` from a boxed stack slot, with no `float_to_fpr` unbox). The
+pointer shifts run-to-run (ASLR), confirming it is a *live heap address*, not a
+constant — and since `a`'s own values (`±1.0/±0.5/0.0`) are **flonum immediates**
+(never pointers), the mis-read slot is a *different* slot that holds a heap object.
+The only loop-live heap object is `res` (the Array). So on the i=0 forward entry,
+**`res`'s boxed Array pointer is unboxed-as-float into the home the body reads for
+`a`**, then re-boxed and pushed — an entry-bridge that unboxes the *wrong slot*
+into `a`'s F home (a register-aliasing / adopt-set mismatch, §32), not a missing
+store. Next: read `gen_bridge`'s `S/C → F` emission for the layer2 adopt set to
+find the slot whose forward bridge writes `a`'s home. Shipping result unchanged:
+§27 Stage 1; bug still default-off, x86-only, never in CI.
+
+### 38.3 Bridge dump: layer2 forces `a` to spill; corruption is runtime, not IR
+
+Instrumenting `gen_bridges_for_branches` to print every loop-merge bridge
+(`entry → target`, with the emitted `inst` stream) for the *failing* recompile of
+`test` pins the placement exactly. Slot map: `%1`=`res`, `%2`=`i`, `%3`=`endv`,
+`%4`=`a`. The forward (method/loop) entry bridge is correct:
+
+```
+BRIDGE BB1 (loop head) entry=all-S
+  target: [%3: F(FPReg(1))] [%4: S(Value)] …
+  inst  : [StackToReg(%3,Rax), FloatToFpr(Rax,FPReg(1),deopt)]   ; endv unboxed, guarded
+```
+
+Under `layer2-float-by-type`, `endv` (`%3`) is adopted `F` for the whole loop and
+**permanently pins the physical reg `FPReg(1)`**. With `stress-spill-pool`
+(`POOL=2`, only `FPReg(0..1)` physical), the body then computes `a` (`%4`) into
+the one remaining physical `FPReg(0)`, and at the diamond join **BB4** must move it
+to **`FPReg(2)` — a spill** (`id 2 ≥ POOL`):
+
+```
+BRIDGE BB4 Side(BB2)  entry [%4:F(FPReg(0))] → target [%4:F(FPReg(2))]  inst [FprMove(FPReg(0),FPReg(2))]
+```
+
+Every iteration takes this same Side path (`a = -1+i·0.5 ≤ 1.0 = endv` always, so
+`a > endv` is always false), so the IR is identical for i=0..4 — there is **no
+IR-level distinction** for the corrupted first iteration. The spill offsets agree:
+the store `FprMove(FPReg(0)→FPReg(2))` and the `res << a` read (`FprToStack →
+fpr_to_stack → load_fpr_into_xmm0`) both resolve `FPReg(2)` to **`[rbp-168]`**
+(`base_stack_offset=192`, `168 = 192-24+8·0`), well clear of the live slots
+(`conv(%1)=72`, `conv(%4)=96`) — so **no slot/spill aliasing**, and `168` *is*
+inside the poisoned region yet `res[0]` is still the pointer, not NaN.
+
+**Conclusion.** The store writes `xmm2` (`FPReg(0)`) to `[rbp-168]`; the read loads
+it back; both offsets are correct and poisoned. So on the i=0 path `xmm2` itself
+**transiently holds a boxed pointer** at the moment `a`'s value is spilled — the
+`a = -1.0 + i*0.5` computation deposits a non-float into its result reg on exactly
+the first iteration. This is a **runtime register-state corruption**, not a missing
+store, not an aliased slot, not an uninitialised read (all falsified). It is
+*caused* by the layer2 × spill interaction (pinning `endv` forces `a` to live in
+`FPReg(0)`/spill under `POOL=2`), but the defect is upstream of the bridge: the
+first-iteration float computation feeding `FPReg(0)`. Pinning the exact instruction
+needs a runtime watch on `xmm2` across i=0's `a`-computation (gdb/hardware
+watchpoint) — the IR and emitted bytes are now exhausted as evidence. Shipping
+result unchanged: §27 Stage 1; bug default-off (`layer2-float-by-type`), x86-only,
+never in CI.
