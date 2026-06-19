@@ -2883,3 +2883,57 @@ the regalloc separation work is vindicated. The bug was merely *exposed* by
 a loop-carried float into a spill slot whose deopt write-back then trips the
 stack-discipline error. With §39 fixed, `layer2-float-by-type` no longer has a
 known correctness blocker under `stress-spill-pool`.
+
+## 40. Bench gate for `layer2-float-by-type`: a −9% mandelbrot regression, root-caused and fixed
+
+With §39 unblocking correctness, the bench gate (§13.4) was run on x86-64,
+`layer2-float-by-type` ON vs OFF (release, best-of-N min):
+
+| benchmark | OFF (base) | ON (old adopt) | ratio |
+|---|---|---|---|
+| so_mandelbrot (2000²) | 0.94 s | 1.03 s | **1.086 ❌** |
+| so_nbody (200k) | 0.249 s | 0.247 s | 0.991 |
+| app_aobench (256²) | 6.23 s | 6.12 s | 0.983 |
+
+mandelbrot regressed **~9 %**, and the regression *scaled with the float loop*
+(600² 2.2 % → 2000² 9 %), so it was steady-state, not noise — and on the default
+`POOL=14` build, so **not** spill pressure.
+
+### 40.1 Root cause (emit-asm of the kernel loop)
+
+`emit-asm` of the isolated complex-iteration kernel (`tr=zr²−zi²+cr; ti=2zr·zi+ci;
+zr,zi=tr,ti`) showed the back-edge bridge:
+
+- **OFF**: 4 pure `movq xmm,xmm` (carried floats stay `F`, unboxed).
+- **ON**: 4× `movq xmm0,xmmN; call f64_to_val; mov [rbp-off],rax` — i.e. it
+  **boxes the carried floats every iteration**, then reloads them at loop entry.
+
+So layer2's loop-entry/back-edge target held the carried floats as `S` (boxed),
+not `F`. The cause: the L2-1 adopt set `is_float_typed(i) ∧ loop_used_as_float(i)`
+is *narrower* than the fixpoint's `mode==F` — it misses **copy-aliased** carried
+floats (the `zr,zi = tr,ti` duplicates, written by copy and only read as float
+next iteration, so their `UseTy` isn't `Float`). OFF unboxes 6, ON only 4; the
+missing 2 get boxed/reboxed per iteration.
+
+### 40.2 Fix — adopt the *union* (layer2 ⊇ greedy)
+
+```rust
+let adopt = |i| (be.is_float_typed(i) && loop_float.contains(&i))
+             || matches!(be.mode(i), LinkMode::F(_));
+```
+
+Keep the type+liveness signal (the L2-1 decoupling intent — it can still adopt
+*more* than placement), but never adopt a *narrower* set than the fixpoint, so a
+carried float the fixpoint kept `F` can never be boxed at the back-edge. This
+re-introduces a *floor* dependence on placement (`mode==F`), which is acceptable:
+§16.6 already established that fully placement-free adoption is perf-neutral at
+best, and the gate is what matters for default-promotion.
+
+### 40.3 Result — gate passes
+
+Release best-of-13, layer2-fixed vs base: mandelbrot **0.995** (regression gone,
+0.5 % faster), aobench **0.987** (1.3 % faster), nbody **≈1.0**. All within noise
+or better → **the bench gate passes**. Correctness preserved: the full stress
+suite (`stress-spill-pool,gc-stress,layer2-float-by-type`) is **2090/2090**. The
+default build is unchanged (the adopt block is `layer2-float-by-type`-gated).
+`layer2-float-by-type` is now a candidate for default-on.

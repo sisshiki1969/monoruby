@@ -126,7 +126,17 @@ impl<'a> JitContext<'a> {
                     {
                         let loop_float: std::collections::HashSet<SlotId> =
                             liveness.loop_used_as_float().map(|(s, _)| s).collect();
-                        let adopt = |i| be.is_float_typed(i) && loop_float.contains(&i);
+                        // Adopt the *type+liveness* signal (the L2-1 decoupling
+                        // goal), but never adopt a *narrower* set than the
+                        // fixpoint's placement: a loop-carried float the fixpoint
+                        // already kept `F` must stay `F`, else the back-edge boxes
+                        // it every iteration (the mandelbrot regression — the
+                        // type signal misses copy-aliased carried floats). So
+                        // adopt the union, keeping layer2 ⊇ the default greedy.
+                        let adopt = |i| {
+                            (be.is_float_typed(i) && loop_float.contains(&i))
+                                || matches!(be.mode(i), LinkMode::F(_))
+                        };
                         target.keep_backedge_floats(adopt, promotable);
                     }
                 }
