@@ -2971,3 +2971,51 @@ semantics, so a darwin-aarch64 codegen miscompile in the `POOL=14` float path. I
 is sidestepped by `stress-spill-pool` (so `bin/test` and the benchmark-driver
 warmup path are unaffected) and is unrelated to layer2 (reproduces on `base`).
 Tracked separately; not reproducible under linux-aarch64 QEMU.
+
+## 42. Stage 2a+2b landed behind `phys-loop-aware`: §29 inertness cracked (under pressure)
+
+Implements the §27.3 loop-aware allocator and — unlike the reverted §28/§29 attempt
+— **verifies it is non-inert**.
+
+**Stage 2a (collect `L`).** A `loop_carried: HashSet<SlotId>` on `SlotState` records
+the loop-carried float set (slots `F`/`Sf` at the back-edge), populated at the
+loop-entry merge from `backedge_for_floats`. The timing §29 lacked is solved by the
+**multi-iteration fixpoint**: the back-edge is already computed before real codegen,
+so `L` is known at merge time. It propagates into the body for free via `Clone` and
+the `&mut self` joins (a correctness-neutral hint). Confirmed populated: the
+complex-iteration kernel gives `L=6` (F=4, Sf=2); `so_nbody` `L=8` (F=7, Sf=1).
+
+**Stage 2b (use `L`).** The phase-1 spill-victim filter (gated on `phys-loop-aware`)
+excludes an all-`Sf` fpr that holds a loop-carried slot, so a fresh value takes a
+phase-2 spill instead of evicting a loop-carried `Sf` cache — fewer in-loop reloads
+(§27.3-2b).
+
+**Non-inertness (the verification the user asked for).** Via the §24 shadow digest,
+on the kernel:
+
+| config | kernel loop digest | `n` (placements) |
+|---|---|---|
+| `shadow-placement` (off) | `0x48168ad7c99d76d5` | 28 |
+| `+ phys-loop-aware` | `0x6191a84d9623dbad` | **26** |
+
+The digest **differs** and the placement count drops **28 → 26** — keeping the
+loop-carried `Sf` resident removed two in-loop reload placements, exactly §26's
+predicted "fewer back-edge moves / different placement". So the §29 wall ("`L`
+always empty at allocation") is cracked: `L` is available *and* changes placement.
+
+**Scope / honest caveat.** The lever only engages under **register pressure**:
+phase 1 (the Sf-demote it gates) runs only when phase 0 finds no vacant fpr. Under
+the shipping `POOL=14`, float loops with `< 14` simultaneously-live floats never hit
+phase 1, so `phys-loop-aware` is **inert there** and the shipping build stays
+byte-identical (the `so_nbody` `POOL=14` digest diff is empty). It bites under
+`stress-spill-pool` (`POOL=2`) and on genuinely high-pressure loops (the
+`doom`-renderer ≈14-float class). So its real-hardware value is narrow, and 2c (the
+M1 perf A/B) measures exactly that.
+
+**Correctness.** `stress-spill-pool,gc-stress,phys-loop-aware` (the lever firing
+under GC) is **2090/2090**. Default build unaffected (the field is an inert,
+`#[allow(dead_code)]` hint; all policy code is `phys-loop-aware`-gated).
+
+**Status.** Stage 2a+2b are implemented and proven non-inert; 2c (M1 perf A/B on
+high-pressure float code) is the gate, and given the POOL=14 inertness it should be
+evaluated on whether any shipping benchmark has enough FP pressure to benefit.

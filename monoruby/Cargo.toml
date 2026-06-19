@@ -66,6 +66,14 @@ shadow-placement = []
 # formula it replaces (verified via `shadow-placement` digests); the seam where
 # P4's loop-aware allocator swaps in. Default-off until the M1 A/B gate clears.
 phys-table = []
+# §5 §27.3 Stage-2: the loop-aware FP allocation policy. ① (the back-edge
+# fixpoint) records the loop-carried float set `L`; the phase-1 spill-victim
+# policy then keeps `L`'s `Sf` caches resident (a fresh value spills instead of
+# evicting a loop-carried float), cutting in-loop reloads. NON-byte-identical by
+# design (§26): it changes placement / removes back-edge moves, so the
+# `shadow-placement` digest becomes a *delta* meter, not an equality check, and
+# the gate is M1 perf A/B (§27.3-2c). Default-off until that gate clears.
+phys-loop-aware = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 
