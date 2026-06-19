@@ -2644,3 +2644,50 @@ which load returns the sentinel, or a hardware watchpoint on the slot — rather
 any dump/trace, all of which move the layout. That is the precise, and only,
 remaining way forward. Code unchanged; tree clean; shipping result stays §27
 Stage 1.
+
+## 37. Captured under emit-asm via recompile; every observable path is correct
+
+A breakthrough on observability: the bug **is** captured under `emit-asm` when the
+failure happens on a **partial-recompile (`ClassVersionGuardFailed`)** path — the
+`run_test` wrapper drives Array-class version bumps that trigger loop recompiles,
+and one of those recompiled-loop runs prints the garbage (`res[0] = 6.9…e-310`)
+with full asm. So that path is *not* Heisenbug-masked, and the cold-page side
+bridge could finally be read.
+
+Using §36's `get_label_address(&entry).as_ptr()` byte read in the outline-bridge
+emit loop, **every** side-exit fpr bridge in the *failing* run is:
+
+```
+66 0f d6 95 58 ff ff ff    movq [rbp-0xa8], xmm2    ; a -> FPReg2 spill
+e9 .. .. .. ..             jmp  BB4
+```
+
+i.e. correct — the store is present even when the run corrupts. And the two
+compiles of `test` (first + recompile) have **identical, correct** main-page code.
+
+Then the last runtime suspect — the **deopt writeback** of a *spilled* live float
+(`a` at `[rbp-0xa8]`, only spilled because layer2 pins `endv` to a physical reg
+under `pool=2`) — was checked and is also correct: `FprToStack` → `fpr_to_stack`
+→ `load_fpr_into_xmm0(fpr, base)`, which for `fpr.0 >= PHYS_FPR_POOL` loads
+`movq xmm0, [rbp-(base-24+8·n)]` — the right spill slot.
+
+### 37.1 Every observable artefact is correct; the bug remains layout-Heisenbug
+
+Verified correct, in the *failing* configuration: the main-block code, the side-
+exit outline bridge **bytes**, the `FprMove` and `FprToStack` lowerings, the deopt
+writeback's spill read, and the frame's `sub rsp` reservation (§35). Yet the
+un-instrumented build still corrupts `res[0]` and every probe heals it. The
+conclusion of §36 stands and is now airtight: this is a **layout-sensitive
+uninitialised/aliased-memory Heisenbug** whose failing register/spill *layout* is,
+by construction, the one no dump can print — not a defect in any single emitted
+instruction. The `res[0]`-only / first-iteration-after-recompile signature most
+likely implicates the **transition** (old-compile deopt → VM → recompiled-loop
+re-entry) leaving `a`'s spill slot in a state the fresh layout reads before its own
+store on exactly that entry — but that crosses two compiles' layouts, so it too
+resists a single-build dump.
+
+**Only a non-perturbing probe can close it**: poison every spill slot with a NaN
+sentinel in the prologue (data, not layout) and see whether `res[0]` returns the
+sentinel (⇒ a genuine pre-store read on the re-entry path) or unrelated garbage
+(⇒ cross-compile transition). Shipping result unchanged: §27 Stage 1; the bug is
+default-off (`layer2-float-by-type`), x86-only, never in CI.
