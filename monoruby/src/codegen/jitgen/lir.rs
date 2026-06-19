@@ -1,10 +1,18 @@
 //! # Unified low-level IR (LIR) — arch-neutral machine-level instructions
 //!
-//! **Stage 1 of the Phase-1 "unified low-level IR" effort.** This module
-//! defines the *data model only*; it is not yet wired into the compilation
-//! pipeline (hence the module-level `dead_code` allow). Subsequent stages
-//! migrate the per-arch `emit_*` primitives onto it one instruction family at a
-//! time. See `doc/lir.md` for the full design and migration plan.
+//! **The unified low-level IR (Phase-1 item ③).** This module defines the
+//! arch-neutral machine-level instruction set (`LInst`) and its logical
+//! operands (`LOperand` / `LReg` / `LMem`). It **is** wired into the pipeline:
+//! both backends' `encode_linst` (`arch/<arch>/compile`) consume `LInst` as the
+//! **single byte-emission seam**. The family migration is far along — register
+//! moves, slot/field memory, the full FP family, fixnum arithmetic, the guard /
+//! check family, the whole method-call family, and the cold side-exit/deopt
+//! handlers all lower through `encode_linst` (stages 2-A…3-H + A, B5–B8; see the
+//! migration log in `doc/lir.md` §6). The arms still handled directly in the
+//! dispatcher are the specialized inlined-frame family and the zero-byte
+//! patch/recompile bookkeeping (`doc/lir.md` §8); migrating the `AsmInst::Inline`
+//! builtin generators onto LIR is the remaining "express inline-builtin codegen
+//! once, arch-neutrally" goal.
 //!
 //! ## Where it sits
 //!
@@ -38,7 +46,8 @@
 //! one description, which is also the concrete code-generation target the future
 //! interpreter/JIT DSL (Phase-1 item ③) lowers to.
 
-// Stage-1 scaffolding: the model exists but nothing consumes it yet.
+// Some `LInst` variants / helpers are only used by not-yet-migrated families
+// (the `AsmInst::Inline` builtin generators); keep them ahead of their consumers.
 #![allow(dead_code)]
 
 use super::*;
