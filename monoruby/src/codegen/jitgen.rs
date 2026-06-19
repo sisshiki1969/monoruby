@@ -1034,18 +1034,27 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
-        // Undo the rsp bump that Loop JIT applied at its entry (see
-        // `AsmInst::LoopJitRspBump`). Method / specialized JITs
-        // restore rsp implicitly via their `leave; ret` epilogue, so
-        // the adjustment is Loop-specific. `loop_jit_spill_bytes`
-        // is `0` for non-Loop frames or Loop frames without spill,
-        // matching the entry-side `subq rsp, _` exactly.
+        // Deopt write-back FIRST, while the Loop-JIT rsp bump is still
+        // in effect. The write-back boxes spilled floats with `call`s
+        // (e.g. `f64_to_val`), and a `call` pushes its return address at
+        // `[rsp-8]`. The bump is what keeps rsp *below* the spill region
+        // (`[rbp - (base-24+8n)]`); if we undid it first, those pushed
+        // return addresses would land on the very spill slots the
+        // write-back is about to read, corrupting a live float (it would
+        // box a code pointer back to the VM). See the deopt-bridge
+        // analysis in doc/regalloc_separation.md §39.
+        self.gen_write_back_for_deopt(wb, base);
+        // Now undo the rsp bump that Loop JIT applied at its entry (see
+        // `AsmInst::LoopJitRspBump`). Method / specialized JITs restore
+        // rsp implicitly via their `leave; ret` epilogue, so the
+        // adjustment is Loop-specific. `loop_jit_spill_bytes` is `0` for
+        // non-Loop frames or Loop frames without spill, matching the
+        // entry-side `subq rsp, _` exactly.
         if loop_jit_spill_bytes > 0 {
             monoasm!( &mut self.jit,
                 addq rsp, (loop_jit_spill_bytes as i32);
             );
         }
-        self.gen_write_back_for_deopt(wb, base);
         monoasm!( &mut self.jit,
             movq r13, (pc.as_ptr());
         );

@@ -267,8 +267,13 @@ impl Codegen {
         base: usize,
     ) {
         self.jit.bind_label(entry);
-        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Write back FIRST, while the loop sp-bump still keeps sp below the
+        // spill region: the write-back boxes spilled floats with calls whose
+        // callee prologues push below sp, and undoing the bump first would let
+        // those pushes overwrite the spill slots being read (see the x86 twin
+        // `side_exit_with_label` and doc/regalloc_separation.md §39).
         self.a64_gen_write_back_for_deopt(wb, base);
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
         // PC == x21.
@@ -297,8 +302,10 @@ impl Codegen {
         base: usize,
     ) {
         self.jit.bind_label(entry);
-        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Write back before undoing the bump — same spill-clobber reason as
+        // `a64_gen_deopt` / the x86 `side_exit_with_label` (§39).
         self.a64_gen_write_back_for_deopt(wb, base);
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,

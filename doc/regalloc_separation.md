@@ -2804,3 +2804,81 @@ needs a runtime watch on `xmm2` across i=0's `a`-computation (gdb/hardware
 watchpoint) — the IR and emitted bytes are now exhausted as evidence. Shipping
 result unchanged: §27 Stage 1; bug default-off (`layer2-float-by-type`), x86-only,
 never in CI.
+
+## 39. SOLVED — the deopt write-back undoes the loop sp-bump too early
+
+The gdb watch closed it, and it is **not** a regalloc bug at all — §32/§38's
+"upstream of the bridge" instinct was right but the culprit is the **deopt
+side-exit handler**, and the trigger is mundane stack discipline.
+
+### 39.1 The decisive observation
+
+Break on `Value::float_heap` (called *only* for the bug, since `±1/±0.5/0` are all
+flonum immediates → no heap Float on the happy path). It fires with
+`num = 0x00007fff_40001e02`. That is **not** a float and **not** `res` — it is a
+**code address on the cold page** (`0x7fff40000000…`). Disassembling there:
+
+```
+0x7fff40001df5: add  $0x10,%rsp           ; ← undo the loop-JIT rsp bump
+0x7fff40001df9: movq %xmm3,%xmm0          ; box endv
+0x7fff40001dfd: call f64_to_val           ; pushes ret-addr 0x7fff40001e02 at [rsp-8]
+0x7fff40001e02: mov  %rax,-0x40(%r14)
+0x7fff40001e06: movq -0xa8(%rbp),%xmm0    ; read a's spill — now 0x7fff40001e02 !
+0x7fff40001e0e: call f64_to_val           ; box the garbage → float_heap(num)
+```
+
+`num` **equals the return address of the immediately-preceding `call` in the same
+bridge**. Proof, not inference: that `call` pushed its return address at `[rsp-8]`,
+and `[rsp-8] == [rbp-0xa8]` because the bridge had just done `add $0x10,%rsp`. The
+constant pool was verified correct in the same session (`0.5 = 0x3fe0…`,
+`-1.0 = 0xbff0…`), ruling out the const-corruption hypothesis.
+
+### 39.2 Root cause
+
+`side_exit_with_label` (the deopt / evict / recompile handler) did:
+
+```
+if loop_jit_spill_bytes > 0 { addq rsp, bytes }   // undo bump
+gen_write_back_for_deopt(wb, base)                 // box spilled floats via calls
+```
+
+The loop-JIT entry's `subq rsp, bytes` (`emit_loop_jit_rsp_bump`) is exactly what
+keeps `rsp` **below** the spill region (`[rbp-(base-24+8n)]`). Undoing it *before*
+the write-back exposes the spill slots: the write-back boxes each spilled float
+with a `call`, and the `call`'s pushed return address lands on the very slot it is
+about to read. The first boxed value (`endv`) corrupts the second (`a`), so the
+deopt writes a **code pointer reinterpreted as f64** back to the VM frame, and the
+VM resumes the loop body with that garbage as `a` → `res[0]`.
+
+This is why it is **first-iteration-only** (the partial recompile's class-version
+guard deopts once, on entry, while the version is still stale), **spill-only**
+(no spill ⇒ no slot below the restored `rsp`), and **layer2-dependent** (pinning
+`endv` to a physical reg under `POOL=2` is what forces `a` to spill in the first
+place). It also explains why every *static* artefact looked correct: the
+corruption happens at runtime, inside the cold deopt bridge, between the boxing
+`call` and the spill read.
+
+### 39.3 Fix
+
+Reorder: run `gen_write_back_for_deopt` **first** (while the bump still protects
+the spill slots — the boxing calls then push *below* the region), then undo the
+bump. Applied to x86 `side_exit_with_label`; the aarch64 twins
+(`a64_gen_deopt`, `a64_gen_handle_error`) had the identical undo-before-write-back
+order and were reordered to match (the other aarch64 unwinders —
+`emit_raise/retry/redo/ensure_end` — already undo *after* their call, so they were
+correct). The aarch64 `emit_loop_jit_rsp_bump` likewise lowers sp below the
+fp-relative spills, so the same hazard and the same fix apply.
+
+Verified on x86: `test_join_float_register_disagreement` passes under
+`layer2-float-by-type,stress-spill-pool`; the full default lib suite is **1706/0**;
+`stress-spill-pool` alone and `layer2+stress` codegen suites are green. The
+aarch64 reorder is by symmetry (untested on the x86 host; M1 CI will confirm).
+
+### 39.4 Bearing on §5
+
+This was a **latent deopt-bridge bug**, not a flaw in the §27 Stage-1 ②/③ split —
+the regalloc separation work is vindicated. The bug was merely *exposed* by
+`layer2-float-by-type` because that policy is the first thing that reliably drives
+a loop-carried float into a spill slot whose deopt write-back then trips the
+stack-discipline error. With §39 fixed, `layer2-float-by-type` no longer has a
+known correctness blocker under `stress-spill-pool`.
