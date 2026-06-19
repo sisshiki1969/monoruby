@@ -2937,3 +2937,37 @@ or better → **the bench gate passes**. Correctness preserved: the full stress
 suite (`stress-spill-pool,gc-stress,layer2-float-by-type`) is **2090/2090**. The
 default build is unchanged (the adopt block is `layer2-float-by-type`-gated).
 `layer2-float-by-type` is now a candidate for default-on.
+
+## 41. `layer2-float-by-type` promoted to default-on (bench gate cleared, both arches)
+
+The §40 union-adopt fix cleared the bench gate on **both** architectures, so
+`layer2-float-by-type` is added to `default` in `monoruby/Cargo.toml`.
+
+**x86-64** (release, best-of-13, layer2/base): mandelbrot **0.995**, aobench
+**0.987**, nbody ≈1.0 — no regression, mandelbrot/aobench faster.
+
+**M1 / arm64-apple-darwin** (benchmark-driver, i/s, layer2/base):
+
+| bench | ratio | | bench | ratio |
+|---|---|---|---|---|
+| mandelbrot | 1.002 | | nqueen | 1.018 |
+| aobench | 1.021 | | bedcov | 1.019 |
+| nbody | 1.001 | | fib | 0.997 |
+| bf / sudoku / matmul | ≈1.00 | | | |
+
+No benchmark regresses beyond noise; aobench/nqueen/bedcov gain ~2 %. The
+mandelbrot −9 % seen with the *old* (pre-§40) adopt is gone on both arches.
+
+The feature is kept (not yet folded) so `--no-default-features` rolls back to the
+greedy placement adopt and the A/B stays available; it will be folded once it has
+soaked. Correctness already covered: the full stress suite
+(`stress-spill-pool,gc-stress,layer2-float-by-type`) is 2090/2090 on x86-64, and
+`bin/test` passes on M1 + x86-64.
+
+Note (separate, pre-existing): a *standalone* (single cold run) `so_nbody` /
+size-2000 `so_mandelbrot` raises a spurious `ZeroDivisionError` on
+arm64-apple-darwin **plain** release builds — impossible under correct Ruby float
+semantics, so a darwin-aarch64 codegen miscompile in the `POOL=14` float path. It
+is sidestepped by `stress-spill-pool` (so `bin/test` and the benchmark-driver
+warmup path are unaffected) and is unrelated to layer2 (reproduces on `base`).
+Tracked separately; not reproducible under linux-aarch64 QEMU.
