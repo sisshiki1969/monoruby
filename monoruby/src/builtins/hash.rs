@@ -794,10 +794,10 @@ fn hash_index(
     }
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashindex as *const () as u64));
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     let error = ir.new_error(state);
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);

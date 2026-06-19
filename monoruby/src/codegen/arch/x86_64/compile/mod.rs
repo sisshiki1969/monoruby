@@ -81,8 +81,8 @@ impl Codegen {
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
             | AsmInst::FprToStack(..)
-            | AsmInst::XmmSave(..)
-            | AsmInst::XmmRestore(..)
+            | AsmInst::FprSave(..)
+            | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOp { .. }
             | AsmInst::IntegerCmp { .. }
             | AsmInst::IntegerCmpBr { .. }
@@ -160,6 +160,8 @@ impl Codegen {
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
+            | AsmInst::ArrayIndex { .. }
+            | AsmInst::ArrayIndexAssign { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
@@ -476,7 +478,7 @@ impl Codegen {
             // ---- FP transfer / convert (spill-aware) -------------------------
             LInst::FprMove { src, dst, base } => {
                 if src != dst {
-                    match (src.loc(base), dst.loc(base)) {
+                    match (PhysMap::new(base).resolve(src), PhysMap::new(base).resolve(dst)) {
                         (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
                             movq xmm(d), xmm(s);
                         ),
@@ -495,7 +497,7 @@ impl Codegen {
             }
             LInst::F64ToFpr { f, dst, base } => {
                 let f_const = self.jit.const_f64(f);
-                match dst.loc(base) {
+                match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                         movq xmm(p), [rip + f_const];
                     ),
@@ -506,7 +508,7 @@ impl Codegen {
                 }
             }
             LInst::FixnumToFpr { src, dst, base } => {
-                let (work, spill_off) = match dst.loc(base) {
+                let (work, spill_off) = match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
                 };
@@ -522,7 +524,7 @@ impl Codegen {
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {
-                    match (lhs.loc(base), rhs.loc(base)) {
+                    match (PhysMap::new(base).resolve(lhs), PhysMap::new(base).resolve(rhs)) {
                         (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
                             movq xmm0, xmm(lp);
                             movq xmm(lp), xmm(rp);
@@ -548,7 +550,7 @@ impl Codegen {
                 }
             }
             LInst::FloatToFpr { src, dst, deopt, base } => {
-                let (work, spill_off) = match dst.loc(base) {
+                let (work, spill_off) = match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
                 };
@@ -564,7 +566,7 @@ impl Codegen {
                 monoasm! {&mut self.jit,
                     movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
                 }
-                match dst.loc(base) {
+                match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                         movq xmm(p), [rip + f];
                     ),
@@ -581,7 +583,7 @@ impl Codegen {
             LInst::FloatUnOp { kind, dst, base } => match kind {
                 UnOpK::Neg => {
                     let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
-                    match dst.loc(base) {
+                    match PhysMap::new(base).resolve(dst) {
                         FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
                             xorps xmm(p), [rip + imm];
                         ),
@@ -614,27 +616,27 @@ impl Codegen {
                 self.condbr_float(kind, dest, brkind);
             }
             // ---- FP pool save/restore + FP C-calls ---------------------------
-            LInst::XmmSave { using_xmm, cont } => self.xmm_save_with_cont(using_xmm, cont),
-            LInst::XmmRestore { using_xmm, cont } => self.xmm_restore_with_cont(using_xmm, cont),
-            LInst::CFunc_F_F { f, src, dst, using_xmm, base } => {
-                self.xmm_save(using_xmm);
+            LInst::FprSave { using_fpr, cont } => self.fpr_save_with_cont(using_fpr, cont),
+            LInst::FprRestore { using_fpr, cont } => self.fpr_restore_with_cont(using_fpr, cont),
+            LInst::CFunc_F_F { f, src, dst, using_fpr, base } => {
+                self.fpr_save(using_fpr);
                 self.load_fpr_into_xmm0(src, base);
                 monoasm!( &mut self.jit,
                     movq rax, (f);
                     call rax;
                 );
-                self.xmm_restore(using_xmm);
+                self.fpr_restore(using_fpr);
                 self.store_fpr_into_xmm(dst, base);
             }
-            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm, base } => {
-                self.xmm_save(using_xmm);
+            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_fpr, base } => {
+                self.fpr_save(using_fpr);
                 self.load_fpr_into_xmm0(lhs, base);
                 self.load_fpr_into_xmm1(rhs, base);
                 monoasm!( &mut self.jit,
                     movq rax, (f);
                     call rax;
                 );
-                self.xmm_restore(using_xmm);
+                self.fpr_restore(using_fpr);
                 self.store_fpr_into_xmm(dst, base);
             }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
@@ -734,10 +736,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_constant(
         &mut self,
         id: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
-        self.store_constant(id, using_xmm);
+        self.store_constant(id, using_fpr);
         self.handle_error(error);
         true
     }
@@ -750,9 +752,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_gvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.load_gvar(name, using_xmm);
+        self.load_gvar(name, using_fpr);
         true
     }
 
@@ -761,9 +763,9 @@ impl Codegen {
         &mut self,
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.store_gvar(name, src, using_xmm);
+        self.store_gvar(name, src, using_fpr);
         true
     }
 
@@ -771,9 +773,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_cvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.load_cvar(name, using_xmm);
+        self.load_cvar(name, using_fpr);
         true
     }
 
@@ -809,9 +811,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_new_array(
         &mut self,
         callid: CallSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.new_array(callid, using_xmm);
+        self.new_array(callid, using_fpr);
         true
     }
 
@@ -820,9 +822,9 @@ impl Codegen {
         &mut self,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.new_hash(args, len, using_xmm);
+        self.new_hash(args, len, using_fpr);
         true
     }
 
@@ -833,9 +835,9 @@ impl Codegen {
         hash: SlotId,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -845,7 +847,7 @@ impl Codegen {
             movq rax, (runtime::hash_insert);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -855,9 +857,9 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -866,7 +868,7 @@ impl Codegen {
             movq rax, (runtime::array_concat);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -876,11 +878,11 @@ impl Codegen {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         self.load_rdi(start);
         self.load_rsi(end);
-        self.new_range(exclude_end, using_xmm);
+        self.new_range(exclude_end, using_fpr);
         true
     }
 
@@ -889,15 +891,15 @@ impl Codegen {
         &mut self,
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.concat_string(arg, len, using_xmm);
+        self.concat_string(arg, len, using_fpr);
         true
     }
 
     /// rax <- `src` coerced to an Array (`Array(x)` / splat).
-    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
-        self.to_a(src, using_xmm);
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_fpr: UsingFpr) -> bool {
+        self.to_a(src, using_fpr);
         true
     }
 
@@ -905,9 +907,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.deepcopy_literal(v, using_xmm);
+        self.deepcopy_literal(v, using_fpr);
         true
     }
 
@@ -953,8 +955,8 @@ impl Codegen {
     ///
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
     ///
-    fn array_teq(&mut self, lhs: SlotId, rhs: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn array_teq(&mut self, lhs: SlotId, rhs: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         self.load_rdx(lhs);
         self.load_rcx(rhs);
         monoasm!( &mut self.jit,
@@ -963,7 +965,7 @@ impl Codegen {
             movq rax, (runtime::array_teq);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -977,9 +979,9 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         self.load_rdx(lhs);
         self.load_rcx(rhs);
         monoasm!( &mut self.jit,
@@ -988,7 +990,7 @@ impl Codegen {
             movq rax, (func);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -1011,7 +1013,7 @@ impl Codegen {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) {
         self.load_rdx(lhs);
         self.load_rcx(rhs);
@@ -1047,14 +1049,14 @@ impl Codegen {
             jmp  done;
         slow:
         );
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (func);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         monoasm!( &mut self.jit,
         done:
         );
@@ -1071,8 +1073,8 @@ impl Codegen {
     ///
     /// - caller save registers
     ///
-    fn new_array(&mut self, callid: CallSiteId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn new_array(&mut self, callid: CallSiteId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movl rdx, (callid.get());
             lea  rcx, [r14 - (LFP_SELF)];
@@ -1081,11 +1083,11 @@ impl Codegen {
             movq rax, (runtime::gen_array);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    fn new_hash(&mut self, args: SlotId, len: usize, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn new_hash(&mut self, args: SlotId, len: usize, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1094,11 +1096,11 @@ impl Codegen {
             movq rax, (runtime::gen_hash);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    fn new_range(&mut self, exclude_end: bool, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn new_range(&mut self, exclude_end: bool, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdx, rbx; // &mut Executor
             movq rcx, r12; // &mut Globals
@@ -1106,11 +1108,11 @@ impl Codegen {
             movq rax, (runtime::gen_range);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    fn concat_string(&mut self, arg: SlotId, len: u16, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn concat_string(&mut self, arg: SlotId, len: u16, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1119,10 +1121,10 @@ impl Codegen {
             movq rax, (runtime::concatenate_string);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    fn to_a(&mut self, src: SlotId, using_xmm: UsingXmm) {
+    fn to_a(&mut self, src: SlotId, using_fpr: UsingFpr) {
         let toa = self.jit.label();
         let exit = self.jit.label();
         monoasm!( &mut self.jit,
@@ -1133,7 +1135,7 @@ impl Codegen {
 
         self.select_page(1);
         self.bind_label(toa);
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1141,15 +1143,15 @@ impl Codegen {
             movq rax, (runtime::to_a);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         monoasm!( &mut self.jit,
             jmp  exit;
         );
         self.select_page(0);
     }
 
-    fn concat_regexp(&mut self, arg: SlotId, len: u16, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    fn concat_regexp(&mut self, arg: SlotId, len: u16, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1158,7 +1160,7 @@ impl Codegen {
             movq rax, (runtime::concatenate_regexp);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -1184,9 +1186,9 @@ impl Codegen {
     ///
     /// Get a block argument of current frame.
     ///
-    fn block_arg(&mut self, using_xmm: UsingXmm, call_site_bc_ptr: BytecodePtr) {
+    fn block_arg(&mut self, using_fpr: UsingFpr, call_site_bc_ptr: BytecodePtr) {
         let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdx, r14;
             movq rdi, rbx;
@@ -1195,7 +1197,7 @@ impl Codegen {
             movq rax, (runtime::block_arg);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -1438,8 +1440,8 @@ impl Codegen {
     }
 
     /// `undef`-method via runtime::undef_method(vm, globals, id).
-    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
-        self.xmm_save(using_xmm);
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_fpr: UsingFpr) -> bool {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1447,13 +1449,13 @@ impl Codegen {
             movq rax, (runtime::undef_method);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
     /// Alias a global var via runtime::alias_global_var(globals, new, old).
-    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
-        self.xmm_save(using_xmm);
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_fpr: UsingFpr) -> bool {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, r12;          // &mut Globals
             movl rsi, (new.get());  // new IdentId
@@ -1461,7 +1463,7 @@ impl Codegen {
             movq rax, (runtime::alias_global_var);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -1469,9 +1471,9 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_check_cvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.check_cvar(name, using_xmm);
+        self.check_cvar(name, using_fpr);
         true
     }
 
@@ -1480,9 +1482,9 @@ impl Codegen {
         &mut self,
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.store_cvar(name, src, using_xmm);
+        self.store_cvar(name, src, using_fpr);
         true
     }
 
@@ -1491,9 +1493,9 @@ impl Codegen {
         &mut self,
         new: SlotId,
         old: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -1502,7 +1504,7 @@ impl Codegen {
             movq rax, (runtime::alias_method);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -1511,18 +1513,18 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_defined_yield(
         &mut self,
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_yield(dst, using_xmm);
+        self.defined_yield(dst, using_fpr);
         true
     }
 
     pub(in crate::codegen::jitgen) fn emit_defined_super(
         &mut self,
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_super(dst, using_xmm);
+        self.defined_super(dst, using_fpr);
         true
     }
 
@@ -1530,9 +1532,9 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_gvar(dst, name, using_xmm);
+        self.defined_gvar(dst, name, using_fpr);
         true
     }
 
@@ -1540,9 +1542,9 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_cvar(dst, name, using_xmm);
+        self.defined_cvar(dst, name, using_fpr);
         true
     }
 
@@ -1550,9 +1552,9 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         siteid: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_const(dst, siteid, using_xmm);
+        self.defined_const(dst, siteid, using_fpr);
         true
     }
 
@@ -1561,9 +1563,9 @@ impl Codegen {
         dst: SlotId,
         recv: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_method(dst, recv, name, using_xmm);
+        self.defined_method(dst, recv, name, using_fpr);
         true
     }
 
@@ -1571,9 +1573,9 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.defined_ivar(dst, name, using_xmm);
+        self.defined_ivar(dst, name, using_fpr);
         true
     }
 
@@ -1584,9 +1586,9 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.generic_binop(lhs, rhs, func, using_xmm);
+        self.generic_binop(lhs, rhs, func, using_fpr);
         true
     }
 
@@ -1594,9 +1596,9 @@ impl Codegen {
         &mut self,
         lhs: SlotId,
         rhs: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.array_teq(lhs, rhs, using_xmm);
+        self.array_teq(lhs, rhs, using_fpr);
         true
     }
 
@@ -1606,9 +1608,9 @@ impl Codegen {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+        self.opt_eq_cmp(lhs, rhs, kind, func, using_fpr);
         true
     }
 
@@ -1618,9 +1620,9 @@ impl Codegen {
         &mut self,
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.concat_regexp(arg, len, using_xmm);
+        self.concat_regexp(arg, len, using_fpr);
         true
     }
 
@@ -1642,14 +1644,14 @@ impl Codegen {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let rest = if let Some(rest_pos) = rest_pos {
             rest_pos + 1
         } else {
             0
         };
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             lea rsi, [rbp - (rbp_local(dst))];
             movq rdx, (len);
@@ -1657,7 +1659,7 @@ impl Codegen {
             movq rax, (runtime::expand_array);
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         true
     }
 
@@ -1667,10 +1669,10 @@ impl Codegen {
         &mut self,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
-        self.method_def(name, func_id, using_xmm);
+        self.method_def(name, func_id, using_fpr);
         self.handle_error(error);
         true
     }
@@ -1680,10 +1682,10 @@ impl Codegen {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
-        self.singleton_method_def(obj, name, func_id, using_xmm);
+        self.singleton_method_def(obj, name, func_id, using_fpr);
         self.handle_error(error);
         true
     }
@@ -1780,11 +1782,11 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_block_arg(
         &mut self,
         ret: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
     ) -> bool {
-        self.block_arg(using_xmm, call_site_bc_ptr);
+        self.block_arg(using_fpr, call_site_bc_ptr);
         self.handle_error(error);
         self.store_rax(ret);
         true
@@ -1797,9 +1799,9 @@ impl Codegen {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
-        self.store_ivar_heap(src, ivarid, is_object_ty, using_xmm);
+        self.store_ivar_heap(src, ivarid, is_object_ty, using_fpr);
         true
     }
 }

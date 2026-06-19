@@ -103,9 +103,9 @@ fn fiber_yield_inline(
     // interpolation operand). Write the frame back (the standard GC
     // safepoint) before yielding so every live slot is materialised.
     state.exec_gc(ir, false);
-    let using_xmm = state.get_using_xmm();
+    let using_fpr = state.get_using_fpr();
     let error = ir.new_error(state);
-    ir.xmm_save(using_xmm);
+    ir.fpr_save(using_fpr);
     // TODO: we must check if the parent fiber exits.
     if pos_num == 0 {
         ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_nil());
@@ -120,7 +120,7 @@ fn fiber_yield_inline(
         let yield_fiber = r#gen.yield_fiber as *const () as u64;
         r#gen.emit_fiber_yield_call(yield_fiber)
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     ir.handle_error(error);
     state.def_rax2acc(ir, dst);
     true

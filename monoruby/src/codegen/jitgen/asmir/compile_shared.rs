@@ -170,21 +170,21 @@ impl Codegen {
                 });
             }
             // Store to a constant, bumping the global constant version (aarch64
-            // bails if any xmm is live, hence the bool result).
-            AsmInst::StoreConstant { id, using_xmm, error } => {
+            // bails if any fpr is live, hence the bool result).
+            AsmInst::StoreConstant { id, using_fpr, error } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::StoreConstant { id, using_xmm, error })
+                self.encode_linst(LInst::StoreConstant { id, using_fpr, error })
             }
             // Variable access. gvar/cvar go via a runtime call; dynvar walks the
             // outer-LFP chain.
-            AsmInst::LoadGVar { name, using_xmm } => {
-                self.encode_linst(LInst::LoadGVar { name, using_xmm })
+            AsmInst::LoadGVar { name, using_fpr } => {
+                self.encode_linst(LInst::LoadGVar { name, using_fpr })
             }
-            AsmInst::StoreGVar { name, src, using_xmm } => {
-                self.encode_linst(LInst::StoreGVar { name, src, using_xmm })
+            AsmInst::StoreGVar { name, src, using_fpr } => {
+                self.encode_linst(LInst::StoreGVar { name, src, using_fpr })
             }
-            AsmInst::LoadCVar { name, using_xmm } => {
-                self.encode_linst(LInst::LoadCVar { name, using_xmm })
+            AsmInst::LoadCVar { name, using_fpr } => {
+                self.encode_linst(LInst::LoadCVar { name, using_fpr })
             }
             AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
             AsmInst::StoreDynVar { dst, src } => {
@@ -195,27 +195,27 @@ impl Codegen {
             AsmInst::CreateArray { src, len } => {
                 self.encode_linst(LInst::CreateArray { src, len })
             }
-            AsmInst::NewArray { callid, using_xmm } => {
-                self.encode_linst(LInst::NewArray { callid, using_xmm })
+            AsmInst::NewArray { callid, using_fpr } => {
+                self.encode_linst(LInst::NewArray { callid, using_fpr })
             }
-            AsmInst::NewHash(args, len, using_xmm) => {
-                self.encode_linst(LInst::NewHash { args, len, using_xmm })
+            AsmInst::NewHash(args, len, using_fpr) => {
+                self.encode_linst(LInst::NewHash { args, len, using_fpr })
             }
-            AsmInst::HashInsert { hash, args, len, using_xmm } => {
-                self.encode_linst(LInst::HashInsert { hash, args, len, using_xmm })
+            AsmInst::HashInsert { hash, args, len, using_fpr } => {
+                self.encode_linst(LInst::HashInsert { hash, args, len, using_fpr })
             }
-            AsmInst::ArrayConcat { dst, src, using_xmm } => {
-                self.encode_linst(LInst::ArrayConcat { dst, src, using_xmm })
+            AsmInst::ArrayConcat { dst, src, using_fpr } => {
+                self.encode_linst(LInst::ArrayConcat { dst, src, using_fpr })
             }
-            AsmInst::NewRange { start, end, exclude_end, using_xmm } => {
-                self.encode_linst(LInst::NewRange { start, end, exclude_end, using_xmm })
+            AsmInst::NewRange { start, end, exclude_end, using_fpr } => {
+                self.encode_linst(LInst::NewRange { start, end, exclude_end, using_fpr })
             }
-            AsmInst::ConcatStr { arg, len, using_xmm } => {
-                self.encode_linst(LInst::ConcatStr { arg, len, using_xmm })
+            AsmInst::ConcatStr { arg, len, using_fpr } => {
+                self.encode_linst(LInst::ConcatStr { arg, len, using_fpr })
             }
-            AsmInst::ToA { src, using_xmm } => self.encode_linst(LInst::ToA { src, using_xmm }),
-            AsmInst::DeepCopyLit(v, using_xmm) => {
-                self.encode_linst(LInst::DeepCopyLit { v, using_xmm })
+            AsmInst::ToA { src, using_fpr } => self.encode_linst(LInst::ToA { src, using_fpr }),
+            AsmInst::DeepCopyLit(v, using_fpr) => {
+                self.encode_linst(LInst::DeepCopyLit { v, using_fpr })
             }
             // Floating-point register transfer/convert family (aarch64 bails if
             // the FP pool register is not lowerable, hence the bool results).
@@ -255,11 +255,11 @@ impl Codegen {
                 base: frame.base_stack_offset,
             }),
             // Save / restore live FP pool registers around a C-call.
-            AsmInst::XmmSave(using_xmm, cont) => {
-                self.encode_linst(LInst::XmmSave { using_xmm, cont })
+            AsmInst::FprSave(using_fpr, cont) => {
+                self.encode_linst(LInst::FprSave { using_fpr, cont })
             }
-            AsmInst::XmmRestore(using_xmm, cont) => {
-                self.encode_linst(LInst::XmmRestore { using_xmm, cont })
+            AsmInst::FprRestore(using_fpr, cont) => {
+                self.encode_linst(LInst::FprRestore { using_fpr, cont })
             }
             // Integer / float arithmetic fast paths. Each backend resolves the
             // same operands and dispatches to its own emission primitive
@@ -331,12 +331,12 @@ impl Codegen {
             }
             AsmInst::FloatBinOp {
                 kind,
-                binary_xmm,
+                binary_fpr,
                 dst,
             } => self.encode_linst(LInst::FloatBinOp {
                 kind,
-                lhs: binary_xmm.0,
-                rhs: binary_xmm.1,
+                lhs: binary_fpr.0,
+                rhs: binary_fpr.1,
                 dst,
                 base: frame.base_stack_offset,
             }),
@@ -664,13 +664,13 @@ impl Codegen {
                 self.encode_linst(LInst::GuardCapture { deopt });
             }
             // `&block` forwarding: proxy the block handler, or materialize it
-            // into a Proc value (aarch64 bails on a live xmm / range overflow).
+            // into a Proc value (aarch64 bails on a live fpr / range overflow).
             AsmInst::BlockArgProxy { ret, outer } => self.encode_linst(LInst::BlockArgProxy { ret, outer }),
-            AsmInst::BlockArg { ret, _outer: _, using_xmm, error, call_site_bc_ptr } => {
+            AsmInst::BlockArg { ret, _outer: _, using_fpr, error, call_site_bc_ptr } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::BlockArg {
                     ret,
-                    using_xmm,
+                    using_fpr,
                     call_site_bc_ptr,
                     error,
                 });
@@ -725,12 +725,12 @@ impl Codegen {
                 src,
                 ivarid,
                 is_object_ty,
-                using_xmm,
+                using_fpr,
             } => self.encode_linst(LInst::StoreIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
-                using_xmm,
+                using_fpr,
             }),
             // Load a heap-spilled instance variable (bounds-checked unless self),
             // substituting nil for an out-of-range / unset slot.
@@ -744,100 +744,100 @@ impl Codegen {
                 self_,
             }),
             // Runtime-call definition ops (undef a method / alias a global var).
-            // aarch64 bails when an xmm pool register is live (no xmm save yet).
-            AsmInst::UndefMethod { undef, using_xmm } => {
-                self.encode_linst(LInst::UndefMethod { undef, using_xmm })
+            // aarch64 bails when an fpr pool register is live (no fpr save yet).
+            AsmInst::UndefMethod { undef, using_fpr } => {
+                self.encode_linst(LInst::UndefMethod { undef, using_fpr })
             }
-            AsmInst::AliasGvar { new, old, using_xmm } => {
-                self.encode_linst(LInst::AliasGvar { new, old, using_xmm })
+            AsmInst::AliasGvar { new, old, using_fpr } => {
+                self.encode_linst(LInst::AliasGvar { new, old, using_fpr })
             }
             // Runtime-call class-variable / method-alias ops.
-            AsmInst::CheckCVar { name, using_xmm } => {
-                self.encode_linst(LInst::CheckCVar { name, using_xmm })
+            AsmInst::CheckCVar { name, using_fpr } => {
+                self.encode_linst(LInst::CheckCVar { name, using_fpr })
             }
-            AsmInst::StoreCVar { name, src, using_xmm } => {
-                self.encode_linst(LInst::StoreCVar { name, src, using_xmm })
+            AsmInst::StoreCVar { name, src, using_fpr } => {
+                self.encode_linst(LInst::StoreCVar { name, src, using_fpr })
             }
-            AsmInst::AliasMethod { new, old, using_xmm } => {
-                self.encode_linst(LInst::AliasMethod { new, old, using_xmm })
+            AsmInst::AliasMethod { new, old, using_fpr } => {
+                self.encode_linst(LInst::AliasMethod { new, old, using_fpr })
             }
             // defined? runtime-call family.
-            AsmInst::DefinedYield { dst, using_xmm } => {
-                self.encode_linst(LInst::DefinedYield { dst, using_xmm })
+            AsmInst::DefinedYield { dst, using_fpr } => {
+                self.encode_linst(LInst::DefinedYield { dst, using_fpr })
             }
-            AsmInst::DefinedSuper { dst, using_xmm } => {
-                self.encode_linst(LInst::DefinedSuper { dst, using_xmm })
+            AsmInst::DefinedSuper { dst, using_fpr } => {
+                self.encode_linst(LInst::DefinedSuper { dst, using_fpr })
             }
-            AsmInst::DefinedGvar { dst, name, using_xmm } => {
-                self.encode_linst(LInst::DefinedGvar { dst, name, using_xmm })
+            AsmInst::DefinedGvar { dst, name, using_fpr } => {
+                self.encode_linst(LInst::DefinedGvar { dst, name, using_fpr })
             }
-            AsmInst::DefinedCvar { dst, name, using_xmm } => {
-                self.encode_linst(LInst::DefinedCvar { dst, name, using_xmm })
+            AsmInst::DefinedCvar { dst, name, using_fpr } => {
+                self.encode_linst(LInst::DefinedCvar { dst, name, using_fpr })
             }
-            AsmInst::DefinedConst { dst, siteid, using_xmm } => {
-                self.encode_linst(LInst::DefinedConst { dst, siteid, using_xmm })
+            AsmInst::DefinedConst { dst, siteid, using_fpr } => {
+                self.encode_linst(LInst::DefinedConst { dst, siteid, using_fpr })
             }
-            AsmInst::DefinedMethod { dst, recv, name, using_xmm } => {
-                self.encode_linst(LInst::DefinedMethod { dst, recv, name, using_xmm })
+            AsmInst::DefinedMethod { dst, recv, name, using_fpr } => {
+                self.encode_linst(LInst::DefinedMethod { dst, recv, name, using_fpr })
             }
-            AsmInst::DefinedIvar { dst, name, using_xmm } => {
-                self.encode_linst(LInst::DefinedIvar { dst, name, using_xmm })
+            AsmInst::DefinedIvar { dst, name, using_fpr } => {
+                self.encode_linst(LInst::DefinedIvar { dst, name, using_fpr })
             }
             // Generic binary-op / Array=== runtime calls.
-            AsmInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
-                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, using_xmm })
+            AsmInst::GenericBinOp { lhs, rhs, func, using_fpr } => {
+                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, using_fpr })
             }
-            AsmInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
-                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, using_xmm })
+            AsmInst::OptEqCmp { lhs, rhs, kind, func, using_fpr } => {
+                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, using_fpr })
             }
-            AsmInst::ArrayTEq { lhs, rhs, using_xmm } => {
-                self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_xmm })
+            AsmInst::ArrayTEq { lhs, rhs, using_fpr } => {
+                self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_fpr })
             }
             // Regexp interpolation / keyword-rest fixup runtime calls.
-            AsmInst::ConcatRegexp { arg, len, using_xmm } => {
-                self.encode_linst(LInst::ConcatRegexp { arg, len, using_xmm })
+            AsmInst::ConcatRegexp { arg, len, using_fpr } => {
+                self.encode_linst(LInst::ConcatRegexp { arg, len, using_fpr })
             }
             AsmInst::CheckKwRest(slot) => self.encode_linst(LInst::CheckKwRest { slot }),
             // Multiple-assignment array expansion.
-            AsmInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
-                self.encode_linst(LInst::ExpandArray { dst, len, rest_pos, using_xmm })
+            AsmInst::ExpandArray { dst, len, rest_pos, using_fpr } => {
+                self.encode_linst(LInst::ExpandArray { dst, len, rest_pos, using_fpr })
             }
             // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
             // around the call.
-            AsmInst::CFunc_F_F { f, src, dst, using_xmm } => self.encode_linst(LInst::CFunc_F_F {
+            AsmInst::CFunc_F_F { f, src, dst, using_fpr } => self.encode_linst(LInst::CFunc_F_F {
                 f,
                 src,
                 dst,
-                using_xmm,
+                using_fpr,
                 base: frame.base_stack_offset,
             }),
-            AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm } => {
+            AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_fpr } => {
                 self.encode_linst(LInst::CFunc_FF_F {
                     f,
                     lhs,
                     rhs,
                     dst,
-                    using_xmm,
+                    using_fpr,
                     base: frame.base_stack_offset,
                 })
             }
-            // Method definition (`def`). aarch64 bails on a live xmm pool reg.
-            AsmInst::MethodDef { name, func_id, using_xmm, error } => {
+            // Method definition (`def`). aarch64 bails on a live fpr pool reg.
+            AsmInst::MethodDef { name, func_id, using_fpr, error } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::MethodDef {
                     name,
                     func_id,
-                    using_xmm,
+                    using_fpr,
                     error,
                 });
             }
-            AsmInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
+            AsmInst::SingletonMethodDef { obj, name, func_id, using_fpr, error } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::SingletonMethodDef {
                     obj,
                     name,
                     func_id,
-                    using_xmm,
+                    using_fpr,
                     error,
                 });
             }
@@ -912,6 +912,16 @@ impl Codegen {
             // Inlined builtin method body: the generator closure emits the
             // arch-appropriate asm directly.
             AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
+            // §20 (B): typed array integer-index read/assign (replaces the
+            // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
+            // index-register setup + `array_index*` call lives in
+            // `gen_array_index*`.
+            AsmInst::ArrayIndex { kind } => self.gen_array_index(kind),
+            AsmInst::ArrayIndexAssign {
+                kind,
+                using_fpr,
+                error,
+            } => self.gen_array_index_assign(kind, using_fpr, &labels[error]),
             // Typed field-load (replaces the `ir.inline` escape hatch for trivial
             // field-reader inline builtins). Goal-2 proof: an inline builtin's
             // codegen expressed once in arch-neutral LIR via an existing op.
@@ -924,7 +934,7 @@ impl Codegen {
             }),
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
-            // bails on a live xmm pool reg / out-of-range frame offset.
+            // bails on a live fpr pool reg / out-of-range frame offset.
             AsmInst::ClassDef {
                 base,
                 superclass,
@@ -932,7 +942,7 @@ impl Codegen {
                 name,
                 func_id,
                 is_module,
-                using_xmm,
+                using_fpr,
                 error,
             } => {
                 self.encode_linst(LInst::ClassDef {
@@ -942,7 +952,7 @@ impl Codegen {
                     name,
                     func_id,
                     is_module,
-                    using_xmm,
+                    using_fpr,
                     error: labels[error].clone(),
                 });
             }
@@ -950,14 +960,14 @@ impl Codegen {
                 base,
                 dst,
                 func_id,
-                using_xmm,
+                using_fpr,
                 error,
             } => {
                 self.encode_linst(LInst::SingletonClassDef {
                     base,
                     dst,
                     func_id,
-                    using_xmm,
+                    using_fpr,
                     error: labels[error].clone(),
                 });
             }
@@ -1002,21 +1012,21 @@ impl Codegen {
                 src,
                 ivarid,
                 is_object_ty,
-                using_xmm,
+                using_fpr,
             } => {
-                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_xmm);
+                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr);
             }
-            LInst::StoreConstant { id, using_xmm, error } => {
-                self.emit_store_constant(id, using_xmm, &error);
+            LInst::StoreConstant { id, using_fpr, error } => {
+                self.emit_store_constant(id, using_fpr, &error);
             }
-            LInst::LoadGVar { name, using_xmm } => {
-                self.emit_load_gvar(name, using_xmm);
+            LInst::LoadGVar { name, using_fpr } => {
+                self.emit_load_gvar(name, using_fpr);
             }
-            LInst::StoreGVar { name, src, using_xmm } => {
-                self.emit_store_gvar(name, src, using_xmm);
+            LInst::StoreGVar { name, src, using_fpr } => {
+                self.emit_store_gvar(name, src, using_fpr);
             }
-            LInst::LoadCVar { name, using_xmm } => {
-                self.emit_load_cvar(name, using_xmm);
+            LInst::LoadCVar { name, using_fpr } => {
+                self.emit_load_cvar(name, using_fpr);
             }
             LInst::LoadDynVar { src } => {
                 self.emit_load_dyn_var(src);
@@ -1027,83 +1037,83 @@ impl Codegen {
             LInst::CreateArray { src, len } => {
                 self.emit_create_array(src, len);
             }
-            LInst::NewArray { callid, using_xmm } => {
-                self.emit_new_array(callid, using_xmm);
+            LInst::NewArray { callid, using_fpr } => {
+                self.emit_new_array(callid, using_fpr);
             }
-            LInst::NewHash { args, len, using_xmm } => {
-                self.emit_new_hash(args, len, using_xmm);
+            LInst::NewHash { args, len, using_fpr } => {
+                self.emit_new_hash(args, len, using_fpr);
             }
-            LInst::HashInsert { hash, args, len, using_xmm } => {
-                self.emit_hash_insert(hash, args, len, using_xmm);
+            LInst::HashInsert { hash, args, len, using_fpr } => {
+                self.emit_hash_insert(hash, args, len, using_fpr);
             }
-            LInst::ArrayConcat { dst, src, using_xmm } => {
-                self.emit_array_concat(dst, src, using_xmm);
+            LInst::ArrayConcat { dst, src, using_fpr } => {
+                self.emit_array_concat(dst, src, using_fpr);
             }
-            LInst::NewRange { start, end, exclude_end, using_xmm } => {
-                self.emit_new_range(start, end, exclude_end, using_xmm);
+            LInst::NewRange { start, end, exclude_end, using_fpr } => {
+                self.emit_new_range(start, end, exclude_end, using_fpr);
             }
-            LInst::ConcatStr { arg, len, using_xmm } => {
-                self.emit_concat_str(arg, len, using_xmm);
+            LInst::ConcatStr { arg, len, using_fpr } => {
+                self.emit_concat_str(arg, len, using_fpr);
             }
-            LInst::ToA { src, using_xmm } => {
-                self.emit_to_a(src, using_xmm);
+            LInst::ToA { src, using_fpr } => {
+                self.emit_to_a(src, using_fpr);
             }
-            LInst::DeepCopyLit { v, using_xmm } => {
-                self.emit_deep_copy_lit(v, using_xmm);
+            LInst::DeepCopyLit { v, using_fpr } => {
+                self.emit_deep_copy_lit(v, using_fpr);
             }
-            LInst::UndefMethod { undef, using_xmm } => {
-                self.emit_undef_method(undef, using_xmm);
+            LInst::UndefMethod { undef, using_fpr } => {
+                self.emit_undef_method(undef, using_fpr);
             }
-            LInst::AliasGvar { new, old, using_xmm } => {
-                self.emit_alias_gvar(new, old, using_xmm);
+            LInst::AliasGvar { new, old, using_fpr } => {
+                self.emit_alias_gvar(new, old, using_fpr);
             }
-            LInst::CheckCVar { name, using_xmm } => {
-                self.emit_check_cvar(name, using_xmm);
+            LInst::CheckCVar { name, using_fpr } => {
+                self.emit_check_cvar(name, using_fpr);
             }
-            LInst::StoreCVar { name, src, using_xmm } => {
-                self.emit_store_cvar(name, src, using_xmm);
+            LInst::StoreCVar { name, src, using_fpr } => {
+                self.emit_store_cvar(name, src, using_fpr);
             }
-            LInst::AliasMethod { new, old, using_xmm } => {
-                self.emit_alias_method(new, old, using_xmm);
+            LInst::AliasMethod { new, old, using_fpr } => {
+                self.emit_alias_method(new, old, using_fpr);
             }
-            LInst::DefinedYield { dst, using_xmm } => {
-                self.emit_defined_yield(dst, using_xmm);
+            LInst::DefinedYield { dst, using_fpr } => {
+                self.emit_defined_yield(dst, using_fpr);
             }
-            LInst::DefinedSuper { dst, using_xmm } => {
-                self.emit_defined_super(dst, using_xmm);
+            LInst::DefinedSuper { dst, using_fpr } => {
+                self.emit_defined_super(dst, using_fpr);
             }
-            LInst::DefinedGvar { dst, name, using_xmm } => {
-                self.emit_defined_gvar(dst, name, using_xmm);
+            LInst::DefinedGvar { dst, name, using_fpr } => {
+                self.emit_defined_gvar(dst, name, using_fpr);
             }
-            LInst::DefinedCvar { dst, name, using_xmm } => {
-                self.emit_defined_cvar(dst, name, using_xmm);
+            LInst::DefinedCvar { dst, name, using_fpr } => {
+                self.emit_defined_cvar(dst, name, using_fpr);
             }
-            LInst::DefinedConst { dst, siteid, using_xmm } => {
-                self.emit_defined_const(dst, siteid, using_xmm);
+            LInst::DefinedConst { dst, siteid, using_fpr } => {
+                self.emit_defined_const(dst, siteid, using_fpr);
             }
-            LInst::DefinedMethod { dst, recv, name, using_xmm } => {
-                self.emit_defined_method(dst, recv, name, using_xmm);
+            LInst::DefinedMethod { dst, recv, name, using_fpr } => {
+                self.emit_defined_method(dst, recv, name, using_fpr);
             }
-            LInst::DefinedIvar { dst, name, using_xmm } => {
-                self.emit_defined_ivar(dst, name, using_xmm);
+            LInst::DefinedIvar { dst, name, using_fpr } => {
+                self.emit_defined_ivar(dst, name, using_fpr);
             }
-            LInst::GenericBinOp { lhs, rhs, func, using_xmm } => {
-                self.emit_generic_binop(lhs, rhs, func, using_xmm);
+            LInst::GenericBinOp { lhs, rhs, func, using_fpr } => {
+                self.emit_generic_binop(lhs, rhs, func, using_fpr);
             }
-            LInst::OptEqCmp { lhs, rhs, kind, func, using_xmm } => {
-                self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_xmm);
+            LInst::OptEqCmp { lhs, rhs, kind, func, using_fpr } => {
+                self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_fpr);
             }
-            LInst::ArrayTEq { lhs, rhs, using_xmm } => {
-                self.emit_array_teq(lhs, rhs, using_xmm);
+            LInst::ArrayTEq { lhs, rhs, using_fpr } => {
+                self.emit_array_teq(lhs, rhs, using_fpr);
             }
-            LInst::ConcatRegexp { arg, len, using_xmm } => {
-                self.emit_concat_regexp(arg, len, using_xmm);
+            LInst::ConcatRegexp { arg, len, using_fpr } => {
+                self.emit_concat_regexp(arg, len, using_fpr);
             }
             LInst::CheckKwRest { slot } => {
                 self.emit_check_kw_rest(slot);
             }
-            LInst::ExpandArray { dst, len, rest_pos, using_xmm } => {
-                self.emit_expand_array(dst, len, rest_pos, using_xmm);
+            LInst::ExpandArray { dst, len, rest_pos, using_fpr } => {
+                self.emit_expand_array(dst, len, rest_pos, using_fpr);
             }
             LInst::Deopt { deopt } => {
                 self.emit_deopt(&deopt);
@@ -1141,14 +1151,14 @@ impl Codegen {
             LInst::BlockArgProxy { ret, outer } => {
                 self.emit_block_arg_proxy(ret, outer);
             }
-            LInst::BlockArg { ret, using_xmm, call_site_bc_ptr, error } => {
-                self.emit_block_arg(ret, using_xmm, call_site_bc_ptr, &error);
+            LInst::BlockArg { ret, using_fpr, call_site_bc_ptr, error } => {
+                self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error);
             }
-            LInst::MethodDef { name, func_id, using_xmm, error } => {
-                self.emit_method_def(name, func_id, using_xmm, &error);
+            LInst::MethodDef { name, func_id, using_fpr, error } => {
+                self.emit_method_def(name, func_id, using_fpr, &error);
             }
-            LInst::SingletonMethodDef { obj, name, func_id, using_xmm, error } => {
-                self.emit_singleton_method_def(obj, name, func_id, using_xmm, &error);
+            LInst::SingletonMethodDef { obj, name, func_id, using_fpr, error } => {
+                self.emit_singleton_method_def(obj, name, func_id, using_fpr, &error);
             }
             LInst::Raise { loop_jit_spill_bytes } => {
                 self.emit_raise(loop_jit_spill_bytes);
@@ -1194,7 +1204,7 @@ impl Codegen {
                 name,
                 func_id,
                 is_module,
-                using_xmm,
+                using_fpr,
                 error,
             } => {
                 self.class_def(
@@ -1204,7 +1214,7 @@ impl Codegen {
                     name,
                     func_id,
                     is_module,
-                    using_xmm,
+                    using_fpr,
                     &error,
                 );
             }
@@ -1212,10 +1222,10 @@ impl Codegen {
                 base,
                 dst,
                 func_id,
-                using_xmm,
+                using_fpr,
                 error,
             } => {
-                self.singleton_class_def(base, dst, func_id, using_xmm, &error);
+                self.singleton_class_def(base, dst, func_id, using_fpr, &error);
             }
             LInst::SetupMethodFrame {
                 meta,

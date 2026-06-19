@@ -54,12 +54,12 @@ pub(super) fn gen_class_allocate_inline(
     };
     let CallSiteInfo { dst, .. } = *callsite;
     state.writeback_acc(ir);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     // The allocator produces an instance of exactly `class_id`. Record
     // that class in the abstract state so the trailing
     // `o.__builtin_initialize__(...)` resolves to a single, statically
@@ -409,9 +409,9 @@ pub(super) fn gen_class_new_inline(
     state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
-    let using_xmm = state.get_using_xmm();
+    let using_fpr = state.get_using_fpr();
     let error = ir.new_error(state);
-    ir.xmm_save(using_xmm);
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         let cached_version = r#gen.jit.data_i32(-1);
         let cached_funcid = r#gen.jit.data_i32(-1);
@@ -488,7 +488,7 @@ pub(super) fn gen_class_new_inline(
         );
         r#gen.jit.select_page(0);
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     ir.handle_error(error);
     state.def_rax2acc(ir, dst);
     true
@@ -583,15 +583,15 @@ pub(super) fn gen_class_new_inline(
     state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
-    let using_xmm = state.get_using_xmm();
+    let using_fpr = state.get_using_fpr();
     let error = ir.new_error(state);
-    ir.xmm_save(using_xmm);
+    ir.fpr_save(using_fpr);
     let alloc_func = alloc_func as *const () as u64;
     let ci = check_initializer as *const () as u64;
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     ir.handle_error(error);
     state.def_rax2acc(ir, dst);
     true

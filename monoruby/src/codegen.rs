@@ -160,16 +160,16 @@ impl GP {
     }
 }
 
-/// `xmm{id+2}`; ids >= `PHYS_XMM_POOL` are spilled to a stack slot.
+/// `xmm{id+2}`; ids >= `PHYS_FPR_POOL` are spilled to a stack slot.
 ///
 /// The `stress-spill-pool` cargo feature shrinks the pool to 2 so
 /// that nearly every F-mode allocation overflows into a spill slot
 /// — this exercises the LoadSpill / StoreSpill paths and the
 /// spill-aware AsmInst lowerings throughout the entire test suite.
 #[cfg(not(feature = "stress-spill-pool"))]
-const PHYS_XMM_POOL: usize = 14;
+const PHYS_FPR_POOL: usize = 14;
 #[cfg(feature = "stress-spill-pool")]
-const PHYS_XMM_POOL: usize = 2;
+const PHYS_FPR_POOL: usize = 2;
 
 ///
 /// Virtual floating-point register. The front-end (TraceIr → AsmIr)
@@ -184,17 +184,139 @@ impl FPReg {
     fn new(id: usize) -> Self {
         Self(id)
     }
+}
 
-    fn loc(self, base_stack_offset: usize) -> FPRegLoc {
-        let pool = PHYS_XMM_POOL;
-        if self.0 < pool {
-            FPRegLoc::Xmm(self.0 as u64 + 2)
-        } else {
-            let n = self.0 - pool;
-            let ofs = (base_stack_offset as i32) - 24 + 8 * (n as i32);
-            FPRegLoc::Spill(ofs)
+///
+/// Physical placement map: resolves a *virtual* [`FPReg`] to its concrete
+/// [`FPRegLoc`] (a physical `xmm` register or an f64 spill slot).
+///
+/// This is the single chokepoint where the **physical register allocation**
+/// phase (separation phase ②: virtual → physical) is expressed. Today it is the
+/// fixed pool-vs-spill *formula*, parameterised only by the frame's
+/// `base_stack_offset`: an id `< PHYS_FPR_POOL` lives in physical `xmm{id+2}`,
+/// any higher id spills to an 8-byte stack slot. Crucially a spilled float stays
+/// **unboxed f64 on the stack** (never boxed) — the box-avoidance that makes the
+/// spill cheap. A later allocator pass replaces the formula with an explicit
+/// per-`FPReg` assignment behind this same `resolve` seam, without touching any
+/// emission site.
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhysMap {
+    base_stack_offset: usize,
+}
+
+impl PhysMap {
+    pub(crate) fn new(base_stack_offset: usize) -> Self {
+        Self { base_stack_offset }
+    }
+
+    ///
+    /// Resolve a virtual FP register to its physical location.
+    ///
+    /// ③ is **policy-free**: it asks ② ([`phys_alloc::slot`], feature
+    /// `phys-table`) for the virtual fpr's frame-independent physical slot, then
+    /// applies this frame's `base_stack_offset` to turn a spill-slot index into a
+    /// concrete `[rbp/x29 - off]`. Without the feature it falls back to the
+    /// historical inline formula (byte-identical).
+    ///
+    pub(crate) fn resolve(&self, reg: FPReg) -> FPRegLoc {
+        let loc = self.apply_base(physical_slot(reg));
+        #[cfg(feature = "shadow-placement")]
+        placement_shadow::record(loc);
+        loc
+    }
+
+    ///
+    /// Turn a frame-independent [`PhysSlot`] into a concrete [`FPRegLoc`] by
+    /// applying this frame's stack base to spill-slot indices.
+    ///
+    fn apply_base(&self, slot: PhysSlot) -> FPRegLoc {
+        match slot {
+            PhysSlot::Xmm(p) => FPRegLoc::Xmm(p),
+            PhysSlot::Spill(n) => {
+                FPRegLoc::Spill((self.base_stack_offset as i32) - 24 + 8 * (n as i32))
+            }
         }
     }
+}
+
+///
+/// A *frame-independent* physical placement for a virtual FP register: either a
+/// physical `xmm` register, or the `n`-th f64 spill slot (turned into a concrete
+/// `base`-relative offset by [`PhysMap::apply_base`]). This is the unit ②
+/// ([`phys_alloc`]) assigns; ③ ([`PhysMap::resolve`]) only applies the frame base.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PhysSlot {
+    Xmm(u64),
+    Spill(usize),
+}
+
+///
+/// ② physical-placement policy for a virtual fpr (P2). With feature `phys-table`
+/// this routes through the explicit table in [`phys_alloc`]; otherwise it is the
+/// inline pool-vs-spill formula. Both are byte-identical: id `< PHYS_FPR_POOL` →
+/// `xmm{id+2}`, else spill-slot `id - PHYS_FPR_POOL`.
+///
+#[inline]
+fn physical_slot(reg: FPReg) -> PhysSlot {
+    #[cfg(feature = "phys-table")]
+    {
+        phys_alloc::slot(reg.0)
+    }
+    #[cfg(not(feature = "phys-table"))]
+    {
+        phys_alloc::policy(reg.0)
+    }
+}
+
+///
+/// **②** — the physical FP-register allocation policy, extracted out of ③ (P2,
+/// §25). [`policy`] is the placement rule formerly hardcoded in
+/// `PhysMap::resolve`; with feature `phys-table` it is memoised into an explicit
+/// per-compilation table ([`slot`]) — the seam where P4's loop-aware allocator
+/// later installs a non-formula assignment, leaving ③ untouched.
+///
+mod phys_alloc {
+    use super::{PhysSlot, PHYS_FPR_POOL};
+
+    ///
+    /// The placement rule: virtual fpr `i` → its frame-independent physical slot.
+    ///
+    pub(super) fn policy(i: usize) -> PhysSlot {
+        if i < PHYS_FPR_POOL {
+            PhysSlot::Xmm(i as u64 + 2)
+        } else {
+            PhysSlot::Spill(i - PHYS_FPR_POOL)
+        }
+    }
+
+    #[cfg(feature = "phys-table")]
+    mod table {
+        use super::super::PhysSlot;
+        use std::cell::RefCell;
+
+        thread_local! {
+            /// ②'s explicit placement table, grown lazily by [`super::slot`]. The
+            /// formula part is frame-independent, so a single table serves a whole
+            /// compilation (and beyond — the policy is deterministic).
+            static TABLE: RefCell<Vec<PhysSlot>> = const { RefCell::new(Vec::new()) };
+        }
+
+        pub(in super::super) fn slot(i: usize) -> PhysSlot {
+            TABLE.with(|t| {
+                let mut t = t.borrow_mut();
+                while t.len() <= i {
+                    let n = t.len();
+                    t.push(super::policy(n));
+                }
+                t[i]
+            })
+        }
+    }
+
+    #[cfg(feature = "phys-table")]
+    pub(super) use table::slot;
 }
 
 ///
@@ -205,10 +327,85 @@ impl FPReg {
 /// asm based on this — e.g. `addsd xmm, mem` when the rhs operand is
 /// spilled, instead of forcing a scratch load.
 ///
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum FPRegLoc {
     Xmm(u64),
     Spill(i32),
+}
+
+///
+/// Stage-1 *placement shadow* (feature `shadow-placement`, off by default).
+///
+/// Records, in emission order, every physical FP placement that ③ commits — one
+/// entry per [`PhysMap::resolve`] call. A `begin`/`take` bracket around a
+/// `jit_compile` yields a `Vec<FPRegLoc>` fingerprint of that compilation's
+/// FPReg→FPRegLoc lowering. This is the oracle for the P2/P3 separation: the
+/// fingerprint produced by the baseline greedy allocator and by the separated ②
+/// must be byte-identical (`Vec` equality). Recording lives behind the single
+/// `resolve` chokepoint, so it captures *exactly* what the backends emit, on
+/// both arches, with zero plumbing.
+///
+#[cfg(feature = "shadow-placement")]
+pub(crate) mod placement_shadow {
+    use super::FPRegLoc;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SHADOW: RefCell<Option<Vec<FPRegLoc>>> = const { RefCell::new(None) };
+    }
+
+    ///
+    /// Start recording the ordered placement fingerprint. Pairs with [`take`].
+    ///
+    pub(crate) fn begin() {
+        SHADOW.with(|s| *s.borrow_mut() = Some(Vec::new()));
+    }
+
+    ///
+    /// Stop recording and return the fingerprint, or `None` if not recording.
+    ///
+    pub(crate) fn take() -> Option<Vec<FPRegLoc>> {
+        SHADOW.with(|s| s.borrow_mut().take())
+    }
+
+    ///
+    /// Append one placement to the active fingerprint (no-op when not recording).
+    ///
+    pub(crate) fn record(loc: FPRegLoc) {
+        SHADOW.with(|s| {
+            if let Some(log) = s.borrow_mut().as_mut() {
+                log.push(loc);
+            }
+        });
+    }
+
+    ///
+    /// Compact FNV-1a-64 digest of a placement fingerprint, for per-compilation
+    /// A/B logging (a full `Vec<FPRegLoc>` is unwieldy in stderr; the digest
+    /// diverges iff any placement diverges, which is all the P3 gate needs).
+    ///
+    pub(crate) fn digest(fp: &[FPRegLoc]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |x: u64| {
+            for b in x.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for loc in fp {
+            match *loc {
+                FPRegLoc::Xmm(x) => {
+                    mix(0);
+                    mix(x);
+                }
+                FPRegLoc::Spill(o) => {
+                    mix(1);
+                    mix(o as u64);
+                }
+            }
+        }
+        h
+    }
 }
 
 pub struct JitModule {
@@ -1189,6 +1386,83 @@ extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Phase ② seam: `PhysMap::resolve` is the single point that maps a virtual
+    // `FPReg` to a physical location. It must reproduce the historical pool-vs-
+    // spill formula exactly — pool ids land in `xmm{id+2}`, and ids at/above the
+    // pool spill to f64 stack slots (8 bytes apart, never boxed).
+    #[test]
+    fn physmap_resolve_formula() {
+        let base = 256usize;
+        let pm = PhysMap::new(base);
+        // Pool ids → physical xmm{id+2}.
+        for id in 0..PHYS_FPR_POOL {
+            match pm.resolve(FPReg(id)) {
+                FPRegLoc::Xmm(x) => assert_eq!(x, id as u64 + 2),
+                FPRegLoc::Spill(_) => panic!("pool id {id} should be a physical xmm"),
+            }
+        }
+        // Spill ids → 8-byte-strided f64 stack slots based at `base`.
+        for n in 0..4usize {
+            let id = PHYS_FPR_POOL + n;
+            match pm.resolve(FPReg(id)) {
+                FPRegLoc::Spill(off) => assert_eq!(off, base as i32 - 24 + 8 * n as i32),
+                FPRegLoc::Xmm(_) => panic!("spill id {id} should be a stack slot"),
+            }
+        }
+    }
+
+    // Stage-1 placement-shadow harness check: `begin`/`record`/`take` must
+    // capture the exact ordered sequence of `PhysMap::resolve` outputs, and two
+    // identical resolve passes must produce identical fingerprints (the
+    // determinism the P3 baseline-vs-② byte-compare relies on).
+    #[cfg(feature = "shadow-placement")]
+    #[test]
+    fn placement_shadow_fingerprint() {
+        let pm = PhysMap::new(256);
+        let regs = [
+            FPReg(0),
+            FPReg(3),
+            FPReg(PHYS_FPR_POOL),
+            FPReg(PHYS_FPR_POOL + 2),
+            FPReg(1),
+        ];
+        // Reference fingerprint computed without recording.
+        let reference: Vec<FPRegLoc> = regs.iter().map(|&r| pm.resolve(r)).collect();
+
+        placement_shadow::begin();
+        for &r in &regs {
+            let _ = pm.resolve(r);
+        }
+        let first = placement_shadow::take().expect("recording was active");
+        assert_eq!(first, reference, "fingerprint must match resolve order");
+
+        // Determinism: a second pass yields a byte-identical fingerprint.
+        placement_shadow::begin();
+        for &r in &regs {
+            let _ = pm.resolve(r);
+        }
+        let second = placement_shadow::take().unwrap();
+        assert_eq!(first, second, "placement fingerprint must be deterministic");
+
+        // After `take`, recording is off: `resolve` must not panic or capture.
+        let _ = pm.resolve(FPReg(0));
+        assert!(placement_shadow::take().is_none());
+
+        // Digest: stable for equal streams, order-sensitive (so a reordered
+        // placement — which would change ③'s machine code — is detected).
+        assert_eq!(
+            placement_shadow::digest(&first),
+            placement_shadow::digest(&second)
+        );
+        let mut reordered = reference.clone();
+        reordered.reverse();
+        assert_ne!(
+            placement_shadow::digest(&reference),
+            placement_shadow::digest(&reordered),
+            "digest must be order-sensitive"
+        );
+    }
 
     #[test]
     fn guard_class() {

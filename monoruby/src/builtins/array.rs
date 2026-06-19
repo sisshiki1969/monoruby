@@ -384,12 +384,12 @@ fn array_clone(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_array_clone(array_clone_extern as *const () as u64)
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
     true
 }
@@ -427,12 +427,12 @@ fn array_dup_inline(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_array_dup(array_dup_extern as *const () as u64)
     });
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
     true
 }
@@ -919,10 +919,10 @@ fn array_shl(
     } = *callsite;
     state.load(ir, recv, GP::Rdi);
     state.load(ir, args, GP::Rsi);
-    let using_xmm = state.get_using_xmm();
-    ir.xmm_save(using_xmm);
+    let using_fpr = state.get_using_fpr();
+    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_array_shl(ary_shl as *const () as u64));
-    ir.xmm_restore(using_xmm);
+    ir.fpr_restore(using_fpr);
     state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
     true
 }

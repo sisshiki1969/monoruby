@@ -22,10 +22,12 @@ fi
 # stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. They target
 # the mature x86-64 JIT; enable them only there. Other arches still build and
 # (when coverage is on) measure the JIT, just without the amplifiers.
-case "$(uname -m)" in
-  x86_64) STRESS_FEATURES=(--features stress-spill-pool --features gc-stress) ;;
-  *)      STRESS_FEATURES=() ;;
-esac
+# case "$(uname -m)" in
+#   x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
+#   *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
+# esac
+
+STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type)
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
@@ -49,16 +51,13 @@ fi
 
 cov_clean
 cov_nextest "${STRESS_FEATURES[@]}"
-#MONORUBY_PARSER=ruruby cov_nextest "${STRESS_FEATURES[@]}"
 
-cov_build
+# Rebuild the benchmark binary with the stress features (x86-64 only).
+cov_build "${STRESS_FEATURES[@]}"
 
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 "${RUBY[@]}" benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
-
-# Rebuild the benchmark binary with the stress features (x86-64 only).
-cov_build "${STRESS_FEATURES[@]}"
 
 $MONORUBY benchmark/tarai.rb > monoruby.log
 "${RUBY[@]}" benchmark/tarai.rb > ruby.log
@@ -112,7 +111,7 @@ fi
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct symbol range set systemexit; do
+  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct symbol range set systemexit method unboundmethod; do
     echo "=== core/$cat ==="
     ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done

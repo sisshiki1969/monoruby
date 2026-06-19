@@ -398,7 +398,7 @@ impl Codegen {
         &mut self,
         callid: CallSiteId,
         store: &Store,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
         no_splat: bool,
     ) {
@@ -414,7 +414,7 @@ impl Codegen {
 
         self.check_version_with_cache(&cache);
 
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         if no_splat {
             if pos_num < 1 {
                 monoasm! { &mut self.jit,
@@ -466,7 +466,7 @@ impl Codegen {
             self.handle_error(&error);
         }
         self.call_funcdata();
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         self.handle_error(&error);
     }
 

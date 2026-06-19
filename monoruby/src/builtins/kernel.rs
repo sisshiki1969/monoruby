@@ -2977,12 +2977,12 @@ pub fn object_send(
 
     state.write_back_recv_and_callargs(ir, callsite);
     state.writeback_acc(ir);
-    let using_xmm = state.get_using_xmm();
+    let using_fpr = state.get_using_fpr();
     let error = ir.new_error(state);
     let callid = callsite.id;
     ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
-        r#gen.object_send_inline(callid, store, using_xmm, &error, no_splat);
+        r#gen.object_send_inline(callid, store, using_fpr, &error, no_splat);
     });
     state.def_reg2acc(ir, GP::Rax, callsite.dst);
     true

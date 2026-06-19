@@ -7,7 +7,7 @@ A comprehensive guide for AI assistants working on this repository.
 **monoruby** is a Ruby implementation written from scratch in Rust, featuring a register-based bytecode VM and a just-in-time (JIT) compiler. It is performance-focused and is comparable to ruby 3.4+YJIT on the optcarrot benchmark.
 
 - **Parser**: Ruby source is parsed by **prism** (the official Ruby parser, consumed as the `ruby-prism` crate); monoruby converts prism's tree into its own AST (`monoruby/src/ast/`, `monoruby/src/parser/`). The old hand-written `ruruby-parse` crate has been removed.
-- **Platform**: x86-64 **and** aarch64. The VM-tier backend (bytecode VM, invokers, native-function wrappers) and the JIT emit machine code directly via `monoasm`, with a per-`target_arch` backend under `codegen/arch/`. x86-64 emits full JIT machine code; aarch64 uses an AsmIR→A64 lowering that deopts to the VM on not-yet-ported instructions. Tested on Linux/x86-64 and macOS Apple Silicon (arm64-apple-darwin).
+- **Platform**: x86-64 **and** aarch64. The VM-tier backend (bytecode VM, invokers, native-function wrappers) and the JIT emit machine code directly via `monoasm`, with a per-`target_arch` backend under `codegen/arch/`. Both backends lower the **full** AsmInst set to machine code; aarch64 materializes large frame/field/sp offsets through scratch registers rather than bailing, so it never declines a compile (`compile_asmir`'s `bool` return is vestigial — see `doc/arch_difference.md`). Tested on Linux/x86-64 and macOS Apple Silicon (arm64-apple-darwin).
 - **Rust channel**: Nightly (`nightly-2026-05-18`, pinned in `rust-toolchain.toml`)
 - **No dependency on CRuby** or any other Ruby runtime
 
@@ -198,7 +198,7 @@ JIT: TraceIR          (type-annotated IR from inline caches)
 JIT: AsmIR            (register-allocated, arch-neutral assembly IR)
     │
     ▼
-codegen/arch/<arch>   (AsmIR → machine code; x86-64 full, aarch64 partial+deopt)
+codegen/arch/<arch>   (AsmIR → machine code; both arches lower the full AsmInst set)
     │
     ▼
 monoasm               (dynamic assembler, external crate)
@@ -409,7 +409,7 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 | `gc-log`            | Log GC statistics at exit                                              |
 | `gc-debug`          | GC debug assertions                                                    |
 | `gc-stress`         | GC on every allocation (stress test)                                   |
-| `stress-spill-pool` | Shrink `PHYS_XMM_POOL` to 2 to stress the FP-register spill paths      |
+| `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 to stress the FP-register spill paths      |
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
@@ -540,7 +540,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 ## Common Gotchas
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
-2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). x86-64 has the full JIT; aarch64 emits an A64 subset and deopts to the VM on unported instructions. Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
+2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary (3.4.1). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Library path**: `build.rs` writes `~/.monoruby/library_path` and `~/.monoruby/ruby_version` by running the system `ruby` binary at build time. At runtime, monoruby reads these files to configure `$LOAD_PATH` and `RUBY_VERSION`. If `ruby` was absent at build time, these files will be missing and a warning is printed at startup.

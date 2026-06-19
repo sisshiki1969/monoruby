@@ -30,7 +30,7 @@ pub(super) struct FrameSizes {
 /// Walk every `AsmIr` reachable from `asm_info` (main inst stream,
 /// inline / outline bridges, and recursively the
 /// `specialized_methods`) and return the maximum `VirtFPReg.0` seen
-/// in any `xmm` operand. `None` if no `VirtFPReg` is referenced.
+/// in any `fpr` operand. `None` if no `VirtFPReg` is referenced.
 ///
 pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
     let mut max: Option<usize> = None;
@@ -42,21 +42,21 @@ pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
     };
     for (_, ir) in &asm_info.ir {
         for inst in ir.inst_iter() {
-            for v in inst.xmm_operands() {
+            for v in inst.fpr_operands() {
                 bump(v.0);
             }
         }
     }
     for (ir, _, _) in &asm_info.outline_bridges {
         for inst in ir.inst_iter() {
-            for v in inst.xmm_operands() {
+            for v in inst.fpr_operands() {
                 bump(v.0);
             }
         }
     }
     for (ir, _) in asm_info.inline_bridges.values() {
         for inst in ir.inst_iter() {
-            for v in inst.xmm_operands() {
+            for v in inst.fpr_operands() {
                 bump(v.0);
             }
         }
@@ -219,7 +219,7 @@ pub(super) struct AsmInfo {
     ///
     /// Snapshot of the frame's immutable `base_stack_offset` taken
     /// at `pop_frame`. Lets codegen-side spill-aware lowerings (e.g.
-    /// `XmmBinOp`) compute the rbp-relative offset of a spilled
+    /// `FprBinOp`) compute the rbp-relative offset of a spilled
     /// `VirtFPReg` directly without re-querying
     /// [`JitContext::specialized_frame_sizes`].
     ///
@@ -422,7 +422,7 @@ pub(super) struct JitStackFrame {
     ///
     /// Machine stack offset for this frame. May be temporarily bumped
     /// by [`JitContext::specialized_compile`] for the duration of a
-    /// nested specialized call (`+= using_xmm.offset()` then `-=`),
+    /// nested specialized call (`+= using_fpr.offset()` then `-=`),
     /// so this is the *dynamic* value at any moment. The base value
     /// is preserved in [`Self::base_stack_offset`].
     ///
@@ -803,7 +803,7 @@ impl<'a> JitContext<'a> {
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         let mut frame = self.stack_frame.pop().unwrap();
         // Grow `stack_offset` by the JIT-owned spill region — every
-        // `VirtFPReg(N)` with `N >= PHYS_XMM_POOL` claims 8 bytes
+        // `VirtFPReg(N)` with `N >= PHYS_FPR_POOL` claims 8 bytes
         // at the top of the frame's local area. Walk the
         // freshly-finalised AsmIr to find the max id used; this
         // works regardless of which `AbstractFrame` branch produced
@@ -811,7 +811,7 @@ impl<'a> JitContext<'a> {
         // each branch, but the resulting AsmInst is committed once
         // and we can find the same value by scanning).
         let spill_count = max_virt_fpreg_id(&frame.asm_info)
-            .map(|m| (m + 1).saturating_sub(PHYS_XMM_POOL))
+            .map(|m| (m + 1).saturating_sub(PHYS_FPR_POOL))
             .unwrap_or(0);
         // Each spill slot is 8 bytes; round the spill region up to a
         // 16-byte multiple so that any external `call` (e.g. into
@@ -859,7 +859,7 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitResult<JitStackFrame> {
-        let stack_offset = state.get_using_xmm().offset();
+        let stack_offset = state.get_using_fpr().offset();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);

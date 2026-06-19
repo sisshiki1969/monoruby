@@ -4,6 +4,21 @@ use crate::bytecodegen::BinOpK;
 
 use super::*;
 
+///
+/// §18 handler separation: the allocation-free **decision** a float binary op
+/// reduces to (the Layer-① result of `plan_binop_float`). `binop_float` then
+/// executes it (Layer-② allocation + emission). Holding the decision as a value —
+/// rather than branching straight into `def_C_float` / `load_binary_ret_fpr` —
+/// is what makes the type/representation choice separable from the placement.
+///
+enum FloatBinOpPlan {
+    /// Both operands are constant floats and the folded result is a flonum
+    /// immediate: a pure constant, no fpr. Carries the folded `f64`.
+    Fold(f64),
+    /// The fpr path: load operands into fpr, allocate the destination, emit.
+    FprOp,
+}
+
 impl<'a> JitContext<'a> {
     ///
     /// Outcome of a binary op whose operand class is unknown *and* whose
@@ -210,7 +225,7 @@ impl<'a> JitContext<'a> {
                 }
                 let src_idx = bc_pos + 1;
                 let dest = self.label();
-                let mode = state.load_binary_xmm(ir, info);
+                let mode = state.load_binary_fpr(ir, info);
                 ir.float_cmp_br(mode, kind, brkind, dest);
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
                 Ok(CompileResult::Continue)
@@ -430,24 +445,26 @@ impl AbstractFrame {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_comm(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                // §19 (B): route the guarded integer op through the record stream,
+                // carrying its deopt as a program point (cf. the guarded loads).
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Sub => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_mode(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, lhs, dst);
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
                 let rhs = GP::Rsi;
                 self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                let deopt = ir.new_deopt(self);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
+                let deopt = self.deopt_point();
+                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
                 self.def_reg2acc_fixnum(ir, GP::Rax, dst);
             }
             BinOpK::Rem
@@ -470,17 +487,45 @@ impl AbstractFrame {
         })
     }
 
-    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
+    ///
+    /// §18 handler separation: the **decision** half of `binop_float`, a pure
+    /// (`&self`, allocation-free) function of the operand state — the Layer-①
+    /// part. It chooses between a constant fold (both operands constant floats and
+    /// the result is a flonum immediate) and the fpr path, *without* allocating an
+    /// fpr or emitting. `binop_float` then *executes* the chosen plan (the Layer-②
+    /// allocation + emission). Separating the two is the template for un-welding
+    /// each float-op handler's type/representation decision from its
+    /// allocation+emission.
+    ///
+    fn plan_binop_float(&self, kind: BinOpK, info: FBinOpInfo) -> FloatBinOpPlan {
         if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
             && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
-            && self.def_C_float(dst, result)
+            && Immediate::flonum(result).is_some()
         {
-            return;
-        };
+            FloatBinOpPlan::Fold(result)
+        } else {
+            FloatBinOpPlan::FprOp
+        }
+    }
 
-        let (lhs, rhs, dst) = self.load_binary_ret_xmm(ir, dst, info);
-        if let Some(dst) = dst {
-            ir.fpr_binop(kind, lhs, rhs, dst);
+    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
+        match self.plan_binop_float(kind, info) {
+            FloatBinOpPlan::Fold(result) => {
+                // `plan_binop_float` already verified `Immediate::flonum`, so this
+                // always succeeds — a pure Layer-① constant, no fpr.
+                let folded = self.def_C_float(dst, result);
+                debug_assert!(folded);
+            }
+            FloatBinOpPlan::FprOp => {
+                let (lhs, rhs, dst) = self.load_binary_ret_fpr(ir, dst, info);
+                if let Some(dst) = dst {
+                    // §19 (B): route the arithmetic through the record stream
+                    // (collect + inline-emit + shadow-check) instead of a direct
+                    // `fpr_binop`, so the operation joins the ordered codegen
+                    // record alongside its operand loads.
+                    ir.transfer(TransferIR::FloatBinOp { kind, lhs, rhs, dst });
+                }
+            }
         }
     }
 
@@ -504,7 +549,13 @@ impl AbstractFrame {
             return;
         };
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        ir.integer_cmp(mode, kind, lhs, rhs);
+        // §19 (B): route the comparison through the record stream.
+        ir.transfer(TransferIR::IntegerCmp {
+            mode,
+            kind,
+            lhs,
+            rhs,
+        });
         self.def_rax2acc(ir, dst);
     }
 
@@ -519,11 +570,12 @@ impl AbstractFrame {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let binary_xmm = self.load_binary_xmm(ir, info);
-        ir.push(AsmInst::FloatCmp {
+        let binary_fpr = self.load_binary_fpr(ir, info);
+        // §19 (B): route the comparison through the record stream.
+        ir.transfer(TransferIR::FloatCmp {
             kind,
-            lhs: binary_xmm.0,
-            rhs: binary_xmm.1,
+            lhs: binary_fpr.0,
+            rhs: binary_fpr.1,
         });
         self.def_rax2acc(ir, dst);
     }
@@ -612,7 +664,7 @@ impl AbstractFrame {
         }
     }
 
-    pub(super) fn load_binary_xmm(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {
+    pub(super) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {
         let FBinOpInfo {
             lhs,
             rhs,
@@ -621,53 +673,53 @@ impl AbstractFrame {
             ..
         } = info;
         if lhs != rhs {
-            // Loading lhs may set an `Sf` mode on its xmm. Without pinning,
+            // Loading lhs may set an `Sf` mode on its fpr. Without pinning,
             // the next allocator call (when loading rhs) can demote that
-            // same xmm via Phase-1 of `try_alloc_xmm_demote` and hand it
-            // back as the rhs xmm — so the consumer would compare /
+            // same fpr via Phase-1 of `try_alloc_fpr_demote` and hand it
+            // back as the rhs fpr — so the consumer would compare /
             // arithmetic the value with itself. Pin lhs across the rhs
             // load to force the allocator to pick a different physical
             // register.
-            let lhs_xmm = self.fetch_float_assume(ir, lhs, lhs_class);
-            self.pin_xmm(lhs_xmm);
-            let rhs_xmm = self.fetch_float_assume(ir, rhs, rhs_class);
-            self.unpin_xmm(lhs_xmm);
-            (lhs_xmm, rhs_xmm)
+            let lhs_fpr = self.fetch_float_assume(ir, lhs, lhs_class);
+            self.pin_fpr(lhs_fpr);
+            let rhs_fpr = self.fetch_float_assume(ir, rhs, rhs_class);
+            self.unpin_fpr(lhs_fpr);
+            (lhs_fpr, rhs_fpr)
         } else {
             let lhs = self.fetch_float_assume(ir, lhs, lhs_class);
             (lhs, lhs)
         }
     }
 
-    pub(super) fn load_binary_ret_xmm(
+    pub(super) fn load_binary_ret_fpr(
         &mut self,
         ir: &mut AsmIr,
         dst: Option<SlotId>,
         info: FBinOpInfo,
     ) -> (FPReg, FPReg, Option<FPReg>) {
-        let (lhs, rhs) = self.load_binary_xmm(ir, info);
+        let (lhs, rhs) = self.load_binary_fpr(ir, info);
         // Pin both operands while allocating the destination — `def_F` calls
-        // `alloc_xmm`, which can otherwise pick `lhs` or `rhs` as the spill
+        // `alloc_fpr`, which can otherwise pick `lhs` or `rhs` as the spill
         // victim and alias dst onto an operand the consumer still needs.
-        self.pin_xmm(lhs);
-        self.pin_xmm(rhs);
+        self.pin_fpr(lhs);
+        self.pin_fpr(rhs);
         let dst = dst.map(|dst| {
             if dst == info.lhs {
-                self.def_F_with_xmm(dst, lhs);
+                self.def_F_with_fpr(dst, lhs);
                 lhs
             } else {
                 self.def_F(dst)
             }
         });
-        self.unpin_xmm(rhs);
-        self.unpin_xmm(lhs);
+        self.unpin_fpr(rhs);
+        self.unpin_fpr(lhs);
         (lhs, rhs, dst)
     }
 
     fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> FPReg {
         match class {
-            FOpClass::Integer => self.load_xmm_fixnum(ir, rhs),
-            FOpClass::Float => self.load_xmm(ir, rhs),
+            FOpClass::Integer => self.load_fpr_fixnum(ir, rhs),
+            FOpClass::Float => self.load_fpr(ir, rhs),
         }
     }
 }

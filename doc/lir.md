@@ -101,7 +101,7 @@ benefit. The `lir.rs` unit test uses `matches!` instead of `==`.
 | GC / nil | `WriteBarrier { parent, value }`, `NilIfZero { reg }` |
 | Guards (carry a side-exit `deopt`) | `GuardClass`, `GuardArrayTy`, `GuardFrozen`, `GuardConstBaseClass`, `GuardConstVersion`, `GuardCapture`, `CheckBOP` |
 | Integer arithmetic | `IntegerBinOp { …, deopt }`, `IntegerCmp`, `FixnumNeg { …, deopt }`, `FixnumBitNot` |
-| Floating-point | `FprMove`, `F64ToFpr`, `FixnumToFpr`, `FprToStack`, `FprSwap`, `FloatToFpr` (deopt), `I64ToBoth`, `FloatBinOp`, `FloatUnOp`, `FloatCmp`, `FloatCmpBr`, `XmmSave`, `XmmRestore`, `CFunc_F_F`, `CFunc_FF_F` (FP ops carry the spill `base`) |
+| Floating-point | `FprMove`, `F64ToFpr`, `FixnumToFpr`, `FprToStack`, `FprSwap`, `FloatToFpr` (deopt), `I64ToBoth`, `FloatBinOp`, `FloatUnOp`, `FloatCmp`, `FloatCmpBr`, `FprSave`, `FprRestore`, `CFunc_F_F`, `CFunc_FF_F` (FP ops carry the spill `base`) |
 | Heap ivar (macro-op) | `LoadIVarHeap`, `StoreIVarHeap` |
 | Construction (macro-op) | `CreateArray`, `NewArray`, `NewHash`, `HashInsert`, `ArrayConcat`, `NewRange`, `ConcatStr`, `ConcatRegexp`, `ToA`, `DeepCopyLit`, `ExpandArray` |
 | Variables (macro-op) | `StoreConstant`, `LoadGVar`, `StoreGVar`, `LoadCVar`, `CheckCVar`, `StoreCVar`, `LoadDynVar`, `StoreDynVar`, `AliasGvar` |
@@ -213,7 +213,7 @@ accumulator).
 | 3-E | FP transfer/convert (`FprMove` / `F64ToFpr` / `FixnumToFpr` / `FprToStack`) | first FP family; real decomposition |
 | 3-F | FP swap / `FloatToFpr` (deopt) / `I64ToBoth` | |
 | 3-G | FP arithmetic & compare (`FloatBinOp` / `FloatUnOp` / `FloatCmp` / `FloatCmpBr`) | NaN-correct conditions |
-| 3-H | FP C-calls (`CFunc_F_F` / `CFunc_FF_F`) + `XmmSave` / `XmmRestore` | completes the FP family |
+| 3-H | FP C-calls (`CFunc_F_F` / `CFunc_FF_F`) + `FprSave` / `FprRestore` | completes the FP family |
 | A | bounds-checked heap-ivar load/store (`LoadIVarHeap` / `StoreIVarHeap`) | first macro-op via `encode_linst_macro` |
 | B1 | variable + construction macro-ops (g/c/dyn-var, array/hash/range/str, `to_a`, `defined?`, generic binop, alias/undef, …) | bulk macro-op routing |
 | B2 | remaining construction / `defined?` / dispatch-helper macro-ops | |

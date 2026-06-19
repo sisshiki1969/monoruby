@@ -6,8 +6,8 @@ impl Codegen {
     ///
     /// return "yield" if callable, `nil` if not.
     ///
-    pub(super) fn defined_yield(&mut self, dst: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_yield(&mut self, dst: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -16,11 +16,11 @@ impl Codegen {
             lea  rdi, [rbp - (rbp_local(dst))];
             movq [rdi], rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn defined_const(&mut self, dst: SlotId, siteid: ConstSiteId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_const(&mut self, dst: SlotId, siteid: ConstSiteId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -29,7 +29,7 @@ impl Codegen {
             movq rax, (runtime::defined_const);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     pub(super) fn defined_method(
@@ -37,9 +37,9 @@ impl Codegen {
         dst: SlotId,
         recv: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) {
-        self.xmm_save(using_xmm);
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -49,7 +49,7 @@ impl Codegen {
             movq rax, (runtime::defined_method);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -57,8 +57,8 @@ impl Codegen {
     ///
     /// Set `dst` to "super" if callable, `nil` if not.
     ///
-    pub(super) fn defined_super(&mut self, dst: SlotId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_super(&mut self, dst: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -67,7 +67,7 @@ impl Codegen {
             lea  rdi, [rbp - (rbp_local(dst))];
             movq [rdi], rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
     ///
@@ -75,8 +75,8 @@ impl Codegen {
     ///
     /// Set `dst`` to "global-variable" if exists, `nil` if not.
     ///
-    pub(super) fn defined_gvar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_gvar(&mut self, dst: SlotId, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -86,11 +86,11 @@ impl Codegen {
             lea  rdi, [rbp - (rbp_local(dst))];
             movq [rdi], rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn defined_ivar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_ivar(&mut self, dst: SlotId, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -99,11 +99,11 @@ impl Codegen {
             movq rax, (runtime::defined_ivar);
             call rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn defined_cvar(&mut self, dst: SlotId, name: IdentId, using_xmm: UsingXmm) {
-        self.xmm_save(using_xmm);
+    pub(super) fn defined_cvar(&mut self, dst: SlotId, name: IdentId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
@@ -113,6 +113,6 @@ impl Codegen {
             lea  rdi, [rbp - (rbp_local(dst))];
             movq [rdi], rax;
         };
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 }

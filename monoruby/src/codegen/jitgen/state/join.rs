@@ -61,7 +61,7 @@ impl AbstractFrame {
             // De-fuse the meet (§5): `decide_join` is a pure read-only function
             // of the two input `LinkMode`s (the merge *decision*); `apply_join`
             // performs the placement mutation — and is the *only* place the meet
-            // allocates an xmm (`try_set_new_F` / `try_set_new_Sf`). This is the
+            // allocates an fpr (`try_set_new_F` / `try_set_new_Sf`). This is the
             // seam the allocator pass will own: it will consume the `JoinAction`
             // stream and assign registers + emit edge moves, instead of
             // `apply_join` allocating inline. Behaviour is identical to the old
@@ -90,7 +90,7 @@ impl AbstractFrame {
     ///
     /// **Stage 1 — placement record completeness.** Replay the recorded
     /// `JoinAction` stream from `pre` and assert it reproduces the merged
-    /// placement (every slot's `LinkMode`), including the `try_alloc_xmm` phase-1
+    /// placement (every slot's `LinkMode`), including the `try_alloc_fpr` phase-1
     /// cross-slot demotions.
     ///
     #[cfg(debug_assertions)]
@@ -139,7 +139,7 @@ impl AbstractFrame {
 /// The per-slot merge decision (§5 de-fusion): a pure function of the two
 /// predecessors' `LinkMode`s, computed by [`AbstractFrame::decide_join`] and
 /// executed by [`AbstractFrame::apply_join`]. Reifying the decision separates
-/// the *meet* (analysis) from the *placement mutation + xmm allocation*
+/// the *meet* (analysis) from the *placement mutation + fpr allocation*
 /// (codegen/allocation) — the prerequisite for moving allocation into its own
 /// pass that lowers these actions to register assignments + edge moves.
 ///
@@ -151,20 +151,20 @@ enum JoinAction {
     SetMaybeNone,
     /// `_ -> V`
     Discard,
-    /// registers disagree across branches: try to rebind to a fresh xmm so each
-    /// bridge is a single move; keep the current `F` binding if no phys xmm is
+    /// registers disagree across branches: try to rebind to a fresh fpr so each
+    /// bridge is a single move; keep the current `F` binding if no phys fpr is
     /// free (the bridge then swaps). [`F`/`F` arm]
     TryFreshFKeep,
-    /// try fresh-xmm `F`; fall back to `S(Float)` if no phys xmm is free.
+    /// try fresh-fpr `F`; fall back to `S(Float)` if no phys fpr is free.
     /// [`C`/`F` and `C`/`C`-both-float arms]
     TryFreshFElseS,
-    /// rebind to `Sf(x, guarded)` with the current xmm `x` (registers agree, or
+    /// rebind to `Sf(x, guarded)` with the current fpr `x` (registers agree, or
     /// the `Sf`/`C` arm folding a literal into the guard).
     SetSf(FPReg, SfGuarded),
-    /// try fresh-xmm `Sf(guarded)`; keep `Sf(x, guarded)` if no phys xmm is free.
+    /// try fresh-fpr `Sf(guarded)`; keep `Sf(x, guarded)` if no phys fpr is free.
     /// [`F`|`Sf` / `Sf`|`F` arm, registers disagree]
     TryFreshSfElseKeep(FPReg, SfGuarded),
-    /// try fresh-xmm `Sf(guarded)`; fall back to `S(guarded)` if no phys xmm.
+    /// try fresh-fpr `Sf(guarded)`; fall back to `S(guarded)` if no phys fpr.
     /// [`C` / `Sf` arm]
     TryFreshSfElseS(SfGuarded),
     /// `_ -> S(guarded)`
@@ -199,13 +199,13 @@ impl AbstractFrame {
                     LinkMode::Sf(_, guarded) => guarded,
                     _ => unreachable!(),
                 };
-                let (other_xmm, other_g) = match other.mode(i) {
+                let (other_fpr, other_g) = match other.mode(i) {
                     LinkMode::F(y) => (y, SfGuarded::Float),
                     LinkMode::Sf(y, guarded) => (y, guarded),
                     _ => unreachable!(),
                 };
                 guarded.join(other_g);
-                if x == other_xmm {
+                if x == other_fpr {
                     SetSf(x, guarded)
                 } else {
                     TryFreshSfElseKeep(x, guarded)
@@ -229,7 +229,7 @@ impl AbstractFrame {
 
     ///
     /// Apply a merge action to slot *i*. The **only** place [`Self::join`]
-    /// mutates placement or allocates an xmm.
+    /// mutates placement or allocates an fpr.
     ///
     fn apply_join(&mut self, i: SlotId, action: JoinAction) {
         match action {
@@ -244,7 +244,7 @@ impl AbstractFrame {
             JoinAction::TryFreshFElseS => {
                 if self.try_set_new_F(i).is_none() {
                     // Fall back to S — bridge materialises from the concrete
-                    // literal on the C side and from xmm on the F side.
+                    // literal on the C side and from fpr on the F side.
                     self.set_S_with_guard(i, Guarded::Float);
                 }
             }

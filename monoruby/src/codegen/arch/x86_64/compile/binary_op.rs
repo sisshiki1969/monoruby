@@ -229,8 +229,8 @@ impl Codegen {
     /// ### destroy
     /// - caller-save registers
     ///
-    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
-        self.xmm_save(using_xmm);
+    pub(crate) fn gen_int_pow(&mut self, using_fpr: UsingFpr, error: &DestLabel) {
+        self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             sarq rdi, 1;
             sarq rsi, 1;
@@ -238,7 +238,7 @@ impl Codegen {
             movq rax, (pow_ii as *const ());
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
         monoasm!( &mut self.jit,
             testq rax, rax;
             jeq error;
@@ -248,32 +248,32 @@ impl Codegen {
     ///
     /// gen code for `Integer#%` with a Float rhs.
     ///
-    /// Calls `rem_ff(lhs, rhs)` and stores the f64 result in `dst_xmm`.
+    /// Calls `rem_ff(lhs, rhs)` and stores the f64 result in `dst_fpr`.
     ///
     /// ### in
-    /// - xmm(*lhs_xmm*): lhs as f64 (Integer converted to f64)
-    /// - xmm(*rhs_xmm*): rhs as f64
+    /// - xmm(*lhs_fpr*): lhs as f64 (Integer converted to f64)
+    /// - xmm(*rhs_fpr*): rhs as f64
     ///
     /// ### out
-    /// - xmm(*dst_xmm*): result f64
+    /// - xmm(*dst_fpr*): result f64
     ///
     pub(crate) fn gen_int_rem_if(
         &mut self,
-        lhs_xmm: FPReg,
-        rhs_xmm: FPReg,
-        dst_xmm: FPReg,
-        using_xmm: UsingXmm,
+        lhs_fpr: FPReg,
+        rhs_fpr: FPReg,
+        dst_fpr: FPReg,
+        using_fpr: UsingFpr,
         base: usize,
     ) {
-        self.xmm_save(using_xmm);
-        self.load_fpr_into_xmm0(lhs_xmm, base);
-        self.load_fpr_into_xmm1(rhs_xmm, base);
+        self.fpr_save(using_fpr);
+        self.load_fpr_into_xmm0(lhs_fpr, base);
+        self.load_fpr_into_xmm1(rhs_fpr, base);
         monoasm!( &mut self.jit,
             movq rax, (rem_ff as *const ());
             call rax;
         );
-        self.xmm_restore(using_xmm);
-        self.store_fpr_into_xmm(dst_xmm, base);
+        self.fpr_restore(using_fpr);
+        self.store_fpr_into_xmm(dst_fpr, base);
     }
 
     ///
@@ -284,8 +284,8 @@ impl Codegen {
     /// is non-integer, so we cannot store it as a raw f64.
     ///
     /// ### in
-    /// - xmm(*lhs_xmm*): lhs as f64
-    /// - xmm(*rhs_xmm*): rhs as f64
+    /// - xmm(*lhs_fpr*): lhs as f64
+    /// - xmm(*rhs_fpr*): rhs as f64
     ///
     /// ### out
     /// - rax: result Value
@@ -295,19 +295,19 @@ impl Codegen {
     ///
     pub(crate) fn gen_int_pow_if(
         &mut self,
-        lhs_xmm: FPReg,
-        rhs_xmm: FPReg,
-        using_xmm: UsingXmm,
+        lhs_fpr: FPReg,
+        rhs_fpr: FPReg,
+        using_fpr: UsingFpr,
         base: usize,
     ) {
-        self.xmm_save(using_xmm);
-        self.load_fpr_into_xmm0(lhs_xmm, base);
-        self.load_fpr_into_xmm1(rhs_xmm, base);
+        self.fpr_save(using_fpr);
+        self.load_fpr_into_xmm0(lhs_fpr, base);
+        self.load_fpr_into_xmm1(rhs_fpr, base);
         monoasm!( &mut self.jit,
             movq rax, (pow_ff as *const ());
             call rax;
         );
-        self.xmm_restore(using_xmm);
+        self.fpr_restore(using_fpr);
     }
 }
 
@@ -346,13 +346,13 @@ impl Codegen {
         &mut self,
         kind: BinOpK,
         dst: FPReg,
-        binary_xmm: (FPReg, FPReg),
+        binary_fpr: (FPReg, FPReg),
         base_stack_offset: usize,
     ) {
-        let (l, r) = binary_xmm;
-        let lhs_loc = l.loc(base_stack_offset);
-        let rhs_loc = r.loc(base_stack_offset);
-        let dst_loc = dst.loc(base_stack_offset);
+        let (l, r) = binary_fpr;
+        let lhs_loc = PhysMap::new(base_stack_offset).resolve(l);
+        let rhs_loc = PhysMap::new(base_stack_offset).resolve(r);
+        let dst_loc = PhysMap::new(base_stack_offset).resolve(dst);
 
         // Step 1: pick `work` for `dst`.
         let (work, dst_spill_off) = match dst_loc {
@@ -436,10 +436,10 @@ macro_rules! cmp_main {
 }
 
 impl Codegen {
-    pub(super) fn cmp_float(&mut self, binary_xmm: (FPReg, FPReg), base_stack_offset: usize) {
-        let (l, r) = binary_xmm;
-        let l_loc = l.loc(base_stack_offset);
-        let r_loc = r.loc(base_stack_offset);
+    pub(super) fn cmp_float(&mut self, binary_fpr: (FPReg, FPReg), base_stack_offset: usize) {
+        let (l, r) = binary_fpr;
+        let l_loc = PhysMap::new(base_stack_offset).resolve(l);
+        let r_loc = PhysMap::new(base_stack_offset).resolve(r);
         // ucomisd's first operand must be an xmm register; the second
         // can be xmm or memory. Pick the cheapest combination.
         match (l_loc, r_loc) {
@@ -886,10 +886,10 @@ mod tests {
     /// forces every left operand to remain live until the innermost
     /// `s * t` is evaluated and the result bubbles back out — so all
     /// 14 input variables (plus the running result) must occupy xmm
-    /// slots simultaneously. With PHYS_XMM_POOL = 14, that overflow
+    /// slots simultaneously. With PHYS_FPR_POOL = 14, that overflow
     /// guarantees at least one `VirtFPReg(>=14)` allocation per
     /// iteration, exercising LoadSpill/StoreSpill and the spill-aware
-    /// XmmBinOp memory-operand lowering. The hot `for` loop hits the
+    /// FprBinOp memory-operand lowering. The hot `for` loop hits the
     /// loop-JIT threshold at iteration 16 (test mode).
     #[test]
     fn loop_jit_spill_stress() {

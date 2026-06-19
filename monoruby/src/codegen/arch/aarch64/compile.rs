@@ -9,6 +9,7 @@
 //! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
+use crate::codegen::jitgen::asmir::ArrayIndexKind;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
@@ -266,8 +267,13 @@ impl Codegen {
         base: usize,
     ) {
         self.jit.bind_label(entry);
-        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Write back FIRST, while the loop sp-bump still keeps sp below the
+        // spill region: the write-back boxes spilled floats with calls whose
+        // callee prologues push below sp, and undoing the bump first would let
+        // those pushes overwrite the spill slots being read (see the x86 twin
+        // `side_exit_with_label` and doc/regalloc_separation.md §39).
         self.a64_gen_write_back_for_deopt(wb, base);
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
         // PC == x21.
@@ -296,8 +302,10 @@ impl Codegen {
         base: usize,
     ) {
         self.jit.bind_label(entry);
-        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Write back before undoing the bump — same spill-clobber reason as
+        // `a64_gen_deopt` / the x86 `side_exit_with_label` (§39).
         self.a64_gen_write_back_for_deopt(wb, base);
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
@@ -650,12 +658,12 @@ impl Codegen {
     /// `pow_ii(a, b, vm)` (which returns the boxed result, possibly a BigInt,
     /// or 0/None on error). Result Value lands in Rax (x0). aarch64 twin of x86
     /// `gen_int_pow`. The FP pool is saved around the C-call.
-    pub(crate) fn gen_int_pow(&mut self, using_xmm: UsingXmm, error: &DestLabel) {
+    pub(crate) fn gen_int_pow(&mut self, using_fpr: UsingFpr, error: &DestLabel) {
         let rdi = GP::Rdi.a64().0; // x4 (a, tagged)
         let rsi = GP::Rsi.a64().0; // x3 (b, tagged)
         let f = crate::executor::op::pow_ii as *const () as u64;
         let error = error.clone();
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             asr x0, x(rdi), #(1);    // a (untagged) -> arg0
             asr x1, x(rsi), #(1);    // b (untagged) -> arg1
@@ -665,35 +673,35 @@ impl Codegen {
             blr x9;                  // x0 = pow_ii(a, b, vm)
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             cbz x0, error;           // 0/None -> raise
         );
     }
 
     /// `Integer#%` with a Float rhs: `rem_ff(lhs, rhs)` (f64,f64 -> f64). The
-    /// operands are loaded into d0/d1, the result (d0) stored into `dst_xmm`.
+    /// operands are loaded into d0/d1, the result (d0) stored into `dst_fpr`.
     /// aarch64 twin of x86 `gen_int_rem_if`.
     pub(crate) fn gen_int_rem_if(
         &mut self,
-        lhs_xmm: FPReg,
-        rhs_xmm: FPReg,
-        dst_xmm: FPReg,
-        using_xmm: UsingXmm,
+        lhs_fpr: FPReg,
+        rhs_fpr: FPReg,
+        dst_fpr: FPReg,
+        using_fpr: UsingFpr,
         base: usize,
     ) {
         let f = crate::executor::op::rem_ff as *const () as u64;
         monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-        self.emit_xmm_save(using_xmm, false);
-        self.a64_fpr_into_d(lhs_xmm, 0, base);
-        self.a64_fpr_into_d(rhs_xmm, 1, base);
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_fpr_into_d(lhs_fpr, 0, base);
+        self.a64_fpr_into_d(rhs_fpr, 1, base);
         monoasm_arm64!(&mut self.jit,
             mov x9, (f);
             blr x9;                  // d0 = rem_ff(d0, d1)
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
-        self.a64_d0_into_fpr(dst_xmm, base);
+        self.a64_d0_into_fpr(dst_fpr, base);
     }
 
     /// `Integer#**` with a Float rhs: `pow_ff(lhs, rhs)` (f64,f64 -> Value, which
@@ -701,21 +709,21 @@ impl Codegen {
     /// lands in Rax (x0). aarch64 twin of x86 `gen_int_pow_if`.
     pub(crate) fn gen_int_pow_if(
         &mut self,
-        lhs_xmm: FPReg,
-        rhs_xmm: FPReg,
-        using_xmm: UsingXmm,
+        lhs_fpr: FPReg,
+        rhs_fpr: FPReg,
+        using_fpr: UsingFpr,
         base: usize,
     ) {
         let f = crate::executor::op::pow_ff as *const () as u64;
         monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-        self.emit_xmm_save(using_xmm, false);
-        self.a64_fpr_into_d(lhs_xmm, 0, base);
-        self.a64_fpr_into_d(rhs_xmm, 1, base);
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_fpr_into_d(lhs_fpr, 0, base);
+        self.a64_fpr_into_d(rhs_fpr, 1, base);
         monoasm_arm64!(&mut self.jit,
             mov x9, (f);
             blr x9;                  // x0 = pow_ff(d0, d1)
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
     }
 
@@ -1000,7 +1008,7 @@ impl Codegen {
 
     // ---- spill-aware FP-register access -----------------------------------
     // The FP register allocator keeps unboxed floats in the pool D2-D15
-    // (`PHYS_XMM_POOL` = 14 ⇒ `FPRegLoc::Xmm(2..=15)`); when it needs more live
+    // (`PHYS_FPR_POOL` = 14 ⇒ `FPRegLoc::Xmm(2..=15)`); when it needs more live
     // floats than that, the overflow spills to frame slots
     // (`FPRegLoc::Spill(off)` ⇒ `[x29-off]`, mirroring x86's `[rbp-off]`).
     // D0/D1 are reserved scratch and never alias a pool register, so they carry
@@ -1012,7 +1020,7 @@ impl Codegen {
     // callee-saved, so the Rust↔JIT boundary (the invoker prologue/epilogue and
     // the fiber-switch `a64_{push,pop}_callee_save`) preserves D8-D15 for the
     // Rust caller. Within the JIT world the whole pool is treated as
-    // caller-saved — `XmmSave`/`XmmRestore` spill the live subset around any
+    // caller-saved — `FprSave`/`FprRestore` spill the live subset around any
     // clobbering call (a JIT→JIT `blr` clobbers D2-D15; a C-call's Rust callee
     // preserves D8-D15 but the spill is harmless), and `f64_to_val`'s heap path
     // saves D2-D7 while relying on `float_heap` to preserve D8-D15.
@@ -1020,7 +1028,7 @@ impl Codegen {
     /// Place `src`'s value into physical D-register `dreg` unconditionally
     /// (`fmov` for a pool register, a frame load for a spill slot).
     fn a64_fpr_load(&mut self, src: FPReg, dreg: u32, base: usize) {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => {
                 if p as u32 != dreg {
                     monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32););
@@ -1049,7 +1057,7 @@ impl Codegen {
     /// Store physical D-register `dreg` into `dst` unconditionally (`fmov` for a
     /// pool register, a frame store for a spill slot).
     fn a64_fpr_save(&mut self, dst: FPReg, dreg: u32, base: usize) {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => {
                 if p as u32 != dreg {
                     monoasm_arm64!(&mut self.jit, fmov d(p as u32), d(dreg););
@@ -1067,7 +1075,7 @@ impl Codegen {
     /// resident (no code emitted), otherwise the spill loaded into scratch
     /// `dreg`.
     fn a64_fpr_read(&mut self, src: FPReg, dreg: u32, base: usize) -> u32 {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => p as u32,
             FPRegLoc::Spill(_) => {
                 self.a64_fpr_load(src, dreg, base);
@@ -1079,7 +1087,7 @@ impl Codegen {
     /// Register to write `dst` into: its pool register if resident, else scratch
     /// `dreg` (the caller must follow with `a64_fpr_commit`). Emits nothing.
     fn a64_fpr_wtmp(&self, dst: FPReg, dreg: u32, base: usize) -> u32 {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => p as u32,
             FPRegLoc::Spill(_) => dreg,
         }
@@ -1088,7 +1096,7 @@ impl Codegen {
     /// Flush scratch `dreg` back to `dst`'s spill slot; a no-op when `dst` is
     /// pool-resident (the op already wrote its pool register in place).
     fn a64_fpr_commit(&mut self, dst: FPReg, dreg: u32, base: usize) {
-        if let FPRegLoc::Spill(_) = dst.loc(base) {
+        if let FPRegLoc::Spill(_) = PhysMap::new(base).resolve(dst) {
             self.a64_fpr_save(dst, dreg, base);
         }
     }
@@ -1247,7 +1255,7 @@ impl Codegen {
         &mut self,
         func_id: FuncId,
         dst_off: Option<u32>,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) {
         let lfp = GP::R14.a64().0; // x22
@@ -1308,7 +1316,7 @@ impl Codegen {
         );
         // Reload the pool (clobbered by the class body + exit_classdef) and pop
         // the save area before the final HandleError branch.
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
     }
 
@@ -1324,7 +1332,7 @@ impl Codegen {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
         let sc_off = superclass.map(|s| conv(s) as u32);
@@ -1335,7 +1343,7 @@ impl Codegen {
         // Save the live FP pool for the whole ClassDef sequence; it persists
         // across define_class, the class body, and exit_classdef, is reloaded
         // into d2.. before each HandleError, and is popped once at the end.
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         // superclass -> x3, base -> x5 (Option<Value>; 0 == None)
         match sc_off {
             Some(off) => self.a64_frame_load(3, lfp, off),
@@ -1356,9 +1364,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
-        self.a64_xmm_reload(using_xmm);
+        self.a64_fpr_reload(using_fpr);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_fpr, error);
         true
     }
 
@@ -1369,14 +1377,14 @@ impl Codegen {
         base: SlotId,
         dst: Option<SlotId>,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
         let base_off = conv(base) as u32;
         let dst_off = dst.map(|d| conv(d) as u32);
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::define_singleton_class as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         // define_singleton_class(vm, globals, base)
         self.a64_frame_load(2, lfp, base_off);             // x2 = base (receiver Value)
         monoasm_arm64!(&mut self.jit,
@@ -1387,9 +1395,9 @@ impl Codegen {
             blr x9;                                        // x0 = Option<Value> self
             ldr x30, [sp], #16;
         );
-        self.a64_xmm_reload(using_xmm);
+        self.a64_fpr_reload(using_fpr);
         self.emit_handle_error(error);
-        self.a64_jit_class_def_sub(func_id, dst_off, using_xmm, error);
+        self.a64_jit_class_def_sub(func_id, dst_off, using_fpr, error);
         true
     }
 
@@ -1845,36 +1853,36 @@ impl Codegen {
                 self.jit.bcond_label(cond, &dest);
             }
             // ---- FP pool save/restore + FP C-calls ---------------------------
-            LInst::XmmSave { using_xmm, cont } => {
-                self.emit_xmm_save(using_xmm, cont);
+            LInst::FprSave { using_fpr, cont } => {
+                self.emit_fpr_save(using_fpr, cont);
             }
-            LInst::XmmRestore { using_xmm, cont } => {
-                self.emit_xmm_restore(using_xmm, cont);
+            LInst::FprRestore { using_fpr, cont } => {
+                self.emit_fpr_restore(using_fpr, cont);
             }
-            LInst::CFunc_F_F { f, src, dst, using_xmm, base } => {
+            LInst::CFunc_F_F { f, src, dst, using_fpr, base } => {
                 let fp = f as u64;
                 monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-                self.emit_xmm_save(using_xmm, false);
+                self.emit_fpr_save(using_fpr, false);
                 self.a64_fpr_load(src, 0, base); // arg -> d0
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (fp);
                     blr x9;            // result in d0
                 );
-                self.emit_xmm_restore(using_xmm, false);
+                self.emit_fpr_restore(using_fpr, false);
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
-            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_xmm, base } => {
+            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_fpr, base } => {
                 let fp = f as u64;
                 monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-                self.emit_xmm_save(using_xmm, false);
+                self.emit_fpr_save(using_fpr, false);
                 self.a64_fpr_load(lhs, 0, base); // arg0 -> d0
                 self.a64_fpr_load(rhs, 1, base); // arg1 -> d1
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (fp);
                     blr x9;            // result in d0
                 );
-                self.emit_xmm_restore(using_xmm, false);
+                self.emit_fpr_restore(using_fpr, false);
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
@@ -2106,7 +2114,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_constant(
         &mut self,
         id: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
         let error = error.clone();
@@ -2115,7 +2123,7 @@ impl Codegen {
             .get_label_address(&self.const_version_label())
             .as_ptr() as u64;
         let f = runtime::set_constant as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x3, x0;                 // val (was in rax)
             mov x0, x19;                // vm
@@ -2132,7 +2140,7 @@ impl Codegen {
         );
         // Restore the FP pool *before* the error branch: the cold error handler
         // writes the live floats back from the pool, so they must be valid.
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             cbz x0, error;              // None -> error
         );
@@ -2147,10 +2155,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_gvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::get_global_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -2160,7 +2168,7 @@ impl Codegen {
             blr x9;                       // result in x0 (= rax)
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2169,12 +2177,12 @@ impl Codegen {
         &mut self,
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::set_global_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -2187,7 +2195,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2195,10 +2203,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_cvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::get_class_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm
             mov x1, x20;                  // globals
@@ -2208,7 +2216,7 @@ impl Codegen {
             blr x9;                       // result in x0
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2263,11 +2271,11 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_new_array(
         &mut self,
         callid: CallSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let f = runtime::gen_array as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                       // vm
             mov x1, x20;                       // globals
@@ -2278,7 +2286,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2287,12 +2295,12 @@ impl Codegen {
         &mut self,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = args.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::gen_hash as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -2305,7 +2313,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2317,13 +2325,13 @@ impl Codegen {
         hash: SlotId,
         args: SlotId,
         len: usize,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let args_off = args.0 as u32 * 8 + LFP_SELF as u32;
         let hash_off = hash.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::hash_insert as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -2337,7 +2345,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2347,13 +2355,13 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let dst_off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let src_off = src.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::array_concat as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -2366,7 +2374,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2376,13 +2384,13 @@ impl Codegen {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let soff = start.0 as u32 * 8 + LFP_SELF as u32;
         let eoff = end.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::gen_range as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         self.a64_frame_load(0, lfp, soff); // x0 = start value
         self.a64_frame_load(1, lfp, eoff); // x1 = end value
         monoasm_arm64!(&mut self.jit,
@@ -2394,7 +2402,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2405,12 +2413,12 @@ impl Codegen {
         &mut self,
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::concatenate_string as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm
             mov x1, x20;              // globals
@@ -2423,13 +2431,13 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
     /// rax <- `src` coerced to an Array: load slot `src`; if already an Array
     /// keep it, otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
-    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_xmm: UsingXmm) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_fpr: UsingFpr) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         let toa = self.jit.label();
@@ -2437,7 +2445,7 @@ impl Codegen {
         // Reserve the FP-pool save area for the whole sequence; both the
         // already-Array fast path and the to_a C call fall through to the
         // matching restore, so sp stays balanced either way.
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         self.a64_frame_load(0, lfp, off); // val (rax)
         self.a64_guard_rvalue(GP::Rax.a64().0, ARRAY_CLASS, &toa); // not Array -> toa
         monoasm_arm64!(&mut self.jit, b exit;); // already Array
@@ -2453,7 +2461,7 @@ impl Codegen {
             ldr x30, [sp], #16;
             exit:
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2462,11 +2470,11 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let imm = v.id();
         let f = Value::value_deep_copy as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, (imm);
             str x30, [sp, #-16]!;
@@ -2474,7 +2482,7 @@ impl Codegen {
             blr x9;            // result in x0 (= rax)
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -2484,15 +2492,15 @@ impl Codegen {
     // base.
 
     /// Save the live FP pool registers (D2..) below sp before a C-call.
-    pub(in crate::codegen::jitgen) fn emit_xmm_save(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        if using_xmm.not_any() && !cont {
+    pub(in crate::codegen::jitgen) fn emit_fpr_save(&mut self, using_fpr: UsingFpr, cont: bool) -> bool {
+        if using_fpr.not_any() && !cont {
             return true;
         }
         let sp_offset =
-            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+            (using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
         monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
         let mut i = 0u32;
-        for (xi, b) in using_xmm.iter().enumerate() {
+        for (xi, b) in using_fpr.iter().enumerate() {
             if *b {
                 let pr = xi as u32 + 2;
                 let ofs = 8 * i;
@@ -2504,14 +2512,14 @@ impl Codegen {
     }
 
     /// Restore the live FP pool registers and pop the save area after a C-call.
-    pub(in crate::codegen::jitgen) fn emit_xmm_restore(&mut self, using_xmm: UsingXmm, cont: bool) -> bool {
-        if using_xmm.not_any() && !cont {
+    pub(in crate::codegen::jitgen) fn emit_fpr_restore(&mut self, using_fpr: UsingFpr, cont: bool) -> bool {
+        if using_fpr.not_any() && !cont {
             return true;
         }
         let sp_offset =
-            (using_xmm.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+            (using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
         let mut i = 0u32;
-        for (xi, b) in using_xmm.iter().enumerate() {
+        for (xi, b) in using_fpr.iter().enumerate() {
             if *b {
                 let pr = xi as u32 + 2;
                 let ofs = 8 * i;
@@ -2528,10 +2536,10 @@ impl Codegen {
     /// persist across several clobbering calls: the pool regs are reloaded
     /// before each intermediate side-exit branch (whose handler reads the pool
     /// *registers*), while the save area itself is popped only once at the end
-    /// via `emit_xmm_restore`. No-op when the pool is empty.
-    fn a64_xmm_reload(&mut self, using_xmm: UsingXmm) {
+    /// via `emit_fpr_restore`. No-op when the pool is empty.
+    fn a64_fpr_reload(&mut self, using_fpr: UsingFpr) {
         let mut i = 0u32;
-        for (xi, b) in using_xmm.iter().enumerate() {
+        for (xi, b) in using_fpr.iter().enumerate() {
             if *b {
                 let pr = xi as u32 + 2;
                 let ofs = 8 * i;
@@ -2984,7 +2992,7 @@ impl Codegen {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
@@ -3016,11 +3024,11 @@ impl Codegen {
         self.emit_write_barrier(GP::Rdi, src);
         monoasm_arm64!(&mut self.jit, b exit;);
         // cold path: set_ivar(obj, ivarid, src), preserving the FP pool. src (s)
-        // and rdi survive emit_xmm_save (it only touches d-regs / sp) and are
+        // and rdi survive emit_fpr_save (it only touches d-regs / sp) and are
         // read into the C-arg regs just before the call.
         let f = set_ivar as *const () as u64;
         monoasm_arm64!(&mut self.jit, generic:);
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x(rdi);            // base: &mut RValue
             mov x1, (ivar as u64);     // id: IvarId
@@ -3030,7 +3038,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit, exit:);
         true
     }
@@ -3083,9 +3091,9 @@ impl Codegen {
     /// `undef`-method via runtime::undef_method(vm=x19, globals=x20, id). Bails
     /// when an xmm pool register is live (no aarch64 xmm save around C calls
     /// yet); lr is preserved across the `blr`.
-    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_xmm: UsingXmm) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_fpr: UsingFpr) -> bool {
         let f = runtime::undef_method as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                   // vm (Executor)
             mov x1, x20;                   // globals
@@ -3095,15 +3103,15 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
     /// Alias a global var via runtime::alias_global_var(globals=x20, new, old).
     /// Bails when an xmm pool register is live.
-    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_xmm: UsingXmm) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_fpr: UsingFpr) -> bool {
         let f = runtime::alias_global_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x20;                 // globals
             mov x1, (new.get() as u64);  // new IdentId
@@ -3113,7 +3121,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3123,10 +3131,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_check_cvar(
         &mut self,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::check_class_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -3136,7 +3144,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3148,12 +3156,12 @@ impl Codegen {
         &mut self,
         name: IdentId,
         src: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::set_class_var as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
@@ -3166,7 +3174,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3179,13 +3187,13 @@ impl Codegen {
         &mut self,
         new: SlotId,
         old: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off_old = old.0 as u32 * 8 + LFP_SELF as u32;
         let off_new = new.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::alias_method as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm (Executor)
             mov x1, x20;                 // globals
@@ -3198,7 +3206,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3215,12 +3223,12 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_defined_yield(
         &mut self,
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_yield as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -3230,7 +3238,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_frame_store(0, lfp, off); // -> dst
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3238,12 +3246,12 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_defined_super(
         &mut self,
         dst: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_super as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3253,7 +3261,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_frame_store(0, lfp, off);
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3262,12 +3270,12 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_gvar as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3278,7 +3286,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_frame_store(0, lfp, off);
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3287,12 +3295,12 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_cvar as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3303,7 +3311,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_frame_store(0, lfp, off);
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3312,12 +3320,12 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         siteid: ConstSiteId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_const as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3330,7 +3338,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3340,13 +3348,13 @@ impl Codegen {
         dst: SlotId,
         recv: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off_dst = dst.0 as u32 * 8 + LFP_SELF as u32;
         let off_recv = recv.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_method as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3360,7 +3368,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3369,12 +3377,12 @@ impl Codegen {
         &mut self,
         dst: SlotId,
         name: IdentId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::defined_ivar as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -3387,7 +3395,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3399,13 +3407,13 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
         let f = func as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -3418,7 +3426,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3428,13 +3436,13 @@ impl Codegen {
         &mut self,
         lhs: SlotId,
         rhs: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
         let off_r = rhs.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::array_teq as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -3447,7 +3455,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3460,12 +3468,12 @@ impl Codegen {
         &mut self,
         arg: SlotId,
         len: u16,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = arg.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::concatenate_regexp as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals
@@ -3478,7 +3486,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3519,7 +3527,7 @@ impl Codegen {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let rest = if let Some(rest_pos) = rest_pos {
             rest_pos as u64 + 1
@@ -3530,7 +3538,7 @@ impl Codegen {
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let rdi = GP::Rdi.a64().0; // x4 holds src
         let f = runtime::expand_array as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit, mov x0, x(rdi);); // src (from GP::Rdi)
         self.a64_addr_sub(1, lfp, off);  // x1 = &dst (descending base)
         monoasm_arm64!(&mut self.jit,
@@ -3541,7 +3549,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         true
     }
 
@@ -3560,7 +3568,7 @@ impl Codegen {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off_l = lhs.0 as u32 * 8 + LFP_SELF as u32;
@@ -3606,14 +3614,14 @@ impl Codegen {
         // caller-saved d2.. pool regs, but the inline fast path above (which
         // branches straight to `done`) leaves them untouched, so both paths
         // reach `done` with sp and the pool registers consistent.
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
         done:
         );
@@ -3628,7 +3636,7 @@ impl Codegen {
     /// Load a `FPReg` (pool reg or spill slot) into the scratch register `dreg`
     /// (D0/D1, outside the D2-D15 pool). Spill-aware, so it never bails.
     fn a64_fpr_into_d(&mut self, src: FPReg, dreg: u32, base: usize) {
-        match src.loc(base) {
+        match PhysMap::new(base).resolve(src) {
             FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(dreg), d(p as u32);),
             FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
                 mov x10, (off as i64 as u64);
@@ -3640,7 +3648,7 @@ impl Codegen {
 
     /// Store `d0` into a `FPReg` (pool reg or spill slot).
     fn a64_d0_into_fpr(&mut self, dst: FPReg, base: usize) {
-        match dst.loc(base) {
+        match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => monoasm_arm64!(&mut self.jit, fmov d(p as u32), d0;),
             FPRegLoc::Spill(off) => monoasm_arm64!(&mut self.jit,
                 mov x10, (off as i64 as u64);
@@ -3943,7 +3951,7 @@ impl Codegen {
     ///
     pub(crate) fn array_index_assign(
         &mut self,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         generic: &DestLabel,
         error: &DestLabel,
     ) {
@@ -3981,7 +3989,7 @@ impl Codegen {
             b exit;
         }
         self.jit.bind_label(generic);
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         // set_array_integer_index(base, index, vm, globals, src). Source regs at
         // entry: base=x4, index=x3, src=x2. Reorder into the C ABI args
         // (x0..x4) without clobbering a still-needed source.
@@ -3997,9 +4005,85 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         }
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
         self.jit.bind_label(exit); // generic C-call path falls through to exit
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **read** for `AsmInst::ArrayIndex`
+    /// (aarch64). The index-register setup + `array_index` call that used to live
+    /// in the `ir.inline(|gen| …)` closure, driven by the typed `ArrayIndexKind`.
+    ///
+    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let out_range = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    mov x3, (idx as u64);   // index (already non-negative)
+                }
+                self.array_index(&out_range);
+            }
+            ArrayIndexKind::Fixnum => {
+                // Single-page layout (no select_page — see Codegen::array_index):
+                // the negative-index normalization is laid out inline; a
+                // non-negative index branches straight to `checked`.
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    asr x3, x3, #1;         // untag index
+                    cmp x3, #0;
+                    b.pl checked;           // non-negative -> use as-is
+                }
+                self.get_array_length();    // x0 <- len, x4 (base) preserved
+                monoasm_arm64! { &mut self.jit,
+                    adds x3, x3, x0;        // index += len, set flags
+                    b.pl checked;           // normalized non-negative -> recheck
+                    b generic;              // past the start -> out of range
+                }
+                self.jit.bind_label(checked.clone());
+                self.array_index(&generic);
+            }
+        }
+    }
+
+    ///
+    /// §20 (B): emit an array integer-index **assign** for
+    /// `AsmInst::ArrayIndexAssign` (aarch64).
+    ///
+    pub(crate) fn gen_array_index_assign(
+        &mut self,
+        kind: ArrayIndexKind,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        match kind {
+            ArrayIndexKind::U16(idx) => {
+                let generic = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    mov x3, (idx as u64);   // index (already non-negative)
+                }
+                self.array_index_assign(using_fpr, &generic, error);
+            }
+            ArrayIndexKind::Fixnum => {
+                // Single-page layout (no select_page — see array_index_assign).
+                let generic = self.jit.label();
+                let checked = self.jit.label();
+                monoasm_arm64! { &mut self.jit,
+                    asr x3, x3, #1;         // untag index
+                    cmp x3, #0;
+                    b.pl checked;           // non-negative -> use as-is
+                }
+                self.get_array_length();    // x0 <- len, x4 (base) preserved
+                monoasm_arm64! { &mut self.jit,
+                    adds x3, x3, x0;        // index += len, set flags
+                    b.pl checked;           // normalized non-negative -> recheck
+                    b generic;              // past the start -> out of range
+                }
+                self.jit.bind_label(checked.clone());
+                self.array_index_assign(using_fpr, &generic, error);
+            }
+        }
     }
 
     /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
@@ -4037,7 +4121,7 @@ impl Codegen {
     /// Inlined `BasicObject#object_id`: `i64_to_value(self_id)`. The receiver
     /// (its raw id) is in Rdi (x4); move it to the C ABI arg0 (x0) and call.
     /// Result Value lands in Rax (x0). The FP pool is saved by the surrounding
-    /// AsmIr xmm_save/xmm_restore; here we only preserve LR around the `blr`.
+    /// AsmIr fpr_save/fpr_restore; here we only preserve LR around the `blr`.
     pub(crate) fn emit_object_id(&mut self) {
         let rdi = GP::Rdi.a64().0; // x4
         let f = crate::executor::op::i64_to_value as *const () as u64;
@@ -4054,7 +4138,7 @@ impl Codegen {
     /// already in Rdx (x2 == C arg2) and the key in Rcx (x1); move the key to
     /// arg3 first (before x1 is overwritten by globals), then load vm/globals.
     /// Result Value lands in Rax (x0); errors are checked by the trailing
-    /// HandleError. FP pool saved by the surrounding xmm_save/restore.
+    /// HandleError. FP pool saved by the surrounding fpr_save/restore.
     pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x3, x1;           // key (Rcx) -> arg3   [recv already in x2 == Rdx]
@@ -4070,7 +4154,7 @@ impl Codegen {
     /// Inlined `Class#allocate`: `alloc_func(class_id, globals)`. The class id
     /// (a u32) and the resolved allocator pointer are embedded as constants;
     /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).
-    /// FP pool saved by the surrounding xmm_save.
+    /// FP pool saved by the surrounding fpr_save.
     pub(crate) fn emit_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
@@ -4094,7 +4178,7 @@ impl Codegen {
     /// The new instance is held in R15 (x23, ACC — overwritten by the trailing
     /// def_rax2acc anyway); the result Value lands in Rax (x0), 0 on an
     /// `initialize` error (checked by the trailing HandleError). FP pool saved
-    /// by the surrounding xmm_save/restore. The args slot offset is bounded by
+    /// by the surrounding fpr_save/restore. The args slot offset is bounded by
     /// the caller (`gen_class_new_inline` bails past the `sub` immediate range).
     pub(crate) fn emit_class_new(
         &mut self,
@@ -4146,7 +4230,7 @@ impl Codegen {
     }
 
     /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.
-    /// Result Value in Rax (x0). FP pool saved by the surrounding xmm_save.
+    /// Result Value in Rax (x0). FP pool saved by the surrounding fpr_save.
     pub(crate) fn emit_array_clone(&mut self, f: u64) {
         let rdi = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
@@ -4390,11 +4474,11 @@ impl Codegen {
         &mut self,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
         let f = runtime::define_method as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
@@ -4405,7 +4489,7 @@ impl Codegen {
             blr x9;                          // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
         true
     }
@@ -4419,13 +4503,13 @@ impl Codegen {
         obj: SlotId,
         name: IdentId,
         func_id: FuncId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         error: &DestLabel,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = obj.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::singleton_define_method as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
@@ -4439,14 +4523,14 @@ impl Codegen {
             blr x9;                          // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
         true
     }
 
     // ---- exception / non-local control flow -------------------------------
     // All four branch into `entry_raise` (the shared unwind/dispatch entry,
-    // bound by a64_gen_entry_raise). None carry a `using_xmm` set — an
+    // bound by a64_gen_entry_raise). None carry a `using_fpr` set — an
     // in-flight exception abandons the FP pool. C-arg regs: x0=vm (x19).
 
     /// `raise` — runtime::raise_err(vm, err_val) then unwind. The value to
@@ -4583,7 +4667,7 @@ impl Codegen {
         // and used by neither the JIT global set (x19-x23) nor JIT'd code, so
         // they survive the C calls and hold the outer LFP / funcdata. The
         // continuation frame is already reserved by the surrounding
-        // xmm_save_cont, so no extra push here.
+        // fpr_save_cont, so no extra push here.
         let f_yield = runtime::get_yield_data as *const () as u64;
         let f_args = runtime::jit_handle_arguments_no_block as *const () as u64;
         // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
@@ -4756,7 +4840,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_block_arg(
         &mut self,
         ret: SlotId,
-        using_xmm: UsingXmm,
+        using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
     ) -> bool {
@@ -4764,7 +4848,7 @@ impl Codegen {
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
         let cs = call_site_bc_ptr.as_ptr() as u64;
         let f = runtime::block_arg as *const () as u64;
-        self.emit_xmm_save(using_xmm, false);
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm
             mov x1, x20;          // globals
@@ -4775,7 +4859,7 @@ impl Codegen {
             blr x9;               // x0 = Option<Value>
             ldr x30, [sp], #16;
         );
-        self.emit_xmm_restore(using_xmm, false);
+        self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
         let rax = GP::Rax.a64().0;
         self.a64_frame_store(rax, lfp, off); // ret <- Proc
