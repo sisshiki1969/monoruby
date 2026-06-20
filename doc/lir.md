@@ -478,21 +478,32 @@ registers, and keeping the frame consistent) is built as a sequence of
 feature-gated (`gp-alloc`) increments, each byte-identical while no slot is yet
 placed in the pool:
 
-1. **Write-back pool-support** *(done)*. `WriteBack` carries a `gp:
-   Vec<(GP, SlotId)>` list — the pool-resident slots and their physical
-   registers — alongside the single `r15` accumulator. Every flush / deopt / GC
-   safepoint write-back (`gen_write_back`, `gen_write_back_for_deopt`,
-   `a64_gen_write_back_for_deopt`) stores each pool register to its slot's frame
-   home, exactly as it already does for `r15`. The producer (`wb_gp`) scans for
-   slots in mode `G(_, VReg::Alloc(_))`; until the placement policy creates such
-   a slot the list is always empty, so the field, its `Hash`/`Debug`, and the
-   write-back loops are inert and the emitted bytes are unchanged. This is the
-   prerequisite that makes a pool-resident value survive a flush/deopt before
-   the placement *trigger* exists.
+1. **Write-back + flush pool-support** *(done)*. Two seams, both inert until a
+   slot is placed:
+   - *Side-exit / deopt / GC write-back.* `WriteBack` carries a `gp:
+     Vec<(GP, SlotId)>` list — the pool-resident slots and their physical
+     registers — alongside the single `r15` accumulator. Every such write-back
+     (`gen_write_back`, `gen_write_back_for_deopt`,
+     `a64_gen_write_back_for_deopt`) stores each pool register to its slot's
+     frame home, exactly as for `r15`. The producer (`wb_gp`) scans for slots in
+     mode `G(_, VReg::Alloc(_))`.
+   - *In-function flush-at-boundary.* `writeback_acc` — already called before
+     every call / store / definition, and already asserting no `G(_, _)` slot
+     survives it — now also flushes the pool residents (`writeback_pool_state`):
+     each `G(_, Alloc)` slot is stored to its home and dropped to `S`. Because
+     this runs before every C-ABI call, **a pool value never stays resident
+     across a call**, so the GP allocator needs *no* caller-saved spill/reload
+     threading (`using_gp`) the way the FP side does — the flush already did it.
+
+   Until the placement policy creates a `G(_, Alloc(_))` slot both lists are
+   empty, so the fields, their `Hash`/`Debug`, and the write-back/flush loops
+   are inert and the emitted bytes are unchanged.
 2. **Placement policy** *(next)*: choose which slots enter the pool (victim
-   selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`.
-3. **C-ABI call-save**: spill live pool registers across runtime calls (the GP
-   analogue of `fpr_save` / `fpr_restore`).
-4. **Branch-merge reconciliation**: agree pool residency across control-flow
-   joins.
-5. **M1 A/B bench gate** before the feature becomes default.
+   selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`,
+   within a call-free straight-line stretch (the flush at §1 bounds it).
+3. **Branch-merge reconciliation**: agree pool residency across control-flow
+   joins (or simply flush at every block boundary in the first cut).
+4. **M1 A/B bench gate** before the feature becomes default.
+
+Note C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes
+it unnecessary — pool slots are always written back before a call.

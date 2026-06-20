@@ -1269,9 +1269,42 @@ impl SlotState {
         Some(slot)
     }
 
+    /// §9 9d-B flush-at-boundary: evict every allocatable-pool resident
+    /// (`G(_, VReg::Alloc(_))`) to its stack home in the *abstract state*,
+    /// returning the `(reg, slot)` pairs so the emission half can store them.
+    /// The dedicated accumulator (`Pinned(R15)`) is handled by
+    /// [`Self::writeback_acc_state`]; this is its pool analogue.
+    ///
+    /// This runs at every call / store / definition boundary (every
+    /// `writeback_acc` site), so a pool value never stays resident across a
+    /// C-ABI call — which is exactly why the GP allocator needs no
+    /// caller-saved spill/reload threading (`using_gp`) the way the FP side
+    /// does: the flush already wrote it back. Empty until the placement policy
+    /// puts a slot in the pool.
+    #[cfg(feature = "gp-alloc")]
+    fn writeback_pool_state(&mut self) -> Vec<(GP, SlotId)> {
+        let mut out = vec![];
+        for slot in self.all_regs() {
+            if let LinkMode::G(_, vreg @ VReg::Alloc(_)) = self.mode(slot) {
+                let guarded = self.guarded(slot);
+                let reg = vreg.phys();
+                self.set_mode(slot, LinkMode::S(guarded));
+                out.push((reg, slot));
+            }
+        }
+        if !out.is_empty() {
+            self.gp_alloc = GpAllocator::new();
+        }
+        out
+    }
+
     pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
         if let Some(slot) = self.writeback_acc_state() {
             ir.acc2stack(slot);
+        }
+        #[cfg(feature = "gp-alloc")]
+        for (reg, slot) in self.writeback_pool_state() {
+            ir.reg2stack(reg, slot);
         }
         assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_, _))));
         assert!(self.r15.is_none());
