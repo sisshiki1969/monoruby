@@ -237,8 +237,11 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
 /// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
 /// primitives already receive `DestLabel`s. `DestLabel` is `Clone` but not
-/// `Copy`, so `LInst` is `Clone`/`PartialEq` but not `Copy`.
-#[derive(Debug, Clone)]
+/// `Copy`, so `LInst` is not `Copy`. It is also not `Clone`: the `Inline`
+/// escape hatch wraps a `Box<dyn FnOnce>` generator (see `InlineProcedure`),
+/// which is move-only. `LInst`s are produced, encoded once, and dropped, so a
+/// clone is never needed.
+#[derive(Debug)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     Mov {
@@ -854,12 +857,22 @@ pub(in crate::codegen::jitgen) enum LInst {
         loop_jit_spill_bytes: usize,
         base: usize,
     },
+    /// Inlined-builtin escape hatch: an opaque generator closure that emits the
+    /// arch-appropriate asm directly. Unlike every other `LInst` (which is
+    /// store-free and lowered by `encode_linst`), its emit needs the compile
+    /// context (`&Store`, `&SideExitLabels`, frame `base`), so it is dispatched
+    /// by `encode_linst_inline` at the LIR-emit boundary, not `encode_linst`.
+    /// This is the transitional carrier that lets *every* `AsmInst` lower to
+    /// `LInst`; migrating the closures to typed, arch-neutral LIR ops (so this
+    /// variant can eventually go away) is the "express inline-builtin codegen
+    /// once" goal (`doc/lir.md` §8).
+    Inline(super::asmir::InlineProcedure),
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
 /// `AsmInst`. Stage 2 builds one of these per migrated family and hands it to
 /// the per-arch encoder; for now it is a thin, ergonomic builder over `Vec`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(in crate::codegen::jitgen) struct Lir {
     insts: Vec<LInst>,
 }

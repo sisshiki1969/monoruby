@@ -18,9 +18,12 @@ class/method definition, exceptions, `yield`, the method-prologue guards, …) a
 all lowered through `encode_linst`, as is the **entire** method-call family —
 argument setup *and* the call itself (the dispatcher pre-resolves the
 store/frame-dependent values and the encoder stays store-free) — and the cold
-**deopt side-exit handler** blocks. What remains outside is the specialized
-inlined-frame family, the `AsmInst::Inline` escape hatch, and the zero-byte
-patch/recompile bookkeeping that is *not* byte emission — see §8.
+**deopt side-exit handler** blocks. Even the `AsmInst::Inline` builtin escape
+hatch now lowers to a carrier `LInst::Inline` (dispatched via the
+context-carrying `encode_linst_inline`), so **every** `AsmInst` reaching the
+dispatcher lowers to `LInst`. What remains outside `encode_linst` is the
+specialized inlined-frame family and the zero-byte patch/recompile bookkeeping
+that is *not* byte emission — see §8.
 
 ---
 
@@ -274,18 +277,28 @@ encoder dispatches on `LSideExitKind`.
 The remaining things handled **directly** (not through `encode_linst`):
 
 - **Specialized inlined-frame family.** `MethodRetSpecialized`,
-  `BlockBreakSpecialized`, `SpecializedCall`, `SetupYieldFrame`,
-  `SpecializedYield`, and `Inline` lower an inlined callee/block frame; they
-  resolve frame-local labels and patch points and are dispatched to a per-arch
-  method of the same name (`arch/<arch>/compile/…`).
+  `BlockBreakSpecialized`, `SpecializedCall`, `SetupYieldFrame`, and
+  `SpecializedYield` lower an inlined callee/block frame; they resolve
+  frame-local labels and patch points and are dispatched to a per-arch method of
+  the same name (`arch/<arch>/compile/…`). (`AsmInst::Inline` is no longer in
+  this group — it lowers to `LInst::Inline`; see below.)
 - **The `AsmInst::Inline` escape hatch.** Most builtin inline generators (e.g.
   `emit_math_sqrt`) still run a closure that emits arch asm directly via `gen`.
-  Migrating these onto LIR is **goal 2** of the long-term plan ("express the
-  inline-builtin codegen once, arch-neutrally"). First proof: `Range#begin/end`
-  now lower through the typed `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg`
-  → existing `LInst::Load { Field }` (no new LIR op, byte-identical on both
-  arches, hand-written `emit_range_begin/end` deleted). The remaining
-  generators need a few new FP/branch LIR primitives (e.g. for `sqrt`).
+  As of the AsmIR→LIR consolidation, `AsmInst::Inline` *does* lower to a
+  carrier LIR op — `LInst::Inline(InlineProcedure)` — so **every** `AsmInst`
+  reaching the dispatcher now lowers to `LInst`. `LInst::Inline` is the one LIR
+  op whose emit is *not* store-free: its wrapped closure needs the compile
+  context (`&Store`, `&SideExitLabels`, frame `base`), so it is dispatched at
+  the lowering boundary via `encode_linst_inline` rather than through the
+  store-free `encode_linst`. (If it ever reached `encode_linst`/`_macro` it hits
+  the `unreachable!` fallthrough.) This is a transitional carrier: migrating the
+  closures onto typed, arch-neutral LIR ops — so the variant can eventually go
+  away — is **goal 2** of the long-term plan ("express the inline-builtin codegen
+  once, arch-neutrally"). First proof: `Range#begin/end` now lower through the
+  typed `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg` → existing
+  `LInst::Load { Field }` (no new LIR op, byte-identical on both arches,
+  hand-written `emit_range_begin/end` deleted). The remaining generators need a
+  few new FP/branch LIR primitives (e.g. for `sqrt`).
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:
@@ -297,8 +310,9 @@ The remaining things handled **directly** (not through `encode_linst`):
 > code-position metadata / runtime patch bookkeeping is *not* emission and stays
 > in the dispatcher / `Codegen`.
 
-None of this invalidates the model: `encode_linst` (with `encode_linst_macro`)
-is the single seam for byte emission. The only arms still handled directly in
-the dispatcher are the specialized inlined-frame family (which resolve
+None of this invalidates the model: `encode_linst` (with `encode_linst_macro`,
+plus the context-carrying `encode_linst_inline` for the one `LInst::Inline`
+op) is the single seam for byte emission. The only arms still handled directly
+in the dispatcher are the specialized inlined-frame family (which resolve
 frame-local labels / patch points) and the patch/recompile bookkeeping, which is
 *not* emission by the invariant above.

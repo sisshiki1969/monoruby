@@ -909,9 +909,15 @@ impl Codegen {
                 let return_addr = self.do_specialized_call(entry_label, None);
                 self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
             }
-            // Inlined builtin method body: the generator closure emits the
-            // arch-appropriate asm directly.
-            AsmInst::Inline(proc) => (proc.proc)(self, store, labels, frame.base_stack_offset),
+            // Inlined builtin method body: lower to `LInst::Inline`, the
+            // context-carrying escape hatch. Unlike every other `LInst` (which
+            // is store-free and goes through `encode_linst`), its emit needs
+            // `store`/`labels`/`base`, so it is dispatched here via
+            // `encode_linst_inline` — the one LIR op whose machine-code emit
+            // lives at the lowering boundary rather than in `encode_linst`.
+            AsmInst::Inline(proc) => {
+                self.encode_linst_inline(LInst::Inline(proc), store, labels, frame.base_stack_offset)
+            }
             // §20 (B): typed array integer-index read/assign (replaces the
             // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
             // index-register setup + `array_index*` call lives in
@@ -990,6 +996,29 @@ impl Codegen {
             other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
         }
         true
+    }
+
+    ///
+    /// Emit the one context-carrying `LInst`: `LInst::Inline`. The wrapped
+    /// generator closure emits arch-appropriate asm directly and, unlike the
+    /// store-free `encode_linst`, needs the compile context (`store`, the
+    /// side-exit `labels`, and the frame `base`). It is therefore dispatched
+    /// from the AsmIR→LIR lowering boundary (`compile_asmir`) rather than from
+    /// `encode_linst`. Accessing `InlineProcedure::proc` is sound here because
+    /// `compile_shared` is a child module of `asmir`, where the field is
+    /// declared.
+    ///
+    pub(in crate::codegen::jitgen) fn encode_linst_inline(
+        &mut self,
+        inst: LInst,
+        store: &Store,
+        labels: &SideExitLabels,
+        base: usize,
+    ) {
+        match inst {
+            LInst::Inline(proc) => (proc.proc)(self, store, labels, base),
+            _ => unreachable!("encode_linst_inline only handles LInst::Inline"),
+        }
     }
 
     ///
