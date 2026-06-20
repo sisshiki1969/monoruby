@@ -102,6 +102,18 @@ const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 10;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
+/// §9 9d allocatable GP pool: the caller-saved scratch registers that are *not*
+/// used by the fixed VM convention (acc/lfp/pc/globals/executor) or the C-ABI /
+/// inline-builtin convention (rdi/rax/rsi/rdx/rcx). The 9d allocator colours
+/// `VReg::Alloc` ids into these (or a frame spill slot); because they are
+/// caller-saved, any live across a C-ABI call is spilled/reloaded around it.
+///
+/// x86-64: `r8`–`r11`. (aarch64's pool is revisited when 9d targets it — these
+/// `GP` names map to `x5`–`x8` via `GP::a64`, which overlap the aarch64 call-arg
+/// scratch, so the aarch64 allocatable set will likely differ.)
+#[allow(dead_code)]
+pub(in crate::codegen) const GP_ALLOC_POOL: [GP; 4] = [GP::R8, GP::R9, GP::R10, GP::R11];
+
 ///
 /// General purpose registers.
 ///

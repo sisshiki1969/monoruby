@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::lir::VReg;
 
 ///
 /// §5 stage 3c-i — the register-allocation **policy** seam.
@@ -240,6 +241,85 @@ impl FprAllocator {
     }
 }
 
+/// §9 9d-B: GP-pool allocation state — the [`FprAllocator`] analogue for the
+/// allocatable GP pool ([`crate::codegen::GP_ALLOC_POOL`], x86-64 `r8`–`r11`).
+///
+/// `vgp[i]` lists the slots whose value currently resides at allocation id `i`:
+/// `i < POOL` → physical pool register `GP_ALLOC_POOL[i]`; `i >= POOL` → frame
+/// spill slot `i - POOL` (mirroring the FP `id < PHYS_FPR_POOL` ? xmm : spill
+/// split). A `VReg::Alloc(i)` is coloured by resolving `i` through this table.
+///
+/// B2.1 establishes the table; the placement policy (B2.2) and codegen (B2.3)
+/// populate and consume it. Inert until then — no `Alloc` VRegs are emitted.
+#[cfg(feature = "gp-alloc")]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub(super) struct GpAllocator {
+    vgp: Vec<Vec<SlotId>>,
+    /// pool registers that must not be reused by allocation until unpinned.
+    pinned: Vec<VReg>,
+}
+
+#[cfg(feature = "gp-alloc")]
+#[allow(dead_code)]
+impl GpAllocator {
+    fn new() -> Self {
+        Self {
+            vgp: (0..crate::codegen::GP_ALLOC_POOL.len())
+                .map(|_| vec![])
+                .collect(),
+            pinned: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.vgp.len()
+    }
+
+    fn slots(&self, id: usize) -> &[SlotId] {
+        &self.vgp[id]
+    }
+
+    fn is_vacant(&self, id: usize) -> bool {
+        self.vgp[id].is_empty()
+    }
+
+    fn is_pinned(&self, reg: VReg) -> bool {
+        self.pinned.contains(&reg)
+    }
+
+    fn add(&mut self, slot: SlotId, id: usize) {
+        self.vgp[id].push(slot);
+    }
+
+    fn remove(&mut self, slot: SlotId, id: usize) {
+        self.vgp[id].retain(|e| *e != slot);
+    }
+
+    fn clear(&mut self, id: usize) {
+        self.vgp[id].clear();
+    }
+
+    /// Append a fresh spill slot beyond the physical pool and return its id.
+    fn push_spill(&mut self) -> usize {
+        let new_id = self.vgp.len();
+        self.vgp.push(vec![]);
+        new_id
+    }
+
+    fn pin(&mut self, reg: VReg) {
+        if !self.pinned.contains(&reg) {
+            self.pinned.push(reg);
+        }
+    }
+
+    fn unpin(&mut self, reg: VReg) {
+        if let Some(pos) = self.pinned.iter().position(|x| *x == reg) {
+            self.pinned.swap_remove(pos);
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
     /// Per-slot location / representation (the `LinkMode` split into its two
@@ -252,6 +332,10 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
+    /// §9 9d-B: GP-pool allocation state (the `fpr_alloc` analogue). Inert in
+    /// B2.1; populated by the allocator (B2.2+).
+    #[cfg(feature = "gp-alloc")]
+    gp_alloc: GpAllocator,
     r15: Option<SlotId>,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
@@ -292,6 +376,8 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
+            #[cfg(feature = "gp-alloc")]
+            gp_alloc: GpAllocator::new(),
             r15: None,
             local_num,
             deferred_rest: None,
@@ -412,7 +498,7 @@ impl SlotState {
                         self.set_Sf(slot, x, SfGuarded::Float);
                     }
                 }
-                LinkMode::G(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                LinkMode::G(_, _) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                     unreachable!("use_float {:?}", self.mode(slot));
                 }
             };
@@ -602,7 +688,7 @@ impl SlotState {
                 assert!(self.fpr(fpr).contains(&slot));
                 self.fpr_remove(slot, fpr);
             }
-            LinkMode::G(_) => {
+            LinkMode::G(_, _) => {
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
             }
@@ -883,7 +969,7 @@ impl SlotState {
         if let Some(slot) = slot.into() {
             self.discard(slot);
             self.writeback_acc(ir);
-            self.set_mode(slot, LinkMode::G(guarded));
+            self.set_mode(slot, LinkMode::G(guarded, VReg::Pinned(GP::R15)));
             self.r15 = Some(slot);
         }
     }
@@ -918,7 +1004,7 @@ impl SlotState {
                 Spill::Fpr(fpr, slot)
             }
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(guarded) => {
+            LinkMode::G(guarded, _) => {
                 // G -> S
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
@@ -952,7 +1038,7 @@ impl SlotState {
         let spill = match self.mode(slot) {
             LinkMode::F(fpr) => Spill::Fpr(fpr, slot),
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(_) => Spill::Acc(slot),
+            LinkMode::G(_, _) => Spill::Acc(slot),
             LinkMode::Sf(_, _) | LinkMode::S(_) => Spill::None,
             LinkMode::V => Spill::Lit(Value::nil(), slot),
             LinkMode::MaybeNone | LinkMode::None => {
@@ -1187,7 +1273,7 @@ impl SlotState {
         if let Some(slot) = self.writeback_acc_state() {
             ir.acc2stack(slot);
         }
-        assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_))));
+        assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_, _))));
         assert!(self.r15.is_none());
     }
 
@@ -1235,7 +1321,7 @@ impl SlotState {
             LinkMode::C(v) => {
                 self.def_C(dst, v);
             }
-            LinkMode::G(guarded) => {
+            LinkMode::G(guarded, _) => {
                 ir.reg2stack(GP::R15, src);
                 self.set_S_with_guard(src, guarded);
                 self.def_G(ir, dst, guarded)
@@ -1288,7 +1374,7 @@ impl AbstractFrame {
         // write-back and the guard emission, exactly as the prior `return`s did.
         let mut mode = self.mode(slot);
         match &mut mode {
-            LinkMode::S(guarded) | LinkMode::G(guarded) => {
+            LinkMode::S(guarded) | LinkMode::G(guarded, _) => {
                 if class_guarded == *guarded {
                     return false;
                 } else if *guarded == Guarded::Value {
@@ -1409,7 +1495,7 @@ impl AbstractFrame {
                 }
                 LinkMode::S(_)
                 | LinkMode::C(_)
-                | LinkMode::G(_)
+                | LinkMode::G(_, _)
                 | LinkMode::V
                 | LinkMode::MaybeNone
                 | LinkMode::None => {}
@@ -1584,9 +1670,12 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     S(Guarded),
     ///
-    /// On the general-purpose register (r15).
+    /// On a general-purpose register (`VReg`). §9 9d: the register is explicit
+    /// (mirroring `F(FPReg)`). Today it is always the pinned accumulator
+    /// `VReg::Pinned(GP::R15)`; the allocator will later place a slot in an
+    /// `Alloc` VReg coloured into the `r8`–`r11` pool.
     ///
-    G(Guarded),
+    G(Guarded, VReg),
     ///
     /// On the floating point register (fpr).
     ///
@@ -1626,7 +1715,7 @@ impl LinkMode {
 
     fn guarded(&self) -> Guarded {
         match self {
-            LinkMode::S(guarded) | LinkMode::G(guarded) => *guarded,
+            LinkMode::S(guarded) | LinkMode::G(guarded, _) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
@@ -1645,7 +1734,7 @@ impl LinkMode {
             LinkMode::MaybeNone => Placement::MaybeNone,
             LinkMode::V => Placement::Void,
             LinkMode::S(_) => Placement::Stack,
-            LinkMode::G(_) => Placement::Gp,
+            LinkMode::G(_, _) => Placement::Gp,
             LinkMode::F(x) => Placement::Xmm(*x),
             LinkMode::Sf(x, _) => Placement::FprStack(*x),
             LinkMode::C(v) => Placement::Const(*v),
@@ -1665,7 +1754,7 @@ impl LinkMode {
             Placement::MaybeNone => LinkMode::MaybeNone,
             Placement::Void => LinkMode::V,
             Placement::Stack => LinkMode::S(guarded),
-            Placement::Gp => LinkMode::G(guarded),
+            Placement::Gp => LinkMode::G(guarded, VReg::Pinned(GP::R15)),
             Placement::Xmm(x) => LinkMode::F(x),
             Placement::FprStack(x) => {
                 let sf = match guarded {
@@ -1879,7 +1968,7 @@ impl AbstractFrame {
                     self.to_sf(ir, slot, l, r, guarded);
                 }
             }
-            (LinkMode::F(_) | LinkMode::G(_), LinkMode::S(_)) => {
+            (LinkMode::F(_) | LinkMode::G(_, _), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
             }
             (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
@@ -1933,7 +2022,7 @@ impl AbstractFrame {
                     self.set_F(slot, r);
                 }
             }
-            (LinkMode::G(_), LinkMode::Sf(x, SfGuarded::Float)) => {
+            (LinkMode::G(_, _), LinkMode::Sf(x, SfGuarded::Float)) => {
                 // G -> Sf
                 let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                 if self.is_fpr_vacant(x) {
@@ -2211,7 +2300,7 @@ mod tests {
             LinkMode::S(Guarded::Fixnum),
             LinkMode::S(Guarded::Float),
             LinkMode::S(Guarded::Class(NIL_CLASS)),
-            LinkMode::G(Guarded::Fixnum),
+            LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)),
             LinkMode::F(x),
             LinkMode::Sf(x, SfGuarded::Float),
             LinkMode::Sf(x, SfGuarded::Fixnum),

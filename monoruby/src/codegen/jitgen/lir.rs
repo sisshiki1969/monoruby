@@ -59,15 +59,15 @@ use crate::bytecodegen::{BinOpK, UnOpK};
 /// The encoder folds an `Imm` into the instruction's immediate field when it
 /// fits, and materializes it into a scratch register otherwise — the same
 /// legalization story as `LMem` displacements.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::codegen::jitgen) enum LOperand {
-    Reg(GP),
+    Reg(VReg),
     Imm(i64),
 }
 
 impl From<GP> for LOperand {
     fn from(r: GP) -> Self {
-        LOperand::Reg(r)
+        LOperand::Reg(r.into())
     }
 }
 
@@ -85,15 +85,61 @@ impl From<i64> for LOperand {
 /// aarch64. There is deliberately no general-purpose name for these (aarch64's
 /// x9 is outside the `GP` enum's allocatable mapping), so they need their own
 /// operand kind.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::codegen::jitgen) enum LReg {
-    Gp(GP),
+    Gp(VReg),
     Scratch,
 }
 
 impl From<GP> for LReg {
     fn from(r: GP) -> Self {
-        LReg::Gp(r)
+        LReg::Gp(r.into())
+    }
+}
+
+/// A **virtual** general-purpose register (§9 9b/9d).
+///
+/// LIR carries virtual registers, with physical assignment deferred to a later
+/// arch-dependent phase — exactly as `FPReg` already is for the FP file. A `VReg`
+/// is one of two kinds:
+///
+/// - [`VReg::Pinned`] — a *pre-colored* physical `GP` the front-end chose: the
+///   fixed VM globals (acc=`R15`, lfp=`R14`, …) and the C-ABI / inline-builtin
+///   convention registers (`Rdi`=receiver, `Rax`=result, `Rsi`/`Rdx`/`Rcx`=call
+///   args). The allocator cannot move these.
+/// - [`VReg::Alloc`] — an *allocatable* virtual id, coloured by the 9d allocator
+///   into the [`GP_ALLOC_POOL`] (`r8`–`r11` on x86-64) or a frame spill slot.
+///   Pool registers are caller-saved, so any live across a C-ABI call are
+///   spilled/reloaded around it (as the FP side already does).
+///
+/// **Today the map is the identity** (9b): the front-end emits only `Pinned`, so
+/// `phys()` is total and byte-identical. 9d makes the front-end emit `Alloc` for
+/// cross-operation temporaries and replaces this seam with a map-consulting
+/// resolve (the GP analogue of `PhysMap::resolve` → `FPRegLoc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) enum VReg {
+    Pinned(GP),
+    Alloc(u32),
+}
+
+impl VReg {
+    /// Resolve to the physical register at the encode seam. Identity on `Pinned`
+    /// (§9 9b). `Alloc` is unreachable until the 9d allocator is wired (no `Alloc`
+    /// VRegs are emitted yet), at which point this becomes a map-consulting
+    /// resolve that may also yield a spill slot.
+    pub(in crate::codegen::jitgen) fn phys(self) -> GP {
+        match self {
+            VReg::Pinned(gp) => gp,
+            VReg::Alloc(_) => {
+                unreachable!("GP allocator (§9 9d) not yet wired; no Alloc VRegs are emitted")
+            }
+        }
+    }
+}
+
+impl From<GP> for VReg {
+    fn from(r: GP) -> Self {
+        VReg::Pinned(r)
     }
 }
 
@@ -244,14 +290,15 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 #[derive(Debug)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
+    /// (§9 9b) carries virtual GP registers; the encoder resolves them.
     Mov {
-        dst: GP,
-        src: GP,
+        dst: VReg,
+        src: VReg,
     },
     /// `dst <- imm` — materialize a full 64-bit immediate (e.g. a tagged
     /// `Value`'s bit pattern) into a register.
     LoadImm {
-        dst: GP,
+        dst: VReg,
         imm: u64,
     },
     /// `dst <- [mem]`. `dst` may be the scratch pointer (intermediate deref).
@@ -313,15 +360,15 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- lhs <op> rhs`.
     Alu {
         op: LAluOp,
-        dst: GP,
-        lhs: GP,
+        dst: VReg,
+        lhs: VReg,
         rhs: LOperand,
     },
     /// Set condition flags from `lhs - rhs` (no result register written). The
     /// immediate of an `Imm` rhs is the operand's raw bit pattern (e.g. a tagged
     /// fixnum `Value`), compared against the raw register bits.
     Cmp {
-        lhs: GP,
+        lhs: VReg,
         rhs: LOperand,
     },
     /// Bind `label` at the current code position.
@@ -971,11 +1018,17 @@ impl Lir {
     }
 
     pub(in crate::codegen::jitgen) fn mov(&mut self, dst: GP, src: GP) -> &mut Self {
-        self.push(LInst::Mov { dst, src })
+        self.push(LInst::Mov {
+            dst: dst.into(),
+            src: src.into(),
+        })
     }
 
     pub(in crate::codegen::jitgen) fn load_imm(&mut self, dst: GP, imm: u64) -> &mut Self {
-        self.push(LInst::LoadImm { dst, imm })
+        self.push(LInst::LoadImm {
+            dst: dst.into(),
+            imm,
+        })
     }
 
     pub(in crate::codegen::jitgen) fn load(
@@ -1006,8 +1059,8 @@ impl Lir {
     ) -> &mut Self {
         self.push(LInst::Alu {
             op,
-            dst,
-            lhs,
+            dst: dst.into(),
+            lhs: lhs.into(),
             rhs: rhs.into(),
         })
     }
@@ -1018,7 +1071,7 @@ impl Lir {
         rhs: impl Into<LOperand>,
     ) -> &mut Self {
         self.push(LInst::Cmp {
-            lhs,
+            lhs: lhs.into(),
             rhs: rhs.into(),
         })
     }
@@ -1085,8 +1138,8 @@ mod tests {
         assert!(matches!(
             lir.iter().next(),
             Some(LInst::Mov {
-                dst: GP::Rax,
-                src: GP::Rdi
+                dst: VReg::Pinned(GP::Rax),
+                src: VReg::Pinned(GP::Rdi)
             })
         ));
     }

@@ -444,5 +444,29 @@ ordered sequence the allocator can walk and the drainer can replay faithfully.
   (§42), it is a perf experiment gated behind a flag + the M1 A/B bench gate, and
   the shadow digest becomes a delta meter, not an equality check.
 
+### 9d allocatable GP pool (design decision)
+
+The VM's fixed registers stay **pinned** (acc=R15, lfp=R14, pc=R13, globals=R12,
+executor=rbx) and the C-ABI / inline-builtin convention regs (rdi=recv, rax=result,
+rsi/rdx/rcx=call args) are **pre-colored** by the operations that use them — the
+allocator cannot move those. The allocatable pool is the otherwise-unused
+**caller-saved scratch** set:
+
+- **x86-64:** `r8, r9, r10, r11` (4 registers). These are caller-saved, so any of
+  them that is **live across a C-ABI call** (e.g. a runtime helper / `CFunc_*`)
+  must be spilled to the frame and reloaded — the allocator inserts the
+  save/restore exactly as the FP side already does around calls (`fpr_save` /
+  `fpr_restore`).
+- **aarch64:** the analogous caller-saved temps left free in the `GP::a64` map
+  (`x9..x15` minus the encode scratch x9/x10), with the same spill-across-call
+  rule.
+
+So a `VReg` is either **pinned** (an ABI/convention register the front-end chose)
+or **allocatable** (assigned by 9d to a pool register or a spill slot). The
+identity map of 9b is the degenerate all-pinned case; 9d makes the front-end emit
+allocatable `VReg`s for cross-operation temporaries and colours them into the
+pool. The payoff is keeping hot bytecode-slot values in `r8`–`r11` instead of
+re-loading them from the LFP each use.
+
 9a/9b are byte-identical refactors (safe to land once verified); 9c/9d are the
 substantive allocator work and stay behind a flag until the bench gate clears.

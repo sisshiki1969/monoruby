@@ -45,11 +45,14 @@ impl Codegen {
                 self.jit.bind_label(label);
             }
             // dst <- src
-            AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov { dst, src }),
+            AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov {
+                dst: dst.into(),
+                src: src.into(),
+            }),
             // acc <- reg
             AsmInst::RegToAcc(r) => self.encode_linst(LInst::Mov {
-                dst: GP::R15,
-                src: r,
+                dst: GP::R15.into(),
+                src: r.into(),
             }),
             // [slot] <- acc
             AsmInst::AccToStack(slot) => self.encode_linst(LInst::Store {
@@ -68,7 +71,7 @@ impl Codegen {
             }),
             // reg <- literal Value (immediate)
             AsmInst::LitToReg(v, r) => self.encode_linst(LInst::LoadImm {
-                dst: r,
+                dst: r.into(),
                 imm: v.id(),
             }),
             // [slot] <- literal Value. The encoder legalizes the immediate
@@ -301,11 +304,11 @@ impl Codegen {
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
                 match mode {
                     OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs,
-                        rhs: LOperand::Reg(rhs),
+                        lhs: lhs.into(),
+                        rhs: rhs.into(),
                     }),
                     OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs,
+                        lhs: lhs.into(),
                         rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
                     }),
                     // imm on the left: materialize it into lhs, then compare
@@ -313,12 +316,12 @@ impl Codegen {
                     // lhs).
                     OpMode::IR(i, _) => {
                         self.encode_linst(LInst::LoadImm {
-                            dst: lhs,
+                            dst: lhs.into(),
                             imm: Value::i32(i as i32).id(),
                         });
                         self.encode_linst(LInst::Cmp {
-                            lhs,
-                            rhs: LOperand::Reg(rhs),
+                            lhs: lhs.into(),
+                            rhs: rhs.into(),
                         });
                     }
                 }
@@ -579,8 +582,8 @@ impl Codegen {
                     value: src,
                 });
                 self.encode_linst(LInst::Mov {
-                    dst: GP::Rax,
-                    src,
+                    dst: GP::Rax.into(),
+                    src: src.into(),
                 });
             }
             // Heap (Box-spilled) Struct member access: deref the heap buffer
@@ -623,21 +626,21 @@ impl Codegen {
                     },
                 });
                 self.encode_linst(LInst::Mov {
-                    dst: GP::Rax,
-                    src,
+                    dst: GP::Rax.into(),
+                    src: src.into(),
                 });
             }
             // reg += i / reg -= i (no-op when i == 0).
             AsmInst::RegAdd(reg, i) => self.encode_linst(LInst::Alu {
                 op: LAluOp::Add,
-                dst: reg,
-                lhs: reg,
+                dst: reg.into(),
+                lhs: reg.into(),
                 rhs: LOperand::Imm(i as i64),
             }),
             AsmInst::RegSub(reg, i) => self.encode_linst(LInst::Alu {
                 op: LAluOp::Sub,
-                dst: reg,
-                lhs: reg,
+                dst: reg.into(),
+                lhs: reg.into(),
                 rhs: LOperand::Imm(i as i64),
             }),
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
