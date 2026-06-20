@@ -102,6 +102,26 @@ mod alloc_policy {
             .map(FPReg)
             .filter(|&fpr| !state.fpr_alloc.is_pinned(fpr) && !state.fpr_alloc.is_vacant(fpr))
             .filter(|&fpr| {
+                // §27.3 Stage-2b (`phys-loop-aware`): do not demote the `Sf`
+                // cache of a loop-carried float — keep `L` resident so the
+                // body re-reads it from `xmm` instead of decoding it each
+                // iteration; the fresh value goes to a phase-2 spill instead.
+                // Default path: this filter is absent (`loop_carried` empty),
+                // so victim selection is byte-identical.
+                #[cfg(feature = "phys-loop-aware")]
+                if state
+                    .fpr_alloc
+                    .slots(fpr)
+                    .iter()
+                    .any(|&s| state.loop_carried.contains(&s))
+                    && state
+                        .fpr_alloc
+                        .slots(fpr)
+                        .iter()
+                        .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)))
+                {
+                    return false;
+                }
                 state
                     .fpr_alloc
                     .slots(fpr)
@@ -236,6 +256,15 @@ pub(crate) struct SlotState {
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
+    /// §27.3 Stage-2a: the loop-carried float set `L` for the enclosing loop —
+    /// slots that are `F`/`Sf` at the loop back-edge (so they round-trip the
+    /// loop). Populated at the loop-entry merge from the fixpoint's back-edge
+    /// (which is why §29's forward-allocation attempt found it empty), and
+    /// propagated through clones / `&mut self` joins. A correctness-neutral
+    /// *hint*: read only by the `phys-loop-aware` allocation policy to keep
+    /// loop-carried `Sf` resident; empty (no effect) on the default path.
+    #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
+    loop_carried: std::collections::HashSet<SlotId>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -266,6 +295,7 @@ impl SlotState {
             r15: None,
             local_num,
             deferred_rest: None,
+            loop_carried: std::collections::HashSet::new(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -425,6 +455,15 @@ impl SlotState {
     /// of the analysis-pass placement (`mode == F`). See doc §16.
     pub(in crate::codegen::jitgen) fn is_float_typed(&self, slot: SlotId) -> bool {
         matches!(self.guarded(slot), Guarded::Float)
+    }
+
+    /// §27.3 Stage-2a: record the loop-carried float set for this loop body.
+    #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
+    pub(in crate::codegen::jitgen) fn set_loop_carried(
+        &mut self,
+        set: std::collections::HashSet<SlotId>,
+    ) {
+        self.loop_carried = set;
     }
 
     pub(in crate::codegen::jitgen) fn class(&self, slot: SlotId) -> Option<ClassId> {
