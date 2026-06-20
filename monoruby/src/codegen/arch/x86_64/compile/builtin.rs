@@ -9,34 +9,6 @@
 use super::*;
 
 impl Codegen {
-    /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, OR with
-    /// FALSE_VALUE so 0→FALSE_VALUE and 1→TRUE_VALUE. Receiver in rdi → rax.
-    pub(crate) fn emit_range_exclude_end(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    }
-
-    /// `Enumerator::ArithmeticSequence#exclude_end?`: same encoding as
-    /// `emit_range_exclude_end` but from the AS field.
-    pub(crate) fn emit_as_exclude_end(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    }
-
-    /// Load a 64-bit Value field at `offset` from the receiver in rdi → rax.
-    /// Shared by `ArithmeticSequence#begin`/`#end`/`#step`.
-    pub(crate) fn emit_load_value_field(&mut self, offset: usize) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (offset as i32)];
-        }
-    }
-
     /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
     /// eq→TRUE, ne→FALSE. Receiver in rdi → rax.
     pub(crate) fn emit_object_not(&mut self) {
@@ -80,28 +52,6 @@ impl Codegen {
             jeq exit;
             movq rax, (TRUE_VALUE);
         exit:
-        }
-    }
-
-    /// `Array#size`/`#length`: untagged length (`get_array_length`) tagged as a
-    /// fixnum in rax.
-    pub(crate) fn emit_array_size(&mut self) {
-        self.get_array_length();
-        monoasm! { &mut self.jit,
-            salq  rax, 1;
-            orq   rax, 1;
-        }
-    }
-
-    /// `String#bytesize`: inline-vs-heap length select, tagged as a fixnum in
-    /// rax. Receiver in rdi.
-    pub(crate) fn emit_string_bytesize(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-            cmpq rax, (STRING_INLINE_CAP);
-            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            salq rax, 1;
-            orq  rax, 1;
         }
     }
 

@@ -13,7 +13,9 @@ use crate::codegen::jitgen::asmir::ArrayIndexKind;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
+use crate::codegen::jitgen::lir::{
+    LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind, Lir,
+};
 
 /// Resolve a LIR register operand to its aarch64 register number. The scratch
 /// pointer is `x9`.
@@ -157,13 +159,20 @@ impl Codegen {
             std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
         let bump = frame.loop_jit_spill_bytes;
+        // §9 (9a, first brick): reify the side-exit handler block into a
+        // whole-region `Lir` buffer, drained through `encode_linst` below. The
+        // handlers sit between the `b skip` (already emitted) and `bind(skip)`,
+        // so draining here — before the `skip` bind — preserves emission order
+        // and is byte-identical. Labels are still created eagerly for the body to
+        // reference; the drain is the seam the future phys-alloc pass slots into.
+        let mut lir = Lir::new();
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 // Eviction falls back to the interpreter like a deopt (the
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Evict,
                         pc,
                         wb,
@@ -179,7 +188,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.encode_linst(LInst::SideExit {
+                        lir.push(LInst::SideExit {
                             kind: LSideExitKind::Deopt,
                             pc: key.0,
                             wb: key.1.clone(),
@@ -196,7 +205,7 @@ impl Codegen {
                 // correct, just not yet self-optimizing).
                 SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt { reason, position },
                         pc,
                         wb,
@@ -208,7 +217,7 @@ impl Codegen {
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Error,
                         pc,
                         wb,
@@ -224,6 +233,9 @@ impl Codegen {
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
             labels.push(label);
+        }
+        for inst in lir.into_insts() {
+            self.encode_linst(inst);
         }
         if let Some(skip) = &skip {
             self.jit.bind_label(skip.clone());
@@ -1459,6 +1471,41 @@ impl Codegen {
                 mem: LMem::Field { base, disp },
             } => {
                 self.a64_field_load(a64_lreg(dst), a64_lreg(base), disp as u32);
+            }
+            // dst <- bool([base + disp]): 32-bit raw-bool field → Ruby bool Value.
+            // `lsl` clears the low 3 bits, so `add #FALSE_VALUE` == `orr`.
+            LInst::BoolFieldToReg { dst, base, disp } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr w(d), [x(b), #(disp as u32)];
+                    lsl x(d), x(d), #3;
+                    add x(d), x(d), #(FALSE_VALUE);
+                );
+            }
+            // dst <- fixnum(Array#size): inline-or-heap length, fixnum-tagged.
+            // `lsl` clears bit 0, so `add #1` == `orr #1`. Scratch x9 holds heap_len.
+            LInst::ArrayLenFixnum { dst, base } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x(d), [x(b), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                    ldr x9, [x(b), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                    cmp x(d), #(ARRAY_INLINE_CAPA as u32);
+                    csel x(d), x9, x(d), gt;
+                    lsl x(d), x(d), #1;
+                    add x(d), x(d), #1;
+                );
+            }
+            // dst <- fixnum(String#bytesize): inline-or-heap byte length, tagged.
+            LInst::StringLenFixnum { dst, base } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x(d), [x(b), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                    ldr x9, [x(b), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                    cmp x(d), #(STRING_INLINE_CAP as u32);
+                    csel x(d), x9, x(d), gt;
+                    lsl x(d), x(d), #1;
+                    add x(d), x(d), #1;
+                );
             }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
@@ -3683,16 +3730,6 @@ impl Codegen {
         }
     }
 
-    /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, then add
-    /// FALSE_VALUE (whose bit 3 is clear, so `add` == `or`): 0→FALSE_VALUE,
-    /// 8→0x1c=TRUE_VALUE. Receiver in Rdi (x4) → Rax (x0).
-    pub(crate) fn emit_range_exclude_end(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr w0, [x4, #(crate::rvalue::RANGE_EXCLUDE_END_OFFSET as u32)];
-            lsl x0, x0, #3;
-            add x0, x0, #(FALSE_VALUE);
-        );
-    }
 
     /// `Fiber.yield` with no args: the yielded value (Rsi/x3) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
@@ -3795,23 +3832,6 @@ impl Codegen {
         );
     }
 
-    /// `Enumerator::ArithmeticSequence#exclude_end?`: same encoding as
-    /// `emit_range_exclude_end` but from the AS field.
-    pub(crate) fn emit_as_exclude_end(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr w0, [x4, #(crate::rvalue::AS_EXCLUDE_END_OFFSET as u32)];
-            lsl x0, x0, #3;
-            add x0, x0, #(FALSE_VALUE);
-        );
-    }
-
-    /// Load a 64-bit Value field at `offset` from the receiver in Rdi (x4) → Rax
-    /// (x0). Shared by `ArithmeticSequence#begin`/`#end`/`#step`.
-    pub(crate) fn emit_load_value_field(&mut self, offset: usize) {
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(offset as u32)];
-        );
-    }
 
     /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
     /// eq→TRUE, ne→FALSE. Receiver in Rdi (x4) → Rax (x0).
@@ -3852,29 +3872,6 @@ impl Codegen {
             mov x0, #(TRUE_VALUE);
         );
         self.jit.bind_label(exit);
-    }
-
-    /// `Array#size`/`#length`: untagged length (`get_array_length`) tagged as a
-    /// fixnum in Rax (x0).
-    pub(crate) fn emit_array_size(&mut self) {
-        self.get_array_length();
-        monoasm_arm64!(&mut self.jit,
-            lsl x0, x0, #1;
-            add x0, x0, #1;
-        );
-    }
-
-    /// `String#bytesize`: inline-vs-heap length select, tagged as a fixnum in
-    /// Rax (x0). Receiver in Rdi (x4).
-    pub(crate) fn emit_string_bytesize(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
-            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
-            cmp x0, #(STRING_INLINE_CAP as u32);
-            csel x0, x9, x0, gt;   // capa > inline cap -> use heap_len
-            lsl x0, x0, #1;
-            add x0, x0, #1;
-        );
     }
 
     /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.

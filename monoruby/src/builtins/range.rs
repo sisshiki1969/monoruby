@@ -250,8 +250,9 @@ fn range_exclude_end(
         return true;
     }
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_range_exclude_end());
-
+    // Pure-LIR bool-field read (no arch-specific closure): load the 32-bit
+    // exclude-end flag from `[Rdi + off]` and convert it to a Ruby bool Value.
+    ir.bool_field_to_reg(GP::Rax, GP::Rdi, crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32);
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }

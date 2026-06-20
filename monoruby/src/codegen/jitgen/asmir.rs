@@ -1,5 +1,8 @@
 use crate::bytecodegen::BinOpK;
-use crate::codegen::jitgen::lir::{LInst, LSideExitKind};
+// Only the x86-gated `gen_asm` driver uses these directly; the aarch64 driver
+// lives in `arch/aarch64/compile.rs` with its own imports.
+#[cfg(target_arch = "x86_64")]
+use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;
 
@@ -1006,6 +1009,25 @@ impl AsmIr {
         self.inst.push(AsmInst::LoadFieldToReg { dst, base, disp });
     }
 
+    /// Emit `dst <- bool([base + disp])`: load a 32-bit raw-bool field and
+    /// convert it to a Ruby `true`/`false` `Value`. Typed alternative to
+    /// `inline` for the `exclude_end?` field-reader inline builtins.
+    pub(crate) fn bool_field_to_reg(&mut self, dst: GP, base: GP, disp: i32) {
+        self.inst.push(AsmInst::BoolFieldToReg { dst, base, disp });
+    }
+
+    /// Emit `dst <- fixnum(Array#size)`: the fixnum-tagged length of the array
+    /// receiver in `base`. Typed alternative to `inline` for `Array#size`.
+    pub(crate) fn array_len_fixnum(&mut self, dst: GP, base: GP) {
+        self.inst.push(AsmInst::ArrayLenFixnum { dst, base });
+    }
+
+    /// Emit `dst <- fixnum(String#bytesize)`: the fixnum-tagged byte length of
+    /// the string receiver in `base`. Typed alternative to `inline`.
+    pub(crate) fn string_len_fixnum(&mut self, dst: GP, base: GP) {
+        self.inst.push(AsmInst::StringLenFixnum { dst, base });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1562,6 +1584,31 @@ pub(super) enum AsmInst {
         dst: GP,
         base: GP,
         disp: i32,
+    },
+    /// `dst <- bool([base + disp])`: load a 32-bit raw-bool field of a heap
+    /// object and convert it to a Ruby `true`/`false` `Value` (`(b << 3) |
+    /// FALSE_VALUE`). A typed replacement for the `emit_*_exclude_end` closures
+    /// (`Range#exclude_end?`, `ArithmeticSequence#exclude_end?`), which were
+    /// byte-identical bar the offset. Lowers to `LInst::BoolFieldToReg`.
+    BoolFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
+    /// `dst <- fixnum(Array#size)`: the fixnum-tagged length of the array
+    /// receiver in `base` (inline `capa`, or the heap length when `capa` exceeds
+    /// `ARRAY_INLINE_CAPA`), `(n << 1) | 1`. Typed replacement for the
+    /// `emit_array_size` closure. Lowers to `LInst::ArrayLenFixnum`.
+    ArrayLenFixnum {
+        dst: GP,
+        base: GP,
+    },
+    /// `dst <- fixnum(String#bytesize)`: as `ArrayLenFixnum` but for a string
+    /// receiver (inline threshold `STRING_INLINE_CAP`). Typed replacement for the
+    /// `emit_string_bytesize` closure. Lowers to `LInst::StringLenFixnum`.
+    StringLenFixnum {
+        dst: GP,
+        base: GP,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {
@@ -2294,11 +2341,18 @@ impl Codegen {
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
+        // §9 (9a, first brick): reify the isolated side-exit handler block into a
+        // whole-region `Lir` buffer, then drain it through `encode_linst` below
+        // instead of emitting each handler inline. Byte-identical (immediate
+        // drain, no allocation pass yet); the labels are still created eagerly so
+        // the main body can reference them. This is the seam the future
+        // physical-allocation pass slots into (between buffering and the drain).
+        let mut lir = Lir::new();
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Evict,
                         pc,
                         wb,
@@ -2314,7 +2368,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.encode_linst(LInst::SideExit {
+                        lir.push(LInst::SideExit {
                             kind: LSideExitKind::Deopt,
                             pc: t.0,
                             wb: t.1.clone(),
@@ -2328,7 +2382,7 @@ impl Codegen {
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt { reason, position },
                         pc,
                         wb,
@@ -2340,7 +2394,7 @@ impl Codegen {
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Error,
                         pc,
                         wb,
@@ -2353,6 +2407,9 @@ impl Codegen {
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
             side_exits.push(label);
+        }
+        for inst in lir.into_insts() {
+            self.encode_linst(inst);
         }
 
         if entry.is_some() && exit.is_some() {

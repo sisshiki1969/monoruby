@@ -259,6 +259,31 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: LReg,
         mem: LMem,
     },
+    /// `dst <- bool([base + disp])`: zero-extend a 32-bit raw-bool object field
+    /// and convert it to a Ruby `true`/`false` `Value` (`(b << 3) |
+    /// FALSE_VALUE`). A small macro-op (32-bit load + shift + or, identical on
+    /// both arches bar the load encoding); replaces the per-arch
+    /// `emit_*_exclude_end` field-reader emitters.
+    BoolFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
+    /// `dst <- fixnum(Array#size)`: fixnum-tagged length of an inline-or-heap
+    /// array. A macro-op (load inline capa + conditional-select heap len when
+    /// capa > `ARRAY_INLINE_CAPA` + `(n << 1) | 1` tag); the conditional select
+    /// is the per-arch part (x86 `cmov`, aarch64 `csel`). Replaces the per-arch
+    /// `emit_array_size` emitter.
+    ArrayLenFixnum {
+        dst: GP,
+        base: GP,
+    },
+    /// `dst <- fixnum(String#bytesize)`: as `ArrayLenFixnum` but with the string
+    /// inline threshold `STRING_INLINE_CAP`. Replaces `emit_string_bytesize`.
+    StringLenFixnum {
+        dst: GP,
+        base: GP,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,
@@ -892,6 +917,14 @@ impl Lir {
 
     pub(in crate::codegen::jitgen) fn iter(&self) -> std::slice::Iter<'_, LInst> {
         self.insts.iter()
+    }
+
+    /// Consume the buffer, yielding its `LInst`s in order. The drain point for
+    /// the two-phase pipeline (§9): a region is buffered, then replayed through
+    /// `encode_linst` here. (A later increment runs the physical-allocation pass
+    /// over the `Vec` between buffering and this drain.)
+    pub(in crate::codegen::jitgen) fn into_insts(self) -> Vec<LInst> {
+        self.insts
     }
 
     pub(in crate::codegen::jitgen) fn push(&mut self, inst: LInst) -> &mut Self {

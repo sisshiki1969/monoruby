@@ -3682,7 +3682,9 @@ fn string_bytesize(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_string_bytesize());
+    // Pure-LIR container length (no arch-specific closure): inline-or-heap byte
+    // length of the string receiver in Rdi, fixnum-tagged into Rax.
+    ir.string_len_fixnum(GP::Rax, GP::Rdi);
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }
