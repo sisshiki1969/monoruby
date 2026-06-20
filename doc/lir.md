@@ -316,3 +316,86 @@ op) is the single seam for byte emission. The only arms still handled directly
 in the dispatcher are the specialized inlined-frame family (which resolve
 frame-local labels / patch points) and the patch/recompile bookkeeping, which is
 *not* emission by the invariant above.
+
+---
+
+## §9 The two-phase pipeline: whole-function buffering + virtual GP + physical allocation
+
+Everything above is the **single-pass** seam: `compile_asmir` lowers each
+`AsmInst` to one or more `LInst`s and *emits them immediately* through
+`encode_linst`. That gave us one byte-emission description per op, but it cannot
+host a register allocator: allocation needs the **whole function's** instruction
+stream in hand to compute liveness, so an op cannot be encoded the instant it is
+produced.
+
+The next architectural step (the `AsmIr → LIR` pipeline) splits emission into two
+phases while keeping `AsmIr` and `LIR` as **separate layers** (collapsing them
+would just reconstruct `AsmIr`):
+
+```text
+AsmIr (AsmInst, frame-INDEPENDENT, FP already virtual, GP physical)
+  │  lower (resolve frame size / labels / patch points)
+  ▼
+LIR  = Vec<LInst>   ← whole compiled unit, offsets baked in, GP *virtual*
+  │  arch-dependent physical-register allocation pass (GP virtual → physical)
+  ▼
+encode (drain → encode_linst → bytes)
+```
+
+- **LIR is barely-arch-independent and offset-baked.** Frame base, slot
+  displacements, field offsets, and labels are all resolved when `AsmIr` lowers
+  to `LIR` (`AsmInst` is frame-independent; `LInst` already carries `base`). What
+  `LIR` does *not* yet bake is the physical register assignment.
+- **Registers are virtual in LIR.** FP registers already are (`FPReg` =
+  phys-or-spill, resolved by `PhysMap` at encode time — §25/§27). GP registers
+  are *not*: today `LInst` names concrete `GP`s (`R15` = accumulator, `R12` =
+  globals, `R14` = LFP, plus scratch temporaries). The pipeline introduces a
+  **virtual GP** (`VReg`) for the *allocatable* GP uses; the fixed globals
+  (acc / pc / lfp / globals / executor — see `CLAUDE.md`) stay pinned and are
+  **not** virtualized. Only the temporary/scratch GP traffic becomes virtual and
+  is assigned in the post-LIR phase.
+
+### Blockers (from the current driver, `asmir.rs::compile` ~2293–2400)
+
+The single-pass driver interleaves byte emission with **ordering operations** that
+are not themselves `LInst`s emitted through `encode_linst`:
+
+1. `self.jit.label()` / `bind_label(..)` — label creation and binding.
+2. `self.jit.select_page(1)` — cold/hot page selection (x86 lays side-exit
+   handlers on the cold page).
+3. `frame.sourcemap.push((i, pos))` — source-position records keyed on the
+   *current* code position.
+4. Patch-point / return-address-table bookkeeping (`doc/arch_difference.md` §4),
+   which emits zero bytes but is position-sensitive.
+
+If LIR buffered only the `encode_linst` calls and left (1)–(4) inline, replaying
+the buffer later would desync every label, page boundary, and source mapping.
+Therefore the buffer must model these as **ordering pseudo-ops** in the same
+`Vec<LInst>` (e.g. `LInst::BindLabel`, `LInst::SelectPage`, `LInst::SourcePos`),
+so the *entire* emission stream — bytes **and** position metadata — is one
+ordered sequence the allocator can walk and the drainer can replay faithfully.
+
+### Staged increments
+
+- **9a — Make the emission stream fully reified.** Add the ordering pseudo-ops so
+  `compile_asmir` + the side-exit loop produce a single `Vec<LInst>` covering
+  *all* of byte emission, label binding, page selection, and sourcemap. Verify
+  **byte-identical** output by draining the buffer immediately (no allocation
+  pass yet) — a pure refactor, gated/shadowed like the §24 placement harness.
+- **9b — Introduce `VReg` (virtual GP) with an identity map.** Replace the
+  *allocatable* GP operands with `VReg`, lowered through a trivial
+  virtual→physical map that reproduces today's assignment. Still byte-identical;
+  this only changes the *type* carried, establishing the seam.
+- **9c — Carry liveness / loop metadata into LIR.** Per §27.1, re-deriving
+  liveness after LIR-flatten cost 2.5×, so the allocator must consume the
+  metadata the ① fixpoint already computed (loop-carried sets, etc.) rather than
+  recompute it. Thread it onto the buffer.
+- **9d — The arch-dependent physical-allocation pass.** Walk the buffered LIR,
+  assign physical GPs to `VReg`s (spilling to frame slots under pressure, exactly
+  as `FPReg` does for FP), then drain → encode. This is the first point the
+  output may legitimately differ from today's bytes; like `phys-loop-aware`
+  (§42), it is a perf experiment gated behind a flag + the M1 A/B bench gate, and
+  the shadow digest becomes a delta meter, not an equality check.
+
+9a/9b are byte-identical refactors (safe to land once verified); 9c/9d are the
+substantive allocator work and stay behind a flag until the bench gate clears.
