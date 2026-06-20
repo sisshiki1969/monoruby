@@ -164,6 +164,8 @@ impl Codegen {
             | AsmInst::ArrayIndexAssign { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::BoolFieldToReg { .. }
+            | AsmInst::ArrayLenFixnum { .. }
+            | AsmInst::StringLenFixnum { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -296,6 +298,28 @@ impl Codegen {
                     movl R(d), [R(b) + (disp)];
                     shlq R(d), 3;
                     orq  R(d), (FALSE_VALUE);
+                );
+            }
+            // dst <- fixnum(Array#size): inline-or-heap length, fixnum-tagged.
+            LInst::ArrayLenFixnum { dst, base } => {
+                let (d, b) = (dst as u64, base as u64);
+                monoasm!( &mut self.jit,
+                    movq R(d), [R(b) + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq R(d), (ARRAY_INLINE_CAPA);
+                    cmovgtq R(d), [R(b) + (RVALUE_OFFSET_HEAP_LEN)];
+                    salq R(d), 1;
+                    orq  R(d), 1;
+                );
+            }
+            // dst <- fixnum(String#bytesize): inline-or-heap byte length, tagged.
+            LInst::StringLenFixnum { dst, base } => {
+                let (d, b) = (dst as u64, base as u64);
+                monoasm!( &mut self.jit,
+                    movq R(d), [R(b) + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq R(d), (STRING_INLINE_CAP);
+                    cmovgtq R(d), [R(b) + (RVALUE_OFFSET_HEAP_LEN)];
+                    salq R(d), 1;
+                    orq  R(d), 1;
                 );
             }
             // [lfp - slot] <- src

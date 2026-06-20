@@ -346,8 +346,9 @@ fn array_size(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_array_size());
-
+    // Pure-LIR container length (no arch-specific closure): inline-or-heap length
+    // of the array receiver in Rdi, fixnum-tagged into Rax.
+    ir.array_len_fixnum(GP::Rax, GP::Rdi);
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }

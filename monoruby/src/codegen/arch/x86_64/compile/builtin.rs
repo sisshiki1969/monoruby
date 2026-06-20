@@ -55,28 +55,6 @@ impl Codegen {
         }
     }
 
-    /// `Array#size`/`#length`: untagged length (`get_array_length`) tagged as a
-    /// fixnum in rax.
-    pub(crate) fn emit_array_size(&mut self) {
-        self.get_array_length();
-        monoasm! { &mut self.jit,
-            salq  rax, 1;
-            orq   rax, 1;
-        }
-    }
-
-    /// `String#bytesize`: inline-vs-heap length select, tagged as a fixnum in
-    /// rax. Receiver in rdi.
-    pub(crate) fn emit_string_bytesize(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-            cmpq rax, (STRING_INLINE_CAP);
-            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            salq rax, 1;
-            orq  rax, 1;
-        }
-    }
-
     /// `String#getbyte`: receiver String in rdi, fixnum index in rsi →
     /// rax = byte tagged as a fixnum, or nil when the (negative-adjusted)
     /// index is out of range.

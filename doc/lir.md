@@ -308,6 +308,14 @@ The remaining things handled **directly** (not through `encode_linst`):
     32-bit load + `shl 3` + `or FALSE_VALUE`, deduping the two byte-identical
     `emit_*_exclude_end` emitters into one encode arm per arch). Done:
     `Range#exclude_end?`, `ArithmeticSequence#exclude_end?`.
+  - **Container length** → `AsmIr::array_len_fixnum` / `string_len_fixnum` →
+    `AsmInst::ArrayLenFixnum` / `StringLenFixnum` → the matching `LInst` (a
+    macro-op: load inline capa + conditional-select the heap length when capa
+    exceeds the inline cap + fixnum-tag; the conditional select is the only
+    per-arch part, x86 `cmov` / aarch64 `csel`). Done: `Array#size`,
+    `String#bytesize` — one op each (differing only in the inline-cap constant,
+    `ARRAY_INLINE_CAPA` vs `STRING_INLINE_CAP`), replacing the four
+    `emit_array_size`/`emit_string_bytesize` emitters.
   - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
     arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
     `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.

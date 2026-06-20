@@ -942,6 +942,14 @@ impl Codegen {
             AsmInst::BoolFieldToReg { dst, base, disp } => {
                 self.encode_linst(LInst::BoolFieldToReg { dst, base, disp })
             }
+            // Typed container-length-as-fixnum (replaces `emit_array_size` /
+            // `emit_string_bytesize`).
+            AsmInst::ArrayLenFixnum { dst, base } => {
+                self.encode_linst(LInst::ArrayLenFixnum { dst, base })
+            }
+            AsmInst::StringLenFixnum { dst, base } => {
+                self.encode_linst(LInst::StringLenFixnum { dst, base })
+            }
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live fpr pool reg / out-of-range frame offset.

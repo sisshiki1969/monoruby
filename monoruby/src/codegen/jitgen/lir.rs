@@ -269,6 +269,21 @@ pub(in crate::codegen::jitgen) enum LInst {
         base: GP,
         disp: i32,
     },
+    /// `dst <- fixnum(Array#size)`: fixnum-tagged length of an inline-or-heap
+    /// array. A macro-op (load inline capa + conditional-select heap len when
+    /// capa > `ARRAY_INLINE_CAPA` + `(n << 1) | 1` tag); the conditional select
+    /// is the per-arch part (x86 `cmov`, aarch64 `csel`). Replaces the per-arch
+    /// `emit_array_size` emitter.
+    ArrayLenFixnum {
+        dst: GP,
+        base: GP,
+    },
+    /// `dst <- fixnum(String#bytesize)`: as `ArrayLenFixnum` but with the string
+    /// inline threshold `STRING_INLINE_CAP`. Replaces `emit_string_bytesize`.
+    StringLenFixnum {
+        dst: GP,
+        base: GP,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,

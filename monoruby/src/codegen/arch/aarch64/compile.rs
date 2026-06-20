@@ -1482,6 +1482,31 @@ impl Codegen {
                     add x(d), x(d), #(FALSE_VALUE);
                 );
             }
+            // dst <- fixnum(Array#size): inline-or-heap length, fixnum-tagged.
+            // `lsl` clears bit 0, so `add #1` == `orr #1`. Scratch x9 holds heap_len.
+            LInst::ArrayLenFixnum { dst, base } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x(d), [x(b), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                    ldr x9, [x(b), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                    cmp x(d), #(ARRAY_INLINE_CAPA as u32);
+                    csel x(d), x9, x(d), gt;
+                    lsl x(d), x(d), #1;
+                    add x(d), x(d), #1;
+                );
+            }
+            // dst <- fixnum(String#bytesize): inline-or-heap byte length, tagged.
+            LInst::StringLenFixnum { dst, base } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x(d), [x(b), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                    ldr x9, [x(b), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                    cmp x(d), #(STRING_INLINE_CAP as u32);
+                    csel x(d), x9, x(d), gt;
+                    lsl x(d), x(d), #1;
+                    add x(d), x(d), #1;
+                );
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3847,29 +3872,6 @@ impl Codegen {
             mov x0, #(TRUE_VALUE);
         );
         self.jit.bind_label(exit);
-    }
-
-    /// `Array#size`/`#length`: untagged length (`get_array_length`) tagged as a
-    /// fixnum in Rax (x0).
-    pub(crate) fn emit_array_size(&mut self) {
-        self.get_array_length();
-        monoasm_arm64!(&mut self.jit,
-            lsl x0, x0, #1;
-            add x0, x0, #1;
-        );
-    }
-
-    /// `String#bytesize`: inline-vs-heap length select, tagged as a fixnum in
-    /// Rax (x0). Receiver in Rdi (x4).
-    pub(crate) fn emit_string_bytesize(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
-            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
-            cmp x0, #(STRING_INLINE_CAP as u32);
-            csel x0, x9, x0, gt;   // capa > inline cap -> use heap_len
-            lsl x0, x0, #1;
-            add x0, x0, #1;
-        );
     }
 
     /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.

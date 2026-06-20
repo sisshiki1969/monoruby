@@ -1,5 +1,8 @@
 use crate::bytecodegen::BinOpK;
-use crate::codegen::jitgen::lir::{Lir, LInst, LSideExitKind};
+// Only the x86-gated `gen_asm` driver uses these directly; the aarch64 driver
+// lives in `arch/aarch64/compile.rs` with its own imports.
+#[cfg(target_arch = "x86_64")]
+use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;
 
@@ -1013,6 +1016,18 @@ impl AsmIr {
         self.inst.push(AsmInst::BoolFieldToReg { dst, base, disp });
     }
 
+    /// Emit `dst <- fixnum(Array#size)`: the fixnum-tagged length of the array
+    /// receiver in `base`. Typed alternative to `inline` for `Array#size`.
+    pub(crate) fn array_len_fixnum(&mut self, dst: GP, base: GP) {
+        self.inst.push(AsmInst::ArrayLenFixnum { dst, base });
+    }
+
+    /// Emit `dst <- fixnum(String#bytesize)`: the fixnum-tagged byte length of
+    /// the string receiver in `base`. Typed alternative to `inline`.
+    pub(crate) fn string_len_fixnum(&mut self, dst: GP, base: GP) {
+        self.inst.push(AsmInst::StringLenFixnum { dst, base });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1579,6 +1594,21 @@ pub(super) enum AsmInst {
         dst: GP,
         base: GP,
         disp: i32,
+    },
+    /// `dst <- fixnum(Array#size)`: the fixnum-tagged length of the array
+    /// receiver in `base` (inline `capa`, or the heap length when `capa` exceeds
+    /// `ARRAY_INLINE_CAPA`), `(n << 1) | 1`. Typed replacement for the
+    /// `emit_array_size` closure. Lowers to `LInst::ArrayLenFixnum`.
+    ArrayLenFixnum {
+        dst: GP,
+        base: GP,
+    },
+    /// `dst <- fixnum(String#bytesize)`: as `ArrayLenFixnum` but for a string
+    /// receiver (inline threshold `STRING_INLINE_CAP`). Typed replacement for the
+    /// `emit_string_bytesize` closure. Lowers to `LInst::StringLenFixnum`.
+    StringLenFixnum {
+        dst: GP,
+        base: GP,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {
