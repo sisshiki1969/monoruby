@@ -527,12 +527,35 @@ placed in the pool:
    `x5`–`x8`; that backend needs the same audit before placement targets it. The
    `gp-alloc` feature is x86-first and off by default, so nothing places into the
    aarch64 pool yet.)*
-3. **Placement policy** *(next)*: choose which slots enter the pool (victim
-   selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`,
-   within a call-free straight-line stretch (the flush at §1 bounds it).
-4. **Branch-merge reconciliation**: agree pool residency across control-flow
-   joins (or simply flush at every block boundary in the first cut).
-5. **M1 A/B bench gate** before the feature becomes default.
+3. **Placement policy + multi-residency** *(done)*. `def_reg2acc_guarded` is the
+   trigger: when a new accumulator value arrives from a register **other than
+   R15** (so R15 still holds the *previous* accumulator),
+   `try_relocate_acc_to_pool` moves that previous value into a free pool register
+   (`G(_, Alloc(id))`) instead of spilling it. Later reads then come from the
+   register (no LFP reload) until the next flush. Making the state machine track
+   pool residents (not just the single R15 accumulator) required:
+   - **`Placement::Gp(VReg)`** *(load-bearing)*. `SlotState` stores `place` +
+     `ty` and reconstructs every `mode()` via `from_parts` — so the placement
+     **must** carry the `VReg`, else `set_mode(G(Alloc))` loses the pool-register
+     identity on the very next state read (it round-trips to `Stack`).
+   - **Register-aware reads everywhere a `G` slot is consumed**: `on_reg` /
+     `on_reg_or` (binop operands), `load_state` (`GpLoad::Reg(vreg.phys())`),
+     `fetch_for_callee` (call-argument materialization), the `G→Sf` bridge — all
+     resolve `vreg.phys()` rather than assuming R15.
+   - **Alloc-aware destructive sites + flush** (§1, the `gp` field / `writeback_
+     pool_state` / Alloc-aware `clear`/`write_back_slot`).
+   - **Fixnum-only restriction** *(GC safety)*: a pool register is **not a GC
+     root**, so only values statically guarded `Fixnum` (immediates — no heap
+     pointer) are relocated. A heap pointer kept solely in `r8`–`r11` across a
+     collection would be freed; heap-value pooling is deferred until pool
+     registers are made GC-rootable. Hot integer loops — the primary target — are
+     covered. Verified byte-identical on default; gp-alloc passes the full suite
+     including `gc-stress` (GC on every allocation).
+4. **M1 A/B bench gate** before the feature becomes default.
 
-Note C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes
-it unnecessary — pool slots are always written back before a call.
+Notes:
+- C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes it
+  unnecessary — pool slots are always written back before a call.
+- Branch-merge reconciliation needs no special pool handling: pool residents are
+  flushed (→ `S`) before any branch (the compile-loop `flush_pool` and the
+  back-edge analysis G→S demotion), so a merge never sees a `G(_, Alloc)` slot.

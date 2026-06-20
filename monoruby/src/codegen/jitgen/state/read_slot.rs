@@ -534,9 +534,9 @@ impl AbstractFrame {
         ofs: i32,
     ) {
         match self.mode(slot) {
-            LinkMode::G(_, _) => {
+            LinkMode::G(_, vreg) => {
                 self.use_as_value(slot);
-                ir.reg2rsp_offset(GP::R15, ofs);
+                ir.reg2rsp_offset(vreg.phys(), ofs);
             }
             _ => {
                 self.load(ir, slot, GP::Rax);

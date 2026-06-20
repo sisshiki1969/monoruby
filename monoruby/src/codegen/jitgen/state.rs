@@ -273,6 +273,10 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
+            #[cfg(feature = "gp-alloc")]
+            if src != GP::R15 {
+                self.try_relocate_acc_to_pool(ir, dst);
+            }
             self.def_G(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));
         }
