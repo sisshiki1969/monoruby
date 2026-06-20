@@ -118,7 +118,7 @@ pub(in crate::codegen) const GP_ALLOC_POOL: [GP; 4] = [GP::R8, GP::R9, GP::R10, 
 /// General purpose registers.
 ///
 #[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum GP {
     Rax = 0,
     Rcx = 1,

@@ -355,6 +355,10 @@ impl Codegen {
             let acc = GP::R15.a64().0; // x23
             self.a64_frame_store(acc, lfp, off);
         }
+        for (reg, slot) in &wb.gp {
+            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+            self.a64_frame_store(reg.a64().0, lfp, off);
+        }
     }
 
     /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
