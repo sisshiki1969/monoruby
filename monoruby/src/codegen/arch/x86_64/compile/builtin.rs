@@ -54,10 +54,11 @@ impl Codegen {
     /// classification consistent with `RStringInner::set_byte`.
     ///
     /// ### destroy
-    /// - rax, rcx, rdx, rsi, r8
+    /// - rax, rcx, rdx, rsi
     pub(crate) fn emit_string_setbyte(&mut self, deopt: &DestLabel) {
         let exit = self.jit.label();
         let set_unknown = self.jit.label();
+        let pos_idx = self.jit.label();
         monoasm! { &mut self.jit,
             // frozen (0b010) or chilled (0b100) → deopt
             movzxw rax, [rdi + (RVALUE_OFFSET_FLAG)];
@@ -70,18 +71,22 @@ impl Codegen {
             // Shared (copy-on-write) string: the buffer is aliased by
             // other sharers and must not be written in place — deopt to
             // the interpreter, which detaches via `owned_mut`.
-            movq r8, (crate::rvalue::STRING_SHARED_TAG);
-            cmpq rax, r8;
+            // (rcx is free here until the `lea` below, so use it for the
+            // tag scratch rather than r8 — r8-r11 are the allocatable pool.)
+            movq rcx, (crate::rvalue::STRING_SHARED_TAG);
+            cmpq rax, rcx;
             jeq  deopt;
             lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
             cmpq rax, (STRING_INLINE_CAP);
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
             cmovgtq rcx, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-            // negative index counts back from the end
-            movq r8, rsi;
-            addq r8, rax;
+            // negative index counts back from the end. Branch on the sign
+            // instead of computing `rsi + rax` into a scratch reg and
+            // cmov'ing, so we need no extra register (r8 is now pool).
             testq rsi, rsi;
-            cmovsq rsi, r8;
+            jns  pos_idx;
+            addq rsi, rax;
+        pos_idx:
             // out of range (unsigned check covers still-negative) → IndexError
             cmpq rsi, rax;
             jae  deopt;
