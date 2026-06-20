@@ -223,7 +223,10 @@ fn inline_field_load(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_load_value_field(offset));
+    // Pure-LIR field read (no arch-specific closure): the receiver is in Rdi,
+    // load `[Rdi + offset]` into Rax. Lowers to `AsmInst::LoadFieldToReg` →
+    // `LInst::Load { Field }`, identical on both arches (cf. `range_begin`).
+    ir.load_field_to_reg(GP::Rax, GP::Rdi, offset as i32);
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }

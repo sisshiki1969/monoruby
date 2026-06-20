@@ -29,14 +29,6 @@ impl Codegen {
         }
     }
 
-    /// Load a 64-bit Value field at `offset` from the receiver in rdi → rax.
-    /// Shared by `ArithmeticSequence#begin`/`#end`/`#step`.
-    pub(crate) fn emit_load_value_field(&mut self, offset: usize) {
-        monoasm! { &mut self.jit,
-            movq rax, [rdi + (offset as i32)];
-        }
-    }
-
     /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
     /// eq→TRUE, ne→FALSE. Receiver in rdi → rax.
     pub(crate) fn emit_object_not(&mut self) {

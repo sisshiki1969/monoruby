@@ -294,11 +294,22 @@ The remaining things handled **directly** (not through `encode_linst`):
   the `unreachable!` fallthrough.) This is a transitional carrier: migrating the
   closures onto typed, arch-neutral LIR ops — so the variant can eventually go
   away — is **goal 2** of the long-term plan ("express the inline-builtin codegen
-  once, arch-neutrally"). First proof: `Range#begin/end` now lower through the
-  typed `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg` → existing
-  `LInst::Load { Field }` (no new LIR op, byte-identical on both arches,
-  hand-written `emit_range_begin/end` deleted). The remaining generators need a
-  few new FP/branch LIR primitives (e.g. for `sqrt`).
+  once, arch-neutrally"). The migratable category is the *pure* generators —
+  property/field readers and trivial C-function wrappers, whose codegen is one
+  existing LIR op with no arch-specific control flow:
+  - **Field readers** → `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg`
+    → existing `LInst::Load { Field }` (no new op, byte-identical on both arches).
+    Done: `Range#begin/end` (hand-written `emit_range_begin/end` deleted) and
+    `ArithmeticSequence#begin/#end/#step` (via the shared `inline_field_load`
+    helper; hand-written `emit_load_value_field` deleted from both backends).
+  - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
+    arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
+    `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.
+
+  What stays a closure is the genuinely arch-specific shapes — generators with
+  control flow whose condition-code mapping differs per arch (`Math.sqrt`'s
+  NaN/negative guard: x86 `ucomisd`+`jp`/`jb`, aarch64 `fcmp`+`fsqrt`), object
+  allocation, `send`, etc. Those need a few new FP/branch LIR primitives first.
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:
