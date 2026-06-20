@@ -1,10 +1,18 @@
 //! # Unified low-level IR (LIR) — arch-neutral machine-level instructions
 //!
-//! **Stage 1 of the Phase-1 "unified low-level IR" effort.** This module
-//! defines the *data model only*; it is not yet wired into the compilation
-//! pipeline (hence the module-level `dead_code` allow). Subsequent stages
-//! migrate the per-arch `emit_*` primitives onto it one instruction family at a
-//! time. See `doc/lir.md` for the full design and migration plan.
+//! **The unified low-level IR (Phase-1 item ③).** This module defines the
+//! arch-neutral machine-level instruction set (`LInst`) and its logical
+//! operands (`LOperand` / `LReg` / `LMem`). It **is** wired into the pipeline:
+//! both backends' `encode_linst` (`arch/<arch>/compile`) consume `LInst` as the
+//! **single byte-emission seam**. The family migration is far along — register
+//! moves, slot/field memory, the full FP family, fixnum arithmetic, the guard /
+//! check family, the whole method-call family, and the cold side-exit/deopt
+//! handlers all lower through `encode_linst` (stages 2-A…3-H + A, B5–B8; see the
+//! migration log in `doc/lir.md` §6). The arms still handled directly in the
+//! dispatcher are the specialized inlined-frame family and the zero-byte
+//! patch/recompile bookkeeping (`doc/lir.md` §8); migrating the `AsmInst::Inline`
+//! builtin generators onto LIR is the remaining "express inline-builtin codegen
+//! once, arch-neutrally" goal.
 //!
 //! ## Where it sits
 //!
@@ -38,7 +46,8 @@
 //! one description, which is also the concrete code-generation target the future
 //! interpreter/JIT DSL (Phase-1 item ③) lowers to.
 
-// Stage-1 scaffolding: the model exists but nothing consumes it yet.
+// Some `LInst` variants / helpers are only used by not-yet-migrated families
+// (the `AsmInst::Inline` builtin generators); keep them ahead of their consumers.
 #![allow(dead_code)]
 
 use super::*;
@@ -228,8 +237,11 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
 /// `JitLabel`), because the encoder runs after label resolution — the `emit_*`
 /// primitives already receive `DestLabel`s. `DestLabel` is `Clone` but not
-/// `Copy`, so `LInst` is `Clone`/`PartialEq` but not `Copy`.
-#[derive(Debug, Clone)]
+/// `Copy`, so `LInst` is not `Copy`. It is also not `Clone`: the `Inline`
+/// escape hatch wraps a `Box<dyn FnOnce>` generator (see `InlineProcedure`),
+/// which is move-only. `LInst`s are produced, encoded once, and dropped, so a
+/// clone is never needed.
+#[derive(Debug)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     Mov {
@@ -845,12 +857,22 @@ pub(in crate::codegen::jitgen) enum LInst {
         loop_jit_spill_bytes: usize,
         base: usize,
     },
+    /// Inlined-builtin escape hatch: an opaque generator closure that emits the
+    /// arch-appropriate asm directly. Unlike every other `LInst` (which is
+    /// store-free and lowered by `encode_linst`), its emit needs the compile
+    /// context (`&Store`, `&SideExitLabels`, frame `base`), so it is dispatched
+    /// by `encode_linst_inline` at the LIR-emit boundary, not `encode_linst`.
+    /// This is the transitional carrier that lets *every* `AsmInst` lower to
+    /// `LInst`; migrating the closures to typed, arch-neutral LIR ops (so this
+    /// variant can eventually go away) is the "express inline-builtin codegen
+    /// once" goal (`doc/lir.md` §8).
+    Inline(super::asmir::InlineProcedure),
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
 /// `AsmInst`. Stage 2 builds one of these per migrated family and hands it to
 /// the per-arch encoder; for now it is a thin, ergonomic builder over `Vec`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(in crate::codegen::jitgen) struct Lir {
     insts: Vec<LInst>,
 }

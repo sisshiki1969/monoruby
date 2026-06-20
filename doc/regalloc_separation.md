@@ -2971,3 +2971,101 @@ semantics, so a darwin-aarch64 codegen miscompile in the `POOL=14` float path. I
 is sidestepped by `stress-spill-pool` (so `bin/test` and the benchmark-driver
 warmup path are unaffected) and is unrelated to layer2 (reproduces on `base`).
 Tracked separately; not reproducible under linux-aarch64 QEMU.
+
+## 42. Stage 2a+2b landed behind `phys-loop-aware`: §29 inertness cracked (under pressure)
+
+Implements the §27.3 loop-aware allocator and — unlike the reverted §28/§29 attempt
+— **verifies it is non-inert**.
+
+**Stage 2a (collect `L`).** A `loop_carried: HashSet<SlotId>` on `SlotState` records
+the loop-carried float set (slots `F`/`Sf` at the back-edge), populated at the
+loop-entry merge from `backedge_for_floats`. The timing §29 lacked is solved by the
+**multi-iteration fixpoint**: the back-edge is already computed before real codegen,
+so `L` is known at merge time. It propagates into the body for free via `Clone` and
+the `&mut self` joins (a correctness-neutral hint). Confirmed populated: the
+complex-iteration kernel gives `L=6` (F=4, Sf=2); `so_nbody` `L=8` (F=7, Sf=1).
+
+**Stage 2b (use `L`).** The phase-1 spill-victim filter (gated on `phys-loop-aware`)
+excludes an all-`Sf` fpr that holds a loop-carried slot, so a fresh value takes a
+phase-2 spill instead of evicting a loop-carried `Sf` cache — fewer in-loop reloads
+(§27.3-2b).
+
+**Non-inertness (the verification the user asked for).** Via the §24 shadow digest,
+on the kernel:
+
+| config | kernel loop digest | `n` (placements) |
+|---|---|---|
+| `shadow-placement` (off) | `0x48168ad7c99d76d5` | 28 |
+| `+ phys-loop-aware` | `0x6191a84d9623dbad` | **26** |
+
+The digest **differs** and the placement count drops **28 → 26** — keeping the
+loop-carried `Sf` resident removed two in-loop reload placements, exactly §26's
+predicted "fewer back-edge moves / different placement". So the §29 wall ("`L`
+always empty at allocation") is cracked: `L` is available *and* changes placement.
+
+**Scope / honest caveat.** The lever only engages under **register pressure**:
+phase 1 (the Sf-demote it gates) runs only when phase 0 finds no vacant fpr. Under
+the shipping `POOL=14`, float loops with `< 14` simultaneously-live floats never hit
+phase 1, so `phys-loop-aware` is **inert there** and the shipping build stays
+byte-identical (the `so_nbody` `POOL=14` digest diff is empty). It bites under
+`stress-spill-pool` (`POOL=2`) and on genuinely high-pressure loops (the
+`doom`-renderer ≈14-float class). So its real-hardware value is narrow, and 2c (the
+M1 perf A/B) measures exactly that.
+
+**Correctness.** `stress-spill-pool,gc-stress,phys-loop-aware` (the lever firing
+under GC) is **2090/2090**. Default build unaffected (the field is an inert,
+`#[allow(dead_code)]` hint; all policy code is `phys-loop-aware`-gated).
+
+**Status.** Stage 2a+2b are implemented and proven non-inert; 2c (M1 perf A/B on
+high-pressure float code) is the gate, and given the POOL=14 inertness it should be
+evaluated on whether any shipping benchmark has enough FP pressure to benefit.
+
+## 43. (2) the global-pin lever: headroom measured, win is *copy coalescing* (partial)
+
+Per the user's choice to pursue the §26 "eliminate back-edge moves" lever (which,
+unlike §42's pressure-gated policy, can bite under shipping `POOL=14`), the back-edge
+FP-reconciliation move count was measured (default build, POOL=14, per loop
+iteration):
+
+| benchmark | back-edge bridges w/ moves | total `FprMove`+`FprSwap` |
+|---|---|---|
+| kernel (complex iter) | 1 | 4 |
+| so_nbody | 1 | 7 |
+| so_mandelbrot (150) | 6 | 29 |
+
+So there **is** per-iteration headroom under POOL=14. But the emit-asm decomposition
+of the kernel's 4 fixes *what kind* of move, and it reshapes (2):
+
+```
+000265: movq xmm4,xmm9     ; zr (new, in xmm9) -> xmm4
+00026a: movq xmm5,xmm8     ; zi (new, in xmm8) -> xmm5
+000273: movq xmm6,xmm9     ; zr -> xmm6   ← duplicate copy of zr
+000278: movq xmm7,xmm8     ; zi -> xmm7   ← duplicate copy of zi
+```
+
+The 4 moves are **2 reconciliations** (`zr`,`zi` land in the header's regs) **+ 2
+duplications** (`zr` is kept in *two* regs `xmm4`/`xmm6`, `zi` in `xmm5`/`xmm7`,
+because two copy-aliased slots each got their own fpr).
+
+### 43.1 Only the duplications are eliminable
+
+- **The reconciliations are intrinsic.** `zr := tr` produces the new `zr` in `tr`'s
+  reg; landing it in the header's expected reg costs one move *somewhere*. Pinning
+  `zr` to a fixed reg merely relocates that move from the back-edge bridge into the
+  body assignment — same per-iteration cost (confirmed by the SSA model: a relabel
+  reconciliation cannot be moved off the critical path, only shifted).
+- **The duplications are coalescable.** `FprAllocator.vfpr` is `Vec<Vec<SlotId>>` —
+  one fpr *already* can hold several slots. The two `zr`-aliases sit in separate
+  fprs only because the parallel-assignment codegen split them. Coalescing
+  copy-aliased loop-carried floats into one fpr removes the duplicate back-edge move
+  (kernel 4 → 2).
+
+### 43.2 Consequence
+
+(2) is a **copy-coalescing** optimization, not a generic "global pin": it recovers
+~half the back-edge moves (the duplications), and the rest are intrinsic. That is a
+real but *partial* win, a substantial fixpoint-allocator change (coalesce decision
+threaded through `copy_slot` + the merge target), squarely in §16.6's regressed-
+before risk class, and still M1-gated. The cheaper §42 `phys-loop-aware` lever is
+orthogonal (pressure-gated); coalescing is the POOL=14-relevant one but pays only
+on copy-heavy loop-carried floats (the `a,b = c,d` swap/rotate shape).
