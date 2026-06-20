@@ -489,6 +489,16 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: FPReg,
         base: usize,
     },
+    /// `Math.sqrt`: `fret <- sqrt(fsrc)`, NaN passes through, a negative argument
+    /// branches to `deopt`. A macro-op (FP compare to 0 + NaN/negative branches +
+    /// `sqrtsd`/`fsqrt`); the condition-code mapping is the per-arch part (x86
+    /// `ucomisd`+`jp`/`jb`, aarch64 `fcmp`+`b.vs`/`b.mi`). Replaces `emit_math_sqrt`.
+    MathSqrt {
+        fsrc: FPReg,
+        fret: Option<FPReg>,
+        deopt: DestLabel,
+        base: usize,
+    },
     /// Float comparison producing a Ruby boolean in the accumulator. NaN
     /// compares false for every operator except `!=`; the encoder picks
     /// NaN-correct condition codes per arch.

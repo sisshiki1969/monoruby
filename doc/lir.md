@@ -327,11 +327,19 @@ The remaining things handled **directly** (not through `encode_linst`):
   - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
     arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
     `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.
+  - **FP guard + op** (`Math.sqrt`) → `AsmIr::math_sqrt` → `LInst::MathSqrt`, a
+    macro-op carrying the deopt label (resolved by the dispatcher like
+    `GuardClass`). It encapsulates the per-arch domain guard (x86 `ucomisd` +
+    `jp`/`jb`, aarch64 `fcmp` + `b.vs`/`b.mi`) and the `sqrtsd`/`fsqrt` in one
+    encode arm per arch — so even a deopt-branching FP builtin migrates without a
+    closure (it does *not* declare `fpr_operands`, matching the prior opaque
+    `Inline`, so the spill-area sizing is unchanged; the fprs are accounted via
+    the surrounding `load_fpr`/`def_F`).
 
-  What stays a closure is the genuinely arch-specific shapes — generators with
-  control flow whose condition-code mapping differs per arch (`Math.sqrt`'s
-  NaN/negative guard: x86 `ucomisd`+`jp`/`jb`, aarch64 `fcmp`+`fsqrt`), object
-  allocation, `send`, etc. Those need a few new FP/branch LIR primitives first.
+  What stays a closure is the genuinely complex shapes — object allocation,
+  `send`, `fiddle`, the integer shift/division guards, `object_id`/`block_given?`
+  (runtime calls / control flow). Several would still benefit from a couple of
+  generic FP/branch/call LIR primitives.
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:

@@ -1040,6 +1040,12 @@ impl AsmIr {
         self.inst.push(AsmInst::NotToBool { dst, src });
     }
 
+    /// Emit `Math.sqrt`: `fret <- sqrt(fsrc)`, deopting on a negative argument.
+    /// Typed alternative to `inline`.
+    pub(crate) fn math_sqrt(&mut self, fsrc: FPReg, fret: Option<FPReg>, deopt: AsmDeopt) {
+        self.inst.push(AsmInst::MathSqrt { fsrc, fret, deopt });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1637,6 +1643,16 @@ pub(super) enum AsmInst {
     NotToBool {
         dst: GP,
         src: GP,
+    },
+    /// `Math.sqrt`: `fret <- sqrt(fsrc)`, guarding the domain. NaN passes through
+    /// (`sqrt(NaN) = NaN`); a negative argument branches to `deopt` (the
+    /// interpreter re-runs and raises `Math::DomainError`); `-0.0` yields `-0.0`.
+    /// Typed replacement for the `emit_math_sqrt` closure. Carries the deopt as an
+    /// `AsmDeopt` (resolved to a label by the dispatcher, like `GuardClass`).
+    MathSqrt {
+        fsrc: FPReg,
+        fret: Option<FPReg>,
+        deopt: AsmDeopt,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {

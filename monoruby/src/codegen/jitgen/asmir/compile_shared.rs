@@ -957,6 +957,17 @@ impl Codegen {
             AsmInst::NotToBool { dst, src } => {
                 self.encode_linst(LInst::NotToBool { dst, src })
             }
+            // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
+            // deopt label and pass the frame base, like the guard family.
+            AsmInst::MathSqrt { fsrc, fret, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::MathSqrt {
+                    fsrc,
+                    fret,
+                    deopt,
+                    base: frame.base_stack_offset,
+                });
+            }
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live fpr pool reg / out-of-range frame offset.

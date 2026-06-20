@@ -168,6 +168,7 @@ impl Codegen {
             | AsmInst::StringLenFixnum { .. }
             | AsmInst::IsNilToBool { .. }
             | AsmInst::NotToBool { .. }
+            | AsmInst::MathSqrt { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -344,6 +345,30 @@ impl Codegen {
                     cmpq R(s), (FALSE_VALUE);
                     cmovneq R(d), R(sc);
                 );
+            }
+            // Math.sqrt: ucomisd sets PF for NaN and CF for val < 0. NaN -> sqrt,
+            // negative -> deopt.
+            LInst::MathSqrt {
+                fsrc,
+                fret,
+                deopt,
+                base,
+            } => {
+                let do_sqrt = self.jit.label();
+                self.load_fpr_into_xmm0(fsrc, base);
+                monoasm!( &mut self.jit,
+                    xorpd xmm1, xmm1;
+                    ucomisd xmm0, xmm1;
+                    jp do_sqrt;
+                    jb deopt;
+                do_sqrt:
+                );
+                if let Some(fret) = fret {
+                    monoasm!( &mut self.jit,
+                        sqrtsd xmm0, xmm0;
+                    );
+                    self.store_fpr_into_xmm(fret, base);
+                }
             }
             // [lfp - slot] <- src
             LInst::Store {

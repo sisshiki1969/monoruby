@@ -1529,6 +1529,24 @@ impl Codegen {
                     csel x(d), x(d), x(sc), eq;
                 );
             }
+            // Math.sqrt: fcmp vs 0.0; NaN (unordered, Vs) -> sqrt, negative (Mi) -> deopt.
+            LInst::MathSqrt {
+                fsrc,
+                fret,
+                deopt,
+                base,
+            } => {
+                self.a64_fpr_into_d0(fsrc, base);
+                let do_sqrt = self.jit.label();
+                monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
+                self.jit.bcond_label(monoasm::Cond::Vs, &do_sqrt);
+                self.jit.bcond_label(monoasm::Cond::Mi, &deopt);
+                self.jit.bind_label(do_sqrt);
+                if let Some(fret) = fret {
+                    monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
+                    self.a64_d0_into_fpr(fret, base);
+                }
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3726,32 +3744,6 @@ impl Codegen {
             ),
         }
     }
-
-    /// Inlined `Math.sqrt`: `fsqrt` on the unboxed argument. NaN passes through
-    /// (`sqrt(NaN) == NaN`); a negative argument deopts so the interpreter
-    /// re-runs the builtin and raises DomainError (`-0.0` compares equal to
-    /// `0.0`, so it falls through and `fsqrt(-0.0) == -0.0`, as CRuby).
-    /// aarch64 twin of x86 `math_sqrt`'s inline body.
-    pub(crate) fn emit_math_sqrt(
-        &mut self,
-        src: FPReg,
-        dst: Option<FPReg>,
-        deopt: &DestLabel,
-        base: usize,
-    ) {
-        self.a64_fpr_into_d0(src, base);
-        let do_sqrt = self.jit.label();
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
-        self.jit.bcond_label(monoasm::Cond::Vs, &do_sqrt); // NaN (unordered) -> sqrt
-        self.jit.bcond_label(monoasm::Cond::Mi, &deopt); // negative -> deopt
-        self.jit.bind_label(do_sqrt);
-        if let Some(dst) = dst {
-            monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
-            self.a64_d0_into_fpr(dst, base);
-        }
-    }
-
 
     /// `Fiber.yield` with no args: the yielded value (Rsi/x3) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {

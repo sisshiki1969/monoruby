@@ -181,33 +181,6 @@ impl Codegen {
         }
     }
 
-    /// `Math.sqrt`: `sqrtsd` on `fsrc`; NaN passes through, a negative argument
-    /// deopts (the interpreter re-runs and raises DomainError).
-    pub(crate) fn emit_math_sqrt(
-        &mut self,
-        fsrc: FPReg,
-        fret: Option<FPReg>,
-        deopt: &DestLabel,
-        base: usize,
-    ) {
-        let do_sqrt = self.jit.label();
-        // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
-        self.load_fpr_into_xmm0(fsrc, base);
-        monoasm!( &mut self.jit,
-            xorpd xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jp do_sqrt;
-            jb deopt;
-        do_sqrt:
-        );
-        if let Some(fret) = fret {
-            monoasm!( &mut self.jit,
-                sqrtsd xmm0, xmm0;
-            );
-            self.store_fpr_into_xmm(fret, base);
-        }
-    }
-
     /// `Fiber.yield` with no args: the yielded value (rsi) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
         monoasm! { &mut self.jit,
