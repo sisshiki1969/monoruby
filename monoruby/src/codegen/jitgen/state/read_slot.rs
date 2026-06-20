@@ -50,8 +50,9 @@ pub(in crate::codegen::jitgen) enum FprLoad {
     None,
     /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
     FromStack(FPReg),
-    /// `reg2stack(R15, slot); float_to_fpr(R15, x, deopt)`
-    FromAcc(FPReg),
+    /// `G` slot in a GP register: `reg2stack(src, slot); float_to_fpr(src, x,
+    /// deopt)`. `src` is `r15` for the accumulator or a pool register once placed.
+    FromReg(GP, FPReg),
     /// `f64_to_fpr(f, x)` (guard-free)
     FromF64(f64, FPReg),
     /// `i64_to_stack_and_fpr(i, slot, x)` (guard-free)
@@ -72,10 +73,10 @@ impl FprLoad {
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_fpr(GP::Rdi, x, deopt);
             }
-            FprLoad::FromAcc(x) => {
+            FprLoad::FromReg(src, x) => {
                 let deopt = ir.deopt_from_point(deopt.unwrap());
-                ir.reg2stack(GP::R15, slot);
-                ir.float_to_fpr(GP::R15, x, deopt);
+                ir.reg2stack(src, slot);
+                ir.float_to_fpr(src, x, deopt);
             }
             FprLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
             FprLoad::FromFixnum(i, x) => ir.i64_to_stack_and_fpr(i, slot, x),
@@ -98,8 +99,10 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
     Stack(SlotId, GP),
-    /// `reg_move(r15, dst)`
-    Acc(GP),
+    /// `G` slot resident in a GP register: `reg_move(src, dst)`. `src` is the
+    /// slot's register (`r15` for the accumulator, a pool register `r8`–`r11`
+    /// once 9d places it).
+    Reg(GP, GP),
 }
 
 impl GpLoad {
@@ -111,7 +114,7 @@ impl GpLoad {
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
             GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
-            GpLoad::Acc(dst) => ir.reg_move(GP::R15, dst),
+            GpLoad::Reg(src, dst) => ir.reg_move(src, dst),
         }
     }
 }
@@ -137,8 +140,9 @@ pub(in crate::codegen::jitgen) enum FprFixnumLoad {
     None,
     /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
     FromStack(FPReg, bool),
-    /// `reg2stack(R15, slot); [GuardClass(R15)]; fixnum2fpr(R15, x)`
-    FromAcc(FPReg, bool),
+    /// `G` slot in a GP register: `reg2stack(src, slot); [GuardClass(src)];
+    /// fixnum2fpr(src, x)`. `src` is `r15` or a pool register once placed.
+    FromReg(GP, FPReg, bool),
     /// guard-free numeric literal (`LinkMode::C`) — reuses the [`FprLoad`] record
     Numeric(FprLoad),
 }
@@ -160,13 +164,13 @@ impl FprFixnumLoad {
                 }
                 ir.fixnum2fpr(GP::Rdi, x);
             }
-            FprFixnumLoad::FromAcc(x, guard) => {
+            FprFixnumLoad::FromReg(src, x, guard) => {
                 let deopt = deopt.map(|p| ir.deopt_from_point(p));
-                ir.reg2stack(GP::R15, slot);
+                ir.reg2stack(src, slot);
                 if guard {
-                    ir.push(AsmInst::GuardClass(GP::R15, INTEGER_CLASS, deopt.unwrap()));
+                    ir.push(AsmInst::GuardClass(src, INTEGER_CLASS, deopt.unwrap()));
                 }
-                ir.fixnum2fpr(GP::R15, x);
+                ir.fixnum2fpr(src, x);
             }
             FprFixnumLoad::Numeric(load) => load.emit(ir, slot, None),
         }
@@ -326,7 +330,7 @@ impl AbstractFrame {
                 }
                 GpLoad::Stack(slot, dst)
             }
-            LinkMode::G(_, _) => GpLoad::Acc(dst),
+            LinkMode::G(_, vreg) => GpLoad::Reg(vreg.phys(), dst),
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
@@ -414,11 +418,12 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 (x, FprFixnumLoad::FromStack(x, guard))
             }
-            LinkMode::G(_, _) => {
+            LinkMode::G(_, vreg) => {
                 // G -> Sf
+                let src = vreg.phys();
                 let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                (x, FprFixnumLoad::FromAcc(x, guard))
+                (x, FprFixnumLoad::FromReg(src, x, guard))
             }
             LinkMode::C(v) => {
                 let (x, load) = self.load_fpr_from_C_state(slot, v);
@@ -476,10 +481,11 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
                 (x, FprLoad::FromStack(x))
             }
-            LinkMode::G(_, _) => {
+            LinkMode::G(_, vreg) => {
                 // -> Sf
+                let src = vreg.phys();
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
-                (x, FprLoad::FromAcc(x))
+                (x, FprLoad::FromReg(src, x))
             }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
