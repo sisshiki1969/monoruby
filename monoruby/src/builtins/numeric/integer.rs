@@ -562,7 +562,8 @@ fn integer_succ(
 
     let deopt = ir.new_deopt(state);
     state.load(ir, recv, GP::Rdi);
-    ir.inline(move |r#gen, _, labels, _| r#gen.emit_integer_succ(&labels[deopt]));
+    // Pure-LIR Integer#succ (no arch-specific closure): tagged +1, deopt on overflow.
+    ir.integer_succ(GP::Rdi, deopt);
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }
@@ -603,7 +604,11 @@ fn integer_tof(
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
         let fret = state.def_F(ret);
-        ir.inline(move |r#gen, _, _, base| r#gen.emit_int_to_float(fret, base));
+        // Pure-LIR fixnum→float (no arch-specific closure): untag Rdi and convert
+        // into the result fpr. Reuses the existing `FixnumToFpr` op, which writes
+        // straight into `fret`'s xmm (one fewer move than the old emitter's
+        // unconditional `xmm0` round-trip).
+        ir.fixnum2fpr(GP::Rdi, fret);
     }
     true
 }

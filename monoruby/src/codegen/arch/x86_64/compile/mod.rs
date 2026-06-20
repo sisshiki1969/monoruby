@@ -166,6 +166,11 @@ impl Codegen {
             | AsmInst::BoolFieldToReg { .. }
             | AsmInst::ArrayLenFixnum { .. }
             | AsmInst::StringLenFixnum { .. }
+            | AsmInst::IsNilToBool { .. }
+            | AsmInst::NotToBool { .. }
+            | AsmInst::MathSqrt { .. }
+            | AsmInst::IntegerSucc { .. }
+            | AsmInst::BlockGiven { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -320,6 +325,74 @@ impl Codegen {
                     cmovgtq R(d), [R(b) + (RVALUE_OFFSET_HEAP_LEN)];
                     salq R(d), 1;
                     orq  R(d), 1;
+                );
+            }
+            // dst <- (src == nil) ? true : false (Ruby bool). Rsi scratch.
+            LInst::IsNilToBool { dst, src } => {
+                let (d, s, sc) = (dst as u64, src as u64, GP::Rsi as u64);
+                monoasm!( &mut self.jit,
+                    movq R(d), (FALSE_VALUE);
+                    movq R(sc), (TRUE_VALUE);
+                    cmpq R(s), (NIL_VALUE);
+                    cmoveqq R(d), R(sc);
+                );
+            }
+            // dst <- (!src) ? true : false (Ruby bool). Destroys src; Rsi scratch.
+            LInst::NotToBool { dst, src } => {
+                let (d, s, sc) = (dst as u64, src as u64, GP::Rsi as u64);
+                monoasm!( &mut self.jit,
+                    orq  R(s), (0x10);
+                    movq R(d), (TRUE_VALUE);
+                    movq R(sc), (FALSE_VALUE);
+                    cmpq R(s), (FALSE_VALUE);
+                    cmovneq R(d), R(sc);
+                );
+            }
+            // Math.sqrt: ucomisd sets PF for NaN and CF for val < 0. NaN -> sqrt,
+            // negative -> deopt.
+            LInst::MathSqrt {
+                fsrc,
+                fret,
+                deopt,
+                base,
+            } => {
+                let do_sqrt = self.jit.label();
+                self.load_fpr_into_xmm0(fsrc, base);
+                monoasm!( &mut self.jit,
+                    xorpd xmm1, xmm1;
+                    ucomisd xmm0, xmm1;
+                    jp do_sqrt;
+                    jb deopt;
+                do_sqrt:
+                );
+                if let Some(fret) = fret {
+                    monoasm!( &mut self.jit,
+                        sqrtsd xmm0, xmm0;
+                    );
+                    self.store_fpr_into_xmm(fret, base);
+                }
+            }
+            // Integer#succ: tagged +1 (= +2), deopt on signed overflow.
+            LInst::IntegerSucc { reg, deopt } => {
+                let r = reg as u64;
+                monoasm!( &mut self.jit,
+                    addq R(r), 2;
+                    jo   deopt;
+                );
+            }
+            // Kernel#block_given?: FALSE unless [r14 - LFP_BLOCK] is set & non-nil.
+            LInst::BlockGiven { dst } => {
+                let d = dst as u64;
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    movq R(d), (FALSE_VALUE);
+                    movq rdi, [r14 - (LFP_BLOCK)];
+                    testq rdi, rdi;
+                    jz exit;
+                    cmpq rdi, (NIL_VALUE);
+                    jeq exit;
+                    movq R(d), (TRUE_VALUE);
+                exit:
                 );
             }
             // [lfp - slot] <- src

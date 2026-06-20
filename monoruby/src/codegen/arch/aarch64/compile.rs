@@ -1507,6 +1507,67 @@ impl Codegen {
                     add x(d), x(d), #1;
                 );
             }
+            // dst <- (src == nil) ? true : false (Ruby bool). x3(Rsi) scratch.
+            LInst::IsNilToBool { dst, src } => {
+                let (d, s, sc) = (dst.a64().0, src.a64().0, GP::Rsi.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    mov  x(d), #(FALSE_VALUE);
+                    mov  x(sc), #(TRUE_VALUE);
+                    cmp  x(s), #(NIL_VALUE);
+                    csel x(d), x(sc), x(d), eq;
+                );
+            }
+            // dst <- (!src) ? true : false (Ruby bool). Destroys src; x9/x3 scratch.
+            LInst::NotToBool { dst, src } => {
+                let (d, s, sc) = (dst.a64().0, src.a64().0, GP::Rsi.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    mov  x9, #(0x10);
+                    orr  x(s), x(s), x9;
+                    mov  x(d), #(TRUE_VALUE);
+                    mov  x(sc), #(FALSE_VALUE);
+                    cmp  x(s), #(FALSE_VALUE);
+                    csel x(d), x(d), x(sc), eq;
+                );
+            }
+            // Math.sqrt: fcmp vs 0.0; NaN (unordered, Vs) -> sqrt, negative (Mi) -> deopt.
+            LInst::MathSqrt {
+                fsrc,
+                fret,
+                deopt,
+                base,
+            } => {
+                self.a64_fpr_into_d0(fsrc, base);
+                let do_sqrt = self.jit.label();
+                monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
+                self.jit.bcond_label(monoasm::Cond::Vs, &do_sqrt);
+                self.jit.bcond_label(monoasm::Cond::Mi, &deopt);
+                self.jit.bind_label(do_sqrt);
+                if let Some(fret) = fret {
+                    monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
+                    self.a64_d0_into_fpr(fret, base);
+                }
+            }
+            // Integer#succ: tagged +1 (= +2), deopt on signed overflow.
+            LInst::IntegerSucc { reg, deopt } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit, adds x(r), x(r), #(2u32););
+                self.jit.bcond_label(monoasm::Cond::Vs, &deopt);
+            }
+            // Kernel#block_given?: FALSE unless [LFP - LFP_BLOCK] is set & non-nil.
+            LInst::BlockGiven { dst } => {
+                let (d, lfp, rdi) = (dst.a64().0, GP::R14.a64().0, GP::Rdi.a64().0);
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x(d), #(FALSE_VALUE);
+                    sub x9, x(lfp), #(LFP_BLOCK as u32);
+                    ldr x(rdi), [x9];
+                    cbz x(rdi), exit;
+                    cmp x(rdi), #(NIL_VALUE);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+                monoasm_arm64!(&mut self.jit, mov x(d), #(TRUE_VALUE););
+                self.jit.bind_label(exit);
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3705,32 +3766,6 @@ impl Codegen {
         }
     }
 
-    /// Inlined `Math.sqrt`: `fsqrt` on the unboxed argument. NaN passes through
-    /// (`sqrt(NaN) == NaN`); a negative argument deopts so the interpreter
-    /// re-runs the builtin and raises DomainError (`-0.0` compares equal to
-    /// `0.0`, so it falls through and `fsqrt(-0.0) == -0.0`, as CRuby).
-    /// aarch64 twin of x86 `math_sqrt`'s inline body.
-    pub(crate) fn emit_math_sqrt(
-        &mut self,
-        src: FPReg,
-        dst: Option<FPReg>,
-        deopt: &DestLabel,
-        base: usize,
-    ) {
-        self.a64_fpr_into_d0(src, base);
-        let do_sqrt = self.jit.label();
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
-        self.jit.bcond_label(monoasm::Cond::Vs, &do_sqrt); // NaN (unordered) -> sqrt
-        self.jit.bcond_label(monoasm::Cond::Mi, &deopt); // negative -> deopt
-        self.jit.bind_label(do_sqrt);
-        if let Some(dst) = dst {
-            monoasm_arm64!(&mut self.jit, fsqrt d0, d0;);
-            self.a64_d0_into_fpr(dst, base);
-        }
-    }
-
-
     /// `Fiber.yield` with no args: the yielded value (Rsi/x3) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
         monoasm_arm64!(&mut self.jit,
@@ -3833,46 +3868,8 @@ impl Codegen {
     }
 
 
-    /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
-    /// eq→TRUE, ne→FALSE. Receiver in Rdi (x4) → Rax (x0).
-    pub(crate) fn emit_object_not(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            mov  x9, #(0x10);
-            orr  x4, x4, x9;            // GP::Rdi == x4
-            mov  x0, #(TRUE_VALUE);     // GP::Rax == x0
-            mov  x3, #(FALSE_VALUE);    // GP::Rsi == x3
-            cmp  x4, #(FALSE_VALUE);
-            csel x0, x0, x3, eq;        // eq -> TRUE, else FALSE
-        );
-    }
-
-    /// `Kernel#nil?`: receiver in Rdi (x4) → Rax (x0), nil→TRUE else FALSE.
-    pub(crate) fn emit_kernel_nil(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            mov  x0, #(FALSE_VALUE);    // GP::Rax == x0
-            mov  x3, #(TRUE_VALUE);     // GP::Rsi == x3
-            cmp  x4, #(NIL_VALUE);      // GP::Rdi == x4
-            csel x0, x3, x0, eq;        // nil -> TRUE, else FALSE
-        );
-    }
-
     /// `Kernel#block_given?`: the block slot at [LFP - LFP_BLOCK] is 0 or NIL
     /// when no block was passed. Result Value in Rax (x0).
-    pub(crate) fn emit_block_given(&mut self) {
-        let exit = self.jit.label();
-        monoasm_arm64!(&mut self.jit,
-            mov x0, #(FALSE_VALUE);             // GP::Rax == x0
-            sub x9, x22, #(LFP_BLOCK as u32);   // x22 == LFP (r14)
-            ldr x4, [x9];                       // block handle -> GP::Rdi
-            cbz x4, exit;
-            cmp x4, #(NIL_VALUE);
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
-        monoasm_arm64!(&mut self.jit,
-            mov x0, #(TRUE_VALUE);
-        );
-        self.jit.bind_label(exit);
-    }
 
     /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.
     /// Arrays store a short length inline (the `capa` field) and switch to a
@@ -4083,17 +4080,6 @@ impl Codegen {
         }
     }
 
-    /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
-    /// double with `scvtf`, and store into `fret`. aarch64 twin of x86
-    /// `integer_tof`'s `sarq` + `cvtsi2sdq` + `store_fpr_into_xmm`.
-    pub(crate) fn emit_int_to_float(&mut self, fret: FPReg, base: usize) {
-        let rdi = GP::Rdi.a64().0; // x4
-        monoasm_arm64!(&mut self.jit,
-            asr x(rdi), x(rdi), #(1);  // untag
-            scvtf d0, x(rdi);
-        );
-        self.a64_d0_into_fpr(fret, base);
-    }
 
     /// Inlined `Float#to_i`: truncate the double in `fsrc` to i64 (`fcvtzs`),
     /// then tag it as a fixnum. `fcvtzs` saturates out-of-range doubles to
@@ -4271,14 +4257,6 @@ impl Codegen {
     /// `Integer#succ` / `#next`: fixnum in Rdi (x4); tagged `+1` is `+2` on the
     /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum). aarch64
     /// twin of x86 `addq;jo`.
-    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
-        let rdi = GP::Rdi.a64().0; // x4
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit,
-            adds x(rdi), x(rdi), #(2u32);   // set NZCV
-        );
-        self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // overflow -> deopt
-    }
 
     /// `String#getbyte`: receiver String in Rdi (x4), fixnum index in Rsi (x3) →
     /// Rax (x0) = byte tagged as a fixnum, or nil when the (negative-adjusted)

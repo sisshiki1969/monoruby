@@ -357,7 +357,8 @@ fn kernel_nil(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| r#gen.emit_kernel_nil());
+        // Pure-LIR predicate (no arch-specific closure): Rax = (Rdi == nil).
+        ir.is_nil_to_bool(GP::Rax, GP::Rdi);
         state.def_rax2acc(ir, dst);
     }
     true
@@ -473,7 +474,8 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _, _| r#gen.emit_block_given());
+        // Pure-LIR Kernel#block_given? (no arch-specific closure).
+        ir.block_given(GP::Rax);
         state.def_rax2acc(ir, dst);
     }
 

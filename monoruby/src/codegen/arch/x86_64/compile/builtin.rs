@@ -9,18 +9,6 @@
 use super::*;
 
 impl Codegen {
-    /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
-    /// eq→TRUE, ne→FALSE. Receiver in rdi → rax.
-    pub(crate) fn emit_object_not(&mut self) {
-        monoasm! { &mut self.jit,
-            orq  rdi, (0x10);
-            movq rax, (TRUE_VALUE);
-            movq rsi, (FALSE_VALUE);
-            cmpq rdi, (FALSE_VALUE);
-            cmovneq rax, rsi;
-        }
-    }
-
     /// `BasicObject#object_id`: `i64_to_value(self_id)`; self id in rdi → rax.
     pub(crate) fn emit_object_id(&mut self) {
         monoasm! { &mut self.jit,
@@ -29,31 +17,6 @@ impl Codegen {
         }
     }
 
-    /// `Kernel#nil?`: receiver in rdi → rax, nil→TRUE else FALSE.
-    pub(crate) fn emit_kernel_nil(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, (FALSE_VALUE);
-            movq rsi, (TRUE_VALUE);
-            cmpq rdi, (NIL_VALUE);
-            cmoveqq rax, rsi;
-        }
-    }
-
-    /// `Kernel#block_given?`: the block slot at [r14 - LFP_BLOCK] is 0 or NIL
-    /// when no block was passed. Result Value in rax.
-    pub(crate) fn emit_block_given(&mut self) {
-        let exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            movq rax, (FALSE_VALUE);
-            movq rdi, [r14 - (LFP_BLOCK)];
-            testq rdi, rdi;
-            jz exit;
-            cmpq rdi, (NIL_VALUE);
-            jeq exit;
-            movq rax, (TRUE_VALUE);
-        exit:
-        }
-    }
 
     /// `String#getbyte`: receiver String in rdi, fixnum index in rsi →
     /// rax = byte tagged as a fixnum, or nil when the (negative-adjusted)
@@ -135,15 +98,6 @@ impl Codegen {
         }
     }
 
-    /// `Integer#succ` / `#next`: fixnum in rdi; tagged `+1` is `+2` on the
-    /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum).
-    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
-        monoasm! { &mut self.jit,
-            addq rdi, 2;
-            jo   deopt;
-        }
-    }
-
     /// `Hash#[]`: `hashindex(vm, globals, recv, key)`. recv in rdx, key in rcx.
     /// Result Value in rax (errors via the trailing HandleError).
     pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {
@@ -190,14 +144,6 @@ impl Codegen {
         }
     }
 
-    /// `Integer#to_f`: untag the fixnum in rdi, convert to double, store to fret.
-    pub(crate) fn emit_int_to_float(&mut self, fret: FPReg, base: usize) {
-        monoasm! { &mut self.jit,
-            sarq  rdi, 1;
-            cvtsi2sdq xmm0, rdi;
-        }
-        self.store_fpr_into_xmm(fret, base);
-    }
 
     /// `Float#to_i`: truncate `fsrc` to i64, tag as fixnum in rdi, deopt on
     /// out-of-fixnum overflow.
@@ -208,33 +154,6 @@ impl Codegen {
             addq  rdi, rdi;
             jo    deopt;
             orq   rdi, 1;
-        }
-    }
-
-    /// `Math.sqrt`: `sqrtsd` on `fsrc`; NaN passes through, a negative argument
-    /// deopts (the interpreter re-runs and raises DomainError).
-    pub(crate) fn emit_math_sqrt(
-        &mut self,
-        fsrc: FPReg,
-        fret: Option<FPReg>,
-        deopt: &DestLabel,
-        base: usize,
-    ) {
-        let do_sqrt = self.jit.label();
-        // ucomisd sets PF=1 for NaN and CF=1 for val < 0.
-        self.load_fpr_into_xmm0(fsrc, base);
-        monoasm!( &mut self.jit,
-            xorpd xmm1, xmm1;
-            ucomisd xmm0, xmm1;
-            jp do_sqrt;
-            jb deopt;
-        do_sqrt:
-        );
-        if let Some(fret) = fret {
-            monoasm!( &mut self.jit,
-                sqrtsd xmm0, xmm0;
-            );
-            self.store_fpr_into_xmm(fret, base);
         }
     }
 

@@ -1028,6 +1028,36 @@ impl AsmIr {
         self.inst.push(AsmInst::StringLenFixnum { dst, base });
     }
 
+    /// Emit `dst <- (src == nil)` as a Ruby bool `Value` (`Object#nil?`). Typed
+    /// alternative to `inline`; destroys the `GP::Rsi` scratch.
+    pub(crate) fn is_nil_to_bool(&mut self, dst: GP, src: GP) {
+        self.inst.push(AsmInst::IsNilToBool { dst, src });
+    }
+
+    /// Emit `dst <- !src` as a Ruby bool `Value` (`BasicObject#!`). Typed
+    /// alternative to `inline`; destroys `src` and the `GP::Rsi` scratch.
+    pub(crate) fn not_to_bool(&mut self, dst: GP, src: GP) {
+        self.inst.push(AsmInst::NotToBool { dst, src });
+    }
+
+    /// Emit `Math.sqrt`: `fret <- sqrt(fsrc)`, deopting on a negative argument.
+    /// Typed alternative to `inline`.
+    pub(crate) fn math_sqrt(&mut self, fsrc: FPReg, fret: Option<FPReg>, deopt: AsmDeopt) {
+        self.inst.push(AsmInst::MathSqrt { fsrc, fret, deopt });
+    }
+
+    /// Emit `Integer#succ`: `reg <- reg + 1` (tagged), deopting on overflow.
+    /// Typed alternative to `inline`.
+    pub(crate) fn integer_succ(&mut self, reg: GP, deopt: AsmDeopt) {
+        self.inst.push(AsmInst::IntegerSucc { reg, deopt });
+    }
+
+    /// Emit `Kernel#block_given?`: `dst <- (a block was passed)`. Typed
+    /// alternative to `inline`; destroys `GP::Rdi`.
+    pub(crate) fn block_given(&mut self, dst: GP) {
+        self.inst.push(AsmInst::BlockGiven { dst });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1609,6 +1639,45 @@ pub(super) enum AsmInst {
     StringLenFixnum {
         dst: GP,
         base: GP,
+    },
+    /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).
+    /// Typed replacement for the `emit_kernel_nil` closure. Uses `GP::Rsi` as a
+    /// scratch and destroys it; `dst`/`src` must not be `Rsi`. Lowers to
+    /// `LInst::IsNilToBool`.
+    IsNilToBool {
+        dst: GP,
+        src: GP,
+    },
+    /// `dst <- (!src) ? true : false` as a Ruby bool `Value` (`BasicObject#!`):
+    /// `true` when `src` is nil/false, else `false`. Typed replacement for the
+    /// `emit_object_not` closure. Destroys `src` and the `GP::Rsi` scratch.
+    /// Lowers to `LInst::NotToBool`.
+    NotToBool {
+        dst: GP,
+        src: GP,
+    },
+    /// `Math.sqrt`: `fret <- sqrt(fsrc)`, guarding the domain. NaN passes through
+    /// (`sqrt(NaN) = NaN`); a negative argument branches to `deopt` (the
+    /// interpreter re-runs and raises `Math::DomainError`); `-0.0` yields `-0.0`.
+    /// Typed replacement for the `emit_math_sqrt` closure. Carries the deopt as an
+    /// `AsmDeopt` (resolved to a label by the dispatcher, like `GuardClass`).
+    MathSqrt {
+        fsrc: FPReg,
+        fret: Option<FPReg>,
+        deopt: AsmDeopt,
+    },
+    /// `Integer#succ`: `reg <- reg + 1` on the tagged fixnum in `reg` (`+2` in
+    /// tagged form), branching to `deopt` on signed overflow (the interpreter
+    /// re-runs and promotes to Bignum). Typed replacement for `emit_integer_succ`.
+    IntegerSucc {
+        reg: GP,
+        deopt: AsmDeopt,
+    },
+    /// `Kernel#block_given?`: `dst <- (block slot is set and non-nil)` as a Ruby
+    /// bool `Value`. Reads `[LFP - LFP_BLOCK]`; destroys `GP::Rdi`. Typed
+    /// replacement for the `emit_block_given` closure. Lowers to `LInst::BlockGiven`.
+    BlockGiven {
+        dst: GP,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {

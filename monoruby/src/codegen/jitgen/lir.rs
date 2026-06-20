@@ -284,6 +284,21 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: GP,
         base: GP,
     },
+    /// `dst <- (src == nil) ? true : false` (Ruby bool `Value`). A macro-op
+    /// (compare to `NIL_VALUE` + conditional-select TRUE/FALSE; the select is the
+    /// per-arch part, x86 `cmov` / aarch64 `csel`). Uses `GP::Rsi` as scratch.
+    /// Replaces `emit_kernel_nil`.
+    IsNilToBool {
+        dst: GP,
+        src: GP,
+    },
+    /// `dst <- (!src) ? true : false` (Ruby bool `Value`): `or src,0x10` then
+    /// compare to `FALSE_VALUE` + conditional-select. Destroys `src` and the
+    /// `GP::Rsi` scratch. Replaces `emit_object_not`.
+    NotToBool {
+        dst: GP,
+        src: GP,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,
@@ -473,6 +488,29 @@ pub(in crate::codegen::jitgen) enum LInst {
         kind: UnOpK,
         dst: FPReg,
         base: usize,
+    },
+    /// `Math.sqrt`: `fret <- sqrt(fsrc)`, NaN passes through, a negative argument
+    /// branches to `deopt`. A macro-op (FP compare to 0 + NaN/negative branches +
+    /// `sqrtsd`/`fsqrt`); the condition-code mapping is the per-arch part (x86
+    /// `ucomisd`+`jp`/`jb`, aarch64 `fcmp`+`b.vs`/`b.mi`). Replaces `emit_math_sqrt`.
+    MathSqrt {
+        fsrc: FPReg,
+        fret: Option<FPReg>,
+        deopt: DestLabel,
+        base: usize,
+    },
+    /// `Integer#succ`: `reg += 2` (tagged-fixnum `+1`), branch to `deopt` on
+    /// signed overflow (x86 `add`+`jo`, aarch64 `adds`+`b.vs`). Replaces
+    /// `emit_integer_succ`.
+    IntegerSucc {
+        reg: GP,
+        deopt: DestLabel,
+    },
+    /// `Kernel#block_given?`: `dst <- (block slot set and non-nil)` as a Ruby
+    /// bool `Value`; reads `[LFP - LFP_BLOCK]` and destroys `GP::Rdi`. A macro-op
+    /// with a self-contained local exit label. Replaces `emit_block_given`.
+    BlockGiven {
+        dst: GP,
     },
     /// Float comparison producing a Ruby boolean in the accumulator. NaN
     /// compares false for every operator except `!=`; the encoder picks

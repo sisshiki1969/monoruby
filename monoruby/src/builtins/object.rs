@@ -191,7 +191,8 @@ fn object_not(
         }
     } else {
         state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _, _| r#gen.emit_object_not());
+        // Pure-LIR predicate (no arch-specific closure): Rax = !Rdi.
+        ir.not_to_bool(GP::Rax, GP::Rdi);
         state.def_rax2acc(ir, dst);
     }
     true

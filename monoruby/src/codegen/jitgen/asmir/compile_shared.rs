@@ -950,6 +950,31 @@ impl Codegen {
             AsmInst::StringLenFixnum { dst, base } => {
                 self.encode_linst(LInst::StringLenFixnum { dst, base })
             }
+            // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
+            AsmInst::IsNilToBool { dst, src } => {
+                self.encode_linst(LInst::IsNilToBool { dst, src })
+            }
+            AsmInst::NotToBool { dst, src } => {
+                self.encode_linst(LInst::NotToBool { dst, src })
+            }
+            // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
+            // deopt label and pass the frame base, like the guard family.
+            AsmInst::MathSqrt { fsrc, fret, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::MathSqrt {
+                    fsrc,
+                    fret,
+                    deopt,
+                    base: frame.base_stack_offset,
+                });
+            }
+            // `Integer#succ` (replaces `emit_integer_succ`): resolve the deopt.
+            AsmInst::IntegerSucc { reg, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::IntegerSucc { reg, deopt });
+            }
+            // `Kernel#block_given?` (replaces `emit_block_given`).
+            AsmInst::BlockGiven { dst } => self.encode_linst(LInst::BlockGiven { dst }),
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live fpr pool reg / out-of-range frame offset.

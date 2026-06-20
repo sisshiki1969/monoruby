@@ -704,12 +704,11 @@ fn math_sqrt(
     // re-execute the call via the regular builtin and raise DomainError.
     let deopt = ir.new_deopt(state);
     let fret = dst.map(|dst| state.def_F(dst));
-    ir.inline(move |r#gen, _, labels, base| {
-        // NaN passes through (sqrt(NaN) = NaN); negative values deopt (the
-        // interpreter re-runs and raises DomainError). -0.0 compares equal to
-        // 0.0, so it skips the deopt and yields -0.0 as CRuby does.
-        r#gen.emit_math_sqrt(fsrc, fret, &labels[deopt], base)
-    });
+    // Pure-LIR `Math.sqrt` (no arch-specific closure). NaN passes through
+    // (sqrt(NaN) = NaN); negative values deopt (the interpreter re-runs and
+    // raises DomainError). -0.0 compares equal to 0.0, so it skips the deopt and
+    // yields -0.0 as CRuby does.
+    ir.math_sqrt(fsrc, fret, deopt);
     true
 }
 

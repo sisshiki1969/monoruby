@@ -316,14 +316,36 @@ The remaining things handled **directly** (not through `encode_linst`):
     `String#bytesize` — one op each (differing only in the inline-cap constant,
     `ARRAY_INLINE_CAPA` vs `STRING_INLINE_CAP`), replacing the four
     `emit_array_size`/`emit_string_bytesize` emitters.
+  - **Fixnum → float** (`Integer#to_f`) → the *existing* `AsmIr::fixnum2fpr` →
+    `LInst::FixnumToFpr` op (untag + `cvtsi2sd`/`scvtf` straight into the result
+    fpr). No new primitive; deletes `emit_int_to_float` from both backends (and
+    drops a redundant `xmm0` round-trip the old emitter always did).
+  - **Bool predicates** (`Object#nil?`, `BasicObject#!`) → `AsmIr::is_nil_to_bool`
+    / `not_to_bool` → `LInst::IsNilToBool` / `NotToBool` (a macro-op: compare +
+    conditional-select TRUE/FALSE; the select is the per-arch part, `cmov`/`csel`).
+    Replaces the `emit_kernel_nil` / `emit_object_not` emitters.
   - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
     arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
     `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.
+  - **FP guard + op** (`Math.sqrt`) → `AsmIr::math_sqrt` → `LInst::MathSqrt`, a
+    macro-op carrying the deopt label (resolved by the dispatcher like
+    `GuardClass`). It encapsulates the per-arch domain guard (x86 `ucomisd` +
+    `jp`/`jb`, aarch64 `fcmp` + `b.vs`/`b.mi`) and the `sqrtsd`/`fsqrt` in one
+    encode arm per arch — so even a deopt-branching FP builtin migrates without a
+    closure (it does *not* declare `fpr_operands`, matching the prior opaque
+    `Inline`, so the spill-area sizing is unchanged; the fprs are accounted via
+    the surrounding `load_fpr`/`def_F`).
+  - **Integer guard + op** (`Integer#succ`) → `AsmIr::integer_succ` →
+    `LInst::IntegerSucc`, a macro-op carrying the deopt label (`add`+`jo` /
+    `adds`+`b.vs`, deopt → Bignum promotion). The integer analog of `MathSqrt`.
+  - **Control-flow predicate** (`Kernel#block_given?`) → `AsmIr::block_given` →
+    `LInst::BlockGiven`, a macro-op with a self-contained local exit label (reads
+    `[LFP - LFP_BLOCK]`). No external context needed.
 
-  What stays a closure is the genuinely arch-specific shapes — generators with
-  control flow whose condition-code mapping differs per arch (`Math.sqrt`'s
-  NaN/negative guard: x86 `ucomisd`+`jp`/`jb`, aarch64 `fcmp`+`fsqrt`), object
-  allocation, `send`, etc. Those need a few new FP/branch LIR primitives first.
+  What stays a closure is the genuinely complex shapes — object allocation,
+  `send`, `fiddle`, the remaining integer shift/division guards, `object_id`
+  (a runtime call). Several would still benefit from a couple of generic
+  FP/branch/call LIR primitives.
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:
