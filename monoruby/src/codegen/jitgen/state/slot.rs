@@ -1004,12 +1004,12 @@ impl SlotState {
                 Spill::Fpr(fpr, slot)
             }
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(guarded, _) => {
+            LinkMode::G(guarded, vreg) => {
                 // G -> S
                 assert_eq!(self.r15, Some(slot));
                 self.r15 = None;
                 self.set_mode(slot, LinkMode::S(guarded));
-                Spill::Acc(slot)
+                Spill::Reg(vreg.phys(), slot)
             }
             LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => Spill::None,
             LinkMode::V | LinkMode::None => {
@@ -1038,7 +1038,7 @@ impl SlotState {
         let spill = match self.mode(slot) {
             LinkMode::F(fpr) => Spill::Fpr(fpr, slot),
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(_, _) => Spill::Acc(slot),
+            LinkMode::G(_, vreg) => Spill::Reg(vreg.phys(), slot),
             LinkMode::Sf(_, _) | LinkMode::S(_) => Spill::None,
             LinkMode::V => Spill::Lit(Value::nil(), slot),
             LinkMode::MaybeNone | LinkMode::None => {
@@ -1604,8 +1604,11 @@ pub(in crate::codegen::jitgen) enum Spill {
     Fpr(FPReg, SlotId),
     /// `ir.lit2stack(value, slot)`
     Lit(Value, SlotId),
-    /// `ir.acc2stack(slot)`
-    Acc(SlotId),
+    /// Write back a `G`-slot's register to its stack home: `ir.reg2stack(reg,
+    /// slot)`. `reg` is the slot's register (`r15` for the accumulator — then
+    /// byte-identical to the old `acc2stack` — or a pool register once 9d places
+    /// it).
+    Reg(GP, SlotId),
 }
 
 impl Spill {
@@ -1614,7 +1617,7 @@ impl Spill {
             Spill::None => {}
             Spill::Fpr(fpr, slot) => ir.fpr2stack(fpr, slot),
             Spill::Lit(v, slot) => ir.lit2stack(v, slot),
-            Spill::Acc(slot) => ir.acc2stack(slot),
+            Spill::Reg(reg, slot) => ir.reg2stack(reg, slot),
         }
     }
 }

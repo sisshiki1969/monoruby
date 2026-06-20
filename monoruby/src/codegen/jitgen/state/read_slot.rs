@@ -98,8 +98,10 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
     Stack(SlotId, GP),
-    /// `reg_move(r15, dst)`
-    Acc(GP),
+    /// `G` slot resident in a GP register: `reg_move(src, dst)`. `src` is the
+    /// slot's register (`r15` for the accumulator, a pool register `r8`–`r11`
+    /// once 9d places it).
+    Reg(GP, GP),
 }
 
 impl GpLoad {
@@ -111,7 +113,7 @@ impl GpLoad {
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
             GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
-            GpLoad::Acc(dst) => ir.reg_move(GP::R15, dst),
+            GpLoad::Reg(src, dst) => ir.reg_move(src, dst),
         }
     }
 }
@@ -326,7 +328,7 @@ impl AbstractFrame {
                 }
                 GpLoad::Stack(slot, dst)
             }
-            LinkMode::G(_, _) => GpLoad::Acc(dst),
+            LinkMode::G(_, vreg) => GpLoad::Reg(vreg.phys(), dst),
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);

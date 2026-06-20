@@ -123,16 +123,15 @@ pub(in crate::codegen::jitgen) enum VReg {
 }
 
 impl VReg {
-    /// Resolve to the physical register at the encode seam. Identity on `Pinned`
-    /// (§9 9b). `Alloc` is unreachable until the 9d allocator is wired (no `Alloc`
-    /// VRegs are emitted yet), at which point this becomes a map-consulting
-    /// resolve that may also yield a spill slot.
+    /// Resolve to the physical register at the encode seam. `Pinned` is the
+    /// front-end's choice (identity); `Alloc(id)` resolves to its pool register
+    /// `GP_ALLOC_POOL[id]`. Unlike the FP file, GP has no separate spill file — a
+    /// slot "spills" to its own LFP home — so every `Alloc` id is in `0..POOL`
+    /// (the allocator guarantees the bound), and this stays total.
     pub(in crate::codegen::jitgen) fn phys(self) -> GP {
         match self {
             VReg::Pinned(gp) => gp,
-            VReg::Alloc(_) => {
-                unreachable!("GP allocator (§9 9d) not yet wired; no Alloc VRegs are emitted")
-            }
+            VReg::Alloc(id) => crate::codegen::GP_ALLOC_POOL[id as usize],
         }
     }
 }
