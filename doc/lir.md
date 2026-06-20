@@ -498,12 +498,41 @@ placed in the pool:
    Until the placement policy creates a `G(_, Alloc(_))` slot both lists are
    empty, so the fields, their `Hash`/`Debug`, and the write-back/flush loops
    are inert and the emitted bytes are unchanged.
-2. **Placement policy** *(next)*: choose which slots enter the pool (victim
+2. **Reserve the pool registers (x86-64)** *(done)*. The pool design above
+   assumed `r8`–`r11` were "otherwise-unused caller-saved scratch", but an audit
+   of the JIT-body lowerings found that is *not* true: `r8`–`r11` are the JIT's
+   **secondary scratch pool**, used freely once the primary scratch
+   (`rax/rcx/rdx/rsi/rdi`) runs out. To hold a value in a pool register *across*
+   instructions, no intervening lowering may clobber it — so the pool registers
+   must be reserved, exactly as the FP side reserves its xmm pool and confines
+   scratch to `xmm0/xmm1`.
+
+   The audit (in-scope: every `compile.rs` / `compile/*` / `guard.rs` lowering
+   that can run while a pool value is live; out of scope: `vmgen` = the VM
+   interpreter, `invoker`/`wrapper` = reached via a call boundary) found:
+   - `r10`, `r11`: unused in JIT-body code.
+   - `r9`: only `class_def`, a **post-flush** call-staging use (safe).
+   - `r8`: every use is **post-flush call-staging** (a method-send/define/store
+     sequence runs `writeback_acc` *first*, emptying the pool — so `r8` is free
+     there, the GP analogue of using the pool after `fpr_save`) **except one**:
+     `emit_string_setbyte`, a pure inline op that can execute with a pool value
+     live. That one was migrated off `r8` (tag scratch → `rcx`; negative-index
+     adjust → a sign branch instead of a cmov-through-scratch).
+
+   The **reservation invariant**: a JIT-body lowering may use `r8`–`r11` as
+   scratch *only* in a post-flush call-staging window (after `writeback_acc`,
+   where the pool is provably empty). Everywhere a pool value can be live, the
+   pool registers are off-limits. After the migration this holds for the whole
+   x86-64 backend. *(aarch64 pool reservation is pending: `GP::R8`–`R11` map to
+   `x5`–`x8`; that backend needs the same audit before placement targets it. The
+   `gp-alloc` feature is x86-first and off by default, so nothing places into the
+   aarch64 pool yet.)*
+3. **Placement policy** *(next)*: choose which slots enter the pool (victim
    selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`,
    within a call-free straight-line stretch (the flush at §1 bounds it).
-3. **Branch-merge reconciliation**: agree pool residency across control-flow
+4. **Branch-merge reconciliation**: agree pool residency across control-flow
    joins (or simply flush at every block boundary in the first cut).
-4. **M1 A/B bench gate** before the feature becomes default.
+5. **M1 A/B bench gate** before the feature becomes default.
 
 Note C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes
 it unnecessary — pool slots are always written back before a call.
