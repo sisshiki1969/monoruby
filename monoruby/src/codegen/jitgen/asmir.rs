@@ -1046,6 +1046,18 @@ impl AsmIr {
         self.inst.push(AsmInst::MathSqrt { fsrc, fret, deopt });
     }
 
+    /// Emit `Integer#succ`: `reg <- reg + 1` (tagged), deopting on overflow.
+    /// Typed alternative to `inline`.
+    pub(crate) fn integer_succ(&mut self, reg: GP, deopt: AsmDeopt) {
+        self.inst.push(AsmInst::IntegerSucc { reg, deopt });
+    }
+
+    /// Emit `Kernel#block_given?`: `dst <- (a block was passed)`. Typed
+    /// alternative to `inline`; destroys `GP::Rdi`.
+    pub(crate) fn block_given(&mut self, dst: GP) {
+        self.inst.push(AsmInst::BlockGiven { dst });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1653,6 +1665,19 @@ pub(super) enum AsmInst {
         fsrc: FPReg,
         fret: Option<FPReg>,
         deopt: AsmDeopt,
+    },
+    /// `Integer#succ`: `reg <- reg + 1` on the tagged fixnum in `reg` (`+2` in
+    /// tagged form), branching to `deopt` on signed overflow (the interpreter
+    /// re-runs and promotes to Bignum). Typed replacement for `emit_integer_succ`.
+    IntegerSucc {
+        reg: GP,
+        deopt: AsmDeopt,
+    },
+    /// `Kernel#block_given?`: `dst <- (block slot is set and non-nil)` as a Ruby
+    /// bool `Value`. Reads `[LFP - LFP_BLOCK]`; destroys `GP::Rdi`. Typed
+    /// replacement for the `emit_block_given` closure. Lowers to `LInst::BlockGiven`.
+    BlockGiven {
+        dst: GP,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {

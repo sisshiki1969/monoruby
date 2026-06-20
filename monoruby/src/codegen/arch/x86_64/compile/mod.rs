@@ -169,6 +169,8 @@ impl Codegen {
             | AsmInst::IsNilToBool { .. }
             | AsmInst::NotToBool { .. }
             | AsmInst::MathSqrt { .. }
+            | AsmInst::IntegerSucc { .. }
+            | AsmInst::BlockGiven { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -369,6 +371,29 @@ impl Codegen {
                     );
                     self.store_fpr_into_xmm(fret, base);
                 }
+            }
+            // Integer#succ: tagged +1 (= +2), deopt on signed overflow.
+            LInst::IntegerSucc { reg, deopt } => {
+                let r = reg as u64;
+                monoasm!( &mut self.jit,
+                    addq R(r), 2;
+                    jo   deopt;
+                );
+            }
+            // Kernel#block_given?: FALSE unless [r14 - LFP_BLOCK] is set & non-nil.
+            LInst::BlockGiven { dst } => {
+                let d = dst as u64;
+                let exit = self.jit.label();
+                monoasm!( &mut self.jit,
+                    movq R(d), (FALSE_VALUE);
+                    movq rdi, [r14 - (LFP_BLOCK)];
+                    testq rdi, rdi;
+                    jz exit;
+                    cmpq rdi, (NIL_VALUE);
+                    jeq exit;
+                    movq R(d), (TRUE_VALUE);
+                exit:
+                );
             }
             // [lfp - slot] <- src
             LInst::Store {

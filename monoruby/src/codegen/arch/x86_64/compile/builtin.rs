@@ -17,21 +17,6 @@ impl Codegen {
         }
     }
 
-    /// `Kernel#block_given?`: the block slot at [r14 - LFP_BLOCK] is 0 or NIL
-    /// when no block was passed. Result Value in rax.
-    pub(crate) fn emit_block_given(&mut self) {
-        let exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            movq rax, (FALSE_VALUE);
-            movq rdi, [r14 - (LFP_BLOCK)];
-            testq rdi, rdi;
-            jz exit;
-            cmpq rdi, (NIL_VALUE);
-            jeq exit;
-            movq rax, (TRUE_VALUE);
-        exit:
-        }
-    }
 
     /// `String#getbyte`: receiver String in rdi, fixnum index in rsi →
     /// rax = byte tagged as a fixnum, or nil when the (negative-adjusted)
@@ -110,15 +95,6 @@ impl Codegen {
         set_unknown:
             movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
         exit:
-        }
-    }
-
-    /// `Integer#succ` / `#next`: fixnum in rdi; tagged `+1` is `+2` on the
-    /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum).
-    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
-        monoasm! { &mut self.jit,
-            addq rdi, 2;
-            jo   deopt;
         }
     }
 

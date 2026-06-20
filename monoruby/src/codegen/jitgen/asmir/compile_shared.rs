@@ -968,6 +968,13 @@ impl Codegen {
                     base: frame.base_stack_offset,
                 });
             }
+            // `Integer#succ` (replaces `emit_integer_succ`): resolve the deopt.
+            AsmInst::IntegerSucc { reg, deopt } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::IntegerSucc { reg, deopt });
+            }
+            // `Kernel#block_given?` (replaces `emit_block_given`).
+            AsmInst::BlockGiven { dst } => self.encode_linst(LInst::BlockGiven { dst }),
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live fpr pool reg / out-of-range frame offset.

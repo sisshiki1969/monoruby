@@ -562,7 +562,8 @@ fn integer_succ(
 
     let deopt = ir.new_deopt(state);
     state.load(ir, recv, GP::Rdi);
-    ir.inline(move |r#gen, _, labels, _| r#gen.emit_integer_succ(&labels[deopt]));
+    // Pure-LIR Integer#succ (no arch-specific closure): tagged +1, deopt on overflow.
+    ir.integer_succ(GP::Rdi, deopt);
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
 }

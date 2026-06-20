@@ -335,11 +335,17 @@ The remaining things handled **directly** (not through `encode_linst`):
     closure (it does *not* declare `fpr_operands`, matching the prior opaque
     `Inline`, so the spill-area sizing is unchanged; the fprs are accounted via
     the surrounding `load_fpr`/`def_F`).
+  - **Integer guard + op** (`Integer#succ`) → `AsmIr::integer_succ` →
+    `LInst::IntegerSucc`, a macro-op carrying the deopt label (`add`+`jo` /
+    `adds`+`b.vs`, deopt → Bignum promotion). The integer analog of `MathSqrt`.
+  - **Control-flow predicate** (`Kernel#block_given?`) → `AsmIr::block_given` →
+    `LInst::BlockGiven`, a macro-op with a self-contained local exit label (reads
+    `[LFP - LFP_BLOCK]`). No external context needed.
 
   What stays a closure is the genuinely complex shapes — object allocation,
-  `send`, `fiddle`, the integer shift/division guards, `object_id`/`block_given?`
-  (runtime calls / control flow). Several would still benefit from a couple of
-  generic FP/branch/call LIR primitives.
+  `send`, `fiddle`, the remaining integer shift/division guards, `object_id`
+  (a runtime call). Several would still benefit from a couple of generic
+  FP/branch/call LIR primitives.
 - **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
   asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
   goes through LIR (above); what stays out is the part that **emits no bytes**:

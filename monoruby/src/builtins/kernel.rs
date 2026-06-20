@@ -474,7 +474,8 @@ fn kernel_block_given(
             state.def_C(dst, Immediate::bool(b));
         }
     } else {
-        ir.inline(|r#gen, _, _, _| r#gen.emit_block_given());
+        // Pure-LIR Kernel#block_given? (no arch-specific closure).
+        ir.block_given(GP::Rax);
         state.def_rax2acc(ir, dst);
     }
 

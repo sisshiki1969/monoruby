@@ -1547,6 +1547,27 @@ impl Codegen {
                     self.a64_d0_into_fpr(fret, base);
                 }
             }
+            // Integer#succ: tagged +1 (= +2), deopt on signed overflow.
+            LInst::IntegerSucc { reg, deopt } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit, adds x(r), x(r), #(2u32););
+                self.jit.bcond_label(monoasm::Cond::Vs, &deopt);
+            }
+            // Kernel#block_given?: FALSE unless [LFP - LFP_BLOCK] is set & non-nil.
+            LInst::BlockGiven { dst } => {
+                let (d, lfp, rdi) = (dst.a64().0, GP::R14.a64().0, GP::Rdi.a64().0);
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x(d), #(FALSE_VALUE);
+                    sub x9, x(lfp), #(LFP_BLOCK as u32);
+                    ldr x(rdi), [x9];
+                    cbz x(rdi), exit;
+                    cmp x(rdi), #(NIL_VALUE);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+                monoasm_arm64!(&mut self.jit, mov x(d), #(TRUE_VALUE););
+                self.jit.bind_label(exit);
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3849,21 +3870,6 @@ impl Codegen {
 
     /// `Kernel#block_given?`: the block slot at [LFP - LFP_BLOCK] is 0 or NIL
     /// when no block was passed. Result Value in Rax (x0).
-    pub(crate) fn emit_block_given(&mut self) {
-        let exit = self.jit.label();
-        monoasm_arm64!(&mut self.jit,
-            mov x0, #(FALSE_VALUE);             // GP::Rax == x0
-            sub x9, x22, #(LFP_BLOCK as u32);   // x22 == LFP (r14)
-            ldr x4, [x9];                       // block handle -> GP::Rdi
-            cbz x4, exit;
-            cmp x4, #(NIL_VALUE);
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
-        monoasm_arm64!(&mut self.jit,
-            mov x0, #(TRUE_VALUE);
-        );
-        self.jit.bind_label(exit);
-    }
 
     /// Length of the array whose pointer is in Rdi (x4) → Rax (x0), untagged.
     /// Arrays store a short length inline (the `capa` field) and switch to a
@@ -4251,14 +4257,6 @@ impl Codegen {
     /// `Integer#succ` / `#next`: fixnum in Rdi (x4); tagged `+1` is `+2` on the
     /// raw bits. Deopts on i63 overflow (interpreter returns a Bignum). aarch64
     /// twin of x86 `addq;jo`.
-    pub(crate) fn emit_integer_succ(&mut self, deopt: &DestLabel) {
-        let rdi = GP::Rdi.a64().0; // x4
-        let deopt = deopt.clone();
-        monoasm_arm64!(&mut self.jit,
-            adds x(rdi), x(rdi), #(2u32);   // set NZCV
-        );
-        self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // overflow -> deopt
-    }
 
     /// `String#getbyte`: receiver String in Rdi (x4), fixnum index in Rsi (x3) →
     /// Rax (x0) = byte tagged as a fixnum, or nil when the (negative-adjusted)

@@ -499,6 +499,19 @@ pub(in crate::codegen::jitgen) enum LInst {
         deopt: DestLabel,
         base: usize,
     },
+    /// `Integer#succ`: `reg += 2` (tagged-fixnum `+1`), branch to `deopt` on
+    /// signed overflow (x86 `add`+`jo`, aarch64 `adds`+`b.vs`). Replaces
+    /// `emit_integer_succ`.
+    IntegerSucc {
+        reg: GP,
+        deopt: DestLabel,
+    },
+    /// `Kernel#block_given?`: `dst <- (block slot set and non-nil)` as a Ruby
+    /// bool `Value`; reads `[LFP - LFP_BLOCK]` and destroys `GP::Rdi`. A macro-op
+    /// with a self-contained local exit label. Replaces `emit_block_given`.
+    BlockGiven {
+        dst: GP,
+    },
     /// Float comparison producing a Ruby boolean in the accumulator. NaN
     /// compares false for every operator except `!=`; the encoder picks
     /// NaN-correct condition codes per arch.
