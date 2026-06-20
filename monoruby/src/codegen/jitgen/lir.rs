@@ -97,31 +97,49 @@ impl From<GP> for LReg {
     }
 }
 
-/// A **virtual** general-purpose register (§9 9b).
+/// A **virtual** general-purpose register (§9 9b/9d).
 ///
-/// LIR is meant to carry virtual registers, with physical assignment deferred to
-/// a later arch-dependent phase (§9 9d) — exactly as `FPReg` already is for the
-/// floating-point file. `VReg` is the GP analogue. **Today the map is the
-/// identity**: the front-end still picks a concrete physical `GP` (the fixed VM
-/// calling convention — `Rdi` = receiver, `Rax` = result, `R15` = accumulator,
-/// …), and `VReg` carries it through unchanged, resolving back to the same `GP`
-/// at the encode seam (`phys()`). This only establishes the *type* boundary so a
-/// future allocator can be slotted in between buffering and emission without
-/// touching every `encode_linst` arm again.
+/// LIR carries virtual registers, with physical assignment deferred to a later
+/// arch-dependent phase — exactly as `FPReg` already is for the FP file. A `VReg`
+/// is one of two kinds:
+///
+/// - [`VReg::Pinned`] — a *pre-colored* physical `GP` the front-end chose: the
+///   fixed VM globals (acc=`R15`, lfp=`R14`, …) and the C-ABI / inline-builtin
+///   convention registers (`Rdi`=receiver, `Rax`=result, `Rsi`/`Rdx`/`Rcx`=call
+///   args). The allocator cannot move these.
+/// - [`VReg::Alloc`] — an *allocatable* virtual id, coloured by the 9d allocator
+///   into the [`GP_ALLOC_POOL`] (`r8`–`r11` on x86-64) or a frame spill slot.
+///   Pool registers are caller-saved, so any live across a C-ABI call are
+///   spilled/reloaded around it (as the FP side already does).
+///
+/// **Today the map is the identity** (9b): the front-end emits only `Pinned`, so
+/// `phys()` is total and byte-identical. 9d makes the front-end emit `Alloc` for
+/// cross-operation temporaries and replaces this seam with a map-consulting
+/// resolve (the GP analogue of `PhysMap::resolve` → `FPRegLoc`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::codegen::jitgen) struct VReg(GP);
+pub(in crate::codegen::jitgen) enum VReg {
+    Pinned(GP),
+    Alloc(u32),
+}
 
 impl VReg {
-    /// Resolve to the physical register. Identity for now (§9 9b); the seam
-    /// where the future GP allocator (§9 9d) maps a virtual id to a physical reg.
+    /// Resolve to the physical register at the encode seam. Identity on `Pinned`
+    /// (§9 9b). `Alloc` is unreachable until the 9d allocator is wired (no `Alloc`
+    /// VRegs are emitted yet), at which point this becomes a map-consulting
+    /// resolve that may also yield a spill slot.
     pub(in crate::codegen::jitgen) fn phys(self) -> GP {
-        self.0
+        match self {
+            VReg::Pinned(gp) => gp,
+            VReg::Alloc(_) => {
+                unreachable!("GP allocator (§9 9d) not yet wired; no Alloc VRegs are emitted")
+            }
+        }
     }
 }
 
 impl From<GP> for VReg {
     fn from(r: GP) -> Self {
-        VReg(r)
+        VReg::Pinned(r)
     }
 }
 
@@ -1120,8 +1138,8 @@ mod tests {
         assert!(matches!(
             lir.iter().next(),
             Some(LInst::Mov {
-                dst: VReg(GP::Rax),
-                src: VReg(GP::Rdi)
+                dst: VReg::Pinned(GP::Rax),
+                src: VReg::Pinned(GP::Rdi)
             })
         ));
     }
