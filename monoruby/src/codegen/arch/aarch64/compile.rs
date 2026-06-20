@@ -1472,6 +1472,16 @@ impl Codegen {
             } => {
                 self.a64_field_load(a64_lreg(dst), a64_lreg(base), disp as u32);
             }
+            // dst <- bool([base + disp]): 32-bit raw-bool field → Ruby bool Value.
+            // `lsl` clears the low 3 bits, so `add #FALSE_VALUE` == `orr`.
+            LInst::BoolFieldToReg { dst, base, disp } => {
+                let (d, b) = (dst.a64().0, base.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    ldr w(d), [x(b), #(disp as u32)];
+                    lsl x(d), x(d), #3;
+                    add x(d), x(d), #(FALSE_VALUE);
+                );
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3695,16 +3705,6 @@ impl Codegen {
         }
     }
 
-    /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, then add
-    /// FALSE_VALUE (whose bit 3 is clear, so `add` == `or`): 0→FALSE_VALUE,
-    /// 8→0x1c=TRUE_VALUE. Receiver in Rdi (x4) → Rax (x0).
-    pub(crate) fn emit_range_exclude_end(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr w0, [x4, #(crate::rvalue::RANGE_EXCLUDE_END_OFFSET as u32)];
-            lsl x0, x0, #3;
-            add x0, x0, #(FALSE_VALUE);
-        );
-    }
 
     /// `Fiber.yield` with no args: the yielded value (Rsi/x3) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
@@ -3807,15 +3807,6 @@ impl Codegen {
         );
     }
 
-    /// `Enumerator::ArithmeticSequence#exclude_end?`: same encoding as
-    /// `emit_range_exclude_end` but from the AS field.
-    pub(crate) fn emit_as_exclude_end(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldr w0, [x4, #(crate::rvalue::AS_EXCLUDE_END_OFFSET as u32)];
-            lsl x0, x0, #3;
-            add x0, x0, #(FALSE_VALUE);
-        );
-    }
 
     /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
     /// eq→TRUE, ne→FALSE. Receiver in Rdi (x4) → Rax (x0).

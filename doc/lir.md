@@ -297,11 +297,17 @@ The remaining things handled **directly** (not through `encode_linst`):
   once, arch-neutrally"). The migratable category is the *pure* generators —
   property/field readers and trivial C-function wrappers, whose codegen is one
   existing LIR op with no arch-specific control flow:
-  - **Field readers** → `AsmIr::load_field_to_reg` → `AsmInst::LoadFieldToReg`
-    → existing `LInst::Load { Field }` (no new op, byte-identical on both arches).
-    Done: `Range#begin/end` (hand-written `emit_range_begin/end` deleted) and
-    `ArithmeticSequence#begin/#end/#step` (via the shared `inline_field_load`
-    helper; hand-written `emit_load_value_field` deleted from both backends).
+  - **64-bit field readers** → `AsmIr::load_field_to_reg` →
+    `AsmInst::LoadFieldToReg` → existing `LInst::Load { Field }` (no new op,
+    byte-identical on both arches). Done: `Range#begin/end` (hand-written
+    `emit_range_begin/end` deleted) and `ArithmeticSequence#begin/#end/#step`
+    (via the shared `inline_field_load` helper; `emit_load_value_field` deleted
+    from both backends).
+  - **Bool field readers** → `AsmIr::bool_field_to_reg` →
+    `AsmInst::BoolFieldToReg` → `LInst::BoolFieldToReg` (a small macro-op:
+    32-bit load + `shl 3` + `or FALSE_VALUE`, deduping the two byte-identical
+    `emit_*_exclude_end` emitters into one encode arm per arch). Done:
+    `Range#exclude_end?`, `ArithmeticSequence#exclude_end?`.
   - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
     arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
     `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.

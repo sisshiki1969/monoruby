@@ -9,26 +9,6 @@
 use super::*;
 
 impl Codegen {
-    /// `Range#exclude_end?`: read the 0/1 flag, shift into bit 3, OR with
-    /// FALSE_VALUE so 0→FALSE_VALUE and 1→TRUE_VALUE. Receiver in rdi → rax.
-    pub(crate) fn emit_range_exclude_end(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rax, [rdi + (crate::rvalue::RANGE_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    }
-
-    /// `Enumerator::ArithmeticSequence#exclude_end?`: same encoding as
-    /// `emit_range_exclude_end` but from the AS field.
-    pub(crate) fn emit_as_exclude_end(&mut self) {
-        monoasm! { &mut self.jit,
-            movl rax, [rdi + (crate::rvalue::AS_EXCLUDE_END_OFFSET as i32)];
-            shlq rax, 3;
-            orq  rax, (FALSE_VALUE);
-        }
-    }
-
     /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
     /// eq→TRUE, ne→FALSE. Receiver in rdi → rax.
     pub(crate) fn emit_object_not(&mut self) {

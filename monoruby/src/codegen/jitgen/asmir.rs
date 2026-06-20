@@ -1006,6 +1006,13 @@ impl AsmIr {
         self.inst.push(AsmInst::LoadFieldToReg { dst, base, disp });
     }
 
+    /// Emit `dst <- bool([base + disp])`: load a 32-bit raw-bool field and
+    /// convert it to a Ruby `true`/`false` `Value`. Typed alternative to
+    /// `inline` for the `exclude_end?` field-reader inline builtins.
+    pub(crate) fn bool_field_to_reg(&mut self, dst: GP, base: GP, disp: i32) {
+        self.inst.push(AsmInst::BoolFieldToReg { dst, base, disp });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1559,6 +1566,16 @@ pub(super) enum AsmInst {
     /// so their codegen is expressed once in arch-neutral LIR rather than as
     /// per-arch hand-written asm. Lowers to `LInst::Load { mem: Field }`.
     LoadFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
+    /// `dst <- bool([base + disp])`: load a 32-bit raw-bool field of a heap
+    /// object and convert it to a Ruby `true`/`false` `Value` (`(b << 3) |
+    /// FALSE_VALUE`). A typed replacement for the `emit_*_exclude_end` closures
+    /// (`Range#exclude_end?`, `ArithmeticSequence#exclude_end?`), which were
+    /// byte-identical bar the offset. Lowers to `LInst::BoolFieldToReg`.
+    BoolFieldToReg {
         dst: GP,
         base: GP,
         disp: i32,

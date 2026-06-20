@@ -259,6 +259,16 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: LReg,
         mem: LMem,
     },
+    /// `dst <- bool([base + disp])`: zero-extend a 32-bit raw-bool object field
+    /// and convert it to a Ruby `true`/`false` `Value` (`(b << 3) |
+    /// FALSE_VALUE`). A small macro-op (32-bit load + shift + or, identical on
+    /// both arches bar the load encoding); replaces the per-arch
+    /// `emit_*_exclude_end` field-reader emitters.
+    BoolFieldToReg {
+        dst: GP,
+        base: GP,
+        disp: i32,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,

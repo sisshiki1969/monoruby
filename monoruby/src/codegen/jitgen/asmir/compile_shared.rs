@@ -938,6 +938,10 @@ impl Codegen {
                     disp,
                 },
             }),
+            // Typed bool-field load (replaces the `emit_*_exclude_end` closures).
+            AsmInst::BoolFieldToReg { dst, base, disp } => {
+                self.encode_linst(LInst::BoolFieldToReg { dst, base, disp })
+            }
             // ---- Class/module definition + misc runtime-call ops --------------
             // `class`/`module` (re)definition + body, and `class << obj`. aarch64
             // bails on a live fpr pool reg / out-of-range frame offset.

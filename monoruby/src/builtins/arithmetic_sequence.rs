@@ -201,7 +201,8 @@ fn as_exclude_end_inline(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_as_exclude_end());
+    // Pure-LIR bool-field read (no arch-specific closure), as `range_exclude_end`.
+    ir.bool_field_to_reg(GP::Rax, GP::Rdi, crate::rvalue::AS_EXCLUDE_END_OFFSET as i32);
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
