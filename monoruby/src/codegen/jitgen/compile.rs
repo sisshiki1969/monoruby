@@ -92,6 +92,11 @@ impl<'a> JitContext<'a> {
                     return Ok(ir);
                 }
                 CompileResult::Branch(dest_bb) => {
+                    // §9 9d-B: flush pool residents before the branch state is
+                    // recorded — the merge machinery is R15-only, so a successor
+                    // must never inherit a pool-resident (`Alloc`) slot.
+                    #[cfg(feature = "gp-alloc")]
+                    state.flush_pool(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
                 }
@@ -133,6 +138,10 @@ impl<'a> JitContext<'a> {
         }
 
         if !last {
+            // §9 9d-B: flush pool residents before the fall-through state is
+            // recorded for the next block (the merge machinery is R15-only).
+            #[cfg(feature = "gp-alloc")]
+            state.flush_pool(&mut ir);
             self.prepare_next(state, end)
         }
 
