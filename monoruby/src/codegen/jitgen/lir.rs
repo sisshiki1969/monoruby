@@ -894,6 +894,14 @@ impl Lir {
         self.insts.iter()
     }
 
+    /// Consume the buffer, yielding its `LInst`s in order. The drain point for
+    /// the two-phase pipeline (§9): a region is buffered, then replayed through
+    /// `encode_linst` here. (A later increment runs the physical-allocation pass
+    /// over the `Vec` between buffering and this drain.)
+    pub(in crate::codegen::jitgen) fn into_insts(self) -> Vec<LInst> {
+        self.insts
+    }
+
     pub(in crate::codegen::jitgen) fn push(&mut self, inst: LInst) -> &mut Self {
         self.insts.push(inst);
         self

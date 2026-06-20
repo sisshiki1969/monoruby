@@ -1,5 +1,5 @@
 use crate::bytecodegen::BinOpK;
-use crate::codegen::jitgen::lir::{LInst, LSideExitKind};
+use crate::codegen::jitgen::lir::{Lir, LInst, LSideExitKind};
 
 use super::*;
 
@@ -2294,11 +2294,18 @@ impl Codegen {
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
+        // §9 (9a, first brick): reify the isolated side-exit handler block into a
+        // whole-region `Lir` buffer, then drain it through `encode_linst` below
+        // instead of emitting each handler inline. Byte-identical (immediate
+        // drain, no allocation pass yet); the labels are still created eagerly so
+        // the main body can reference them. This is the seam the future
+        // physical-allocation pass slots into (between buffering and the drain).
+        let mut lir = Lir::new();
         for side_exit in ir.side_exit {
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Evict,
                         pc,
                         wb,
@@ -2314,7 +2321,7 @@ impl Codegen {
                         label.clone()
                     } else {
                         let label = self.jit.label();
-                        self.encode_linst(LInst::SideExit {
+                        lir.push(LInst::SideExit {
                             kind: LSideExitKind::Deopt,
                             pc: t.0,
                             wb: t.1.clone(),
@@ -2328,7 +2335,7 @@ impl Codegen {
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt { reason, position },
                         pc,
                         wb,
@@ -2340,7 +2347,7 @@ impl Codegen {
                 }
                 SideExit::Error(pc, wb) => {
                     let label = self.jit.label();
-                    self.encode_linst(LInst::SideExit {
+                    lir.push(LInst::SideExit {
                         kind: LSideExitKind::Error,
                         pc,
                         wb,
@@ -2353,6 +2360,9 @@ impl Codegen {
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
             side_exits.push(label);
+        }
+        for inst in lir.into_insts() {
+            self.encode_linst(inst);
         }
 
         if entry.is_some() && exit.is_some() {
