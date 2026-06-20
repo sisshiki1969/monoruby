@@ -326,7 +326,7 @@ impl AbstractFrame {
                 }
                 GpLoad::Stack(slot, dst)
             }
-            LinkMode::G(_) => GpLoad::Acc(dst),
+            LinkMode::G(_, _) => GpLoad::Acc(dst),
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
@@ -390,7 +390,7 @@ impl AbstractFrame {
         // snapshot. The guard-free `Sf`/`F`/`C` arms record no deopt, exactly as
         // before. The side-exit itself is materialized in the emit half.
         let deopt =
-            matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_)).then(|| self.deopt_point());
+            matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_, _)).then(|| self.deopt_point());
         let (x, load) = self.load_fpr_fixnum_state(slot);
         ir.transfer(TransferIR::FprFixnumLoad { load, slot, deopt });
         x
@@ -414,7 +414,7 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 (x, FprFixnumLoad::FromStack(x, guard))
             }
-            LinkMode::G(_) => {
+            LinkMode::G(_, _) => {
                 // G -> Sf
                 let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
@@ -476,7 +476,7 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
                 (x, FprLoad::FromStack(x))
             }
-            LinkMode::G(_) => {
+            LinkMode::G(_, _) => {
                 // -> Sf
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
                 (x, FprLoad::FromAcc(x))
@@ -528,7 +528,7 @@ impl AbstractFrame {
         ofs: i32,
     ) {
         match self.mode(slot) {
-            LinkMode::G(_) => {
+            LinkMode::G(_, _) => {
                 self.use_as_value(slot);
                 ir.reg2rsp_offset(GP::R15, ofs);
             }
