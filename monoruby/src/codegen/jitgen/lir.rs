@@ -59,15 +59,15 @@ use crate::bytecodegen::{BinOpK, UnOpK};
 /// The encoder folds an `Imm` into the instruction's immediate field when it
 /// fits, and materializes it into a scratch register otherwise — the same
 /// legalization story as `LMem` displacements.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::codegen::jitgen) enum LOperand {
-    Reg(GP),
+    Reg(VReg),
     Imm(i64),
 }
 
 impl From<GP> for LOperand {
     fn from(r: GP) -> Self {
-        LOperand::Reg(r)
+        LOperand::Reg(r.into())
     }
 }
 
@@ -85,15 +85,15 @@ impl From<i64> for LOperand {
 /// aarch64. There is deliberately no general-purpose name for these (aarch64's
 /// x9 is outside the `GP` enum's allocatable mapping), so they need their own
 /// operand kind.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::codegen::jitgen) enum LReg {
-    Gp(GP),
+    Gp(VReg),
     Scratch,
 }
 
 impl From<GP> for LReg {
     fn from(r: GP) -> Self {
-        LReg::Gp(r)
+        LReg::Gp(r.into())
     }
 }
 
@@ -342,15 +342,15 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- lhs <op> rhs`.
     Alu {
         op: LAluOp,
-        dst: GP,
-        lhs: GP,
+        dst: VReg,
+        lhs: VReg,
         rhs: LOperand,
     },
     /// Set condition flags from `lhs - rhs` (no result register written). The
     /// immediate of an `Imm` rhs is the operand's raw bit pattern (e.g. a tagged
     /// fixnum `Value`), compared against the raw register bits.
     Cmp {
-        lhs: GP,
+        lhs: VReg,
         rhs: LOperand,
     },
     /// Bind `label` at the current code position.
@@ -1041,8 +1041,8 @@ impl Lir {
     ) -> &mut Self {
         self.push(LInst::Alu {
             op,
-            dst,
-            lhs,
+            dst: dst.into(),
+            lhs: lhs.into(),
             rhs: rhs.into(),
         })
     }
@@ -1053,7 +1053,7 @@ impl Lir {
         rhs: impl Into<LOperand>,
     ) -> &mut Self {
         self.push(LInst::Cmp {
-            lhs,
+            lhs: lhs.into(),
             rhs: rhs.into(),
         })
     }

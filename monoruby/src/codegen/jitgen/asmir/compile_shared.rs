@@ -304,11 +304,11 @@ impl Codegen {
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
                 match mode {
                     OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs,
-                        rhs: LOperand::Reg(rhs),
+                        lhs: lhs.into(),
+                        rhs: rhs.into(),
                     }),
                     OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs,
+                        lhs: lhs.into(),
                         rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
                     }),
                     // imm on the left: materialize it into lhs, then compare
@@ -320,8 +320,8 @@ impl Codegen {
                             imm: Value::i32(i as i32).id(),
                         });
                         self.encode_linst(LInst::Cmp {
-                            lhs,
-                            rhs: LOperand::Reg(rhs),
+                            lhs: lhs.into(),
+                            rhs: rhs.into(),
                         });
                     }
                 }
@@ -633,14 +633,14 @@ impl Codegen {
             // reg += i / reg -= i (no-op when i == 0).
             AsmInst::RegAdd(reg, i) => self.encode_linst(LInst::Alu {
                 op: LAluOp::Add,
-                dst: reg,
-                lhs: reg,
+                dst: reg.into(),
+                lhs: reg.into(),
                 rhs: LOperand::Imm(i as i64),
             }),
             AsmInst::RegSub(reg, i) => self.encode_linst(LInst::Alu {
                 op: LAluOp::Sub,
-                dst: reg,
-                lhs: reg,
+                dst: reg.into(),
+                lhs: reg.into(),
                 rhs: LOperand::Imm(i as i64),
             }),
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than

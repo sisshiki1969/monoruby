@@ -17,7 +17,7 @@ use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LS
 /// pointer is `rdx`.
 fn x86_lreg(r: LReg) -> u64 {
     match r {
-        LReg::Gp(g) => g as u64,
+        LReg::Gp(v) => v.phys() as u64,
         LReg::Scratch => GP::Rdx as u64,
     }
 }
@@ -462,7 +462,7 @@ impl Codegen {
                 rhs: LOperand::Imm(i),
             } if dst == lhs => {
                 if i != 0 {
-                    let r = dst as u64;
+                    let r = dst.phys() as u64;
                     let imm = i as i32;
                     match op {
                         LAluOp::Add => monoasm! { &mut self.jit, addq R(r), (imm); },
@@ -477,9 +477,11 @@ impl Codegen {
             // pattern (a tagged fixnum), passed as u64 so the encoding matches
             // the hand-written `cmp_integer`.
             LInst::Cmp { lhs, rhs } => {
-                let l = lhs as u64;
+                let l = lhs.phys() as u64;
                 match rhs {
-                    LOperand::Reg(r) => monoasm! { &mut self.jit, cmpq R(l), R(r as u64); },
+                    LOperand::Reg(r) => {
+                        monoasm! { &mut self.jit, cmpq R(l), R(r.phys() as u64); }
+                    }
                     LOperand::Imm(i) => monoasm! { &mut self.jit, cmpq R(l), (i as u64); },
                 }
             }

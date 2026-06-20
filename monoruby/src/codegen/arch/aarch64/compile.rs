@@ -21,7 +21,7 @@ use crate::codegen::jitgen::lir::{
 /// pointer is `x9`.
 fn a64_lreg(r: LReg) -> u32 {
     match r {
-        LReg::Gp(g) => g.a64().0,
+        LReg::Gp(v) => v.phys().a64().0,
         LReg::Scratch => 9,
     }
 }
@@ -1627,9 +1627,9 @@ impl Codegen {
                 rhs: LOperand::Imm(i),
             } if dst == lhs => {
                 if i != 0 {
-                    let d = dst.a64().0;
+                    let d = dst.phys().a64().0;
                     let imm = i as u64;
-                    match (op, dst == GP::Rsp) {
+                    match (op, dst.phys() == GP::Rsp) {
                         (LAluOp::Add, false) => {
                             monoasm_arm64!(&mut self.jit, mov x9, (imm); add x(d), x(d), x9;)
                         }
@@ -1652,10 +1652,10 @@ impl Codegen {
             // fixnum bits) is staged through scratch x9, matching
             // `a64_cmp_integer`.
             LInst::Cmp { lhs, rhs } => {
-                let l = lhs.a64().0;
+                let l = lhs.phys().a64().0;
                 match rhs {
                     LOperand::Reg(r) => {
-                        let r = r.a64().0;
+                        let r = r.phys().a64().0;
                         monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
                     }
                     LOperand::Imm(i) => {
