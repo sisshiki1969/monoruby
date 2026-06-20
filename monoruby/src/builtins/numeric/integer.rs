@@ -603,7 +603,11 @@ fn integer_tof(
         // `496.to_f #=> NaN`.
         state.load(ir, recv, GP::Rdi);
         let fret = state.def_F(ret);
-        ir.inline(move |r#gen, _, _, base| r#gen.emit_int_to_float(fret, base));
+        // Pure-LIR fixnum→float (no arch-specific closure): untag Rdi and convert
+        // into the result fpr. Reuses the existing `FixnumToFpr` op, which writes
+        // straight into `fret`'s xmm (one fewer move than the old emitter's
+        // unconditional `xmm0` round-trip).
+        ir.fixnum2fpr(GP::Rdi, fret);
     }
     true
 }

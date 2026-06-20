@@ -166,6 +166,8 @@ impl Codegen {
             | AsmInst::BoolFieldToReg { .. }
             | AsmInst::ArrayLenFixnum { .. }
             | AsmInst::StringLenFixnum { .. }
+            | AsmInst::IsNilToBool { .. }
+            | AsmInst::NotToBool { .. }
             | AsmInst::ClassDef { .. }
             | AsmInst::SingletonClassDef { .. }
             | AsmInst::SetArgumentsForwardedHelper { .. }
@@ -320,6 +322,27 @@ impl Codegen {
                     cmovgtq R(d), [R(b) + (RVALUE_OFFSET_HEAP_LEN)];
                     salq R(d), 1;
                     orq  R(d), 1;
+                );
+            }
+            // dst <- (src == nil) ? true : false (Ruby bool). Rsi scratch.
+            LInst::IsNilToBool { dst, src } => {
+                let (d, s, sc) = (dst as u64, src as u64, GP::Rsi as u64);
+                monoasm!( &mut self.jit,
+                    movq R(d), (FALSE_VALUE);
+                    movq R(sc), (TRUE_VALUE);
+                    cmpq R(s), (NIL_VALUE);
+                    cmoveqq R(d), R(sc);
+                );
+            }
+            // dst <- (!src) ? true : false (Ruby bool). Destroys src; Rsi scratch.
+            LInst::NotToBool { dst, src } => {
+                let (d, s, sc) = (dst as u64, src as u64, GP::Rsi as u64);
+                monoasm!( &mut self.jit,
+                    orq  R(s), (0x10);
+                    movq R(d), (TRUE_VALUE);
+                    movq R(sc), (FALSE_VALUE);
+                    cmpq R(s), (FALSE_VALUE);
+                    cmovneq R(d), R(sc);
                 );
             }
             // [lfp - slot] <- src

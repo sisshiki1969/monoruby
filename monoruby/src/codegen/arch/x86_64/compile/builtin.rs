@@ -9,33 +9,11 @@
 use super::*;
 
 impl Codegen {
-    /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
-    /// eq→TRUE, ne→FALSE. Receiver in rdi → rax.
-    pub(crate) fn emit_object_not(&mut self) {
-        monoasm! { &mut self.jit,
-            orq  rdi, (0x10);
-            movq rax, (TRUE_VALUE);
-            movq rsi, (FALSE_VALUE);
-            cmpq rdi, (FALSE_VALUE);
-            cmovneq rax, rsi;
-        }
-    }
-
     /// `BasicObject#object_id`: `i64_to_value(self_id)`; self id in rdi → rax.
     pub(crate) fn emit_object_id(&mut self) {
         monoasm! { &mut self.jit,
             movq rax, (crate::executor::op::i64_to_value);
             call rax;
-        }
-    }
-
-    /// `Kernel#nil?`: receiver in rdi → rax, nil→TRUE else FALSE.
-    pub(crate) fn emit_kernel_nil(&mut self) {
-        monoasm! { &mut self.jit,
-            movq rax, (FALSE_VALUE);
-            movq rsi, (TRUE_VALUE);
-            cmpq rdi, (NIL_VALUE);
-            cmoveqq rax, rsi;
         }
     }
 
@@ -190,14 +168,6 @@ impl Codegen {
         }
     }
 
-    /// `Integer#to_f`: untag the fixnum in rdi, convert to double, store to fret.
-    pub(crate) fn emit_int_to_float(&mut self, fret: FPReg, base: usize) {
-        monoasm! { &mut self.jit,
-            sarq  rdi, 1;
-            cvtsi2sdq xmm0, rdi;
-        }
-        self.store_fpr_into_xmm(fret, base);
-    }
 
     /// `Float#to_i`: truncate `fsrc` to i64, tag as fixnum in rdi, deopt on
     /// out-of-fixnum overflow.

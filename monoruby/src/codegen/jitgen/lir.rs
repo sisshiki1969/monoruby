@@ -284,6 +284,21 @@ pub(in crate::codegen::jitgen) enum LInst {
         dst: GP,
         base: GP,
     },
+    /// `dst <- (src == nil) ? true : false` (Ruby bool `Value`). A macro-op
+    /// (compare to `NIL_VALUE` + conditional-select TRUE/FALSE; the select is the
+    /// per-arch part, x86 `cmov` / aarch64 `csel`). Uses `GP::Rsi` as scratch.
+    /// Replaces `emit_kernel_nil`.
+    IsNilToBool {
+        dst: GP,
+        src: GP,
+    },
+    /// `dst <- (!src) ? true : false` (Ruby bool `Value`): `or src,0x10` then
+    /// compare to `FALSE_VALUE` + conditional-select. Destroys `src` and the
+    /// `GP::Rsi` scratch. Replaces `emit_object_not`.
+    NotToBool {
+        dst: GP,
+        src: GP,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,

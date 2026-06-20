@@ -1507,6 +1507,28 @@ impl Codegen {
                     add x(d), x(d), #1;
                 );
             }
+            // dst <- (src == nil) ? true : false (Ruby bool). x3(Rsi) scratch.
+            LInst::IsNilToBool { dst, src } => {
+                let (d, s, sc) = (dst.a64().0, src.a64().0, GP::Rsi.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    mov  x(d), #(FALSE_VALUE);
+                    mov  x(sc), #(TRUE_VALUE);
+                    cmp  x(s), #(NIL_VALUE);
+                    csel x(d), x(sc), x(d), eq;
+                );
+            }
+            // dst <- (!src) ? true : false (Ruby bool). Destroys src; x9/x3 scratch.
+            LInst::NotToBool { dst, src } => {
+                let (d, s, sc) = (dst.a64().0, src.a64().0, GP::Rsi.a64().0);
+                monoasm_arm64!(&mut self.jit,
+                    mov  x9, #(0x10);
+                    orr  x(s), x(s), x9;
+                    mov  x(d), #(TRUE_VALUE);
+                    mov  x(sc), #(FALSE_VALUE);
+                    cmp  x(s), #(FALSE_VALUE);
+                    csel x(d), x(d), x(sc), eq;
+                );
+            }
             // [lfp - slot] <- src (legalized like `Load`).
             LInst::Store {
                 src,
@@ -3833,29 +3855,6 @@ impl Codegen {
     }
 
 
-    /// `BasicObject#!`: `recv | 0x10` is FALSE_VALUE iff recv is nil/false; map
-    /// eq→TRUE, ne→FALSE. Receiver in Rdi (x4) → Rax (x0).
-    pub(crate) fn emit_object_not(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            mov  x9, #(0x10);
-            orr  x4, x4, x9;            // GP::Rdi == x4
-            mov  x0, #(TRUE_VALUE);     // GP::Rax == x0
-            mov  x3, #(FALSE_VALUE);    // GP::Rsi == x3
-            cmp  x4, #(FALSE_VALUE);
-            csel x0, x0, x3, eq;        // eq -> TRUE, else FALSE
-        );
-    }
-
-    /// `Kernel#nil?`: receiver in Rdi (x4) → Rax (x0), nil→TRUE else FALSE.
-    pub(crate) fn emit_kernel_nil(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            mov  x0, #(FALSE_VALUE);    // GP::Rax == x0
-            mov  x3, #(TRUE_VALUE);     // GP::Rsi == x3
-            cmp  x4, #(NIL_VALUE);      // GP::Rdi == x4
-            csel x0, x3, x0, eq;        // nil -> TRUE, else FALSE
-        );
-    }
-
     /// `Kernel#block_given?`: the block slot at [LFP - LFP_BLOCK] is 0 or NIL
     /// when no block was passed. Result Value in Rax (x0).
     pub(crate) fn emit_block_given(&mut self) {
@@ -4083,17 +4082,6 @@ impl Codegen {
         }
     }
 
-    /// Inlined `Integer#to_f`: untag the tagged fixnum in Rdi (x4), convert to
-    /// double with `scvtf`, and store into `fret`. aarch64 twin of x86
-    /// `integer_tof`'s `sarq` + `cvtsi2sdq` + `store_fpr_into_xmm`.
-    pub(crate) fn emit_int_to_float(&mut self, fret: FPReg, base: usize) {
-        let rdi = GP::Rdi.a64().0; // x4
-        monoasm_arm64!(&mut self.jit,
-            asr x(rdi), x(rdi), #(1);  // untag
-            scvtf d0, x(rdi);
-        );
-        self.a64_d0_into_fpr(fret, base);
-    }
 
     /// Inlined `Float#to_i`: truncate the double in `fsrc` to i64 (`fcvtzs`),
     /// then tag it as a fixnum. `fcvtzs` saturates out-of-range doubles to

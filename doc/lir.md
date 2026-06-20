@@ -316,6 +316,14 @@ The remaining things handled **directly** (not through `encode_linst`):
     `String#bytesize` — one op each (differing only in the inline-cap constant,
     `ARRAY_INLINE_CAPA` vs `STRING_INLINE_CAP`), replacing the four
     `emit_array_size`/`emit_string_bytesize` emitters.
+  - **Fixnum → float** (`Integer#to_f`) → the *existing* `AsmIr::fixnum2fpr` →
+    `LInst::FixnumToFpr` op (untag + `cvtsi2sd`/`scvtf` straight into the result
+    fpr). No new primitive; deletes `emit_int_to_float` from both backends (and
+    drops a redundant `xmm0` round-trip the old emitter always did).
+  - **Bool predicates** (`Object#nil?`, `BasicObject#!`) → `AsmIr::is_nil_to_bool`
+    / `not_to_bool` → `LInst::IsNilToBool` / `NotToBool` (a macro-op: compare +
+    conditional-select TRUE/FALSE; the select is the per-arch part, `cmov`/`csel`).
+    Replaces the `emit_kernel_nil` / `emit_object_not` emitters.
   - **C-function wrappers** (e.g. `Math.sin/cos/atan2`, `Float#**`) are *already*
     arch-neutral: they route through the typed `AsmInst::CFunc_F_F` /
     `CFunc_FF_F` (→ existing `LInst::CFunc_*`), not the closure escape hatch.

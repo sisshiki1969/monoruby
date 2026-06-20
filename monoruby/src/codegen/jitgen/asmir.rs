@@ -1028,6 +1028,18 @@ impl AsmIr {
         self.inst.push(AsmInst::StringLenFixnum { dst, base });
     }
 
+    /// Emit `dst <- (src == nil)` as a Ruby bool `Value` (`Object#nil?`). Typed
+    /// alternative to `inline`; destroys the `GP::Rsi` scratch.
+    pub(crate) fn is_nil_to_bool(&mut self, dst: GP, src: GP) {
+        self.inst.push(AsmInst::IsNilToBool { dst, src });
+    }
+
+    /// Emit `dst <- !src` as a Ruby bool `Value` (`BasicObject#!`). Typed
+    /// alternative to `inline`; destroys `src` and the `GP::Rsi` scratch.
+    pub(crate) fn not_to_bool(&mut self, dst: GP, src: GP) {
+        self.inst.push(AsmInst::NotToBool { dst, src });
+    }
+
     pub(crate) fn bc_index(&mut self, index: BcIndex) {
         self.push(AsmInst::BcIndex(index));
     }
@@ -1609,6 +1621,22 @@ pub(super) enum AsmInst {
     StringLenFixnum {
         dst: GP,
         base: GP,
+    },
+    /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).
+    /// Typed replacement for the `emit_kernel_nil` closure. Uses `GP::Rsi` as a
+    /// scratch and destroys it; `dst`/`src` must not be `Rsi`. Lowers to
+    /// `LInst::IsNilToBool`.
+    IsNilToBool {
+        dst: GP,
+        src: GP,
+    },
+    /// `dst <- (!src) ? true : false` as a Ruby bool `Value` (`BasicObject#!`):
+    /// `true` when `src` is nil/false, else `false`. Typed replacement for the
+    /// `emit_object_not` closure. Destroys `src` and the `GP::Rsi` scratch.
+    /// Lowers to `LInst::NotToBool`.
+    NotToBool {
+        dst: GP,
+        src: GP,
     },
     #[allow(non_camel_case_types)]
     CFunc_F_F {
