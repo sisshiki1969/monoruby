@@ -140,6 +140,13 @@ pub(crate) struct WriteBack {
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     r15: Option<SlotId>,
+    /// §9 9d-B: slots resident in the allocatable GP pool (x86-64 `r8`–`r11`),
+    /// each paired with the physical register holding it. Written back to the
+    /// slot's frame home at every flush / deopt / GC safepoint, exactly like
+    /// `r15` (the dedicated accumulator) but for the pool registers. Empty until
+    /// the GP allocator (the `gp-alloc` feature) places a slot, so shipping
+    /// builds carry an always-empty vec and emit byte-identical code.
+    gp: Vec<(GP, SlotId)>,
     /// Deferred forwarding-rest materialization (D1). Each entry
     /// `(dst, src, len)`: the rest-parameter slot `dst` of a
     /// forwarding-trampoline frame was *not* materialized as an `Array`
@@ -169,6 +176,10 @@ impl Hash for WriteBack {
         if let Some(slot) = self.r15 {
             slot.hash(state);
         }
+        for (reg, slot) in &self.gp {
+            reg.hash(state);
+            slot.hash(state);
+        }
         for (dst, src, len) in &self.forward_rest {
             dst.hash(state);
             src.hash(state);
@@ -195,6 +206,9 @@ impl std::fmt::Debug for WriteBack {
         if let Some(slot) = self.r15 {
             s.push_str(&format!(" R15->{:?}", slot));
         }
+        for (reg, slot) in &self.gp {
+            s.push_str(&format!(" {:?}->{:?}", reg, slot));
+        }
         for (dst, src, len) in &self.forward_rest {
             s.push_str(&format!(" fwdrest[{:?};{}]->{:?}", src, len, dst));
         }
@@ -208,6 +222,7 @@ impl WriteBack {
         literal: Vec<(Value, SlotId)>,
         r15: Option<SlotId>,
         void: Vec<SlotId>,
+        gp: Vec<(GP, SlotId)>,
         forward_rest: Vec<(SlotId, SlotId, u16)>,
     ) -> Self {
         Self {
@@ -215,6 +230,7 @@ impl WriteBack {
             literal,
             r15,
             void,
+            gp,
             forward_rest,
         }
     }
@@ -864,8 +880,13 @@ impl JitModule {
             self.literal_to_stack(*slot, Value::nil());
         }
         if let Some(slot) = wb.r15 {
-            monoasm! { self,
+            monoasm! { &mut *self,
                 movq [rbp - (rbp_local(slot))], r15;
+            }
+        }
+        for (reg, slot) in &wb.gp {
+            monoasm! { &mut *self,
+                movq [rbp - (rbp_local(*slot))], R(*reg as _);
             }
         }
     }
@@ -894,6 +915,11 @@ impl JitModule {
         if let Some(slot) = wb.r15 {
             monoasm! { &mut *self,
                 movq [r14 - (conv(slot))], r15;
+            }
+        }
+        for (reg, slot) in &wb.gp {
+            monoasm! { &mut *self,
+                movq [r14 - (conv(*slot))], R(*reg as _);
             }
         }
         // D1: materialize deferred forwarding-rest arrays. Runs last so

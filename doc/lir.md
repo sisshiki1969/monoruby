@@ -470,3 +470,29 @@ re-loading them from the LFP each use.
 
 9a/9b are byte-identical refactors (safe to land once verified); 9c/9d are the
 substantive allocator work and stay behind a flag until the bench gate clears.
+
+### 9d placement build order
+
+The placement phase (filling `gp_alloc`, colouring `VReg::Alloc` into pool
+registers, and keeping the frame consistent) is built as a sequence of
+feature-gated (`gp-alloc`) increments, each byte-identical while no slot is yet
+placed in the pool:
+
+1. **Write-back pool-support** *(done)*. `WriteBack` carries a `gp:
+   Vec<(GP, SlotId)>` list — the pool-resident slots and their physical
+   registers — alongside the single `r15` accumulator. Every flush / deopt / GC
+   safepoint write-back (`gen_write_back`, `gen_write_back_for_deopt`,
+   `a64_gen_write_back_for_deopt`) stores each pool register to its slot's frame
+   home, exactly as it already does for `r15`. The producer (`wb_gp`) scans for
+   slots in mode `G(_, VReg::Alloc(_))`; until the placement policy creates such
+   a slot the list is always empty, so the field, its `Hash`/`Debug`, and the
+   write-back loops are inert and the emitted bytes are unchanged. This is the
+   prerequisite that makes a pool-resident value survive a flush/deopt before
+   the placement *trigger* exists.
+2. **Placement policy** *(next)*: choose which slots enter the pool (victim
+   selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`.
+3. **C-ABI call-save**: spill live pool registers across runtime calls (the GP
+   analogue of `fpr_save` / `fpr_restore`).
+4. **Branch-merge reconciliation**: agree pool residency across control-flow
+   joins.
+5. **M1 A/B bench gate** before the feature becomes default.

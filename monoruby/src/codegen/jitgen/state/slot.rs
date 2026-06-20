@@ -1459,7 +1459,11 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        WriteBack::new(vec![], literal, self.r15, void, vec![])
+        #[cfg(feature = "gp-alloc")]
+        let gp = self.wb_gp(|_| true);
+        #[cfg(not(feature = "gp-alloc"))]
+        let gp = vec![];
+        WriteBack::new(vec![], literal, self.r15, void, gp, vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
@@ -1470,7 +1474,11 @@ impl AbstractFrame {
             Some(slot) if f(slot) => Some(slot),
             _ => None,
         };
-        WriteBack::new(fpr, literal, r15, vec![], self.wb_forward_rest())
+        #[cfg(feature = "gp-alloc")]
+        let gp = self.wb_gp(f);
+        #[cfg(not(feature = "gp-alloc"))]
+        let gp = vec![];
+        WriteBack::new(fpr, literal, r15, vec![], gp, self.wb_forward_rest())
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
@@ -1533,6 +1541,21 @@ impl AbstractFrame {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
                 LinkMode::V => Some(idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// §9 9d-B: collect the slots resident in the allocatable GP pool
+    /// (`VReg::Alloc`), each paired with its physical pool register. The
+    /// dedicated accumulator (`VReg::Pinned(R15)`) is *not* included — it is
+    /// written back separately via `self.r15`. Empty until the allocator places
+    /// a slot in the pool.
+    #[cfg(feature = "gp-alloc")]
+    fn wb_gp(&self, f: impl Fn(SlotId) -> bool) -> Vec<(GP, SlotId)> {
+        self.all_regs()
+            .filter_map(|idx| match self.mode(idx) {
+                LinkMode::G(_, vreg @ VReg::Alloc(_)) if f(idx) => Some((vreg.phys(), idx)),
                 _ => None,
             })
             .collect()
