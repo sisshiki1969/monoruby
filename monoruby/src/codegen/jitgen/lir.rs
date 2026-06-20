@@ -97,6 +97,34 @@ impl From<GP> for LReg {
     }
 }
 
+/// A **virtual** general-purpose register (§9 9b).
+///
+/// LIR is meant to carry virtual registers, with physical assignment deferred to
+/// a later arch-dependent phase (§9 9d) — exactly as `FPReg` already is for the
+/// floating-point file. `VReg` is the GP analogue. **Today the map is the
+/// identity**: the front-end still picks a concrete physical `GP` (the fixed VM
+/// calling convention — `Rdi` = receiver, `Rax` = result, `R15` = accumulator,
+/// …), and `VReg` carries it through unchanged, resolving back to the same `GP`
+/// at the encode seam (`phys()`). This only establishes the *type* boundary so a
+/// future allocator can be slotted in between buffering and emission without
+/// touching every `encode_linst` arm again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) struct VReg(GP);
+
+impl VReg {
+    /// Resolve to the physical register. Identity for now (§9 9b); the seam
+    /// where the future GP allocator (§9 9d) maps a virtual id to a physical reg.
+    pub(in crate::codegen::jitgen) fn phys(self) -> GP {
+        self.0
+    }
+}
+
+impl From<GP> for VReg {
+    fn from(r: GP) -> Self {
+        VReg(r)
+    }
+}
+
 /// `LirEncode` implementation legalizes them (immediate field vs.
 /// scratch-register materialization) when lowering.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -244,14 +272,15 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 #[derive(Debug)]
 pub(in crate::codegen::jitgen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
+    /// (§9 9b) carries virtual GP registers; the encoder resolves them.
     Mov {
-        dst: GP,
-        src: GP,
+        dst: VReg,
+        src: VReg,
     },
     /// `dst <- imm` — materialize a full 64-bit immediate (e.g. a tagged
     /// `Value`'s bit pattern) into a register.
     LoadImm {
-        dst: GP,
+        dst: VReg,
         imm: u64,
     },
     /// `dst <- [mem]`. `dst` may be the scratch pointer (intermediate deref).
@@ -971,11 +1000,17 @@ impl Lir {
     }
 
     pub(in crate::codegen::jitgen) fn mov(&mut self, dst: GP, src: GP) -> &mut Self {
-        self.push(LInst::Mov { dst, src })
+        self.push(LInst::Mov {
+            dst: dst.into(),
+            src: src.into(),
+        })
     }
 
     pub(in crate::codegen::jitgen) fn load_imm(&mut self, dst: GP, imm: u64) -> &mut Self {
-        self.push(LInst::LoadImm { dst, imm })
+        self.push(LInst::LoadImm {
+            dst: dst.into(),
+            imm,
+        })
     }
 
     pub(in crate::codegen::jitgen) fn load(
@@ -1085,8 +1120,8 @@ mod tests {
         assert!(matches!(
             lir.iter().next(),
             Some(LInst::Mov {
-                dst: GP::Rax,
-                src: GP::Rdi
+                dst: VReg(GP::Rax),
+                src: VReg(GP::Rdi)
             })
         ));
     }

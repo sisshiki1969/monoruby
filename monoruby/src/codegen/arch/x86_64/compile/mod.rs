@@ -262,6 +262,7 @@ impl Codegen {
         match inst {
             // dst <- src (elided when src == dst)
             LInst::Mov { dst, src } => {
+                let (src, dst) = (src.phys(), dst.phys());
                 if src != dst {
                     let (src, dst) = (src as u64, dst as u64);
                     monoasm!( &mut self.jit,
@@ -271,7 +272,7 @@ impl Codegen {
             }
             // dst <- imm (full 64-bit immediate; x86 movq r64, imm64)
             LInst::LoadImm { dst, imm } => {
-                let r = dst as u64;
+                let r = dst.phys() as u64;
                 monoasm!( &mut self.jit,
                     movq R(r), (imm);
                 );

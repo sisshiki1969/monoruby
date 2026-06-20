@@ -45,11 +45,14 @@ impl Codegen {
                 self.jit.bind_label(label);
             }
             // dst <- src
-            AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov { dst, src }),
+            AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov {
+                dst: dst.into(),
+                src: src.into(),
+            }),
             // acc <- reg
             AsmInst::RegToAcc(r) => self.encode_linst(LInst::Mov {
-                dst: GP::R15,
-                src: r,
+                dst: GP::R15.into(),
+                src: r.into(),
             }),
             // [slot] <- acc
             AsmInst::AccToStack(slot) => self.encode_linst(LInst::Store {
@@ -68,7 +71,7 @@ impl Codegen {
             }),
             // reg <- literal Value (immediate)
             AsmInst::LitToReg(v, r) => self.encode_linst(LInst::LoadImm {
-                dst: r,
+                dst: r.into(),
                 imm: v.id(),
             }),
             // [slot] <- literal Value. The encoder legalizes the immediate
@@ -313,7 +316,7 @@ impl Codegen {
                     // lhs).
                     OpMode::IR(i, _) => {
                         self.encode_linst(LInst::LoadImm {
-                            dst: lhs,
+                            dst: lhs.into(),
                             imm: Value::i32(i as i32).id(),
                         });
                         self.encode_linst(LInst::Cmp {
@@ -579,8 +582,8 @@ impl Codegen {
                     value: src,
                 });
                 self.encode_linst(LInst::Mov {
-                    dst: GP::Rax,
-                    src,
+                    dst: GP::Rax.into(),
+                    src: src.into(),
                 });
             }
             // Heap (Box-spilled) Struct member access: deref the heap buffer
@@ -623,8 +626,8 @@ impl Codegen {
                     },
                 });
                 self.encode_linst(LInst::Mov {
-                    dst: GP::Rax,
-                    src,
+                    dst: GP::Rax.into(),
+                    src: src.into(),
                 });
             }
             // reg += i / reg -= i (no-op when i == 0).

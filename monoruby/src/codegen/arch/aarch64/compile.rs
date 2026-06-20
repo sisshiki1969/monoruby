@@ -1441,7 +1441,7 @@ impl Codegen {
         match inst {
             // dst <- src (elided when the physical registers coincide)
             LInst::Mov { dst, src } => {
-                let (s, d) = (src.a64().0, dst.a64().0);
+                let (s, d) = (src.phys().a64().0, dst.phys().a64().0);
                 if s != d {
                     monoasm_arm64!(&mut self.jit, mov x(d), x(s););
                 }
@@ -1449,7 +1449,7 @@ impl Codegen {
             // dst <- imm (monoasm_arm64! expands a 64-bit immediate to the
             // movz/movk sequence as needed)
             LInst::LoadImm { dst, imm } => {
-                let d = dst.a64().0;
+                let d = dst.phys().a64().0;
                 monoasm_arm64!(&mut self.jit, mov x(d), (imm););
             }
             // dst <- [lfp - slot]. `a64_frame_load` legalizes the (negative)
