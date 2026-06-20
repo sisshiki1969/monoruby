@@ -241,6 +241,85 @@ impl FprAllocator {
     }
 }
 
+/// §9 9d-B: GP-pool allocation state — the [`FprAllocator`] analogue for the
+/// allocatable GP pool ([`crate::codegen::GP_ALLOC_POOL`], x86-64 `r8`–`r11`).
+///
+/// `vgp[i]` lists the slots whose value currently resides at allocation id `i`:
+/// `i < POOL` → physical pool register `GP_ALLOC_POOL[i]`; `i >= POOL` → frame
+/// spill slot `i - POOL` (mirroring the FP `id < PHYS_FPR_POOL` ? xmm : spill
+/// split). A `VReg::Alloc(i)` is coloured by resolving `i` through this table.
+///
+/// B2.1 establishes the table; the placement policy (B2.2) and codegen (B2.3)
+/// populate and consume it. Inert until then — no `Alloc` VRegs are emitted.
+#[cfg(feature = "gp-alloc")]
+#[allow(dead_code)]
+#[derive(Clone, Default)]
+pub(super) struct GpAllocator {
+    vgp: Vec<Vec<SlotId>>,
+    /// pool registers that must not be reused by allocation until unpinned.
+    pinned: Vec<VReg>,
+}
+
+#[cfg(feature = "gp-alloc")]
+#[allow(dead_code)]
+impl GpAllocator {
+    fn new() -> Self {
+        Self {
+            vgp: (0..crate::codegen::GP_ALLOC_POOL.len())
+                .map(|_| vec![])
+                .collect(),
+            pinned: Vec::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.vgp.len()
+    }
+
+    fn slots(&self, id: usize) -> &[SlotId] {
+        &self.vgp[id]
+    }
+
+    fn is_vacant(&self, id: usize) -> bool {
+        self.vgp[id].is_empty()
+    }
+
+    fn is_pinned(&self, reg: VReg) -> bool {
+        self.pinned.contains(&reg)
+    }
+
+    fn add(&mut self, slot: SlotId, id: usize) {
+        self.vgp[id].push(slot);
+    }
+
+    fn remove(&mut self, slot: SlotId, id: usize) {
+        self.vgp[id].retain(|e| *e != slot);
+    }
+
+    fn clear(&mut self, id: usize) {
+        self.vgp[id].clear();
+    }
+
+    /// Append a fresh spill slot beyond the physical pool and return its id.
+    fn push_spill(&mut self) -> usize {
+        let new_id = self.vgp.len();
+        self.vgp.push(vec![]);
+        new_id
+    }
+
+    fn pin(&mut self, reg: VReg) {
+        if !self.pinned.contains(&reg) {
+            self.pinned.push(reg);
+        }
+    }
+
+    fn unpin(&mut self, reg: VReg) {
+        if let Some(pos) = self.pinned.iter().position(|x| *x == reg) {
+            self.pinned.swap_remove(pos);
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
     /// Per-slot location / representation (the `LinkMode` split into its two
@@ -253,6 +332,10 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
+    /// §9 9d-B: GP-pool allocation state (the `fpr_alloc` analogue). Inert in
+    /// B2.1; populated by the allocator (B2.2+).
+    #[cfg(feature = "gp-alloc")]
+    gp_alloc: GpAllocator,
     r15: Option<SlotId>,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
@@ -293,6 +376,8 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
+            #[cfg(feature = "gp-alloc")]
+            gp_alloc: GpAllocator::new(),
             r15: None,
             local_num,
             deferred_rest: None,
