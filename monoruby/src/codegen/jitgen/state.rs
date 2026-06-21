@@ -273,9 +273,14 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
+            // §9 9d-B accumulator register file: put the result straight into a
+            // free pool register (`r8`–`r11`) rather than the single R15
+            // accumulator — no R15 round-trip / relocate `mov`. Falls back to
+            // R15 when the pool is full or the value is not a Fixnum immediate.
             #[cfg(feature = "gp-alloc")]
-            if src != GP::R15 {
-                self.try_relocate_acc_to_pool(ir, dst);
+            if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
+                ir.reg_move(src, vreg.phys());
+                return;
             }
             self.def_G(ir, dst, guarded);
             ir.push(AsmInst::RegToAcc(src));

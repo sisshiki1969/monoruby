@@ -1348,30 +1348,23 @@ impl SlotState {
     /// pool register. The caller (`def_reg2acc_guarded`, `src != R15`) guarantees
     /// R15 still holds the old accumulator value, so the `reg_move` captures it.
     #[cfg(feature = "gp-alloc")]
-    pub(crate) fn try_relocate_acc_to_pool(&mut self, ir: &mut AsmIr, new_slot: SlotId) {
-        let Some(old) = self.r15 else { return };
-        if old == new_slot || old < self.temp_start() {
-            return;
-        }
-        let guarded = self.guarded(old);
-        // Only relocate a value statically guaranteed to be an *immediate*
-        // (`Fixnum` — the value lives entirely in the register, no heap
-        // pointer). A pool register is not a GC root: a heap-pointer value kept
-        // only in `r8`–`r11` across a collection would be freed (the safepoint
-        // write-back covers the dedicated accumulator but the in-loop relocation
-        // window is not yet a GC-rootable location for pool regs). Heap-value
-        // pooling is deferred until pool registers are made GC roots.
+    /// §9 9d-B accumulator register file: define `dst` directly into a free
+    /// pool register (`r8`–`r11`) instead of routing the result through R15.
+    /// Returns the chosen `VReg` (the caller moves the result into it), or
+    /// `None` when the pool is full (caller falls back to the R15 accumulator).
+    /// Fixnum-only — a pool register is not a GC root (see
+    /// `try_relocate_acc_to_pool`).
+    #[cfg(feature = "gp-alloc")]
+    pub(crate) fn try_def_G_pool(&mut self, dst: SlotId, guarded: Guarded) -> Option<VReg> {
         if guarded != Guarded::Fixnum {
-            return;
+            return None;
         }
-        let Some(id) = self.gp_alloc.find_vacant() else {
-            return;
-        };
-        let reg = crate::codegen::GP_ALLOC_POOL[id];
-        ir.reg_move(GP::R15, reg);
-        self.set_mode(old, LinkMode::G(guarded, VReg::Alloc(id as u32)));
-        self.gp_alloc.add(old, id);
-        self.r15 = None;
+        let id = self.gp_alloc.find_vacant()?;
+        self.discard(dst);
+        let vreg = VReg::Alloc(id as u32);
+        self.set_mode(dst, LinkMode::G(guarded, vreg));
+        self.gp_alloc.add(dst, id);
+        Some(vreg)
     }
 
     /// Flush every pool (`Alloc`) resident to its stack home and drop it to `S`,
