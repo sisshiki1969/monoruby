@@ -821,30 +821,17 @@ impl AbstractState {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
         self.exec_gc(ir, true);
-        // A simple call's `set_arguments` emits no C call (just register/memory
-        // arg moves), so defer the GP-pool flush to `writeback_acc` below —
-        // which runs *after* `discard(dst)` + `clear_above_next_sp`. This skips
-        // spilling the call's `dst` (immediately overwritten by the result) and
-        // dead-temp args, which the up-front flush would write back only to drop.
-        // Non-simple calls build rest/kw args via C calls, so the pool must be
-        // flushed before `set_arguments`.
-        //
-        // A call that passes a block must NOT defer, even when simple: the
-        // block is a closure over *this* frame and runs *during* the call
-        // (e.g. `h.times { ... row_bytes ... }`), reading the caller's locals
-        // from their frame homes. Those homes must already hold the current
-        // values before the call, so any pool-resident local has to be flushed
-        // up front. Deferring leaves the home stale (the slot reads as its
-        // uninitialized `nil`), which the block then mis-reads — the
-        // gosu-stub `Image#_init_from_blob` crash where `row_bytes = w * 4`
-        // stays pool-resident and the `h.times` block reads it as nil.
-        let callsite = &store[callid];
-        let passes_block = callsite.block_fid.is_some() || callsite.block_arg.is_some();
-        let using_fpr = if store.is_simple_call(callee_fid, callid) && !passes_block {
-            self.using_fpr_offset()
-        } else {
-            self.get_using_fpr(ir)
-        };
+        // Flush the GP pool up front (folded into `get_using_fpr`), before
+        // `set_arguments`. An earlier optimization deferred this for simple,
+        // block-less calls — reading args straight from the pool registers and
+        // letting the later `writeback_acc` do the flush — to skip spilling the
+        // dead `dst`/temp args. That deferral proved unsound under register
+        // pressure: keeping locals pool-resident through `set_arguments` /
+        // `discard` / `clear_above_next_sp` diverged from the up-front-flush
+        // semantics (optcarrot `--opt` mis-emulated a few frames in on aarch64
+        // `gp-alloc`, e.g. a wrong PPU value broke the vblank-wait loop), so we
+        // always flush before the call now.
+        let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
