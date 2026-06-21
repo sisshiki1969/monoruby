@@ -828,7 +828,19 @@ impl AbstractState {
         // dead-temp args, which the up-front flush would write back only to drop.
         // Non-simple calls build rest/kw args via C calls, so the pool must be
         // flushed before `set_arguments`.
-        let using_fpr = if store.is_simple_call(callee_fid, callid) {
+        //
+        // A call that passes a block must NOT defer, even when simple: the
+        // block is a closure over *this* frame and runs *during* the call
+        // (e.g. `h.times { ... row_bytes ... }`), reading the caller's locals
+        // from their frame homes. Those homes must already hold the current
+        // values before the call, so any pool-resident local has to be flushed
+        // up front. Deferring leaves the home stale (the slot reads as its
+        // uninitialized `nil`), which the block then mis-reads — the
+        // gosu-stub `Image#_init_from_blob` crash where `row_bytes = w * 4`
+        // stays pool-resident and the `h.times` block reads it as nil.
+        let callsite = &store[callid];
+        let passes_block = callsite.block_fid.is_some() || callsite.block_arg.is_some();
+        let using_fpr = if store.is_simple_call(callee_fid, callid) && !passes_block {
             self.using_fpr_offset()
         } else {
             self.get_using_fpr(ir)
