@@ -27,7 +27,7 @@ fi
 #   *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
 # esac
 
-STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type)
+STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type,gp-alloc)
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
