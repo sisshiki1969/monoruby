@@ -555,7 +555,17 @@ placed in the pool:
 
 Notes:
 - C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes it
-  unnecessary — pool slots are always written back before a call.
+  unnecessary — pool slots are always written back before a call. This holds for
+  *every* call, not just Ruby method calls: the method-call path flushes via
+  `writeback_acc`, and **every runtime helper** (`deep_copy_lit`, `new_array`,
+  `new_hash`, `to_a`, `concat_str`, `generic_binop`, class/method def, `defined?`,
+  …) flushes the pool at its pre-call `get_using_fpr` snapshot (which now flushes
+  the GP pool as a side effect — the universal pre-C-call chokepoint). The pool
+  registers are caller-saved, so a Fixnum left resident there would otherwise be
+  clobbered by the helper's C call (e.g. `String#clear`'s `bytesize` in `r8`,
+  clobbered by the `""` literal's `value_deep_copy`). The asmir builders that take
+  `&AbstractFrame` (immutable, so they cannot flush) get an explicit `flush_pool`
+  in their handler instead.
 - Branch-merge reconciliation needs no special pool handling: pool residents are
   flushed (→ `S`) before any branch (the compile-loop `flush_pool` and the
   back-edge analysis G→S demotion), so a merge never sees a `G(_, Alloc)` slot.
@@ -566,6 +576,38 @@ The temp-relocate placement (§9-3) is correct (full suite incl. `gc-stress`
 passes) but the **M1 A/B bench gate fails**: no benchmark improves beyond noise
 and `binarytrees` regresses ~14% (the relocate `mov` + flush is pure overhead
 when the pooled value is not reused enough). So `gp-alloc` stays **off**.
+
+#### 9d-B: accumulator register file (results born directly in `r8`–`r11`)
+
+Instead of the relocate model (new value → R15, *then* relocate the old R15
+resident into the pool), the **accumulator register file** extends the
+accumulator's register set from `{R15}` to `{R15, r8–r11}`: a Fixnum result is
+written *directly* into a free pool register (`try_def_G_pool` in
+`def_reg2acc_guarded`), with **no R15 round-trip and no relocate `mov`**. R15
+remains the fallback when the pool is full or the value is not a Fixnum
+immediate. This removes the relocate overhead that made the temp-relocate
+version regress `binarytrees`.
+
+Making it correct required eliminating two latent "the current value is in R15"
+assumptions that the single-accumulator design relied on:
+1. **`copy_slot`'s `G` arm** spilled `src` then `def_G(dst)` — which claims R15
+   *without moving the value there*. Sound only for `Pinned(R15)`; for a pool
+   resident it left `dst` reading R15 while the value sat in the pool register.
+   Fixed by transferring the pool register's ownership to `dst` (no data move).
+2. **Caller-saved clobbering across runtime helpers** (see the §1 note above):
+   the pool registers are caller-saved, and the flush-at-boundary invariant was
+   only honoured by Ruby method calls, not the runtime helpers. Fixed by folding
+   the GP-pool flush into `get_using_fpr`, the universal pre-C-call snapshot.
+
+Result: full lib suite green under `--features gp-alloc` (1678/1678, reduced
+parallelism — the harness flakes on `ruby`-subprocess spawn under high
+parallelism, unrelated to the JIT). A/B (release, best-of-5): `binarytrees`
+**0.997×** (the −14% regression is gone), `app_fib` 0.959×, `tarai` 1.007×,
+`so_nbody` 0.999× — i.e. **overhead-free but not a speedup**. So the
+register-file fixes the *cost* of the relocate model without changing the
+fundamental conclusion below: residency alone is marginal for Fixnums. `gp-alloc`
+stays **off** pending the untagged-Fixnum representation, which supplies the
+missing per-op cost. The work lives on `claude/gp-acc-regfile`.
 
 **Why register residency alone is marginal for integers.** Unlike floats —
 where the win is avoiding *boxing* (a heap allocation per spilled float) — a
