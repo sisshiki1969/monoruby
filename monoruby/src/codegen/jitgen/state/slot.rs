@@ -1344,17 +1344,14 @@ impl SlotState {
         }
     }
 
-    /// §9 9d-B placement trigger. Relocate the current accumulator into a free
-    /// pool register. The caller (`def_reg2acc_guarded`, `src != R15`) guarantees
-    /// R15 still holds the old accumulator value, so the `reg_move` captures it.
-    #[cfg(feature = "gp-alloc")]
     /// §9 9d-B accumulator register file: define `dst` directly into a free
     /// pool register (`r8`–`r11`) instead of routing the result through R15.
     /// Returns the chosen `VReg` (the caller moves the result into it), or
     /// `None` when the pool is full (caller falls back to the R15 accumulator).
-    /// Fixnum-only — a pool register is not a GC root (see
-    /// `try_relocate_acc_to_pool`).
+    /// Fixnum-only — a pool register is not a GC root, so only an immediate
+    /// (Fixnum) value may reside there.
     #[cfg(feature = "gp-alloc")]
+    #[allow(non_snake_case)]
     pub(crate) fn try_def_G_pool(&mut self, dst: SlotId, guarded: Guarded) -> Option<VReg> {
         if guarded != Guarded::Fixnum {
             return None;
@@ -1431,9 +1428,29 @@ impl SlotState {
                 self.def_C(dst, v);
             }
             LinkMode::G(guarded, vreg) => {
+                // `src`'s value lives in `vreg`. Spill it to `src`'s stack home
+                // and demote `src` to `S`, then hand the *same* register to
+                // `dst` — the value is already there, so no data move is needed.
+                //
+                // The old code unconditionally called `def_G(dst)`, which claims
+                // R15 and relies on the value already sitting in R15. That holds
+                // only when `vreg == Pinned(R15)`; for a pool resident
+                // (`Alloc`), `def_G` would leave `dst` pointing at R15 while the
+                // value stayed in the pool register and R15 held something stale
+                // (§9 9d-B). Transfer the pool register to `dst` instead.
                 ir.reg2stack(vreg.phys(), src);
                 self.set_S_with_guard(src, guarded);
-                self.def_G(ir, dst, guarded)
+                match vreg {
+                    VReg::Pinned(_) => self.def_G(ir, dst, guarded),
+                    #[cfg(feature = "gp-alloc")]
+                    VReg::Alloc(id) => {
+                        self.discard(dst);
+                        self.set_mode(dst, LinkMode::G(guarded, vreg));
+                        self.gp_alloc.add(dst, id as usize);
+                    }
+                    #[cfg(not(feature = "gp-alloc"))]
+                    VReg::Alloc(_) => unreachable!("Alloc VReg without the gp-alloc feature"),
+                }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("copy_slot() {:?} {:?}: {:?}", src, self.mode(src), self);
