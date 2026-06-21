@@ -444,23 +444,38 @@ impl AbstractFrame {
         };
 
         match kind {
-            BinOpK::Add | BinOpK::Mul => {
-                let lhs = GP::Rdi;
+            BinOpK::Add | BinOpK::Sub | BinOpK::Mul => {
                 let rhs = GP::Rsi;
-                self.fetch_fixnum_comm(ir, lhs, rhs, mode);
-                // §19 (B): route the guarded integer op through the record stream,
-                // carrying its deopt as a program point (cf. the guarded loads).
-                let deopt = self.deopt_point();
-                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
-                self.def_reg2acc_fixnum(ir, lhs, dst);
-            }
-            BinOpK::Sub => {
-                let lhs = GP::Rdi;
-                let rhs = GP::Rsi;
-                self.fetch_fixnum_mode(ir, lhs, rhs, mode);
-                let deopt = self.deopt_point();
-                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
-                self.def_reg2acc_fixnum(ir, lhs, dst);
+                if let Some(dst) = dst {
+                    // Compute the result *in place* in the R15 accumulator, which
+                    // is `dst`'s home — the value is born in its destination, so
+                    // there is no `Rdi`-copy + relocate `mov` (the old
+                    // `def_reg2acc_fixnum` store). The lhs operand is loaded
+                    // straight into R15; when it is already the accumulator
+                    // (`(a+b)+c`) not even that load is emitted.
+                    self.fetch_fixnum_inplace(ir, kind, rhs, mode);
+                    // §19 (B): route the guarded integer op through the record
+                    // stream, carrying its deopt as a program point.
+                    let deopt = self.deopt_point();
+                    ir.transfer(TransferIR::IntegerBinOp {
+                        kind,
+                        lhs: GP::R15,
+                        rhs,
+                        mode,
+                        deopt,
+                    });
+                    self.def_acc_fixnum(dst);
+                } else {
+                    // Result discarded: run the op in the Rdi scratch purely for
+                    // the overflow side-exit; no destination store.
+                    let lhs = GP::Rdi;
+                    match kind {
+                        BinOpK::Sub => self.fetch_fixnum_mode(ir, lhs, rhs, mode),
+                        _ => self.fetch_fixnum_comm(ir, lhs, rhs, mode),
+                    }
+                    let deopt = self.deopt_point();
+                    ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
+                }
             }
             BinOpK::Div => {
                 let lhs = GP::Rdi;
@@ -593,6 +608,39 @@ impl AbstractFrame {
     ) {
         let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
         ir.integer_cmp_br(mode, kind, lhs, rhs, brkind, branch_dest);
+    }
+
+    /// Operand fetch for an *in-place* fixnum binop whose result is computed in
+    /// the R15 accumulator (= `dst`). Like `fetch_fixnum_comm`/`fetch_fixnum_mode`
+    /// but the lhs reg operand is brought into R15 (via `fetch_lhs_to_acc`)
+    /// instead of `Rdi`, so the encoder's in-place sequence leaves the result in
+    /// the destination with no relocate move. `rhs` is the scratch register for
+    /// the rhs reg operand (`Rsi`).
+    fn fetch_fixnum_inplace(&mut self, ir: &mut AsmIr, kind: BinOpK, rhs: GP, mode: OpMode) {
+        match mode {
+            OpMode::RR(l, r) => {
+                self.load(ir, r, rhs);
+                self.guard_fixnum(ir, r, rhs);
+                self.fetch_lhs_to_acc(ir, l);
+            }
+            OpMode::RI(l, _) => {
+                // rhs is an immediate folded by the encoder; lhs reg -> R15.
+                self.fetch_lhs_to_acc(ir, l);
+            }
+            OpMode::IR(_, r) => match kind {
+                // Add/Mul are commutative, so the reg operand becomes the
+                // in-place accumulator (≡ RI) and the immediate is folded.
+                BinOpK::Add | BinOpK::Mul => self.fetch_lhs_to_acc(ir, r),
+                // Sub: the encoder materializes the immediate (lhs) into R15
+                // then subtracts the reg operand, so R15 must be free and the
+                // reg operand in the `rhs` scratch.
+                _ => {
+                    self.load(ir, r, rhs);
+                    self.guard_fixnum(ir, r, rhs);
+                    self.free_acc(ir);
+                }
+            },
+        }
     }
 
     fn fetch_fixnum_comm(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {

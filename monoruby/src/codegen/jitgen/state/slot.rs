@@ -1344,6 +1344,26 @@ impl SlotState {
         }
     }
 
+    /// Free the R15 accumulator by spilling its current occupant (if any) to
+    /// the stack, so R15 can serve as the in-place result register of a fixnum
+    /// binop. Afterwards `self.r15 == None`. Pool (`Alloc`) residents are left
+    /// in place (this is the R15-only half of `writeback_acc`).
+    pub(crate) fn free_acc(&mut self, ir: &mut AsmIr) {
+        self.writeback_r15(ir);
+    }
+
+    /// Define `dst` as a Fixnum already resident in the R15 accumulator — the
+    /// in-place result of a fixnum binop. Emits no code: the value is already
+    /// in R15 and the prior occupant was spilled by `free_acc` /
+    /// `fetch_lhs_to_acc`, so this only updates the abstract state (the
+    /// move-free analogue of `def_reg2acc_fixnum`).
+    pub(crate) fn def_acc_fixnum(&mut self, dst: SlotId) {
+        self.discard(dst);
+        debug_assert!(self.no_r15());
+        self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)));
+        self.r15 = Some(dst);
+    }
+
     /// §9 9d-B accumulator register file: define `dst` directly into a free
     /// pool register (`r8`–`r11`) instead of routing the result through R15.
     /// Returns the chosen `VReg` (the caller moves the result into it), or

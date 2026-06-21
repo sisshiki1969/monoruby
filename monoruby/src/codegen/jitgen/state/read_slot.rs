@@ -338,6 +338,24 @@ impl AbstractFrame {
         }
     }
 
+    /// Bring `lhs` into the R15 accumulator so an in-place fixnum binop can
+    /// write its result there directly — no `Rdi` copy and no relocate `mov`.
+    ///
+    /// The current R15 occupant is spilled first (`free_acc`), which preserves
+    /// it for any later use *and* makes the pre-op deopt snapshot consistent
+    /// (the in-place op overwrites R15, but the snapshot reads the spilled stack
+    /// home). When `lhs` is itself that occupant it is already physically in
+    /// R15, so only the spill happens and no reload is emitted — the
+    /// chained-arithmetic fast path (`(a+b)+c`).
+    pub(in crate::codegen::jitgen) fn fetch_lhs_to_acc(&mut self, ir: &mut AsmIr, lhs: SlotId) {
+        let lhs_in_r15 = self.on_reg(lhs) == Some(GP::R15);
+        self.free_acc(ir);
+        if !lhs_in_r15 {
+            self.load(ir, lhs, GP::R15);
+        }
+        self.guard_fixnum(ir, lhs, GP::R15);
+    }
+
     ///
     /// load *slot* into *opt* if not on register, and return the register.
     ///
