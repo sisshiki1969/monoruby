@@ -559,3 +559,55 @@ Notes:
 - Branch-merge reconciliation needs no special pool handling: pool residents are
   flushed (→ `S`) before any branch (the compile-loop `flush_pool` and the
   back-edge analysis G→S demotion), so a merge never sees a `G(_, Alloc)` slot.
+
+### 9d outcome: GP register residency does not pay; the untagged-Fixnum direction does
+
+The temp-relocate placement (§9-3) is correct (full suite incl. `gc-stress`
+passes) but the **M1 A/B bench gate fails**: no benchmark improves beyond noise
+and `binarytrees` regresses ~14% (the relocate `mov` + flush is pure overhead
+when the pooled value is not reused enough). So `gp-alloc` stays **off**.
+
+**Why register residency alone is marginal for integers.** Unlike floats —
+where the win is avoiding *boxing* (a heap allocation per spilled float) — a
+Fixnum is an immediate, so keeping it in a GP register only saves an LFP
+load/store, and that store is already cheap (L1 + store-to-load forwarding).
+Locals must also be materialized in the frame at every deopt / call / GC
+safepoint anyway. Microbench (hand-asm, faithful to the JIT loop body): keeping
+the loop locals of `while i<n; s=s+i; i=i+1; end` in registers instead of memory
+is only **~1.26×** on the *tightest* possible integer loop, diluted to ~noise on
+real benchmarks.
+
+**Loop-carried integer residency** (the float-`F`-mode analogue: promote
+loop-carried Fixnum locals to pool registers at the loop entry, keep them across
+the back-edge) was prototyped on branch `claude/gp-loop-carried-wip`. It
+promotes, but the JIT'd loop deopts and recompiles ~every iteration (the VM→JIT
+loop entry / OSR does not set up the pool registers the JIT'd loop head expects).
+Given the marginal ceiling above, it was not pursued to completion.
+
+**The promising direction — untagged Fixnum ("integer `F`-mode").** A Fixnum is
+tagged `2n+1`, so *every* integer op pays a tag adjustment (`sub 1` / `or 1`)
+**and** a type guard (`test $1; je`). Give integers a second representation —
+**untagged `2n` (LSB cleared), held in a GP register** — exactly as a float has
+boxed `Value` vs unboxed `F` (xmm). Within a run of integer ops the value stays
+untagged; it is tagged (`or 1`) only when it escapes to a `Value` context
+(stored to a boxed slot, passed to a call, …). This removes *both* per-op costs,
+because an untagged-integer slot is statically known to be an integer (no guard,
+like `F` needs no float guard).
+
+Key properties:
+- **Overflow detection is preserved by the `2n` choice**: `2a + 2b = 2(a+b)`
+  overflows i64 iff `a+b` overflows i63 (the Fixnum range), so the existing `jo`
+  works unchanged. (Raw `n` would not preserve this.)
+- **Per-op, not per-loop**: the tag/guard elimination helps *every* integer op,
+  so it benefits straight-line integer code too, not just loops.
+- Microbench (hand-asm): untagged + guard-free is **~1.50×** over the
+  tagged+guarded in-register loop; compounded with residency, **~1.9×** ceiling
+  on the tightest integer loop.
+
+Implementation shape (a substantial change, comparable to introducing `F`/`Sf`):
+a new `LinkMode` for an untagged integer in a GP register (`I`, the `F`
+analogue) plus an untagged-with-boxed-cache variant (`Si`, the `Sf` analogue);
+integer-op lowerings that consume/produce the untagged form; tag on escape to
+`Value`. This is the recorded future direction for integer JIT performance — it
+supplies the "boxing-like" per-op cost that finally makes GP register residency
+worthwhile.
