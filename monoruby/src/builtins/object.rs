@@ -255,7 +255,7 @@ pub(super) fn object_object_id(
     }
     let CallSiteInfo { recv, dst: ret, .. } = *callsite;
     state.load(ir, recv, GP::Rdi);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_object_id());
     ir.fpr_restore(using_fpr);

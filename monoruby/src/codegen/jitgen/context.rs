@@ -859,7 +859,7 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitResult<JitStackFrame> {
-        let stack_offset = state.get_using_fpr().offset();
+        let stack_offset = state.using_fpr_offset().offset();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);

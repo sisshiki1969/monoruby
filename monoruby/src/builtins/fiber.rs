@@ -103,7 +103,7 @@ fn fiber_yield_inline(
     // interpolation operand). Write the frame back (the standard GC
     // safepoint) before yielding so every live slot is materialised.
     state.exec_gc(ir, false);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.fpr_save(using_fpr);
     // TODO: we must check if the parent fiber exits.

@@ -16,3 +16,5 @@ rubyspec_temp/
 .claude/
 coverage_html
 rustc-ice-*.txt
+# nextest scratch files (TMPDIR=.tmp); the tracked .tmp/suite.log is kept
+.tmp/.tmp*

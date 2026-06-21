@@ -527,12 +527,129 @@ placed in the pool:
    `x5`–`x8`; that backend needs the same audit before placement targets it. The
    `gp-alloc` feature is x86-first and off by default, so nothing places into the
    aarch64 pool yet.)*
-3. **Placement policy** *(next)*: choose which slots enter the pool (victim
-   selection under pressure) and populate `gp_alloc` / emit `G(_, Alloc(id))`,
-   within a call-free straight-line stretch (the flush at §1 bounds it).
-4. **Branch-merge reconciliation**: agree pool residency across control-flow
-   joins (or simply flush at every block boundary in the first cut).
-5. **M1 A/B bench gate** before the feature becomes default.
+3. **Placement policy + multi-residency** *(done)*. `def_reg2acc_guarded` is the
+   trigger: when a new accumulator value arrives from a register **other than
+   R15** (so R15 still holds the *previous* accumulator),
+   `try_relocate_acc_to_pool` moves that previous value into a free pool register
+   (`G(_, Alloc(id))`) instead of spilling it. Later reads then come from the
+   register (no LFP reload) until the next flush. Making the state machine track
+   pool residents (not just the single R15 accumulator) required:
+   - **`Placement::Gp(VReg)`** *(load-bearing)*. `SlotState` stores `place` +
+     `ty` and reconstructs every `mode()` via `from_parts` — so the placement
+     **must** carry the `VReg`, else `set_mode(G(Alloc))` loses the pool-register
+     identity on the very next state read (it round-trips to `Stack`).
+   - **Register-aware reads everywhere a `G` slot is consumed**: `on_reg` /
+     `on_reg_or` (binop operands), `load_state` (`GpLoad::Reg(vreg.phys())`),
+     `fetch_for_callee` (call-argument materialization), the `G→Sf` bridge — all
+     resolve `vreg.phys()` rather than assuming R15.
+   - **Alloc-aware destructive sites + flush** (§1, the `gp` field / `writeback_
+     pool_state` / Alloc-aware `clear`/`write_back_slot`).
+   - **Fixnum-only restriction** *(GC safety)*: a pool register is **not a GC
+     root**, so only values statically guarded `Fixnum` (immediates — no heap
+     pointer) are relocated. A heap pointer kept solely in `r8`–`r11` across a
+     collection would be freed; heap-value pooling is deferred until pool
+     registers are made GC-rootable. Hot integer loops — the primary target — are
+     covered. Verified byte-identical on default; gp-alloc passes the full suite
+     including `gc-stress` (GC on every allocation).
+4. **M1 A/B bench gate** before the feature becomes default.
 
-Note C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes
-it unnecessary — pool slots are always written back before a call.
+Notes:
+- C-ABI call-save is *not* a separate step: the flush-at-boundary (§1) makes it
+  unnecessary — pool slots are always written back before a call. This holds for
+  *every* call, not just Ruby method calls: the method-call path flushes via
+  `writeback_acc`, and **every runtime helper** (`deep_copy_lit`, `new_array`,
+  `new_hash`, `to_a`, `concat_str`, `generic_binop`, class/method def, `defined?`,
+  …) flushes the pool at its pre-call `get_using_fpr` snapshot (which now flushes
+  the GP pool as a side effect — the universal pre-C-call chokepoint). The pool
+  registers are caller-saved, so a Fixnum left resident there would otherwise be
+  clobbered by the helper's C call (e.g. `String#clear`'s `bytesize` in `r8`,
+  clobbered by the `""` literal's `value_deep_copy`). The asmir builders that take
+  `&AbstractFrame` (immutable, so they cannot flush) get an explicit `flush_pool`
+  in their handler instead.
+- Branch-merge reconciliation needs no special pool handling: pool residents are
+  flushed (→ `S`) before any branch (the compile-loop `flush_pool` and the
+  back-edge analysis G→S demotion), so a merge never sees a `G(_, Alloc)` slot.
+
+### 9d outcome: GP register residency does not pay; the untagged-Fixnum direction does
+
+The temp-relocate placement (§9-3) is correct (full suite incl. `gc-stress`
+passes) but the **M1 A/B bench gate fails**: no benchmark improves beyond noise
+and `binarytrees` regresses ~14% (the relocate `mov` + flush is pure overhead
+when the pooled value is not reused enough). So `gp-alloc` stays **off**.
+
+#### 9d-B: accumulator register file (results born directly in `r8`–`r11`)
+
+Instead of the relocate model (new value → R15, *then* relocate the old R15
+resident into the pool), the **accumulator register file** extends the
+accumulator's register set from `{R15}` to `{R15, r8–r11}`: a Fixnum result is
+written *directly* into a free pool register (`try_def_G_pool` in
+`def_reg2acc_guarded`), with **no R15 round-trip and no relocate `mov`**. R15
+remains the fallback when the pool is full or the value is not a Fixnum
+immediate. This removes the relocate overhead that made the temp-relocate
+version regress `binarytrees`.
+
+Making it correct required eliminating two latent "the current value is in R15"
+assumptions that the single-accumulator design relied on:
+1. **`copy_slot`'s `G` arm** spilled `src` then `def_G(dst)` — which claims R15
+   *without moving the value there*. Sound only for `Pinned(R15)`; for a pool
+   resident it left `dst` reading R15 while the value sat in the pool register.
+   Fixed by transferring the pool register's ownership to `dst` (no data move).
+2. **Caller-saved clobbering across runtime helpers** (see the §1 note above):
+   the pool registers are caller-saved, and the flush-at-boundary invariant was
+   only honoured by Ruby method calls, not the runtime helpers. Fixed by folding
+   the GP-pool flush into `get_using_fpr`, the universal pre-C-call snapshot.
+
+Result: full lib suite green under `--features gp-alloc` (1678/1678, reduced
+parallelism — the harness flakes on `ruby`-subprocess spawn under high
+parallelism, unrelated to the JIT). A/B (release, best-of-5): `binarytrees`
+**0.997×** (the −14% regression is gone), `app_fib` 0.959×, `tarai` 1.007×,
+`so_nbody` 0.999× — i.e. **overhead-free but not a speedup**. So the
+register-file fixes the *cost* of the relocate model without changing the
+fundamental conclusion below: residency alone is marginal for Fixnums. `gp-alloc`
+stays **off** pending the untagged-Fixnum representation, which supplies the
+missing per-op cost. The work lives on `claude/gp-acc-regfile`.
+
+**Why register residency alone is marginal for integers.** Unlike floats —
+where the win is avoiding *boxing* (a heap allocation per spilled float) — a
+Fixnum is an immediate, so keeping it in a GP register only saves an LFP
+load/store, and that store is already cheap (L1 + store-to-load forwarding).
+Locals must also be materialized in the frame at every deopt / call / GC
+safepoint anyway. Microbench (hand-asm, faithful to the JIT loop body): keeping
+the loop locals of `while i<n; s=s+i; i=i+1; end` in registers instead of memory
+is only **~1.26×** on the *tightest* possible integer loop, diluted to ~noise on
+real benchmarks.
+
+**Loop-carried integer residency** (the float-`F`-mode analogue: promote
+loop-carried Fixnum locals to pool registers at the loop entry, keep them across
+the back-edge) was prototyped on branch `claude/gp-loop-carried-wip`. It
+promotes, but the JIT'd loop deopts and recompiles ~every iteration (the VM→JIT
+loop entry / OSR does not set up the pool registers the JIT'd loop head expects).
+Given the marginal ceiling above, it was not pursued to completion.
+
+**The promising direction — untagged Fixnum ("integer `F`-mode").** A Fixnum is
+tagged `2n+1`, so *every* integer op pays a tag adjustment (`sub 1` / `or 1`)
+**and** a type guard (`test $1; je`). Give integers a second representation —
+**untagged `2n` (LSB cleared), held in a GP register** — exactly as a float has
+boxed `Value` vs unboxed `F` (xmm). Within a run of integer ops the value stays
+untagged; it is tagged (`or 1`) only when it escapes to a `Value` context
+(stored to a boxed slot, passed to a call, …). This removes *both* per-op costs,
+because an untagged-integer slot is statically known to be an integer (no guard,
+like `F` needs no float guard).
+
+Key properties:
+- **Overflow detection is preserved by the `2n` choice**: `2a + 2b = 2(a+b)`
+  overflows i64 iff `a+b` overflows i63 (the Fixnum range), so the existing `jo`
+  works unchanged. (Raw `n` would not preserve this.)
+- **Per-op, not per-loop**: the tag/guard elimination helps *every* integer op,
+  so it benefits straight-line integer code too, not just loops.
+- Microbench (hand-asm): untagged + guard-free is **~1.50×** over the
+  tagged+guarded in-register loop; compounded with residency, **~1.9×** ceiling
+  on the tightest integer loop.
+
+Implementation shape (a substantial change, comparable to introducing `F`/`Sf`):
+a new `LinkMode` for an untagged integer in a GP register (`I`, the `F`
+analogue) plus an untagged-with-boxed-cache variant (`Si`, the `Sf` analogue);
+integer-op lowerings that consume/produce the untagged form; tag on escape to
+`Value`. This is the recorded future direction for integer JIT performance — it
+supplies the "boxing-like" per-op cost that finally makes GP register residency
+worthwhile.

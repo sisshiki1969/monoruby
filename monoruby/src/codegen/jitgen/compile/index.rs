@@ -128,7 +128,7 @@ impl AbstractState {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
-            let using_fpr = self.get_using_fpr();
+            let using_fpr = self.get_using_fpr(ir);
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::U16(idx),
@@ -138,7 +138,7 @@ impl AbstractState {
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
-            let using_fpr = self.get_using_fpr();
+            let using_fpr = self.get_using_fpr(ir);
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::Fixnum,
@@ -164,7 +164,7 @@ impl AbstractState {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
-            let using_fpr = self.get_using_fpr();
+            let using_fpr = self.get_using_fpr(ir);
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::U16(idx),
@@ -174,7 +174,7 @@ impl AbstractState {
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
-            let using_fpr = self.get_using_fpr();
+            let using_fpr = self.get_using_fpr(ir);
             let error = ir.new_error(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::Fixnum,

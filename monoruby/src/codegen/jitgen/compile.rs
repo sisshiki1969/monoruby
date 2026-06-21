@@ -92,6 +92,11 @@ impl<'a> JitContext<'a> {
                     return Ok(ir);
                 }
                 CompileResult::Branch(dest_bb) => {
+                    // §9 9d-B: flush pool residents before the branch state is
+                    // recorded — the merge machinery is R15-only, so a successor
+                    // must never inherit a pool-resident (`Alloc`) slot.
+                    #[cfg(feature = "gp-alloc")]
+                    state.flush_pool(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
                 }
@@ -133,6 +138,10 @@ impl<'a> JitContext<'a> {
         }
 
         if !last {
+            // §9 9d-B: flush pool residents before the fall-through state is
+            // recorded for the next block (the merge machinery is R15-only).
+            #[cfg(feature = "gp-alloc")]
+            state.flush_pool(&mut ir);
             self.prepare_next(state, end)
         }
 
@@ -193,14 +202,16 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::Literal(dst, val) => {
                 state.discard(dst);
-                ir.deep_copy_lit(state.get_using_fpr(), val);
+                let using_fpr = state.get_using_fpr(ir);
+                ir.deep_copy_lit(using_fpr, val);
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             TraceIr::Array { dst, callid } => {
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
                 state.write_back_range(ir, args, pos_num as u16);
                 state.discard(dst);
-                ir.new_array(state.get_using_fpr(), callid);
+                let using_fpr = state.get_using_fpr(ir);
+                ir.new_array(using_fpr, callid);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { .. } => {
@@ -209,23 +220,26 @@ impl<'a> JitContext<'a> {
             TraceIr::Hash { dst, args, len } => {
                 state.write_back_range(ir, args, len * 2);
                 state.discard(dst);
+                let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
-                ir.new_hash(state.get_using_fpr(), args, len as _);
+                ir.new_hash(using_fpr, args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
             }
             TraceIr::HashInsert { hash, args, len } => {
                 state.write_back_range(ir, args, len * 2);
                 state.write_back_slots(ir, &[hash]);
+                let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
-                ir.hash_insert(state.get_using_fpr(), hash, args, len as _);
+                ir.hash_insert(using_fpr, hash, args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, hash);
             }
             TraceIr::ArrayConcat { dst, src } => {
                 state.write_back_slots(ir, &[dst, src]);
+                let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
-                ir.array_concat(state.get_using_fpr(), dst, src);
+                ir.array_concat(using_fpr, dst, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
             }
@@ -238,7 +252,7 @@ impl<'a> JitContext<'a> {
                 state.write_back_slots(ir, &[start, end]);
                 state.discard(dst);
                 let error = ir.new_error(state);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.new_range(start, end, exclude_end, using_fpr, error);
                 state.def_rax2acc(ir, dst);
             }
@@ -326,6 +340,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::BlockArg(ret, outer) => {
                 state.def_S(ret);
+                state.flush_pool(ir);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
             }
@@ -498,6 +513,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ArrayTEq { lhs, rhs } => {
                 state.write_back_slots(ir, &[lhs, rhs]);
                 state.discard(lhs);
+                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.array_teq(state, lhs, rhs);
                 ir.handle_error(error);
@@ -508,6 +524,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ToA { dst, src } => {
                 let error = ir.new_error(state);
                 state.write_back_slot(ir, src);
+                state.flush_pool(ir);
                 ir.to_a(state, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
@@ -519,6 +536,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ConcatStr(dst, arg, len) => {
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
+                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.concat_str(state, arg, len);
                 ir.handle_error(error);
@@ -528,6 +546,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
+                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.concat_regexp(state, arg, len);
                 ir.handle_error(error);
@@ -542,9 +561,11 @@ impl<'a> JitContext<'a> {
                 for reg in dst.0..dst.0 + len {
                     state.def_S(SlotId(reg));
                 }
+                state.flush_pool(ir);
                 ir.expand_array(state, dst, len, rest_pos);
             }
             TraceIr::UndefMethod { undef } => {
+                state.flush_pool(ir);
                 ir.undef_method(state, undef);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
@@ -552,13 +573,14 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::AliasMethod { new, old } => {
                 state.write_back_slots(ir, &[new, old]);
+                state.flush_pool(ir);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasGvar { new, old } => {
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::AliasGvar {
                     new,
                     old,
@@ -568,7 +590,7 @@ impl<'a> JitContext<'a> {
             }
 
             TraceIr::MethodDef { name, func_id } => {
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
                 ir.push(AsmInst::MethodDef {
                     name,
@@ -583,7 +605,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
                 state.write_back_slots(ir, &[obj]);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
                 ir.push(AsmInst::SingletonMethodDef {
                     obj,
@@ -629,12 +651,12 @@ impl<'a> JitContext<'a> {
 
             TraceIr::DefinedYield { dst } => {
                 state.def_S(dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedYield { dst, using_fpr });
             }
             TraceIr::DefinedConst { dst, siteid } => {
                 state.to_S_unguarded(ir, dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedConst {
                     dst,
                     siteid,
@@ -644,7 +666,7 @@ impl<'a> JitContext<'a> {
             TraceIr::DefinedMethod { dst, recv, name } => {
                 state.write_back_slots(ir, &[recv]);
                 state.to_S_unguarded(ir, dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedMethod {
                     dst,
                     recv,
@@ -654,12 +676,12 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::DefinedSuper { dst } => {
                 state.def_S(dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedSuper { dst, using_fpr });
             }
             TraceIr::DefinedGvar { dst, name } => {
                 state.def_S(dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedGvar {
                     dst,
                     name,
@@ -668,7 +690,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::DefinedIvar { dst, name } => {
                 state.to_S_unguarded(ir, dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedIvar {
                     dst,
                     name,
@@ -677,7 +699,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::DefinedCvar { dst, name } => {
                 state.def_S(dst);
-                let using_fpr = state.get_using_fpr();
+                let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedCvar {
                     dst,
                     name,

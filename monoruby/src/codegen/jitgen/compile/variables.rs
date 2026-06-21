@@ -186,7 +186,7 @@ impl AbstractState {
 
     pub(super) fn store_constant(&mut self, ir: &mut AsmIr, src: SlotId, id: ConstSiteId) {
         self.load(ir, src, GP::Rax);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreConstant {
             id,
@@ -201,14 +201,14 @@ impl AbstractState {
 
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         ir.push(AsmInst::LoadGVar { name, using_fpr });
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreGVar {
             name,
@@ -220,7 +220,7 @@ impl AbstractState {
 
     pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         ir.push(AsmInst::LoadCVar { name, using_fpr });
         ir.handle_error(error);
@@ -229,14 +229,14 @@ impl AbstractState {
 
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         ir.push(AsmInst::CheckCVar { name, using_fpr });
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_cvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreCVar {
             name,

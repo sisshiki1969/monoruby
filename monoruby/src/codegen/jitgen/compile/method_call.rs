@@ -158,7 +158,7 @@ impl<'a> JitContext<'a> {
                         let src = state.load_fpr(ir, args);
                         state.pin_fpr(src);
                         state.discard(dst);
-                        let using_fpr = state.get_using_fpr();
+                        let using_fpr = state.get_using_fpr(ir);
                         let dst = state.def_F(dst);
                         state.unpin_fpr(src);
                         ir.push(AsmInst::CFunc_F_F {
@@ -193,7 +193,7 @@ impl<'a> JitContext<'a> {
                         let rhs = state.load_fpr(ir, args);
                         state.pin_fpr(rhs);
                         state.discard(dst);
-                        let using_fpr = state.get_using_fpr();
+                        let using_fpr = state.get_using_fpr(ir);
                         let dst = state.def_F(dst);
                         state.unpin_fpr(rhs);
                         state.unpin_fpr(lhs);
@@ -407,7 +407,7 @@ impl<'a> JitContext<'a> {
             callid,
         )?;
         state.exec_gc(ir, true);
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -505,7 +505,7 @@ impl<'a> JitContext<'a> {
         ir.guard_frozen(deopt);
         let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid })
         } else {
@@ -821,7 +821,18 @@ impl AbstractState {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
         self.exec_gc(ir, true);
-        let using_fpr = self.get_using_fpr();
+        // A simple call's `set_arguments` emits no C call (just register/memory
+        // arg moves), so defer the GP-pool flush to `writeback_acc` below —
+        // which runs *after* `discard(dst)` + `clear_above_next_sp`. This skips
+        // spilling the call's `dst` (immediately overwritten by the result) and
+        // dead-temp args, which the up-front flush would write back only to drop.
+        // Non-simple calls build rest/kw args via C calls, so the pool must be
+        // flushed before `set_arguments`.
+        let using_fpr = if store.is_simple_call(callee_fid, callid) {
+            self.using_fpr_offset()
+        } else {
+            self.get_using_fpr(ir)
+        };
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -872,7 +883,7 @@ impl AbstractState {
         // consume needs the real rest `Array`.
         let defer_rest = deferred_rest && !needs_rest_array;
         self.exec_gc(ir, true);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -902,7 +913,7 @@ impl AbstractState {
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
         self.writeback_acc(ir);
-        let using_fpr = self.get_using_fpr();
+        let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         let evict = ir.new_evict();
         self.exec_gc(ir, true);

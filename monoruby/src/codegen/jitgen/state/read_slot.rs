@@ -338,6 +338,57 @@ impl AbstractFrame {
         }
     }
 
+    /// Bring `lhs` into the register where an in-place fixnum binop computes its
+    /// result, and return that register. No `Rdi` copy, no relocate `mov`.
+    ///
+    /// Register choice, in priority order:
+    /// 1. **`lhs` is already in a GP register** (R15 or a pool register) →
+    ///    compute in place there, reusing it for the result (zero operand
+    ///    copies — the chained-arithmetic / loop-carried fast path). `lhs` is
+    ///    spilled to its stack home first (`write_back_slot`), which preserves
+    ///    it for any later use *and* keeps the overflow-deopt snapshot
+    ///    consistent (the in-place op clobbers the register, but the snapshot
+    ///    reads the spilled home).
+    /// 2. **gp-alloc, a vacant pool register** → load `lhs` into it and compute
+    ///    there, so the result stays resident in `r8`–`r11` and later reads
+    ///    avoid a stack reload (this is what makes the pool pay off).
+    /// 3. otherwise → the R15 accumulator (freed first).
+    pub(in crate::codegen::jitgen) fn fetch_lhs_to_inplace_reg(
+        &mut self,
+        ir: &mut AsmIr,
+        lhs: SlotId,
+    ) -> GP {
+        if let Some(reg) = self.on_reg(lhs) {
+            self.write_back_slot(ir, lhs);
+            self.guard_fixnum(ir, lhs, reg);
+            return reg;
+        }
+        #[cfg(feature = "gp-alloc")]
+        if let Some(id) = self.try_vacant_pool_id() {
+            let reg = crate::codegen::GP_ALLOC_POOL[id];
+            self.load(ir, lhs, reg);
+            self.guard_fixnum(ir, lhs, reg);
+            return reg;
+        }
+        self.free_acc(ir);
+        self.load(ir, lhs, GP::R15);
+        self.guard_fixnum(ir, lhs, GP::R15);
+        GP::R15
+    }
+
+    /// Choose the in-place result register for a fixnum binop whose lhs is an
+    /// immediate (the `IR`-Sub case, where the encoder materializes the
+    /// immediate into the result register): a vacant pool register under
+    /// gp-alloc, else the freed R15 accumulator.
+    pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, ir: &mut AsmIr) -> GP {
+        #[cfg(feature = "gp-alloc")]
+        if let Some(id) = self.try_vacant_pool_id() {
+            return crate::codegen::GP_ALLOC_POOL[id];
+        }
+        self.free_acc(ir);
+        GP::R15
+    }
+
     ///
     /// load *slot* into *opt* if not on register, and return the register.
     ///
@@ -534,9 +585,9 @@ impl AbstractFrame {
         ofs: i32,
     ) {
         match self.mode(slot) {
-            LinkMode::G(_, _) => {
+            LinkMode::G(_, vreg) => {
                 self.use_as_value(slot);
-                ir.reg2rsp_offset(GP::R15, ofs);
+                ir.reg2rsp_offset(vreg.phys(), ofs);
             }
             _ => {
                 self.load(ir, slot, GP::Rax);

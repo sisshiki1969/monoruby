@@ -1118,7 +1118,7 @@ fn integer_rem_float_rhs(
         return true;
     };
     let dst_fpr = state.def_F(dst);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.inline(move |r#gen, _, _, base| {
         r#gen.gen_int_rem_if(lhs_fpr, rhs_fpr, dst_fpr, using_fpr, base)
     });
@@ -1182,7 +1182,7 @@ fn integer_pow_int_rhs(
 
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_pow(using_fpr, &labels[error]));
     state.def_reg2acc(ir, GP::Rax, dst);
@@ -1213,7 +1213,7 @@ fn integer_pow_float_rhs(
 
     let lhs_fpr = state.load_fpr_fixnum(ir, recv);
     let rhs_fpr = state.load_fpr(ir, args);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.inline(move |r#gen, _, _, base| {
         r#gen.gen_int_pow_if(lhs_fpr, rhs_fpr, using_fpr, base)
     });
