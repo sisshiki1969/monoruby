@@ -821,7 +821,18 @@ impl AbstractState {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
         self.exec_gc(ir, true);
-        let using_fpr = self.get_using_fpr(ir);
+        // A simple call's `set_arguments` emits no C call (just register/memory
+        // arg moves), so defer the GP-pool flush to `writeback_acc` below —
+        // which runs *after* `discard(dst)` + `clear_above_next_sp`. This skips
+        // spilling the call's `dst` (immediately overwritten by the result) and
+        // dead-temp args, which the up-front flush would write back only to drop.
+        // Non-simple calls build rest/kw args via C calls, so the pool must be
+        // flushed before `set_arguments`.
+        let using_fpr = if store.is_simple_call(callee_fid, callid) {
+            self.using_fpr_offset()
+        } else {
+            self.get_using_fpr(ir)
+        };
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
