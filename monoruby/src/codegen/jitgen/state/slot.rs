@@ -1352,7 +1352,11 @@ impl SlotState {
     /// (Fixnum) value may reside there.
     #[cfg(feature = "gp-alloc")]
     #[allow(non_snake_case)]
-    pub(crate) fn try_def_G_pool(&mut self, dst: SlotId, guarded: Guarded) -> Option<VReg> {
+    pub(in crate::codegen::jitgen) fn try_def_G_pool(
+        &mut self,
+        dst: SlotId,
+        guarded: Guarded,
+    ) -> Option<VReg> {
         if guarded != Guarded::Fixnum {
             return None;
         }
