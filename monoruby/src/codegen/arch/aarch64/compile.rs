@@ -2207,6 +2207,19 @@ impl Codegen {
         self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
         self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
+        // Preserve the GP-alloc pool (x5-x8 = GP::R8-R11) across the call. They
+        // are AAPCS64 caller-saved and hold live Fixnums under `gp-alloc`. The
+        // write-back above spills them to their frame homes for GC marking, but
+        // the post-GC code keeps reading the *registers* (e.g. a pool-resident
+        // call receiver), so they must survive `execute_gc`. x86 preserves
+        // r8-r11 the same way in its `exec_gc` stub (save/restore_registers).
+        // GP-pool values are Fixnums (immediates), so GC never relocates them
+        // and restoring the raw register value is correct.
+        #[cfg(feature = "gp-alloc")]
+        monoasm_arm64!(&mut self.jit,
+            stp x5, x6, [sp, #-16]!;
+            stp x7, x8, [sp, #-16]!;
+        );
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
             mov x1, x20;
@@ -2214,6 +2227,13 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
+        );
+        #[cfg(feature = "gp-alloc")]
+        monoasm_arm64!(&mut self.jit,
+            ldp x7, x8, [sp], #16;
+            ldp x5, x6, [sp], #16;
+        );
+        monoasm_arm64!(&mut self.jit,
             cbz x0, error;             // None -> error
         );
         self.jit.bind_label(skip);
