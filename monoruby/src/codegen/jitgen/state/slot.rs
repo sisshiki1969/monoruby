@@ -1352,16 +1352,40 @@ impl SlotState {
         self.writeback_r15(ir);
     }
 
-    /// Define `dst` as a Fixnum already resident in the R15 accumulator — the
-    /// in-place result of a fixnum binop. Emits no code: the value is already
-    /// in R15 and the prior occupant was spilled by `free_acc` /
-    /// `fetch_lhs_to_acc`, so this only updates the abstract state (the
-    /// move-free analogue of `def_reg2acc_fixnum`).
-    pub(crate) fn def_acc_fixnum(&mut self, dst: SlotId) {
+    /// A vacant allocatable GP-pool id (`r8`–`r11`), or `None` when the pool is
+    /// full. Used by the in-place fixnum-binop path to keep the result resident
+    /// in the pool (so later reads avoid a stack reload), the move-free analogue
+    /// of `try_def_G_pool`.
+    #[cfg(feature = "gp-alloc")]
+    pub(crate) fn try_vacant_pool_id(&self) -> Option<usize> {
+        self.gp_alloc.find_vacant()
+    }
+
+    /// Define `dst` as a Fixnum already resident in `reg` — the in-place result
+    /// of a fixnum binop. Emits no code: the value is already in `reg` and the
+    /// register was freed (R15 by `free_acc`/`write_back_slot`, a pool register
+    /// by being vacant), so this only updates the abstract state (the move-free
+    /// analogue of `def_reg2acc_fixnum`). `reg` is either R15 or a pool register
+    /// returned by [`Self::try_vacant_pool_id`].
+    pub(crate) fn def_inplace_fixnum(&mut self, dst: SlotId, reg: GP) {
         self.discard(dst);
-        debug_assert!(self.no_r15());
-        self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)));
-        self.r15 = Some(dst);
+        if reg == GP::R15 {
+            debug_assert!(self.no_r15());
+            self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)));
+            self.r15 = Some(dst);
+        } else {
+            #[cfg(feature = "gp-alloc")]
+            {
+                let id = crate::codegen::GP_ALLOC_POOL
+                    .iter()
+                    .position(|&r| r == reg)
+                    .expect("in-place reg must be R15 or a pool register");
+                self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Alloc(id as u32)));
+                self.gp_alloc.add(dst, id);
+            }
+            #[cfg(not(feature = "gp-alloc"))]
+            unreachable!("pool register without the gp-alloc feature");
+        }
     }
 
     /// §9 9d-B accumulator register file: define `dst` directly into a free
