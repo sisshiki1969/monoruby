@@ -54,7 +54,7 @@ pub(super) fn gen_class_allocate_inline(
     };
     let CallSiteInfo { dst, .. } = *callsite;
     state.writeback_acc(ir);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
@@ -409,7 +409,7 @@ pub(super) fn gen_class_new_inline(
     state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
@@ -583,7 +583,7 @@ pub(super) fn gen_class_new_inline(
     state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.fpr_save(using_fpr);
     let alloc_func = alloc_func as *const () as u64;

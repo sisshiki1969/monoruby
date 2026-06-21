@@ -385,7 +385,7 @@ fn array_clone(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_array_clone(array_clone_extern as *const () as u64)
@@ -428,7 +428,7 @@ fn array_dup_inline(
     }
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
         r#gen.emit_array_dup(array_dup_extern as *const () as u64)
@@ -920,7 +920,7 @@ fn array_shl(
     } = *callsite;
     state.load(ir, recv, GP::Rdi);
     state.load(ir, args, GP::Rsi);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_array_shl(ary_shl as *const () as u64));
     ir.fpr_restore(using_fpr);

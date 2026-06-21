@@ -1368,10 +1368,13 @@ impl SlotState {
     /// emitting the stores into `ir`. Used at branch / block-boundary points so
     /// a merged successor never sees a pool-resident slot (the merge machinery
     /// is R15-only). The R15 accumulator is left untouched.
-    #[cfg(feature = "gp-alloc")]
-    pub(crate) fn flush_pool(&mut self, ir: &mut AsmIr) {
+    ///
+    /// Unconditional so callers need no `cfg` gate: without the `gp-alloc`
+    /// feature the pool is always empty, so this is a no-op.
+    pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {
+        #[cfg(feature = "gp-alloc")]
         for (reg, slot) in self.writeback_pool_state() {
-            ir.reg2stack(reg, slot);
+            _ir.reg2stack(reg, slot);
         }
     }
 
@@ -1559,7 +1562,26 @@ impl AbstractFrame {
         self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
     }
 
-    pub(crate) fn get_using_fpr(&self) -> UsingFpr {
+    /// Snapshot the live physical FP pool registers (which the runtime-call
+    /// lowerings save/restore around the C-ABI call) **and**, as a side effect,
+    /// flush any live GP-pool residents to their stack homes.
+    ///
+    /// §9 9d-B: GP-pool registers (`r8`–`r11`) are caller-saved, so a Fixnum
+    /// kept resident there must not survive a C call. Every runtime helper that
+    /// can clobber them is preceded by a `get_using_fpr` snapshot (here, or
+    /// inside the `ir.<helper>(state, …)` builders), so flushing the GP pool at
+    /// this single chokepoint covers them all. Method calls already flush via
+    /// `writeback_acc`, so the flush here is a redundant no-op for them. Use
+    /// [`Self::using_fpr_offset`] where only the stack-offset is needed and no
+    /// call (hence no flush) happens.
+    pub(crate) fn get_using_fpr(&mut self, ir: &mut AsmIr) -> UsingFpr {
+        self.flush_pool(ir);
+        self.using_fpr_offset()
+    }
+
+    /// Pure FP-pool snapshot with no GP-pool flush — for call-free uses that
+    /// only need `UsingFpr::offset()` (e.g. reserving inline-frame stack space).
+    pub(crate) fn using_fpr_offset(&self) -> UsingFpr {
         let mut b = UsingFpr::new();
         // Only physical pool slots need save/restore at call
         // boundaries; spill slots already live on the stack.

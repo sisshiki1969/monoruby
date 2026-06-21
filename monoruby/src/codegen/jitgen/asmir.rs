@@ -668,7 +668,7 @@ impl AsmIr {
         outer: usize,
         call_site_bc_ptr: BytecodePtr,
     ) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         let error = self.new_error(state);
         self.push(AsmInst::BlockArg {
             ret,
@@ -680,12 +680,12 @@ impl AsmIr {
     }
 
     pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::ToA { src, using_fpr });
     }
 
     pub(super) fn concat_str(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::ConcatStr {
             arg,
             len,
@@ -694,7 +694,7 @@ impl AsmIr {
     }
 
     pub(super) fn concat_regexp(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::ConcatRegexp {
             arg,
             len,
@@ -709,7 +709,7 @@ impl AsmIr {
         len: u16,
         rest_pos: Option<u16>,
     ) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         let len = len as _;
         let rest_pos = rest_pos.map(|v| v as _);
         self.push(AsmInst::ExpandArray {
@@ -734,7 +734,7 @@ impl AsmIr {
     /// If `lhs` is Array, compare `rhs` and each element of `lhs`.
     ///
     pub(super) fn array_teq(&mut self, state: &AbstractFrame, lhs: SlotId, rhs: SlotId) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::ArrayTEq {
             lhs,
             rhs,
@@ -749,7 +749,7 @@ impl AsmIr {
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
     ) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::GenericBinOp {
             lhs,
             rhs,
@@ -774,7 +774,7 @@ impl AsmIr {
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
     ) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::OptEqCmp {
             lhs,
             rhs,
@@ -785,14 +785,14 @@ impl AsmIr {
     }
 
     pub(super) fn undef_method(&mut self, state: &AbstractFrame, undef: IdentId) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         let error = self.new_error(state);
         self.push(AsmInst::UndefMethod { undef, using_fpr });
         self.handle_error(error);
     }
 
     pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: SlotId, old: SlotId) {
-        let using_fpr = state.get_using_fpr();
+        let using_fpr = state.using_fpr_offset();
         let error = self.new_error(state);
         self.push(AsmInst::AliasMethod {
             new,

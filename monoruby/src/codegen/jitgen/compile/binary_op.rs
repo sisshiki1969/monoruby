@@ -173,6 +173,9 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
     ) {
         state.write_back_slots(ir, &[lhs, rhs]);
+        // §9 9d-B: the generic comparison emits a C-ABI call; flush any
+        // caller-saved GP-pool resident first (no-op when the pool is empty).
+        state.flush_pool(ir);
         self.guard_class_version(state, ir, true);
         let error = ir.new_error(state);
         // Part C: `==`/`!=` get an inline immediate fast path with a

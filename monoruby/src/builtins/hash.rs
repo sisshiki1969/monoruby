@@ -794,7 +794,7 @@ fn hash_index(
     }
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
-    let using_fpr = state.get_using_fpr();
+    let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashindex as *const () as u64));
     ir.fpr_restore(using_fpr);
