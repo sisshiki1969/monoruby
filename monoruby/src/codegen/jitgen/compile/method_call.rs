@@ -788,6 +788,20 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         arg_class: Option<ClassId>,
     ) -> bool {
+        // Flush the GP register pool (§9 9d-B) to the slots' frame homes before
+        // running the inline-method codegen `f`. `f` may emit C-ABI helper
+        // calls and deopt write-backs that clobber the caller-saved pool
+        // registers (aarch64 x5–x8 / x86-64 r8–r11), so a pool-resident Fixnum
+        // left live across the inline body would be read back as garbage. This
+        // mirrors the explicit `flush_pool` at every other helper-emitting
+        // boundary (ToA, ConcatStr, ConcatRegexp, ExpandArray, the generic
+        // binop/cmp fallbacks, …); the inline-method path was the one gap.
+        // Manifested as an aarch64-only optcarrot `--opt` divergence at frame
+        // 34 under `--features gp-alloc`. No-op when the pool is empty. Done
+        // before the save/restore snapshot so the spill is permanent whether or
+        // not `f` succeeds (on bail the caller falls back to the full call,
+        // which re-flushes — a no-op by then).
+        state.flush_pool(ir);
         let state_save = state.clone();
         let ir_save = ir.save();
         if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
