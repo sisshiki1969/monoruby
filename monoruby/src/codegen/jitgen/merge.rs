@@ -106,33 +106,24 @@ impl<'a> JitContext<'a> {
                     // Adoption policy (Layer-② representation decision, §16): which
                     // loop-carried slots re-adopt the back-edge fixpoint's `F`.
                     //
-                    // Default reads the fixpoint's *placement* (`mode == F`) — the
-                    // remaining dependence on the analysis-pass allocation. L2-1
-                    // (feature `layer2-float-by-type`) replaces it with the
-                    // allocation-free *type + liveness* signal: the back-edge type
-                    // is `Float` and the slot is used as float in the loop
-                    // (`Liveness::loop_used_as_float`). `try_set_new_F` (inside the
-                    // mechanism) still self-limits to a free physical fpr, so a
-                    // promotion the fixpoint could not place under pressure simply
-                    // does not fire.
+                    // Use the allocation-free *type + liveness* signal: the
+                    // back-edge type is `Float` and the slot is used as a float in
+                    // the loop (`Liveness::loop_used_as_float`). `try_set_new_F`
+                    // (inside the mechanism) still self-limits to a free physical
+                    // fpr, so a promotion the fixpoint could not place under
+                    // pressure simply does not fire.
                     let promotable =
                         |i| entries.iter().all(|e| float_bridgeable(e.state.mode(i)));
-                    #[cfg(not(feature = "layer2-float-by-type"))]
-                    {
-                        let adopt = |i| matches!(be.mode(i), LinkMode::F(_));
-                        target.keep_backedge_floats(adopt, promotable);
-                    }
-                    #[cfg(feature = "layer2-float-by-type")]
                     {
                         let loop_float: std::collections::HashSet<SlotId> =
                             liveness.loop_used_as_float().map(|(s, _)| s).collect();
-                        // Adopt the *type+liveness* signal (the L2-1 decoupling
-                        // goal), but never adopt a *narrower* set than the
-                        // fixpoint's placement: a loop-carried float the fixpoint
-                        // already kept `F` must stay `F`, else the back-edge boxes
-                        // it every iteration (the mandelbrot regression — the
-                        // type signal misses copy-aliased carried floats). So
-                        // adopt the union, keeping layer2 ⊇ the default greedy.
+                        // Adopt the type+liveness signal, but never adopt a
+                        // *narrower* set than the fixpoint's placement: a
+                        // loop-carried float the fixpoint already kept `F` must
+                        // stay `F`, else the back-edge boxes it every iteration
+                        // (the mandelbrot regression — the type signal misses
+                        // copy-aliased carried floats). So adopt the union,
+                        // keeping it ⊇ the placement-based greedy set.
                         let adopt = |i| {
                             (be.is_float_typed(i) && loop_float.contains(&i))
                                 || matches!(be.mode(i), LinkMode::F(_))

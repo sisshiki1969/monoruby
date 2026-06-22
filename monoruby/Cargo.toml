@@ -18,11 +18,7 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-# `layer2-float-by-type` (§5 L2-1) is default-on: the M1 + x86-64 bench gate
-# cleared (doc §41 — no regression beyond noise, mandelbrot/aobench/nqueen/bedcov
-# improved). The feature is retained for A/B and `--no-default-features` rollback;
-# it will be folded once it has soaked as the default.
-default = ["layer2-float-by-type"]
+default = []
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
@@ -46,12 +42,6 @@ gc-verify = []
 stress-spill-pool = []
 profile = ["dump-bc", "dump-traceir"]
 perf = []
-# §5 Layer-② extraction L2-1 (doc §16): drive the loop-entry float adoption from
-# the analysis pass's *type + liveness* (back-edge type `Float` ∧ used-as-float in
-# the loop) instead of its *placement* (`mode == F`), decoupling that consumer
-# from the analysis-pass xmm allocation. Now **default-on** (added to `default`):
-# the bench gate cleared on x86-64 and M1 after the §40 union-adopt fix (doc §41).
-layer2-float-by-type = []
 # §5 Layer-② extraction: stage-1 *placement shadow*. Records, in emission order,
 # every physical FP placement that ③ commits (one entry per `PhysMap::resolve`),
 # producing a per-`jit_compile` fingerprint of the FPReg→FPRegLoc lowering. The

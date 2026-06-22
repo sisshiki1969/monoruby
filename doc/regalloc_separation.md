@@ -3069,3 +3069,22 @@ threaded through `copy_slot` + the merge target), squarely in §16.6's regressed
 before risk class, and still M1-gated. The cheaper §42 `phys-loop-aware` lever is
 orthogonal (pressure-gated); coalescing is the POOL=14-relevant one but pays only
 on copy-heavy loop-carried floats (the `a,b = c,d` swap/rotate shape).
+
+## 44. `layer2-float-by-type` folded into the default and removed
+
+The type+liveness loop-entry float adoption (§16 L2-1, promoted to default-on in
+§41) has soaked as the default with no regression, so the Cargo feature is now
+**removed** rather than merely default-on:
+
+- the adopt block in `merge.rs` is unconditional (the union-adopt of §40 — the
+  mandelbrot-safe signal `be.is_float_typed(i) && loop_used_as_float(i)` ∪
+  `be.mode(i) == F`);
+- the A/B-only `#[cfg(not(feature = "layer2-float-by-type"))]` placement-based
+  adopt path is deleted;
+- `layer2-float-by-type` is dropped from `[features]` and the `default` set in
+  `monoruby/Cargo.toml`, and the `bin/` harness (`test`, `bench`, `doom`) no
+  longer passes it.
+
+Only the build knob is gone; runtime behaviour is unchanged from the default-on
+state. The §31/§32 `layer2-float-by-type` × `stress-spill-pool` history is
+retained above as the record of the pressure bug that §39/§40 fixed.
