@@ -13,21 +13,18 @@ drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 # Use YJIT when this ruby supports it (x86-64 Linux CI); fall back to plain ruby
 # where the prebuilt has no YJIT (some arm64 macOS builds). YJIT changes speed,
 # not semantics, so the output diffs are unaffected either way.
-if ruby --yjit -e 'exit(defined?(RubyVM::YJIT) && RubyVM::YJIT.enabled? ? 0 : 1)' >/dev/null 2>&1; then
-  RUBY=(ruby --yjit)
-else
-  RUBY=(ruby)
-fi
+RUBY=(ruby --yjit)
 
-# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths. They target
-# the mature x86-64 JIT; enable them only there. Other arches still build and
-# (when coverage is on) measure the JIT, just without the amplifiers.
-# case "$(uname -m)" in
-#   x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
-#   *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
-# esac
-
-STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type)
+# stress-spill-pool / gc-stress / layer2-float-by-type amplify the JIT's spill +
+# GC paths and run on every arch. `gp-alloc` (the GP-register pool allocator) is
+# only enabled on x86-64: on the AArch64 JIT it still intermittently diverges on
+# `optcarrot --opt` under gc-stress (reproducible on the macOS CI runner, though
+# not on a local M1 or qemu-aarch64), so keep it off there until the aarch64
+# pool path is fixed.
+case "$(uname -m)" in
+  x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type,gp-alloc) ;;
+  *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
+esac
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
@@ -69,13 +66,13 @@ diff -s monoruby.log ruby.log
 #"${RUBY[@]}" benchmark/bf.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
-#echo "checking plb2.."
-#$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
-#"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
-#diff -s monoruby.log ruby.log
-#$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
-#"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
-#diff -s monoruby.log ruby.log
+echo "checking plb2.."
+$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
+"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
+diff -s monoruby.log ruby.log
+$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
+"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
+diff -s monoruby.log ruby.log
 #$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
 #"${RUBY[@]}" benchmark/plb2/matmul.rb > ruby.log
 #diff -s monoruby.log ruby.log

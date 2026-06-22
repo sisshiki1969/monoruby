@@ -788,6 +788,20 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         arg_class: Option<ClassId>,
     ) -> bool {
+        // Flush the GP register pool (§9 9d-B) to the slots' frame homes before
+        // running the inline-method codegen `f`. `f` may emit C-ABI helper
+        // calls and deopt write-backs that clobber the caller-saved pool
+        // registers (aarch64 x5–x8 / x86-64 r8–r11), so a pool-resident Fixnum
+        // left live across the inline body would be read back as garbage. This
+        // mirrors the explicit `flush_pool` at every other helper-emitting
+        // boundary (ToA, ConcatStr, ConcatRegexp, ExpandArray, the generic
+        // binop/cmp fallbacks, …); the inline-method path was the one gap.
+        // Manifested as an aarch64-only optcarrot `--opt` divergence at frame
+        // 34 under `--features gp-alloc`. No-op when the pool is empty. Done
+        // before the save/restore snapshot so the spill is permanent whether or
+        // not `f` succeeds (on bail the caller falls back to the full call,
+        // which re-flushes — a no-op by then).
+        state.flush_pool(ir);
         let state_save = state.clone();
         let ir_save = ir.save();
         if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
@@ -821,18 +835,17 @@ impl AbstractState {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
         self.exec_gc(ir, true);
-        // A simple call's `set_arguments` emits no C call (just register/memory
-        // arg moves), so defer the GP-pool flush to `writeback_acc` below —
-        // which runs *after* `discard(dst)` + `clear_above_next_sp`. This skips
-        // spilling the call's `dst` (immediately overwritten by the result) and
-        // dead-temp args, which the up-front flush would write back only to drop.
-        // Non-simple calls build rest/kw args via C calls, so the pool must be
-        // flushed before `set_arguments`.
-        let using_fpr = if store.is_simple_call(callee_fid, callid) {
-            self.using_fpr_offset()
-        } else {
-            self.get_using_fpr(ir)
-        };
+        // Flush the GP pool up front (folded into `get_using_fpr`), before
+        // `set_arguments`. An earlier optimization deferred this for simple,
+        // block-less calls — reading args straight from the pool registers and
+        // letting the later `writeback_acc` do the flush — to skip spilling the
+        // dead `dst`/temp args. That deferral proved unsound under register
+        // pressure: keeping locals pool-resident through `set_arguments` /
+        // `discard` / `clear_above_next_sp` diverged from the up-front-flush
+        // semantics (optcarrot `--opt` mis-emulated a few frames in on aarch64
+        // `gp-alloc`, e.g. a wrong PPU value broke the vblank-wait loop), so we
+        // always flush before the call now.
+        let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);

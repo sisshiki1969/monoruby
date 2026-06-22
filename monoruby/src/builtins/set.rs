@@ -1168,18 +1168,31 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     let keys = set_keys(lfp.self_val());
     // Result is a Hash mapping classification → Set
     let result_hash = Value::hash_from_inner(Default::default());
-    for k in keys {
-        let classification = vm.invoke_block(globals, &data, &[k])?;
-        let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
-        if let Some(set) = existing {
-            set.as_hash().insert(k, Value::bool(true), vm, globals)?;
-        } else {
-            let new_set = new_empty_set();
-            new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
-            result_hash.as_hash().insert(classification, new_set, vm, globals)?;
+    // `result_hash`, the per-iteration block result, and any freshly-built
+    // subset must stay reachable across the GC that `invoke_block` /
+    // `new_empty_set` / `insert` can trigger (e.g. under gc-stress). They live
+    // only in Rust locals, so without rooting them on the temp stack the
+    // unrooted `result_hash` becomes a use-after-free — it manifested as a
+    // `RValue::ty()` unwrap-on-`None` panic (a swept, dead RVALUE).
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(result_hash);
+        for k in keys {
+            let classification = vm.invoke_block(globals, &data, &[k])?;
+            let depth = vm.temp_len();
+            vm.temp_push(classification);
+            let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
+            if let Some(set) = existing {
+                set.as_hash().insert(k, Value::bool(true), vm, globals)?;
+            } else {
+                let new_set = new_empty_set();
+                vm.temp_push(new_set);
+                new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
+                result_hash.as_hash().insert(classification, new_set, vm, globals)?;
+            }
+            vm.temp_clear(depth);
         }
-    }
-    Ok(result_hash)
+        Ok(result_hash)
+    })
 }
 
 ///
@@ -1295,12 +1308,20 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             }
         }
         let result_set = new_empty_set();
-        for comp in sccs {
-            let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
-            let subset = set_from_iter(elems.into_iter(), vm, globals)?;
-            result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
-        }
-        Ok(result_set)
+        // Root `result_set` and each freshly-built `subset` across the GC that
+        // `set_from_iter` / `insert` can trigger (see `classify`).
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(result_set);
+            for comp in sccs {
+                let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
+                let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+                let depth = vm.temp_len();
+                vm.temp_push(subset);
+                result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
+                vm.temp_clear(depth);
+            }
+            Ok(result_set)
+        })
     } else {
         // Arity-1 mode: classify and return set of sets
         let mut groups: std::collections::HashMap<u64, Vec<Value>> = std::collections::HashMap::new();
@@ -1314,13 +1335,21 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             groups.entry(key).or_default().push(*k);
         }
         let result_set = new_empty_set();
-        for key in group_order {
-            if let Some(elems) = groups.remove(&key) {
-                let subset = set_from_iter(elems.into_iter(), vm, globals)?;
-                result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
+        // Root `result_set` and each freshly-built `subset` across the GC that
+        // `set_from_iter` / `insert` can trigger (see `classify`).
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(result_set);
+            for key in group_order {
+                if let Some(elems) = groups.remove(&key) {
+                    let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+                    let depth = vm.temp_len();
+                    vm.temp_push(subset);
+                    result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
+                    vm.temp_clear(depth);
+                }
             }
-        }
-        Ok(result_set)
+            Ok(result_set)
+        })
     }
 }
 

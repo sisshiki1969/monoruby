@@ -561,6 +561,73 @@ impl Executor {
                     return Err(err);
                 }
             };
+            // monoruby front-loads every installed gem's require path onto
+            // `$LOAD_PATH` (see build.rs) and additionally serves its own
+            // pure-Ruby stubs for C-extension gems (e.g. `gosu`) from
+            // `~/.monoruby/stub`. Either way a bare `require 'foo'`
+            // resolves directly through the native loader and never
+            // reaches rubygems' on-demand activation, so `Gem.loaded_specs`
+            // stays empty. Library code such as
+            // `Gem.loaded_specs["gosu"].full_gem_path` then raises a
+            // `NoMethodError` on `nil`. When the file we just loaded came
+            // from a host gem (`/gems/`) or from a C-extension-gem stub
+            // (`~/.monoruby/stub`), ask the (already eagerly-loaded)
+            // vendored rubygems to activate the gem that provides this
+            // feature so its spec lands in `Gem.loaded_specs`, matching
+            // CRuby — keyed on the requested feature, not the resolved
+            // path, so a stub-shadowed gem still activates its host spec.
+            //
+            // The two gates matter for performance: the first activation
+            // forces rubygems to build its stub index over every installed
+            // gemspec (~100ms here), so we keep that cost off every
+            // program that doesn't actually reach for a host gem.
+            //  * `startup_flag` skips requires issued while startup.rb /
+            //    gem bootstrap runs — notably rubygems' own
+            //    `require "monitor"` (a default gem served from the stub
+            //    dir), which would otherwise build the index at every
+            //    boot for no benefit (default gems don't populate
+            //    `loaded_specs`).
+            //  * the resolved-path gate skips the vendored stdlib (e.g.
+            //    `require 'rbconfig'` resolves under `~/.monoruby/lib`),
+            //    so a program that only touches the stdlib never pays the
+            //    index-build cost.
+            //  * the top-level-feature gate (no `/` in the requested name)
+            //    fires only for a gem's entry require (`require 'gosu'`),
+            //    not its sub-files (`require 'ffi/struct'`). The entry
+            //    require already activates the whole gem, so activating
+            //    again per sub-file is redundant — and ruinous: each
+            //    `try_activate` for an unresolved sub-path drags rubygems'
+            //    full stub scan (`find_unloaded_by_path` → `have_file?` →
+            //    `contains_requirable_file?`) into the hot require path,
+            //    deopt-storming through gem load (e.g. ffi's ~180 sub-file
+            //    requires). Gems pulled in only by sub-path keep an empty
+            //    `loaded_specs` entry — the same as before this hook, and
+            //    not needed by the gosu/`full_gem_path` case this serves.
+            // `require_relative` (`is_relative`) and absolute requires are
+            // skipped too: their feature is a path, not a gem name.
+            // Best-effort — any raised error is swallowed (and cleared
+            // from `self`) so a successful require never fails over this
+            // bookkeeping.
+            if !is_relative
+                && CODEGEN.with(|codegen| codegen.borrow().startup_flag)
+                && file_name.to_str().is_some_and(|s| !s.contains('/'))
+                && canonicalized_path
+                    .to_str()
+                    .is_some_and(|s| s.contains("/gems/") || s.contains("/.monoruby/stub/"))
+                && let Some(gem) = globals
+                    .store
+                    .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Gem"))
+            {
+                let feature = Value::string_from_str(&file_name.to_string_lossy());
+                let _ = self.invoke_method_if_exists(
+                    globals,
+                    IdentId::get_id("try_activate"),
+                    gem,
+                    &[feature],
+                    None,
+                    None,
+                );
+            }
             Ok(true)
         } else {
             Ok(false)
