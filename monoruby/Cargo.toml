@@ -70,6 +70,17 @@ phys-loop-aware = []
 # pool registers live across C-ABI calls. NON-byte-identical once it places a
 # slot; default-off until the M1 A/B bench gate clears (cf. phys-loop-aware §42).
 gp-alloc = []
+# §9 9d-2: move the GP-pool allocation *decision* out of the abstract
+# interpreter (`gp-alloc`) into the LIR pass (`gp_alloc::allocate`, run from
+# `allocate_gp`). Builds live ranges + a pool-clobber map over the buffered
+# `LInst` stream and linear-scan-assigns `VReg::Alloc` ids to pool registers,
+# so cross-merge register retention (keeping a value resident past a boundary
+# the front-end currently flushes at) becomes expressible at the LIR layer.
+# Implies `gp-alloc` (it re-colours the ids that allocator emits). The machinery
+# step is byte-identical (the LIR scan reproduces a valid assignment); the perf
+# step that relaxes the front-end flush is NON-byte-identical and gated on the
+# M1 A/B bench (x86 `bin/bench` A/B as the proxy here). Default-off.
+gp-alloc-lir = ["gp-alloc"]
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

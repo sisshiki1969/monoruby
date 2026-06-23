@@ -74,6 +74,11 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
+            // §9d-2d: loop-carried GP retention. The loop-entry merge keeps an
+            // agreed `G` binding (the fixpoint no longer demotes it at the
+            // back-edge, and `use_float` tolerates a `G` loop-carried slot), so a
+            // value the loop carries stays in its pool register across the
+            // back-edge instead of round-tripping its stack home each iteration.
             let incoming = AbstractState::join_entries(&entries);
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;

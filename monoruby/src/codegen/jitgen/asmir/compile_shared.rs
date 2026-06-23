@@ -1094,6 +1094,25 @@ impl Codegen {
         }
     }
 
+    /// (§9 9d) GP physical-allocation pass over a buffered region body. This is
+    /// the seam between buffering (`gen_asm` collects the body into one ordered
+    /// `Vec<LInst>`) and the drain (emission). Today it is the **identity**: the
+    /// body drains exactly as buffered, so the output is byte-identical. §9d
+    /// fills it in — walking the stream, assigning each allocatable virtual GP
+    /// (`VReg::Alloc`, a bytecode slot) to a pool register (`GP_ALLOC_POOL`) or
+    /// leaving it in its stack home, inserting loads/stores and the call /
+    /// safepoint flush-and-demote (`G -> S`, no reload — a GP pool value's spill
+    /// home *is* its slot). The ① fixpoint's loop-head liveness / loop-carried
+    /// metadata is threaded in here when that step lands (the §9c wiring).
+    pub(in crate::codegen::jitgen) fn allocate_gp(&self, body: Vec<LInst>) -> Vec<LInst> {
+        #[cfg(feature = "gp-alloc-lir")]
+        {
+            return crate::codegen::jitgen::gp_alloc::allocate(body);
+        }
+        #[cfg(not(feature = "gp-alloc-lir"))]
+        body
+    }
+
     /// (§9 9a) Drain a frame-needing ordering pseudo-op. Unlike `encode_linst`
     /// (frameless) and `encode_linst_inline` (`store`/`labels`/`base`), this
     /// reproduces the position-metadata side effects that read/write the frame.

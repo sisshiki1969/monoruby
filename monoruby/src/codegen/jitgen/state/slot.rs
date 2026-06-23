@@ -482,6 +482,17 @@ impl SlotState {
 
     fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
         for (slot, as_f64) in used_as_float {
+            // §9d-2d: a loop-carried pool resident that the loop also uses as a
+            // float stays in its GP register — each float-use loads and converts
+            // straight from it (the read path lowers `G`), and an in-loop need for
+            // `F`/`Sf` is met by the merge bridge's `(G, _)` arms. Unlike the
+            // `S -> Sf` hint there is no pre-conversion to do, so leave it `G`.
+            // Handled before the match so the (default-build) match below — where
+            // `G` is `unreachable!` — stays untouched.
+            #[cfg(feature = "gp-alloc-lir")]
+            if matches!(self.mode(slot), LinkMode::G(_, _)) {
+                continue;
+            }
             match self.mode(slot) {
                 LinkMode::S(_) => {
                     if as_f64 {
@@ -2217,6 +2228,18 @@ impl AbstractFrame {
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
+            // §9 9d-2b cross-merge GP retention: `join` keeps `G` in the target
+            // only when every entry agrees on the identical binding, so the same
+            // value sits in the same pool register on both sides — the bridge is
+            // a no-op. A different register would mean disagreement (which `join`
+            // demotes to `S`, never reaching here); reconcile defensively by
+            // writing back rather than trusting that invariant.
+            #[cfg(feature = "gp-alloc-lir")]
+            (LinkMode::G(_, l), LinkMode::G(_, r)) => {
+                if l != r {
+                    self.write_back_slot(ir, slot);
+                }
+            }
             (l, r) => {
                 unreachable!("{slot:?} {l:?}->{r:?} {target:?}");
             }
