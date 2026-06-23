@@ -2505,6 +2505,8 @@ impl Codegen {
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
         }
         let body = self.lir_buf.take().unwrap();
+        // (§9d) GP physical-allocation pass seam — identity today (byte-identical).
+        let body = self.allocate_gp(body);
         for inst in body {
             match inst {
                 LInst::Inline(_) => {
