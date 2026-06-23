@@ -1361,18 +1361,16 @@ impl SlotState {
         self.gp_alloc.find_vacant()
     }
 
-    /// Define `dst` as a Fixnum already resident in `reg` — the in-place result
-    /// of a fixnum binop. Emits no code: the value is already in `reg` and the
-    /// register was freed (R15 by `free_acc`/`write_back_slot`, a pool register
-    /// by being vacant), so this only updates the abstract state (the move-free
-    /// analogue of `def_reg2acc_fixnum`). `reg` is either R15 or a pool register
-    /// returned by [`Self::try_vacant_pool_id`].
-    pub(crate) fn def_inplace_fixnum(&mut self, dst: SlotId, reg: GP) {
+    /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
+    /// `reg` is either a pool register (the value stays resident) or R15, the
+    /// transient scratch used when no pool register was free. With the R15
+    /// accumulator retired, the R15 case is not a residence: the value is
+    /// stored to `dst`'s stack home and `dst` becomes `S`.
+    pub(crate) fn def_inplace_fixnum(&mut self, ir: &mut AsmIr, dst: SlotId, reg: GP) {
         self.discard(dst);
         if reg == GP::R15 {
-            debug_assert!(self.no_r15());
-            self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)));
-            self.r15 = Some(dst);
+            ir.reg2stack(GP::R15, dst);
+            self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
         } else {
             #[cfg(feature = "gp-alloc")]
             {
