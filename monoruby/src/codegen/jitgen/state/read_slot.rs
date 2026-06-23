@@ -311,25 +311,12 @@ impl AbstractFrame {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::F(fpr) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
                 // F -> Sf
                 self.set_Sf_float(slot, fpr);
                 GpLoad::FprBox(fpr, slot, dst)
             }
-            LinkMode::C(v) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
-                GpLoad::Lit(v, dst)
-            }
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {
-                if dst == GP::R15 {
-                    assert!(self.no_r15());
-                }
-                GpLoad::Stack(slot, dst)
-            }
+            LinkMode::C(v) => GpLoad::Lit(v, dst),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => GpLoad::Stack(slot, dst),
             LinkMode::G(_, vreg) => GpLoad::Reg(vreg.phys(), dst),
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
@@ -370,7 +357,6 @@ impl AbstractFrame {
             self.guard_fixnum(ir, lhs, reg);
             return reg;
         }
-        self.free_acc(ir);
         self.load(ir, lhs, GP::R15);
         self.guard_fixnum(ir, lhs, GP::R15);
         GP::R15
@@ -380,12 +366,11 @@ impl AbstractFrame {
     /// immediate (the `IR`-Sub case, where the encoder materializes the
     /// immediate into the result register): a vacant pool register under
     /// gp-alloc, else the freed R15 accumulator.
-    pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, ir: &mut AsmIr) -> GP {
+    pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, _ir: &mut AsmIr) -> GP {
         #[cfg(feature = "gp-alloc")]
         if let Some(id) = self.try_vacant_pool_id() {
             return crate::codegen::GP_ALLOC_POOL[id];
         }
-        self.free_acc(ir);
         GP::R15
     }
 

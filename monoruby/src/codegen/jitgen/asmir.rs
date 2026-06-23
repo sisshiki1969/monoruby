@@ -573,10 +573,6 @@ impl AsmIr {
         self.push(AsmInst::LitToReg(v, reg));
     }
 
-    pub fn acc2stack(&mut self, reg: SlotId) {
-        self.push(AsmInst::AccToStack(reg));
-    }
-
     ///
     /// Convert Fixnum to f64.
     ///
@@ -1177,11 +1173,6 @@ pub(super) enum AsmInst {
     Unreachable,
     /// move reg to stack
     RegToStack(GP, SlotId),
-    /// move acc to stack
-    AccToStack(SlotId),
-
-    /// move reg to acc
-    RegToAcc(GP),
 
     /// move reg to stack
     StackToReg(SlotId, GP),
@@ -2301,8 +2292,6 @@ impl AsmInst {
     #[allow(dead_code)]
     pub fn dump(&self, store: &Store) -> String {
         match self {
-            Self::AccToStack(slot) => format!("{:?} = R15", slot),
-            Self::RegToAcc(gpr) => format!("R15 = {:?}", gpr),
             Self::RegToStack(gpr, slot) => format!("{:?} = {:?}", slot, gpr),
             Self::StackToReg(slot, gpr) => format!("{:?} = {:?}", gpr, slot),
             Self::LitToReg(val, gpr) => format!("{:?} = {}", gpr, val.debug(store)),

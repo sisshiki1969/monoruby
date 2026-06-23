@@ -464,7 +464,7 @@ impl AbstractFrame {
                         mode,
                         deopt,
                     });
-                    self.def_inplace_fixnum(dst, dst_reg);
+                    self.def_inplace_fixnum(ir, dst, dst_reg);
                 } else {
                     // Result discarded: run the op in the Rdi scratch purely for
                     // the overflow side-exit; no destination store.

@@ -49,16 +49,6 @@ impl Codegen {
                 dst: dst.into(),
                 src: src.into(),
             }),
-            // acc <- reg
-            AsmInst::RegToAcc(r) => self.encode_linst(LInst::Mov {
-                dst: GP::R15.into(),
-                src: r.into(),
-            }),
-            // [slot] <- acc
-            AsmInst::AccToStack(slot) => self.encode_linst(LInst::Store {
-                src: GP::R15,
-                mem: LMem::Slot(slot),
-            }),
             // [slot] <- reg
             AsmInst::RegToStack(r, slot) => self.encode_linst(LInst::Store {
                 src: r,

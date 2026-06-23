@@ -343,7 +343,6 @@ pub(crate) struct SlotState {
     /// B2.1; populated by the allocator (B2.2+).
     #[cfg(feature = "gp-alloc")]
     gp_alloc: GpAllocator,
-    r15: Option<SlotId>,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
@@ -385,7 +384,6 @@ impl SlotState {
             fpr_alloc: FprAllocator::new(),
             #[cfg(feature = "gp-alloc")]
             gp_alloc: GpAllocator::new(),
-            r15: None,
             local_num,
             deferred_rest: None,
             loop_carried: std::collections::HashSet::new(),
@@ -468,10 +466,6 @@ impl SlotState {
             .zip(other.ty.iter())
             .map(|(a, b)| a.join(b))
             .collect()
-    }
-
-    pub(super) fn no_r15(&self) -> bool {
-        self.r15.is_none()
     }
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
@@ -697,8 +691,7 @@ impl SlotState {
             }
             LinkMode::G(_, vreg) => match vreg {
                 VReg::Pinned(_) => {
-                    assert_eq!(self.r15, Some(slot));
-                    self.r15 = None;
+                    unreachable!("R15 accumulator retired; slot residence is pool-only")
                 }
                 VReg::Alloc(_id) => {
                     #[cfg(feature = "gp-alloc")]
@@ -971,30 +964,6 @@ impl SlotState {
         }
     }
 
-    ///
-    /// Link *slot* to the accumulator.
-    ///
-    #[allow(non_snake_case)]
-    pub(crate) fn def_G(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: impl Into<Option<SlotId>>,
-        guarded: Guarded,
-    ) {
-        if let Some(slot) = slot.into() {
-            self.discard(slot);
-            // Free only R15 for the new accumulator; pool (`Alloc`) residents
-            // persist across the `def_G` (they are flushed at call/store/def
-            // boundaries via `writeback_acc`, not here). The placement trigger
-            // (`try_relocate_acc_to_pool`) runs *before* this in
-            // `def_reg2acc_guarded`, where it can check that the new value's
-            // source register is not R15 (so R15 still holds the old value).
-            self.writeback_r15(ir);
-            self.set_mode(slot, LinkMode::G(guarded, VReg::Pinned(GP::R15)));
-            self.r15 = Some(slot);
-        }
-    }
-
     // APIs for 'use'
 
     /// used as f64 with no conversion
@@ -1029,8 +998,7 @@ impl SlotState {
                 // G -> S
                 match vreg {
                     VReg::Pinned(_) => {
-                        assert_eq!(self.r15, Some(slot));
-                        self.r15 = None;
+                        unreachable!("R15 accumulator retired; slot residence is pool-only")
                     }
                     VReg::Alloc(_id) => {
                         #[cfg(feature = "gp-alloc")]
@@ -1284,31 +1252,9 @@ impl SlotState {
     }
 
     ///
-    ///
-    /// Write back acc(`r15``) to the stack slot.
-    ///
-    /// The slot is set to LinkMode::Stack.
-    ///
-    ///
-    /// Analysis half of [`Self::writeback_acc`] (item ②, step-2 spike): evict
-    /// the accumulator (`r15`) owner to its stack home in the *abstract state*
-    /// only, returning the evicted slot so the emission half can store it. This
-    /// is the pure state transition — a standalone analysis pass calls this and
-    /// never touches `AsmIr`; codegen calls `writeback_acc` (this + the store).
-    ///
-    fn writeback_acc_state(&mut self) -> Option<SlotId> {
-        let slot = self.r15?;
-        let guarded = self.guarded(slot);
-        self.set_mode(slot, LinkMode::S(guarded));
-        self.r15 = None;
-        Some(slot)
-    }
-
     /// §9 9d-B flush-at-boundary: evict every allocatable-pool resident
     /// (`G(_, VReg::Alloc(_))`) to its stack home in the *abstract state*,
     /// returning the `(reg, slot)` pairs so the emission half can store them.
-    /// The dedicated accumulator (`Pinned(R15)`) is handled by
-    /// [`Self::writeback_acc_state`]; this is its pool analogue.
     ///
     /// This runs at every call / store / definition boundary (every
     /// `writeback_acc` site), so a pool value never stays resident across a
@@ -1333,25 +1279,6 @@ impl SlotState {
         out
     }
 
-    /// Spill only the dedicated accumulator (R15) to its stack home, leaving
-    /// any pool (`Alloc`) residents in place. Used by `def_G` to free R15 for a
-    /// new accumulator value while letting pool-resident slots persist across
-    /// it. (`writeback_acc` is the *full* flush — R15 *and* pool — used at the
-    /// call / store / definition boundaries.)
-    fn writeback_r15(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.writeback_acc_state() {
-            ir.acc2stack(slot);
-        }
-    }
-
-    /// Free the R15 accumulator by spilling its current occupant (if any) to
-    /// the stack, so R15 can serve as the in-place result register of a fixnum
-    /// binop. Afterwards `self.r15 == None`. Pool (`Alloc`) residents are left
-    /// in place (this is the R15-only half of `writeback_acc`).
-    pub(crate) fn free_acc(&mut self, ir: &mut AsmIr) {
-        self.writeback_r15(ir);
-    }
-
     /// A vacant allocatable GP-pool id (`r8`–`r11`), or `None` when the pool is
     /// full. Used by the in-place fixnum-binop path to keep the result resident
     /// in the pool (so later reads avoid a stack reload), the move-free analogue
@@ -1361,18 +1288,16 @@ impl SlotState {
         self.gp_alloc.find_vacant()
     }
 
-    /// Define `dst` as a Fixnum already resident in `reg` — the in-place result
-    /// of a fixnum binop. Emits no code: the value is already in `reg` and the
-    /// register was freed (R15 by `free_acc`/`write_back_slot`, a pool register
-    /// by being vacant), so this only updates the abstract state (the move-free
-    /// analogue of `def_reg2acc_fixnum`). `reg` is either R15 or a pool register
-    /// returned by [`Self::try_vacant_pool_id`].
-    pub(crate) fn def_inplace_fixnum(&mut self, dst: SlotId, reg: GP) {
+    /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
+    /// `reg` is either a pool register (the value stays resident) or R15, the
+    /// transient scratch used when no pool register was free. With the R15
+    /// accumulator retired, the R15 case is not a residence: the value is
+    /// stored to `dst`'s stack home and `dst` becomes `S`.
+    pub(crate) fn def_inplace_fixnum(&mut self, ir: &mut AsmIr, dst: SlotId, reg: GP) {
         self.discard(dst);
         if reg == GP::R15 {
-            debug_assert!(self.no_r15());
-            self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)));
-            self.r15 = Some(dst);
+            ir.reg2stack(GP::R15, dst);
+            self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
         } else {
             #[cfg(feature = "gp-alloc")]
             {
@@ -1428,16 +1353,12 @@ impl SlotState {
         }
     }
 
-    pub(crate) fn writeback_acc(&mut self, ir: &mut AsmIr) {
-        if let Some(slot) = self.writeback_acc_state() {
-            ir.acc2stack(slot);
-        }
+    pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {
         #[cfg(feature = "gp-alloc")]
         for (reg, slot) in self.writeback_pool_state() {
-            ir.reg2stack(reg, slot);
+            _ir.reg2stack(reg, slot);
         }
         assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_, _))));
-        assert!(self.r15.is_none());
     }
 
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
@@ -1494,7 +1415,9 @@ impl SlotState {
                 ir.reg2stack(vreg.phys(), src);
                 self.set_S_with_guard(src, guarded);
                 match vreg {
-                    VReg::Pinned(_) => self.def_G(ir, dst, guarded),
+                    VReg::Pinned(_) => {
+                        unreachable!("R15 accumulator retired; slot residence is pool-only")
+                    }
                     #[cfg(feature = "gp-alloc")]
                     VReg::Alloc(id) => {
                         self.discard(dst);
@@ -1661,22 +1584,18 @@ impl AbstractFrame {
         let gp = self.wb_gp(|_| true);
         #[cfg(not(feature = "gp-alloc"))]
         let gp = vec![];
-        WriteBack::new(vec![], literal, self.r15, void, gp, vec![])
+        WriteBack::new(vec![], literal, void, gp, vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        let r15 = match self.r15 {
-            Some(slot) if f(slot) => Some(slot),
-            _ => None,
-        };
         #[cfg(feature = "gp-alloc")]
         let gp = self.wb_gp(f);
         #[cfg(not(feature = "gp-alloc"))]
         let gp = vec![];
-        WriteBack::new(fpr, literal, r15, vec![], gp, self.wb_forward_rest())
+        WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
@@ -1745,10 +1664,8 @@ impl AbstractFrame {
     }
 
     /// §9 9d-B: collect the slots resident in the allocatable GP pool
-    /// (`VReg::Alloc`), each paired with its physical pool register. The
-    /// dedicated accumulator (`VReg::Pinned(R15)`) is *not* included — it is
-    /// written back separately via `self.r15`. Empty until the allocator places
-    /// a slot in the pool.
+    /// (`VReg::Alloc`), each paired with its physical pool register. Empty until
+    /// the allocator places a slot in the pool.
     #[cfg(feature = "gp-alloc")]
     fn wb_gp(&self, f: impl Fn(SlotId) -> bool) -> Vec<(GP, SlotId)> {
         self.all_regs()
@@ -1830,9 +1747,7 @@ pub(in crate::codegen::jitgen) enum Spill {
     /// `ir.lit2stack(value, slot)`
     Lit(Value, SlotId),
     /// Write back a `G`-slot's register to its stack home: `ir.reg2stack(reg,
-    /// slot)`. `reg` is the slot's register (`r15` for the accumulator — then
-    /// byte-identical to the old `acc2stack` — or a pool register once 9d places
-    /// it).
+    /// slot)`. `reg` is the slot's pool register.
     Reg(GP, SlotId),
 }
 
