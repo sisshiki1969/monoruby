@@ -43,8 +43,6 @@ impl Codegen {
             AsmInst::BcIndex(..)
             | AsmInst::Label(..)
             | AsmInst::RegMove(..)
-            | AsmInst::RegToAcc(..)
-            | AsmInst::AccToStack(..)
             | AsmInst::RegToStack(..)
             | AsmInst::StackToReg(..)
             | AsmInst::LitToReg(..)

@@ -130,20 +130,18 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 }
 
 ///
-/// The struct holds information for writing back Value's in fpr registers or accumulator to the corresponding stack slots.
+/// The struct holds information for writing back Value's in fpr registers or pool registers to the corresponding stack slots.
 ///
-/// Currently supports `literal`s, `fpr` registers and a `R15` register (as an accumulator).
+/// Currently supports `literal`s, `fpr` registers and `gp` pool registers.
 ///
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     fpr: Vec<(FPReg, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
-    r15: Option<SlotId>,
     /// §9 9d-B: slots resident in the allocatable GP pool (x86-64 `r8`–`r11`),
     /// each paired with the physical register holding it. Written back to the
-    /// slot's frame home at every flush / deopt / GC safepoint, exactly like
-    /// `r15` (the dedicated accumulator) but for the pool registers. Empty until
+    /// slot's frame home at every flush / deopt / GC safepoint. Empty until
     /// the GP allocator (the `gp-alloc` feature) places a slot, so shipping
     /// builds carry an always-empty vec and emit byte-identical code.
     gp: Vec<(GP, SlotId)>,
@@ -173,9 +171,6 @@ impl Hash for WriteBack {
         for slot in &self.void {
             slot.hash(state);
         }
-        if let Some(slot) = self.r15 {
-            slot.hash(state);
-        }
         for (reg, slot) in &self.gp {
             reg.hash(state);
             slot.hash(state);
@@ -203,9 +198,6 @@ impl std::fmt::Debug for WriteBack {
         for slot in &self.void {
             s.push_str(&format!(" nil->{:?}", slot));
         }
-        if let Some(slot) = self.r15 {
-            s.push_str(&format!(" R15->{:?}", slot));
-        }
         for (reg, slot) in &self.gp {
             s.push_str(&format!(" {:?}->{:?}", reg, slot));
         }
@@ -220,7 +212,6 @@ impl WriteBack {
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
-        r15: Option<SlotId>,
         void: Vec<SlotId>,
         gp: Vec<(GP, SlotId)>,
         forward_rest: Vec<(SlotId, SlotId, u16)>,
@@ -228,7 +219,6 @@ impl WriteBack {
         Self {
             fpr,
             literal,
-            r15,
             void,
             gp,
             forward_rest,
@@ -879,11 +869,6 @@ impl JitModule {
         for slot in &wb.void {
             self.literal_to_stack(*slot, Value::nil());
         }
-        if let Some(slot) = wb.r15 {
-            monoasm! { &mut *self,
-                movq [rbp - (rbp_local(slot))], r15;
-            }
-        }
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
                 movq [rbp - (rbp_local(*slot))], R(*reg as _);
@@ -911,11 +896,6 @@ impl JitModule {
         }
         for slot in &wb.void {
             self.literal_to_stack2(*slot, Value::nil());
-        }
-        if let Some(slot) = wb.r15 {
-            monoasm! { &mut *self,
-                movq [r14 - (conv(slot))], r15;
-            }
         }
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,

@@ -350,11 +350,6 @@ impl Codegen {
         for slot in &wb.void {
             self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
         }
-        if let Some(slot) = wb.r15 {
-            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-            let acc = GP::R15.a64().0; // x23
-            self.a64_frame_store(acc, lfp, off);
-        }
         for (reg, slot) in &wb.gp {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
             self.a64_frame_store(reg.a64().0, lfp, off);
