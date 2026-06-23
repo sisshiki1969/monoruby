@@ -966,6 +966,14 @@ pub(in crate::codegen::jitgen) enum LInst {
         loop_jit_spill_bytes: usize,
         base: usize,
     },
+    /// (§9 9a) Ordering pseudo-op: select the hot (0) / cold (1) emission page.
+    /// Emits no machine code of its own; reproduces `self.jit.select_page(n)` at
+    /// drain time so page selection is part of the single ordered LIR stream the
+    /// future allocation pass walks.
+    SelectPage(usize),
+    /// (§9 9a) Ordering pseudo-op: bind a `DestLabel` at the current emission
+    /// position (reproduces `self.jit.bind_label(label)` at drain time).
+    BindLabel(DestLabel),
     /// Inlined-builtin escape hatch: an opaque generator closure that emits the
     /// arch-appropriate asm directly. Unlike every other `LInst` (which is
     /// store-free and lowered by `encode_linst`), its emit needs the compile

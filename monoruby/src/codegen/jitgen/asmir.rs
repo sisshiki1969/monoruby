@@ -2471,11 +2471,11 @@ impl Codegen {
         }
 
         if entry.is_some() && exit.is_some() {
-            self.jit.select_page(1);
+            self.encode_linst(LInst::SelectPage(1));
         }
 
         if let Some(entry) = &entry {
-            self.jit.bind_label(entry.clone());
+            self.encode_linst(LInst::BindLabel(entry.clone()));
         }
 
         for inst in ir.inst {
@@ -2493,7 +2493,7 @@ impl Codegen {
             }
         }
         if entry.is_some() && exit.is_some() {
-            self.jit.select_page(0);
+            self.encode_linst(LInst::SelectPage(0));
         }
     }
 

@@ -42,7 +42,7 @@ impl Codegen {
             // Bind a JIT label at the current position.
             AsmInst::Label(label) => {
                 let label = frame.resolve_label(&mut self.jit, label);
-                self.jit.bind_label(label);
+                self.encode_linst(LInst::BindLabel(label));
             }
             // dst <- src
             AsmInst::RegMove(src, dst) => self.encode_linst(LInst::Mov {
@@ -1060,6 +1060,11 @@ impl Codegen {
     ///
     pub(in crate::codegen::jitgen) fn encode_linst_macro(&mut self, inst: LInst) {
         match inst {
+            // (§9 9a) Ordering pseudo-ops: reproduce the inline jit calls at
+            // drain time. Arch-neutral (pure `self.jit` ops), so they live here
+            // rather than in each backend's `encode_linst`.
+            LInst::SelectPage(page) => self.jit.select_page(page),
+            LInst::BindLabel(label) => self.jit.bind_label(label),
             LInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
