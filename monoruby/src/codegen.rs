@@ -108,11 +108,14 @@ const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 /// `VReg::Alloc` ids into these (or a frame spill slot); because they are
 /// caller-saved, any live across a C-ABI call is spilled/reloaded around it.
 ///
-/// x86-64: `r8`–`r11`. (aarch64's pool is revisited when 9d targets it — these
-/// `GP` names map to `x5`–`x8` via `GP::a64`, which overlap the aarch64 call-arg
-/// scratch, so the aarch64 allocatable set will likely differ.)
-#[allow(dead_code)]
-pub(in crate::codegen) const GP_ALLOC_POOL: [GP; 4] = [GP::R8, GP::R9, GP::R10, GP::R11];
+/// Arch-specific. x86-64 uses `r8`–`r11`. aarch64's pool is **empty**: the
+/// `GP` names `R8`–`R11` map to `x5`–`x8` via `GP::a64`, which overlap the
+/// aarch64 call-arg scratch, so no GP register is allocatable there and every
+/// value lives in its frame home (the R15 accumulator having been retired).
+#[cfg(target_arch = "x86_64")]
+pub(in crate::codegen) const GP_ALLOC_POOL: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11];
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) const GP_ALLOC_POOL: &[GP] = &[];
 
 ///
 /// General purpose registers.
