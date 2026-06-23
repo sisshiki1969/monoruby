@@ -36,8 +36,7 @@ impl Codegen {
         match inst {
             // Source-position record (no machine code).
             AsmInst::BcIndex(i) => {
-                let pos = self.jit.get_current() - frame.start_codepos;
-                frame.sourcemap.push((i, pos));
+                self.encode_linst_frame(LInst::SourcePos { idx: i }, frame);
             }
             // Bind a JIT label at the current position.
             AsmInst::Label(label) => {
@@ -1048,6 +1047,24 @@ impl Codegen {
         match inst {
             LInst::Inline(proc) => (proc.proc)(self, store, labels, base),
             _ => unreachable!("encode_linst_inline only handles LInst::Inline"),
+        }
+    }
+
+    /// (§9 9a) Drain a frame-needing ordering pseudo-op. Unlike `encode_linst`
+    /// (frameless) and `encode_linst_inline` (`store`/`labels`/`base`), this
+    /// reproduces the position-metadata side effects that read/write the frame.
+    /// It is the frame-aware seam the whole-region buffering will route through.
+    pub(in crate::codegen::jitgen) fn encode_linst_frame(
+        &mut self,
+        inst: LInst,
+        frame: &mut AsmInfo,
+    ) {
+        match inst {
+            LInst::SourcePos { idx } => {
+                let pos = self.jit.get_current() - frame.start_codepos;
+                frame.sourcemap.push((idx, pos));
+            }
+            _ => unreachable!("encode_linst_frame only handles frame-needing pseudo-ops"),
         }
     }
 

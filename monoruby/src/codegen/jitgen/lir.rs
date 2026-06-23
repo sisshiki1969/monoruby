@@ -974,6 +974,13 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// (§9 9a) Ordering pseudo-op: bind a `DestLabel` at the current emission
     /// position (reproduces `self.jit.bind_label(label)` at drain time).
     BindLabel(DestLabel),
+    /// (§9 9a) Ordering pseudo-op: record a source-position entry for `idx` at
+    /// the current emission position (reproduces `AsmInst::BcIndex`'s
+    /// `frame.sourcemap.push((idx, cur - start))`). Needs the frame, so it is
+    /// drained through the frame-aware `encode_linst_frame`, not `encode_linst`.
+    SourcePos {
+        idx: BcIndex,
+    },
     /// Inlined-builtin escape hatch: an opaque generator closure that emits the
     /// arch-appropriate asm directly. Unlike every other `LInst` (which is
     /// store-free and lowered by `encode_linst`), its emit needs the compile
