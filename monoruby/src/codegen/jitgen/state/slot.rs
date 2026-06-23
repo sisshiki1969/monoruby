@@ -1288,6 +1288,26 @@ impl SlotState {
         self.gp_alloc.find_vacant()
     }
 
+    /// §9 9d-2b: abstract-only demotion of every pool resident (`G(_, Alloc)`)
+    /// to its stack home (`S`), **without** emitting the stores — the caller is a
+    /// merge point whose per-predecessor `bridge` emits the actual write-back
+    /// when it reconciles an entry's `G` to this now-`S` target.
+    ///
+    /// Used at loop-entry merges, where retaining `G` is unsafe: the loop path's
+    /// `liveness_analysis` → `use_float` `unreachable!`s on a `G` mode (a slot
+    /// the loop uses as a float must be an fpr binding, not a pool resident). So
+    /// loops opt out of cross-merge GP retention this slice; straight-line / non
+    /// loop merges still retain. `set_S_with_guard` → `clear` keeps the
+    /// `gp_alloc` occupancy table consistent.
+    #[cfg(feature = "gp-alloc-lir")]
+    pub(in crate::codegen::jitgen) fn demote_pool_to_stack(&mut self) {
+        for slot in self.all_regs() {
+            if let LinkMode::G(guarded, VReg::Alloc(_)) = self.mode(slot) {
+                self.set_S_with_guard(slot, guarded);
+            }
+        }
+    }
+
     /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
     /// `reg` is either a pool register (the value stays resident) or R15, the
     /// transient scratch used when no pool register was free. With the R15
@@ -2217,6 +2237,18 @@ impl AbstractFrame {
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
+            // §9 9d-2b cross-merge GP retention: `join` keeps `G` in the target
+            // only when every entry agrees on the identical binding, so the same
+            // value sits in the same pool register on both sides — the bridge is
+            // a no-op. A different register would mean disagreement (which `join`
+            // demotes to `S`, never reaching here); reconcile defensively by
+            // writing back rather than trusting that invariant.
+            #[cfg(feature = "gp-alloc-lir")]
+            (LinkMode::G(_, l), LinkMode::G(_, r)) => {
+                if l != r {
+                    self.write_back_slot(ir, slot);
+                }
+            }
             (l, r) => {
                 unreachable!("{slot:?} {l:?}->{r:?} {target:?}");
             }

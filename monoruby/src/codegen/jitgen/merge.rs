@@ -74,7 +74,14 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
-            let incoming = AbstractState::join_entries(&entries);
+            #[allow(unused_mut)]
+            let mut incoming = AbstractState::join_entries(&entries);
+            // §9 9d-2b: loops opt out of cross-merge GP retention — the loop path
+            // below runs `liveness_analysis`/`use_float`, which `unreachable!`s on
+            // a `G` mode. Demote any retained pool resident to its stack home
+            // before the fixpoint and bridges (each entry's bridge writes it back).
+            #[cfg(feature = "gp-alloc-lir")]
+            incoming.demote_pool_to_stack();
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }

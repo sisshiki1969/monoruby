@@ -139,8 +139,12 @@ impl<'a> JitContext<'a> {
 
         if !last {
             // §9 9d-B: flush pool residents before the fall-through state is
-            // recorded for the next block (the merge machinery is R15-only).
-            #[cfg(feature = "gp-alloc")]
+            // recorded for the next block. §9d-2b: with the LIR allocator the
+            // merge machinery is now `G`-aware (`decide_join` keeps an agreed
+            // pool binding, `bridge` reconciles a disagreement), so a fall-through
+            // successor can inherit the pool register instead of reloading — skip
+            // the flush and let the merge retain or write back as needed.
+            #[cfg(all(feature = "gp-alloc", not(feature = "gp-alloc-lir")))]
             state.flush_pool(&mut ir);
             self.prepare_next(state, end)
         }

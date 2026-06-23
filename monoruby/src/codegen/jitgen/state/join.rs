@@ -223,6 +223,15 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::C(r)) if l == r => Nop,
             (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => TryFreshFElseS,
+            // §9 9d-2b cross-merge GP retention: when both predecessors agree on
+            // the *identical* pool binding (same guarded type, same `VReg`), keep
+            // it — the bridge for each entry is then a no-op `(G(v),G(v))`. Any
+            // disagreement (different reg, mixed `G`/non-`G`, differing type)
+            // falls through to the `SetS` catch-all, demoting to the stack home
+            // (the bridge writes back). A single-entry block self-joins here, so
+            // this is also what preserves `G` through a single-predecessor merge.
+            #[cfg(feature = "gp-alloc-lir")]
+            (LinkMode::G(lg, l), LinkMode::G(rg, r)) if l == r && lg == rg => Nop,
             _ => SetS(self.guarded(i).join(&other.guarded(i))),
         }
     }
