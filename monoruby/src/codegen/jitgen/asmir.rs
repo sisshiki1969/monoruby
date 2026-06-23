@@ -23,6 +23,19 @@ pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,
 }
 
+impl InlineProcedure {
+    /// Wrap a context-carrying generator as an `LInst::Inline` payload. Lets the
+    /// `compile_asmir` lowering route the not-yet-typed families (specialized
+    /// inlined-frame ops, `gen_array_index*`) through the same `LInst::Inline`
+    /// escape hatch as the inline-builtin generators, so *every* `AsmInst`
+    /// lowers to an `LInst` (the §9a whole-region-buffering prerequisite).
+    pub(in crate::codegen::jitgen) fn new(
+        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels, usize) + 'static,
+    ) -> Self {
+        InlineProcedure { proc: Box::new(f) }
+    }
+}
+
 impl std::fmt::Debug for InlineProcedure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "InlineProcedure")
@@ -2471,19 +2484,41 @@ impl Codegen {
         }
 
         if entry.is_some() && exit.is_some() {
-            self.jit.select_page(1);
+            self.encode_linst(LInst::SelectPage(1));
         }
 
         if let Some(entry) = &entry {
-            self.jit.bind_label(entry.clone());
+            self.encode_linst(LInst::BindLabel(entry.clone()));
         }
 
+        // (§9a-ii) Lower the whole body into one ordered `Vec<LInst>` (the
+        // `encode_linst*` + per-arch-fallthrough buffer-pass guards collect
+        // instead of emitting), then drain it. The buffer is the seam the future
+        // GP physical-allocation pass slots between these two loops; today it
+        // drains immediately, so the output is byte-identical.
+        self.lir_buf = Some(Vec::new());
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             {
                 //eprintln!("  ; {}", inst.dump(store));
             }
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
+        }
+        let body = self.lir_buf.take().unwrap();
+        for inst in body {
+            match inst {
+                LInst::Inline(_) => {
+                    self.encode_linst_inline(inst, store, &side_exits, frame.base_stack_offset)
+                }
+                LInst::SourcePos { .. } => self.encode_linst_frame(inst, frame),
+                LInst::DeferredArch {
+                    inst,
+                    class_version,
+                } => {
+                    self.compile_asmir_arch(store, frame, &side_exits, inst, class_version);
+                }
+                _ => self.encode_linst(inst),
+            }
         }
 
         if let Some(exit) = exit {
@@ -2493,7 +2528,7 @@ impl Codegen {
             }
         }
         if entry.is_some() && exit.is_some() {
-            self.jit.select_page(0);
+            self.encode_linst(LInst::SelectPage(0));
         }
     }
 

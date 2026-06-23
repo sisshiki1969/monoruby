@@ -287,7 +287,7 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 /// which is move-only. `LInst`s are produced, encoded once, and dropped, so a
 /// clone is never needed.
 #[derive(Debug)]
-pub(in crate::codegen::jitgen) enum LInst {
+pub(in crate::codegen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     /// (§9 9b) carries virtual GP registers; the encoder resolves them.
     Mov {
@@ -966,6 +966,21 @@ pub(in crate::codegen::jitgen) enum LInst {
         loop_jit_spill_bytes: usize,
         base: usize,
     },
+    /// (§9 9a) Ordering pseudo-op: select the hot (0) / cold (1) emission page.
+    /// Emits no machine code of its own; reproduces `self.jit.select_page(n)` at
+    /// drain time so page selection is part of the single ordered LIR stream the
+    /// future allocation pass walks.
+    SelectPage(usize),
+    /// (§9 9a) Ordering pseudo-op: bind a `DestLabel` at the current emission
+    /// position (reproduces `self.jit.bind_label(label)` at drain time).
+    BindLabel(DestLabel),
+    /// (§9 9a) Ordering pseudo-op: record a source-position entry for `idx` at
+    /// the current emission position (reproduces `AsmInst::BcIndex`'s
+    /// `frame.sourcemap.push((idx, cur - start))`). Needs the frame, so it is
+    /// drained through the frame-aware `encode_linst_frame`, not `encode_linst`.
+    SourcePos {
+        idx: BcIndex,
+    },
     /// Inlined-builtin escape hatch: an opaque generator closure that emits the
     /// arch-appropriate asm directly. Unlike every other `LInst` (which is
     /// store-free and lowered by `encode_linst`), its emit needs the compile
@@ -976,6 +991,15 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// variant can eventually go away) is the "express inline-builtin codegen
     /// once" goal (`doc/lir.md` §8).
     Inline(super::asmir::InlineProcedure),
+    /// (§9a-ii) A not-yet-LIR-ized `AsmInst` whose per-arch lowering
+    /// (`compile_asmir_arch`) still emits directly via `monoasm!`. Buffered
+    /// verbatim and re-dispatched to `compile_asmir_arch` at drain — where the
+    /// frame is in hand — so its direct emission lands at the correct position
+    /// in the one ordered stream (rather than during the buffering pass).
+    DeferredArch {
+        inst: super::asmir::AsmInst,
+        class_version: DestLabel,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
