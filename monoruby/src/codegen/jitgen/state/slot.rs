@@ -1392,8 +1392,13 @@ impl SlotState {
     /// pool register (`r8`–`r11`) instead of routing the result through R15.
     /// Returns the chosen `VReg` (the caller moves the result into it), or
     /// `None` when the pool is full (caller falls back to the R15 accumulator).
-    /// Fixnum-only — a pool register is not a GC root, so only an immediate
-    /// (Fixnum) value may reside there.
+    ///
+    /// Any value type may reside in the pool, not just Fixnums. A pool register
+    /// is rooted for GC the same way the R15 accumulator is: every GC safepoint
+    /// (`get_gc_write_back` → `wb_gp`) spills each pool resident to its frame
+    /// home so the collector marks it, and the `execute_gc` stub preserves the
+    /// pool registers across the call. The GC is mark-and-sweep (non-moving),
+    /// so the preserved raw pointer stays valid for a heap value that survived.
     #[cfg(feature = "gp-alloc")]
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn try_def_G_pool(
@@ -1401,9 +1406,6 @@ impl SlotState {
         dst: SlotId,
         guarded: Guarded,
     ) -> Option<VReg> {
-        if guarded != Guarded::Fixnum {
-            return None;
-        }
         let id = self.gp_alloc.find_vacant()?;
         self.discard(dst);
         let vreg = VReg::Alloc(id as u32);
@@ -1614,7 +1616,7 @@ impl AbstractFrame {
     /// lowerings save/restore around the C-ABI call) **and**, as a side effect,
     /// flush any live GP-pool residents to their stack homes.
     ///
-    /// §9 9d-B: GP-pool registers (`r8`–`r11`) are caller-saved, so a Fixnum
+    /// §9 9d-B: GP-pool registers (`r8`–`r11`) are caller-saved, so a value
     /// kept resident there must not survive a C call. Every runtime helper that
     /// can clobber them is preceded by a `get_using_fpr` snapshot (here, or
     /// inside the `ir.<helper>(state, …)` builders), so flushing the GP pool at

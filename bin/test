@@ -15,15 +15,15 @@ drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 # not semantics, so the output diffs are unaffected either way.
 RUBY=(ruby --yjit)
 
-# stress-spill-pool / gc-stress / layer2-float-by-type amplify the JIT's spill +
-# GC paths and run on every arch. `gp-alloc` (the GP-register pool allocator) is
-# only enabled on x86-64: on the AArch64 JIT it still intermittently diverges on
+# stress-spill-pool / gc-stress amplify the JIT's spill + GC paths and run on
+# every arch. `gp-alloc` (the GP-register pool allocator) is only enabled on
+# x86-64: on the AArch64 JIT it still intermittently diverges on
 # `optcarrot --opt` under gc-stress (reproducible on the macOS CI runner, though
 # not on a local M1 or qemu-aarch64), so keep it off there until the aarch64
 # pool path is fixed.
 case "$(uname -m)" in
-  x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type,gp-alloc) ;;
-  *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress,layer2-float-by-type) ;;
+  x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,gp-alloc) ;;
+  *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress) ;;
 esac
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
