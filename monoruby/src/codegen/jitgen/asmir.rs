@@ -23,6 +23,19 @@ pub(super) struct InlineProcedure {
     proc: Box<dyn FnOnce(&mut Codegen, &Store, &SideExitLabels, usize)>,
 }
 
+impl InlineProcedure {
+    /// Wrap a context-carrying generator as an `LInst::Inline` payload. Lets the
+    /// `compile_asmir` lowering route the not-yet-typed families (specialized
+    /// inlined-frame ops, `gen_array_index*`) through the same `LInst::Inline`
+    /// escape hatch as the inline-builtin generators, so *every* `AsmInst`
+    /// lowers to an `LInst` (the §9a whole-region-buffering prerequisite).
+    pub(in crate::codegen::jitgen) fn new(
+        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels, usize) + 'static,
+    ) -> Self {
+        InlineProcedure { proc: Box::new(f) }
+    }
+}
+
 impl std::fmt::Debug for InlineProcedure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "InlineProcedure")

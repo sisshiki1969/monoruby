@@ -869,17 +869,28 @@ impl Codegen {
             // Clean return / block-break out of an inlined frame.
             AsmInst::MethodRetSpecialized { rbp_offset }
             | AsmInst::BlockBreakSpecialized { rbp_offset } => {
-                self.method_return_specialized(rbp_offset.unwrap_concrete());
+                let off = rbp_offset.unwrap_concrete();
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.method_return_specialized(off);
+                });
             }
             // Outer-scope local access at a pre-resolved frame offset.
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
-                self.load_dyn_var_specialized(offset.unwrap_concrete(), reg);
+                let off = offset.unwrap_concrete();
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.load_dyn_var_specialized(off, reg);
+                });
             }
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
-                self.store_dyn_var_specialized(offset.unwrap_concrete(), dst, src);
+                let off = offset.unwrap_concrete();
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.store_dyn_var_specialized(off, dst, src);
+                });
             }
             // Direct call into an inlined method entry; the return-address patch
-            // point is recorded for BOP-redefinition eviction.
+            // point is recorded for BOP-redefinition eviction. Labels are
+            // resolved now (frame); the call + patch run at drain time, where
+            // `do_specialized_call`'s return address is the correct position.
             AsmInst::SpecializedCall {
                 entry,
                 patch_point,
@@ -888,18 +899,24 @@ impl Codegen {
                 let patch_point =
                     patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.do_specialized_call(entry_label, patch_point);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
+                    let return_addr = cg.do_specialized_call(entry_label, patch_point);
+                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                });
             }
             // Specialized `yield`: build the block frame, then branch into the
             // inlined block entry (no patch point).
             AsmInst::SetupYieldFrame { meta, outer } => {
-                self.setup_yield_frame(meta, outer);
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.setup_yield_frame(meta, outer);
+                });
             }
             AsmInst::SpecializedYield { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                let return_addr = self.do_specialized_call(entry_label, None);
-                self.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
+                    let return_addr = cg.do_specialized_call(entry_label, None);
+                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                });
             }
             // Inlined builtin method body: lower to `LInst::Inline`, the
             // context-carrying escape hatch. Unlike every other `LInst` (which
@@ -914,12 +931,20 @@ impl Codegen {
             // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
             // index-register setup + `array_index*` call lives in
             // `gen_array_index*`.
-            AsmInst::ArrayIndex { kind } => self.gen_array_index(kind),
+            AsmInst::ArrayIndex { kind } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_array_index(kind);
+                });
+            }
             AsmInst::ArrayIndexAssign {
                 kind,
                 using_fpr,
                 error,
-            } => self.gen_array_index_assign(kind, using_fpr, &labels[error]),
+            } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
+                    cg.gen_array_index_assign(kind, using_fpr, &labels[error]);
+                });
+            }
             // Typed field-load (replaces the `ir.inline` escape hatch for trivial
             // field-reader inline builtins). Goal-2 proof: an inline builtin's
             // codegen expressed once in arch-neutral LIR via an existing op.
@@ -1066,6 +1091,21 @@ impl Codegen {
             }
             _ => unreachable!("encode_linst_frame only handles frame-needing pseudo-ops"),
         }
+    }
+
+    /// (§9a) Lower a not-yet-typed family op (specialized inlined-frame ops,
+    /// `gen_array_index*`) through the `LInst::Inline` escape hatch, so every
+    /// `AsmInst` produces an `LInst`. Resolve any frame `JitLabel`s to
+    /// `DestLabel`s *before* calling — the closure runs at drain time with only
+    /// `(store, labels, base)`, exactly like the inline-builtin generators.
+    fn lower_via_inline(
+        &mut self,
+        store: &Store,
+        labels: &SideExitLabels,
+        base: usize,
+        f: impl FnOnce(&mut Codegen, &Store, &SideExitLabels, usize) + 'static,
+    ) {
+        self.encode_linst_inline(LInst::Inline(InlineProcedure::new(f)), store, labels, base);
     }
 
     ///
