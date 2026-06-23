@@ -1047,7 +1047,21 @@ impl Codegen {
             // `correct_rest_kw(&table, lfp) -> kwrest Hash`.
             AsmInst::RestKw { rest_kw } => self.encode_linst(LInst::RestKw { rest_kw }),
             // Not a shared instruction: hand off to the per-arch backend.
-            other => return self.compile_asmir_arch(store, frame, labels, other, class_version),
+            // (§9a-ii) Not-yet-LIR-ized arms still emit directly in the per-arch
+            // `compile_asmir_arch`. During the buffering pass, defer them as
+            // `LInst::DeferredArch` so they run at drain (correct position)
+            // rather than emitting now (which would scramble order vs. the
+            // buffered ops). Otherwise (immediate path) dispatch directly.
+            other => {
+                if let Some(buf) = self.lir_buf.as_mut() {
+                    buf.push(LInst::DeferredArch {
+                        inst: other,
+                        class_version,
+                    });
+                    return true;
+                }
+                return self.compile_asmir_arch(store, frame, labels, other, class_version);
+            }
         }
         true
     }
@@ -1069,6 +1083,11 @@ impl Codegen {
         labels: &SideExitLabels,
         base: usize,
     ) {
+        // (§9a-ii) Buffering pass: collect, don't run the generator yet.
+        if let Some(buf) = self.lir_buf.as_mut() {
+            buf.push(inst);
+            return;
+        }
         match inst {
             LInst::Inline(proc) => (proc.proc)(self, store, labels, base),
             _ => unreachable!("encode_linst_inline only handles LInst::Inline"),
@@ -1084,6 +1103,12 @@ impl Codegen {
         inst: LInst,
         frame: &mut AsmInfo,
     ) {
+        // (§9a-ii) Buffering pass: collect, don't record the position yet (the
+        // position is only meaningful at drain time, in emission order).
+        if let Some(buf) = self.lir_buf.as_mut() {
+            buf.push(inst);
+            return;
+        }
         match inst {
             LInst::SourcePos { idx } => {
                 let pos = self.jit.get_current() - frame.start_codepos;

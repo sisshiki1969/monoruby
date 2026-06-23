@@ -2491,12 +2491,34 @@ impl Codegen {
             self.encode_linst(LInst::BindLabel(entry.clone()));
         }
 
+        // (§9a-ii) Lower the whole body into one ordered `Vec<LInst>` (the
+        // `encode_linst*` + per-arch-fallthrough buffer-pass guards collect
+        // instead of emitting), then drain it. The buffer is the seam the future
+        // GP physical-allocation pass slots between these two loops; today it
+        // drains immediately, so the output is byte-identical.
+        self.lir_buf = Some(Vec::new());
         for inst in ir.inst {
             #[cfg(feature = "emit-asm")]
             {
                 //eprintln!("  ; {}", inst.dump(store));
             }
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
+        }
+        let body = self.lir_buf.take().unwrap();
+        for inst in body {
+            match inst {
+                LInst::Inline(_) => {
+                    self.encode_linst_inline(inst, store, &side_exits, frame.base_stack_offset)
+                }
+                LInst::SourcePos { .. } => self.encode_linst_frame(inst, frame),
+                LInst::DeferredArch {
+                    inst,
+                    class_version,
+                } => {
+                    self.compile_asmir_arch(store, frame, &side_exits, inst, class_version);
+                }
+                _ => self.encode_linst(inst),
+            }
         }
 
         if let Some(exit) = exit {

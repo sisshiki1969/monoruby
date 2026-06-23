@@ -656,6 +656,12 @@ pub struct Codegen {
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) startup_flag: bool,
+    /// (§9a-ii) When `Some`, `encode_linst*` and the per-arch fallthrough buffer
+    /// the lowered `LInst`s here instead of emitting, so the region driver
+    /// (`gen_asm`) collects the whole body into one ordered stream and drains it
+    /// (the seam the future GP physical-allocation pass slots into). `None`
+    /// during the drain and everywhere else — emission is immediate.
+    pub(crate) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
     #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
     pub(crate) jit_compile_time: std::time::Duration,
 }
@@ -946,6 +952,7 @@ impl Codegen {
             resume_fiber,
             yield_fiber,
             startup_flag: false,
+            lir_buf: None,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),
         };

@@ -257,6 +257,12 @@ impl Codegen {
     /// `doc/lir.md`.
     ///
     pub(in crate::codegen::jitgen) fn encode_linst(&mut self, inst: LInst) {
+        // (§9a-ii) Buffering pass: collect the lowered op, don't emit. The
+        // region driver drains the buffer (with `lir_buf` cleared) afterwards.
+        if let Some(buf) = self.lir_buf.as_mut() {
+            buf.push(inst);
+            return;
+        }
         match inst {
             // dst <- src (elided when src == dst)
             LInst::Mov { dst, src } => {

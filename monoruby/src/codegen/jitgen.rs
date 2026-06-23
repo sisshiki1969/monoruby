@@ -39,7 +39,7 @@ mod guard;
 #[path = "arch/aarch64/guard.rs"]
 mod guard;
 // Unified low-level IR (Phase-1 Stage 1: data model only, not yet wired in).
-mod lir;
+pub(in crate::codegen) mod lir;
 mod merge;
 mod state;
 pub mod trace_ir;

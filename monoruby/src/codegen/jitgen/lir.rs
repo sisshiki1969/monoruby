@@ -287,7 +287,7 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 /// which is move-only. `LInst`s are produced, encoded once, and dropped, so a
 /// clone is never needed.
 #[derive(Debug)]
-pub(in crate::codegen::jitgen) enum LInst {
+pub(in crate::codegen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
     /// (§9 9b) carries virtual GP registers; the encoder resolves them.
     Mov {
@@ -991,6 +991,15 @@ pub(in crate::codegen::jitgen) enum LInst {
     /// variant can eventually go away) is the "express inline-builtin codegen
     /// once" goal (`doc/lir.md` §8).
     Inline(super::asmir::InlineProcedure),
+    /// (§9a-ii) A not-yet-LIR-ized `AsmInst` whose per-arch lowering
+    /// (`compile_asmir_arch`) still emits directly via `monoasm!`. Buffered
+    /// verbatim and re-dispatched to `compile_asmir_arch` at drain — where the
+    /// frame is in hand — so its direct emission lands at the correct position
+    /// in the one ordered stream (rather than during the buffering pass).
+    DeferredArch {
+        inst: super::asmir::AsmInst,
+        class_version: DestLabel,
+    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
