@@ -275,8 +275,9 @@ impl AbstractFrame {
         if let Some(dst) = dst.into() {
             // §9 9d-B accumulator register file: put the result straight into a
             // free pool register (`r8`–`r11`) rather than the single R15
-            // accumulator — no R15 round-trip / relocate `mov`. Falls back to
-            // R15 when the pool is full or the value is not a Fixnum immediate.
+            // accumulator — no R15 round-trip / relocate `mov`. Any value type
+            // may go to the pool (it is GC-rooted at every safepoint like R15);
+            // falls back to the R15 accumulator only when the pool is full.
             #[cfg(feature = "gp-alloc")]
             if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
                 ir.reg_move(src, vreg.phys());

@@ -2208,13 +2208,14 @@ impl Codegen {
         self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
         // Preserve the GP-alloc pool (x5-x8 = GP::R8-R11) across the call. They
-        // are AAPCS64 caller-saved and hold live Fixnums under `gp-alloc`. The
+        // are AAPCS64 caller-saved and hold live Values under `gp-alloc`. The
         // write-back above spills them to their frame homes for GC marking, but
         // the post-GC code keeps reading the *registers* (e.g. a pool-resident
         // call receiver), so they must survive `execute_gc`. x86 preserves
         // r8-r11 the same way in its `exec_gc` stub (save/restore_registers).
-        // GP-pool values are Fixnums (immediates), so GC never relocates them
-        // and restoring the raw register value is correct.
+        // The GC is mark-and-sweep (non-moving), so a heap value the write-back
+        // kept alive is not relocated and restoring the raw register value is
+        // correct (Fixnum immediates are trivially fine for the same reason).
         #[cfg(feature = "gp-alloc")]
         monoasm_arm64!(&mut self.jit,
             stp x5, x6, [sp, #-16]!;
