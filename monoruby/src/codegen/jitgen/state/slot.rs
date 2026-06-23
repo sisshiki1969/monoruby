@@ -482,6 +482,17 @@ impl SlotState {
 
     fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
         for (slot, as_f64) in used_as_float {
+            // §9d-2d: a loop-carried pool resident that the loop also uses as a
+            // float stays in its GP register — each float-use loads and converts
+            // straight from it (the read path lowers `G`), and an in-loop need for
+            // `F`/`Sf` is met by the merge bridge's `(G, _)` arms. Unlike the
+            // `S -> Sf` hint there is no pre-conversion to do, so leave it `G`.
+            // Handled before the match so the (default-build) match below — where
+            // `G` is `unreachable!` — stays untouched.
+            #[cfg(feature = "gp-alloc-lir")]
+            if matches!(self.mode(slot), LinkMode::G(_, _)) {
+                continue;
+            }
             match self.mode(slot) {
                 LinkMode::S(_) => {
                     if as_f64 {
@@ -1286,26 +1297,6 @@ impl SlotState {
     #[cfg(feature = "gp-alloc")]
     pub(crate) fn try_vacant_pool_id(&self) -> Option<usize> {
         self.gp_alloc.find_vacant()
-    }
-
-    /// §9 9d-2b: abstract-only demotion of every pool resident (`G(_, Alloc)`)
-    /// to its stack home (`S`), **without** emitting the stores — the caller is a
-    /// merge point whose per-predecessor `bridge` emits the actual write-back
-    /// when it reconciles an entry's `G` to this now-`S` target.
-    ///
-    /// Used at loop-entry merges, where retaining `G` is unsafe: the loop path's
-    /// `liveness_analysis` → `use_float` `unreachable!`s on a `G` mode (a slot
-    /// the loop uses as a float must be an fpr binding, not a pool resident). So
-    /// loops opt out of cross-merge GP retention this slice; straight-line / non
-    /// loop merges still retain. `set_S_with_guard` → `clear` keeps the
-    /// `gp_alloc` occupancy table consistent.
-    #[cfg(feature = "gp-alloc-lir")]
-    pub(in crate::codegen::jitgen) fn demote_pool_to_stack(&mut self) {
-        for slot in self.all_regs() {
-            if let LinkMode::G(guarded, VReg::Alloc(_)) = self.mode(slot) {
-                self.set_S_with_guard(slot, guarded);
-            }
-        }
     }
 
     /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.

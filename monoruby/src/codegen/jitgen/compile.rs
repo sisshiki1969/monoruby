@@ -93,12 +93,11 @@ impl<'a> JitContext<'a> {
                 }
                 CompileResult::Branch(dest_bb) => {
                     // §9 9d-B: flush pool residents before the branch state is
-                    // recorded. §9d-2c: the merge machinery is now `G`-aware, so a
-                    // (forward) branch successor can inherit the pool register —
-                    // skip the flush. A back-edge into a loop header is still made
-                    // safe by the loop-entry `demote_pool_to_stack` (loops opt out
-                    // of GP retention until the fixpoint/`use_float` path handles
-                    // `G`); the demote's per-entry bridge writes back there.
+                    // recorded. §9d-2c/2d: the merge machinery is now `G`-aware, so
+                    // a (forward) branch successor — and, since 2d, a back-edge
+                    // into a loop header — can inherit the pool register, so skip
+                    // the flush. The loop-entry merge and the fixpoint keep or
+                    // reconcile the binding (`bridge`).
                     #[cfg(all(feature = "gp-alloc", not(feature = "gp-alloc-lir")))]
                     state.flush_pool(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
