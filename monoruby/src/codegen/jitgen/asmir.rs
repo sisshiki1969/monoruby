@@ -898,6 +898,20 @@ impl AsmIr {
         });
     }
 
+    /// `gp-local-alloc`: register-form fixnum comparison `dst = lhs <kind> rhs`
+    /// (a boolean `Value`), operands already in GP registers chosen by the local
+    /// allocator and fixnum-guarded. The lowering compares and stores the bool to
+    /// `dst`'s stack home (the result is a bool, never a GP resident).
+    pub(in crate::codegen::jitgen) fn integer_cmp_reg(
+        &mut self,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: GP,
+        rhs: GP,
+    ) {
+        self.push(AsmInst::IntegerCmpReg { kind, dst, lhs, rhs });
+    }
+
     ///
     /// Float binary operation
     ///
@@ -1777,6 +1791,17 @@ pub(super) enum AsmInst {
         lhs: GP,
         rhs: GP,
         deopt: AsmDeopt,
+    },
+    ///
+    /// `gp-local-alloc`: register-form fixnum comparison `dst = lhs <kind> rhs`
+    /// (a bool `Value`), operands already in GP registers and fixnum-guarded.
+    /// The lowering compares and stores the boolean to `dst`'s stack home.
+    ///
+    IntegerCmpReg {
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: GP,
+        rhs: GP,
     },
     ///
     ///

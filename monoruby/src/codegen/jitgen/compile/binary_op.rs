@@ -106,10 +106,16 @@ impl<'a> JitContext<'a> {
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Float(info) => {
-                    // The fpr path materializes operands from their stack homes
-                    // (and may box a result); flush the GP residents first.
+                    // The fpr path computes in xmm: it never touches the GP
+                    // allocatable registers and never allocates (a flonum result
+                    // stays in an FPReg; boxing is deferred to a later write-back,
+                    // which flushes GP itself), and its deopt write-back already
+                    // re-homes the GP residents. So the residents survive a flush.
+                    // But it reads its operands from their stack homes, so a
+                    // GP-resident operand (the integer side of a mixed op) must be
+                    // synced to its home first; then drop a stale cache of `dst`.
                     #[cfg(feature = "gp-local-alloc")]
-                    state.flush_gp(ir);
+                    state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
@@ -147,6 +153,14 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Continue)
             }
             BinaryOpType::Float(info) => {
+                // The float comparison computes in xmm and stores a bool: it
+                // never touches the GP allocatable registers and never allocates,
+                // and its deopt write-back re-homes the GP residents. The
+                // residents survive, but the op reads its operands from their
+                // stack homes — so sync a GP-resident operand (the integer side
+                // of a mixed compare) first, then drop a stale cache of `dst`.
+                #[cfg(feature = "gp-local-alloc")]
+                state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
                 state.gen_cmp_float(ir, dst, info, kind);
                 Ok(CompileResult::Continue)
             }
@@ -154,6 +168,8 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                #[cfg(feature = "gp-local-alloc")]
+                state.flush_gp(ir);
                 if polymorphic {
                     self.emit_generic_cmp(state, ir, kind, lhs, rhs);
                     state.def_rax2acc(ir, dst);
@@ -570,6 +586,30 @@ impl AbstractFrame {
         (gp, true)
     }
 
+    /// `gp-local-alloc`: prepare the GP register file for a float op that keeps
+    /// the residents alive (it computes in xmm without clobbering them). The op
+    /// reads its operands from their stack homes, so a GP-resident operand — the
+    /// integer side of a mixed `Integer <op> Float` — is written back to its home
+    /// and marked clean (it stays cached for a following integer op). Finally any
+    /// stale GP cache of the result slot is dropped.
+    #[cfg(feature = "gp-local-alloc")]
+    fn gp_sync_float_operands(
+        &mut self,
+        ir: &mut AsmIr,
+        lhs: SlotId,
+        rhs: SlotId,
+        dst: Option<SlotId>,
+    ) {
+        for slot in [lhs, rhs] {
+            if let Some(reg) = self.gp_regfile.sync(slot) {
+                ir.reg2stack(reg, slot);
+            }
+        }
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+    }
+
     fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {
         Some(match kind {
             BinOpK::Add => lhs + rhs,
@@ -630,25 +670,77 @@ impl AbstractFrame {
         mode: OpMode,
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode) {
+            // The fold redefines `dst`; drop any stale GP cache of it.
+            #[cfg(feature = "gp-local-alloc")]
+            if let Some(dst) = dst {
+                self.gp_regfile.invalidate(dst);
+            }
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
+        #[cfg(feature = "gp-local-alloc")]
+        {
+            self.gen_cmp_integer_gp(ir, kind, dst, mode);
+            return;
+        }
         // §slot-IR: keep the AsmIR layer free of physical registers for the
         // fixnum comparison. Write the operand slots back to the stack and emit
         // a slot-based cmp; the LIR lowering loads them into scratch regs,
         // fixnum-guards, compares, and stores the boolean result to `dst`.
-        let OpMode::RR(l, r) = mode;
-        self.write_back_slots(ir, &[l, r]);
-        let deopt = self.deopt_point();
-        ir.transfer(TransferIR::IntegerCmpSlot {
-            mode,
-            kind,
-            dst,
-            deopt,
-        });
+        #[cfg(not(feature = "gp-local-alloc"))]
+        {
+            let OpMode::RR(l, r) = mode;
+            self.write_back_slots(ir, &[l, r]);
+            let deopt = self.deopt_point();
+            ir.transfer(TransferIR::IntegerCmpSlot {
+                mode,
+                kind,
+                dst,
+                deopt,
+            });
+            if let Some(dst) = dst {
+                // The result is a boolean `Value` on the stack (the lowering
+                // stored it). `def_S` defines it as `Guarded::Value`; match that.
+                self.def_S(dst);
+            }
+        }
+    }
+
+    /// `gp-local-alloc`: the register-allocated fixnum comparison. Operands are
+    /// brought into GP registers (reusing residents from a prior binop), guarded,
+    /// and compared in registers; the boolean result is stored to `dst`'s stack
+    /// home (a bool is never a GP resident, so the file shrinks by the operands
+    /// the stack pointer has popped and gains nothing).
+    #[cfg(feature = "gp-local-alloc")]
+    fn gen_cmp_integer_gp(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        mode: OpMode,
+    ) {
+        let OpMode::RR(lhs, rhs) = mode;
+        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // Snapshot the deopt write-back before clearing (the guards side-exit to
+        // a point where the interpreter re-reads the operands from their homes).
+        let deopt = ir.new_deopt(self);
+        // The result `dst` is redefined as a bool: drop any stale GP cache of it.
         if let Some(dst) = dst {
-            // The result is a boolean `Value` on the stack (the lowering stored
-            // it). `def_rax2acc` defines it as `Guarded::Value`; match that.
+            self.gp_regfile.invalidate(dst);
+        }
+        // Clear the popped operand temporaries so a following binop can reuse
+        // their registers.
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        if lhs_fresh {
+            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+        }
+        if rhs_fresh {
+            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+        }
+        ir.integer_cmp_reg(kind, dst, lhs_gp, rhs_gp);
+        if let Some(dst) = dst {
             self.def_S(dst);
         }
     }

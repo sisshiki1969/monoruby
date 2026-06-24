@@ -244,6 +244,22 @@ impl GpRegFile {
         self.holder[Self::index_of(reg)] = Some(Holder { slot, dirty, age });
     }
 
+    /// If `slot` is a GP resident, return its register and mark it **clean** —
+    /// the caller is about to write the register to `slot`'s stack home, making
+    /// the home current. Used to feed a GP-resident value to a non-GP consumer
+    /// that reads the operand from its stack home (e.g. the integer operand of a
+    /// mixed `Integer + Float` op), without evicting the resident: it stays
+    /// cached (now clean), so a following integer op still reuses it and a later
+    /// flush does not re-spill it.
+    pub(in crate::codegen::jitgen) fn sync(&mut self, slot: SlotId) -> Option<GP> {
+        let idx = self
+            .holder
+            .iter()
+            .position(|h| h.map(|h| h.slot) == Some(slot))?;
+        self.holder[idx].as_mut().unwrap().dirty = false;
+        Some(GP_ALLOC_SET[idx])
+    }
+
     /// Free every register caching a slot at or above `sp` — those temporaries
     /// are dead (popped past the stack pointer), so they are dropped without a
     /// spill, mirroring `clear_above_next_sp`.
@@ -448,5 +464,23 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, GpAction::Spill { slot, .. } if *slot == sl(s))));
         }
+    }
+
+    /// `sync` makes a resident's stack home current (returns its register) and
+    /// leaves it cached but clean — so a later flush does not re-spill it and a
+    /// later op still reuses it. Used to feed a GP-resident integer operand to a
+    /// mixed `Integer + Float` op, which reads it from its stack home.
+    #[test]
+    fn sync_marks_clean_and_keeps_resident() {
+        let mut rf = GpRegFile::new();
+        rf.bind(R8, sl(7), /* dirty */ true);
+        // A dirty resident syncs to its register and is now clean.
+        assert_eq!(rf.sync(sl(7)), Some(R8));
+        assert!(rf.reg_of(sl(7)) == Some(R8)); // still cached
+        assert!(rf.dirty_residents().is_empty()); // but clean now
+        // A flush of the (now clean) file emits no spill.
+        assert!(rf.take_dirty_spills().is_empty());
+        // Syncing a non-resident slot is a no-op.
+        assert_eq!(GpRegFile::new().sync(sl(3)), None);
     }
 }

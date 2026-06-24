@@ -333,6 +333,23 @@ impl Codegen {
                     deopt,
                 });
             }
+            // `gp-local-alloc`: register-form comparison. Operands are already in
+            // GP registers and fixnum-guarded, so just compare (result in rax) and
+            // store the boolean to `dst`'s slot.
+            AsmInst::IntegerCmpReg {
+                kind,
+                dst,
+                lhs,
+                rhs,
+            } => {
+                self.encode_linst(LInst::IntegerCmp { kind, lhs, rhs });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: GP::Rax,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
             // §slot-IR: lower the slot-based fixnum comparison — load each operand
             // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
             // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in

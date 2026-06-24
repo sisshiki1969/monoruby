@@ -173,13 +173,14 @@ impl<'a> JitContext<'a> {
         if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
         }
-        // `gp-local-alloc`: only `IntegerBinOp` is GP-aware. Every other
-        // instruction first flushes the live GP residents back to their stack
-        // homes, so it observes slots in their canonical location. (`BinOp` is
-        // exempt here; its non-integer paths flush inside `binary_op`.) A no-op
-        // when the register file is empty, which is always the case without the
-        // feature — so the default build is unchanged.
-        if !matches!(trace_ir, TraceIr::BinOp { .. }) {
+        // `gp-local-alloc`: the integer `BinOp` and `BinCmp` paths are GP-aware.
+        // Every other instruction first flushes the live GP residents back to
+        // their stack homes, so it observes slots in their canonical location.
+        // (`BinOp`/`BinCmp` are exempt here; their non-integer paths flush inside
+        // `binary_op` / `binary_cmp`.) A no-op when the register file is empty,
+        // which is always the case without the feature — so the default build is
+        // unchanged.
+        if !matches!(trace_ir, TraceIr::BinOp { .. } | TraceIr::BinCmp { .. }) {
             state.flush_gp(ir);
         }
         match trace_ir {
