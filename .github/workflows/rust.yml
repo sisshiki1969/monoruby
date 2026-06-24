@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [master, "darwin*"]
+    branches: [master, gpalloc, "darwin*"]
   pull_request:
-    branches: [master, "darwin*"]
+    branches: [master, gpalloc, "darwin*"]
 
 jobs:
   amd64:
