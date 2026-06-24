@@ -261,22 +261,6 @@ impl Codegen {
             // Integer / float arithmetic fast paths. Each backend resolves the
             // same operands and dispatches to its own emission primitive
             // (aarch64 bails on an unsupported BinOpK, hence the bool results).
-            AsmInst::IntegerBinOp {
-                kind,
-                lhs,
-                rhs,
-                mode,
-                deopt,
-            } => {
-                let deopt = labels[deopt].clone();
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    mode,
-                    lhs,
-                    rhs,
-                    deopt,
-                });
-            }
             // §slot-IR: lower the slot-based fixnum binop to the physical
             // sequence — load each operand slot into a scratch reg, fixnum-guard
             // it, compute in place in `Rdi` (overflow -> deopt), and store the
@@ -290,10 +274,6 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                // Place the slot operand(s) into the registers `integer_binop`
-                // expects for this (mode, kind) and fixnum-guard each; the
-                // immediate (if any) is folded by `integer_binop` from `mode`.
-                // The result is computed in place in `Rdi` (= `lhs`).
                 let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
                     me.encode_linst(LInst::Load {
                         dst: reg.into(),
@@ -305,58 +285,19 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                // `Div` needs both operands in registers (Rdi=lhs, Rsi=rhs) with
-                // immediates materialized, and produces its quotient in `rax`.
-                // Add/Sub/Mul fold the immediate from `mode` and compute in place
-                // in `Rdi` (with a commutative-aware operand placement).
+                // Load both operands (Rdi=lhs, Rsi=rhs) and fixnum-guard each.
+                // Add/Sub/Mul compute in place in `Rdi`; `Div` produces its
+                // quotient in `rax`.
+                let OpMode::RR(l, r) = mode;
+                load_guard(self, l, GP::Rdi);
+                load_guard(self, r, GP::Rsi);
                 let result_reg = if matches!(kind, BinOpK::Div) {
-                    match mode {
-                        OpMode::RR(l, r) => {
-                            load_guard(self, l, GP::Rdi);
-                            load_guard(self, r, GP::Rsi);
-                        }
-                        OpMode::RI(l, i) => {
-                            load_guard(self, l, GP::Rdi);
-                            self.encode_linst(LInst::LoadImm {
-                                dst: GP::Rsi.into(),
-                                imm: Value::i32(i as i32).id(),
-                            });
-                        }
-                        OpMode::IR(i, r) => {
-                            self.encode_linst(LInst::LoadImm {
-                                dst: GP::Rdi.into(),
-                                imm: Value::i32(i as i32).id(),
-                            });
-                            load_guard(self, r, GP::Rsi);
-                        }
-                    }
                     GP::Rax
                 } else {
-                    match mode {
-                        OpMode::RR(l, r) => {
-                            load_guard(self, l, GP::Rdi);
-                            load_guard(self, r, GP::Rsi);
-                        }
-                        // rhs is the immediate: only lhs slot is loaded (into Rdi).
-                        OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                        // lhs is the immediate. Add/Mul are commutative, so the reg
-                        // operand becomes the in-place accumulator (Rdi); Sub
-                        // materializes the immediate into Rdi and subtracts the reg
-                        // operand from Rsi.
-                        OpMode::IR(_, r) => {
-                            let reg = if matches!(kind, BinOpK::Sub) {
-                                GP::Rsi
-                            } else {
-                                GP::Rdi
-                            };
-                            load_guard(self, r, reg);
-                        }
-                    }
                     GP::Rdi
                 };
                 self.encode_linst(LInst::IntegerBinOp {
                     kind,
-                    mode,
                     lhs: GP::Rdi,
                     rhs: GP::Rsi,
                     deopt,
@@ -390,17 +331,11 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                match mode {
-                    OpMode::RR(l, r) => {
-                        load_guard(self, l, GP::Rdi);
-                        load_guard(self, r, GP::Rsi);
-                    }
-                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
-                }
+                let OpMode::RR(l, r) = mode;
+                load_guard(self, l, GP::Rdi);
+                load_guard(self, r, GP::Rsi);
                 self.encode_linst(LInst::IntegerCmp {
                     kind,
-                    mode,
                     lhs: GP::Rdi,
                     rhs: GP::Rsi,
                 });
@@ -433,35 +368,14 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                match mode {
-                    OpMode::RR(l, r) => {
-                        load_guard(self, l, GP::Rdi);
-                        load_guard(self, r, GP::Rsi);
-                    }
-                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
-                }
+                let OpMode::RR(l, r) = mode;
+                load_guard(self, l, GP::Rdi);
+                load_guard(self, r, GP::Rsi);
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
-                match mode {
-                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs: GP::Rdi.into(),
-                        rhs: GP::Rsi.into(),
-                    }),
-                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs: GP::Rdi.into(),
-                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
-                    }),
-                    OpMode::IR(i, _) => {
-                        self.encode_linst(LInst::LoadImm {
-                            dst: GP::Rdi.into(),
-                            imm: Value::i32(i as i32).id(),
-                        });
-                        self.encode_linst(LInst::Cmp {
-                            lhs: GP::Rdi.into(),
-                            rhs: GP::Rsi.into(),
-                        });
-                    }
-                }
+                self.encode_linst(LInst::Cmp {
+                    lhs: GP::Rdi.into(),
+                    rhs: GP::Rsi.into(),
+                });
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {
                     cond = cond.invert();
@@ -1434,8 +1348,8 @@ impl Codegen {
             LInst::ExecGc { write_back, error, base } => {
                 self.emit_exec_gc(write_back, &error, base);
             }
-            LInst::IntegerCmp { kind, mode, lhs, rhs } => {
-                self.emit_integer_cmp(kind, mode, lhs, rhs);
+            LInst::IntegerCmp { kind, lhs, rhs } => {
+                self.emit_integer_cmp(kind, lhs, rhs);
             }
             LInst::Ret => {
                 self.emit_ret();

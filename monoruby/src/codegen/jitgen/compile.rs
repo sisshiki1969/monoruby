@@ -1024,13 +1024,10 @@ enum BinaryOpType {
 
 impl AbstractState {
     fn binary_integer_mode(&self, lhs: SlotId, rhs: SlotId) -> OpMode {
-        if let Some(rhs) = self.is_i16_literal(rhs) {
-            OpMode::RI(lhs, rhs)
-        } else if let Some(lhs) = self.is_i16_literal(lhs) {
-            OpMode::IR(lhs, rhs)
-        } else {
-            OpMode::RR(lhs, rhs)
-        }
+        // `OpMode` is RR-only: an integer-literal operand is no longer folded
+        // into an immediate (`RI`/`IR`); it is materialized in its stack slot
+        // and loaded like any other operand.
+        OpMode::RR(lhs, rhs)
     }
 
     fn binary_class(

@@ -856,36 +856,6 @@ impl AsmIr {
 // binary operations
 //
 impl AsmIr {
-    ///
-    /// Integer binary operation.
-    ///
-    /// ### in
-    /// - rdi  lhs
-    /// - rsi  rhs
-    ///
-    /// ### out
-    /// - rdi  dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    pub(super) fn integer_binop(
-        &mut self,
-        kind: BinOpK,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        deopt: AsmDeopt,
-    ) {
-        self.push(AsmInst::IntegerBinOp {
-            kind,
-            lhs,
-            rhs,
-            mode,
-            deopt,
-        });
-    }
 
     /// §slot-IR: slot-based fixnum binop. Operands and destination are stack
     /// slots; the LIR lowering loads them into scratch registers, fixnum-guards,
@@ -1760,27 +1730,6 @@ pub(super) enum AsmInst {
         reg: GP,
     },
 
-    ///
-    /// Integer binary operation.
-    ///
-    /// ### in
-    /// - rdi  lhs
-    /// - rsi  rhs
-    ///
-    /// ### out
-    /// - rdi  dst
-    ///
-    /// ### destroy
-    /// - caller save registers
-    /// - stack
-    ///
-    IntegerBinOp {
-        kind: BinOpK,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        deopt: AsmDeopt,
-    },
     ///
     /// §slot-IR: slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
     /// slots). The LIR lowering materializes the physical registers — load each

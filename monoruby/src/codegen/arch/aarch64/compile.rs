@@ -360,57 +360,22 @@ impl Codegen {
     /// overflow of the tagged arithmetic == fixnum overflow, so we branch to
     /// `deopt` on the V flag. Result is left in `lhs`'s register, mirroring x86
     /// `integer_binop`. Mul/Div/etc. not yet ported (bail).
-    fn a64_integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: &OpMode,
-        kind: BinOpK,
-        deopt: &DestLabel,
-    ) -> bool {
+    fn a64_integer_binop(&mut self, lhs: GP, rhs: GP, kind: BinOpK, deopt: &DestLabel) -> bool {
         let l = lhs.a64().0;
         let r = rhs.a64().0;
         match kind {
             BinOpK::Add => {
-                match mode {
-                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
-                        sub x(l), x(l), #(1u32);
-                        adds x(l), x(l), x(r);
-                    ),
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        let imm = Value::i32(*i as i32).id().wrapping_sub(1);
-                        monoasm_arm64!(&mut self.jit,
-                            mov x9, (imm);
-                            adds x(l), x(l), x9;
-                        );
-                    }
-                }
+                monoasm_arm64!(&mut self.jit,
+                    sub x(l), x(l), #(1u32);
+                    adds x(l), x(l), x(r);
+                );
                 self.jit.bcond_label(monoasm::Cond::Vs, deopt);
             }
-            BinOpK::Sub => match mode {
-                OpMode::RR(..) => {
-                    monoasm_arm64!(&mut self.jit, subs x(l), x(l), x(r););
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
-                }
-                OpMode::RI(_, rhs_i) => {
-                    let imm = Value::i32(*rhs_i as i32).id().wrapping_sub(1);
-                    monoasm_arm64!(&mut self.jit,
-                        mov x9, (imm);
-                        subs x(l), x(l), x9;
-                    );
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                }
-                OpMode::IR(lhs_i, _) => {
-                    let imm = Value::i32(*lhs_i as i32).id();
-                    monoasm_arm64!(&mut self.jit,
-                        mov x(l), (imm);
-                        subs x(l), x(l), x(r);
-                    );
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
-                }
-            },
+            BinOpK::Sub => {
+                monoasm_arm64!(&mut self.jit, subs x(l), x(l), x(r););
+                self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+                monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
+            }
             // Mul: compute `2a * b` (matching x86's `imul` on the half-untagged
             // lhs). aarch64 has no `smulh`, so detect overflow with a checking
             // `sdiv`: if `2a != 0` and `(2a*b)/(2a) != b` the product wrapped.
@@ -419,19 +384,10 @@ impl Codegen {
             // high half (`smulh`) must equal the sign-extension of the low half
             // (`low >> 63`); a mismatch means the product wrapped.
             BinOpK::Mul => {
-                match mode {
-                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
-                        asr x(r), x(r), #(1u32);   // b (untagged)
-                        sub x(l), x(l), #(1u32);   // 2a
-                    ),
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        let imm = *i as i64 as u64; // raw multiplier
-                        monoasm_arm64!(&mut self.jit,
-                            mov x(r), (imm);
-                            sub x(l), x(l), #(1u32);
-                        );
-                    }
-                }
+                monoasm_arm64!(&mut self.jit,
+                    asr x(r), x(r), #(1u32);   // b (untagged)
+                    sub x(l), x(l), #(1u32);   // 2a
+                );
                 monoasm_arm64!(&mut self.jit, mul x9, x(l), x(r);); // low 64
                 monoasm_arm64!(&mut self.jit, smulh x10, x(l), x(r););
                 monoasm_arm64!(&mut self.jit,
@@ -740,23 +696,10 @@ impl Codegen {
 
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
-    fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
+    fn a64_cmp_integer(&mut self, lhs: GP, rhs: GP) {
         let l = lhs.a64().0;
-        match mode {
-            OpMode::RR(..) => {
-                let r = rhs.a64().0;
-                monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
-            }
-            OpMode::RI(_, i) => {
-                let imm = Value::i32(*i as i32).id();
-                monoasm_arm64!(&mut self.jit, mov x9, (imm); cmp x(l), x9;);
-            }
-            OpMode::IR(i, _) => {
-                let r = rhs.a64().0;
-                let imm = Value::i32(*i as i32).id();
-                monoasm_arm64!(&mut self.jit, mov x(l), (imm); cmp x(l), x(r););
-            }
-        }
+        let r = rhs.a64().0;
+        monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
     }
 
     /// After `a64_cmp_integer`, materialize a Ruby boolean in rax (x0):
@@ -1803,12 +1746,11 @@ impl Codegen {
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {
                 kind,
-                mode,
                 lhs,
                 rhs,
                 deopt,
             } => {
-                self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt);
+                self.a64_integer_binop(lhs, rhs, kind, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
@@ -2688,11 +2630,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
         kind: CmpKind,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
     ) -> bool {
-        self.a64_cmp_integer(&mode, lhs, rhs);
+        self.a64_cmp_integer(lhs, rhs);
         self.a64_flag_to_bool(kind);
         true
     }

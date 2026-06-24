@@ -994,16 +994,6 @@ impl SlotState {
         u16::try_from(i).ok()
     }
 
-    pub fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
-        let i = self.is_fixnum_literal(slot)?.get();
-        i16::try_from(i).ok()
-    }
-
-    //pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-    //    let i = self.is_fixnum_literal(slot)?.get();
-    //    u8::try_from(i).ok()
-    //}
-
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
         let b = if let Guarded::Class(class) = self.guarded(slot) {
             store[class].is_array_ty_instance()
@@ -1120,16 +1110,6 @@ impl SlotState {
         None
     }
 
-    /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
-    /// With the R15 accumulator retired and the GP pool abolished, `reg` is
-    /// always the transient R15 scratch: the value is stored to `dst`'s stack
-    /// home and `dst` becomes `S`.
-    pub(crate) fn def_inplace_fixnum(&mut self, ir: &mut AsmIr, dst: SlotId, reg: GP) {
-        debug_assert_eq!(reg, GP::R15);
-        self.discard(dst);
-        ir.reg2stack(reg, dst);
-        self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
-    }
 
     /// Flush GP-pool residents to their stack homes at a branch / block /
     /// safepoint boundary. **Now a no-op**: GP-pool residence (`LinkMode::G`)

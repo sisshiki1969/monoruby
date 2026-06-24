@@ -82,7 +82,6 @@ impl Codegen {
             | AsmInst::FprToStack(..)
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
-            | AsmInst::IntegerBinOp { .. }
             | AsmInst::IntegerBinOpSlot { .. }
             | AsmInst::IntegerCmpSlot { .. }
             | AsmInst::IntegerCmpBrSlot { .. }
@@ -572,12 +571,11 @@ impl Codegen {
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {
                 kind,
-                mode,
                 lhs,
                 rhs,
                 deopt,
             } => {
-                self.integer_binop(lhs, rhs, &mode, kind, &deopt);
+                self.integer_binop(lhs, rhs, kind, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
@@ -1383,11 +1381,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
         kind: CmpKind,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
     ) -> bool {
-        self.integer_cmp(kind, mode, lhs, rhs);
+        self.integer_cmp(kind, lhs, rhs);
         true
     }
 

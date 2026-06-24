@@ -331,21 +331,10 @@ impl AbstractFrame {
     }
 
     fn check_concrete_i64(&self, mode: OpMode) -> Option<(i64, i64)> {
-        match mode {
-            OpMode::RR(lhs, rhs) => {
-                let lhs = self.is_fixnum_literal(lhs)?.get();
-                let rhs = self.is_fixnum_literal(rhs)?.get();
-                Some((lhs, rhs))
-            }
-            OpMode::RI(lhs, rhs) => {
-                let lhs = self.is_fixnum_literal(lhs)?.get();
-                Some((lhs, rhs as i64))
-            }
-            OpMode::IR(lhs, rhs) => {
-                let rhs = self.is_fixnum_literal(rhs)?.get();
-                Some((lhs as i64, rhs))
-            }
-        }
+        let OpMode::RR(lhs, rhs) = mode;
+        let lhs = self.is_fixnum_literal(lhs)?.get();
+        let rhs = self.is_fixnum_literal(rhs)?.get();
+        Some((lhs, rhs))
     }
 
     #[allow(non_snake_case)]
@@ -445,7 +434,7 @@ impl AbstractFrame {
         };
 
         // §slot-IR: keep the AsmIR layer free of physical registers for the
-        // fixnum binop. Write the operand slot(s) back to their stack homes and
+        // fixnum binop. Write the operand slots back to their stack homes and
         // emit a slot-based op; the LIR lowering loads them into scratch regs,
         // fixnum-guards, computes (overflow -> deopt), and stores the result to
         // `dst` (when present). The result lives on the stack (`S(Fixnum)`) — the
@@ -453,74 +442,21 @@ impl AbstractFrame {
         // coexist. A `None` dst is the discarded-result case: the op still runs
         // (its overflow / divide-by-zero side-exit is observable) but nothing is
         // stored. `Div`'s result is produced in `rax` (the lowering handles that).
-        if let BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div = kind {
-            match mode {
-                OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
-                OpMode::RI(l, _) => self.write_back_slot(ir, l),
-                OpMode::IR(_, r) => self.write_back_slot(ir, r),
-            }
-            let deopt = self.deopt_point();
-            ir.transfer(TransferIR::IntegerBinOpSlot {
-                kind,
-                dst,
-                mode,
-                deopt,
-            });
-            if let Some(dst) = dst {
-                self.def_S_guarded(dst, Guarded::Fixnum);
-            }
-            return;
-        }
-
-        match kind {
-            BinOpK::Add | BinOpK::Sub | BinOpK::Mul => {
-                let rhs = GP::Rsi;
-                if let Some(dst) = dst {
-                    // Compute the result *in place* in `dst`'s register — the
-                    // value is born in its destination, so there is no `Rdi`-copy
-                    // + relocate `mov` (the old `def_reg2acc_fixnum` store). The
-                    // lhs operand is brought into that register (R15, or a pool
-                    // register under gp-alloc so the result stays resident); when
-                    // it is already there (`(a+b)+c`) not even a load is emitted.
-                    let dst_reg = self.fetch_fixnum_inplace(ir, kind, rhs, mode);
-                    // §19 (B): route the guarded integer op through the record
-                    // stream, carrying its deopt as a program point.
-                    let deopt = self.deopt_point();
-                    ir.transfer(TransferIR::IntegerBinOp {
-                        kind,
-                        lhs: dst_reg,
-                        rhs,
-                        mode,
-                        deopt,
-                    });
-                    self.def_inplace_fixnum(ir, dst, dst_reg);
-                } else {
-                    // Result discarded: run the op in the Rdi scratch purely for
-                    // the overflow side-exit; no destination store.
-                    let lhs = GP::Rdi;
-                    match kind {
-                        BinOpK::Sub => self.fetch_fixnum_mode(ir, lhs, rhs, mode),
-                        _ => self.fetch_fixnum_comm(ir, lhs, rhs, mode),
-                    }
-                    let deopt = self.deopt_point();
-                    ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
-                }
-            }
-            BinOpK::Div => {
-                let lhs = GP::Rdi;
-                let rhs = GP::Rsi;
-                self.fetch_fixnum_binary(ir, lhs, rhs, mode);
-                let deopt = self.deopt_point();
-                ir.transfer(TransferIR::IntegerBinOp { kind, lhs, rhs, mode, deopt });
-                self.def_reg2acc_fixnum(ir, GP::Rax, dst);
-            }
-            BinOpK::Rem
-            | BinOpK::Exp
-            | BinOpK::BitOr
-            | BinOpK::BitAnd
-            | BinOpK::BitXor
-            | BinOpK::Shl
-            | BinOpK::Shr => unreachable!(),
+        debug_assert!(matches!(
+            kind,
+            BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div
+        ));
+        let OpMode::RR(l, r) = mode;
+        self.write_back_slots(ir, &[l, r]);
+        let deopt = self.deopt_point();
+        ir.transfer(TransferIR::IntegerBinOpSlot {
+            kind,
+            dst,
+            mode,
+            deopt,
+        });
+        if let Some(dst) = dst {
+            self.def_S_guarded(dst, Guarded::Fixnum);
         }
     }
 
@@ -588,14 +524,11 @@ impl AbstractFrame {
             return;
         };
         // §slot-IR: keep the AsmIR layer free of physical registers for the
-        // fixnum comparison. Write the operand slot(s) back to the stack and emit
+        // fixnum comparison. Write the operand slots back to the stack and emit
         // a slot-based cmp; the LIR lowering loads them into scratch regs,
         // fixnum-guards, compares, and stores the boolean result to `dst`.
-        match mode {
-            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
-            OpMode::RI(l, _) => self.write_back_slot(ir, l),
-            OpMode::IR(_, r) => self.write_back_slot(ir, r),
-        }
+        let OpMode::RR(l, r) = mode;
+        self.write_back_slots(ir, &[l, r]);
         let deopt = self.deopt_point();
         ir.transfer(TransferIR::IntegerCmpSlot {
             mode,
@@ -639,14 +572,11 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        // §slot-IR: write the operand slot(s) back to the stack and emit a
+        // §slot-IR: write the operand slots back to the stack and emit a
         // slot-based compare+branch; the LIR lowering loads them into scratch
         // regs, fixnum-guards, compares, and branches.
-        match mode {
-            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
-            OpMode::RI(l, _) => self.write_back_slot(ir, l),
-            OpMode::IR(_, r) => self.write_back_slot(ir, r),
-        }
+        let OpMode::RR(l, r) = mode;
+        self.write_back_slots(ir, &[l, r]);
         let deopt = self.deopt_point();
         ir.transfer(TransferIR::IntegerCmpBrSlot {
             mode,
@@ -655,89 +585,6 @@ impl AbstractFrame {
             branch_dest,
             deopt,
         });
-    }
-
-    /// Operand fetch for an *in-place* fixnum binop. Brings the lhs reg operand
-    /// into the register where the encoder's in-place sequence leaves the result
-    /// (via `fetch_lhs_to_inplace_reg`: R15 or a pool register), and returns that
-    /// register so the caller can emit the op and define `dst` there with no
-    /// relocate move. `rhs` is the scratch register for the rhs reg operand
-    /// (`Rsi`).
-    fn fetch_fixnum_inplace(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        rhs: GP,
-        mode: OpMode,
-    ) -> GP {
-        match mode {
-            OpMode::RR(l, r) => {
-                self.load(ir, r, rhs);
-                self.guard_fixnum(ir, r, rhs);
-                self.fetch_lhs_to_inplace_reg(ir, l)
-            }
-            OpMode::RI(l, _) => {
-                // rhs is an immediate folded by the encoder; lhs reg -> dst reg.
-                self.fetch_lhs_to_inplace_reg(ir, l)
-            }
-            OpMode::IR(_, r) => match kind {
-                // Add/Mul are commutative, so the reg operand becomes the
-                // in-place accumulator (≡ RI) and the immediate is folded.
-                BinOpK::Add | BinOpK::Mul => self.fetch_lhs_to_inplace_reg(ir, r),
-                // Sub: the encoder materializes the immediate (lhs) into the
-                // result register then subtracts the reg operand, so the result
-                // register must be free and the reg operand in the `rhs` scratch.
-                _ => {
-                    self.load(ir, r, rhs);
-                    self.guard_fixnum(ir, r, rhs);
-                    self.alloc_inplace_reg(ir)
-                }
-            },
-        }
-    }
-
-    fn fetch_fixnum_comm(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
-        match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
-            OpMode::RI(slot, _) | OpMode::IR(_, slot) => self.fetch_fixnum_r(ir, slot, lhs),
-        }
-    }
-
-    fn fetch_fixnum_mode(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
-        match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
-            OpMode::RI(l, _) => self.fetch_fixnum_r(ir, l, lhs),
-            OpMode::IR(_, r) => self.fetch_fixnum_r(ir, r, rhs),
-        }
-    }
-
-    fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
-        match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
-            OpMode::RI(l, r) => {
-                ir.lit2reg(Value::i32(r as i32), rhs);
-                self.fetch_fixnum_r(ir, l, lhs);
-            }
-            OpMode::IR(l, r) => {
-                ir.lit2reg(Value::i32(l as i32), lhs);
-                self.fetch_fixnum_r(ir, r, rhs);
-            }
-        }
-    }
-
-    fn fetch_fixnum_rr(&mut self, ir: &mut AsmIr, l: SlotId, r: SlotId, lhs: GP, rhs: GP) {
-        self.load(ir, l, lhs);
-        self.load(ir, r, rhs);
-        self.guard_fixnum(ir, l, lhs);
-        self.guard_fixnum(ir, r, rhs);
-    }
-
-    fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
-        self.load(ir, slot, r);
-        if self.is_fixnum_literal(slot).is_some() {
-        } else {
-            self.guard_fixnum(ir, slot, r);
-        }
     }
 
     pub(super) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {

@@ -204,20 +204,8 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         lhs: FPReg,
         rhs: FPReg,
     },
-    /// §19 (B): an integer binary **operation** with an overflow/`bignum` guard.
-    /// Like the guarded loads (`FprLoad`), it carries its deopt as a
-    /// [`DeoptPoint`] program point (not a frozen `AsmDeopt`); the emit half
-    /// materializes the side-exit via `deopt_from_point`, keeping the record
-    /// codegen-independent.
-    IntegerBinOp {
-        kind: BinOpK,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        deopt: DeoptPoint,
-    },
     /// §slot-IR: a slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
-    /// slots). Like `IntegerBinOp` it carries its deopt as a program point;
+    /// slots). It carries its deopt as a program point;
     /// no physical register appears (the LIR lowering materializes them).
     IntegerBinOpSlot {
         kind: BinOpK,
@@ -261,16 +249,6 @@ impl TransferIR {
             } => ir.fpr_binop(kind, lhs, rhs, dst),
             TransferIR::FloatCmp { kind, lhs, rhs } => {
                 ir.push(AsmInst::FloatCmp { kind, lhs, rhs })
-            }
-            TransferIR::IntegerBinOp {
-                kind,
-                lhs,
-                rhs,
-                mode,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
             }
             TransferIR::IntegerBinOpSlot {
                 kind,
@@ -339,44 +317,6 @@ impl AbstractFrame {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
             }
         }
-    }
-
-    /// Bring `lhs` into the register where an in-place fixnum binop computes its
-    /// result, and return that register. No `Rdi` copy, no relocate `mov`.
-    ///
-    /// Register choice, in priority order:
-    /// 1. **`lhs` is already in a GP register** (R15 or a pool register) →
-    ///    compute in place there, reusing it for the result (zero operand
-    ///    copies — the chained-arithmetic / loop-carried fast path). `lhs` is
-    ///    spilled to its stack home first (`write_back_slot`), which preserves
-    ///    it for any later use *and* keeps the overflow-deopt snapshot
-    ///    consistent (the in-place op clobbers the register, but the snapshot
-    ///    reads the spilled home).
-    /// 2. **gp-alloc, a vacant pool register** → load `lhs` into it and compute
-    ///    there, so the result stays resident in `r8`–`r11` and later reads
-    ///    avoid a stack reload (this is what makes the pool pay off).
-    /// 3. otherwise → the R15 accumulator (freed first).
-    pub(in crate::codegen::jitgen) fn fetch_lhs_to_inplace_reg(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: SlotId,
-    ) -> GP {
-        if let Some(reg) = self.on_reg(lhs) {
-            self.write_back_slot(ir, lhs);
-            self.guard_fixnum(ir, lhs, reg);
-            return reg;
-        }
-        self.load(ir, lhs, GP::R15);
-        self.guard_fixnum(ir, lhs, GP::R15);
-        GP::R15
-    }
-
-    /// Choose the in-place result register for a fixnum binop whose lhs is an
-    /// immediate (the `IR`-Sub case, where the encoder materializes the
-    /// immediate into the result register): the freed R15 accumulator (the GP
-    /// pool is abolished).
-    pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, _ir: &mut AsmIr) -> GP {
-        GP::R15
     }
 
     ///
