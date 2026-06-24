@@ -252,6 +252,10 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
+    /// Per-basic-block local GP register file (`gp-local-alloc`). Empty (and
+    /// flushed) at every block boundary, so it never carries state across a
+    /// merge despite living in the cloned `SlotState`.
+    pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
@@ -291,6 +295,7 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
+            gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
             deferred_rest: None,
             loop_carried: std::collections::HashSet::new(),
@@ -1315,16 +1320,22 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        // No GP-pool residents to spill (`LinkMode::G` abolished).
-        WriteBack::new(vec![], literal, void, vec![], vec![])
+        // `gp-local-alloc`: spill dirty GP residents so the GC marks them (the
+        // registers themselves survive the collection — `exec_gc` preserves the
+        // caller-saved set). Empty without the feature.
+        let gp = self.gp_regfile.dirty_residents();
+        WriteBack::new(vec![], literal, void, gp, vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        // No GP-pool residents to re-home (`LinkMode::G` abolished).
-        WriteBack::new(fpr, literal, vec![], vec![], self.wb_forward_rest())
+        // `gp-local-alloc`: re-home dirty GP residents (a binop result still in a
+        // register) so a deopt resuming in the VM reads them from their stack
+        // home. Empty without the feature.
+        let gp = self.gp_regfile.dirty_residents();
+        WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {

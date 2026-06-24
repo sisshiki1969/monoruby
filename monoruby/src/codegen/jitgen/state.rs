@@ -375,6 +375,22 @@ impl AbstractFrame {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
     }
 
+    /// Flush the per-block local GP register file (`gp-local-alloc`): spill every
+    /// dirty resident to its stack home and clear the file. Called up front by
+    /// every non-`IntegerBinOp` instruction — only that op is GP-aware so far —
+    /// and at block boundaries, so the rest of codegen always observes a slot in
+    /// its canonical stack home. A no-op when the file is empty (the default
+    /// build never populates it, and even with the feature on most instructions
+    /// see an empty file), so the emitted code is unchanged there.
+    pub(in crate::codegen::jitgen) fn flush_gp(&mut self, ir: &mut AsmIr) {
+        if self.gp_regfile.is_empty() {
+            return;
+        }
+        for (reg, slot) in self.gp_regfile.take_dirty_spills() {
+            ir.reg2stack(reg, slot);
+        }
+    }
+
     ///
     /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
     ///

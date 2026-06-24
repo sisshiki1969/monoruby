@@ -96,6 +96,9 @@ impl<'a> JitContext<'a> {
                     // recorded — the merge machinery is R15/stack-only, so a
                     // successor must never inherit a pool-resident (`Alloc`) slot.
                     state.flush_pool(&mut ir);
+                    // `gp-local-alloc`: a successor block starts with an empty GP
+                    // register file (the file is never carried across a merge).
+                    state.flush_gp(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
                 }
@@ -140,6 +143,10 @@ impl<'a> JitContext<'a> {
             // §9 9d-B: flush pool residents before the fall-through state is
             // recorded for the next block (the merge machinery is stack-only).
             state.flush_pool(&mut ir);
+            // `gp-local-alloc`: the last instruction may be a GP-aware binop, so
+            // flush the GP residents before the fall-through state is recorded —
+            // the successor block starts with an empty register file.
+            state.flush_gp(&mut ir);
             self.prepare_next(state, end)
         }
 
@@ -165,6 +172,15 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "jit-debug")]
         if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
+        }
+        // `gp-local-alloc`: only `IntegerBinOp` is GP-aware. Every other
+        // instruction first flushes the live GP residents back to their stack
+        // homes, so it observes slots in their canonical location. (`BinOp` is
+        // exempt here; its non-integer paths flush inside `binary_op`.) A no-op
+        // when the register file is empty, which is always the case without the
+        // feature — so the default build is unchanged.
+        if !matches!(trace_ir, TraceIr::BinOp { .. }) {
+            state.flush_gp(ir);
         }
         match trace_ir {
             TraceIr::InitMethod(info) => {

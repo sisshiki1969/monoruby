@@ -113,19 +113,64 @@ struct Holder {
 /// The per-basic-block GP register file: which slot, if any, each allocatable
 /// register currently caches. The `vgp`-style `holder` vector mirrors the xmm
 /// `FprAllocator`.
-struct GpRegFile {
+///
+/// Held in the abstract state and driven online during the basic-block walk:
+/// `IntegerBinOp` reuses/allocates registers through it, while every other
+/// instruction calls [`Self::take_dirty_spills`] up front to flush the live GP
+/// residents back to their stack homes (only `IntegerBinOp` is GP-aware so far).
+///
+/// It is flushed empty at every basic-block boundary, so although it rides
+/// inside the cloned/merged `SlotState` it never actually carries state across a
+/// block merge (the per-block-locality the design requires).
+#[derive(Clone)]
+pub(in crate::codegen::jitgen) struct GpRegFile {
     /// `holder[i]` is what `GP_ALLOC_SET[i]` caches (`None` = free).
     holder: Vec<Option<Holder>>,
     /// FIFO clock for victim selection.
     clock: u64,
 }
 
+impl Default for GpRegFile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpRegFile {
-    fn new() -> Self {
+    pub(in crate::codegen::jitgen) fn new() -> Self {
         Self {
             holder: vec![None; GP_ALLOC_SET.len()],
             clock: 0,
         }
+    }
+
+    /// True when no register is occupied (the common case — flushing then is a
+    /// no-op, so the hot path pays nothing).
+    pub(in crate::codegen::jitgen) fn is_empty(&self) -> bool {
+        self.holder.iter().all(|h| h.is_none())
+    }
+
+    /// The `(reg, slot)` pairs of every **dirty** resident, for inclusion in a
+    /// deopt / GC write-back (the values that differ from their stack home and
+    /// must be re-homed if the VM resumes). Does not mutate the file.
+    pub(in crate::codegen::jitgen) fn dirty_residents(&self) -> Vec<(GP, SlotId)> {
+        (0..self.holder.len())
+            .filter_map(|i| match self.holder[i] {
+                Some(Holder { slot, dirty: true, .. }) => Some((GP_ALLOC_SET[i], slot)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Flush: return the `(reg, slot)` spills for every dirty resident and clear
+    /// the file. The caller emits the stores (the block-boundary / pre-non-binop
+    /// flush). Clean residents need no store and are simply dropped.
+    pub(in crate::codegen::jitgen) fn take_dirty_spills(&mut self) -> Vec<(GP, SlotId)> {
+        let spills = self.dirty_residents();
+        for h in self.holder.iter_mut() {
+            *h = None;
+        }
+        spills
     }
 
     fn tick(&mut self) -> u64 {
