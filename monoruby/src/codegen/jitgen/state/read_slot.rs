@@ -254,8 +254,7 @@ pub(in crate::codegen::jitgen) enum TransferIR {
     IntegerBinOpSlot {
         kind: BinOpK,
         dst: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
+        mode: OpMode,
         deopt: DeoptPoint,
     },
 }
@@ -296,12 +295,11 @@ impl TransferIR {
             TransferIR::IntegerBinOpSlot {
                 kind,
                 dst,
-                lhs,
-                rhs,
+                mode,
                 deopt,
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_binop_slot(kind, dst, lhs, rhs, deopt);
+                ir.integer_binop_slot(kind, dst, mode, deopt);
             }
         }
     }

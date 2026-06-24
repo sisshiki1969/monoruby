@@ -281,32 +281,48 @@ impl Codegen {
             AsmInst::IntegerBinOpSlot {
                 kind,
                 dst,
-                lhs,
-                rhs,
+                mode,
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                self.encode_linst(LInst::Load {
-                    dst: GP::Rdi.into(),
-                    mem: LMem::Slot(lhs),
-                });
-                self.encode_linst(LInst::GuardClass {
-                    reg: GP::Rdi,
-                    class: INTEGER_CLASS,
-                    deopt: deopt.clone(),
-                });
-                self.encode_linst(LInst::Load {
-                    dst: GP::Rsi.into(),
-                    mem: LMem::Slot(rhs),
-                });
-                self.encode_linst(LInst::GuardClass {
-                    reg: GP::Rsi,
-                    class: INTEGER_CLASS,
-                    deopt: deopt.clone(),
-                });
+                // Place the slot operand(s) into the registers `integer_binop`
+                // expects for this (mode, kind) and fixnum-guard each; the
+                // immediate (if any) is folded by `integer_binop` from `mode`.
+                // The result is computed in place in `Rdi` (= `lhs`).
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                match mode {
+                    OpMode::RR(l, r) => {
+                        load_guard(self, l, GP::Rdi);
+                        load_guard(self, r, GP::Rsi);
+                    }
+                    // rhs is the immediate: only lhs slot is loaded (into Rdi).
+                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                    // lhs is the immediate. Add/Mul are commutative, so the reg
+                    // operand becomes the in-place accumulator (Rdi); Sub
+                    // materializes the immediate into Rdi and subtracts the reg
+                    // operand from Rsi.
+                    OpMode::IR(_, r) => {
+                        let reg = if matches!(kind, BinOpK::Sub) {
+                            GP::Rsi
+                        } else {
+                            GP::Rdi
+                        };
+                        load_guard(self, r, reg);
+                    }
+                }
                 self.encode_linst(LInst::IntegerBinOp {
                     kind,
-                    mode: OpMode::RR(dst, dst),
+                    mode,
                     lhs: GP::Rdi,
                     rhs: GP::Rsi,
                     deopt,

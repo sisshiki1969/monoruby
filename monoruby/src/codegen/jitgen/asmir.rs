@@ -886,15 +886,13 @@ impl AsmIr {
         &mut self,
         kind: BinOpK,
         dst: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
+        mode: OpMode,
         deopt: AsmDeopt,
     ) {
         self.push(AsmInst::IntegerBinOpSlot {
             kind,
             dst,
-            lhs,
-            rhs,
+            mode,
             deopt,
         });
     }
@@ -1770,8 +1768,7 @@ pub(super) enum AsmInst {
     IntegerBinOpSlot {
         kind: BinOpK,
         dst: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
+        mode: OpMode,
         deopt: AsmDeopt,
     },
     ///
