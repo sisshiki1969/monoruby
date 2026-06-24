@@ -98,7 +98,7 @@ impl<'a> JitContext<'a> {
                     // into a loop header — can inherit the pool register, so skip
                     // the flush. The loop-entry merge and the fixpoint keep or
                     // reconcile the binding (`bridge`).
-                    #[cfg(all(feature = "gp-alloc", not(feature = "gp-alloc-lir")))]
+                    #[cfg(not(feature = "gp-alloc-lir"))]
                     state.flush_pool(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
@@ -147,7 +147,7 @@ impl<'a> JitContext<'a> {
             // pool binding, `bridge` reconciles a disagreement), so a fall-through
             // successor can inherit the pool register instead of reloading — skip
             // the flush and let the merge retain or write back as needed.
-            #[cfg(all(feature = "gp-alloc", not(feature = "gp-alloc-lir")))]
+            #[cfg(not(feature = "gp-alloc-lir"))]
             state.flush_pool(&mut ir);
             self.prepare_next(state, end)
         }

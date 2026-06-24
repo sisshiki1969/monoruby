@@ -350,7 +350,6 @@ impl AbstractFrame {
             self.guard_fixnum(ir, lhs, reg);
             return reg;
         }
-        #[cfg(feature = "gp-alloc")]
         if let Some(id) = self.try_vacant_pool_id() {
             let reg = crate::codegen::GP_ALLOC_POOL[id];
             self.load(ir, lhs, reg);
@@ -367,7 +366,6 @@ impl AbstractFrame {
     /// immediate into the result register): a vacant pool register under
     /// gp-alloc, else the freed R15 accumulator.
     pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, _ir: &mut AsmIr) -> GP {
-        #[cfg(feature = "gp-alloc")]
         if let Some(id) = self.try_vacant_pool_id() {
             return crate::codegen::GP_ALLOC_POOL[id];
         }

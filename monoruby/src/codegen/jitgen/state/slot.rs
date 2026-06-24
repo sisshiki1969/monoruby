@@ -251,7 +251,6 @@ impl FprAllocator {
 ///
 /// B2.1 establishes the table; the placement policy (B2.2) and codegen (B2.3)
 /// populate and consume it. Inert until then — no `Alloc` VRegs are emitted.
-#[cfg(feature = "gp-alloc")]
 #[allow(dead_code)]
 #[derive(Clone, Default)]
 pub(super) struct GpAllocator {
@@ -260,7 +259,6 @@ pub(super) struct GpAllocator {
     pinned: Vec<VReg>,
 }
 
-#[cfg(feature = "gp-alloc")]
 #[allow(dead_code)]
 impl GpAllocator {
     fn new() -> Self {
@@ -341,7 +339,6 @@ pub(crate) struct SlotState {
     fpr_alloc: FprAllocator,
     /// §9 9d-B: GP-pool allocation state (the `fpr_alloc` analogue). Inert in
     /// B2.1; populated by the allocator (B2.2+).
-    #[cfg(feature = "gp-alloc")]
     gp_alloc: GpAllocator,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
@@ -382,7 +379,6 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
-            #[cfg(feature = "gp-alloc")]
             gp_alloc: GpAllocator::new(),
             local_num,
             deferred_rest: None,
@@ -705,10 +701,7 @@ impl SlotState {
                     unreachable!("R15 accumulator retired; slot residence is pool-only")
                 }
                 VReg::Alloc(_id) => {
-                    #[cfg(feature = "gp-alloc")]
                     self.gp_alloc.remove(slot, _id as usize);
-                    #[cfg(not(feature = "gp-alloc"))]
-                    unreachable!("Alloc VReg without the gp-alloc feature");
                 }
             },
             LinkMode::C(_) => {}
@@ -1012,10 +1005,7 @@ impl SlotState {
                         unreachable!("R15 accumulator retired; slot residence is pool-only")
                     }
                     VReg::Alloc(_id) => {
-                        #[cfg(feature = "gp-alloc")]
                         self.gp_alloc.remove(slot, _id as usize);
-                        #[cfg(not(feature = "gp-alloc"))]
-                        unreachable!("Alloc VReg without the gp-alloc feature");
                     }
                 }
                 self.set_mode(slot, LinkMode::S(guarded));
@@ -1273,7 +1263,6 @@ impl SlotState {
     /// caller-saved spill/reload threading (`using_gp`) the way the FP side
     /// does: the flush already wrote it back. Empty until the placement policy
     /// puts a slot in the pool.
-    #[cfg(feature = "gp-alloc")]
     fn writeback_pool_state(&mut self) -> Vec<(GP, SlotId)> {
         let mut out = vec![];
         for slot in self.all_regs() {
@@ -1294,7 +1283,6 @@ impl SlotState {
     /// full. Used by the in-place fixnum-binop path to keep the result resident
     /// in the pool (so later reads avoid a stack reload), the move-free analogue
     /// of `try_def_G_pool`.
-    #[cfg(feature = "gp-alloc")]
     pub(crate) fn try_vacant_pool_id(&self) -> Option<usize> {
         self.gp_alloc.find_vacant()
     }
@@ -1310,7 +1298,6 @@ impl SlotState {
             ir.reg2stack(GP::R15, dst);
             self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
         } else {
-            #[cfg(feature = "gp-alloc")]
             {
                 let id = crate::codegen::GP_ALLOC_POOL
                     .iter()
@@ -1319,8 +1306,6 @@ impl SlotState {
                 self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Alloc(id as u32)));
                 self.gp_alloc.add(dst, id);
             }
-            #[cfg(not(feature = "gp-alloc"))]
-            unreachable!("pool register without the gp-alloc feature");
         }
     }
 
@@ -1335,7 +1320,6 @@ impl SlotState {
     /// home so the collector marks it, and the `execute_gc` stub preserves the
     /// pool registers across the call. The GC is mark-and-sweep (non-moving),
     /// so the preserved raw pointer stays valid for a heap value that survived.
-    #[cfg(feature = "gp-alloc")]
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn try_def_G_pool(
         &mut self,
@@ -1355,17 +1339,14 @@ impl SlotState {
     /// a merged successor never sees a pool-resident slot (the merge machinery
     /// is R15-only). The R15 accumulator is left untouched.
     ///
-    /// Unconditional so callers need no `cfg` gate: without the `gp-alloc`
-    /// feature the pool is always empty, so this is a no-op.
+    /// A no-op where the pool is empty (e.g. aarch64, `GP_ALLOC_POOL = &[]`).
     pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {
-        #[cfg(feature = "gp-alloc")]
         for (reg, slot) in self.writeback_pool_state() {
             _ir.reg2stack(reg, slot);
         }
     }
 
     pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {
-        #[cfg(feature = "gp-alloc")]
         for (reg, slot) in self.writeback_pool_state() {
             _ir.reg2stack(reg, slot);
         }
@@ -1429,14 +1410,11 @@ impl SlotState {
                     VReg::Pinned(_) => {
                         unreachable!("R15 accumulator retired; slot residence is pool-only")
                     }
-                    #[cfg(feature = "gp-alloc")]
                     VReg::Alloc(id) => {
                         self.discard(dst);
                         self.set_mode(dst, LinkMode::G(guarded, vreg));
                         self.gp_alloc.add(dst, id as usize);
                     }
-                    #[cfg(not(feature = "gp-alloc"))]
-                    VReg::Alloc(_) => unreachable!("Alloc VReg without the gp-alloc feature"),
                 }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
@@ -1591,10 +1569,7 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        #[cfg(feature = "gp-alloc")]
         let gp = self.wb_gp(|_| true);
-        #[cfg(not(feature = "gp-alloc"))]
-        let gp = vec![];
         WriteBack::new(vec![], literal, void, gp, vec![])
     }
 
@@ -1602,10 +1577,7 @@ impl AbstractFrame {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        #[cfg(feature = "gp-alloc")]
         let gp = self.wb_gp(f);
-        #[cfg(not(feature = "gp-alloc"))]
-        let gp = vec![];
         WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
     }
 
@@ -1677,7 +1649,6 @@ impl AbstractFrame {
     /// §9 9d-B: collect the slots resident in the allocatable GP pool
     /// (`VReg::Alloc`), each paired with its physical pool register. Empty until
     /// the allocator places a slot in the pool.
-    #[cfg(feature = "gp-alloc")]
     fn wb_gp(&self, f: impl Fn(SlotId) -> bool) -> Vec<(GP, SlotId)> {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {

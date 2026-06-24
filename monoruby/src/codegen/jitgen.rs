@@ -147,7 +147,7 @@ pub(crate) struct WriteBack {
     /// §9 9d-B: slots resident in the allocatable GP pool (x86-64 `r8`–`r11`),
     /// each paired with the physical register holding it. Written back to the
     /// slot's frame home at every flush / deopt / GC safepoint. Empty until
-    /// the GP allocator (the `gp-alloc` feature) places a slot, so shipping
+    /// the GP allocator places a pool slot, so shipping
     /// builds carry an always-empty vec and emit byte-identical code.
     gp: Vec<(GP, SlotId)>,
     /// Deferred forwarding-rest materialization (D1). Each entry
