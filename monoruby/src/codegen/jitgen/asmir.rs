@@ -553,6 +553,15 @@ impl AsmIr {
         }
     }
 
+    /// Like `reg2stack`, but addresses the slot via the LFP (r14) so the store
+    /// follows the frame across a `move_frame_to_heap`. Used for the result of
+    /// a possibly-capturing call (see `AsmInst::RegToLfpStack`).
+    pub(crate) fn reg2lfp_stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            self.push(AsmInst::RegToLfpStack(src, dst));
+        }
+    }
+
     pub(crate) fn stack2reg(&mut self, src: SlotId, dst: GP) {
         self.push(AsmInst::StackToReg(src, dst));
     }
@@ -1240,6 +1249,17 @@ pub(super) enum AsmInst {
     Unreachable,
     /// move reg to stack
     RegToStack(GP, SlotId),
+    /// move reg to the slot's home addressed via the **LFP (r14)**, not the
+    /// native frame pointer (rbp). On x86 ordinary `RegToStack` writes
+    /// `[rbp - rbp_local(slot)]`; that is the *stack* frame, which becomes
+    /// stale after a callee moves this frame to the heap (`move_frame_to_heap`,
+    /// e.g. a block captured into a Proc). The result of such a capturing call
+    /// must instead land on whichever frame is live afterwards — the heap copy
+    /// when captured, the stack frame otherwise — which is exactly what the LFP
+    /// (reloaded from `cfp.lfp` after the call) points at. aarch64 already
+    /// addresses every slot via the LFP, so there this is identical to
+    /// `RegToStack`. See the capture-deopt analysis in `doc/arch_difference.md`.
+    RegToLfpStack(GP, SlotId),
 
     /// move reg to stack
     StackToReg(SlotId, GP),

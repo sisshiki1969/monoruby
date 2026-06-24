@@ -44,6 +44,7 @@ impl Codegen {
             | AsmInst::Label(..)
             | AsmInst::RegMove(..)
             | AsmInst::RegToStack(..)
+            | AsmInst::RegToLfpStack(..)
             | AsmInst::StackToReg(..)
             | AsmInst::LitToReg(..)
             | AsmInst::LitToStack(..)
@@ -403,7 +404,7 @@ impl Codegen {
                 exit:
                 );
             }
-            // [lfp - slot] <- src
+            // [rbp - slot] <- src (native-frame relative)
             LInst::Store {
                 src,
                 mem: LMem::Slot(slot),
@@ -411,6 +412,16 @@ impl Codegen {
                 let r = src as u64;
                 monoasm!( &mut self.jit,
                     movq [rbp - (rbp_local(slot))], R(r);
+                );
+            }
+            // [r14 - slot] <- src (LFP relative; follows a heap-moved frame)
+            LInst::Store {
+                src,
+                mem: LMem::LfpSlot(slot),
+            } => {
+                let r = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [r14 - (conv(slot))], R(r);
                 );
             }
             // [base + disp] <- src (object field; no immediate-range limit on x86)

@@ -53,6 +53,11 @@ impl Codegen {
                 src: r,
                 mem: LMem::Slot(slot),
             }),
+            // [lfp - slot] <- reg (LFP-relative; follows a heap-moved frame)
+            AsmInst::RegToLfpStack(r, slot) => self.encode_linst(LInst::Store {
+                src: r,
+                mem: LMem::LfpSlot(slot),
+            }),
             // reg <- [slot]
             AsmInst::StackToReg(slot, r) => self.encode_linst(LInst::Load {
                 dst: r.into(),

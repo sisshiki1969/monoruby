@@ -1574,9 +1574,12 @@ impl Codegen {
                 self.jit.bind_label(exit);
             }
             // [lfp - slot] <- src (legalized like `Load`).
+            // aarch64 already addresses every slot via the LFP, so `Slot` and
+            // `LfpSlot` lower identically here (the distinction only matters on
+            // x86, where ordinary `Slot` is rbp-relative).
             LInst::Store {
                 src,
-                mem: LMem::Slot(slot),
+                mem: LMem::Slot(slot) | LMem::LfpSlot(slot),
             } => {
                 let lfp = GP::R14.a64().0;
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
