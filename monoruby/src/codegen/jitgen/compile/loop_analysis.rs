@@ -75,11 +75,7 @@ impl<'a> JitContext<'a> {
         }
         // The fixpoint's analogue of the back-edge flush: a pool resident the
         // loop body produced is demoted to its stack home at the back-edge, so
-        // the loop-entry merge never sees `G`. §9d-2d lifts this under
-        // `gp-alloc-lir` — keeping `G` lets a loop-carried value stay in its pool
-        // register across the back-edge (the loop-entry merge is now `G`-aware,
-        // and `use_float` tolerates a `G` loop-carried slot).
-        #[cfg(not(feature = "gp-alloc-lir"))]
+        // the loop-entry merge never sees `G`.
         if let Some(backedge) = &mut backedge {
             for i in backedge.all_regs() {
                 if let LinkMode::G(_, _) = backedge.mode(i) {

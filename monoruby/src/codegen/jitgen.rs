@@ -30,11 +30,6 @@ mod context;
 mod definition;
 #[cfg(target_arch = "x86_64")]
 mod deoptimize;
-// §9 9d-2: LIR-level GP register allocator (live ranges + clobber map +
-// linear-scan over the buffered `LInst` stream). Only the `gp-alloc-lir`
-// feature consumes it (via `Codegen::allocate_gp`).
-#[cfg(feature = "gp-alloc-lir")]
-mod gp_alloc;
 // Type / class guards, split per arch (mirrors the asmir `compile` backend):
 // each arch's lowering lives under `arch/<arch>/guard.rs`.
 #[cfg(target_arch = "x86_64")]

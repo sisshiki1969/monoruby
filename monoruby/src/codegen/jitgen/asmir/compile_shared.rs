@@ -1105,11 +1105,6 @@ impl Codegen {
     /// home *is* its slot). The ① fixpoint's loop-head liveness / loop-carried
     /// metadata is threaded in here when that step lands (the §9c wiring).
     pub(in crate::codegen::jitgen) fn allocate_gp(&self, body: Vec<LInst>) -> Vec<LInst> {
-        #[cfg(feature = "gp-alloc-lir")]
-        {
-            return crate::codegen::jitgen::gp_alloc::allocate(body);
-        }
-        #[cfg(not(feature = "gp-alloc-lir"))]
         body
     }
 
