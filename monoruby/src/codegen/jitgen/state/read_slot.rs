@@ -204,14 +204,6 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         lhs: FPReg,
         rhs: FPReg,
     },
-    /// §19 (B): an integer **comparison** (`fetch_fixnum_*_nodeopt` already
-    /// emitted the fixnum guards), result in `rax`. Deopt-free, pure data.
-    IntegerCmp {
-        mode: OpMode,
-        kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
-    },
     /// §19 (B): an integer binary **operation** with an overflow/`bignum` guard.
     /// Like the guarded loads (`FprLoad`), it carries its deopt as a
     /// [`DeoptPoint`] program point (not a frozen `AsmDeopt`); the emit half
@@ -270,12 +262,6 @@ impl TransferIR {
             TransferIR::FloatCmp { kind, lhs, rhs } => {
                 ir.push(AsmInst::FloatCmp { kind, lhs, rhs })
             }
-            TransferIR::IntegerCmp {
-                mode,
-                kind,
-                lhs,
-                rhs,
-            } => ir.integer_cmp(mode, kind, lhs, rhs),
             TransferIR::IntegerBinOp {
                 kind,
                 lhs,

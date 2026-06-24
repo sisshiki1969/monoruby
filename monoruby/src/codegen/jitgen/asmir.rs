@@ -930,19 +930,6 @@ impl AsmIr {
     ///
     /// Integer comparison
     ///
-    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
-    ///
-    /// If error occurs in comparison operation, raise error.
-    ///
-    pub(super) fn integer_cmp(&mut self, mode: OpMode, kind: CmpKind, lhs: GP, rhs: GP) {
-        self.push(AsmInst::IntegerCmp {
-            kind,
-            mode,
-            lhs,
-            rhs,
-        });
-    }
-
     /// §slot-IR: slot-based fixnum comparison (see [`AsmInst::IntegerCmpSlot`]).
     pub(super) fn integer_cmp_slot(
         &mut self,
@@ -956,25 +943,6 @@ impl AsmIr {
             mode,
             dst,
             deopt,
-        });
-    }
-
-    pub(super) fn integer_cmp_br(
-        &mut self,
-        mode: OpMode,
-        kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
-        self.push(AsmInst::IntegerCmpBr {
-            mode,
-            kind,
-            lhs,
-            rhs,
-            brkind,
-            branch_dest,
         });
     }
 
@@ -1827,18 +1795,6 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
-    /// Integer comparison
-    ///
-    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
-    ///
-    /// If error occurs in comparison operation, raise error.
-    ///
-    IntegerCmp {
-        mode: OpMode,
-        kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
-    },
     ///
     /// §slot-IR: slot-based fixnum comparison (`dst = lhs <kind> rhs` as a bool
     /// `Value`, all stack slots). The LIR lowering loads each operand slot into a
@@ -1850,20 +1806,6 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         dst: Option<SlotId>,
         deopt: AsmDeopt,
-    },
-    ///
-    /// Integer comparison and conditional branch
-    ///
-    /// Compare two values with `mode``, jump to `branch_dest`` if the condition specified by `kind``
-    /// and `brkind`` is met.
-    ///
-    IntegerCmpBr {
-        mode: OpMode,
-        kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
-        brkind: BrKind,
-        branch_dest: JitLabel,
     },
     ///
     /// §slot-IR: slot-based fused fixnum compare + conditional branch. The LIR

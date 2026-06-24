@@ -1120,10 +1120,6 @@ impl SlotState {
         None
     }
 
-    pub(in crate::codegen::jitgen) fn on_reg_or(&self, _slot: SlotId, optb: GP) -> GP {
-        optb
-    }
-
     /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
     /// With the R15 accumulator retired and the GP pool abolished, `reg` is
     /// always the transient R15 scratch: the value is stored to `dst`'s stack

@@ -368,12 +368,6 @@ impl Codegen {
                     });
                 }
             }
-            AsmInst::IntegerCmp {
-                mode,
-                kind,
-                lhs,
-                rhs,
-            } => self.encode_linst(LInst::IntegerCmp { kind, mode, lhs, rhs }),
             // §slot-IR: lower the slot-based fixnum comparison — load each operand
             // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
             // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
@@ -416,49 +410,6 @@ impl Codegen {
                         mem: LMem::Slot(dst),
                     });
                 }
-            }
-            // Fused integer compare + conditional branch, lowered to LIR here
-            // (arch-neutral) and encoded per-arch. The compare sets flags; the
-            // branch is a signed conditional jump with the BrKind inversion
-            // folded into the condition.
-            AsmInst::IntegerCmpBr {
-                mode,
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                branch_dest,
-            } => {
-                let target = frame.resolve_label(&mut self.jit, branch_dest);
-                match mode {
-                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
-                        rhs: rhs.into(),
-                    }),
-                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
-                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
-                    }),
-                    // imm on the left: materialize it into lhs, then compare
-                    // reg-reg (mirrors `cmp_integer`'s IR path, which clobbers
-                    // lhs).
-                    OpMode::IR(i, _) => {
-                        self.encode_linst(LInst::LoadImm {
-                            dst: lhs.into(),
-                            imm: Value::i32(i as i32).id(),
-                        });
-                        self.encode_linst(LInst::Cmp {
-                            lhs: lhs.into(),
-                            rhs: rhs.into(),
-                        });
-                    }
-                }
-                // TEq compares like Eq for integers; BrIfNot takes the inverse.
-                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
-                if brkind == BrKind::BrIfNot {
-                    cond = cond.invert();
-                }
-                self.encode_linst(LInst::CondBr { cond, target });
             }
             // §slot-IR: lower the slot-based compare+branch — load each operand
             // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),

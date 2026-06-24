@@ -576,14 +576,6 @@ impl AbstractFrame {
         }
     }
 
-    fn cmp_regs(&self, mode: OpMode) -> (GP, GP) {
-        match mode {
-            OpMode::RR(lhs, rhs) => (self.on_reg_or(lhs, GP::Rdi), self.on_reg_or(rhs, GP::Rsi)),
-            OpMode::RI(lhs, _) => (self.on_reg_or(lhs, GP::Rdi), GP::Rsi),
-            OpMode::IR(_, rhs) => (GP::Rdi, self.on_reg_or(rhs, GP::Rsi)),
-        }
-    }
-
     pub(super) fn gen_cmp_integer(
         &mut self,
         ir: &mut AsmIr,
@@ -719,16 +711,6 @@ impl AbstractFrame {
         }
     }
 
-    fn fetch_fixnum_mode_nodeopt(&mut self, ir: &mut AsmIr, mode: OpMode) -> (GP, GP) {
-        let (lhs, rhs) = self.cmp_regs(mode);
-        match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr_nodeopt(ir, l, r, lhs, rhs),
-            OpMode::RI(l, _) => self.fetch_fixnum_r_nodeopt(ir, l, lhs),
-            OpMode::IR(_, r) => self.fetch_fixnum_r_nodeopt(ir, r, rhs),
-        }
-        (lhs, rhs)
-    }
-
     fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
         match mode {
             OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
@@ -750,25 +732,7 @@ impl AbstractFrame {
         self.guard_fixnum(ir, r, rhs);
     }
 
-    fn fetch_fixnum_rr_nodeopt(&mut self, ir: &mut AsmIr, l: SlotId, r: SlotId, lhs: GP, rhs: GP) {
-        self.load(ir, l, lhs);
-        self.load(ir, r, rhs);
-        if self.is_fixnum_literal(l).is_some() && self.is_fixnum_literal(r).is_some() {
-            return;
-        }
-        self.guard_fixnum(ir, l, lhs);
-        self.guard_fixnum(ir, r, rhs);
-    }
-
     fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
-        self.load(ir, slot, r);
-        if self.is_fixnum_literal(slot).is_some() {
-        } else {
-            self.guard_fixnum(ir, slot, r);
-        }
-    }
-
-    fn fetch_fixnum_r_nodeopt(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         self.load(ir, slot, r);
         if self.is_fixnum_literal(slot).is_some() {
         } else {
