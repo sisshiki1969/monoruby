@@ -293,15 +293,9 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            // §9 9d-B accumulator register file: put the result into a free pool
-            // register (x86 `r8`–`r11`; aarch64's pool is empty so this never
-            // fires there). Any value type may go to the pool (it is GC-rooted
-            // at every safepoint). With the R15 accumulator retired, a value
-            // that gets no pool register is stored straight to its stack home.
-            if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
-                ir.reg_move(src, vreg.phys());
-                return;
-            }
+            // GP-pool residence (`LinkMode::G`) is abolished: with the R15
+            // accumulator retired and no allocatable GP pool, a defined value
+            // is always stored straight to its stack home (`LinkMode::S`).
             ir.reg2stack(src, dst);
             self.def_S_guarded(dst, guarded);
         }

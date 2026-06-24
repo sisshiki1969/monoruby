@@ -50,9 +50,6 @@ pub(in crate::codegen::jitgen) enum FprLoad {
     None,
     /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
     FromStack(FPReg),
-    /// `G` slot in a GP register: `reg2stack(src, slot); float_to_fpr(src, x,
-    /// deopt)`. `src` is `r15` for the accumulator or a pool register once placed.
-    FromReg(GP, FPReg),
     /// `f64_to_fpr(f, x)` (guard-free)
     FromF64(f64, FPReg),
     /// `i64_to_stack_and_fpr(i, slot, x)` (guard-free)
@@ -72,11 +69,6 @@ impl FprLoad {
                 let deopt = ir.deopt_from_point(deopt.unwrap());
                 ir.stack2reg(slot, GP::Rdi);
                 ir.float_to_fpr(GP::Rdi, x, deopt);
-            }
-            FprLoad::FromReg(src, x) => {
-                let deopt = ir.deopt_from_point(deopt.unwrap());
-                ir.reg2stack(src, slot);
-                ir.float_to_fpr(src, x, deopt);
             }
             FprLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
             FprLoad::FromFixnum(i, x) => ir.i64_to_stack_and_fpr(i, slot, x),
@@ -99,10 +91,6 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
     Stack(SlotId, GP),
-    /// `G` slot resident in a GP register: `reg_move(src, dst)`. `src` is the
-    /// slot's register (`r15` for the accumulator, a pool register `r8`–`r11`
-    /// once 9d places it).
-    Reg(GP, GP),
 }
 
 impl GpLoad {
@@ -114,7 +102,6 @@ impl GpLoad {
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
             GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
-            GpLoad::Reg(src, dst) => ir.reg_move(src, dst),
         }
     }
 }
@@ -140,17 +127,14 @@ pub(in crate::codegen::jitgen) enum FprFixnumLoad {
     None,
     /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
     FromStack(FPReg, bool),
-    /// `G` slot in a GP register: `reg2stack(src, slot); [GuardClass(src)];
-    /// fixnum2fpr(src, x)`. `src` is `r15` or a pool register once placed.
-    FromReg(GP, FPReg, bool),
     /// guard-free numeric literal (`LinkMode::C`) — reuses the [`FprLoad`] record
     Numeric(FprLoad),
 }
 
 impl FprFixnumLoad {
-    /// `deopt` (the program point) is `Some` for the guarded `S`/`G` arms and
+    /// `deopt` (the program point) is `Some` for the guarded `S` arm and
     /// `None` for the guard-free ones. The side-exit is materialized for the
-    /// `S`/`G` arms whenever the point is `Some` — even if `guard` is false, so
+    /// `S` arm whenever the point is `Some` — even if `guard` is false, so
     /// the `side_exit` table stays identical to the pre-split wrapper, which
     /// created the deopt unconditionally for those arms.
     fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
@@ -163,14 +147,6 @@ impl FprFixnumLoad {
                     ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
                 }
                 ir.fixnum2fpr(GP::Rdi, x);
-            }
-            FprFixnumLoad::FromReg(src, x, guard) => {
-                let deopt = deopt.map(|p| ir.deopt_from_point(p));
-                ir.reg2stack(src, slot);
-                if guard {
-                    ir.push(AsmInst::GuardClass(src, INTEGER_CLASS, deopt.unwrap()));
-                }
-                ir.fixnum2fpr(src, x);
             }
             FprFixnumLoad::Numeric(load) => load.emit(ir, slot, None),
         }
@@ -372,7 +348,6 @@ impl AbstractFrame {
             }
             LinkMode::C(v) => GpLoad::Lit(v, dst),
             LinkMode::Sf(_, _) | LinkMode::S(_) => GpLoad::Stack(slot, dst),
-            LinkMode::G(_, vreg) => GpLoad::Reg(vreg.phys(), dst),
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
@@ -405,12 +380,6 @@ impl AbstractFrame {
             self.guard_fixnum(ir, lhs, reg);
             return reg;
         }
-        if let Some(id) = self.try_vacant_pool_id() {
-            let reg = crate::codegen::GP_ALLOC_POOL[id];
-            self.load(ir, lhs, reg);
-            self.guard_fixnum(ir, lhs, reg);
-            return reg;
-        }
         self.load(ir, lhs, GP::R15);
         self.guard_fixnum(ir, lhs, GP::R15);
         GP::R15
@@ -418,12 +387,9 @@ impl AbstractFrame {
 
     /// Choose the in-place result register for a fixnum binop whose lhs is an
     /// immediate (the `IR`-Sub case, where the encoder materializes the
-    /// immediate into the result register): a vacant pool register under
-    /// gp-alloc, else the freed R15 accumulator.
+    /// immediate into the result register): the freed R15 accumulator (the GP
+    /// pool is abolished).
     pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, _ir: &mut AsmIr) -> GP {
-        if let Some(id) = self.try_vacant_pool_id() {
-            return crate::codegen::GP_ALLOC_POOL[id];
-        }
         GP::R15
     }
 
@@ -483,7 +449,7 @@ impl AbstractFrame {
         // snapshot. The guard-free `Sf`/`F`/`C` arms record no deopt, exactly as
         // before. The side-exit itself is materialized in the emit half.
         let deopt =
-            matches!(self.mode(slot), LinkMode::S(_) | LinkMode::G(_, _)).then(|| self.deopt_point());
+            matches!(self.mode(slot), LinkMode::S(_)).then(|| self.deopt_point());
         let (x, load) = self.load_fpr_fixnum_state(slot);
         ir.transfer(TransferIR::FprFixnumLoad { load, slot, deopt });
         x
@@ -506,13 +472,6 @@ impl AbstractFrame {
                 let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 (x, FprFixnumLoad::FromStack(x, guard))
-            }
-            LinkMode::G(_, vreg) => {
-                // G -> Sf
-                let src = vreg.phys();
-                let guard = self.guard_class_state(slot, INTEGER_CLASS);
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                (x, FprFixnumLoad::FromReg(src, x, guard))
             }
             LinkMode::C(v) => {
                 let (x, load) = self.load_fpr_from_C_state(slot, v);
@@ -570,12 +529,6 @@ impl AbstractFrame {
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
                 (x, FprLoad::FromStack(x))
             }
-            LinkMode::G(_, vreg) => {
-                // -> Sf
-                let src = vreg.phys();
-                let x = self.set_new_Sf(slot, SfGuarded::Float);
-                (x, FprLoad::FromReg(src, x))
-            }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_fpr() {:?}", self.mode(slot));
@@ -622,16 +575,8 @@ impl AbstractFrame {
         slot: SlotId,
         ofs: i32,
     ) {
-        match self.mode(slot) {
-            LinkMode::G(_, vreg) => {
-                self.use_as_value(slot);
-                ir.reg2rsp_offset(vreg.phys(), ofs);
-            }
-            _ => {
-                self.load(ir, slot, GP::Rax);
-                ir.reg2rsp_offset(GP::Rax, ofs);
-            }
-        }
+        self.load(ir, slot, GP::Rax);
+        ir.reg2rsp_offset(GP::Rax, ofs);
     }
 
     pub(in crate::codegen::jitgen) fn fetch_rest_for_callee(
