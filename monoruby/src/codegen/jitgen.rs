@@ -28,6 +28,8 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
+#[allow(dead_code)]
+mod gp_alloc;
 #[cfg(target_arch = "x86_64")]
 mod deoptimize;
 // Type / class guards, split per arch (mirrors the asmir `compile` backend):
