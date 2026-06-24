@@ -266,13 +266,18 @@ pub(in crate::codegen::jitgen) fn allocate_run(insts: &[BinOpInst]) -> Vec<GpAct
     let mut out = Vec::new();
 
     for inst in insts {
+        // 1. Load the operands.
         let lhs_reg = ensure(&mut rf, inst.lhs, &[], &mut out);
         let rhs_reg = ensure(&mut rf, inst.rhs, &[lhs_reg], &mut out);
-        // The result is (re)defined: drop any stale cache, then claim a register
-        // for it (always — results stay resident), pinning the operand registers
-        // across the possible eviction.
+        // 2. The result is (re)defined: drop any stale cache of it.
         rf.invalidate(inst.dst);
-        let dst_reg = rf.alloc(&[lhs_reg, rhs_reg], &mut out);
+        // 3. Clear `next_sp`: the popped temporaries (the just-consumed operands
+        //    included) are dead. Done before the result allocation so the result
+        //    can reuse a freed operand's register.
+        rf.free_above_sp(inst.next_sp);
+        // 4. Claim a register for the result (always — results stay resident),
+        //    pinning only `rhs` so the result may reuse `lhs` in place.
+        let dst_reg = rf.alloc(&[rhs_reg], &mut out);
         out.push(GpAction::BinOp {
             kind: inst.kind,
             dst: dst_reg,
@@ -280,9 +285,6 @@ pub(in crate::codegen::jitgen) fn allocate_run(insts: &[BinOpInst]) -> Vec<GpAct
             rhs: rhs_reg,
         });
         rf.bind(dst_reg, inst.dst, /* dirty */ true);
-        // Liveness: free temporaries the stack pointer has popped (incl. the
-        // just-consumed operands), making their registers reusable.
-        rf.free_above_sp(inst.next_sp);
     }
 
     flush_dirty(&mut rf, &mut out);
@@ -354,7 +356,9 @@ mod tests {
     const R10: GP = GP::R10;
 
     /// The worked example `%1 = %2 + %3` (operands %2/%3 popped, %1 live):
-    /// %2 → R8, %3 → R9, R10 = R8 + R9, %1 recorded in R10, R10 spilled at flush.
+    /// %2 → R8, %3 → R9; then `next_sp` frees both operand registers, so the
+    /// result reuses `lhs`'s R8 in place — R8 = R8 + R9 — and is spilled to %1's
+    /// home at flush.
     #[test]
     fn single_binop() {
         // next_sp = 2 → slots %2,%3 (idx 2,3) dead, %1 (idx 1) live.
@@ -364,8 +368,8 @@ mod tests {
             vec![
                 GpAction::Load { slot: sl(2), reg: R8, guard: true },
                 GpAction::Load { slot: sl(3), reg: R9, guard: true },
-                GpAction::BinOp { kind: BinOpK::Add, dst: R10, lhs: R8, rhs: R9 },
-                GpAction::Spill { reg: R10, slot: sl(1) },
+                GpAction::BinOp { kind: BinOpK::Add, dst: R8, lhs: R8, rhs: R9 },
+                GpAction::Spill { reg: R8, slot: sl(1) },
             ]
         );
     }
@@ -379,10 +383,17 @@ mod tests {
         assert!(!out
             .iter()
             .any(|a| matches!(a, GpAction::Load { slot, .. } if *slot == sl(1))));
-        // %1's register is an operand of the second op.
-        assert!(out
+        // The second op's `lhs` is exactly the register the first op produced
+        // `%1` in — the result flows directly into the next op with no reload.
+        let binops: Vec<_> = out
             .iter()
-            .any(|a| matches!(a, GpAction::BinOp { lhs, .. } if *lhs == R10)));
+            .filter_map(|a| match a {
+                GpAction::BinOp { dst, lhs, .. } => Some((*dst, *lhs)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(binops.len(), 2);
+        assert_eq!(binops[1].1, binops[0].0);
     }
 
     /// The result is always kept in a register even under pressure: four live

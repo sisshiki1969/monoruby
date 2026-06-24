@@ -506,21 +506,37 @@ impl AbstractFrame {
     #[cfg(feature = "gp-local-alloc")]
     fn binop_integer_gp(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, mode: OpMode) {
         let OpMode::RR(lhs, rhs) = mode;
+        // 1. Load the operands into registers (reusing a resident copy).
         let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // 2. Snapshot the deopt write-back *before* clearing: it must re-home the
+        //    dirty residents that are live at this op's PC — which includes a
+        //    dirty operand that is itself a dead-after temporary (a prior binop
+        //    result consumed here). The guards and the overflow check below all
+        //    side-exit to this point, where the interpreter re-reads the operands
+        //    from their stack homes, so they have to be recoverable.
+        let deopt = ir.new_deopt(self);
+        // 3. `dst` is about to be redefined: drop any stale GP cache of it (done
+        //    after the snapshot, so a `dst` that aliases a dirty operand is still
+        //    re-homed for the re-execution).
         if let Some(dst) = dst {
             self.gp_regfile.invalidate(dst);
         }
-        // The result must stay resident: take a register (evicting the oldest
-        // non-operand resident when full), spilling its dirty value first.
-        let (dst_gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
+        // 4. Clear `next_sp`: every temporary the stack pointer has popped is now
+        //    dead. `next_sp` is the sp *after* this op, so the operands — already
+        //    read into registers in step 1 — are freed here too. This must run
+        //    after the load (which still reads them) and before the result
+        //    allocation (so the result can reuse a freed operand's register).
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        // 5. Allocate the result register and run the op. Pin only `rhs_gp`: the
+        //    result may reuse `lhs_gp` in place (the in-place `dst = lhs op rhs`
+        //    that `IntegerBinOpReg` lowers without a move), but it must never
+        //    collide with `rhs`, which the op reads after the `dst <- lhs` move.
+        let (dst_gp, spill) = self.gp_regfile.alloc_reg(&[rhs_gp]);
         if let Some((reg, slot)) = spill {
             ir.reg2stack(reg, slot);
         }
-        // The register file now reflects the final resident set, so the deopt's
-        // write-back re-homes exactly the dirty residents that are still in
-        // registers (the operands are clean / at their home).
-        let deopt = ir.new_deopt(self);
         if lhs_fresh {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
         }
@@ -532,9 +548,6 @@ impl AbstractFrame {
             self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
             self.def_S_guarded(dst, Guarded::Fixnum);
         }
-        // Liveness: free temporaries the stack pointer has popped.
-        let sp = self.next_sp();
-        self.gp_regfile.free_above_sp(sp);
     }
 
     /// Bring `slot` into a GP register: reuse its resident copy (returning
