@@ -424,6 +424,63 @@ impl Codegen {
                 }
                 self.encode_linst(LInst::CondBr { cond, target });
             }
+            // §slot-IR: lower the slot-based compare+branch — load each operand
+            // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),
+            // fixnum-guard it, then emit the same Cmp/CondBr as `IntegerCmpBr`.
+            AsmInst::IntegerCmpBrSlot {
+                mode,
+                kind,
+                brkind,
+                branch_dest,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                match mode {
+                    OpMode::RR(l, r) => {
+                        load_guard(self, l, GP::Rdi);
+                        load_guard(self, r, GP::Rsi);
+                    }
+                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
+                }
+                let target = frame.resolve_label(&mut self.jit, branch_dest);
+                match mode {
+                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
+                        lhs: GP::Rdi.into(),
+                        rhs: GP::Rsi.into(),
+                    }),
+                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
+                        lhs: GP::Rdi.into(),
+                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
+                    }),
+                    OpMode::IR(i, _) => {
+                        self.encode_linst(LInst::LoadImm {
+                            dst: GP::Rdi.into(),
+                            imm: Value::i32(i as i32).id(),
+                        });
+                        self.encode_linst(LInst::Cmp {
+                            lhs: GP::Rdi.into(),
+                            rhs: GP::Rsi.into(),
+                        });
+                    }
+                }
+                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
+                if brkind == BrKind::BrIfNot {
+                    cond = cond.invert();
+                }
+                self.encode_linst(LInst::CondBr { cond, target });
+            }
             AsmInst::FloatBinOp {
                 kind,
                 binary_fpr,

@@ -969,6 +969,25 @@ impl AsmIr {
         });
     }
 
+    /// §slot-IR: slot-based fused fixnum compare + branch (see
+    /// [`AsmInst::IntegerCmpBrSlot`]).
+    pub(super) fn integer_cmp_br_slot(
+        &mut self,
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: JitLabel,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerCmpBrSlot {
+            mode,
+            kind,
+            brkind,
+            branch_dest,
+            deopt,
+        });
+    }
+
     pub(super) fn float_cmp_br(
         &mut self,
         binary_fpr: (FPReg, FPReg),
@@ -1825,6 +1844,19 @@ pub(super) enum AsmInst {
         rhs: GP,
         brkind: BrKind,
         branch_dest: JitLabel,
+    },
+    ///
+    /// §slot-IR: slot-based fused fixnum compare + conditional branch. The LIR
+    /// lowering loads each operand slot into a scratch reg, fixnum-guards it
+    /// (`deopt`), compares, and branches to `branch_dest` per `kind`/`brkind`.
+    /// No GP register at the AsmIR layer.
+    ///
+    IntegerCmpBrSlot {
+        mode: OpMode,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: JitLabel,
+        deopt: AsmDeopt,
     },
     FloatCmp {
         kind: CmpKind,

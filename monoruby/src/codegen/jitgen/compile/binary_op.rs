@@ -643,8 +643,22 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        ir.integer_cmp_br(mode, kind, lhs, rhs, brkind, branch_dest);
+        // §slot-IR: write the operand slot(s) back to the stack and emit a
+        // slot-based compare+branch; the LIR lowering loads them into scratch
+        // regs, fixnum-guards, compares, and branches.
+        match mode {
+            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
+            OpMode::RI(l, _) => self.write_back_slot(ir, l),
+            OpMode::IR(_, r) => self.write_back_slot(ir, r),
+        }
+        let deopt = self.deopt_point();
+        ir.transfer(TransferIR::IntegerCmpBrSlot {
+            mode,
+            kind,
+            brkind,
+            branch_dest,
+            deopt,
+        });
     }
 
     /// Operand fetch for an *in-place* fixnum binop. Brings the lhs reg operand
