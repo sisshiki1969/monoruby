@@ -18,7 +18,7 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["gp-alloc"]
+default = []
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
@@ -64,23 +64,15 @@ phys-table = []
 # `shadow-placement` digest becomes a *delta* meter, not an equality check, and
 # the gate is M1 perf A/B (§27.3-2c). Default-off until that gate clears.
 phys-loop-aware = []
-# §9 9d-B: the GP register allocator. Tracks slots resident in the allocatable
-# pool (x86-64 r8-r11) in `gp_alloc` (the `fpr_alloc` analogue), colours
-# `VReg::Alloc` ids into pool registers (spilling under pressure), and spills
-# pool registers live across C-ABI calls. NON-byte-identical once it places a
-# slot; default-off until the M1 A/B bench gate clears (cf. phys-loop-aware §42).
-gp-alloc = []
-# §9 9d-2: move the GP-pool allocation *decision* out of the abstract
-# interpreter (`gp-alloc`) into the LIR pass (`gp_alloc::allocate`, run from
-# `allocate_gp`). Builds live ranges + a pool-clobber map over the buffered
-# `LInst` stream and linear-scan-assigns `VReg::Alloc` ids to pool registers,
-# so cross-merge register retention (keeping a value resident past a boundary
-# the front-end currently flushes at) becomes expressible at the LIR layer.
-# Implies `gp-alloc` (it re-colours the ids that allocator emits). The machinery
-# step is byte-identical (the LIR scan reproduces a valid assignment); the perf
-# step that relaxes the front-end flush is NON-byte-identical and gated on the
-# M1 A/B bench (x86 `bin/bench` A/B as the proxy here). Default-off.
-gp-alloc-lir = ["gp-alloc"]
+# §9 9d-2: cross-merge GP register retention in the LIR pass (`gp_alloc::allocate`,
+# run from `allocate_gp`). The GP register allocator itself (the allocatable pool
+# `r8`-`r11` tracked in `gp_alloc`, the `fpr_alloc` analogue) is now standard —
+# always compiled; on aarch64 the pool is empty (`GP_ALLOC_POOL = &[]`) so it is
+# inert. This feature additionally lets a pool resident stay in its register
+# across a control-flow edge (fall-through, forward branch, loop back-edge)
+# instead of flushing at the boundary. NON-byte-identical once it retains;
+# default-off until the M1 A/B bench gate clears (cf. phys-loop-aware §42).
+gp-alloc-lir = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

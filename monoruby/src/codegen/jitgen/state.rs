@@ -278,7 +278,6 @@ impl AbstractFrame {
             // fires there). Any value type may go to the pool (it is GC-rooted
             // at every safepoint). With the R15 accumulator retired, a value
             // that gets no pool register is stored straight to its stack home.
-            #[cfg(feature = "gp-alloc")]
             if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
                 ir.reg_move(src, vreg.phys());
                 return;

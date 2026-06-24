@@ -16,15 +16,11 @@ drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 RUBY=(ruby --yjit)
 
 # stress-spill-pool / gc-stress amplify the JIT's spill + GC paths and run on
-# every arch. `gp-alloc` (the GP-register pool allocator) is only enabled on
-# x86-64: on the AArch64 JIT it still intermittently diverges on
-# `optcarrot --opt` under gc-stress (reproducible on the macOS CI runner, though
-# not on a local M1 or qemu-aarch64), so keep it off there until the aarch64
-# pool path is fixed.
-case "$(uname -m)" in
-  x86_64) STRESS_FEATURES=(--features stress-spill-pool,gc-stress,gp-alloc) ;;
-  *)      STRESS_FEATURES=(--features stress-spill-pool,gc-stress) ;;
-esac
+# every arch. The GP-register pool allocator is now standard (always compiled);
+# on the AArch64 JIT its pool is empty (`GP_ALLOC_POOL = &[]`), so it is inert
+# there — no pool allocation happens, which sidesteps the macOS-runner
+# `optcarrot --opt` divergence that the (non-empty) aarch64 pool path used to hit.
+STRESS_FEATURES=(--features stress-spill-pool,gc-stress)
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:

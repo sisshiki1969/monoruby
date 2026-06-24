@@ -797,7 +797,7 @@ impl<'a> JitContext<'a> {
         // boundary (ToA, ConcatStr, ConcatRegexp, ExpandArray, the generic
         // binop/cmp fallbacks, …); the inline-method path was the one gap.
         // Manifested as an aarch64-only optcarrot `--opt` divergence at frame
-        // 34 under `--features gp-alloc`. No-op when the pool is empty. Done
+        // 34 with a non-empty GP pool. No-op when the pool is empty (aarch64). Done
         // before the save/restore snapshot so the spill is permanent whether or
         // not `f` succeeds (on bail the caller falls back to the full call,
         // which re-flushes — a no-op by then).
