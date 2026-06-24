@@ -253,7 +253,7 @@ pub(in crate::codegen::jitgen) enum TransferIR {
     /// no physical register appears (the LIR lowering materializes them).
     IntegerBinOpSlot {
         kind: BinOpK,
-        dst: SlotId,
+        dst: Option<SlotId>,
         mode: OpMode,
         deopt: DeoptPoint,
     },

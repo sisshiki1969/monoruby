@@ -300,26 +300,55 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                match mode {
-                    OpMode::RR(l, r) => {
-                        load_guard(self, l, GP::Rdi);
-                        load_guard(self, r, GP::Rsi);
+                // `Div` needs both operands in registers (Rdi=lhs, Rsi=rhs) with
+                // immediates materialized, and produces its quotient in `rax`.
+                // Add/Sub/Mul fold the immediate from `mode` and compute in place
+                // in `Rdi` (with a commutative-aware operand placement).
+                let result_reg = if matches!(kind, BinOpK::Div) {
+                    match mode {
+                        OpMode::RR(l, r) => {
+                            load_guard(self, l, GP::Rdi);
+                            load_guard(self, r, GP::Rsi);
+                        }
+                        OpMode::RI(l, i) => {
+                            load_guard(self, l, GP::Rdi);
+                            self.encode_linst(LInst::LoadImm {
+                                dst: GP::Rsi.into(),
+                                imm: Value::i32(i as i32).id(),
+                            });
+                        }
+                        OpMode::IR(i, r) => {
+                            self.encode_linst(LInst::LoadImm {
+                                dst: GP::Rdi.into(),
+                                imm: Value::i32(i as i32).id(),
+                            });
+                            load_guard(self, r, GP::Rsi);
+                        }
                     }
-                    // rhs is the immediate: only lhs slot is loaded (into Rdi).
-                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                    // lhs is the immediate. Add/Mul are commutative, so the reg
-                    // operand becomes the in-place accumulator (Rdi); Sub
-                    // materializes the immediate into Rdi and subtracts the reg
-                    // operand from Rsi.
-                    OpMode::IR(_, r) => {
-                        let reg = if matches!(kind, BinOpK::Sub) {
-                            GP::Rsi
-                        } else {
-                            GP::Rdi
-                        };
-                        load_guard(self, r, reg);
+                    GP::Rax
+                } else {
+                    match mode {
+                        OpMode::RR(l, r) => {
+                            load_guard(self, l, GP::Rdi);
+                            load_guard(self, r, GP::Rsi);
+                        }
+                        // rhs is the immediate: only lhs slot is loaded (into Rdi).
+                        OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                        // lhs is the immediate. Add/Mul are commutative, so the reg
+                        // operand becomes the in-place accumulator (Rdi); Sub
+                        // materializes the immediate into Rdi and subtracts the reg
+                        // operand from Rsi.
+                        OpMode::IR(_, r) => {
+                            let reg = if matches!(kind, BinOpK::Sub) {
+                                GP::Rsi
+                            } else {
+                                GP::Rdi
+                            };
+                            load_guard(self, r, reg);
+                        }
                     }
-                }
+                    GP::Rdi
+                };
                 self.encode_linst(LInst::IntegerBinOp {
                     kind,
                     mode,
@@ -327,10 +356,12 @@ impl Codegen {
                     rhs: GP::Rsi,
                     deopt,
                 });
-                self.encode_linst(LInst::Store {
-                    src: GP::Rdi,
-                    mem: LMem::Slot(dst),
-                });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: result_reg,
+                        mem: LMem::Slot(dst),
+                    });
+                }
             }
             AsmInst::IntegerCmp {
                 mode,

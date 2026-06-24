@@ -885,7 +885,7 @@ impl AsmIr {
     pub(super) fn integer_binop_slot(
         &mut self,
         kind: BinOpK,
-        dst: SlotId,
+        dst: Option<SlotId>,
         mode: OpMode,
         deopt: AsmDeopt,
     ) {
@@ -1802,7 +1802,7 @@ pub(super) enum AsmInst {
     ///
     IntegerBinOpSlot {
         kind: BinOpK,
-        dst: SlotId,
+        dst: Option<SlotId>,
         mode: OpMode,
         deopt: AsmDeopt,
     },

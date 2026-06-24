@@ -445,13 +445,15 @@ impl AbstractFrame {
         };
 
         // §slot-IR: keep the AsmIR layer free of physical registers for the
-        // dst-present fixnum binop. Write the operand slot(s) back to their stack
-        // homes and emit a slot-based op; the LIR lowering loads them into scratch
-        // regs, fixnum-guards, computes, and stores the result to `dst`. The
-        // result lives on the stack (`S(Fixnum)`) — the universal interchange
-        // with the still-register-based ops, so the two coexist. (The
-        // discarded-result and `Div` cases stay on the register path below.)
-        if let (BinOpK::Add | BinOpK::Sub | BinOpK::Mul, Some(dst)) = (kind, dst) {
+        // fixnum binop. Write the operand slot(s) back to their stack homes and
+        // emit a slot-based op; the LIR lowering loads them into scratch regs,
+        // fixnum-guards, computes (overflow -> deopt), and stores the result to
+        // `dst` (when present). The result lives on the stack (`S(Fixnum)`) — the
+        // universal interchange with the still-register-based ops, so the two
+        // coexist. A `None` dst is the discarded-result case: the op still runs
+        // (its overflow / divide-by-zero side-exit is observable) but nothing is
+        // stored. `Div`'s result is produced in `rax` (the lowering handles that).
+        if let BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div = kind {
             match mode {
                 OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
                 OpMode::RI(l, _) => self.write_back_slot(ir, l),
@@ -464,7 +466,9 @@ impl AbstractFrame {
                 mode,
                 deopt,
             });
-            self.def_S_guarded(dst, Guarded::Fixnum);
+            if let Some(dst) = dst {
+                self.def_S_guarded(dst, Guarded::Fixnum);
+            }
             return;
         }
 
