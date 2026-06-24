@@ -309,6 +309,30 @@ impl Codegen {
                     });
                 }
             }
+            // `gp-local-alloc`: register-form binop. The op computes in place in
+            // its `lhs`, so move `lhs` into `dst` first when they differ, then
+            // run the shared `IntegerBinOp` on `dst` (overflow -> deopt).
+            AsmInst::IntegerBinOpReg {
+                kind,
+                dst,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                if dst != lhs {
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: lhs.into(),
+                    });
+                }
+                self.encode_linst(LInst::IntegerBinOp {
+                    kind,
+                    lhs: dst,
+                    rhs,
+                    deopt,
+                });
+            }
             // §slot-IR: lower the slot-based fixnum comparison — load each operand
             // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
             // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in

@@ -83,6 +83,7 @@ impl Codegen {
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpSlot { .. }
+            | AsmInst::IntegerBinOpReg { .. }
             | AsmInst::IntegerCmpSlot { .. }
             | AsmInst::IntegerCmpBrSlot { .. }
             | AsmInst::FloatBinOp { .. }

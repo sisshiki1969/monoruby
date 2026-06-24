@@ -183,27 +183,34 @@ impl GpRegFile {
     }
 
     /// The register currently caching `slot`, if any (the reuse lookup).
-    fn reg_of(&self, slot: SlotId) -> Option<GP> {
+    pub(in crate::codegen::jitgen) fn reg_of(&self, slot: SlotId) -> Option<GP> {
         self.holder
             .iter()
             .position(|h| h.map(|h| h.slot) == Some(slot))
             .map(|i| GP_ALLOC_SET[i])
     }
 
-    fn find_free(&self) -> Option<GP> {
-        self.holder
-            .iter()
-            .position(|h| h.is_none())
+    /// A free register that is not `pinned`. Pinned registers hold operands that
+    /// are live across this allocation (e.g. when the result slot aliases an
+    /// operand slot, `invalidate(dst)` leaves the operand's register unbound but
+    /// still in use), so they must never be handed out even when free.
+    fn find_free(&self, pinned: &[GP]) -> Option<GP> {
+        (0..self.holder.len())
+            .find(|&i| self.holder[i].is_none() && !pinned.contains(&GP_ALLOC_SET[i]))
             .map(|i| GP_ALLOC_SET[i])
     }
 
-    /// Allocate a register, always succeeding: a free register if any, else the
-    /// **oldest** resident that is not `pinned` is evicted (its dirty value
-    /// written back) so the caller — typically a binop result that must stay
-    /// resident — always gets a register.
-    fn alloc(&mut self, pinned: &[GP], out: &mut Vec<GpAction>) -> GP {
-        if let Some(reg) = self.find_free() {
-            return reg;
+    /// Online allocation primitive for the codegen driver: return a register
+    /// (a free one, else the **oldest** non-`pinned` resident) plus the spill
+    /// the caller must emit when a dirty resident was evicted. The returned
+    /// register is left **unbound** — the caller binds it after loading/computing
+    /// the value (so the binop result always lands in a register).
+    pub(in crate::codegen::jitgen) fn alloc_reg(
+        &mut self,
+        pinned: &[GP],
+    ) -> (GP, Option<(GP, SlotId)>) {
+        if let Some(reg) = self.find_free(pinned) {
+            return (reg, None);
         }
         let victim_idx = (0..self.holder.len())
             .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
@@ -211,15 +218,23 @@ impl GpRegFile {
             .expect("more pinned registers than the allocatable set");
         let reg = GP_ALLOC_SET[victim_idx];
         let h = self.holder[victim_idx].unwrap();
-        if h.dirty {
-            out.push(GpAction::Spill { reg, slot: h.slot });
-        }
+        let spill = if h.dirty { Some((reg, h.slot)) } else { None };
         self.holder[victim_idx] = None;
+        (reg, spill)
+    }
+
+    /// Internal `alloc` used by the pure `allocate_run` reference: like
+    /// [`Self::alloc_reg`] but emits the spill into `out`.
+    fn alloc(&mut self, pinned: &[GP], out: &mut Vec<GpAction>) -> GP {
+        let (reg, spill) = self.alloc_reg(pinned);
+        if let Some((reg, slot)) = spill {
+            out.push(GpAction::Spill { reg, slot });
+        }
         reg
     }
 
     /// Record that `reg` now caches `slot`, dropping any prior cache of `slot`.
-    fn bind(&mut self, reg: GP, slot: SlotId, dirty: bool) {
+    pub(in crate::codegen::jitgen) fn bind(&mut self, reg: GP, slot: SlotId, dirty: bool) {
         for h in self.holder.iter_mut() {
             if h.map(|h| h.slot) == Some(slot) {
                 *h = None;
@@ -232,7 +247,7 @@ impl GpRegFile {
     /// Free every register caching a slot at or above `sp` — those temporaries
     /// are dead (popped past the stack pointer), so they are dropped without a
     /// spill, mirroring `clear_above_next_sp`.
-    fn free_above_sp(&mut self, sp: SlotId) {
+    pub(in crate::codegen::jitgen) fn free_above_sp(&mut self, sp: SlotId) {
         for h in self.holder.iter_mut() {
             if let Some(held) = *h
                 && held.slot >= sp
@@ -256,7 +271,7 @@ pub(in crate::codegen::jitgen) fn allocate_run(insts: &[BinOpInst]) -> Vec<GpAct
         // The result is (re)defined: drop any stale cache, then claim a register
         // for it (always — results stay resident), pinning the operand registers
         // across the possible eviction.
-        rf.bind_invalidate(inst.dst);
+        rf.invalidate(inst.dst);
         let dst_reg = rf.alloc(&[lhs_reg, rhs_reg], &mut out);
         out.push(GpAction::BinOp {
             kind: inst.kind,
@@ -306,7 +321,7 @@ fn flush_dirty(rf: &mut GpRegFile, out: &mut Vec<GpAction>) {
 impl GpRegFile {
     /// A slot is about to be redefined: drop any stale register cache of it (the
     /// old value is dead, so no spill).
-    fn bind_invalidate(&mut self, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn invalidate(&mut self, slot: SlotId) {
         for h in self.holder.iter_mut() {
             if h.map(|h| h.slot) == Some(slot) {
                 *h = None;

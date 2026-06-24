@@ -180,6 +180,10 @@ impl AbstractFrame {
         self.next_sp = slot;
     }
 
+    pub(in crate::codegen::jitgen) fn next_sp(&self) -> SlotId {
+        self.next_sp
+    }
+
     pub(super) fn no_capture_guard(&self) -> bool {
         self.invariants.no_capture_guard
     }

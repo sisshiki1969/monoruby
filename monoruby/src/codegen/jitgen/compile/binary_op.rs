@@ -72,6 +72,11 @@ impl<'a> JitContext<'a> {
             | BinOpK::BitXor
             | BinOpK::Exp
             | BinOpK::Rem => {
+                // Not the integer Add/Sub GP path: these always lower to a
+                // (possibly inlined) method call that reads its operands from
+                // their stack homes, so spill the live GP residents first.
+                #[cfg(feature = "gp-local-alloc")]
+                state.flush_gp(ir);
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
                     None => Ok(self.binop_uncached(state, dst)),
@@ -101,13 +106,25 @@ impl<'a> JitContext<'a> {
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Float(info) => {
+                    // The fpr path materializes operands from their stack homes
+                    // (and may box a result); flush the GP residents first.
+                    #[cfg(feature = "gp-local-alloc")]
+                    state.flush_gp(ir);
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
-                BinaryOpType::Other(None, _) => Ok(self.binop_uncached(state, dst)),
-                BinaryOpType::Other(Some(lhs_class), rhs_class) => self.call_binary_method(
-                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
-                ),
+                BinaryOpType::Other(None, _) => {
+                    #[cfg(feature = "gp-local-alloc")]
+                    state.flush_gp(ir);
+                    Ok(self.binop_uncached(state, dst))
+                }
+                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                    #[cfg(feature = "gp-local-alloc")]
+                    state.flush_gp(ir);
+                    self.call_binary_method(
+                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
+                    )
+                }
             },
         }
     }
@@ -429,9 +446,28 @@ impl AbstractFrame {
         if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
             && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
         {
+            // The fold redefines `dst` as a constant; drop any stale GP cache of
+            // it so a later op does not reuse the register's old value. Other
+            // residents stay live (the fold emits nothing and reads no slot).
+            #[cfg(feature = "gp-local-alloc")]
+            if let Some(dst) = dst {
+                self.gp_regfile.invalidate(dst);
+            }
             self.def_C(dst, result);
             return;
         };
+
+        // `gp-local-alloc`: keep `Add`/`Sub` operands and result in GP registers
+        // across consecutive binops (the local allocator). `Mul`/`Div` clobber
+        // `rhs` / use rax-rdx, so they fall through to the slot path below after
+        // flushing the register file.
+        #[cfg(feature = "gp-local-alloc")]
+        if let BinOpK::Add | BinOpK::Sub = kind {
+            self.binop_integer_gp(ir, kind, dst, mode);
+            return;
+        }
+        #[cfg(feature = "gp-local-alloc")]
+        self.flush_gp(ir);
 
         // §slot-IR: keep the AsmIR layer free of physical registers for the
         // fixnum binop. Write the operand slots back to their stack homes and
@@ -458,6 +494,67 @@ impl AbstractFrame {
         if let Some(dst) = dst {
             self.def_S_guarded(dst, Guarded::Fixnum);
         }
+    }
+
+    /// `gp-local-alloc`: the register-allocated `Add`/`Sub` path. Operands are
+    /// brought into GP registers (reusing a resident copy, else materialized to
+    /// the stack home and loaded + fixnum-guarded), the result is allocated a
+    /// register (evicting the oldest resident if full), and the op runs in
+    /// registers (overflow -> deopt). The result stays resident — its stack home
+    /// is written only when the file is flushed (before a non-binop or at the
+    /// block boundary) or re-homed by a deopt write-back.
+    #[cfg(feature = "gp-local-alloc")]
+    fn binop_integer_gp(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, mode: OpMode) {
+        let OpMode::RR(lhs, rhs) = mode;
+        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+        // The result must stay resident: take a register (evicting the oldest
+        // non-operand resident when full), spilling its dirty value first.
+        let (dst_gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        // The register file now reflects the final resident set, so the deopt's
+        // write-back re-homes exactly the dirty residents that are still in
+        // registers (the operands are clean / at their home).
+        let deopt = ir.new_deopt(self);
+        if lhs_fresh {
+            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+        }
+        if rhs_fresh {
+            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+        }
+        ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
+        if let Some(dst) = dst {
+            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
+            self.def_S_guarded(dst, Guarded::Fixnum);
+        }
+        // Liveness: free temporaries the stack pointer has popped.
+        let sp = self.next_sp();
+        self.gp_regfile.free_above_sp(sp);
+    }
+
+    /// Bring `slot` into a GP register: reuse its resident copy (returning
+    /// `fresh = false`, no reload/guard) or materialize it to its stack home,
+    /// load it, and report `fresh = true` so the caller emits the fixnum guard.
+    #[cfg(feature = "gp-local-alloc")]
+    fn gp_ensure(&mut self, ir: &mut AsmIr, slot: SlotId, pinned: &[GP]) -> (GP, bool) {
+        if let Some(gp) = self.gp_regfile.reg_of(slot) {
+            return (gp, false);
+        }
+        // Not resident: put the value at its canonical stack home (a no-op for an
+        // `S` slot; materializes a constant / boxed float), then load it.
+        self.write_back_slot(ir, slot);
+        let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
+        if let Some((reg, s)) = spill {
+            ir.reg2stack(reg, s);
+        }
+        ir.stack2reg(slot, gp);
+        self.gp_regfile.bind(gp, slot, /* dirty */ false);
+        (gp, true)
     }
 
     fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {

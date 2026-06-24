@@ -876,6 +876,28 @@ impl AsmIr {
         });
     }
 
+    /// `gp-local-alloc`: register-form fixnum binop `dst = lhs <kind> rhs` with
+    /// all three operands in physical GP registers chosen by the local
+    /// allocator. The result computes in place in `lhs`; the lowering moves
+    /// `lhs` into `dst` first when they differ. Only the non-`rhs`-clobbering
+    /// `Add`/`Sub` use this form (Mul/Div go through the slot path).
+    pub(in crate::codegen::jitgen) fn integer_binop_reg(
+        &mut self,
+        kind: BinOpK,
+        dst: GP,
+        lhs: GP,
+        rhs: GP,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerBinOpReg {
+            kind,
+            dst,
+            lhs,
+            rhs,
+            deopt,
+        });
+    }
+
     ///
     /// Float binary operation
     ///
@@ -1741,6 +1763,19 @@ pub(super) enum AsmInst {
         kind: BinOpK,
         dst: Option<SlotId>,
         mode: OpMode,
+        deopt: AsmDeopt,
+    },
+    ///
+    /// `gp-local-alloc`: register-form fixnum binop `dst = lhs <kind> rhs`, all
+    /// in physical GP registers from the local allocator. Computes in place in
+    /// `lhs` (overflow -> `deopt`); the lowering moves `lhs` into `dst` first
+    /// when they differ. `Add`/`Sub` only.
+    ///
+    IntegerBinOpReg {
+        kind: BinOpK,
+        dst: GP,
+        lhs: GP,
+        rhs: GP,
         deopt: AsmDeopt,
     },
     ///
