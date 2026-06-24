@@ -232,6 +232,26 @@ impl AbstractFrame {
         self.def_reg2acc(ir, GP::Rax, dst);
     }
 
+    /// Define `dst` from the call result in rax, for a call that may capture
+    /// (heap-move) this frame. The result is stored to `dst`'s home via the
+    /// **LFP (r14)** rather than parked in a GP-pool register or written
+    /// rbp-relative: if the callee captured the frame (e.g. turned a block into
+    /// a Proc), the live frame afterwards is the heap copy that the LFP points
+    /// at, and an rbp-relative store would land on the abandoned stack frame —
+    /// losing the result (the capture-deopt re-homes only register-resident
+    /// slots, so an `S` slot stored rbp-relative is never re-homed). Skipping
+    /// the pool keeps this correct with an empty `GP_ALLOC_POOL` too.
+    pub(crate) fn def_rax2acc_capturing(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        if let Some(dst) = dst.into() {
+            ir.reg2lfp_stack(GP::Rax, dst);
+            self.def_S_guarded(dst, slot::Guarded::Value);
+        }
+    }
+
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
         self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
     }
@@ -273,15 +293,9 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            // §9 9d-B accumulator register file: put the result into a free pool
-            // register (x86 `r8`–`r11`; aarch64's pool is empty so this never
-            // fires there). Any value type may go to the pool (it is GC-rooted
-            // at every safepoint). With the R15 accumulator retired, a value
-            // that gets no pool register is stored straight to its stack home.
-            if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
-                ir.reg_move(src, vreg.phys());
-                return;
-            }
+            // GP-pool residence (`LinkMode::G`) is abolished: with the R15
+            // accumulator retired and no allocatable GP pool, a defined value
+            // is always stored straight to its stack home (`LinkMode::S`).
             ir.reg2stack(src, dst);
             self.def_S_guarded(dst, guarded);
         }

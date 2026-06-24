@@ -1,5 +1,4 @@
 use super::*;
-use crate::codegen::jitgen::lir::VReg;
 
 ///
 /// §5 stage 3c-i — the register-allocation **policy** seam.
@@ -241,90 +240,6 @@ impl FprAllocator {
     }
 }
 
-/// §9 9d-B: GP-pool allocation state — the [`FprAllocator`] analogue for the
-/// allocatable GP pool ([`crate::codegen::GP_ALLOC_POOL`], x86-64 `r8`–`r11`).
-///
-/// `vgp[i]` lists the slots whose value currently resides at allocation id `i`:
-/// `i < POOL` → physical pool register `GP_ALLOC_POOL[i]`; `i >= POOL` → frame
-/// spill slot `i - POOL` (mirroring the FP `id < PHYS_FPR_POOL` ? xmm : spill
-/// split). A `VReg::Alloc(i)` is coloured by resolving `i` through this table.
-///
-/// B2.1 establishes the table; the placement policy (B2.2) and codegen (B2.3)
-/// populate and consume it. Inert until then — no `Alloc` VRegs are emitted.
-#[allow(dead_code)]
-#[derive(Clone, Default)]
-pub(super) struct GpAllocator {
-    vgp: Vec<Vec<SlotId>>,
-    /// pool registers that must not be reused by allocation until unpinned.
-    pinned: Vec<VReg>,
-}
-
-#[allow(dead_code)]
-impl GpAllocator {
-    fn new() -> Self {
-        Self {
-            vgp: (0..crate::codegen::GP_ALLOC_POOL.len())
-                .map(|_| vec![])
-                .collect(),
-            pinned: Vec::new(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.vgp.len()
-    }
-
-    fn slots(&self, id: usize) -> &[SlotId] {
-        &self.vgp[id]
-    }
-
-    fn is_vacant(&self, id: usize) -> bool {
-        self.vgp[id].is_empty()
-    }
-
-    /// First vacant *physical* pool id (a free allocatable pool register), or
-    /// `None` when every pool register is occupied. Restricted to ids below the
-    /// physical pool size — spill ids (`>= POOL`) are never freshly allocated.
-    fn find_vacant(&self) -> Option<usize> {
-        (0..crate::codegen::GP_ALLOC_POOL.len()).find(|&id| self.is_vacant(id))
-    }
-
-    fn is_pinned(&self, reg: VReg) -> bool {
-        self.pinned.contains(&reg)
-    }
-
-    fn add(&mut self, slot: SlotId, id: usize) {
-        self.vgp[id].push(slot);
-    }
-
-    fn remove(&mut self, slot: SlotId, id: usize) {
-        self.vgp[id].retain(|e| *e != slot);
-    }
-
-    fn clear(&mut self, id: usize) {
-        self.vgp[id].clear();
-    }
-
-    /// Append a fresh spill slot beyond the physical pool and return its id.
-    fn push_spill(&mut self) -> usize {
-        let new_id = self.vgp.len();
-        self.vgp.push(vec![]);
-        new_id
-    }
-
-    fn pin(&mut self, reg: VReg) {
-        if !self.pinned.contains(&reg) {
-            self.pinned.push(reg);
-        }
-    }
-
-    fn unpin(&mut self, reg: VReg) {
-        if let Some(pos) = self.pinned.iter().position(|x| *x == reg) {
-            self.pinned.swap_remove(pos);
-        }
-    }
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
     /// Per-slot location / representation (the `LinkMode` split into its two
@@ -337,9 +252,6 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
-    /// §9 9d-B: GP-pool allocation state (the `fpr_alloc` analogue). Inert in
-    /// B2.1; populated by the allocator (B2.2+).
-    gp_alloc: GpAllocator,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
@@ -379,7 +291,6 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
-            gp_alloc: GpAllocator::new(),
             local_num,
             deferred_rest: None,
             loop_carried: std::collections::HashSet::new(),
@@ -478,17 +389,6 @@ impl SlotState {
 
     fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
         for (slot, as_f64) in used_as_float {
-            // §9d-2d: a loop-carried pool resident that the loop also uses as a
-            // float stays in its GP register — each float-use loads and converts
-            // straight from it (the read path lowers `G`), and an in-loop need for
-            // `F`/`Sf` is met by the merge bridge's `(G, _)` arms. Unlike the
-            // `S -> Sf` hint there is no pre-conversion to do, so leave it `G`.
-            // Handled before the match so the (default-build) match below — where
-            // `G` is `unreachable!` — stays untouched.
-            #[cfg(feature = "gp-alloc-lir")]
-            if matches!(self.mode(slot), LinkMode::G(_, _)) {
-                continue;
-            }
             match self.mode(slot) {
                 LinkMode::S(_) => {
                     if as_f64 {
@@ -506,7 +406,7 @@ impl SlotState {
                         self.set_Sf(slot, x, SfGuarded::Float);
                     }
                 }
-                LinkMode::G(_, _) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                     unreachable!("use_float {:?}", self.mode(slot));
                 }
             };
@@ -696,14 +596,6 @@ impl SlotState {
                 assert!(self.fpr(fpr).contains(&slot));
                 self.fpr_remove(slot, fpr);
             }
-            LinkMode::G(_, vreg) => match vreg {
-                VReg::Pinned(_) => {
-                    unreachable!("R15 accumulator retired; slot residence is pool-only")
-                }
-                VReg::Alloc(_id) => {
-                    self.gp_alloc.remove(slot, _id as usize);
-                }
-            },
             LinkMode::C(_) => {}
             LinkMode::S(_) => {}
             LinkMode::MaybeNone | LinkMode::None => {}
@@ -899,7 +791,7 @@ impl SlotState {
     /// Link *slot* to stack with guard.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(in crate::codegen::jitgen) fn def_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
         self.discard(slot);
         self.set_mode(slot, LinkMode::S(guarded));
     }
@@ -998,19 +890,6 @@ impl SlotState {
                 Spill::Fpr(fpr, slot)
             }
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(guarded, vreg) => {
-                // G -> S
-                match vreg {
-                    VReg::Pinned(_) => {
-                        unreachable!("R15 accumulator retired; slot residence is pool-only")
-                    }
-                    VReg::Alloc(_id) => {
-                        self.gp_alloc.remove(slot, _id as usize);
-                    }
-                }
-                self.set_mode(slot, LinkMode::S(guarded));
-                Spill::Reg(vreg.phys(), slot)
-            }
             LinkMode::Sf(_, _) | LinkMode::S(_) | LinkMode::MaybeNone => Spill::None,
             LinkMode::V | LinkMode::None => {
                 eprintln!("{:?}", self);
@@ -1038,7 +917,6 @@ impl SlotState {
         let spill = match self.mode(slot) {
             LinkMode::F(fpr) => Spill::Fpr(fpr, slot),
             LinkMode::C(v) => Spill::Lit(v, slot),
-            LinkMode::G(_, vreg) => Spill::Reg(vreg.phys(), slot),
             LinkMode::Sf(_, _) | LinkMode::S(_) => Spill::None,
             LinkMode::V => Spill::Lit(Value::nil(), slot),
             LinkMode::MaybeNone | LinkMode::None => {
@@ -1236,122 +1114,34 @@ impl SlotState {
         }
     }
 
-    pub(super) fn on_reg(&self, slot: SlotId) -> Option<GP> {
-        match self.mode(slot) {
-            // The accumulator (`Pinned(R15)`) and any pool resident (`Alloc`)
-            // both physically hold the value in a GP register.
-            LinkMode::G(_, vreg) => Some(vreg.phys()),
-            _ => None,
-        }
-    }
-
-    pub(in crate::codegen::jitgen) fn on_reg_or(&self, slot: SlotId, optb: GP) -> GP {
-        match self.mode(slot) {
-            LinkMode::G(_, vreg) => vreg.phys(),
-            _ => optb,
-        }
-    }
-
-    ///
-    /// §9 9d-B flush-at-boundary: evict every allocatable-pool resident
-    /// (`G(_, VReg::Alloc(_))`) to its stack home in the *abstract state*,
-    /// returning the `(reg, slot)` pairs so the emission half can store them.
-    ///
-    /// This runs at every call / store / definition boundary (every
-    /// `writeback_acc` site), so a pool value never stays resident across a
-    /// C-ABI call — which is exactly why the GP allocator needs no
-    /// caller-saved spill/reload threading (`using_gp`) the way the FP side
-    /// does: the flush already wrote it back. Empty until the placement policy
-    /// puts a slot in the pool.
-    fn writeback_pool_state(&mut self) -> Vec<(GP, SlotId)> {
-        let mut out = vec![];
-        for slot in self.all_regs() {
-            if let LinkMode::G(_, vreg @ VReg::Alloc(_)) = self.mode(slot) {
-                let guarded = self.guarded(slot);
-                let reg = vreg.phys();
-                self.set_mode(slot, LinkMode::S(guarded));
-                out.push((reg, slot));
-            }
-        }
-        if !out.is_empty() {
-            self.gp_alloc = GpAllocator::new();
-        }
-        out
-    }
-
-    /// A vacant allocatable GP-pool id (`r8`–`r11`), or `None` when the pool is
-    /// full. Used by the in-place fixnum-binop path to keep the result resident
-    /// in the pool (so later reads avoid a stack reload), the move-free analogue
-    /// of `try_def_G_pool`.
-    pub(crate) fn try_vacant_pool_id(&self) -> Option<usize> {
-        self.gp_alloc.find_vacant()
+    /// A GP register physically holding `slot`'s value. **Always `None`**: with
+    /// GP-pool residence (`LinkMode::G`) abolished, no slot is register-resident.
+    pub(super) fn on_reg(&self, _slot: SlotId) -> Option<GP> {
+        None
     }
 
     /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
-    /// `reg` is either a pool register (the value stays resident) or R15, the
-    /// transient scratch used when no pool register was free. With the R15
-    /// accumulator retired, the R15 case is not a residence: the value is
-    /// stored to `dst`'s stack home and `dst` becomes `S`.
+    /// With the R15 accumulator retired and the GP pool abolished, `reg` is
+    /// always the transient R15 scratch: the value is stored to `dst`'s stack
+    /// home and `dst` becomes `S`.
     pub(crate) fn def_inplace_fixnum(&mut self, ir: &mut AsmIr, dst: SlotId, reg: GP) {
+        debug_assert_eq!(reg, GP::R15);
         self.discard(dst);
-        if reg == GP::R15 {
-            ir.reg2stack(GP::R15, dst);
-            self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
-        } else {
-            {
-                let id = crate::codegen::GP_ALLOC_POOL
-                    .iter()
-                    .position(|&r| r == reg)
-                    .expect("in-place reg must be R15 or a pool register");
-                self.set_mode(dst, LinkMode::G(Guarded::Fixnum, VReg::Alloc(id as u32)));
-                self.gp_alloc.add(dst, id);
-            }
-        }
+        ir.reg2stack(reg, dst);
+        self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
     }
 
-    /// §9 9d-B accumulator register file: define `dst` directly into a free
-    /// pool register (`r8`–`r11`) instead of routing the result through R15.
-    /// Returns the chosen `VReg` (the caller moves the result into it), or
-    /// `None` when the pool is full (caller falls back to the R15 accumulator).
-    ///
-    /// Any value type may reside in the pool, not just Fixnums. A pool register
-    /// is rooted for GC the same way the R15 accumulator is: every GC safepoint
-    /// (`get_gc_write_back` → `wb_gp`) spills each pool resident to its frame
-    /// home so the collector marks it, and the `execute_gc` stub preserves the
-    /// pool registers across the call. The GC is mark-and-sweep (non-moving),
-    /// so the preserved raw pointer stays valid for a heap value that survived.
-    #[allow(non_snake_case)]
-    pub(in crate::codegen::jitgen) fn try_def_G_pool(
-        &mut self,
-        dst: SlotId,
-        guarded: Guarded,
-    ) -> Option<VReg> {
-        let id = self.gp_alloc.find_vacant()?;
-        self.discard(dst);
-        let vreg = VReg::Alloc(id as u32);
-        self.set_mode(dst, LinkMode::G(guarded, vreg));
-        self.gp_alloc.add(dst, id);
-        Some(vreg)
-    }
+    /// Flush GP-pool residents to their stack homes at a branch / block /
+    /// safepoint boundary. **Now a no-op**: GP-pool residence (`LinkMode::G`)
+    /// is abolished, so no value is ever register-resident in a pool slot. The
+    /// call sites are retained as explicit boundary markers (and so the seam is
+    /// available should a GP allocator be reintroduced).
+    pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {}
 
-    /// Flush every pool (`Alloc`) resident to its stack home and drop it to `S`,
-    /// emitting the stores into `ir`. Used at branch / block-boundary points so
-    /// a merged successor never sees a pool-resident slot (the merge machinery
-    /// is R15-only). The R15 accumulator is left untouched.
-    ///
-    /// A no-op where the pool is empty (e.g. aarch64, `GP_ALLOC_POOL = &[]`).
-    pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {
-        for (reg, slot) in self.writeback_pool_state() {
-            _ir.reg2stack(reg, slot);
-        }
-    }
-
-    pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {
-        for (reg, slot) in self.writeback_pool_state() {
-            _ir.reg2stack(reg, slot);
-        }
-        assert!(!self.all_regs().any(|i| matches!(self.mode(i), LinkMode::G(_, _))));
-    }
+    /// Write the accumulator back before a call / safepoint. **Now a no-op**:
+    /// with the R15 accumulator retired and the GP pool abolished there is no
+    /// register-resident accumulator to spill. Retained as a boundary marker.
+    pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {}
 
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
         self.fpr(fpr).is_empty()
@@ -1392,30 +1182,6 @@ impl SlotState {
             }
             LinkMode::C(v) => {
                 self.def_C(dst, v);
-            }
-            LinkMode::G(guarded, vreg) => {
-                // `src`'s value lives in `vreg`. Spill it to `src`'s stack home
-                // and demote `src` to `S`, then hand the *same* register to
-                // `dst` — the value is already there, so no data move is needed.
-                //
-                // The old code unconditionally called `def_G(dst)`, which claims
-                // R15 and relies on the value already sitting in R15. That holds
-                // only when `vreg == Pinned(R15)`; for a pool resident
-                // (`Alloc`), `def_G` would leave `dst` pointing at R15 while the
-                // value stayed in the pool register and R15 held something stale
-                // (§9 9d-B). Transfer the pool register to `dst` instead.
-                ir.reg2stack(vreg.phys(), src);
-                self.set_S_with_guard(src, guarded);
-                match vreg {
-                    VReg::Pinned(_) => {
-                        unreachable!("R15 accumulator retired; slot residence is pool-only")
-                    }
-                    VReg::Alloc(id) => {
-                        self.discard(dst);
-                        self.set_mode(dst, LinkMode::G(guarded, vreg));
-                        self.gp_alloc.add(dst, id as usize);
-                    }
-                }
             }
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("copy_slot() {:?} {:?}: {:?}", src, self.mode(src), self);
@@ -1465,7 +1231,7 @@ impl AbstractFrame {
         // write-back and the guard emission, exactly as the prior `return`s did.
         let mut mode = self.mode(slot);
         match &mut mode {
-            LinkMode::S(guarded) | LinkMode::G(guarded, _) => {
+            LinkMode::S(guarded) => {
                 if class_guarded == *guarded {
                     return false;
                 } else if *guarded == Guarded::Value {
@@ -1569,16 +1335,16 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        let gp = self.wb_gp(|_| true);
-        WriteBack::new(vec![], literal, void, gp, vec![])
+        // No GP-pool residents to spill (`LinkMode::G` abolished).
+        WriteBack::new(vec![], literal, void, vec![], vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        let gp = self.wb_gp(f);
-        WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
+        // No GP-pool residents to re-home (`LinkMode::G` abolished).
+        WriteBack::new(fpr, literal, vec![], vec![], self.wb_forward_rest())
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
@@ -1603,7 +1369,6 @@ impl AbstractFrame {
                 }
                 LinkMode::S(_)
                 | LinkMode::C(_)
-                | LinkMode::G(_, _)
                 | LinkMode::V
                 | LinkMode::MaybeNone
                 | LinkMode::None => {}
@@ -1641,18 +1406,6 @@ impl AbstractFrame {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
                 LinkMode::V => Some(idx),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// §9 9d-B: collect the slots resident in the allocatable GP pool
-    /// (`VReg::Alloc`), each paired with its physical pool register. Empty until
-    /// the allocator places a slot in the pool.
-    fn wb_gp(&self, f: impl Fn(SlotId) -> bool) -> Vec<(GP, SlotId)> {
-        self.all_regs()
-            .filter_map(|idx| match self.mode(idx) {
-                LinkMode::G(_, vreg @ VReg::Alloc(_)) if f(idx) => Some((vreg.phys(), idx)),
                 _ => None,
             })
             .collect()
@@ -1698,12 +1451,6 @@ pub(in crate::codegen::jitgen) enum Placement {
     Void,
     /// boxed `Value` in its stack home
     Stack,
-    /// boxed `Value` in a GP register — the dedicated accumulator
-    /// (`VReg::Pinned(R15)`) or an allocatable-pool resident (`VReg::Alloc`).
-    /// Carrying the `VReg` here is load-bearing: `SlotState` stores `place`
-    /// (this) + `ty` and reconstructs every `mode()` via `from_parts`, so a bare
-    /// `Gp` would lose the pool-register identity on every state access.
-    Gp(VReg),
     /// unboxed f64 in an fpr (type is implicitly `Float`)
     Xmm(FPReg),
     /// unboxed f64 in an fpr + a read-only boxed cache on the stack (the `Sf`
@@ -1728,9 +1475,6 @@ pub(in crate::codegen::jitgen) enum Spill {
     Fpr(FPReg, SlotId),
     /// `ir.lit2stack(value, slot)`
     Lit(Value, SlotId),
-    /// Write back a `G`-slot's register to its stack home: `ir.reg2stack(reg,
-    /// slot)`. `reg` is the slot's pool register.
-    Reg(GP, SlotId),
 }
 
 impl Spill {
@@ -1739,7 +1483,6 @@ impl Spill {
             Spill::None => {}
             Spill::Fpr(fpr, slot) => ir.fpr2stack(fpr, slot),
             Spill::Lit(v, slot) => ir.lit2stack(v, slot),
-            Spill::Reg(reg, slot) => ir.reg2stack(reg, slot),
         }
     }
 }
@@ -1795,13 +1538,6 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     S(Guarded),
     ///
-    /// On a general-purpose register (`VReg`). §9 9d: the register is explicit
-    /// (mirroring `F(FPReg)`). Today it is always the pinned accumulator
-    /// `VReg::Pinned(GP::R15)`; the allocator will later place a slot in an
-    /// `Alloc` VReg coloured into the `r8`–`r11` pool.
-    ///
-    G(Guarded, VReg),
-    ///
     /// On the floating point register (fpr).
     ///
     /// mutation of the corresponding FPR lazily affects the stack slot.
@@ -1840,7 +1576,7 @@ impl LinkMode {
 
     fn guarded(&self) -> Guarded {
         match self {
-            LinkMode::S(guarded) | LinkMode::G(guarded, _) => *guarded,
+            LinkMode::S(guarded) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
@@ -1859,7 +1595,6 @@ impl LinkMode {
             LinkMode::MaybeNone => Placement::MaybeNone,
             LinkMode::V => Placement::Void,
             LinkMode::S(_) => Placement::Stack,
-            LinkMode::G(_, vreg) => Placement::Gp(*vreg),
             LinkMode::F(x) => Placement::Xmm(*x),
             LinkMode::Sf(x, _) => Placement::FprStack(*x),
             LinkMode::C(v) => Placement::Const(*v),
@@ -1869,7 +1604,7 @@ impl LinkMode {
     ///
     /// Recombine a placement with a type guard into a `LinkMode` — the inverse
     /// of [`Self::placement`] + [`Self::guarded`]. The `guarded` types the boxed
-    /// `Stack` / `Gp` cases and picks the `Sf` refinement for `FprStack` (the
+    /// `Stack` case and picks the `Sf` refinement for `FprStack` (the
     /// `Guarded → SfGuarded` inverse: `Value → FixnumOrFloat`); the `Xmm` /
     /// `Const` / sentinel placements carry their own type, so it is ignored.
     ///
@@ -1879,7 +1614,6 @@ impl LinkMode {
             Placement::MaybeNone => LinkMode::MaybeNone,
             Placement::Void => LinkMode::V,
             Placement::Stack => LinkMode::S(guarded),
-            Placement::Gp(vreg) => LinkMode::G(guarded, vreg),
             Placement::Xmm(x) => LinkMode::F(x),
             Placement::FprStack(x) => {
                 let sf = match guarded {
@@ -2093,7 +1827,7 @@ impl AbstractFrame {
                     self.to_sf(ir, slot, l, r, guarded);
                 }
             }
-            (LinkMode::F(_) | LinkMode::G(_, _), LinkMode::S(_)) => {
+            (LinkMode::F(_), LinkMode::S(_)) => {
                 self.write_back_slot(ir, slot);
             }
             (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
@@ -2147,19 +1881,6 @@ impl AbstractFrame {
                     self.set_F(slot, r);
                 }
             }
-            (LinkMode::G(_, vreg), LinkMode::Sf(x, SfGuarded::Float)) => {
-                // G -> Sf
-                let src = vreg.phys();
-                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
-                if self.is_fpr_vacant(x) {
-                    ir.float_to_fpr(src, x, deopt);
-                    self.set_Sf_float(slot, x);
-                } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
-                    ir.float_to_fpr(src, tmp, deopt);
-                    self.gen_fpr_swap(ir, x, tmp);
-                }
-            }
             (LinkMode::S(_), LinkMode::S(guarded)) => {
                 if let Some(class) = guarded.class()
                     && !self.is_class(slot, class)
@@ -2199,18 +1920,6 @@ impl AbstractFrame {
             }
             (LinkMode::None, LinkMode::None) => {}
             (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
-            // §9 9d-2b cross-merge GP retention: `join` keeps `G` in the target
-            // only when every entry agrees on the identical binding, so the same
-            // value sits in the same pool register on both sides — the bridge is
-            // a no-op. A different register would mean disagreement (which `join`
-            // demotes to `S`, never reaching here); reconcile defensively by
-            // writing back rather than trusting that invariant.
-            #[cfg(feature = "gp-alloc-lir")]
-            (LinkMode::G(_, l), LinkMode::G(_, r)) => {
-                if l != r {
-                    self.write_back_slot(ir, slot);
-                }
-            }
             (l, r) => {
                 unreachable!("{slot:?} {l:?}->{r:?} {target:?}");
             }
@@ -2438,7 +2147,6 @@ mod tests {
             LinkMode::S(Guarded::Fixnum),
             LinkMode::S(Guarded::Float),
             LinkMode::S(Guarded::Class(NIL_CLASS)),
-            LinkMode::G(Guarded::Fixnum, VReg::Pinned(GP::R15)),
             LinkMode::F(x),
             LinkMode::Sf(x, SfGuarded::Float),
             LinkMode::Sf(x, SfGuarded::Fixnum),

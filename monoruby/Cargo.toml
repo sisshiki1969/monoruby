@@ -64,15 +64,6 @@ phys-table = []
 # `shadow-placement` digest becomes a *delta* meter, not an equality check, and
 # the gate is M1 perf A/B (§27.3-2c). Default-off until that gate clears.
 phys-loop-aware = []
-# §9 9d-2: cross-merge GP register retention in the LIR pass (`gp_alloc::allocate`,
-# run from `allocate_gp`). The GP register allocator itself (the allocatable pool
-# `r8`-`r11` tracked in `gp_alloc`, the `fpr_alloc` analogue) is now standard —
-# always compiled; on aarch64 the pool is empty (`GP_ALLOC_POOL = &[]`) so it is
-# inert. This feature additionally lets a pool resident stay in its register
-# across a control-flow edge (fall-through, forward branch, loop back-edge)
-# instead of flushing at the boundary. NON-byte-identical once it retains;
-# default-off until the M1 A/B bench gate clears (cf. phys-loop-aware §42).
-gp-alloc-lir = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 

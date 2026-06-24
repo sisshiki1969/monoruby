@@ -868,7 +868,16 @@ impl AbstractState {
         });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
-        self.def_rax2acc(ir, dst);
+        // When a capture guard follows (the callee may `move_frame_to_heap`,
+        // e.g. by turning a block into a Proc), the result must be homed via
+        // the LFP so it follows the frame onto the heap — see
+        // `def_rax2acc_capturing`. Otherwise the ordinary rbp-relative store is
+        // fine (and lets the result stay pool-resident).
+        if self.no_capture_guard() {
+            self.def_rax2acc(ir, dst);
+        } else {
+            self.def_rax2acc_capturing(ir, dst);
+        }
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
         self.unset_const_version_guard();
@@ -940,7 +949,13 @@ impl AbstractState {
         });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
-        self.def_rax2acc(ir, dst);
+        // A yielded block can capture this frame; home the result via the LFP
+        // when a capture guard follows (see `def_rax2acc_capturing`).
+        if self.no_capture_guard() {
+            self.def_rax2acc(ir, dst);
+        } else {
+            self.def_rax2acc_capturing(ir, dst);
+        }
         self.immediate_evict(ir, evict);
         self.unset_class_version_guard();
         self.unset_const_version_guard();

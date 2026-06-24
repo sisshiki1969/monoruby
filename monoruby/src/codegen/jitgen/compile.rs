@@ -93,12 +93,8 @@ impl<'a> JitContext<'a> {
                 }
                 CompileResult::Branch(dest_bb) => {
                     // §9 9d-B: flush pool residents before the branch state is
-                    // recorded. §9d-2c/2d: the merge machinery is now `G`-aware, so
-                    // a (forward) branch successor — and, since 2d, a back-edge
-                    // into a loop header — can inherit the pool register, so skip
-                    // the flush. The loop-entry merge and the fixpoint keep or
-                    // reconcile the binding (`bridge`).
-                    #[cfg(not(feature = "gp-alloc-lir"))]
+                    // recorded — the merge machinery is R15/stack-only, so a
+                    // successor must never inherit a pool-resident (`Alloc`) slot.
                     state.flush_pool(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
@@ -142,12 +138,7 @@ impl<'a> JitContext<'a> {
 
         if !last {
             // §9 9d-B: flush pool residents before the fall-through state is
-            // recorded for the next block. §9d-2b: with the LIR allocator the
-            // merge machinery is now `G`-aware (`decide_join` keeps an agreed
-            // pool binding, `bridge` reconciles a disagreement), so a fall-through
-            // successor can inherit the pool register instead of reloading — skip
-            // the flush and let the merge retain or write back as needed.
-            #[cfg(not(feature = "gp-alloc-lir"))]
+            // recorded for the next block (the merge machinery is stack-only).
             state.flush_pool(&mut ir);
             self.prepare_next(state, end)
         }

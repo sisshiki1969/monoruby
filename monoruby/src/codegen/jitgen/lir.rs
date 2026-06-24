@@ -151,6 +151,13 @@ pub(in crate::codegen::jitgen) enum LMem {
     /// `[rbp - rbp_local(slot)]` on x86, `[lfp - (slot*8 + LFP_SELF)]` on
     /// aarch64. The encoder owns that arch-specific displacement formula.
     Slot(SlotId),
+    /// Like [`LMem::Slot`], but always addressed via the **LFP (r14)** rather
+    /// than the native frame pointer: `[r14 - (slot*8 + LFP_SELF)]` on both
+    /// arches. On aarch64 this is identical to `Slot` (slots are already
+    /// LFP-relative there); on x86 it differs from `Slot`'s `[rbp - …]` and is
+    /// used to write a capturing call's result onto the post-call live frame
+    /// (heap copy if the frame was captured). See `AsmInst::RegToLfpStack`.
+    LfpSlot(SlotId),
     /// An object field at a *positive* byte displacement from a base register
     /// (which may be the scratch pointer). `disp` may exceed any
     /// single-instruction immediate range; the encoder materializes it into a

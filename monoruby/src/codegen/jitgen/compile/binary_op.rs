@@ -1,6 +1,7 @@
 use num::Zero;
 
 use crate::bytecodegen::BinOpK;
+use crate::codegen::jitgen::state::Guarded;
 
 use super::*;
 
@@ -443,6 +444,34 @@ impl AbstractFrame {
             return;
         };
 
+        // §slot-IR: keep the AsmIR layer free of physical registers for the
+        // fixnum binop. Write the operand slot(s) back to their stack homes and
+        // emit a slot-based op; the LIR lowering loads them into scratch regs,
+        // fixnum-guards, computes (overflow -> deopt), and stores the result to
+        // `dst` (when present). The result lives on the stack (`S(Fixnum)`) — the
+        // universal interchange with the still-register-based ops, so the two
+        // coexist. A `None` dst is the discarded-result case: the op still runs
+        // (its overflow / divide-by-zero side-exit is observable) but nothing is
+        // stored. `Div`'s result is produced in `rax` (the lowering handles that).
+        if let BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div = kind {
+            match mode {
+                OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
+                OpMode::RI(l, _) => self.write_back_slot(ir, l),
+                OpMode::IR(_, r) => self.write_back_slot(ir, r),
+            }
+            let deopt = self.deopt_point();
+            ir.transfer(TransferIR::IntegerBinOpSlot {
+                kind,
+                dst,
+                mode,
+                deopt,
+            });
+            if let Some(dst) = dst {
+                self.def_S_guarded(dst, Guarded::Fixnum);
+            }
+            return;
+        }
+
         match kind {
             BinOpK::Add | BinOpK::Sub | BinOpK::Mul => {
                 let rhs = GP::Rsi;
@@ -547,14 +576,6 @@ impl AbstractFrame {
         }
     }
 
-    fn cmp_regs(&self, mode: OpMode) -> (GP, GP) {
-        match mode {
-            OpMode::RR(lhs, rhs) => (self.on_reg_or(lhs, GP::Rdi), self.on_reg_or(rhs, GP::Rsi)),
-            OpMode::RI(lhs, _) => (self.on_reg_or(lhs, GP::Rdi), GP::Rsi),
-            OpMode::IR(_, rhs) => (GP::Rdi, self.on_reg_or(rhs, GP::Rsi)),
-        }
-    }
-
     pub(super) fn gen_cmp_integer(
         &mut self,
         ir: &mut AsmIr,
@@ -566,15 +587,27 @@ impl AbstractFrame {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        // §19 (B): route the comparison through the record stream.
-        ir.transfer(TransferIR::IntegerCmp {
+        // §slot-IR: keep the AsmIR layer free of physical registers for the
+        // fixnum comparison. Write the operand slot(s) back to the stack and emit
+        // a slot-based cmp; the LIR lowering loads them into scratch regs,
+        // fixnum-guards, compares, and stores the boolean result to `dst`.
+        match mode {
+            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
+            OpMode::RI(l, _) => self.write_back_slot(ir, l),
+            OpMode::IR(_, r) => self.write_back_slot(ir, r),
+        }
+        let deopt = self.deopt_point();
+        ir.transfer(TransferIR::IntegerCmpSlot {
             mode,
             kind,
-            lhs,
-            rhs,
+            dst,
+            deopt,
         });
-        self.def_rax2acc(ir, dst);
+        if let Some(dst) = dst {
+            // The result is a boolean `Value` on the stack (the lowering stored
+            // it). `def_rax2acc` defines it as `Guarded::Value`; match that.
+            self.def_S(dst);
+        }
     }
 
     pub(super) fn gen_cmp_float(
@@ -606,8 +639,22 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        ir.integer_cmp_br(mode, kind, lhs, rhs, brkind, branch_dest);
+        // §slot-IR: write the operand slot(s) back to the stack and emit a
+        // slot-based compare+branch; the LIR lowering loads them into scratch
+        // regs, fixnum-guards, compares, and branches.
+        match mode {
+            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
+            OpMode::RI(l, _) => self.write_back_slot(ir, l),
+            OpMode::IR(_, r) => self.write_back_slot(ir, r),
+        }
+        let deopt = self.deopt_point();
+        ir.transfer(TransferIR::IntegerCmpBrSlot {
+            mode,
+            kind,
+            brkind,
+            branch_dest,
+            deopt,
+        });
     }
 
     /// Operand fetch for an *in-place* fixnum binop. Brings the lhs reg operand
@@ -664,16 +711,6 @@ impl AbstractFrame {
         }
     }
 
-    fn fetch_fixnum_mode_nodeopt(&mut self, ir: &mut AsmIr, mode: OpMode) -> (GP, GP) {
-        let (lhs, rhs) = self.cmp_regs(mode);
-        match mode {
-            OpMode::RR(l, r) => self.fetch_fixnum_rr_nodeopt(ir, l, r, lhs, rhs),
-            OpMode::RI(l, _) => self.fetch_fixnum_r_nodeopt(ir, l, lhs),
-            OpMode::IR(_, r) => self.fetch_fixnum_r_nodeopt(ir, r, rhs),
-        }
-        (lhs, rhs)
-    }
-
     fn fetch_fixnum_binary(&mut self, ir: &mut AsmIr, lhs: GP, rhs: GP, mode: OpMode) {
         match mode {
             OpMode::RR(l, r) => self.fetch_fixnum_rr(ir, l, r, lhs, rhs),
@@ -695,25 +732,7 @@ impl AbstractFrame {
         self.guard_fixnum(ir, r, rhs);
     }
 
-    fn fetch_fixnum_rr_nodeopt(&mut self, ir: &mut AsmIr, l: SlotId, r: SlotId, lhs: GP, rhs: GP) {
-        self.load(ir, l, lhs);
-        self.load(ir, r, rhs);
-        if self.is_fixnum_literal(l).is_some() && self.is_fixnum_literal(r).is_some() {
-            return;
-        }
-        self.guard_fixnum(ir, l, lhs);
-        self.guard_fixnum(ir, r, rhs);
-    }
-
     fn fetch_fixnum_r(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
-        self.load(ir, slot, r);
-        if self.is_fixnum_literal(slot).is_some() {
-        } else {
-            self.guard_fixnum(ir, slot, r);
-        }
-    }
-
-    fn fetch_fixnum_r_nodeopt(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         self.load(ir, slot, r);
         if self.is_fixnum_literal(slot).is_some() {
         } else {

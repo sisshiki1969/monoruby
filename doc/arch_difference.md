@@ -221,6 +221,44 @@ immediates inline and everything else via the heap fallback).
 
 ---
 
+## 5b. Local-slot addressing: rbp (x86) vs LFP (aarch64)
+
+The two backends address a frame's own local/temporary slots through different
+base registers, and this leaks into one correctness-relevant corner:
+
+| | x86-64 | aarch64 |
+| --- | --- | --- |
+| `LMem::Slot` lowering | `[rbp - rbp_local(slot)]` (native frame pointer) | `[x22 - (slot*8 + LFP_SELF)]` (LFP) |
+| deopt write-back (`wb.gp`) | `[r14 - conv(slot)]` (LFP) | `[x22 - …]` (LFP) |
+
+Normally rbp and the LFP point at the same stack frame, so the choice is
+invisible. They **diverge after `move_frame_to_heap`**: when a callee captures
+the caller's frame (e.g. turns a block into a Proc — `to_enum(:m) { size }`,
+`lazy`, …), the live frame becomes a heap copy that the LFP (reloaded from
+`cfp.lfp` after the call) points at, while rbp still names the abandoned stack
+frame. The JIT handles this by emitting a `guard_capture` after such a call that
+deopts to the VM when capture happened; the deopt's write-back re-homes
+register-resident (`wb.gp` / `wb.fpr`) slots **via the LFP**, so they reach the
+heap copy.
+
+A slot in `LinkMode::S` (value already at its stack home) is *not* in the
+write-back — it is assumed materialized. On x86 that materialization is
+rbp-relative, so a call **result** written to an `S` slot after a capturing call
+lands on the dead stack frame and is lost (the VM then reads the stale heap
+copy). With a non-empty GP pool this was masked because results stayed pool-
+resident (`G`) and the deopt re-homed them via the LFP; it surfaces once the
+pool is empty (the aarch64 default, and the x86 `GP_ALLOC_POOL = &[]` config).
+aarch64 never had the bug because *all* its slot stores are already LFP-relative.
+
+The fix is `AsmInst::RegToLfpStack` / `LMem::LfpSlot` (this commit): the result
+of a possibly-capturing call (the `send` / `compile_yield` paths, gated on
+`!no_capture_guard()`) is stored via the LFP (`def_rax2acc_capturing`) so it
+follows the frame onto the heap — matching what aarch64 does for every slot, and
+what the deopt write-back does for `G`/`F` slots. On aarch64 `LfpSlot` lowers
+identically to `Slot`.
+
+---
+
 ## 6. Practical consequences
 
 - **Correctness is equal.** Both backends produce correct results.

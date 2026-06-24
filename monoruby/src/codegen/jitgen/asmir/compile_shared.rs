@@ -53,6 +53,11 @@ impl Codegen {
                 src: r,
                 mem: LMem::Slot(slot),
             }),
+            // [lfp - slot] <- reg (LFP-relative; follows a heap-moved frame)
+            AsmInst::RegToLfpStack(r, slot) => self.encode_linst(LInst::Store {
+                src: r,
+                mem: LMem::LfpSlot(slot),
+            }),
             // reg <- [slot]
             AsmInst::StackToReg(slot, r) => self.encode_linst(LInst::Load {
                 dst: r.into(),
@@ -272,49 +277,191 @@ impl Codegen {
                     deopt,
                 });
             }
-            AsmInst::IntegerCmp {
+            // §slot-IR: lower the slot-based fixnum binop to the physical
+            // sequence — load each operand slot into a scratch reg, fixnum-guard
+            // it, compute in place in `Rdi` (overflow -> deopt), and store the
+            // result to `dst`'s slot. This is where the GP registers the AsmIR
+            // layer no longer carries are materialized (`%dst = %lhs op %rhs` ->
+            // `Rdi=%lhs; Rsi=%rhs; Rdi=Rdi op Rsi; %dst=Rdi`).
+            AsmInst::IntegerBinOpSlot {
+                kind,
+                dst,
+                mode,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                // Place the slot operand(s) into the registers `integer_binop`
+                // expects for this (mode, kind) and fixnum-guard each; the
+                // immediate (if any) is folded by `integer_binop` from `mode`.
+                // The result is computed in place in `Rdi` (= `lhs`).
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                // `Div` needs both operands in registers (Rdi=lhs, Rsi=rhs) with
+                // immediates materialized, and produces its quotient in `rax`.
+                // Add/Sub/Mul fold the immediate from `mode` and compute in place
+                // in `Rdi` (with a commutative-aware operand placement).
+                let result_reg = if matches!(kind, BinOpK::Div) {
+                    match mode {
+                        OpMode::RR(l, r) => {
+                            load_guard(self, l, GP::Rdi);
+                            load_guard(self, r, GP::Rsi);
+                        }
+                        OpMode::RI(l, i) => {
+                            load_guard(self, l, GP::Rdi);
+                            self.encode_linst(LInst::LoadImm {
+                                dst: GP::Rsi.into(),
+                                imm: Value::i32(i as i32).id(),
+                            });
+                        }
+                        OpMode::IR(i, r) => {
+                            self.encode_linst(LInst::LoadImm {
+                                dst: GP::Rdi.into(),
+                                imm: Value::i32(i as i32).id(),
+                            });
+                            load_guard(self, r, GP::Rsi);
+                        }
+                    }
+                    GP::Rax
+                } else {
+                    match mode {
+                        OpMode::RR(l, r) => {
+                            load_guard(self, l, GP::Rdi);
+                            load_guard(self, r, GP::Rsi);
+                        }
+                        // rhs is the immediate: only lhs slot is loaded (into Rdi).
+                        OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                        // lhs is the immediate. Add/Mul are commutative, so the reg
+                        // operand becomes the in-place accumulator (Rdi); Sub
+                        // materializes the immediate into Rdi and subtracts the reg
+                        // operand from Rsi.
+                        OpMode::IR(_, r) => {
+                            let reg = if matches!(kind, BinOpK::Sub) {
+                                GP::Rsi
+                            } else {
+                                GP::Rdi
+                            };
+                            load_guard(self, r, reg);
+                        }
+                    }
+                    GP::Rdi
+                };
+                self.encode_linst(LInst::IntegerBinOp {
+                    kind,
+                    mode,
+                    lhs: GP::Rdi,
+                    rhs: GP::Rsi,
+                    deopt,
+                });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: result_reg,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
+            // §slot-IR: lower the slot-based fixnum comparison — load each operand
+            // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
+            // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
+            // rax), and store the boolean to `dst`'s slot.
+            AsmInst::IntegerCmpSlot {
                 mode,
                 kind,
-                lhs,
-                rhs,
-            } => self.encode_linst(LInst::IntegerCmp { kind, mode, lhs, rhs }),
-            // Fused integer compare + conditional branch, lowered to LIR here
-            // (arch-neutral) and encoded per-arch. The compare sets flags; the
-            // branch is a signed conditional jump with the BrKind inversion
-            // folded into the condition.
-            AsmInst::IntegerCmpBr {
+                dst,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                match mode {
+                    OpMode::RR(l, r) => {
+                        load_guard(self, l, GP::Rdi);
+                        load_guard(self, r, GP::Rsi);
+                    }
+                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
+                }
+                self.encode_linst(LInst::IntegerCmp {
+                    kind,
+                    mode,
+                    lhs: GP::Rdi,
+                    rhs: GP::Rsi,
+                });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: GP::Rax,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
+            // §slot-IR: lower the slot-based compare+branch — load each operand
+            // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),
+            // fixnum-guard it, then emit the same Cmp/CondBr as `IntegerCmpBr`.
+            AsmInst::IntegerCmpBrSlot {
                 mode,
                 kind,
-                lhs,
-                rhs,
                 brkind,
                 branch_dest,
+                deopt,
             } => {
+                let deopt = labels[deopt].clone();
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                match mode {
+                    OpMode::RR(l, r) => {
+                        load_guard(self, l, GP::Rdi);
+                        load_guard(self, r, GP::Rsi);
+                    }
+                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
+                }
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
                 match mode {
                     OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
-                        rhs: rhs.into(),
+                        lhs: GP::Rdi.into(),
+                        rhs: GP::Rsi.into(),
                     }),
                     OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
+                        lhs: GP::Rdi.into(),
                         rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
                     }),
-                    // imm on the left: materialize it into lhs, then compare
-                    // reg-reg (mirrors `cmp_integer`'s IR path, which clobbers
-                    // lhs).
                     OpMode::IR(i, _) => {
                         self.encode_linst(LInst::LoadImm {
-                            dst: lhs.into(),
+                            dst: GP::Rdi.into(),
                             imm: Value::i32(i as i32).id(),
                         });
                         self.encode_linst(LInst::Cmp {
-                            lhs: lhs.into(),
-                            rhs: rhs.into(),
+                            lhs: GP::Rdi.into(),
+                            rhs: GP::Rsi.into(),
                         });
                     }
                 }
-                // TEq compares like Eq for integers; BrIfNot takes the inverse.
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {
                     cond = cond.invert();
@@ -1105,11 +1252,6 @@ impl Codegen {
     /// home *is* its slot). The ① fixpoint's loop-head liveness / loop-carried
     /// metadata is threaded in here when that step lands (the §9c wiring).
     pub(in crate::codegen::jitgen) fn allocate_gp(&self, body: Vec<LInst>) -> Vec<LInst> {
-        #[cfg(feature = "gp-alloc-lir")]
-        {
-            return crate::codegen::jitgen::gp_alloc::allocate(body);
-        }
-        #[cfg(not(feature = "gp-alloc-lir"))]
         body
     }
 

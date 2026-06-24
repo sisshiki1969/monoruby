@@ -553,6 +553,15 @@ impl AsmIr {
         }
     }
 
+    /// Like `reg2stack`, but addresses the slot via the LFP (r14) so the store
+    /// follows the frame across a `move_frame_to_heap`. Used for the result of
+    /// a possibly-capturing call (see `AsmInst::RegToLfpStack`).
+    pub(crate) fn reg2lfp_stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            self.push(AsmInst::RegToLfpStack(src, dst));
+        }
+    }
+
     pub(crate) fn stack2reg(&mut self, src: SlotId, dst: GP) {
         self.push(AsmInst::StackToReg(src, dst));
     }
@@ -878,6 +887,25 @@ impl AsmIr {
         });
     }
 
+    /// §slot-IR: slot-based fixnum binop. Operands and destination are stack
+    /// slots; the LIR lowering loads them into scratch registers, fixnum-guards,
+    /// computes (overflow -> `deopt`), and stores the result back to `dst`. No
+    /// physical register appears at the AsmIR level.
+    pub(super) fn integer_binop_slot(
+        &mut self,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        mode: OpMode,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerBinOpSlot {
+            kind,
+            dst,
+            mode,
+            deopt,
+        });
+    }
+
     ///
     /// Float binary operation
     ///
@@ -902,35 +930,38 @@ impl AsmIr {
     ///
     /// Integer comparison
     ///
-    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
-    ///
-    /// If error occurs in comparison operation, raise error.
-    ///
-    pub(super) fn integer_cmp(&mut self, mode: OpMode, kind: CmpKind, lhs: GP, rhs: GP) {
-        self.push(AsmInst::IntegerCmp {
-            kind,
-            mode,
-            lhs,
-            rhs,
-        });
-    }
-
-    pub(super) fn integer_cmp_br(
+    /// §slot-IR: slot-based fixnum comparison (see [`AsmInst::IntegerCmpSlot`]).
+    pub(super) fn integer_cmp_slot(
         &mut self,
         mode: OpMode,
         kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
+        dst: Option<SlotId>,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerCmpSlot {
+            kind,
+            mode,
+            dst,
+            deopt,
+        });
+    }
+
+    /// §slot-IR: slot-based fused fixnum compare + branch (see
+    /// [`AsmInst::IntegerCmpBrSlot`]).
+    pub(super) fn integer_cmp_br_slot(
+        &mut self,
+        mode: OpMode,
+        kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
+        deopt: AsmDeopt,
     ) {
-        self.push(AsmInst::IntegerCmpBr {
+        self.push(AsmInst::IntegerCmpBrSlot {
             mode,
             kind,
-            lhs,
-            rhs,
             brkind,
             branch_dest,
+            deopt,
         });
     }
 
@@ -1186,6 +1217,17 @@ pub(super) enum AsmInst {
     Unreachable,
     /// move reg to stack
     RegToStack(GP, SlotId),
+    /// move reg to the slot's home addressed via the **LFP (r14)**, not the
+    /// native frame pointer (rbp). On x86 ordinary `RegToStack` writes
+    /// `[rbp - rbp_local(slot)]`; that is the *stack* frame, which becomes
+    /// stale after a callee moves this frame to the heap (`move_frame_to_heap`,
+    /// e.g. a block captured into a Proc). The result of such a capturing call
+    /// must instead land on whichever frame is live afterwards — the heap copy
+    /// when captured, the stack frame otherwise — which is exactly what the LFP
+    /// (reloaded from `cfp.lfp` after the call) points at. aarch64 already
+    /// addresses every slot via the LFP, so there this is identical to
+    /// `RegToStack`. See the capture-deopt analysis in `doc/arch_difference.md`.
+    RegToLfpStack(GP, SlotId),
 
     /// move reg to stack
     StackToReg(SlotId, GP),
@@ -1740,31 +1782,43 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
-    /// Integer comparison
+    /// §slot-IR: slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
+    /// slots). The LIR lowering materializes the physical registers — load each
+    /// operand slot into a scratch reg, fixnum-guard it, compute in place
+    /// (overflow -> `deopt`), and store the result to `dst`. The AsmIR layer
+    /// carries no GP register for this op (the slot-IR migration).
     ///
-    /// Compare two Values in *lhs* and *rhs* with *kind*, and return the result in `rax` as Value.
-    ///
-    /// If error occurs in comparison operation, raise error.
-    ///
-    IntegerCmp {
+    IntegerBinOpSlot {
+        kind: BinOpK,
+        dst: Option<SlotId>,
         mode: OpMode,
-        kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
+        deopt: AsmDeopt,
     },
     ///
-    /// Integer comparison and conditional branch
     ///
-    /// Compare two values with `mode``, jump to `branch_dest`` if the condition specified by `kind``
-    /// and `brkind`` is met.
+    /// §slot-IR: slot-based fixnum comparison (`dst = lhs <kind> rhs` as a bool
+    /// `Value`, all stack slots). The LIR lowering loads each operand slot into a
+    /// scratch reg, fixnum-guards it (`deopt`), compares, and stores the boolean
+    /// result to `dst` (when present). No GP register at the AsmIR layer.
     ///
-    IntegerCmpBr {
+    IntegerCmpSlot {
         mode: OpMode,
         kind: CmpKind,
-        lhs: GP,
-        rhs: GP,
+        dst: Option<SlotId>,
+        deopt: AsmDeopt,
+    },
+    ///
+    /// §slot-IR: slot-based fused fixnum compare + conditional branch. The LIR
+    /// lowering loads each operand slot into a scratch reg, fixnum-guards it
+    /// (`deopt`), compares, and branches to `branch_dest` per `kind`/`brkind`.
+    /// No GP register at the AsmIR layer.
+    ///
+    IntegerCmpBrSlot {
+        mode: OpMode,
+        kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
+        deopt: AsmDeopt,
     },
     FloatCmp {
         kind: CmpKind,
