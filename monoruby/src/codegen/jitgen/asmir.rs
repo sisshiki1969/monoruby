@@ -878,6 +878,27 @@ impl AsmIr {
         });
     }
 
+    /// §slot-IR: slot-based fixnum binop. Operands and destination are stack
+    /// slots; the LIR lowering loads them into scratch registers, fixnum-guards,
+    /// computes (overflow -> `deopt`), and stores the result back to `dst`. No
+    /// physical register appears at the AsmIR level.
+    pub(super) fn integer_binop_slot(
+        &mut self,
+        kind: BinOpK,
+        dst: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerBinOpSlot {
+            kind,
+            dst,
+            lhs,
+            rhs,
+            deopt,
+        });
+    }
+
     ///
     /// Float binary operation
     ///
@@ -1737,6 +1758,20 @@ pub(super) enum AsmInst {
         lhs: GP,
         rhs: GP,
         mode: OpMode,
+        deopt: AsmDeopt,
+    },
+    ///
+    /// §slot-IR: slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
+    /// slots). The LIR lowering materializes the physical registers — load each
+    /// operand slot into a scratch reg, fixnum-guard it, compute in place
+    /// (overflow -> `deopt`), and store the result to `dst`. The AsmIR layer
+    /// carries no GP register for this op (the slot-IR migration).
+    ///
+    IntegerBinOpSlot {
+        kind: BinOpK,
+        dst: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
         deopt: AsmDeopt,
     },
     ///

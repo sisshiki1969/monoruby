@@ -248,6 +248,16 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         mode: OpMode,
         deopt: DeoptPoint,
     },
+    /// §slot-IR: a slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
+    /// slots). Like `IntegerBinOp` it carries its deopt as a program point;
+    /// no physical register appears (the LIR lowering materializes them).
+    IntegerBinOpSlot {
+        kind: BinOpK,
+        dst: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+        deopt: DeoptPoint,
+    },
 }
 
 impl TransferIR {
@@ -282,6 +292,16 @@ impl TransferIR {
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
                 ir.integer_binop(kind, lhs, rhs, mode, deopt);
+            }
+            TransferIR::IntegerBinOpSlot {
+                kind,
+                dst,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                let deopt = ir.deopt_from_point(&deopt);
+                ir.integer_binop_slot(kind, dst, lhs, rhs, deopt);
             }
         }
     }

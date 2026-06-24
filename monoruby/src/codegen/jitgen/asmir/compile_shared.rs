@@ -272,6 +272,50 @@ impl Codegen {
                     deopt,
                 });
             }
+            // §slot-IR: lower the slot-based fixnum binop to the physical
+            // sequence — load each operand slot into a scratch reg, fixnum-guard
+            // it, compute in place in `Rdi` (overflow -> deopt), and store the
+            // result to `dst`'s slot. This is where the GP registers the AsmIR
+            // layer no longer carries are materialized (`%dst = %lhs op %rhs` ->
+            // `Rdi=%lhs; Rsi=%rhs; Rdi=Rdi op Rsi; %dst=Rdi`).
+            AsmInst::IntegerBinOpSlot {
+                kind,
+                dst,
+                lhs,
+                rhs,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::Load {
+                    dst: GP::Rdi.into(),
+                    mem: LMem::Slot(lhs),
+                });
+                self.encode_linst(LInst::GuardClass {
+                    reg: GP::Rdi,
+                    class: INTEGER_CLASS,
+                    deopt: deopt.clone(),
+                });
+                self.encode_linst(LInst::Load {
+                    dst: GP::Rsi.into(),
+                    mem: LMem::Slot(rhs),
+                });
+                self.encode_linst(LInst::GuardClass {
+                    reg: GP::Rsi,
+                    class: INTEGER_CLASS,
+                    deopt: deopt.clone(),
+                });
+                self.encode_linst(LInst::IntegerBinOp {
+                    kind,
+                    mode: OpMode::RR(dst, dst),
+                    lhs: GP::Rdi,
+                    rhs: GP::Rsi,
+                    deopt,
+                });
+                self.encode_linst(LInst::Store {
+                    src: GP::Rdi,
+                    mem: LMem::Slot(dst),
+                });
+            }
             AsmInst::IntegerCmp {
                 mode,
                 kind,

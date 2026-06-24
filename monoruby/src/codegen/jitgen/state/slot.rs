@@ -888,7 +888,7 @@ impl SlotState {
     /// Link *slot* to stack with guard.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn def_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+    pub(in crate::codegen::jitgen) fn def_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
         self.discard(slot);
         self.set_mode(slot, LinkMode::S(guarded));
     }

@@ -1,6 +1,7 @@
 use num::Zero;
 
 use crate::bytecodegen::BinOpK;
+use crate::codegen::jitgen::state::Guarded;
 
 use super::*;
 
@@ -442,6 +443,30 @@ impl AbstractFrame {
             self.def_C(dst, result);
             return;
         };
+
+        // §slot-IR (incremental, RR case): keep the AsmIR layer free of physical
+        // registers for the reg-reg fixnum binop. Write the operand slots back to
+        // their stack homes and emit a slot-based op; the LIR lowering loads them
+        // into scratch regs, guards, computes, and stores the result to `dst`.
+        // The result lives on the stack (`S`) — the universal interchange with
+        // the still-register-based ops, so the two coexist. The immediate (RI/IR)
+        // and discarded-result cases stay on the register-based path below.
+        if let (BinOpK::Add | BinOpK::Sub | BinOpK::Mul, Some(dst), OpMode::RR(l, r)) =
+            (kind, dst, mode)
+        {
+            self.write_back_slots(ir, &[l, r]);
+            let deopt = self.deopt_point();
+            ir.transfer(TransferIR::IntegerBinOpSlot {
+                kind,
+                dst,
+                lhs: l,
+                rhs: r,
+                deopt,
+            });
+            // The result is a fixnum on the stack (the lowering stored it there).
+            self.def_S_guarded(dst, Guarded::Fixnum);
+            return;
+        }
 
         match kind {
             BinOpK::Add | BinOpK::Sub | BinOpK::Mul => {
