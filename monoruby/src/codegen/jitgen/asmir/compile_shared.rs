@@ -338,6 +338,49 @@ impl Codegen {
                 lhs,
                 rhs,
             } => self.encode_linst(LInst::IntegerCmp { kind, mode, lhs, rhs }),
+            // §slot-IR: lower the slot-based fixnum comparison — load each operand
+            // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
+            // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
+            // rax), and store the boolean to `dst`'s slot.
+            AsmInst::IntegerCmpSlot {
+                mode,
+                kind,
+                dst,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
+                    me.encode_linst(LInst::Load {
+                        dst: reg.into(),
+                        mem: LMem::Slot(slot),
+                    });
+                    me.encode_linst(LInst::GuardClass {
+                        reg,
+                        class: INTEGER_CLASS,
+                        deopt: deopt.clone(),
+                    });
+                };
+                match mode {
+                    OpMode::RR(l, r) => {
+                        load_guard(self, l, GP::Rdi);
+                        load_guard(self, r, GP::Rsi);
+                    }
+                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
+                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
+                }
+                self.encode_linst(LInst::IntegerCmp {
+                    kind,
+                    mode,
+                    lhs: GP::Rdi,
+                    rhs: GP::Rsi,
+                });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: GP::Rax,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
             // Fused integer compare + conditional branch, lowered to LIR here
             // (arch-neutral) and encoded per-arch. The compare sets flags; the
             // branch is a signed conditional jump with the BrKind inversion

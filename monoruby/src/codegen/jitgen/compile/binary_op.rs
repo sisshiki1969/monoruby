@@ -591,15 +591,27 @@ impl AbstractFrame {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        let (lhs, rhs) = self.fetch_fixnum_mode_nodeopt(ir, mode);
-        // §19 (B): route the comparison through the record stream.
-        ir.transfer(TransferIR::IntegerCmp {
+        // §slot-IR: keep the AsmIR layer free of physical registers for the
+        // fixnum comparison. Write the operand slot(s) back to the stack and emit
+        // a slot-based cmp; the LIR lowering loads them into scratch regs,
+        // fixnum-guards, compares, and stores the boolean result to `dst`.
+        match mode {
+            OpMode::RR(l, r) => self.write_back_slots(ir, &[l, r]),
+            OpMode::RI(l, _) => self.write_back_slot(ir, l),
+            OpMode::IR(_, r) => self.write_back_slot(ir, r),
+        }
+        let deopt = self.deopt_point();
+        ir.transfer(TransferIR::IntegerCmpSlot {
             mode,
             kind,
-            lhs,
-            rhs,
+            dst,
+            deopt,
         });
-        self.def_rax2acc(ir, dst);
+        if let Some(dst) = dst {
+            // The result is a boolean `Value` on the stack (the lowering stored
+            // it). `def_rax2acc` defines it as `Guarded::Value`; match that.
+            self.def_S(dst);
+        }
     }
 
     pub(super) fn gen_cmp_float(

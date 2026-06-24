@@ -934,6 +934,22 @@ impl AsmIr {
         });
     }
 
+    /// §slot-IR: slot-based fixnum comparison (see [`AsmInst::IntegerCmpSlot`]).
+    pub(super) fn integer_cmp_slot(
+        &mut self,
+        mode: OpMode,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        deopt: AsmDeopt,
+    ) {
+        self.push(AsmInst::IntegerCmpSlot {
+            kind,
+            mode,
+            dst,
+            deopt,
+        });
+    }
+
     pub(super) fn integer_cmp_br(
         &mut self,
         mode: OpMode,
@@ -1783,6 +1799,18 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         lhs: GP,
         rhs: GP,
+    },
+    ///
+    /// §slot-IR: slot-based fixnum comparison (`dst = lhs <kind> rhs` as a bool
+    /// `Value`, all stack slots). The LIR lowering loads each operand slot into a
+    /// scratch reg, fixnum-guards it (`deopt`), compares, and stores the boolean
+    /// result to `dst` (when present). No GP register at the AsmIR layer.
+    ///
+    IntegerCmpSlot {
+        mode: OpMode,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        deopt: AsmDeopt,
     },
     ///
     /// Integer comparison and conditional branch

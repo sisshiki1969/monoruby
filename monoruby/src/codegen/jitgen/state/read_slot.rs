@@ -257,6 +257,15 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         mode: OpMode,
         deopt: DeoptPoint,
     },
+    /// §slot-IR: a slot-based fixnum comparison (`dst = lhs <kind> rhs`, all
+    /// stack slots). Carries its deopt as a program point (for the operand
+    /// fixnum guards); no physical register appears.
+    IntegerCmpSlot {
+        mode: OpMode,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        deopt: DeoptPoint,
+    },
 }
 
 impl TransferIR {
@@ -300,6 +309,15 @@ impl TransferIR {
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
                 ir.integer_binop_slot(kind, dst, mode, deopt);
+            }
+            TransferIR::IntegerCmpSlot {
+                mode,
+                kind,
+                dst,
+                deopt,
+            } => {
+                let deopt = ir.deopt_from_point(&deopt);
+                ir.integer_cmp_slot(mode, kind, dst, deopt);
             }
         }
     }
