@@ -258,152 +258,55 @@ impl Codegen {
             AsmInst::FprRestore(using_fpr, cont) => {
                 self.encode_linst(LInst::FprRestore { using_fpr, cont })
             }
-            // Integer / float arithmetic fast paths. Each backend resolves the
-            // same operands and dispatches to its own emission primitive
-            // (aarch64 bails on an unsupported BinOpK, hence the bool results).
-            AsmInst::IntegerBinOp {
+            // Register-form binop. `Add`/`Sub`/`Mul` compute in place in their
+            // `lhs`, so move `lhs` into `dst` first when they differ, then run
+            // the shared `IntegerBinOp` on `dst` (overflow -> deopt). `Div` reads
+            // `lhs` (preserved) and clobbers `rhs`, producing the quotient in
+            // `rax`; copy it to `dst` afterwards.
+            AsmInst::IntegerBinOpReg {
                 kind,
+                dst,
                 lhs,
                 rhs,
-                mode,
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    mode,
-                    lhs,
-                    rhs,
-                    deopt,
-                });
-            }
-            // §slot-IR: lower the slot-based fixnum binop to the physical
-            // sequence — load each operand slot into a scratch reg, fixnum-guard
-            // it, compute in place in `Rdi` (overflow -> deopt), and store the
-            // result to `dst`'s slot. This is where the GP registers the AsmIR
-            // layer no longer carries are materialized (`%dst = %lhs op %rhs` ->
-            // `Rdi=%lhs; Rsi=%rhs; Rdi=Rdi op Rsi; %dst=Rdi`).
-            AsmInst::IntegerBinOpSlot {
-                kind,
-                dst,
-                mode,
-                deopt,
-            } => {
-                let deopt = labels[deopt].clone();
-                // Place the slot operand(s) into the registers `integer_binop`
-                // expects for this (mode, kind) and fixnum-guard each; the
-                // immediate (if any) is folded by `integer_binop` from `mode`.
-                // The result is computed in place in `Rdi` (= `lhs`).
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
+                if matches!(kind, BinOpK::Div) {
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs,
+                        rhs,
+                        deopt,
                     });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: GP::Rax.into(),
                     });
-                };
-                // `Div` needs both operands in registers (Rdi=lhs, Rsi=rhs) with
-                // immediates materialized, and produces its quotient in `rax`.
-                // Add/Sub/Mul fold the immediate from `mode` and compute in place
-                // in `Rdi` (with a commutative-aware operand placement).
-                let result_reg = if matches!(kind, BinOpK::Div) {
-                    match mode {
-                        OpMode::RR(l, r) => {
-                            load_guard(self, l, GP::Rdi);
-                            load_guard(self, r, GP::Rsi);
-                        }
-                        OpMode::RI(l, i) => {
-                            load_guard(self, l, GP::Rdi);
-                            self.encode_linst(LInst::LoadImm {
-                                dst: GP::Rsi.into(),
-                                imm: Value::i32(i as i32).id(),
-                            });
-                        }
-                        OpMode::IR(i, r) => {
-                            self.encode_linst(LInst::LoadImm {
-                                dst: GP::Rdi.into(),
-                                imm: Value::i32(i as i32).id(),
-                            });
-                            load_guard(self, r, GP::Rsi);
-                        }
-                    }
-                    GP::Rax
                 } else {
-                    match mode {
-                        OpMode::RR(l, r) => {
-                            load_guard(self, l, GP::Rdi);
-                            load_guard(self, r, GP::Rsi);
-                        }
-                        // rhs is the immediate: only lhs slot is loaded (into Rdi).
-                        OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                        // lhs is the immediate. Add/Mul are commutative, so the reg
-                        // operand becomes the in-place accumulator (Rdi); Sub
-                        // materializes the immediate into Rdi and subtracts the reg
-                        // operand from Rsi.
-                        OpMode::IR(_, r) => {
-                            let reg = if matches!(kind, BinOpK::Sub) {
-                                GP::Rsi
-                            } else {
-                                GP::Rdi
-                            };
-                            load_guard(self, r, reg);
-                        }
+                    if dst != lhs {
+                        self.encode_linst(LInst::Mov {
+                            dst: dst.into(),
+                            src: lhs.into(),
+                        });
                     }
-                    GP::Rdi
-                };
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    mode,
-                    lhs: GP::Rdi,
-                    rhs: GP::Rsi,
-                    deopt,
-                });
-                if let Some(dst) = dst {
-                    self.encode_linst(LInst::Store {
-                        src: result_reg,
-                        mem: LMem::Slot(dst),
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs: dst,
+                        rhs,
+                        deopt,
                     });
                 }
             }
-            // §slot-IR: lower the slot-based fixnum comparison — load each operand
-            // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
-            // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
-            // rax), and store the boolean to `dst`'s slot.
-            AsmInst::IntegerCmpSlot {
-                mode,
+            // Register-form comparison. Operands are already in GP registers and
+            // fixnum-guarded, so just compare (result in rax) and store the
+            // boolean to `dst`'s slot.
+            AsmInst::IntegerCmpReg {
                 kind,
                 dst,
-                deopt,
+                lhs,
+                rhs,
             } => {
-                let deopt = labels[deopt].clone();
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
-                    });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
-                    });
-                };
-                match mode {
-                    OpMode::RR(l, r) => {
-                        load_guard(self, l, GP::Rdi);
-                        load_guard(self, r, GP::Rsi);
-                    }
-                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
-                }
-                self.encode_linst(LInst::IntegerCmp {
-                    kind,
-                    mode,
-                    lhs: GP::Rdi,
-                    rhs: GP::Rsi,
-                });
+                self.encode_linst(LInst::IntegerCmp { kind, lhs, rhs });
                 if let Some(dst) = dst {
                     self.encode_linst(LInst::Store {
                         src: GP::Rax,
@@ -411,57 +314,20 @@ impl Codegen {
                     });
                 }
             }
-            // §slot-IR: lower the slot-based compare+branch — load each operand
-            // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),
-            // fixnum-guard it, then emit the same Cmp/CondBr as `IntegerCmpBr`.
-            AsmInst::IntegerCmpBrSlot {
-                mode,
+            // Register-form compare+branch. Operands are already in GP registers
+            // and fixnum-guarded; compare and branch per `kind`/`brkind`.
+            AsmInst::IntegerCmpBrReg {
                 kind,
                 brkind,
                 branch_dest,
-                deopt,
+                lhs,
+                rhs,
             } => {
-                let deopt = labels[deopt].clone();
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
-                    });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
-                    });
-                };
-                match mode {
-                    OpMode::RR(l, r) => {
-                        load_guard(self, l, GP::Rdi);
-                        load_guard(self, r, GP::Rsi);
-                    }
-                    OpMode::RI(l, _) => load_guard(self, l, GP::Rdi),
-                    OpMode::IR(_, r) => load_guard(self, r, GP::Rsi),
-                }
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
-                match mode {
-                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs: GP::Rdi.into(),
-                        rhs: GP::Rsi.into(),
-                    }),
-                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs: GP::Rdi.into(),
-                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
-                    }),
-                    OpMode::IR(i, _) => {
-                        self.encode_linst(LInst::LoadImm {
-                            dst: GP::Rdi.into(),
-                            imm: Value::i32(i as i32).id(),
-                        });
-                        self.encode_linst(LInst::Cmp {
-                            lhs: GP::Rdi.into(),
-                            rhs: GP::Rsi.into(),
-                        });
-                    }
-                }
+                self.encode_linst(LInst::Cmp {
+                    lhs: lhs.into(),
+                    rhs: rhs.into(),
+                });
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {
                     cond = cond.invert();
@@ -660,18 +526,18 @@ impl Codegen {
             // Inline instance-variable / struct-member access on the receiver in
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
-            // Inline ivar load: `r15 <- self.@ivar` at a fixed field offset on
+            // Inline ivar load: `dst <- self.@ivar` at a fixed field offset on
             // the receiver (rdi); an unset slot reads as 0 and becomes nil.
-            AsmInst::LoadIVarInline { ivarid } => {
+            AsmInst::LoadIVarInline { ivarid, dst } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15.into(),
+                    dst: dst.into(),
                     mem: LMem::Field {
                         base: GP::Rdi.into(),
                         disp,
                     },
                 });
-                self.encode_linst(LInst::NilIfZero { reg: GP::R15 });
+                self.encode_linst(LInst::NilIfZero { reg: dst });
             }
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
@@ -877,10 +743,12 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => self.encode_linst(LInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             }),
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an fpr pool register is live (no fpr save yet).
@@ -1312,8 +1180,9 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => {
-                self.emit_load_ivar_heap(ivarid, is_object_ty, self_);
+                self.emit_load_ivar_heap(ivarid, is_object_ty, self_, dst);
             }
             LInst::StoreIVarHeap {
                 src,
@@ -1434,8 +1303,8 @@ impl Codegen {
             LInst::ExecGc { write_back, error, base } => {
                 self.emit_exec_gc(write_back, &error, base);
             }
-            LInst::IntegerCmp { kind, mode, lhs, rhs } => {
-                self.emit_integer_cmp(kind, mode, lhs, rhs);
+            LInst::IntegerCmp { kind, lhs, rhs } => {
+                self.emit_integer_cmp(kind, lhs, rhs);
             }
             LInst::Ret => {
                 self.emit_ret();

@@ -461,7 +461,6 @@ pub(in crate::codegen) enum LInst {
     /// idiv/imul-vs-aarch64 lowering stay per-arch.
     IntegerBinOp {
         kind: BinOpK,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
         deopt: DestLabel,
@@ -625,6 +624,7 @@ pub(in crate::codegen) enum LInst {
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     },
     /// Store into a heap-spilled instance variable of another object
     /// (bounds-checked; grows the var-table on miss via a runtime call).
@@ -813,7 +813,6 @@ pub(in crate::codegen) enum LInst {
     },
     IntegerCmp {
         kind: CmpKind,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
     },

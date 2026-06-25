@@ -2978,7 +2978,6 @@ pub fn object_send(
     }
 
     state.write_back_recv_and_callargs(ir, callsite);
-    state.writeback_acc(ir);
     let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     let callid = callsite.id;

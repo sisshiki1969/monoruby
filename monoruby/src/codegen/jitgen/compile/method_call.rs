@@ -415,7 +415,6 @@ impl<'a> JitContext<'a> {
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
-        state.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -449,7 +448,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if recv_class.is_always_frozen() {
             if dst.is_some() {
                 ir.lit2reg(Value::nil(), GP::Rax);
@@ -462,12 +460,16 @@ impl<'a> JitContext<'a> {
             };
             let is_object_ty = self.store[recv_class].is_object_ty_instance();
             if is_object_ty && ivarid.is_inline() {
-                ir.push(AsmInst::LoadIVarInline { ivarid })
+                ir.push(AsmInst::LoadIVarInline {
+                    ivarid,
+                    dst: GP::R15,
+                })
             } else {
                 ir.push(AsmInst::LoadIVarHeap {
                     ivarid,
                     is_object_ty,
                     self_: false,
+                    dst: GP::R15,
                 });
             }
         }
@@ -549,7 +551,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if inline {
             ir.push(AsmInst::LoadStructSlotInline { slot_index });
         } else {
@@ -788,20 +789,9 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         arg_class: Option<ClassId>,
     ) -> bool {
-        // Flush the GP register pool (§9 9d-B) to the slots' frame homes before
-        // running the inline-method codegen `f`. `f` may emit C-ABI helper
-        // calls and deopt write-backs that clobber the caller-saved pool
-        // registers (aarch64 x5–x8 / x86-64 r8–r11), so a pool-resident Fixnum
-        // left live across the inline body would be read back as garbage. This
-        // mirrors the explicit `flush_pool` at every other helper-emitting
-        // boundary (ToA, ConcatStr, ConcatRegexp, ExpandArray, the generic
-        // binop/cmp fallbacks, …); the inline-method path was the one gap.
-        // Manifested as an aarch64-only optcarrot `--opt` divergence at frame
-        // 34 with a non-empty GP pool. No-op when the pool is empty (aarch64). Done
-        // before the save/restore snapshot so the spill is permanent whether or
-        // not `f` succeeds (on bail the caller falls back to the full call,
-        // which re-flushes — a no-op by then).
-        state.flush_pool(ir);
+        // No GP flush here: a register-only inline keeps the residents live,
+        // while a C-ABI-call inline flushes them at its `get_using_fpr`
+        // chokepoint (see `SlotState::get_using_fpr`).
         let state_save = state.clone();
         let ir_save = ir.save();
         if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
@@ -838,13 +828,13 @@ impl AbstractState {
         // Flush the GP pool up front (folded into `get_using_fpr`), before
         // `set_arguments`. An earlier optimization deferred this for simple,
         // block-less calls — reading args straight from the pool registers and
-        // letting the later `writeback_acc` do the flush — to skip spilling the
-        // dead `dst`/temp args. That deferral proved unsound under register
-        // pressure: keeping locals pool-resident through `set_arguments` /
-        // `discard` / `clear_above_next_sp` diverged from the up-front-flush
-        // semantics (optcarrot `--opt` mis-emulated a few frames in on aarch64
-        // `gp-alloc`, e.g. a wrong PPU value broke the vblank-wait loop), so we
-        // always flush before the call now.
+        // letting a later flush handle it — to skip spilling the dead `dst`/temp
+        // args. That deferral proved unsound under register pressure: keeping
+        // locals pool-resident through `set_arguments` / `discard` /
+        // `clear_above_next_sp` diverged from the up-front-flush semantics
+        // (optcarrot `--opt` mis-emulated a few frames in on aarch64 `gp-alloc`,
+        // e.g. a wrong PPU value broke the vblank-wait loop), so we always flush
+        // before the call now.
         let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
@@ -853,7 +843,6 @@ impl AbstractState {
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -871,10 +860,11 @@ impl AbstractState {
         // When a capture guard follows (the callee may `move_frame_to_heap`,
         // e.g. by turning a block into a Proc), the result must be homed via
         // the LFP so it follows the frame onto the heap — see
-        // `def_rax2acc_capturing`. Otherwise the ordinary rbp-relative store is
-        // fine (and lets the result stay pool-resident).
+        // `def_rax2acc_capturing`. Otherwise park the result in a GP-pool
+        // register (a resident) so a following integer op consumes it without a
+        // stack round-trip — see `def_rax2gp`.
         if self.no_capture_guard() {
-            self.def_rax2acc(ir, dst);
+            self.def_rax2gp(ir, dst);
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }
@@ -913,7 +903,6 @@ impl AbstractState {
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -934,7 +923,6 @@ impl AbstractState {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
-        self.writeback_acc(ir);
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         let evict = ir.new_evict();
@@ -950,9 +938,10 @@ impl AbstractState {
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // A yielded block can capture this frame; home the result via the LFP
-        // when a capture guard follows (see `def_rax2acc_capturing`).
+        // when a capture guard follows (see `def_rax2acc_capturing`). Otherwise
+        // park it in a GP-pool register resident (see `def_rax2gp`).
         if self.no_capture_guard() {
-            self.def_rax2acc(ir, dst);
+            self.def_rax2gp(ir, dst);
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }

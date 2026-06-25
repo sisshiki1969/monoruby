@@ -48,8 +48,11 @@ impl DeoptPoint {
 pub(in crate::codegen::jitgen) enum FprLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
-    FromStack(FPReg),
+    /// `<load Rdi>; float_to_fpr(Rdi, x, deopt)`. When the slot has a live GP
+    /// resident the value is flushed home (`reg2stack`, to keep the `Sf`
+    /// invariant) and read into Rdi from the register (`reg_move`); otherwise it
+    /// is read from the stack home (`stack2reg`).
+    FromStack(FPReg, Option<GP>),
     /// `f64_to_fpr(f, x)` (guard-free)
     FromF64(f64, FPReg),
     /// `i64_to_stack_and_fpr(i, slot, x)` (guard-free)
@@ -65,9 +68,22 @@ impl FprLoad {
     fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             FprLoad::None => {}
-            FprLoad::FromStack(x) => {
+            FprLoad::FromStack(x, gp) => {
                 let deopt = ir.deopt_from_point(deopt.unwrap());
-                ir.stack2reg(slot, GP::Rdi);
+                match gp {
+                    // The slot transitions `S -> Sf`, whose contract is that its
+                    // stack home holds the canonical boxed value (a later
+                    // fpr-pressure demote `Sf -> S` emits no spill — see
+                    // `try_alloc_fpr_ctx` phase 1). A GP resident's value lives
+                    // only in `reg`, so flush it home here before reading it into
+                    // Rdi for the conversion; otherwise the home stays stale and
+                    // the value is lost on demote.
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
                 ir.float_to_fpr(GP::Rdi, x, deopt);
             }
             FprLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
@@ -91,6 +107,10 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
     Stack(SlotId, GP),
+    /// The slot is a live GP resident (an integer binop result still in a
+    /// register): move it from the resident register instead of reading its
+    /// possibly-stale stack home. `reg_move(src, dst)`.
+    FromGp(GP, GP),
 }
 
 impl GpLoad {
@@ -102,6 +122,7 @@ impl GpLoad {
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
             GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
+            GpLoad::FromGp(src, dst) => ir.reg_move(src, dst),
         }
     }
 }
@@ -125,8 +146,13 @@ impl GpLoad {
 pub(in crate::codegen::jitgen) enum FprFixnumLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
-    FromStack(FPReg, bool),
+    /// `<load Rdi>; [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`. When the slot has a
+    /// live GP resident — the integer side of a mixed `Integer op Float` is
+    /// typically still in a register from a prior integer op — the value is
+    /// flushed home (`reg2stack`, to keep the `Sf` invariant) and read into Rdi
+    /// from the register (`reg_move`); else it is read from its stack home
+    /// (`stack2reg`).
+    FromStack(FPReg, bool, Option<GP>),
     /// guard-free numeric literal (`LinkMode::C`) — reuses the [`FprLoad`] record
     Numeric(FprLoad),
 }
@@ -140,9 +166,18 @@ impl FprFixnumLoad {
     fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             FprFixnumLoad::None => {}
-            FprFixnumLoad::FromStack(x, guard) => {
+            FprFixnumLoad::FromStack(x, guard, gp) => {
                 let deopt = deopt.map(|p| ir.deopt_from_point(p));
-                ir.stack2reg(slot, GP::Rdi);
+                match gp {
+                    // See `FprLoad::FromStack`: the slot becomes `Sf`, so its
+                    // stack home must hold the canonical boxed value. Flush the
+                    // resident home before reading it into Rdi.
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
                 if guard {
                     ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
                 }
@@ -204,45 +239,6 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         lhs: FPReg,
         rhs: FPReg,
     },
-    /// §19 (B): an integer binary **operation** with an overflow/`bignum` guard.
-    /// Like the guarded loads (`FprLoad`), it carries its deopt as a
-    /// [`DeoptPoint`] program point (not a frozen `AsmDeopt`); the emit half
-    /// materializes the side-exit via `deopt_from_point`, keeping the record
-    /// codegen-independent.
-    IntegerBinOp {
-        kind: BinOpK,
-        lhs: GP,
-        rhs: GP,
-        mode: OpMode,
-        deopt: DeoptPoint,
-    },
-    /// §slot-IR: a slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
-    /// slots). Like `IntegerBinOp` it carries its deopt as a program point;
-    /// no physical register appears (the LIR lowering materializes them).
-    IntegerBinOpSlot {
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        mode: OpMode,
-        deopt: DeoptPoint,
-    },
-    /// §slot-IR: a slot-based fixnum comparison (`dst = lhs <kind> rhs`, all
-    /// stack slots). Carries its deopt as a program point (for the operand
-    /// fixnum guards); no physical register appears.
-    IntegerCmpSlot {
-        mode: OpMode,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        deopt: DeoptPoint,
-    },
-    /// §slot-IR: a slot-based fused fixnum compare + branch. Carries its deopt
-    /// as a program point (operand guards) and the branch target `JitLabel`.
-    IntegerCmpBrSlot {
-        mode: OpMode,
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        deopt: DeoptPoint,
-    },
 }
 
 impl TransferIR {
@@ -261,44 +257,6 @@ impl TransferIR {
             } => ir.fpr_binop(kind, lhs, rhs, dst),
             TransferIR::FloatCmp { kind, lhs, rhs } => {
                 ir.push(AsmInst::FloatCmp { kind, lhs, rhs })
-            }
-            TransferIR::IntegerBinOp {
-                kind,
-                lhs,
-                rhs,
-                mode,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_binop(kind, lhs, rhs, mode, deopt);
-            }
-            TransferIR::IntegerBinOpSlot {
-                kind,
-                dst,
-                mode,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_binop_slot(kind, dst, mode, deopt);
-            }
-            TransferIR::IntegerCmpSlot {
-                mode,
-                kind,
-                dst,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_slot(mode, kind, dst, deopt);
-            }
-            TransferIR::IntegerCmpBrSlot {
-                mode,
-                kind,
-                brkind,
-                branch_dest,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_br_slot(mode, kind, brkind, branch_dest, deopt);
             }
         }
     }
@@ -333,50 +291,20 @@ impl AbstractFrame {
                 GpLoad::FprBox(fpr, slot, dst)
             }
             LinkMode::C(v) => GpLoad::Lit(v, dst),
-            LinkMode::Sf(_, _) | LinkMode::S(_) => GpLoad::Stack(slot, dst),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {
+                // A live GP resident holds the slot's (possibly dirty) value in a
+                // register; move it from there rather than reading a stale home.
+                if let Some(src) = self.gp_regfile.reg_of(slot) {
+                    GpLoad::FromGp(src, dst)
+                } else {
+                    GpLoad::Stack(slot, dst)
+                }
+            }
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
             }
         }
-    }
-
-    /// Bring `lhs` into the register where an in-place fixnum binop computes its
-    /// result, and return that register. No `Rdi` copy, no relocate `mov`.
-    ///
-    /// Register choice, in priority order:
-    /// 1. **`lhs` is already in a GP register** (R15 or a pool register) →
-    ///    compute in place there, reusing it for the result (zero operand
-    ///    copies — the chained-arithmetic / loop-carried fast path). `lhs` is
-    ///    spilled to its stack home first (`write_back_slot`), which preserves
-    ///    it for any later use *and* keeps the overflow-deopt snapshot
-    ///    consistent (the in-place op clobbers the register, but the snapshot
-    ///    reads the spilled home).
-    /// 2. **gp-alloc, a vacant pool register** → load `lhs` into it and compute
-    ///    there, so the result stays resident in `r8`–`r11` and later reads
-    ///    avoid a stack reload (this is what makes the pool pay off).
-    /// 3. otherwise → the R15 accumulator (freed first).
-    pub(in crate::codegen::jitgen) fn fetch_lhs_to_inplace_reg(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: SlotId,
-    ) -> GP {
-        if let Some(reg) = self.on_reg(lhs) {
-            self.write_back_slot(ir, lhs);
-            self.guard_fixnum(ir, lhs, reg);
-            return reg;
-        }
-        self.load(ir, lhs, GP::R15);
-        self.guard_fixnum(ir, lhs, GP::R15);
-        GP::R15
-    }
-
-    /// Choose the in-place result register for a fixnum binop whose lhs is an
-    /// immediate (the `IR`-Sub case, where the encoder materializes the
-    /// immediate into the result register): the freed R15 accumulator (the GP
-    /// pool is abolished).
-    pub(in crate::codegen::jitgen) fn alloc_inplace_reg(&mut self, _ir: &mut AsmIr) -> GP {
-        GP::R15
     }
 
     ///
@@ -455,9 +383,14 @@ impl AbstractFrame {
                 // S -> Sf. Refine the type first (its guard verdict) then take
                 // the placement; `set_new_Sf` overwrites the refined `S` guarded
                 // with `Sf(Fixnum)`, exactly as `guard_fixnum` + `set_new_Sf` did.
+                // Capture any live GP resident *before* `set_new_Sf` clears it, so
+                // the emit reads the value from the register instead of its
+                // possibly-stale stack home (the conversion copies to Rdi first, so
+                // the resident register survives intact).
+                let gp = self.gp_regfile.reg_of(slot);
                 let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                (x, FprFixnumLoad::FromStack(x, guard))
+                (x, FprFixnumLoad::FromStack(x, guard, gp))
             }
             LinkMode::C(v) => {
                 let (x, load) = self.load_fpr_from_C_state(slot, v);
@@ -511,9 +444,12 @@ impl AbstractFrame {
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => (x, FprLoad::None),
             LinkMode::S(_) => {
-                // -> Sf
+                // -> Sf. Capture any live GP resident before `set_new_Sf` clears
+                // it so the emit reads from the register rather than the stack
+                // home (see `load_fpr_fixnum_state`).
+                let gp = self.gp_regfile.reg_of(slot);
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
-                (x, FprLoad::FromStack(x))
+                (x, FprLoad::FromStack(x, gp))
             }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {

@@ -2,13 +2,6 @@ use super::*;
 use crate::bytecodegen::{BinOpK, UnOpK, inst::*};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum OpMode {
-    RR(SlotId, SlotId),
-    RI(SlotId, i16),
-    IR(i16, SlotId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FOpClass {
     Float,
     Integer,

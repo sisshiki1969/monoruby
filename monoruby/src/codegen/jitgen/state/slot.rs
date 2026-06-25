@@ -252,6 +252,10 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
+    /// Per-basic-block local GP register file (the local GP allocator). Empty (and
+    /// flushed) at every block boundary, so it never carries state across a
+    /// merge despite living in the cloned `SlotState`.
+    pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
     /// D1 forwarding-rest deferral (transient annotation; see the consumers).
     deferred_rest: Option<(SlotId, SlotId, u16)>,
@@ -291,6 +295,7 @@ impl SlotState {
             ty: vec![default_ty; total_reg_num],
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
+            gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
             deferred_rest: None,
             loop_carried: std::collections::HashSet::new(),
@@ -591,6 +596,10 @@ impl SlotState {
     /// Clear slot *reg* and set LinkMode to V.
     ///
     fn clear(&mut self, slot: SlotId) {
+        // Redefining a slot drops any GP resident caching its old value (mirrors
+        // `fpr_remove` for the fpr file). The binop that *creates* a resident
+        // rebinds it after this `clear`, so the cache stays correct.
+        self.gp_regfile.invalidate(slot);
         match self.mode(slot) {
             LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
                 assert!(self.fpr(fpr).contains(&slot));
@@ -899,6 +908,14 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        // A GP resident keeps `LinkMode::S` while its live value sits in a
+        // (dirty) pool register; `write_back_slot_state` would then see `S` and
+        // emit nothing, leaving the stack home stale. Re-home the dirty register
+        // first and drop the resident, so the slot is genuinely in its stack home.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
+        self.gp_regfile.invalidate(slot);
         let s = self.write_back_slot_state(slot);
         ir.transfer(TransferIR::Spill(s));
     }
@@ -930,6 +947,11 @@ impl SlotState {
 
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        // Same GP-resident caveat as `write_back_slot`: re-home the dirty pool
+        // register before `to_S_unguarded_state`'s `clear` drops it unspilled.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
         let s = self.to_S_unguarded_state(slot);
         ir.transfer(TransferIR::Spill(s));
     }
@@ -947,6 +969,17 @@ impl SlotState {
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<Fixnum> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.is_immediate()?.try_fixnum()
+        } else {
+            None
+        }
+    }
+
+    /// The tagged `Value` of a fixnum compile-time-constant slot, if any — the
+    /// immediate to load straight into a register (the local GP allocator), skipping
+    /// the stack-home materialization and the fixnum guard.
+    pub fn fixnum_literal_value(&self, slot: SlotId) -> Option<Value> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            v.is_immediate()?.try_fixnum().map(|_| v)
         } else {
             None
         }
@@ -993,16 +1026,6 @@ impl SlotState {
         let i = self.is_fixnum_literal(slot)?.get();
         u16::try_from(i).ok()
     }
-
-    pub fn is_i16_literal(&self, slot: SlotId) -> Option<i16> {
-        let i = self.is_fixnum_literal(slot)?.get();
-        i16::try_from(i).ok()
-    }
-
-    //pub fn is_u8_literal(&self, slot: SlotId) -> Option<u8> {
-    //    let i = self.is_fixnum_literal(slot)?.get();
-    //    u8::try_from(i).ok()
-    //}
 
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
         let b = if let Guarded::Class(class) = self.guarded(slot) {
@@ -1120,29 +1143,6 @@ impl SlotState {
         None
     }
 
-    /// Define `dst` as a Fixnum produced in-place by a fixnum binop in `reg`.
-    /// With the R15 accumulator retired and the GP pool abolished, `reg` is
-    /// always the transient R15 scratch: the value is stored to `dst`'s stack
-    /// home and `dst` becomes `S`.
-    pub(crate) fn def_inplace_fixnum(&mut self, ir: &mut AsmIr, dst: SlotId, reg: GP) {
-        debug_assert_eq!(reg, GP::R15);
-        self.discard(dst);
-        ir.reg2stack(reg, dst);
-        self.set_mode(dst, LinkMode::S(Guarded::Fixnum));
-    }
-
-    /// Flush GP-pool residents to their stack homes at a branch / block /
-    /// safepoint boundary. **Now a no-op**: GP-pool residence (`LinkMode::G`)
-    /// is abolished, so no value is ever register-resident in a pool slot. The
-    /// call sites are retained as explicit boundary markers (and so the seam is
-    /// available should a GP allocator be reintroduced).
-    pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {}
-
-    /// Write the accumulator back before a call / safepoint. **Now a no-op**:
-    /// with the R15 accumulator retired and the GP pool abolished there is no
-    /// register-resident accumulator to spill. Retained as a boundary marker.
-    pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {}
-
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
         self.fpr(fpr).is_empty()
     }
@@ -1176,8 +1176,15 @@ impl SlotState {
                 self.set_Sf(dst, x, guarded);
             }
             LinkMode::S(guarded) => {
-                ir.stack2reg(src, GP::Rax);
-                ir.reg2stack(GP::Rax, dst);
+                // A live GP resident holds `src`'s value in a register; copy it
+                // from there rather than reading a stale stack home (mirrors
+                // `load`'s resident-aware `S` arm).
+                if let Some(reg) = self.gp_regfile.reg_of(src) {
+                    ir.reg2stack(reg, dst);
+                } else {
+                    ir.stack2reg(src, GP::Rax);
+                    ir.reg2stack(GP::Rax, dst);
+                }
                 self.def_S_guarded(dst, guarded);
             }
             LinkMode::C(v) => {
@@ -1298,12 +1305,17 @@ impl AbstractFrame {
     /// kept resident there must not survive a C call. Every runtime helper that
     /// can clobber them is preceded by a `get_using_fpr` snapshot (here, or
     /// inside the `ir.<helper>(state, …)` builders), so flushing the GP pool at
-    /// this single chokepoint covers them all. Method calls already flush via
-    /// `writeback_acc`, so the flush here is a redundant no-op for them. Use
+    /// this single chokepoint covers them all. Use
     /// [`Self::using_fpr_offset`] where only the stack-offset is needed and no
     /// call (hence no flush) happens.
     pub(crate) fn get_using_fpr(&mut self, ir: &mut AsmIr) -> UsingFpr {
-        self.flush_pool(ir);
+        // Single chokepoint for GP-clobbering calls: every C-ABI call (inline-asm
+        // generators, CFunc inlines, the cached method-call path) takes a
+        // `get_using_fpr` snapshot first, so flushing the local GP register file
+        // here re-homes the residents for all of them — the inline generators no
+        // longer each need their own flush, and register-only inlines (which make
+        // no call and never call this) keep their residents.
+        self.flush_gp(ir);
         self.using_fpr_offset()
     }
 
@@ -1335,16 +1347,22 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        // No GP-pool residents to spill (`LinkMode::G` abolished).
-        WriteBack::new(vec![], literal, void, vec![], vec![])
+        // spill dirty GP residents so the GC marks them (the
+        // registers themselves survive the collection — `exec_gc` preserves the
+        // caller-saved set). Empty without the feature.
+        let gp = self.gp_regfile.dirty_residents();
+        WriteBack::new(vec![], literal, void, gp, vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        // No GP-pool residents to re-home (`LinkMode::G` abolished).
-        WriteBack::new(fpr, literal, vec![], vec![], self.wb_forward_rest())
+        // re-home dirty GP residents (a binop result still in a
+        // register) so a deopt resuming in the VM reads them from their stack
+        // home. Empty without the feature.
+        let gp = self.gp_regfile.dirty_residents();
+        WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
