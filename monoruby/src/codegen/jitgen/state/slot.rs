@@ -596,6 +596,10 @@ impl SlotState {
     /// Clear slot *reg* and set LinkMode to V.
     ///
     fn clear(&mut self, slot: SlotId) {
+        // Redefining a slot drops any GP resident caching its old value (mirrors
+        // `fpr_remove` for the fpr file). The binop that *creates* a resident
+        // rebinds it after this `clear`, so the cache stays correct.
+        self.gp_regfile.invalidate(slot);
         match self.mode(slot) {
             LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
                 assert!(self.fpr(fpr).contains(&slot));
@@ -1300,6 +1304,13 @@ impl AbstractFrame {
     /// call (hence no flush) happens.
     pub(crate) fn get_using_fpr(&mut self, ir: &mut AsmIr) -> UsingFpr {
         self.flush_pool(ir);
+        // Single chokepoint for GP-clobbering calls: every C-ABI call (inline-asm
+        // generators, CFunc inlines, the cached method-call path) takes a
+        // `get_using_fpr` snapshot first, so flushing the local GP register file
+        // here re-homes the residents for all of them — the inline generators no
+        // longer each need their own flush, and register-only inlines (which make
+        // no call and never call this) keep their residents.
+        self.flush_gp(ir);
         self.using_fpr_offset()
     }
 

@@ -66,10 +66,11 @@ impl<'a> JitContext<'a> {
             // Float#** / Float#% handles code generation using both-side class
             // info from the BinOp inline cache.
             BinOpK::Shl | BinOpK::Shr | BinOpK::Exp | BinOpK::Rem => {
-                // Not the integer GP path: these always lower to a (possibly
-                // inlined) method call that reads its operands from their stack
-                // homes, so spill the live GP residents first.
-                state.flush_gp(ir);
+                // Dispatched through `call_binary_method`. No flush here: a
+                // register-only inline (e.g. `Integer#<<`) reads its operands
+                // GP-resident-aware and keeps the residents live, while any C-ABI
+                // call (a clobbering inline like `Array#<<`, or the cached
+                // method-call path) flushes them at its `get_using_fpr` chokepoint.
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
                     None => Ok(self.binop_uncached(state, dst)),
@@ -112,11 +113,11 @@ impl<'a> JitContext<'a> {
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Other(None, _) => {
-                    state.flush_gp(ir);
+                    // Recompiles (deopts) — its write-back re-homes the residents.
                     Ok(self.binop_uncached(state, dst))
                 }
                 BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    state.flush_gp(ir);
+                    // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
                     self.call_binary_method(
                         state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
                     )
@@ -561,8 +562,10 @@ impl AbstractFrame {
             self.gp_regfile.invalidate(rhs);
         }
         if let Some(dst) = dst {
-            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
+            // Define first (this clears any stale resident of `dst` via `clear`),
+            // then bind the result register.
             self.def_S_guarded(dst, Guarded::Fixnum);
+            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
         }
     }
 

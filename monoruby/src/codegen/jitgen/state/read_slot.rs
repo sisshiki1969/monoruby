@@ -91,6 +91,10 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
     Stack(SlotId, GP),
+    /// The slot is a live GP resident (an integer binop result still in a
+    /// register): move it from the resident register instead of reading its
+    /// possibly-stale stack home. `reg_move(src, dst)`.
+    FromGp(GP, GP),
 }
 
 impl GpLoad {
@@ -102,6 +106,7 @@ impl GpLoad {
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
             GpLoad::Stack(slot, dst) => ir.stack2reg(slot, dst),
+            GpLoad::FromGp(src, dst) => ir.reg_move(src, dst),
         }
     }
 }
@@ -256,7 +261,15 @@ impl AbstractFrame {
                 GpLoad::FprBox(fpr, slot, dst)
             }
             LinkMode::C(v) => GpLoad::Lit(v, dst),
-            LinkMode::Sf(_, _) | LinkMode::S(_) => GpLoad::Stack(slot, dst),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => {
+                // A live GP resident holds the slot's (possibly dirty) value in a
+                // register; move it from there rather than reading a stale home.
+                if let Some(src) = self.gp_regfile.reg_of(slot) {
+                    GpLoad::FromGp(src, dst)
+                } else {
+                    GpLoad::Stack(slot, dst)
+                }
+            }
             LinkMode::MaybeNone => GpLoad::Stack(slot, dst),
             LinkMode::V | LinkMode::None => {
                 unreachable!("load() {:?} {:?}: {:?}", slot, self.mode(slot), self);
