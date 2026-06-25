@@ -48,9 +48,10 @@ impl DeoptPoint {
 pub(in crate::codegen::jitgen) enum FprLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `<load Rdi>; float_to_fpr(Rdi, x, deopt)`. `Rdi` is loaded from the slot's
-    /// live GP resident (`reg_move`) when one is present, else from its stack
-    /// home (`stack2reg`).
+    /// `<load Rdi>; float_to_fpr(Rdi, x, deopt)`. When the slot has a live GP
+    /// resident the value is flushed home (`reg2stack`, to keep the `Sf`
+    /// invariant) and read into Rdi from the register (`reg_move`); otherwise it
+    /// is read from the stack home (`stack2reg`).
     FromStack(FPReg, Option<GP>),
     /// `f64_to_fpr(f, x)` (guard-free)
     FromF64(f64, FPReg),
@@ -70,7 +71,17 @@ impl FprLoad {
             FprLoad::FromStack(x, gp) => {
                 let deopt = ir.deopt_from_point(deopt.unwrap());
                 match gp {
-                    Some(reg) => ir.reg_move(reg, GP::Rdi),
+                    // The slot transitions `S -> Sf`, whose contract is that its
+                    // stack home holds the canonical boxed value (a later
+                    // fpr-pressure demote `Sf -> S` emits no spill — see
+                    // `try_alloc_fpr_ctx` phase 1). A GP resident's value lives
+                    // only in `reg`, so flush it home here before reading it into
+                    // Rdi for the conversion; otherwise the home stays stale and
+                    // the value is lost on demote.
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
                     None => ir.stack2reg(slot, GP::Rdi),
                 }
                 ir.float_to_fpr(GP::Rdi, x, deopt);
@@ -135,10 +146,12 @@ impl GpLoad {
 pub(in crate::codegen::jitgen) enum FprFixnumLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `<load Rdi>; [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`. `Rdi` is loaded from
-    /// the slot's live GP resident (`reg_move`) when one is present — the integer
-    /// side of a mixed `Integer op Float` is typically still in a register from a
-    /// prior integer op — else from its stack home (`stack2reg`).
+    /// `<load Rdi>; [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`. When the slot has a
+    /// live GP resident — the integer side of a mixed `Integer op Float` is
+    /// typically still in a register from a prior integer op — the value is
+    /// flushed home (`reg2stack`, to keep the `Sf` invariant) and read into Rdi
+    /// from the register (`reg_move`); else it is read from its stack home
+    /// (`stack2reg`).
     FromStack(FPReg, bool, Option<GP>),
     /// guard-free numeric literal (`LinkMode::C`) — reuses the [`FprLoad`] record
     Numeric(FprLoad),
@@ -156,7 +169,13 @@ impl FprFixnumLoad {
             FprFixnumLoad::FromStack(x, guard, gp) => {
                 let deopt = deopt.map(|p| ir.deopt_from_point(p));
                 match gp {
-                    Some(reg) => ir.reg_move(reg, GP::Rdi),
+                    // See `FprLoad::FromStack`: the slot becomes `Sf`, so its
+                    // stack home must hold the canonical boxed value. Flush the
+                    // resident home before reading it into Rdi.
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
                     None => ir.stack2reg(slot, GP::Rdi),
                 }
                 if guard {
