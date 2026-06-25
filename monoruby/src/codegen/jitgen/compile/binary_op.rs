@@ -574,8 +574,22 @@ impl AbstractFrame {
         if let Some(gp) = self.gp_regfile.reg_of(slot) {
             return (gp, false);
         }
-        // Not resident: put the value at its canonical stack home (a no-op for an
-        // `S` slot; materializes a constant / boxed float), then load it.
+        // Compile-time fixnum constant: load the tagged immediate straight into a
+        // register, skipping the stack-home round-trip (`%1 = %2 + 1` loads `1`
+        // as `movabs gp, 0x3` rather than materializing it to a slot and reading
+        // it back). The value is a known fixnum, so it needs no guard — report
+        // `fresh = false`.
+        if let Some(v) = self.fixnum_literal_value(slot) {
+            let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
+            if let Some((reg, s)) = spill {
+                ir.reg2stack(reg, s);
+            }
+            ir.lit2reg(v, gp);
+            self.gp_regfile.bind(gp, slot, /* dirty */ false);
+            return (gp, false);
+        }
+        // Not resident and not a constant: put the value at its canonical stack
+        // home (a no-op for an `S` slot; materializes a boxed float), then load it.
         self.write_back_slot(ir, slot);
         let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
         if let Some((reg, s)) = spill {

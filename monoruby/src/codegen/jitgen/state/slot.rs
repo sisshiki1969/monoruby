@@ -957,6 +957,17 @@ impl SlotState {
         }
     }
 
+    /// The tagged `Value` of a fixnum compile-time-constant slot, if any — the
+    /// immediate to load straight into a register (`gp-local-alloc`), skipping
+    /// the stack-home materialization and the fixnum guard.
+    pub fn fixnum_literal_value(&self, slot: SlotId) -> Option<Value> {
+        if let LinkMode::C(v) = self.mode(slot) {
+            v.is_immediate()?.try_fixnum().map(|_| v)
+        } else {
+            None
+        }
+    }
+
     pub fn is_flonum_literal(&self, slot: SlotId) -> Option<Flonum> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.is_immediate()?.try_flonum()
