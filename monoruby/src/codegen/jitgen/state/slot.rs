@@ -908,6 +908,14 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn write_back_slot(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        // A GP resident keeps `LinkMode::S` while its live value sits in a
+        // (dirty) pool register; `write_back_slot_state` would then see `S` and
+        // emit nothing, leaving the stack home stale. Re-home the dirty register
+        // first and drop the resident, so the slot is genuinely in its stack home.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
+        self.gp_regfile.invalidate(slot);
         let s = self.write_back_slot_state(slot);
         ir.transfer(TransferIR::Spill(s));
     }
@@ -939,6 +947,11 @@ impl SlotState {
 
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        // Same GP-resident caveat as `write_back_slot`: re-home the dirty pool
+        // register before `to_S_unguarded_state`'s `clear` drops it unspilled.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
         let s = self.to_S_unguarded_state(slot);
         ir.transfer(TransferIR::Spill(s));
     }
@@ -1163,8 +1176,15 @@ impl SlotState {
                 self.set_Sf(dst, x, guarded);
             }
             LinkMode::S(guarded) => {
-                ir.stack2reg(src, GP::Rax);
-                ir.reg2stack(GP::Rax, dst);
+                // A live GP resident holds `src`'s value in a register; copy it
+                // from there rather than reading a stale stack home (mirrors
+                // `load`'s resident-aware `S` arm).
+                if let Some(reg) = self.gp_regfile.reg_of(src) {
+                    ir.reg2stack(reg, dst);
+                } else {
+                    ir.stack2reg(src, GP::Rax);
+                    ir.reg2stack(GP::Rax, dst);
+                }
                 self.def_S_guarded(dst, guarded);
             }
             LinkMode::C(v) => {

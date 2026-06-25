@@ -171,46 +171,33 @@ impl<'a> JitContext<'a> {
         if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
         }
-        // The integer `BinOp`, `BinCmp` and `BinCmpBr` paths are GP-aware. Every
-        // other instruction first flushes the live GP residents back to their
-        // stack homes, so it observes slots in their canonical location. (These
-        // three are exempt here; their non-integer paths flush inside
-        // `binary_op` / `binary_cmp` / `binary_cmp_br`, and the integer compare +
-        // branch flushes before its branch since it ends the block.) A no-op when
+        // An arm flushes the local GP register file at its head only when it can
+        // clobber the caller-saved pool (a C-ABI helper) *without* passing the
+        // `get_using_fpr` chokepoint first — `get_using_fpr` itself flushes (see
+        // `SlotState::get_using_fpr`), so an arm that reaches it (directly, via the
+        // cached `send`, or inside its `ir.<helper>` / `jit_*` builder) before any
+        // clobber needs no head flush. Every slot *read* goes through the
+        // GP-resident-aware `load` / `write_back_slot` / `to_S_unguarded` /
+        // `copy_slot`, each of which re-homes a live resident rather than reading a
+        // stale stack home, so leaving a resident live into such an arm is safe.
+        // (That resident-awareness was missing from `write_back_slot` /
+        // `to_S_unguarded` / `copy_slot` and showed up as `string_scrub_block_form`
+        // / `hash_*` JIT miscompiles until fixed.) A head flush is also a no-op when
         // the register file is empty.
         //
-        // The following are also exempt because they neither call a GP-clobbering
-        // C-ABI helper nor read a slot through its stale stack home (every slot
-        // read goes through the GP-resident-aware `load`):
-        // - `FrozenLiteral` materializes a literal into `dst` (register-only).
-        // - `LoadConst` folds to a constant / `Sf` (register-only) and `StoreConst`
-        //   flushes at its own `get_using_fpr` chokepoint.
-        // - `StoreIvar` stores from a register and its write barrier preserves the
-        //   caller-saved set.
-        // - `Ret` loads the return value into rax (`reg_move` straight from a
-        //   resident when live) and returns, abandoning the dead residents.
+        // So the arms that omit the head flush are: the GP-aware integer `BinOp` /
+        // `BinCmp` / `BinCmpBr`; the register-only / self-chokepointing
+        // `FrozenLiteral` / `LoadConst` / `StoreConst` / `StoreIvar` / `Ret`;
+        // `MethodCall` / `Yield` / `Index` / `IndexAssign` (route through `send` /
+        // the yield lowerings); and every arm whose body reaches `get_using_fpr`
+        // (the `new_*` builders, cvar/gvar accessors, `*Def`, `Defined*`).
         //
-        // `LoadIvar` is deliberately **not** exempt: it loads the ivar into a pool
-        // register, but a prior resident left live *across* that load sequence gets
-        // corrupted under register pressure (a `core/math` ruby/spec regression).
-        // Flushing before it still keeps the `@ivar op x` register fast-path: the
-        // value loads straight into a pool register and the *consuming* op (a
-        // `BinOp`) is exempt, so the ivar resident survives into it.
-        if !matches!(
-            trace_ir,
-            TraceIr::BinOp { .. }
-                | TraceIr::BinCmp { .. }
-                | TraceIr::BinCmpBr { .. }
-                | TraceIr::FrozenLiteral(..)
-                | TraceIr::LoadConst(..)
-                | TraceIr::StoreConst(..)
-                | TraceIr::StoreIvar(..)
-                | TraceIr::Ret(..)
-        ) {
-            state.flush_gp(ir);
-        }
+        // `LoadIvar` still flushes: it loads the ivar into a pool register with no
+        // `get_using_fpr` on the path, and a prior resident left live *across* that
+        // load is corrupted under register pressure (a `core/math` regression).
         match trace_ir {
             TraceIr::InitMethod(info) => {
+                state.flush_gp(ir);
                 assert!(!self.is_loop());
                 ir.push(AsmInst::Init {
                     info,
@@ -219,11 +206,13 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::Preparation);
             }
             TraceIr::LoopStart { .. } => {
+                state.flush_gp(ir);
                 state.unset_side_effect_guard();
                 self.inc_loop_count();
                 state.exec_gc(ir, false);
             }
             TraceIr::LoopEnd => {
+                state.flush_gp(ir);
                 state.unset_side_effect_guard();
                 assert_ne!(0, self.loop_count());
                 self.dec_loop_count();
@@ -256,6 +245,7 @@ impl<'a> JitContext<'a> {
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { .. } => {
+                state.flush_gp(ir);
                 return Err(CompileError);
             }
             TraceIr::Hash { dst, args, len } => {
@@ -305,6 +295,7 @@ impl<'a> JitContext<'a> {
                 state.store_constant(ir, src, id);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
+                state.flush_gp(ir);
                 let self_class = self.self_class();
                 if let Some(ivarid) = self.store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
@@ -350,15 +341,18 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::LoadDynVar(dst, src) => {
+                state.flush_gp(ir);
                 assert!(!dst.is_self());
                 self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
             }
             TraceIr::StoreDynVar(dst, src) => {
+                state.flush_gp(ir);
                 self.store_dynvar(state, ir, dst, src);
                 state.unset_side_effect_guard();
             }
             TraceIr::BlockArgProxy(ret, outer) => {
+                state.flush_gp(ir);
                 // When this frame is specialized for a caller call site
                 // that passes no block (no literal block and no `&blk`),
                 // the forwarded `&block` of `...` is provably nil at
@@ -380,6 +374,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::BlockArg(ret, outer) => {
+                state.flush_gp(ir);
                 state.def_S(ret);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
@@ -551,6 +546,7 @@ impl<'a> JitContext<'a> {
             TraceIr::InlineCache => {}
 
             TraceIr::ArrayTEq { lhs, rhs } => {
+                state.flush_gp(ir);
                 state.write_back_slots(ir, &[lhs, rhs]);
                 state.discard(lhs);
                 let error = ir.new_error(state);
@@ -561,6 +557,7 @@ impl<'a> JitContext<'a> {
             }
 
             TraceIr::ToA { dst, src } => {
+                state.flush_gp(ir);
                 let error = ir.new_error(state);
                 state.write_back_slot(ir, src);
                 ir.to_a(state, src);
@@ -569,9 +566,11 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::Mov(dst, src) => {
+                state.flush_gp(ir);
                 state.copy_slot(ir, src, dst);
             }
             TraceIr::ConcatStr(dst, arg, len) => {
+                state.flush_gp(ir);
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
                 let error = ir.new_error(state);
@@ -581,6 +580,7 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
+                state.flush_gp(ir);
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
                 let error = ir.new_error(state);
@@ -593,6 +593,7 @@ impl<'a> JitContext<'a> {
                 src,
                 dst: (dst, len, rest_pos),
             } => {
+                state.flush_gp(ir);
                 state.load(ir, src, GP::Rdi);
                 for reg in dst.0..dst.0 + len {
                     state.def_S(SlotId(reg));
@@ -600,12 +601,14 @@ impl<'a> JitContext<'a> {
                 ir.expand_array(state, dst, len, rest_pos);
             }
             TraceIr::UndefMethod { undef } => {
+                state.flush_gp(ir);
                 ir.undef_method(state, undef);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
                 state.unset_side_effect_guard();
             }
             TraceIr::AliasMethod { new, old } => {
+                state.flush_gp(ir);
                 state.write_back_slots(ir, &[new, old]);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
@@ -749,6 +752,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Return(result));
             }
             TraceIr::MethodRet(ret) => {
+                state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
                 if let Some((spec_ids, extra)) = self.method_caller_specialized_ids() {
@@ -766,6 +770,7 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::MethodReturn(result));
             }
             TraceIr::BlockBreak(ret) => {
+                state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
                 if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids() {
@@ -783,31 +788,37 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Break(result));
             }
             TraceIr::Raise(ret) => {
+                state.flush_gp(ir);
                 state.locals_to_S(ir);
                 state.load(ir, ret, GP::Rax);
                 ir.push(AsmInst::Raise);
                 return Ok(CompileResult::Raise);
             }
             TraceIr::Retry => {
+                state.flush_gp(ir);
                 state.locals_to_S(ir);
                 ir.push(AsmInst::Retry(pc));
                 return Ok(CompileResult::Raise);
             }
             TraceIr::Redo => {
+                state.flush_gp(ir);
                 state.locals_to_S(ir);
                 ir.push(AsmInst::Redo(pc));
                 return Ok(CompileResult::Raise);
             }
 
             TraceIr::EnsureEnd => {
+                state.flush_gp(ir);
                 state.locals_to_S(ir);
                 ir.push(AsmInst::EnsureEnd);
             }
             TraceIr::Br(disp) => {
+                state.flush_gp(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 return Ok(CompileResult::Branch(dest_bb));
             }
             TraceIr::CondBr(cond_, disp, false, brkind) => {
+                state.flush_gp(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_truthy(cond_) {
                     if brkind == BrKind::BrIf {
@@ -823,6 +834,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::NilBr(cond_, disp) => {
+                state.flush_gp(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_nil(cond_) {
                     return Ok(CompileResult::Branch(dest_bb));
@@ -834,8 +846,11 @@ impl<'a> JitContext<'a> {
                     self.new_side_branch(bc_pos, dest_bb, state.clone(), branch_dest);
                 }
             }
-            TraceIr::CondBr(_, _, true, _) => {}
+            TraceIr::CondBr(_, _, true, _) => {
+                state.flush_gp(ir);
+            }
             TraceIr::CheckLocal(local, disp) => {
+                state.flush_gp(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 match state.mode(local) {
                     LinkMode::S(_) | LinkMode::C(_) => {
@@ -855,6 +870,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::CheckKwRest(local) => {
+                state.flush_gp(ir);
                 // D1 kwrest deferral: in a specialized pure forwarding
                 // trampoline (`def f(...) = g(...)`) whose `...` rest is
                 // source-routed (see `forward_rest_deferral`), skip
@@ -877,6 +893,7 @@ impl<'a> JitContext<'a> {
                 else_disp,
                 branch_table,
             } => {
+                state.flush_gp(ir);
                 state.load_fixnum(ir, cond, GP::Rdi);
                 let mut branch_labels = vec![];
                 let else_dest = self.iseq().get_bb(bc_pos + 1 + else_disp);
