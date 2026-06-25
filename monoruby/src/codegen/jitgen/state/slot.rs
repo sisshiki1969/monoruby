@@ -1130,14 +1130,6 @@ impl SlotState {
         None
     }
 
-
-    /// Flush GP-pool residents to their stack homes at a branch / block /
-    /// safepoint boundary. **Now a no-op**: GP-pool residence (`LinkMode::G`)
-    /// is abolished, so no value is ever register-resident in a pool slot. The
-    /// call sites are retained as explicit boundary markers (and so the seam is
-    /// available should a GP allocator be reintroduced).
-    pub(crate) fn flush_pool(&mut self, _ir: &mut AsmIr) {}
-
     /// Write the accumulator back before a call / safepoint. **Now a no-op**:
     /// with the R15 accumulator retired and the GP pool abolished there is no
     /// register-resident accumulator to spill. Retained as a boundary marker.
@@ -1303,7 +1295,6 @@ impl AbstractFrame {
     /// [`Self::using_fpr_offset`] where only the stack-offset is needed and no
     /// call (hence no flush) happens.
     pub(crate) fn get_using_fpr(&mut self, ir: &mut AsmIr) -> UsingFpr {
-        self.flush_pool(ir);
         // Single chokepoint for GP-clobbering calls: every C-ABI call (inline-asm
         // generators, CFunc inlines, the cached method-call path) takes a
         // `get_using_fpr` snapshot first, so flushing the local GP register file

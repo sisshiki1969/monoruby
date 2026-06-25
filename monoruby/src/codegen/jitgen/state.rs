@@ -256,6 +256,50 @@ impl AbstractFrame {
         }
     }
 
+    /// Define `dst` from a call/yield result in rax by parking it in a GP-pool
+    /// register (making it a resident) instead of writing it to its stack home.
+    /// A following integer op can then consume it straight out of the register.
+    ///
+    /// The result is a general `Value` of unknown class, so the resident is
+    /// marked `fixnum = false`: the first integer op to consume it re-guards
+    /// (`gp_ensure` → `take_needs_fixnum_guard`). It is bound **dirty**, so a
+    /// deopt / GC safepoint re-homes it (`dirty_residents`) and the next
+    /// `flush_gp` spills it. Only sound when the frame is *not* capturable — a
+    /// capturing call must use `def_rax2acc_capturing` (LFP-relative store) and
+    /// leaves no register resident.
+    pub(crate) fn def_rax2gp(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            // Clear any stale resident / link of `dst` first (mirrors the binop
+            // result path), then bind the freshly allocated register.
+            self.def_S_guarded(dst, slot::Guarded::Value);
+            let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
+            if let Some((reg, slot)) = spill {
+                ir.reg2stack(reg, slot);
+            }
+            ir.reg_move(GP::Rax, gp);
+            self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
+        }
+    }
+
+    /// Define `dst` from a concrete (non-immediate) literal by loading it
+    /// straight into a GP-pool register (a resident) rather than through rax to
+    /// the stack home. The literal is a heap value (frozen String/Array/…), so
+    /// the resident is `fixnum = false`; it carries its concrete guarded type.
+    /// The slot is `LinkMode::S`, so it is re-homed at a deopt / GC safepoint
+    /// purely as a **dirty** resident (`dirty_residents` spills the register to
+    /// the stack home, where GC then scans the heap pointer), and spilled at the
+    /// next `flush_gp` — exactly as the old `def_reg2acc_concrete_value` path
+    /// left the pointer physically in the stack slot.
+    pub(crate) fn def_lit2gp(&mut self, ir: &mut AsmIr, dst: SlotId, v: Value) {
+        self.def_S_guarded(dst, Guarded::from_concrete_value(v));
+        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        ir.lit2reg(v, gp);
+        self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
+    }
+
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
         self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
     }

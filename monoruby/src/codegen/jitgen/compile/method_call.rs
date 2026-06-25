@@ -788,20 +788,9 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         arg_class: Option<ClassId>,
     ) -> bool {
-        // Flush the GP register pool (§9 9d-B) to the slots' frame homes before
-        // running the inline-method codegen `f`. `f` may emit C-ABI helper
-        // calls and deopt write-backs that clobber the caller-saved pool
-        // registers (aarch64 x5–x8 / x86-64 r8–r11), so a pool-resident Fixnum
-        // left live across the inline body would be read back as garbage. This
-        // mirrors the explicit `flush_pool` at every other helper-emitting
-        // boundary (ToA, ConcatStr, ConcatRegexp, ExpandArray, the generic
-        // binop/cmp fallbacks, …); the inline-method path was the one gap.
-        // Manifested as an aarch64-only optcarrot `--opt` divergence at frame
-        // 34 with a non-empty GP pool. No-op when the pool is empty (aarch64). Done
-        // before the save/restore snapshot so the spill is permanent whether or
-        // not `f` succeeds (on bail the caller falls back to the full call,
-        // which re-flushes — a no-op by then).
-        state.flush_pool(ir);
+        // No GP flush here: a register-only inline keeps the residents live,
+        // while a C-ABI-call inline flushes them at its `get_using_fpr`
+        // chokepoint (see `SlotState::get_using_fpr`).
         let state_save = state.clone();
         let ir_save = ir.save();
         if f(state, ir, self, &self.store, callid, recv_class, arg_class) {
@@ -871,10 +860,11 @@ impl AbstractState {
         // When a capture guard follows (the callee may `move_frame_to_heap`,
         // e.g. by turning a block into a Proc), the result must be homed via
         // the LFP so it follows the frame onto the heap — see
-        // `def_rax2acc_capturing`. Otherwise the ordinary rbp-relative store is
-        // fine (and lets the result stay pool-resident).
+        // `def_rax2acc_capturing`. Otherwise park the result in a GP-pool
+        // register (a resident) so a following integer op consumes it without a
+        // stack round-trip — see `def_rax2gp`.
         if self.no_capture_guard() {
-            self.def_rax2acc(ir, dst);
+            self.def_rax2gp(ir, dst);
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }
@@ -950,9 +940,10 @@ impl AbstractState {
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // A yielded block can capture this frame; home the result via the LFP
-        // when a capture guard follows (see `def_rax2acc_capturing`).
+        // when a capture guard follows (see `def_rax2acc_capturing`). Otherwise
+        // park it in a GP-pool register resident (see `def_rax2gp`).
         if self.no_capture_guard() {
-            self.def_rax2acc(ir, dst);
+            self.def_rax2gp(ir, dst);
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }

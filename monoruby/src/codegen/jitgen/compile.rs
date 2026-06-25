@@ -95,7 +95,6 @@ impl<'a> JitContext<'a> {
                     // §9 9d-B: flush pool residents before the branch state is
                     // recorded — the merge machinery is R15/stack-only, so a
                     // successor must never inherit a pool-resident (`Alloc`) slot.
-                    state.flush_pool(&mut ir);
                     // a successor block starts with an empty GP
                     // register file (the file is never carried across a merge).
                     state.flush_gp(&mut ir);
@@ -142,7 +141,6 @@ impl<'a> JitContext<'a> {
         if !last {
             // §9 9d-B: flush pool residents before the fall-through state is
             // recorded for the next block (the merge machinery is stack-only).
-            state.flush_pool(&mut ir);
             // the last instruction may be a GP-aware binop, so
             // flush the GP residents before the fall-through state is recorded —
             // the successor block starts with an empty register file.
@@ -180,9 +178,14 @@ impl<'a> JitContext<'a> {
         // `binary_op` / `binary_cmp` / `binary_cmp_br`, and the integer compare +
         // branch flushes before its branch since it ends the block.) A no-op when
         // the register file is empty.
+        // `FrozenLiteral` is also exempt: it materializes a literal into `dst`
+        // (register-only, no clobbering call) and is GP-resident-aware.
         if !matches!(
             trace_ir,
-            TraceIr::BinOp { .. } | TraceIr::BinCmp { .. } | TraceIr::BinCmpBr { .. }
+            TraceIr::BinOp { .. }
+                | TraceIr::BinCmp { .. }
+                | TraceIr::BinCmpBr { .. }
+                | TraceIr::FrozenLiteral(..)
         ) {
             state.flush_gp(ir);
         }
@@ -213,9 +216,9 @@ impl<'a> JitContext<'a> {
                 if let Some(imm) = val.is_immediate() {
                     state.def_C(dst, imm);
                 } else {
-                    state.discard(dst);
-                    ir.lit2reg(val, GP::Rax);
-                    state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
+                    // Load the literal straight into a GP-pool register resident
+                    // rather than through rax to the stack home (see `def_lit2gp`).
+                    state.def_lit2gp(ir, dst, val);
                 }
             }
             TraceIr::Literal(dst, val) => {
@@ -358,7 +361,6 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::BlockArg(ret, outer) => {
                 state.def_S(ret);
-                state.flush_pool(ir);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
             }
@@ -531,7 +533,6 @@ impl<'a> JitContext<'a> {
             TraceIr::ArrayTEq { lhs, rhs } => {
                 state.write_back_slots(ir, &[lhs, rhs]);
                 state.discard(lhs);
-                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.array_teq(state, lhs, rhs);
                 ir.handle_error(error);
@@ -542,7 +543,6 @@ impl<'a> JitContext<'a> {
             TraceIr::ToA { dst, src } => {
                 let error = ir.new_error(state);
                 state.write_back_slot(ir, src);
-                state.flush_pool(ir);
                 ir.to_a(state, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
@@ -554,7 +554,6 @@ impl<'a> JitContext<'a> {
             TraceIr::ConcatStr(dst, arg, len) => {
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
-                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.concat_str(state, arg, len);
                 ir.handle_error(error);
@@ -564,7 +563,6 @@ impl<'a> JitContext<'a> {
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 state.write_back_range(ir, arg, len);
                 state.discard(dst);
-                state.flush_pool(ir);
                 let error = ir.new_error(state);
                 ir.concat_regexp(state, arg, len);
                 ir.handle_error(error);
@@ -579,11 +577,9 @@ impl<'a> JitContext<'a> {
                 for reg in dst.0..dst.0 + len {
                     state.def_S(SlotId(reg));
                 }
-                state.flush_pool(ir);
                 ir.expand_array(state, dst, len, rest_pos);
             }
             TraceIr::UndefMethod { undef } => {
-                state.flush_pool(ir);
                 ir.undef_method(state, undef);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
@@ -591,7 +587,6 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::AliasMethod { new, old } => {
                 state.write_back_slots(ir, &[new, old]);
-                state.flush_pool(ir);
                 ir.alias_method(state, new, old);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
