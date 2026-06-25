@@ -86,7 +86,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             _ => match state.binop_type(lhs, rhs, ic) {
-                BinaryOpType::Integer(mode) => {
+                BinaryOpType::Integer(l, r) => {
                     // A constant-fold bakes the result (e.g. `100 * 100` -> 10000)
                     // assuming the builtin operator, with no runtime trace of the
                     // op. Guard that assumption: emit `CheckBOP` *before* the fold
@@ -99,10 +99,10 @@ impl<'a> JitContext<'a> {
                     // register fast-path keeps its operands at runtime, so it is
                     // not worth a guard on every arithmetic op.
                     #[cfg(target_arch = "aarch64")]
-                    if state.check_concrete_i64(mode).is_some() {
+                    if state.check_concrete_i64(l, r).is_some() {
                         ir.check_bop(state);
                     }
-                    state.binop_integer(ir, kind, dst, mode);
+                    state.binop_integer(ir, kind, dst, l, r);
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Float(info) => {
@@ -148,8 +148,8 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(mode) => {
-                state.gen_cmp_integer(ir, kind, dst, mode);
+            BinaryOpType::Integer(l, r) => {
+                state.gen_cmp_integer(ir, kind, dst, l, r);
                 Ok(CompileResult::Continue)
             }
             BinaryOpType::Float(info) => {
@@ -244,13 +244,13 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(mode) => {
-                if let Some(result) = state.check_concrete_i64_cmpbr(mode, kind, brkind, dest_bb) {
+            BinaryOpType::Integer(l, r) => {
+                if let Some(result) = state.check_concrete_i64_cmpbr(l, r, kind, brkind, dest_bb) {
                     return Ok(result);
                 }
                 let src_idx = bc_pos + 1;
                 let dest = self.label();
-                state.gen_cmpbr_integer(ir, kind, mode, brkind, dest);
+                state.gen_cmpbr_integer(ir, kind, l, r, brkind, dest);
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
                 Ok(CompileResult::Continue)
             }
@@ -363,8 +363,7 @@ impl AbstractFrame {
         self.def_C(dst, Immediate::bool(b));
     }
 
-    fn check_concrete_i64(&self, mode: OpMode) -> Option<(i64, i64)> {
-        let OpMode::RR(lhs, rhs) = mode;
+    fn check_concrete_i64(&self, lhs: SlotId, rhs: SlotId) -> Option<(i64, i64)> {
         let lhs = self.is_fixnum_literal(lhs)?.get();
         let rhs = self.is_fixnum_literal(rhs)?.get();
         Some((lhs, rhs))
@@ -379,12 +378,13 @@ impl AbstractFrame {
 
     pub(super) fn check_concrete_i64_cmpbr(
         &mut self,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         brkind: BrKind,
         dest_bb: BasicBlockId,
     ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(mode) {
+        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
             let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
             return Some(if b {
                 CompileResult::Branch(dest_bb)
@@ -458,8 +458,15 @@ impl AbstractFrame {
     /// ### out
     /// - r15: dst
     ///
-    fn binop_integer(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, mode: OpMode) {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(mode)
+    fn binop_integer(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) {
+        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs)
             && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
         {
             // The fold redefines `dst` as a constant; drop any stale GP cache of
@@ -479,7 +486,7 @@ impl AbstractFrame {
         // flushing the register file.
         #[cfg(feature = "gp-local-alloc")]
         if let BinOpK::Add | BinOpK::Sub = kind {
-            self.binop_integer_gp(ir, kind, dst, mode);
+            self.binop_integer_gp(ir, kind, dst, lhs, rhs);
             return;
         }
         #[cfg(feature = "gp-local-alloc")]
@@ -498,13 +505,13 @@ impl AbstractFrame {
             kind,
             BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div
         ));
-        let OpMode::RR(l, r) = mode;
-        self.write_back_slots(ir, &[l, r]);
+        self.write_back_slots(ir, &[lhs, rhs]);
         let deopt = self.deopt_point();
         ir.transfer(TransferIR::IntegerBinOpSlot {
             kind,
             dst,
-            mode,
+            lhs,
+            rhs,
             deopt,
         });
         if let Some(dst) = dst {
@@ -520,8 +527,14 @@ impl AbstractFrame {
     /// is written only when the file is flushed (before a non-binop or at the
     /// block boundary) or re-homed by a deopt write-back.
     #[cfg(feature = "gp-local-alloc")]
-    fn binop_integer_gp(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, mode: OpMode) {
-        let OpMode::RR(lhs, rhs) = mode;
+    fn binop_integer_gp(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) {
         // 1. Load the operands into registers (reusing a resident copy).
         let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
@@ -681,9 +694,10 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         kind: CmpKind,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
     ) {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(mode) {
+        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
             // The fold redefines `dst`; drop any stale GP cache of it.
             #[cfg(feature = "gp-local-alloc")]
             if let Some(dst) = dst {
@@ -694,7 +708,7 @@ impl AbstractFrame {
         };
         #[cfg(feature = "gp-local-alloc")]
         {
-            self.gen_cmp_integer_gp(ir, kind, dst, mode);
+            self.gen_cmp_integer_gp(ir, kind, dst, lhs, rhs);
             return;
         }
         // §slot-IR: keep the AsmIR layer free of physical registers for the
@@ -703,11 +717,11 @@ impl AbstractFrame {
         // fixnum-guards, compares, and stores the boolean result to `dst`.
         #[cfg(not(feature = "gp-local-alloc"))]
         {
-            let OpMode::RR(l, r) = mode;
-            self.write_back_slots(ir, &[l, r]);
+            self.write_back_slots(ir, &[lhs, rhs]);
             let deopt = self.deopt_point();
             ir.transfer(TransferIR::IntegerCmpSlot {
-                mode,
+                lhs,
+                rhs,
                 kind,
                 dst,
                 deopt,
@@ -731,9 +745,9 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         kind: CmpKind,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
     ) {
-        let OpMode::RR(lhs, rhs) = mode;
         let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Snapshot the deopt write-back before clearing (the guards side-exit to
@@ -784,18 +798,19 @@ impl AbstractFrame {
         &mut self,
         ir: &mut AsmIr,
         kind: CmpKind,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
         // §slot-IR: write the operand slots back to the stack and emit a
         // slot-based compare+branch; the LIR lowering loads them into scratch
         // regs, fixnum-guards, compares, and branches.
-        let OpMode::RR(l, r) = mode;
-        self.write_back_slots(ir, &[l, r]);
+        self.write_back_slots(ir, &[lhs, rhs]);
         let deopt = self.deopt_point();
         ir.transfer(TransferIR::IntegerCmpBrSlot {
-            mode,
+            lhs,
+            rhs,
             kind,
             brkind,
             branch_dest,

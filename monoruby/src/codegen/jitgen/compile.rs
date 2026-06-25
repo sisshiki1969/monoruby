@@ -1034,19 +1034,12 @@ impl<'a> JitContext<'a> {
 }
 
 enum BinaryOpType {
-    Integer(OpMode),
+    Integer(SlotId, SlotId),
     Float(FBinOpInfo),
     Other(Option<ClassId>, Option<ClassId>),
 }
 
 impl AbstractState {
-    fn binary_integer_mode(&self, lhs: SlotId, rhs: SlotId) -> OpMode {
-        // `OpMode` is RR-only: an integer-literal operand is no longer folded
-        // into an immediate (`RI`/`IR`); it is materialized in its stack slot
-        // and loaded like any other operand.
-        OpMode::RR(lhs, rhs)
-    }
-
     fn binary_class(
         &self,
         lhs: SlotId,
@@ -1071,8 +1064,7 @@ impl AbstractState {
         if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
             match (lhs_class, rhs_class) {
                 (INTEGER_CLASS, INTEGER_CLASS) => {
-                    let mode = self.binary_integer_mode(lhs, rhs);
-                    return BinaryOpType::Integer(mode);
+                    return BinaryOpType::Integer(lhs, rhs);
                 }
                 (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
                     let info = FBinOpInfo {

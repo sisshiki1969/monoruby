@@ -210,14 +210,16 @@ pub(in crate::codegen::jitgen) enum TransferIR {
     IntegerBinOpSlot {
         kind: BinOpK,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         deopt: DeoptPoint,
     },
     /// §slot-IR: a slot-based fixnum comparison (`dst = lhs <kind> rhs`, all
     /// stack slots). Carries its deopt as a program point (for the operand
     /// fixnum guards); no physical register appears.
     IntegerCmpSlot {
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         dst: Option<SlotId>,
         deopt: DeoptPoint,
@@ -225,7 +227,8 @@ pub(in crate::codegen::jitgen) enum TransferIR {
     /// §slot-IR: a slot-based fused fixnum compare + branch. Carries its deopt
     /// as a program point (operand guards) and the branch target `JitLabel`.
     IntegerCmpBrSlot {
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
@@ -253,30 +256,33 @@ impl TransferIR {
             TransferIR::IntegerBinOpSlot {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 deopt,
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_binop_slot(kind, dst, mode, deopt);
+                ir.integer_binop_slot(kind, dst, lhs, rhs, deopt);
             }
             TransferIR::IntegerCmpSlot {
-                mode,
+                lhs,
+                rhs,
                 kind,
                 dst,
                 deopt,
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_slot(mode, kind, dst, deopt);
+                ir.integer_cmp_slot(lhs, rhs, kind, dst, deopt);
             }
             TransferIR::IntegerCmpBrSlot {
-                mode,
+                lhs,
+                rhs,
                 kind,
                 brkind,
                 branch_dest,
                 deopt,
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_br_slot(mode, kind, brkind, branch_dest, deopt);
+                ir.integer_cmp_br_slot(lhs, rhs, kind, brkind, branch_dest, deopt);
             }
         }
     }

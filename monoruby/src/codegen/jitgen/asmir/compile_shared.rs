@@ -270,7 +270,8 @@ impl Codegen {
             AsmInst::IntegerBinOpSlot {
                 kind,
                 dst,
-                mode,
+                lhs,
+                rhs,
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
@@ -288,9 +289,8 @@ impl Codegen {
                 // Load both operands (Rdi=lhs, Rsi=rhs) and fixnum-guard each.
                 // Add/Sub/Mul compute in place in `Rdi`; `Div` produces its
                 // quotient in `rax`.
-                let OpMode::RR(l, r) = mode;
-                load_guard(self, l, GP::Rdi);
-                load_guard(self, r, GP::Rsi);
+                load_guard(self, lhs, GP::Rdi);
+                load_guard(self, rhs, GP::Rsi);
                 let result_reg = if matches!(kind, BinOpK::Div) {
                     GP::Rax
                 } else {
@@ -355,7 +355,8 @@ impl Codegen {
             // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
             // rax), and store the boolean to `dst`'s slot.
             AsmInst::IntegerCmpSlot {
-                mode,
+                lhs,
+                rhs,
                 kind,
                 dst,
                 deopt,
@@ -372,9 +373,8 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                let OpMode::RR(l, r) = mode;
-                load_guard(self, l, GP::Rdi);
-                load_guard(self, r, GP::Rsi);
+                load_guard(self, lhs, GP::Rdi);
+                load_guard(self, rhs, GP::Rsi);
                 self.encode_linst(LInst::IntegerCmp {
                     kind,
                     lhs: GP::Rdi,
@@ -391,7 +391,8 @@ impl Codegen {
             // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),
             // fixnum-guard it, then emit the same Cmp/CondBr as `IntegerCmpBr`.
             AsmInst::IntegerCmpBrSlot {
-                mode,
+                lhs,
+                rhs,
                 kind,
                 brkind,
                 branch_dest,
@@ -409,9 +410,8 @@ impl Codegen {
                         deopt: deopt.clone(),
                     });
                 };
-                let OpMode::RR(l, r) = mode;
-                load_guard(self, l, GP::Rdi);
-                load_guard(self, r, GP::Rsi);
+                load_guard(self, lhs, GP::Rdi);
+                load_guard(self, rhs, GP::Rsi);
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
                 self.encode_linst(LInst::Cmp {
                     lhs: GP::Rdi.into(),

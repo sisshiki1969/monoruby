@@ -865,13 +865,15 @@ impl AsmIr {
         &mut self,
         kind: BinOpK,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         deopt: AsmDeopt,
     ) {
         self.push(AsmInst::IntegerBinOpSlot {
             kind,
             dst,
-            mode,
+            lhs,
+            rhs,
             deopt,
         });
     }
@@ -939,14 +941,16 @@ impl AsmIr {
     /// §slot-IR: slot-based fixnum comparison (see [`AsmInst::IntegerCmpSlot`]).
     pub(super) fn integer_cmp_slot(
         &mut self,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         dst: Option<SlotId>,
         deopt: AsmDeopt,
     ) {
         self.push(AsmInst::IntegerCmpSlot {
             kind,
-            mode,
+            lhs,
+            rhs,
             dst,
             deopt,
         });
@@ -956,14 +960,16 @@ impl AsmIr {
     /// [`AsmInst::IntegerCmpBrSlot`]).
     pub(super) fn integer_cmp_br_slot(
         &mut self,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
         deopt: AsmDeopt,
     ) {
         self.push(AsmInst::IntegerCmpBrSlot {
-            mode,
+            lhs,
+            rhs,
             kind,
             brkind,
             branch_dest,
@@ -1776,7 +1782,8 @@ pub(super) enum AsmInst {
     IntegerBinOpSlot {
         kind: BinOpK,
         dst: Option<SlotId>,
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         deopt: AsmDeopt,
     },
     ///
@@ -1811,7 +1818,8 @@ pub(super) enum AsmInst {
     /// result to `dst` (when present). No GP register at the AsmIR layer.
     ///
     IntegerCmpSlot {
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         dst: Option<SlotId>,
         deopt: AsmDeopt,
@@ -1823,7 +1831,8 @@ pub(super) enum AsmInst {
     /// No GP register at the AsmIR layer.
     ///
     IntegerCmpBrSlot {
-        mode: OpMode,
+        lhs: SlotId,
+        rhs: SlotId,
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,

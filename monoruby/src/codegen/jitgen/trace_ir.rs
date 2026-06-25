@@ -1,16 +1,6 @@
 use super::*;
 use crate::bytecodegen::{BinOpK, UnOpK, inst::*};
 
-/// Operand mode for an integer binop / comparison. **RR-only**: both operands
-/// are stack slots. An integer-literal operand is no longer folded into an
-/// immediate (the former `RI` / `IR` modes) — it is materialized in its slot
-/// and loaded like any other operand, which keeps the AsmIR/LIR layers free of
-/// per-operand immediate special-casing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum OpMode {
-    RR(SlotId, SlotId),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FOpClass {
     Float,
