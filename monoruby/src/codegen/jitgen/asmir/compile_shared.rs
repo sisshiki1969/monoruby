@@ -258,60 +258,11 @@ impl Codegen {
             AsmInst::FprRestore(using_fpr, cont) => {
                 self.encode_linst(LInst::FprRestore { using_fpr, cont })
             }
-            // Integer / float arithmetic fast paths. Each backend resolves the
-            // same operands and dispatches to its own emission primitive
-            // (aarch64 bails on an unsupported BinOpK, hence the bool results).
-            // §slot-IR: lower the slot-based fixnum binop to the physical
-            // sequence — load each operand slot into a scratch reg, fixnum-guard
-            // it, compute in place in `Rdi` (overflow -> deopt), and store the
-            // result to `dst`'s slot. This is where the GP registers the AsmIR
-            // layer no longer carries are materialized (`%dst = %lhs op %rhs` ->
-            // `Rdi=%lhs; Rsi=%rhs; Rdi=Rdi op Rsi; %dst=Rdi`).
-            AsmInst::IntegerBinOpSlot {
-                kind,
-                dst,
-                lhs,
-                rhs,
-                deopt,
-            } => {
-                let deopt = labels[deopt].clone();
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
-                    });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
-                    });
-                };
-                // Load both operands (Rdi=lhs, Rsi=rhs) and fixnum-guard each.
-                // Add/Sub/Mul compute in place in `Rdi`; `Div` produces its
-                // quotient in `rax`.
-                load_guard(self, lhs, GP::Rdi);
-                load_guard(self, rhs, GP::Rsi);
-                let result_reg = if matches!(kind, BinOpK::Div) {
-                    GP::Rax
-                } else {
-                    GP::Rdi
-                };
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    lhs: GP::Rdi,
-                    rhs: GP::Rsi,
-                    deopt,
-                });
-                if let Some(dst) = dst {
-                    self.encode_linst(LInst::Store {
-                        src: result_reg,
-                        mem: LMem::Slot(dst),
-                    });
-                }
-            }
-            // register-form binop. The op computes in place in
-            // its `lhs`, so move `lhs` into `dst` first when they differ, then
-            // run the shared `IntegerBinOp` on `dst` (overflow -> deopt).
+            // Register-form binop. `Add`/`Sub`/`Mul` compute in place in their
+            // `lhs`, so move `lhs` into `dst` first when they differ, then run
+            // the shared `IntegerBinOp` on `dst` (overflow -> deopt). `Div` reads
+            // `lhs` (preserved) and clobbers `rhs`, producing the quotient in
+            // `rax`; copy it to `dst` afterwards.
             AsmInst::IntegerBinOpReg {
                 kind,
                 dst,
@@ -320,18 +271,31 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                if dst != lhs {
+                if matches!(kind, BinOpK::Div) {
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs,
+                        rhs,
+                        deopt,
+                    });
                     self.encode_linst(LInst::Mov {
                         dst: dst.into(),
-                        src: lhs.into(),
+                        src: GP::Rax.into(),
+                    });
+                } else {
+                    if dst != lhs {
+                        self.encode_linst(LInst::Mov {
+                            dst: dst.into(),
+                            src: lhs.into(),
+                        });
+                    }
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs: dst,
+                        rhs,
+                        deopt,
                     });
                 }
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    lhs: dst,
-                    rhs,
-                    deopt,
-                });
             }
             // Register-form comparison. Operands are already in GP registers and
             // fixnum-guarded, so just compare (result in rax) and store the

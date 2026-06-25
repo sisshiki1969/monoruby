@@ -190,6 +190,17 @@ impl GpRegFile {
             .map(|i| GP_ALLOC_SET[i])
     }
 
+    /// The register caching `slot` only if that cache is **dirty** (its value
+    /// differs from the stack home). Used before an op that clobbers an operand
+    /// register (`Mul`/`Div` destroy `rhs`): the dirty value must be written to
+    /// its home first, since the register will not survive the op.
+    pub(in crate::codegen::jitgen) fn dirty_reg_of(&self, slot: SlotId) -> Option<GP> {
+        self.holder
+            .iter()
+            .position(|h| matches!(h, Some(Holder { slot: s, dirty: true, .. }) if *s == slot))
+            .map(|i| GP_ALLOC_SET[i])
+    }
+
     /// A free register that is not `pinned`. Pinned registers hold operands that
     /// are live across this allocation (e.g. when the result slot aliases an
     /// operand slot, `invalidate(dst)` leaves the operand's register unbound but

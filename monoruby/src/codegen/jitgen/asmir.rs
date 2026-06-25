@@ -857,27 +857,6 @@ impl AsmIr {
 //
 impl AsmIr {
 
-    /// §slot-IR: slot-based fixnum binop. Operands and destination are stack
-    /// slots; the LIR lowering loads them into scratch registers, fixnum-guards,
-    /// computes (overflow -> `deopt`), and stores the result back to `dst`. No
-    /// physical register appears at the AsmIR level.
-    pub(super) fn integer_binop_slot(
-        &mut self,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-        deopt: AsmDeopt,
-    ) {
-        self.push(AsmInst::IntegerBinOpSlot {
-            kind,
-            dst,
-            lhs,
-            rhs,
-            deopt,
-        });
-    }
-
     /// register-form fixnum binop `dst = lhs <kind> rhs` with
     /// all three operands in physical GP registers chosen by the local
     /// allocator. The result computes in place in `lhs`; the lowering moves
@@ -1751,24 +1730,12 @@ pub(super) enum AsmInst {
     },
 
     ///
-    /// §slot-IR: slot-based fixnum binop (`dst = lhs <kind> rhs`, all stack
-    /// slots). The LIR lowering materializes the physical registers — load each
-    /// operand slot into a scratch reg, fixnum-guard it, compute in place
-    /// (overflow -> `deopt`), and store the result to `dst`. The AsmIR layer
-    /// carries no GP register for this op (the slot-IR migration).
-    ///
-    IntegerBinOpSlot {
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-        deopt: AsmDeopt,
-    },
-    ///
-    /// register-form fixnum binop `dst = lhs <kind> rhs`, all
-    /// in physical GP registers from the local allocator. Computes in place in
-    /// `lhs` (overflow -> `deopt`); the lowering moves `lhs` into `dst` first
-    /// when they differ. `Add`/`Sub` only.
+    /// Register-form fixnum binop `dst = lhs <kind> rhs`, all in physical GP
+    /// registers from the local allocator (overflow / divide-by-zero -> `deopt`).
+    /// `Add`/`Sub`/`Mul` compute in place in the `lhs` position (the lowering
+    /// moves `lhs` into `dst` first when they differ); `Div` reads `lhs`, clobbers
+    /// `rhs`, and produces the quotient in `rax`, which the lowering copies to
+    /// `dst`.
     ///
     IntegerBinOpReg {
         kind: BinOpK,
