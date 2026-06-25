@@ -65,16 +65,10 @@ impl<'a> JitContext<'a> {
             // Integer#| / Integer#& / Integer#^ / Integer#** / Integer#% /
             // Float#** / Float#% handles code generation using both-side class
             // info from the BinOp inline cache.
-            BinOpK::Shl
-            | BinOpK::Shr
-            | BinOpK::BitOr
-            | BinOpK::BitAnd
-            | BinOpK::BitXor
-            | BinOpK::Exp
-            | BinOpK::Rem => {
-                // Not the integer Add/Sub GP path: these always lower to a
-                // (possibly inlined) method call that reads its operands from
-                // their stack homes, so spill the live GP residents first.
+            BinOpK::Shl | BinOpK::Shr | BinOpK::Exp | BinOpK::Rem => {
+                // Not the integer GP path: these always lower to a (possibly
+                // inlined) method call that reads its operands from their stack
+                // homes, so spill the live GP residents first.
                 state.flush_gp(ir);
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
@@ -437,13 +431,11 @@ impl AbstractFrame {
                 }
                 return Immediate::check_fixnum(lhs.ruby_div(&rhs));
             }
-            BinOpK::Rem
-            | BinOpK::Exp
-            | BinOpK::BitOr
-            | BinOpK::BitAnd
-            | BinOpK::BitXor
-            | BinOpK::Shl
-            | BinOpK::Shr => unreachable!(),
+            // Bitwise ops on two i63 fixnums always yield an i63 fixnum.
+            BinOpK::BitOr => return Immediate::check_fixnum(lhs | rhs),
+            BinOpK::BitAnd => return Immediate::check_fixnum(lhs & rhs),
+            BinOpK::BitXor => return Immediate::check_fixnum(lhs ^ rhs),
+            BinOpK::Rem | BinOpK::Exp | BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
         None
     }

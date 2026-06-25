@@ -422,7 +422,22 @@ impl Codegen {
                     add x(rax), x(rax), #(1u32); // 2q+1 (tagged)
                 );
             }
-            // Rem/bit-ops are compiled as method calls, never IntegerBinOp
+            // Bitwise ops on tagged fixnums need no overflow check and never
+            // clobber `rhs`; the result lands in `lhs` like Add/Sub. `&`/`|` keep
+            // the LSB tag; `^` clears it, so re-tag with `+1`.
+            BinOpK::BitOr => {
+                monoasm_arm64!(&mut self.jit, orr x(l), x(l), x(r););
+            }
+            BinOpK::BitAnd => {
+                monoasm_arm64!(&mut self.jit, and x(l), x(l), x(r););
+            }
+            BinOpK::BitXor => {
+                monoasm_arm64!(&mut self.jit,
+                    eor x(l), x(l), x(r);
+                    add x(l), x(l), #(1u32);
+                );
+            }
+            // Rem/Exp/Shl/Shr are compiled as method calls, never IntegerBinOp
             // (mirrors x86 `integer_binop`'s `_ => unreachable!()`).
             _ => unreachable!(),
         }

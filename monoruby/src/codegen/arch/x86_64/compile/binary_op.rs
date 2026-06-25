@@ -105,13 +105,23 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Rem
-            | BinOpK::Exp
-            | BinOpK::BitOr
-            | BinOpK::BitAnd
-            | BinOpK::BitXor
-            | BinOpK::Shl
-            | BinOpK::Shr => unreachable!(),
+            // Bitwise ops on tagged fixnums need no overflow check and never
+            // clobber `rhs`; the result lands in `lhs` like Add/Sub. `&`/`|` keep
+            // the LSB tag (`(2a+1)&(2b+1) = 2(a&b)+1`); `^` clears it, so re-tag
+            // with `+1`.
+            BinOpK::BitOr => {
+                monoasm!( &mut self.jit, orq R(lhs_r), R(rhs_r); );
+            }
+            BinOpK::BitAnd => {
+                monoasm!( &mut self.jit, andq R(lhs_r), R(rhs_r); );
+            }
+            BinOpK::BitXor => {
+                monoasm!( &mut self.jit,
+                    xorq R(lhs_r), R(rhs_r);
+                    addq R(lhs_r), 1;
+                );
+            }
+            BinOpK::Rem | BinOpK::Exp | BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
     }
 
