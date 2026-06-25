@@ -252,7 +252,7 @@ pub(crate) struct SlotState {
     liveness: Vec<IsUsed>,
     /// fpr-register allocation state (item ②, step 1).
     fpr_alloc: FprAllocator,
-    /// Per-basic-block local GP register file (`gp-local-alloc`). Empty (and
+    /// Per-basic-block local GP register file (the local GP allocator). Empty (and
     /// flushed) at every block boundary, so it never carries state across a
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
@@ -958,7 +958,7 @@ impl SlotState {
     }
 
     /// The tagged `Value` of a fixnum compile-time-constant slot, if any — the
-    /// immediate to load straight into a register (`gp-local-alloc`), skipping
+    /// immediate to load straight into a register (the local GP allocator), skipping
     /// the stack-home materialization and the fixnum guard.
     pub fn fixnum_literal_value(&self, slot: SlotId) -> Option<Value> {
         if let LinkMode::C(v) = self.mode(slot) {
@@ -1331,7 +1331,7 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume.
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
-        // `gp-local-alloc`: spill dirty GP residents so the GC marks them (the
+        // spill dirty GP residents so the GC marks them (the
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
@@ -1342,7 +1342,7 @@ impl AbstractFrame {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
         let literal = self.wb_literal(f);
-        // `gp-local-alloc`: re-home dirty GP residents (a binop result still in a
+        // re-home dirty GP residents (a binop result still in a
         // register) so a deopt resuming in the VM reads them from their stack
         // home. Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();

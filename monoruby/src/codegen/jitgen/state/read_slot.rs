@@ -214,26 +214,6 @@ pub(in crate::codegen::jitgen) enum TransferIR {
         rhs: SlotId,
         deopt: DeoptPoint,
     },
-    /// §slot-IR: a slot-based fixnum comparison (`dst = lhs <kind> rhs`, all
-    /// stack slots). Carries its deopt as a program point (for the operand
-    /// fixnum guards); no physical register appears.
-    IntegerCmpSlot {
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        deopt: DeoptPoint,
-    },
-    /// §slot-IR: a slot-based fused fixnum compare + branch. Carries its deopt
-    /// as a program point (operand guards) and the branch target `JitLabel`.
-    IntegerCmpBrSlot {
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        deopt: DeoptPoint,
-    },
 }
 
 impl TransferIR {
@@ -262,27 +242,6 @@ impl TransferIR {
             } => {
                 let deopt = ir.deopt_from_point(&deopt);
                 ir.integer_binop_slot(kind, dst, lhs, rhs, deopt);
-            }
-            TransferIR::IntegerCmpSlot {
-                lhs,
-                rhs,
-                kind,
-                dst,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_slot(lhs, rhs, kind, dst, deopt);
-            }
-            TransferIR::IntegerCmpBrSlot {
-                lhs,
-                rhs,
-                kind,
-                brkind,
-                branch_dest,
-                deopt,
-            } => {
-                let deopt = ir.deopt_from_point(&deopt);
-                ir.integer_cmp_br_slot(lhs, rhs, kind, brkind, branch_dest, deopt);
             }
         }
     }

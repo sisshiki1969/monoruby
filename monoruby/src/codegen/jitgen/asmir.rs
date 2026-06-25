@@ -878,7 +878,7 @@ impl AsmIr {
         });
     }
 
-    /// `gp-local-alloc`: register-form fixnum binop `dst = lhs <kind> rhs` with
+    /// register-form fixnum binop `dst = lhs <kind> rhs` with
     /// all three operands in physical GP registers chosen by the local
     /// allocator. The result computes in place in `lhs`; the lowering moves
     /// `lhs` into `dst` first when they differ. Only the non-`rhs`-clobbering
@@ -900,10 +900,10 @@ impl AsmIr {
         });
     }
 
-    /// `gp-local-alloc`: register-form fixnum comparison `dst = lhs <kind> rhs`
-    /// (a boolean `Value`), operands already in GP registers chosen by the local
-    /// allocator and fixnum-guarded. The lowering compares and stores the bool to
-    /// `dst`'s stack home (the result is a bool, never a GP resident).
+    /// Register-form fixnum comparison `dst = lhs <kind> rhs` (a boolean
+    /// `Value`), operands already in GP registers chosen by the local allocator
+    /// and fixnum-guarded. The lowering compares and stores the bool to `dst`'s
+    /// stack home (the result is a bool, never a GP resident).
     pub(in crate::codegen::jitgen) fn integer_cmp_reg(
         &mut self,
         kind: CmpKind,
@@ -912,6 +912,26 @@ impl AsmIr {
         rhs: GP,
     ) {
         self.push(AsmInst::IntegerCmpReg { kind, dst, lhs, rhs });
+    }
+
+    /// Register-form fused fixnum compare + conditional branch, operands already
+    /// in GP registers and fixnum-guarded. The lowering compares and branches to
+    /// `branch_dest` per `kind`/`brkind`.
+    pub(in crate::codegen::jitgen) fn integer_cmpbr_reg(
+        &mut self,
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: JitLabel,
+        lhs: GP,
+        rhs: GP,
+    ) {
+        self.push(AsmInst::IntegerCmpBrReg {
+            kind,
+            brkind,
+            branch_dest,
+            lhs,
+            rhs,
+        });
     }
 
     ///
@@ -932,48 +952,6 @@ impl AsmIr {
             kind,
             binary_fpr: (lhs, rhs),
             dst,
-        });
-    }
-
-    ///
-    /// Integer comparison
-    ///
-    /// §slot-IR: slot-based fixnum comparison (see [`AsmInst::IntegerCmpSlot`]).
-    pub(super) fn integer_cmp_slot(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        deopt: AsmDeopt,
-    ) {
-        self.push(AsmInst::IntegerCmpSlot {
-            kind,
-            lhs,
-            rhs,
-            dst,
-            deopt,
-        });
-    }
-
-    /// §slot-IR: slot-based fused fixnum compare + branch (see
-    /// [`AsmInst::IntegerCmpBrSlot`]).
-    pub(super) fn integer_cmp_br_slot(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        deopt: AsmDeopt,
-    ) {
-        self.push(AsmInst::IntegerCmpBrSlot {
-            lhs,
-            rhs,
-            kind,
-            brkind,
-            branch_dest,
-            deopt,
         });
     }
 
@@ -1787,7 +1765,7 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
-    /// `gp-local-alloc`: register-form fixnum binop `dst = lhs <kind> rhs`, all
+    /// register-form fixnum binop `dst = lhs <kind> rhs`, all
     /// in physical GP registers from the local allocator. Computes in place in
     /// `lhs` (overflow -> `deopt`); the lowering moves `lhs` into `dst` first
     /// when they differ. `Add`/`Sub` only.
@@ -1800,7 +1778,7 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
-    /// `gp-local-alloc`: register-form fixnum comparison `dst = lhs <kind> rhs`
+    /// register-form fixnum comparison `dst = lhs <kind> rhs`
     /// (a bool `Value`), operands already in GP registers and fixnum-guarded.
     /// The lowering compares and stores the boolean to `dst`'s stack home.
     ///
@@ -1811,32 +1789,16 @@ pub(super) enum AsmInst {
         rhs: GP,
     },
     ///
+    /// Register-form fused fixnum compare + conditional branch, operands already
+    /// in GP registers and fixnum-guarded. The lowering compares and branches to
+    /// `branch_dest` per `kind`/`brkind`.
     ///
-    /// §slot-IR: slot-based fixnum comparison (`dst = lhs <kind> rhs` as a bool
-    /// `Value`, all stack slots). The LIR lowering loads each operand slot into a
-    /// scratch reg, fixnum-guards it (`deopt`), compares, and stores the boolean
-    /// result to `dst` (when present). No GP register at the AsmIR layer.
-    ///
-    IntegerCmpSlot {
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        deopt: AsmDeopt,
-    },
-    ///
-    /// §slot-IR: slot-based fused fixnum compare + conditional branch. The LIR
-    /// lowering loads each operand slot into a scratch reg, fixnum-guards it
-    /// (`deopt`), compares, and branches to `branch_dest` per `kind`/`brkind`.
-    /// No GP register at the AsmIR layer.
-    ///
-    IntegerCmpBrSlot {
-        lhs: SlotId,
-        rhs: SlotId,
+    IntegerCmpBrReg {
         kind: CmpKind,
         brkind: BrKind,
         branch_dest: JitLabel,
-        deopt: AsmDeopt,
+        lhs: GP,
+        rhs: GP,
     },
     FloatCmp {
         kind: CmpKind,

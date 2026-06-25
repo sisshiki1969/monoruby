@@ -309,7 +309,7 @@ impl Codegen {
                     });
                 }
             }
-            // `gp-local-alloc`: register-form binop. The op computes in place in
+            // register-form binop. The op computes in place in
             // its `lhs`, so move `lhs` into `dst` first when they differ, then
             // run the shared `IntegerBinOp` on `dst` (overflow -> deopt).
             AsmInst::IntegerBinOpReg {
@@ -333,9 +333,9 @@ impl Codegen {
                     deopt,
                 });
             }
-            // `gp-local-alloc`: register-form comparison. Operands are already in
-            // GP registers and fixnum-guarded, so just compare (result in rax) and
-            // store the boolean to `dst`'s slot.
+            // Register-form comparison. Operands are already in GP registers and
+            // fixnum-guarded, so just compare (result in rax) and store the
+            // boolean to `dst`'s slot.
             AsmInst::IntegerCmpReg {
                 kind,
                 dst,
@@ -350,72 +350,19 @@ impl Codegen {
                     });
                 }
             }
-            // §slot-IR: lower the slot-based fixnum comparison — load each operand
-            // slot into the scratch reg `integer_cmp` expects (Rdi=lhs, Rsi=rhs;
-            // RI loads only lhs, IR only rhs), fixnum-guard it, compare (result in
-            // rax), and store the boolean to `dst`'s slot.
-            AsmInst::IntegerCmpSlot {
-                lhs,
-                rhs,
-                kind,
-                dst,
-                deopt,
-            } => {
-                let deopt = labels[deopt].clone();
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
-                    });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
-                    });
-                };
-                load_guard(self, lhs, GP::Rdi);
-                load_guard(self, rhs, GP::Rsi);
-                self.encode_linst(LInst::IntegerCmp {
-                    kind,
-                    lhs: GP::Rdi,
-                    rhs: GP::Rsi,
-                });
-                if let Some(dst) = dst {
-                    self.encode_linst(LInst::Store {
-                        src: GP::Rax,
-                        mem: LMem::Slot(dst),
-                    });
-                }
-            }
-            // §slot-IR: lower the slot-based compare+branch — load each operand
-            // slot into the scratch reg the compare expects (Rdi=lhs, Rsi=rhs),
-            // fixnum-guard it, then emit the same Cmp/CondBr as `IntegerCmpBr`.
-            AsmInst::IntegerCmpBrSlot {
-                lhs,
-                rhs,
+            // Register-form compare+branch. Operands are already in GP registers
+            // and fixnum-guarded; compare and branch per `kind`/`brkind`.
+            AsmInst::IntegerCmpBrReg {
                 kind,
                 brkind,
                 branch_dest,
-                deopt,
+                lhs,
+                rhs,
             } => {
-                let deopt = labels[deopt].clone();
-                let mut load_guard = |me: &mut Self, slot: SlotId, reg: GP| {
-                    me.encode_linst(LInst::Load {
-                        dst: reg.into(),
-                        mem: LMem::Slot(slot),
-                    });
-                    me.encode_linst(LInst::GuardClass {
-                        reg,
-                        class: INTEGER_CLASS,
-                        deopt: deopt.clone(),
-                    });
-                };
-                load_guard(self, lhs, GP::Rdi);
-                load_guard(self, rhs, GP::Rsi);
                 let target = frame.resolve_label(&mut self.jit, branch_dest);
                 self.encode_linst(LInst::Cmp {
-                    lhs: GP::Rdi.into(),
-                    rhs: GP::Rsi.into(),
+                    lhs: lhs.into(),
+                    rhs: rhs.into(),
                 });
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {

@@ -379,7 +379,7 @@ impl AbstractFrame {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
     }
 
-    /// Flush the per-block local GP register file (`gp-local-alloc`): spill every
+    /// Flush the per-block local GP register file (the local GP allocator): spill every
     /// dirty resident to its stack home and clear the file. Called up front by
     /// every non-`IntegerBinOp` instruction — only that op is GP-aware so far —
     /// and at block boundaries, so the rest of codegen always observes a slot in

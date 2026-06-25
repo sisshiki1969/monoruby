@@ -75,7 +75,6 @@ impl<'a> JitContext<'a> {
                 // Not the integer Add/Sub GP path: these always lower to a
                 // (possibly inlined) method call that reads its operands from
                 // their stack homes, so spill the live GP residents first.
-                #[cfg(feature = "gp-local-alloc")]
                 state.flush_gp(ir);
                 let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
                 match lhs_class {
@@ -114,18 +113,15 @@ impl<'a> JitContext<'a> {
                     // But it reads its operands from their stack homes, so a
                     // GP-resident operand (the integer side of a mixed op) must be
                     // synced to its home first; then drop a stale cache of `dst`.
-                    #[cfg(feature = "gp-local-alloc")]
                     state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
                 BinaryOpType::Other(None, _) => {
-                    #[cfg(feature = "gp-local-alloc")]
                     state.flush_gp(ir);
                     Ok(self.binop_uncached(state, dst))
                 }
                 BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    #[cfg(feature = "gp-local-alloc")]
                     state.flush_gp(ir);
                     self.call_binary_method(
                         state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
@@ -159,7 +155,6 @@ impl<'a> JitContext<'a> {
                 // residents survive, but the op reads its operands from their
                 // stack homes — so sync a GP-resident operand (the integer side
                 // of a mixed compare) first, then drop a stale cache of `dst`.
-                #[cfg(feature = "gp-local-alloc")]
                 state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
                 state.gen_cmp_float(ir, dst, info, kind);
                 Ok(CompileResult::Continue)
@@ -168,7 +163,6 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                #[cfg(feature = "gp-local-alloc")]
                 state.flush_gp(ir);
                 if polymorphic {
                     self.emit_generic_cmp(state, ir, kind, lhs, rhs);
@@ -260,6 +254,10 @@ impl<'a> JitContext<'a> {
                 {
                     return Ok(result);
                 }
+                // Block terminator: spill the GP residents to their homes before
+                // the branch. This also makes a mixed integer operand's home
+                // current for the float compare's stack read.
+                state.flush_gp(ir);
                 let src_idx = bc_pos + 1;
                 let dest = self.label();
                 let mode = state.load_binary_fpr(ir, info);
@@ -268,9 +266,11 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Continue)
             }
             BinaryOpType::Other(None, _) => {
+                state.flush_gp(ir);
                 Ok(CompileResult::Recompile(RecompileReason::NotCached))
             }
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
+                state.flush_gp(ir);
                 if polymorphic {
                     self.emit_generic_cmp(state, ir, kind, lhs, rhs);
                     let src_idx = bc_pos + 1;
@@ -472,7 +472,6 @@ impl AbstractFrame {
             // The fold redefines `dst` as a constant; drop any stale GP cache of
             // it so a later op does not reuse the register's old value. Other
             // residents stay live (the fold emits nothing and reads no slot).
-            #[cfg(feature = "gp-local-alloc")]
             if let Some(dst) = dst {
                 self.gp_regfile.invalidate(dst);
             }
@@ -480,16 +479,14 @@ impl AbstractFrame {
             return;
         };
 
-        // `gp-local-alloc`: keep `Add`/`Sub` operands and result in GP registers
+        // keep `Add`/`Sub` operands and result in GP registers
         // across consecutive binops (the local allocator). `Mul`/`Div` clobber
         // `rhs` / use rax-rdx, so they fall through to the slot path below after
         // flushing the register file.
-        #[cfg(feature = "gp-local-alloc")]
         if let BinOpK::Add | BinOpK::Sub = kind {
             self.binop_integer_gp(ir, kind, dst, lhs, rhs);
             return;
         }
-        #[cfg(feature = "gp-local-alloc")]
         self.flush_gp(ir);
 
         // §slot-IR: keep the AsmIR layer free of physical registers for the
@@ -519,14 +516,13 @@ impl AbstractFrame {
         }
     }
 
-    /// `gp-local-alloc`: the register-allocated `Add`/`Sub` path. Operands are
+    /// the register-allocated `Add`/`Sub` path. Operands are
     /// brought into GP registers (reusing a resident copy, else materialized to
     /// the stack home and loaded + fixnum-guarded), the result is allocated a
     /// register (evicting the oldest resident if full), and the op runs in
     /// registers (overflow -> deopt). The result stays resident — its stack home
     /// is written only when the file is flushed (before a non-binop or at the
     /// block boundary) or re-homed by a deopt write-back.
-    #[cfg(feature = "gp-local-alloc")]
     fn binop_integer_gp(
         &mut self,
         ir: &mut AsmIr,
@@ -582,7 +578,6 @@ impl AbstractFrame {
     /// Bring `slot` into a GP register: reuse its resident copy (returning
     /// `fresh = false`, no reload/guard) or materialize it to its stack home,
     /// load it, and report `fresh = true` so the caller emits the fixnum guard.
-    #[cfg(feature = "gp-local-alloc")]
     fn gp_ensure(&mut self, ir: &mut AsmIr, slot: SlotId, pinned: &[GP]) -> (GP, bool) {
         if let Some(gp) = self.gp_regfile.reg_of(slot) {
             return (gp, false);
@@ -613,13 +608,12 @@ impl AbstractFrame {
         (gp, true)
     }
 
-    /// `gp-local-alloc`: prepare the GP register file for a float op that keeps
+    /// prepare the GP register file for a float op that keeps
     /// the residents alive (it computes in xmm without clobbering them). The op
     /// reads its operands from their stack homes, so a GP-resident operand — the
     /// integer side of a mixed `Integer <op> Float` — is written back to its home
     /// and marked clean (it stays cached for a following integer op). Finally any
     /// stale GP cache of the result slot is dropped.
-    #[cfg(feature = "gp-local-alloc")]
     fn gp_sync_float_operands(
         &mut self,
         ir: &mut AsmIr,
@@ -699,47 +693,20 @@ impl AbstractFrame {
     ) {
         if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
             // The fold redefines `dst`; drop any stale GP cache of it.
-            #[cfg(feature = "gp-local-alloc")]
             if let Some(dst) = dst {
                 self.gp_regfile.invalidate(dst);
             }
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
-        #[cfg(feature = "gp-local-alloc")]
-        {
-            self.gen_cmp_integer_gp(ir, kind, dst, lhs, rhs);
-            return;
-        }
-        // §slot-IR: keep the AsmIR layer free of physical registers for the
-        // fixnum comparison. Write the operand slots back to the stack and emit
-        // a slot-based cmp; the LIR lowering loads them into scratch regs,
-        // fixnum-guards, compares, and stores the boolean result to `dst`.
-        #[cfg(not(feature = "gp-local-alloc"))]
-        {
-            self.write_back_slots(ir, &[lhs, rhs]);
-            let deopt = self.deopt_point();
-            ir.transfer(TransferIR::IntegerCmpSlot {
-                lhs,
-                rhs,
-                kind,
-                dst,
-                deopt,
-            });
-            if let Some(dst) = dst {
-                // The result is a boolean `Value` on the stack (the lowering
-                // stored it). `def_S` defines it as `Guarded::Value`; match that.
-                self.def_S(dst);
-            }
-        }
+        self.gen_cmp_integer_gp(ir, kind, dst, lhs, rhs);
     }
 
-    /// `gp-local-alloc`: the register-allocated fixnum comparison. Operands are
+    /// the register-allocated fixnum comparison. Operands are
     /// brought into GP registers (reusing residents from a prior binop), guarded,
     /// and compared in registers; the boolean result is stored to `dst`'s stack
     /// home (a bool is never a GP resident, so the file shrinks by the operands
     /// the stack pointer has popped and gains nothing).
-    #[cfg(feature = "gp-local-alloc")]
     fn gen_cmp_integer_gp(
         &mut self,
         ir: &mut AsmIr,
@@ -794,6 +761,13 @@ impl AbstractFrame {
         self.def_rax2acc(ir, dst);
     }
 
+    /// The register-allocated fixnum compare + branch. Like `gen_cmp_integer_gp`,
+    /// the operands are brought into GP registers (reusing residents from a prior
+    /// binop) and fixnum-guarded. Because this terminates the basic block, the
+    /// register file is then **flushed** — every dirty resident spilled to its
+    /// stack home — *before* the conditional branch, so both successor blocks
+    /// (taken and fall-through) observe slots in their canonical homes and start
+    /// with an empty file. The operands stay in their registers for the compare.
     pub(super) fn gen_cmpbr_integer(
         &mut self,
         ir: &mut AsmIr,
@@ -803,19 +777,22 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        // §slot-IR: write the operand slots back to the stack and emit a
-        // slot-based compare+branch; the LIR lowering loads them into scratch
-        // regs, fixnum-guards, compares, and branches.
-        self.write_back_slots(ir, &[lhs, rhs]);
-        let deopt = self.deopt_point();
-        ir.transfer(TransferIR::IntegerCmpBrSlot {
-            lhs,
-            rhs,
-            kind,
-            brkind,
-            branch_dest,
-            deopt,
-        });
+        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // Snapshot the deopt write-back before the flush/branch (the guards
+        // side-exit to a point where the interpreter re-reads the operands).
+        let deopt = ir.new_deopt(self);
+        if lhs_fresh {
+            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+        }
+        if rhs_fresh {
+            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+        }
+        // Block terminator: spill the dirty residents to their stack homes before
+        // the branch (the operands' registers still hold their values for the
+        // compare), leaving the file empty for both successors.
+        self.flush_gp(ir);
+        ir.integer_cmpbr_reg(kind, brkind, branch_dest, lhs_gp, rhs_gp);
     }
 
     pub(super) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {

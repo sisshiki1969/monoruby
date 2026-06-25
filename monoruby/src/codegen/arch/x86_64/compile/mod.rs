@@ -85,8 +85,7 @@ impl Codegen {
             | AsmInst::IntegerBinOpSlot { .. }
             | AsmInst::IntegerBinOpReg { .. }
             | AsmInst::IntegerCmpReg { .. }
-            | AsmInst::IntegerCmpSlot { .. }
-            | AsmInst::IntegerCmpBrSlot { .. }
+            | AsmInst::IntegerCmpBrReg { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
