@@ -105,10 +105,10 @@ impl<'a> JitContext<'a> {
                     // stays in an FPReg; boxing is deferred to a later write-back,
                     // which flushes GP itself), and its deopt write-back already
                     // re-homes the GP residents. So the residents survive a flush.
-                    // But it reads its operands from their stack homes, so a
-                    // GP-resident operand (the integer side of a mixed op) must be
-                    // synced to its home first; then drop a stale cache of `dst`.
-                    state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
+                    // A GP-resident operand (the integer side of a mixed op) is
+                    // read straight from its register by the fpr load (see
+                    // `load_fpr_fixnum`); `dst`'s stale resident is dropped by the
+                    // result `def`.
                     state.binop_float(ir, kind, dst, info);
                     Ok(CompileResult::Continue)
                 }
@@ -147,10 +147,10 @@ impl<'a> JitContext<'a> {
                 // The float comparison computes in xmm and stores a bool: it
                 // never touches the GP allocatable registers and never allocates,
                 // and its deopt write-back re-homes the GP residents. The
-                // residents survive, but the op reads its operands from their
-                // stack homes — so sync a GP-resident operand (the integer side
-                // of a mixed compare) first, then drop a stale cache of `dst`.
-                state.gp_sync_float_operands(ir, info.lhs, info.rhs, dst);
+                // residents survive; a GP-resident operand (the integer side of a
+                // mixed compare) is read straight from its register by the fpr
+                // load (see `load_fpr_fixnum`), and `dst`'s stale resident is
+                // dropped by the result `def`.
                 state.gen_cmp_float(ir, dst, info, kind);
                 Ok(CompileResult::Continue)
             }
@@ -613,23 +613,6 @@ impl AbstractFrame {
     /// integer side of a mixed `Integer <op> Float` — is written back to its home
     /// and marked clean (it stays cached for a following integer op). Finally any
     /// stale GP cache of the result slot is dropped.
-    fn gp_sync_float_operands(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: SlotId,
-        rhs: SlotId,
-        dst: Option<SlotId>,
-    ) {
-        for slot in [lhs, rhs] {
-            if let Some(reg) = self.gp_regfile.sync(slot) {
-                ir.reg2stack(reg, slot);
-            }
-        }
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-    }
-
     fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {
         Some(match kind {
             BinOpK::Add => lhs + rhs,

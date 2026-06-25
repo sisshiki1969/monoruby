@@ -48,8 +48,10 @@ impl DeoptPoint {
 pub(in crate::codegen::jitgen) enum FprLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `stack2reg(slot, Rdi); float_to_fpr(Rdi, x, deopt)`
-    FromStack(FPReg),
+    /// `<load Rdi>; float_to_fpr(Rdi, x, deopt)`. `Rdi` is loaded from the slot's
+    /// live GP resident (`reg_move`) when one is present, else from its stack
+    /// home (`stack2reg`).
+    FromStack(FPReg, Option<GP>),
     /// `f64_to_fpr(f, x)` (guard-free)
     FromF64(f64, FPReg),
     /// `i64_to_stack_and_fpr(i, slot, x)` (guard-free)
@@ -65,9 +67,12 @@ impl FprLoad {
     fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             FprLoad::None => {}
-            FprLoad::FromStack(x) => {
+            FprLoad::FromStack(x, gp) => {
                 let deopt = ir.deopt_from_point(deopt.unwrap());
-                ir.stack2reg(slot, GP::Rdi);
+                match gp {
+                    Some(reg) => ir.reg_move(reg, GP::Rdi),
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
                 ir.float_to_fpr(GP::Rdi, x, deopt);
             }
             FprLoad::FromF64(f, x) => ir.f64_to_fpr(f, x),
@@ -130,8 +135,11 @@ impl GpLoad {
 pub(in crate::codegen::jitgen) enum FprFixnumLoad {
     /// already in an fpr (`Sf` / `F`) — nothing to emit
     None,
-    /// `stack2reg(slot, Rdi); [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`
-    FromStack(FPReg, bool),
+    /// `<load Rdi>; [GuardClass(Rdi)]; fixnum2fpr(Rdi, x)`. `Rdi` is loaded from
+    /// the slot's live GP resident (`reg_move`) when one is present — the integer
+    /// side of a mixed `Integer op Float` is typically still in a register from a
+    /// prior integer op — else from its stack home (`stack2reg`).
+    FromStack(FPReg, bool, Option<GP>),
     /// guard-free numeric literal (`LinkMode::C`) — reuses the [`FprLoad`] record
     Numeric(FprLoad),
 }
@@ -145,9 +153,12 @@ impl FprFixnumLoad {
     fn emit(self, ir: &mut AsmIr, slot: SlotId, deopt: Option<&DeoptPoint>) {
         match self {
             FprFixnumLoad::None => {}
-            FprFixnumLoad::FromStack(x, guard) => {
+            FprFixnumLoad::FromStack(x, guard, gp) => {
                 let deopt = deopt.map(|p| ir.deopt_from_point(p));
-                ir.stack2reg(slot, GP::Rdi);
+                match gp {
+                    Some(reg) => ir.reg_move(reg, GP::Rdi),
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
                 if guard {
                     ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
                 }
@@ -353,9 +364,14 @@ impl AbstractFrame {
                 // S -> Sf. Refine the type first (its guard verdict) then take
                 // the placement; `set_new_Sf` overwrites the refined `S` guarded
                 // with `Sf(Fixnum)`, exactly as `guard_fixnum` + `set_new_Sf` did.
+                // Capture any live GP resident *before* `set_new_Sf` clears it, so
+                // the emit reads the value from the register instead of its
+                // possibly-stale stack home (the conversion copies to Rdi first, so
+                // the resident register survives intact).
+                let gp = self.gp_regfile.reg_of(slot);
                 let guard = self.guard_class_state(slot, INTEGER_CLASS);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                (x, FprFixnumLoad::FromStack(x, guard))
+                (x, FprFixnumLoad::FromStack(x, guard, gp))
             }
             LinkMode::C(v) => {
                 let (x, load) = self.load_fpr_from_C_state(slot, v);
@@ -409,9 +425,12 @@ impl AbstractFrame {
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => (x, FprLoad::None),
             LinkMode::S(_) => {
-                // -> Sf
+                // -> Sf. Capture any live GP resident before `set_new_Sf` clears
+                // it so the emit reads from the register rather than the stack
+                // home (see `load_fpr_fixnum_state`).
+                let gp = self.gp_regfile.reg_of(slot);
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
-                (x, FprLoad::FromStack(x))
+                (x, FprLoad::FromStack(x, gp))
             }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
             LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
