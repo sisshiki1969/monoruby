@@ -1925,13 +1925,13 @@ pub(super) enum AsmInst {
         call_site_bc_ptr: BytecodePtr,
     },
 
-    /// Load instance var *ivarid* of the object *rdi* into register *rax*.
+    /// Load instance var *ivarid* of the object *rdi* into register *dst*.
     ///
     /// #### in
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - r15: Value
+    /// - dst: Value
     ///
     /// #### destroy
     /// - rdi, rsi
@@ -1940,6 +1940,7 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     },
     ///
     /// Load ivar embedded to RValue. (only for object type)
@@ -1948,13 +1949,14 @@ pub(super) enum AsmInst {
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - r15: Value
+    /// - dst: Value
     ///
     /// #### destroy
     /// - rdi
     ///
     LoadIVarInline {
         ivarid: IvarId,
+        dst: GP,
     },
     ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.

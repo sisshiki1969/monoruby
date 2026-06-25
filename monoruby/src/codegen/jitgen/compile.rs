@@ -178,14 +178,29 @@ impl<'a> JitContext<'a> {
         // `binary_op` / `binary_cmp` / `binary_cmp_br`, and the integer compare +
         // branch flushes before its branch since it ends the block.) A no-op when
         // the register file is empty.
-        // `FrozenLiteral` is also exempt: it materializes a literal into `dst`
-        // (register-only, no clobbering call) and is GP-resident-aware.
+        //
+        // The following are also exempt because they neither call a GP-clobbering
+        // C-ABI helper nor read a slot through its stale stack home (every slot
+        // read goes through the GP-resident-aware `load`):
+        // - `FrozenLiteral` materializes a literal into `dst` (register-only).
+        // - `LoadConst` folds to a constant / `Sf` (register-only) and `StoreConst`
+        //   flushes at its own `get_using_fpr` chokepoint.
+        // - `LoadIvar` loads the ivar straight into a pool register (a resident);
+        //   `StoreIvar` stores from a register and its write barrier preserves the
+        //   caller-saved set.
+        // - `Ret` loads the return value into rax (`reg_move` straight from a
+        //   resident when live) and returns, abandoning the dead residents.
         if !matches!(
             trace_ir,
             TraceIr::BinOp { .. }
                 | TraceIr::BinCmp { .. }
                 | TraceIr::BinCmpBr { .. }
                 | TraceIr::FrozenLiteral(..)
+                | TraceIr::LoadConst(..)
+                | TraceIr::StoreConst(..)
+                | TraceIr::LoadIvar(..)
+                | TraceIr::StoreIvar(..)
+                | TraceIr::Ret(..)
         ) {
             state.flush_gp(ir);
         }

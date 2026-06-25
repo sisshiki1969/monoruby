@@ -1130,11 +1130,6 @@ impl SlotState {
         None
     }
 
-    /// Write the accumulator back before a call / safepoint. **Now a no-op**:
-    /// with the R15 accumulator retired and the GP pool abolished there is no
-    /// register-resident accumulator to spill. Retained as a boundary marker.
-    pub(crate) fn writeback_acc(&mut self, _ir: &mut AsmIr) {}
-
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
         self.fpr(fpr).is_empty()
     }
@@ -1290,8 +1285,7 @@ impl AbstractFrame {
     /// kept resident there must not survive a C call. Every runtime helper that
     /// can clobber them is preceded by a `get_using_fpr` snapshot (here, or
     /// inside the `ir.<helper>(state, …)` builders), so flushing the GP pool at
-    /// this single chokepoint covers them all. Method calls already flush via
-    /// `writeback_acc`, so the flush here is a redundant no-op for them. Use
+    /// this single chokepoint covers them all. Use
     /// [`Self::using_fpr_offset`] where only the stack-offset is needed and no
     /// call (hence no flush) happens.
     pub(crate) fn get_using_fpr(&mut self, ir: &mut AsmIr) -> UsingFpr {

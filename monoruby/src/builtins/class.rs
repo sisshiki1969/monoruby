@@ -53,7 +53,6 @@ pub(super) fn gen_class_allocate_inline(
         None => return false,
     };
     let CallSiteInfo { dst, .. } = *callsite;
-    state.writeback_acc(ir);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
@@ -406,7 +405,6 @@ pub(super) fn gen_class_new_inline(
     } else {
         Some(callid)
     };
-    state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
     let using_fpr = state.get_using_fpr(ir);
@@ -580,7 +578,6 @@ pub(super) fn gen_class_new_inline(
     if args_off > 4095 {
         return false;
     }
-    state.writeback_acc(ir);
     state.load(ir, recv, GP::Rdi);
     state.write_back_recv_and_callargs(ir, callsite);
     let using_fpr = state.get_using_fpr(ir);

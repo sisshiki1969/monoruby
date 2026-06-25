@@ -526,18 +526,18 @@ impl Codegen {
             // Inline instance-variable / struct-member access on the receiver in
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
-            // Inline ivar load: `r15 <- self.@ivar` at a fixed field offset on
+            // Inline ivar load: `dst <- self.@ivar` at a fixed field offset on
             // the receiver (rdi); an unset slot reads as 0 and becomes nil.
-            AsmInst::LoadIVarInline { ivarid } => {
+            AsmInst::LoadIVarInline { ivarid, dst } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15.into(),
+                    dst: dst.into(),
                     mem: LMem::Field {
                         base: GP::Rdi.into(),
                         disp,
                     },
                 });
-                self.encode_linst(LInst::NilIfZero { reg: GP::R15 });
+                self.encode_linst(LInst::NilIfZero { reg: dst });
             }
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
@@ -743,10 +743,12 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => self.encode_linst(LInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             }),
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an fpr pool register is live (no fpr save yet).
@@ -1178,8 +1180,9 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => {
-                self.emit_load_ivar_heap(ivarid, is_object_ty, self_);
+                self.emit_load_ivar_heap(ivarid, is_object_ty, self_, dst);
             }
             LInst::StoreIVarHeap {
                 src,

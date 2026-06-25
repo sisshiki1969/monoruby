@@ -1550,15 +1550,16 @@ impl Codegen {
         true
     }
 
-    /// Load a heap-spilled instance variable into the accumulator, substituting
+    /// Load a heap-spilled instance variable into `dst`, substituting
     /// nil for an out-of-range (non-self) or unset slot.
     pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
         &mut self,
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     ) -> bool {
-        self.load_ivar_heap(ivarid, is_object_ty, self_);
+        self.load_ivar_heap(ivarid, is_object_ty, self_, dst);
         true
     }
 

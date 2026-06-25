@@ -3143,6 +3143,7 @@ impl Codegen {
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     ) -> bool {
         let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
@@ -3152,7 +3153,7 @@ impl Codegen {
         };
         let off = idx * 8;
         let rdi = GP::Rdi.a64().0;
-        let r15 = GP::R15.a64().0;
+        let dst = dst.a64().0;
         let nil = self.jit.label();
         let exit = self.jit.label();
         monoasm_arm64!(&mut self.jit,
@@ -3169,11 +3170,11 @@ impl Codegen {
             self.jit.bcond_label(monoasm::Cond::Le, &nil);   // len <= idx -> nil
         }
         monoasm_arm64!(&mut self.jit, ldr x9, [x9, #(MONOVEC_PTR as u32)];); // data ptr
-        self.a64_field_load(r15, 9, off);                    // value
+        self.a64_field_load(dst, 9, off);                    // value
         monoasm_arm64!(&mut self.jit,
-            cbnz x(r15), exit;                               // set -> exit
+            cbnz x(dst), exit;                               // set -> exit
         nil:
-            mov x(r15), (NIL_VALUE);
+            mov x(dst), (NIL_VALUE);
         exit:
         );
         true

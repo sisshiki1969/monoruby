@@ -269,16 +269,38 @@ impl AbstractFrame {
     /// leaves no register resident.
     pub(crate) fn def_rax2gp(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
-            // Clear any stale resident / link of `dst` first (mirrors the binop
-            // result path), then bind the freshly allocated register.
-            self.def_S_guarded(dst, slot::Guarded::Value);
-            let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
-            if let Some((reg, slot)) = spill {
-                ir.reg2stack(reg, slot);
-            }
+            let gp = self.alloc_gp_for(ir, dst, slot::Guarded::Value);
             ir.reg_move(GP::Rax, gp);
-            self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
+            self.bind_gp_resident(gp, dst);
         }
+    }
+
+    /// Allocate a pool GP register to receive a freshly-produced general `Value`
+    /// for `dst`: clear `dst`'s stale link (refining it to `guarded`), evict and
+    /// spill a victim resident if the pool is full, and return the (still
+    /// **unbound**) register. The caller emits the value-producing instruction
+    /// into it and then calls [`Self::bind_gp_resident`] — binding only after the
+    /// value is in the register keeps a victim spill from clobbering it and
+    /// matches the binop-result ordering.
+    pub(in crate::codegen::jitgen) fn alloc_gp_for(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        guarded: slot::Guarded,
+    ) -> GP {
+        self.def_S_guarded(dst, guarded);
+        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        gp
+    }
+
+    /// Bind `gp` as the live (dirty, general-`Value`) resident of `dst` after the
+    /// value has been produced in it. Marked `fixnum = false`, so the first
+    /// integer op to consume it re-guards (`gp_ensure` → `take_needs_fixnum_guard`).
+    pub(in crate::codegen::jitgen) fn bind_gp_resident(&mut self, gp: GP, dst: SlotId) {
+        self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
     }
 
     /// Define `dst` from a concrete (non-immediate) literal by loading it
@@ -291,13 +313,9 @@ impl AbstractFrame {
     /// next `flush_gp` — exactly as the old `def_reg2acc_concrete_value` path
     /// left the pointer physically in the stack slot.
     pub(crate) fn def_lit2gp(&mut self, ir: &mut AsmIr, dst: SlotId, v: Value) {
-        self.def_S_guarded(dst, Guarded::from_concrete_value(v));
-        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
-        if let Some((reg, slot)) = spill {
-            ir.reg2stack(reg, slot);
-        }
+        let gp = self.alloc_gp_for(ir, dst, Guarded::from_concrete_value(v));
         ir.lit2reg(v, gp);
-        self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
+        self.bind_gp_resident(gp, dst);
     }
 
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {

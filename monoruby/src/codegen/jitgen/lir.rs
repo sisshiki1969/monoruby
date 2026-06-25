@@ -624,6 +624,7 @@ pub(in crate::codegen) enum LInst {
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     },
     /// Store into a heap-spilled instance variable of another object
     /// (bounds-checked; grows the var-table on miss via a runtime call).

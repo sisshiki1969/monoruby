@@ -415,7 +415,6 @@ impl<'a> JitContext<'a> {
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
-        state.writeback_acc(ir);
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
@@ -449,7 +448,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if recv_class.is_always_frozen() {
             if dst.is_some() {
                 ir.lit2reg(Value::nil(), GP::Rax);
@@ -462,12 +460,16 @@ impl<'a> JitContext<'a> {
             };
             let is_object_ty = self.store[recv_class].is_object_ty_instance();
             if is_object_ty && ivarid.is_inline() {
-                ir.push(AsmInst::LoadIVarInline { ivarid })
+                ir.push(AsmInst::LoadIVarInline {
+                    ivarid,
+                    dst: GP::R15,
+                })
             } else {
                 ir.push(AsmInst::LoadIVarHeap {
                     ivarid,
                     is_object_ty,
                     self_: false,
+                    dst: GP::R15,
                 });
             }
         }
@@ -549,7 +551,6 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        state.writeback_acc(ir);
         if inline {
             ir.push(AsmInst::LoadStructSlotInline { slot_index });
         } else {
@@ -827,13 +828,13 @@ impl AbstractState {
         // Flush the GP pool up front (folded into `get_using_fpr`), before
         // `set_arguments`. An earlier optimization deferred this for simple,
         // block-less calls — reading args straight from the pool registers and
-        // letting the later `writeback_acc` do the flush — to skip spilling the
-        // dead `dst`/temp args. That deferral proved unsound under register
-        // pressure: keeping locals pool-resident through `set_arguments` /
-        // `discard` / `clear_above_next_sp` diverged from the up-front-flush
-        // semantics (optcarrot `--opt` mis-emulated a few frames in on aarch64
-        // `gp-alloc`, e.g. a wrong PPU value broke the vblank-wait loop), so we
-        // always flush before the call now.
+        // letting a later flush handle it — to skip spilling the dead `dst`/temp
+        // args. That deferral proved unsound under register pressure: keeping
+        // locals pool-resident through `set_arguments` / `discard` /
+        // `clear_above_next_sp` diverged from the up-front-flush semantics
+        // (optcarrot `--opt` mis-emulated a few frames in on aarch64 `gp-alloc`,
+        // e.g. a wrong PPU value broke the vblank-wait loop), so we always flush
+        // before the call now.
         let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
@@ -842,7 +843,6 @@ impl AbstractState {
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -903,7 +903,6 @@ impl AbstractState {
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
-        self.writeback_acc(ir);
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -924,7 +923,6 @@ impl AbstractState {
         let callinfo = &store[callid];
         let dst = callinfo.dst;
         self.write_back_recv_and_callargs(ir, &callinfo);
-        self.writeback_acc(ir);
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         let evict = ir.new_evict();
