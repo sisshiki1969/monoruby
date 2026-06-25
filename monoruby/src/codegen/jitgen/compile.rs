@@ -185,11 +185,17 @@ impl<'a> JitContext<'a> {
         // - `FrozenLiteral` materializes a literal into `dst` (register-only).
         // - `LoadConst` folds to a constant / `Sf` (register-only) and `StoreConst`
         //   flushes at its own `get_using_fpr` chokepoint.
-        // - `LoadIvar` loads the ivar straight into a pool register (a resident);
-        //   `StoreIvar` stores from a register and its write barrier preserves the
+        // - `StoreIvar` stores from a register and its write barrier preserves the
         //   caller-saved set.
         // - `Ret` loads the return value into rax (`reg_move` straight from a
         //   resident when live) and returns, abandoning the dead residents.
+        //
+        // `LoadIvar` is deliberately **not** exempt: it loads the ivar into a pool
+        // register, but a prior resident left live *across* that load sequence gets
+        // corrupted under register pressure (a `core/math` ruby/spec regression).
+        // Flushing before it still keeps the `@ivar op x` register fast-path: the
+        // value loads straight into a pool register and the *consuming* op (a
+        // `BinOp`) is exempt, so the ivar resident survives into it.
         if !matches!(
             trace_ir,
             TraceIr::BinOp { .. }
@@ -198,7 +204,6 @@ impl<'a> JitContext<'a> {
                 | TraceIr::FrozenLiteral(..)
                 | TraceIr::LoadConst(..)
                 | TraceIr::StoreConst(..)
-                | TraceIr::LoadIvar(..)
                 | TraceIr::StoreIvar(..)
                 | TraceIr::Ret(..)
         ) {
