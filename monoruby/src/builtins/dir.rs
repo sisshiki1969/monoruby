@@ -582,6 +582,8 @@ fn process_glob_pattern(
                 // also matches `c.rb`. Mirror that on macOS so the
                 // monoruby/CRuby differential tests agree (e.g. the
                 // `Dir.glob("./././C*")` arm of the `glob` test).
+                // `mut` is used only on macos (`case_insensitive` below).
+                #[allow(unused_mut)]
                 let mut b = globset::GlobBuilder::new(&normalized);
                 #[cfg(target_os = "macos")]
                 b.case_insensitive(true);

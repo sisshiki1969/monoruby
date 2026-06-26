@@ -49,6 +49,12 @@
 // Some `LInst` variants / helpers are only used by not-yet-migrated families
 // (the `AsmInst::Inline` builtin generators); keep them ahead of their consumers.
 #![allow(dead_code)]
+// `LInst` is `pub(in crate::codegen)` (named by `Codegen::lir_buf`), but its
+// payload types (`VReg`/`LMem`/… and the wrapped `AsmInst`/`InlineProcedure`)
+// are intentionally `jitgen`-internal during the LIR migration. Widening
+// `AsmInst` to match would cascade into its own fields, so allow the mismatch
+// here until the LIR surface stabilizes.
+#![allow(private_interfaces)]
 
 use super::*;
 use crate::ast::CmpKind;

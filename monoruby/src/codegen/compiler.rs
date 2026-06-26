@@ -507,6 +507,7 @@ pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
     }
 }
 
+#[allow(dead_code)] // referenced by the aarch64 patch path; dead on x86.
 pub(in crate::codegen) extern "C" fn jit_compile_patch(
     globals: &mut Globals,
     lfp: Lfp,

@@ -917,7 +917,7 @@ impl SlotState {
         }
         self.gp_regfile.invalidate(slot);
         let s = self.write_back_slot_state(slot);
-        ir.transfer(TransferIR::Spill(s));
+        ir.spill(s);
     }
 
     ///
@@ -953,7 +953,7 @@ impl SlotState {
             ir.reg2stack(reg, slot);
         }
         let s = self.to_S_unguarded_state(slot);
-        ir.transfer(TransferIR::Spill(s));
+        ir.spill(s);
     }
 }
 
@@ -1528,6 +1528,23 @@ impl FpXfer {
     }
 }
 
+impl AsmIr {
+    /// Emit a spill record (a transfer/eviction primitive's analysis-half
+    /// decision). A no-op in analysis mode — see [`AsmIr::codegen_mode`].
+    pub(in crate::codegen::jitgen) fn spill(&mut self, s: Spill) {
+        if self.codegen_mode() {
+            s.emit(self);
+        }
+    }
+
+    /// Emit an FP-register transfer record. A no-op in analysis mode.
+    pub(in crate::codegen::jitgen) fn fp_xfer(&mut self, f: FpXfer) {
+        if self.codegen_mode() {
+            f.emit(self);
+        }
+    }
+}
+
 ///
 /// Mode of linkage between stack slot and fpr registers.
 ///
@@ -1964,7 +1981,7 @@ impl AbstractFrame {
 
     fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
         let f = self.to_sf_state(slot, l, r, guarded);
-        ir.transfer(TransferIR::FpXfer(f));
+        ir.fp_xfer(f);
     }
 
     ///

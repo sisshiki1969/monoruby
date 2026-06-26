@@ -16,7 +16,7 @@ use crate::{
 pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
-use state::{DeoptPoint, LinkMode, ReturnState, TransferIR};
+use state::{DeoptPoint, LinkMode, ReturnState};
 
 use super::*;
 use asmir::*;

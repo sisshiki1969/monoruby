@@ -655,11 +655,7 @@ impl AbstractFrame {
             FloatBinOpPlan::FprOp => {
                 let (lhs, rhs, dst) = self.load_binary_ret_fpr(ir, dst, info);
                 if let Some(dst) = dst {
-                    // §19 (B): route the arithmetic through the record stream
-                    // (collect + inline-emit + shadow-check) instead of a direct
-                    // `fpr_binop`, so the operation joins the ordered codegen
-                    // record alongside its operand loads.
-                    ir.transfer(TransferIR::FloatBinOp { kind, lhs, rhs, dst });
+                    ir.fpr_binop(kind, lhs, rhs, dst);
                 }
             }
         }
@@ -734,8 +730,7 @@ impl AbstractFrame {
             return;
         };
         let binary_fpr = self.load_binary_fpr(ir, info);
-        // §19 (B): route the comparison through the record stream.
-        ir.transfer(TransferIR::FloatCmp {
+        ir.push(AsmInst::FloatCmp {
             kind,
             lhs: binary_fpr.0,
             rhs: binary_fpr.1,

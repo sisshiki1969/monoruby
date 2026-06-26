@@ -657,7 +657,7 @@ pub struct Codegen {
     /// (`gen_asm`) collects the whole body into one ordered stream and drains it
     /// (the seam the future GP physical-allocation pass slots into). `None`
     /// during the drain and everywhere else — emission is immediate.
-    pub(crate) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
+    pub(in crate::codegen) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
     #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
     pub(crate) jit_compile_time: std::time::Duration,
 }

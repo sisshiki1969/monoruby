@@ -1,5 +1,4 @@
 use super::*;
-use crate::bytecodegen::BinOpK;
 
 ///
 /// The **deopt program point** a guarded transfer record carries (doc §9): the
@@ -10,8 +9,9 @@ use crate::bytecodegen::BinOpK;
 /// index into the codegen pass's `side_exit` table). The analysis half records
 /// the point (pure values it already tracks); the emit/codegen half materializes
 /// the actual side-exit from it via [`AsmIr::deopt_from_point`]. With this the
-/// `TransferIR` stream no longer embeds any codegen-pass state — the prerequisite
-/// for replaying it from a standalone lowering pass.
+/// guarded transfer records ([`AsmIr::fpr_load`] / [`AsmIr::fpr_fixnum_load`])
+/// embed no codegen-pass state — the prerequisite for replaying them from a
+/// standalone lowering pass.
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::codegen::jitgen) struct DeoptPoint {
@@ -188,76 +188,40 @@ impl FprFixnumLoad {
     }
 }
 
-///
-/// The unified **typed-IR stream element** (item ②, step 2 — record collection).
-/// Every transfer/eviction primitive's analysis half produces one of these; the
-/// codegen pass funnels them through [`AsmIr::transfer`], which both *collects*
-/// the record (building the typed-IR stream that record-driven lowering will
-/// replay) and emits it via [`TransferIR::emit`].
-///
-/// The guarded variants (`FprLoad` / `FprFixnumLoad`) carry the deopt as a
-/// [`DeoptPoint`] program point, **not** a frozen `AsmDeopt` index — so the
-/// stream is now fully codegen-independent (the emit half materializes the
-/// side-exit). `TransferIR` is therefore `Clone` but not `Copy` (a `DeoptPoint`
-/// owns a `WriteBack`).
-///
-#[derive(Debug, Clone, PartialEq)]
-pub(in crate::codegen::jitgen) enum TransferIR {
-    Spill(Spill),
-    FpXfer(FpXfer),
-    GpLoad(GpLoad),
-    /// `load_fpr`: deopt-carrying unbox-to-float (always guarded).
-    FprLoad {
+impl AsmIr {
+    /// Emit a GP-register load record (a transfer/eviction primitive's
+    /// analysis-half decision). A no-op in analysis mode — see
+    /// [`AsmIr::codegen_mode`].
+    pub(in crate::codegen::jitgen) fn gp_load(&mut self, g: GpLoad) {
+        if self.codegen_mode() {
+            g.emit(self);
+        }
+    }
+
+    /// Emit a deopt-carrying unbox-to-float load record (`load_fpr`, always
+    /// guarded). A no-op in analysis mode — skipping it also avoids the dead
+    /// `side_exit` growth `deopt_from_point` would cause there.
+    pub(in crate::codegen::jitgen) fn fpr_load(
+        &mut self,
         load: FprLoad,
         slot: SlotId,
         deopt: DeoptPoint,
-    },
-    /// `load_fpr_fixnum`: unbox Integer to float; `deopt` present only for the
-    /// guarded `S`/`G` arms.
-    FprFixnumLoad {
+    ) {
+        if self.codegen_mode() {
+            load.emit(self, slot, Some(&deopt));
+        }
+    }
+
+    /// Emit a fixnum unbox-to-float load record (`load_fpr_fixnum`); `deopt` is
+    /// present only for the guarded `S`/`G` arms. A no-op in analysis mode.
+    pub(in crate::codegen::jitgen) fn fpr_fixnum_load(
+        &mut self,
         load: FprFixnumLoad,
         slot: SlotId,
         deopt: Option<DeoptPoint>,
-    },
-    /// §19 (B): a float binary **operation** — `lhs op rhs -> dst`, all operands
-    /// already placed in fpr. The first *operation* (vs value-movement) routed
-    /// through the record stream, so the stream is no longer transfers-only — the
-    /// step toward a single ordered, replayable codegen record (doc §18.3/§19).
-    /// Pure data (no closure, no abstract-state read), so it is `Clone` and
-    /// shadow-checkable like the transfer records.
-    FloatBinOp {
-        kind: BinOpK,
-        lhs: FPReg,
-        rhs: FPReg,
-        dst: FPReg,
-    },
-    /// §19 (B): a float **comparison** — `lhs <cmp> rhs`, result left in `rax`
-    /// (the following `def_rax2acc` is a separate transfer). Pure data, like
-    /// `FloatBinOp`.
-    FloatCmp {
-        kind: CmpKind,
-        lhs: FPReg,
-        rhs: FPReg,
-    },
-}
-
-impl TransferIR {
-    pub(in crate::codegen::jitgen) fn emit(self, ir: &mut AsmIr) {
-        match self {
-            TransferIR::Spill(s) => s.emit(ir),
-            TransferIR::FpXfer(f) => f.emit(ir),
-            TransferIR::GpLoad(g) => g.emit(ir),
-            TransferIR::FprLoad { load, slot, deopt } => load.emit(ir, slot, Some(&deopt)),
-            TransferIR::FprFixnumLoad { load, slot, deopt } => load.emit(ir, slot, deopt.as_ref()),
-            TransferIR::FloatBinOp {
-                kind,
-                lhs,
-                rhs,
-                dst,
-            } => ir.fpr_binop(kind, lhs, rhs, dst),
-            TransferIR::FloatCmp { kind, lhs, rhs } => {
-                ir.push(AsmInst::FloatCmp { kind, lhs, rhs })
-            }
+    ) {
+        if self.codegen_mode() {
+            load.emit(self, slot, deopt.as_ref());
         }
     }
 }
@@ -274,7 +238,7 @@ impl AbstractFrame {
     ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         let g = self.load_state(slot, dst);
-        ir.transfer(TransferIR::GpLoad(g));
+        ir.gp_load(g);
     }
 
     ///
@@ -365,7 +329,7 @@ impl AbstractFrame {
         let deopt =
             matches!(self.mode(slot), LinkMode::S(_)).then(|| self.deopt_point());
         let (x, load) = self.load_fpr_fixnum_state(slot);
-        ir.transfer(TransferIR::FprFixnumLoad { load, slot, deopt });
+        ir.fpr_fixnum_load(load, slot, deopt);
         x
     }
 
@@ -417,7 +381,7 @@ impl AbstractFrame {
         // the side-exit from it.
         let deopt = self.deopt_point();
         let (x, load) = self.load_fpr_state(slot);
-        ir.transfer(TransferIR::FprLoad { load, slot, deopt });
+        ir.fpr_load(load, slot, deopt);
         x
     }
 

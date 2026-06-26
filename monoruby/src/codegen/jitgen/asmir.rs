@@ -116,12 +116,6 @@ pub(crate) struct AsmIr {
     /// generic / native callee). Producer skips `create_array` only
     /// when `deferred_rest && !needs_rest_array`.
     needs_rest_array: bool,
-    /// Item ② step 2 (record collection): the typed-IR transfer stream, grown
-    /// in lock-step with `inst` whenever a transfer/eviction primitive funnels
-    /// through [`Self::transfer`] (codegen mode only). Not yet consumed — this
-    /// is the faithful record stream that record-driven lowering will replay.
-    /// Truncated alongside `inst` by `save`/`restore`.
-    transfers: Vec<TransferIR>,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -136,14 +130,6 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
     fn index_mut(&mut self, index: AsmEvict) -> &mut Self::Output {
         &mut self.side_exit[index.0]
     }
-}
-
-/// Element-wise `Debug`-string equality, the `transfer` shadow check's
-/// comparator: neither `AsmInst` nor `SideExit` is `PartialEq` (they carry
-/// non-comparable payloads such as boxed closures), but both are `Debug`.
-#[cfg(debug_assertions)]
-fn dbg_slice_eq<T: std::fmt::Debug>(a: &[T], b: &[T]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| format!("{x:?}") == format!("{y:?}"))
 }
 
 // private interface
@@ -165,79 +151,17 @@ impl AsmIr {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
-            transfers: vec![],
         }
     }
 
-    ///
-    /// Funnel a transfer/eviction primitive's typed-IR record (item ② step 2):
-    /// collect it into the `transfers` stream (codegen mode only, so it stays in
-    /// lock-step with the gated `inst`) and emit it. The emission is identical to
-    /// the prior direct `record.emit(ir, …)`; collection is purely additive.
-    ///
-    /// **Analysis mode** (`codegen_mode == false`, the loop pre-pass) returns
-    /// immediately: the abstract-state mutation already happened in the wrapper's
-    /// `*_state` half, and `emit` only writes to `ir` — which the analysis pass
-    /// discards (`analyse_basic_block` drops its local `AsmIr`). This is doc §9
-    /// step 2's "the analysis pass calls the state halves and **skips
-    /// emission**", and it stops the dead `side_exit` growth a guarded record's
-    /// `deopt_from_point` would otherwise cause (the waste doc §10 flagged). It is
-    /// provably safe: `emit`'s signature (`fn emit(self, ir: &mut AsmIr)`) cannot
-    /// touch frame/abstract state, as the shadow check below independently relies
-    /// on.
-    ///
-    /// In debug builds a **shadow check** replays the record alone into a scratch
-    /// buffer and asserts it reproduces exactly the `AsmInst`s *and* `SideExit`s
-    /// this call appended. That proves `TransferIR::emit` is a pure function of
-    /// the record and the current `side_exit` cursor — its only codegen input,
-    /// since a guarded record materializes its deopt as `AsmDeopt(side_exit.len())`
-    /// (the scratch is pre-padded to the same length so the index matches). This
-    /// is the self-containment record-driven lowering relies on, and a standing
-    /// guard against a future transfer that reads other frame/codegen state.
-    ///
-    pub(super) fn transfer(&mut self, t: TransferIR) {
-        if !self.codegen_mode {
-            return;
-        }
-        self.transfers.push(t.clone());
-        #[cfg(not(debug_assertions))]
-        t.emit(self);
-        #[cfg(debug_assertions)]
-        {
-            let (inst_start, se_start) = (self.inst.len(), self.side_exit.len());
-            t.clone().emit(self);
-            // Replay into a scratch whose deopt cursor (`side_exit.len()`) matches,
-            // so a materialized `AsmDeopt` index is identical.
-            let mut scratch = AsmIr::shadow_scratch();
-            scratch
-                .side_exit
-                .resize_with(se_start, || SideExit::Evict(None));
-            t.clone().emit(&mut scratch);
-            debug_assert!(
-                dbg_slice_eq(&self.inst[inst_start..], &scratch.inst)
-                    && dbg_slice_eq(&self.side_exit[se_start..], &scratch.side_exit[se_start..]),
-                "TransferIR replay mismatch: {t:?}\n  real inst:    {:?}\n  replay inst:  {:?}\n  real exit:    {:?}\n  replay exit:  {:?}",
-                &self.inst[inst_start..],
-                &scratch.inst,
-                &self.side_exit[se_start..],
-                &scratch.side_exit[se_start..],
-            );
-        }
-    }
-
-    /// An empty codegen-mode `AsmIr` for the [`Self::transfer`] shadow check —
-    /// the replay target. Needs no `JitContext`.
-    #[cfg(debug_assertions)]
-    fn shadow_scratch() -> Self {
-        Self {
-            codegen_mode: true,
-            inst: vec![],
-            side_exit: vec![],
-            had_deopt: false,
-            deferred_rest: false,
-            needs_rest_array: false,
-            transfers: vec![],
-        }
+    /// Whether this IR is in codegen mode (vs the analysis pre-pass). The
+    /// transfer/eviction emit wrappers ([`Self::spill`] / [`Self::fp_xfer`] /
+    /// [`Self::gp_load`] / [`Self::fpr_load`] / [`Self::fpr_fixnum_load`]) skip
+    /// emission when this is `false`: the analysis pass discards its `AsmIr`, and
+    /// skipping stops the dead `side_exit` growth a guarded record's
+    /// `deopt_from_point` would otherwise cause (doc §9 step 2 / §10).
+    pub(in crate::codegen::jitgen) fn codegen_mode(&self) -> bool {
+        self.codegen_mode
     }
 
     pub(super) fn had_deopt(&self) -> bool {
@@ -365,10 +289,9 @@ impl AsmIr {
         }
     }
 
-    pub(super) fn save(&mut self) -> (usize, usize, usize, bool, bool, bool, bool) {
+    pub(super) fn save(&mut self) -> (usize, usize, bool, bool, bool, bool) {
         (
             self.inst.len(),
-            self.transfers.len(),
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
@@ -379,8 +302,7 @@ impl AsmIr {
 
     pub(super) fn restore(
         &mut self,
-        (inst, transfers, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
-            usize,
+        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
             usize,
             usize,
             bool,
@@ -390,7 +312,6 @@ impl AsmIr {
         ),
     ) {
         self.inst.truncate(inst);
-        self.transfers.truncate(transfers);
         self.side_exit.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
@@ -419,9 +340,9 @@ impl AsmIr {
     /// [`DeoptPoint`], recorded by the analysis half — doc §9) into a `side_exit`
     /// label, returning its `AsmDeopt`. The emit/codegen half calls this so that
     /// `side_exit` construction lives entirely on the codegen side and the
-    /// `TransferIR` stream stays codegen-independent. Equivalent to `new_deopt`,
-    /// but driven by the recorded `(pc, write_back)` rather than reading the live
-    /// `AbstractFrame`.
+    /// guarded transfer records stay codegen-independent. Equivalent to
+    /// `new_deopt`, but driven by the recorded `(pc, write_back)` rather than
+    /// reading the live `AbstractFrame`.
     ///
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(point.pc(), point.write_back().clone()));
