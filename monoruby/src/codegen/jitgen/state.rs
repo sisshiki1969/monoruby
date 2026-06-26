@@ -267,6 +267,17 @@ impl AbstractFrame {
     /// capturing call must use `def_rax2acc_capturing` (LFP-relative store) and
     /// leaves no register resident.
     pub(crate) fn def_rax2gp(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        // On aarch64 the GP residence registers (`GP_ALLOC_SET` = R8–R11) map to
+        // x5–x8, which are the AAPCS64 call-argument scratch registers (see the
+        // `GP::a64` mapping and the note in `codegen.rs`). Parking a call result
+        // in one of them and keeping it resident across the *next* call's
+        // argument setup lets that setup clobber it, so the spilled home (and the
+        // value passed onward) is garbage. Keep call/yield results on their stack
+        // home there instead — matching the empty `GP_ALLOC_POOL` design intent.
+        if cfg!(target_arch = "aarch64") {
+            self.def_rax2acc(ir, dst);
+            return;
+        }
         if let Some(dst) = dst.into() {
             let gp = self.alloc_gp_for(ir, dst, slot::Guarded::Value);
             ir.reg_move(GP::Rax, gp);
@@ -315,7 +326,16 @@ impl AbstractFrame {
     pub(crate) fn def_lit2gp(&mut self, ir: &mut AsmIr, dst: SlotId, v: Value) {
         let gp = self.alloc_gp_for(ir, dst, Guarded::from_concrete_value(v));
         ir.lit2reg(v, gp);
-        self.bind_gp_resident(gp, dst);
+        // On aarch64 the GP residence registers (R8–R11) alias x5–x8, the
+        // call-argument scratch; a resident left live across a call's argument
+        // setup is clobbered (see `def_rax2gp`). Spill to the stack home right
+        // away instead of keeping a resident — `alloc_gp_for` already set the
+        // slot's `LinkMode::S` guarded link, so later ops read it from the home.
+        if cfg!(target_arch = "aarch64") {
+            ir.reg2stack(gp, dst);
+        } else {
+            self.bind_gp_resident(gp, dst);
+        }
     }
 
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
