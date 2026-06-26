@@ -187,14 +187,20 @@ impl<'a> JitContext<'a> {
         //
         // So the arms that omit the head flush are: the GP-aware integer `BinOp` /
         // `BinCmp` / `BinCmpBr`; the register-only / self-chokepointing
-        // `FrozenLiteral` / `LoadConst` / `StoreConst` / `StoreIvar` / `Ret`;
-        // `MethodCall` / `Yield` / `Index` / `IndexAssign` (route through `send` /
-        // the yield lowerings); and every arm whose body reaches `get_using_fpr`
-        // (the `new_*` builders, cvar/gvar accessors, `*Def`, `Defined*`).
+        // `FrozenLiteral` / `LoadConst` / `StoreConst` / `LoadIvar` / `StoreIvar` /
+        // `Ret`; `MethodCall` / `Yield` / `Index` / `IndexAssign` (route through
+        // `send` / the yield lowerings); and every arm whose body reaches
+        // `get_using_fpr` (the `new_*` builders, cvar/gvar accessors, `*Def`,
+        // `Defined*`).
         //
-        // `LoadIvar` still flushes: it loads the ivar into a pool register with no
-        // `get_using_fpr` on the path, and a prior resident left live *across* that
-        // load is corrupted under register pressure (a `core/math` regression).
+        // `LoadIvar` omits the head flush: it loads the ivar straight into a pool
+        // register (a resident) and its emission clobbers no other pool register
+        // (the load writes only its `dst` and rdi/rdx/rsi scratch). The earlier
+        // `core/math` regression that looked like a "prior resident corrupted
+        // across the load" was really the `S -> Sf` stale-home bug, fixed in
+        // `FprLoad`/`FprFixnumLoad::FromStack` (flush the resident home before the
+        // float conversion); with that fix a resident living across `LoadIvar` is
+        // sound, so the value can feed a following op without a stack round-trip.
         match trace_ir {
             TraceIr::InitMethod(info) => {
                 state.flush_gp(ir);
@@ -295,7 +301,6 @@ impl<'a> JitContext<'a> {
                 state.store_constant(ir, src, id);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
-                state.flush_gp(ir);
                 let self_class = self.self_class();
                 if let Some(ivarid) = self.store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
