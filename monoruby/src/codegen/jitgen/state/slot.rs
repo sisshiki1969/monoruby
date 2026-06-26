@@ -805,6 +805,19 @@ impl SlotState {
         self.set_mode(slot, LinkMode::S(guarded));
     }
 
+    /// Refine `slot`'s abstract type to `Fixnum` **in place**, after a fixnum
+    /// class guard has proved it — *without* discarding the GP resident (unlike
+    /// `def_S_guarded`), so the value stays register-resident for a following
+    /// integer op to reuse guard-free (`gp_ensure` keys off `is_fixnum`). Only an
+    /// `S`-mode slot is refined: a constant (`C`) operand is already a known
+    /// fixnum, and the other modes never reach a fixnum integer guard.
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn refine_S_fixnum(&mut self, slot: SlotId) {
+        if matches!(self.mode(slot), LinkMode::S(_)) {
+            self.set_mode(slot, LinkMode::S(Guarded::Fixnum));
+        }
+    }
+
     ///
     /// Link *slot* to a new fpr register (may emit a victim spill).
     ///

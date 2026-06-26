@@ -549,11 +549,18 @@ impl AbstractFrame {
         if let Some((reg, slot)) = spill {
             ir.reg2stack(reg, slot);
         }
+        // A `fresh` operand is only speculatively an integer (the resident is a
+        // general `Value`, or it was just loaded from its home), so guard it; the
+        // guard then *proves* it a fixnum, so refine its abstract type in place
+        // (keeping the resident) — a later integer op on the same slot reuses it
+        // guard-free via `is_fixnum`.
         if lhs_fresh {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(lhs);
         }
         if rhs_fresh {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(rhs);
         }
         ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
         // The op left garbage in `rhs_gp`: forget that it cached `rhs`.
