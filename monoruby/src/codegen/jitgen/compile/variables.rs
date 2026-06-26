@@ -30,15 +30,7 @@ impl<'a> JitContext<'a> {
             });
             self.set_ivar_heap_accessed();
         };
-        // aarch64: R8–R11 alias x5–x8 (the call-argument scratch), so a resident
-        // ivar value live across a later call's argument setup is clobbered (see
-        // `def_rax2gp`). Spill to the stack home immediately instead — the slot is
-        // already `LinkMode::S` (set by `alloc_gp_for`), so later ops re-read it.
-        if cfg!(target_arch = "aarch64") {
-            ir.reg2stack(gp, dst);
-        } else {
-            state.bind_gp_resident(gp, dst);
-        }
+        state.bind_gp_resident(gp, dst);
     }
 
     pub(super) fn store_ivar(

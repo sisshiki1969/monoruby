@@ -2796,8 +2796,13 @@ impl Codegen {
         // exit (which undoes any loop sp-bump, writes back live values, and
         // re-enters the VM). x19-x23 are AAPCS64 callee-saved so the C call
         // preserves them, and the deopt does the value write-back; the
-        // caller-saved d2-d7 pool is saved around the call because that
-        // write-back reads it (d8-d15 are callee-saved).
+        // caller-saved d2-d7 FP pool *and* the caller-saved GP pool (x5-x8 =
+        // R8-R11) are saved around the call because that write-back reads both
+        // (d8-d15 / x19-x28 are callee-saved). Omitting the x5-x8 save let the
+        // recompile call clobber a GP resident (e.g. a `def_rax2gp` call result
+        // parked in x5) so the following deopt write-back spilled garbage to its
+        // stack home — `require "set"`/`"bigdecimal"` corruption; cf. the twin
+        // save in `a64_gen_exec_gc`.
         let counter = Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (counter);
@@ -2810,13 +2815,15 @@ impl Codegen {
             str w11, [x9];
             cbnz w11, deopt;                 // not yet exhausted -> just deopt
             // counter hit 0: recompile once, then deopt.
-            sub sp, sp, #(48);
+            sub sp, sp, #(80);
             str d2, [sp, #(0)];
             str d3, [sp, #(8)];
             str d4, [sp, #(16)];
             str d5, [sp, #(24)];
             str d6, [sp, #(32)];
             str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];         // GP pool (R8-R11), read by the deopt write-back
+            stp x7, x8, [sp, #(64)];
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
             mov x2, x22;                     // lfp
@@ -2847,7 +2854,9 @@ impl Codegen {
             ldr d5, [sp, #(24)];
             ldr d6, [sp, #(32)];
             ldr d7, [sp, #(40)];
-            add sp, sp, #(48);
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
         );
         // Check the compiler's return value: the recompiler caught a panic, set
         // a Ruby `FatalError`, and returned None (x0 = 0). Branch to the error
@@ -2873,13 +2882,15 @@ impl Codegen {
     fn a64_call_recompile_specialized(&mut self, global_idx: usize, reason: RecompileReason) {
         let f = crate::codegen::compiler::jit_recompile_specialized as *const () as u64;
         monoasm_arm64!(&mut self.jit,
-            sub sp, sp, #(48);
+            sub sp, sp, #(80);
             str d2, [sp, #(0)];
             str d3, [sp, #(8)];
             str d4, [sp, #(16)];
             str d5, [sp, #(24)];
             str d6, [sp, #(32)];
             str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];      // GP pool (R8-R11), read by the deopt write-back
+            stp x7, x8, [sp, #(64)];
             mov x0, x20;                  // globals
             mov x1, (global_idx as u64);  // specialized_info index
             mov x2, (reason as u64);      // RecompileReason
@@ -2893,7 +2904,9 @@ impl Codegen {
             ldr d5, [sp, #(24)];
             ldr d6, [sp, #(32)];
             ldr d7, [sp, #(40)];
-            add sp, sp, #(48);
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
         );
     }
 

@@ -573,17 +573,6 @@ impl AbstractFrame {
             self.def_S_guarded(dst, Guarded::Fixnum);
             self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
         }
-        // aarch64: the GP residence registers (R8–R11) alias x5–x8, the AAPCS64
-        // call-argument scratch. A resident left live across a later op's call /
-        // argument setup is clobbered, so the spilled home (and any value passed
-        // onward) goes garbage — the same hazard `def_rax2gp` / `def_lit2gp` /
-        // `load_ivar` avoid. Keep no GP resident across an op boundary here:
-        // spill the result (and drop the operand residents) to their stack homes
-        // right away, matching the empty-`GP_ALLOC_POOL` design. Consecutive
-        // fixnum binops then reload from the home instead of reusing a register.
-        if cfg!(target_arch = "aarch64") {
-            self.flush_gp(ir);
-        }
     }
 
     /// Bring `slot` into a GP register: reuse its resident copy (returning
