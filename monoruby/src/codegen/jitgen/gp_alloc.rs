@@ -105,11 +105,6 @@ struct Holder {
     /// the register's value differs from `slot`'s stack home (a binop result);
     /// a clean holder (freshly loaded, unmodified) needs no spill.
     dirty: bool,
-    /// the cached value is a known `Fixnum` — true for a fixnum binop result, a
-    /// fixnum-guarded load, or a fixnum constant. A general-value resident (a
-    /// `call`/`yield` result or a frozen heap literal bound into a register) is
-    /// `false`, so a fixnum binop that reuses it must (re)emit the class guard.
-    fixnum: bool,
     /// monotonically-increasing stamp set when the slot was bound, used to pick
     /// the oldest resident as the eviction victim (FIFO).
     age: u64,
@@ -250,45 +245,14 @@ impl GpRegFile {
     }
 
     /// Record that `reg` now caches `slot`, dropping any prior cache of `slot`.
-    /// `fixnum` marks whether the cached value is a known fixnum (see [`Holder`]).
-    pub(in crate::codegen::jitgen) fn bind(
-        &mut self,
-        reg: GP,
-        slot: SlotId,
-        dirty: bool,
-        fixnum: bool,
-    ) {
+    pub(in crate::codegen::jitgen) fn bind(&mut self, reg: GP, slot: SlotId, dirty: bool) {
         for h in self.holder.iter_mut() {
             if h.map(|h| h.slot) == Some(slot) {
                 *h = None;
             }
         }
         let age = self.tick();
-        self.holder[Self::index_of(reg)] = Some(Holder {
-            slot,
-            dirty,
-            fixnum,
-            age,
-        });
-    }
-
-    /// For a fixnum binop reusing `slot` as an operand: report whether it must
-    /// emit a fixnum class guard (the resident is not yet a known fixnum) and, if
-    /// so, upgrade the resident to known-fixnum (the guard, once emitted, proves
-    /// it). Returns `false` for a non-resident (the caller handles that path).
-    pub(in crate::codegen::jitgen) fn take_needs_fixnum_guard(&mut self, slot: SlotId) -> bool {
-        for h in self.holder.iter_mut() {
-            if let Some(held) = h
-                && held.slot == slot
-            {
-                if held.fixnum {
-                    return false;
-                }
-                held.fixnum = true;
-                return true;
-            }
-        }
-        false
+        self.holder[Self::index_of(reg)] = Some(Holder { slot, dirty, age });
     }
 
     /// If `slot` is a GP resident, return its register and mark it **clean** —
@@ -347,7 +311,7 @@ pub(in crate::codegen::jitgen) fn allocate_run(insts: &[BinOpInst]) -> Vec<GpAct
             lhs: lhs_reg,
             rhs: rhs_reg,
         });
-        rf.bind(dst_reg, inst.dst, /* dirty */ true, /* fixnum */ true);
+        rf.bind(dst_reg, inst.dst, /* dirty */ true);
     }
 
     flush_dirty(&mut rf, &mut out);
@@ -366,7 +330,7 @@ fn ensure(rf: &mut GpRegFile, slot: SlotId, pinned: &[GP], out: &mut Vec<GpActio
         reg,
         guard: true,
     });
-    rf.bind(reg, slot, /* dirty */ false, /* fixnum */ true);
+    rf.bind(reg, slot, /* dirty */ false);
     reg
 }
 
@@ -520,7 +484,7 @@ mod tests {
     #[test]
     fn sync_marks_clean_and_keeps_resident() {
         let mut rf = GpRegFile::new();
-        rf.bind(R8, sl(7), /* dirty */ true, /* fixnum */ true);
+        rf.bind(R8, sl(7), /* dirty */ true);
         // A dirty resident syncs to its register and is now clean.
         assert_eq!(rf.sync(sl(7)), Some(R8));
         assert!(rf.reg_of(sl(7)) == Some(R8)); // still cached

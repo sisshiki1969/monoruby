@@ -259,9 +259,9 @@ impl AbstractFrame {
     /// register (making it a resident) instead of writing it to its stack home.
     /// A following integer op can then consume it straight out of the register.
     ///
-    /// The result is a general `Value` of unknown class, so the resident is
-    /// marked `fixnum = false`: the first integer op to consume it re-guards
-    /// (`gp_ensure` → `take_needs_fixnum_guard`). It is bound **dirty**, so a
+    /// The result is a general `Value` of unknown class (`dst` is set to
+    /// `Guarded::Value`), so the first integer op to consume it re-guards
+    /// (`gp_ensure` keys off `is_fixnum(slot)`). It is bound **dirty**, so a
     /// deopt / GC safepoint re-homes it (`dirty_residents`) and the next
     /// `flush_gp` spills it. Only sound when the frame is *not* capturable — a
     /// capturing call must use `def_rax2acc_capturing` (LFP-relative store) and
@@ -295,11 +295,12 @@ impl AbstractFrame {
         gp
     }
 
-    /// Bind `gp` as the live (dirty, general-`Value`) resident of `dst` after the
-    /// value has been produced in it. Marked `fixnum = false`, so the first
-    /// integer op to consume it re-guards (`gp_ensure` → `take_needs_fixnum_guard`).
+    /// Bind `gp` as the live (dirty) resident of `dst` after the value has been
+    /// produced in it. `dst`'s abstract type (`Guarded`) records whether it is a
+    /// known fixnum, so the first integer op to consume a general-`Value` resident
+    /// re-guards (`gp_ensure` keys off `is_fixnum(slot)`).
     pub(in crate::codegen::jitgen) fn bind_gp_resident(&mut self, gp: GP, dst: SlotId) {
-        self.gp_regfile.bind(gp, dst, /* dirty */ true, /* fixnum */ false);
+        self.gp_regfile.bind(gp, dst, /* dirty */ true);
     }
 
     /// Define `dst` from a concrete (non-immediate) literal by loading it

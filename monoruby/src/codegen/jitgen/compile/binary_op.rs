@@ -564,7 +564,7 @@ impl AbstractFrame {
             // Define first (this clears any stale resident of `dst` via `clear`),
             // then bind the result register.
             self.def_S_guarded(dst, Guarded::Fixnum);
-            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true, /* fixnum */ true);
+            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
         }
     }
 
@@ -573,11 +573,13 @@ impl AbstractFrame {
     /// load it, and report `fresh = true` so the caller emits the fixnum guard.
     fn gp_ensure(&mut self, ir: &mut AsmIr, slot: SlotId, pinned: &[GP]) -> (GP, bool) {
         if let Some(gp) = self.gp_regfile.reg_of(slot) {
-            // A resident produced by an integer op is a known fixnum (no guard).
-            // A resident produced by a call/yield result is a general `Value`:
-            // the first integer op to consume it must emit a fixnum guard, after
-            // which `take_needs_fixnum_guard` upgrades it to known-fixnum.
-            return (gp, self.gp_regfile.take_needs_fixnum_guard(slot));
+            // Reuse the resident copy. Whether it needs a fixnum class guard is
+            // the slot's abstract type, not a per-resident flag: a resident
+            // produced by an integer op is `Guarded::Fixnum` (no guard), while one
+            // produced by a `call`/`yield` result or a frozen literal is a general
+            // `Value` / heap class (`is_fixnum == false`) and must be guarded
+            // before integer use.
+            return (gp, !self.is_fixnum(slot));
         }
         // Compile-time fixnum constant: load the tagged immediate straight into a
         // register, skipping the stack-home round-trip (`%1 = %2 + 1` loads `1`
@@ -590,7 +592,7 @@ impl AbstractFrame {
                 ir.reg2stack(reg, s);
             }
             ir.lit2reg(v, gp);
-            self.gp_regfile.bind(gp, slot, /* dirty */ false, /* fixnum */ true);
+            self.gp_regfile.bind(gp, slot, /* dirty */ false);
             return (gp, false);
         }
         // Not resident and not a constant: put the value at its canonical stack
@@ -603,7 +605,7 @@ impl AbstractFrame {
         ir.stack2reg(slot, gp);
         // `fresh = true`: the caller emits a fixnum guard, after which this
         // resident is a known fixnum.
-        self.gp_regfile.bind(gp, slot, /* dirty */ false, /* fixnum */ true);
+        self.gp_regfile.bind(gp, slot, /* dirty */ false);
         (gp, true)
     }
 
