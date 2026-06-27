@@ -42,12 +42,54 @@ else
   MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
 fi
 
+# --- Hang diagnostics (CI flaky-hang investigation) ------------------------
+# `phase` prints a flushed, timestamped marker so a truncated or timed-out CI
+# log shows the last phase reached (this works in the normal job too: when the
+# `darwin` retry wrapper kills a hung attempt at its 25-min cap, the last
+# `[phase ...]` line names the culprit). Under CI_HANG_DEBUG=1 a background
+# watchdog additionally samples the native + Ruby stacks of any stuck
+# `monoruby` process after HANG_DEADLINE seconds (a normal run is ~11 min),
+# then kills it so the step ends with the diagnostics as its final output.
+# Driven in a loop by .github/workflows/darwin-hang-debug.yml.
+phase() {
+  printf '[phase %s] %s\n' "$(date -u +%H:%M:%S)" "$1"
+  [ -n "${CI_HANG_DEBUG:-}" ] && printf '%s' "$1" > "$PHASE_FILE" 2>/dev/null
+  return 0
+}
+
+if [ -n "${CI_HANG_DEBUG:-}" ]; then
+  PHASE_FILE="$(mktemp 2>/dev/null || echo "/tmp/monoruby_phase.$$")"
+  HANG_DEADLINE="${HANG_DEADLINE:-1200}" # 20 min; a normal run is ~11 min
+  (
+    sleep "$HANG_DEADLINE"
+    echo "==================== HANG WATCHDOG (${HANG_DEADLINE}s) ===================="
+    echo "stuck in phase: $(cat "$PHASE_FILE" 2>/dev/null)"
+    echo "---- processes ----"
+    ps -Ao pid,ppid,etime,%cpu,rss,command | grep -Ei 'monoruby|optcarrot|nextest|[c]argo' | grep -v grep || true
+    for pid in $(pgrep -f 'monoruby' 2>/dev/null); do
+      echo "---- sample $pid (5s) ----"
+      /usr/bin/sample "$pid" 5 2>&1 | sed -n '1,150p' || true
+      echo "---- lldb backtrace $pid ----"
+      lldb --batch -p "$pid" -o 'thread backtrace all' -o detach -o quit 2>&1 | sed -n '1,200p' || true
+    done
+    echo "==================== killing stuck monoruby ===================="
+    pkill -9 -f 'monoruby' 2>/dev/null || true
+    echo "==================== watchdog done ===================="
+  ) &
+  WATCHDOG_PID=$!
+  trap 'kill "$WATCHDOG_PID" 2>/dev/null || true; rm -f "$PHASE_FILE" 2>/dev/null || true' EXIT
+fi
+# ---------------------------------------------------------------------------
+
+phase "nextest (unit + integration tests)"
 cov_clean
 cov_nextest "${STRESS_FEATURES[@]}"
 
 # Rebuild the benchmark binary with the stress features (x86-64 only).
+phase "build benchmark binary"
 cov_build "${STRESS_FEATURES[@]}"
 
+phase "benchmarks: app_fib / tarai / so_nbody"
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 "${RUBY[@]}" benchmark/app_fib.rb > ruby.log
 diff -s monoruby.log ruby.log
@@ -62,6 +104,7 @@ diff -s monoruby.log ruby.log
 #"${RUBY[@]}" benchmark/bf.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
+phase "benchmarks: plb2 nqueen / sudoku"
 echo "checking plb2.."
 $MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
 "${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
@@ -76,6 +119,7 @@ diff -s monoruby.log ruby.log
 #"${RUBY[@]}" benchmark/plb2/bedcov.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
+phase "benchmark: so_mandelbrot"
 $MONORUBY benchmark/so_mandelbrot.rb > benchmark/mandel1.ppm
 $MONORUBY --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.ppm
 "${RUBY[@]}" benchmark/so_mandelbrot.rb > benchmark/mandel.ppm
@@ -83,10 +127,12 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
+phase "optcarrot (plain) — monoruby"
 $MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
 "${RUBY[@]}" ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
 
+phase "optcarrot (--opt) — monoruby"
 $MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
 "${RUBY[@]}" ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
@@ -96,6 +142,7 @@ rm *.log
 # present alongside this repo. Reuses the already-built instrumented
 # monoruby and the `ruby` from PATH; exits non-zero on output mismatch.
 if [ -d "../ruby-bench/benchmarks" ]; then
+  phase "ruby-bench output diff"
   echo "Running ruby-bench output diff..."
   MONORUBY="$MONORUBY" CRUBY=ruby bin/ruby-bench-diff
 fi
@@ -105,6 +152,7 @@ if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
   for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct symbol range set systemexit method unboundmethod; do
+    phase "ruby/spec core/$cat"
     echo "=== core/$cat ==="
     ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done

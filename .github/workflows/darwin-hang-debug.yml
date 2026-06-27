@@ -1,0 +1,83 @@
+name: darwin hang debug
+
+# Manual-only diagnostic for the intermittent arm64 `bin/test` hang that only
+# reproduces on the macOS GitHub-hosted runner (not on native Apple Silicon).
+# It loops `bin/test` with CI_HANG_DEBUG=1 until an iteration hangs: a per-run
+# watchdog then `sample`s and `lldb`-backtraces the stuck `monoruby` process
+# (printing where it is spinning — JIT region / GC / VM / I/O) and kills it, so
+# the failing run ends with the stack as its last output. Not wired to push/PR,
+# so it never runs automatically and burns no macOS minutes unless dispatched.
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Max bin/test iterations before giving up"
+        default: "5"
+      hang_deadline:
+        description: "Per-iteration hang watchdog deadline (seconds; normal run ~11 min)"
+        default: "1200"
+
+jobs:
+  darwin-hang-debug:
+    runs-on: macos-latest
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      SKIP_COV: "1"
+      CI_HANG_DEBUG: "1"
+      HANG_DEADLINE: ${{ github.event.inputs.hang_deadline }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.1"
+      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
+        run: gem install bigdecimal --no-document
+      - name: Install ruby-bench gem dependencies
+        run: gem install erubi --no-document
+      - name: Install libffi + pkg-config
+        run: |
+          brew install libffi pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
+      # Allow `lldb` to attach to our own processes non-interactively (the
+      # watchdog's `sample` works without this; this just makes the lldb
+      # backtrace best-effort succeed too).
+      - name: Enable developer mode for lldb attach
+        run: sudo DevToolsSecurity -enable || true
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@nextest
+      - name: Clone optcarrot
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec and mspec (pinned)
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
+        run: |
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+      # Compile up front so each looped bin/test iteration is run-only — the
+      # per-iteration hang watchdog then measures execution time, not build time.
+      - name: Pre-build test + benchmark binaries
+        run: |
+          cargo nextest run --no-run --features stress-spill-pool,gc-stress
+          cargo build --bin monoruby --features stress-spill-pool,gc-stress
+      - name: Loop bin/test until a hang is caught
+        run: |
+          n="${{ github.event.inputs.iterations }}"
+          for i in $(seq 1 "$n"); do
+            echo "==================== iteration $i / $n ===================="
+            if ! bin/test; then
+              echo "iteration $i hung or failed — see the watchdog stack dump above"
+              exit 1
+            fi
+          done
+          echo "no hang reproduced in $n iterations"
