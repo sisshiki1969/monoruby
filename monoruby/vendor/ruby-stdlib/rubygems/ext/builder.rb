@@ -163,6 +163,8 @@ class Gem::Ext::Builder
     @gem_dir    = spec.full_gem_path
     @target_rbconfig = target_rbconfig
     @build_jobs = build_jobs
+
+    @ran_rake = false
   end
 
   ##
@@ -175,6 +177,7 @@ class Gem::Ext::Builder
     when /configure/ then
       Gem::Ext::ConfigureBuilder
     when /rakefile/i, /mkrf_conf/i then
+      @ran_rake = true
       Gem::Ext::RakeBuilder
     when /CMakeLists.txt/ then
       Gem::Ext::CmakeBuilder.new
@@ -247,6 +250,8 @@ EOF
     FileUtils.rm_f @spec.gem_build_complete_path
 
     @spec.extensions.each do |extension|
+      break if @ran_rake
+
       build_extension extension, dest_path
     end
 

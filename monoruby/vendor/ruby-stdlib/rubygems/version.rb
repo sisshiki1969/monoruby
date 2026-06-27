@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "deprecate"
+
 ##
 # The Version class processes string versions into comparable
 # values. A version string should normally be a series of numbers
@@ -149,9 +151,6 @@
 #
 # For the last example, single-digit versions are automatically extended with
 # a zero to give a sensible result.
-
-# Workaround for directly loading Gem::Version in some cases
-module Gem; end
 
 class Gem::Version
   include Comparable

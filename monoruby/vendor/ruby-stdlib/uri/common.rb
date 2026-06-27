@@ -467,7 +467,7 @@ module URI
   private_class_method :_decode_uri_component
 
   # Returns a URL-encoded string derived from the given
-  # {Enumerable}[rdoc-ref:Enumerable@Enumerable+in+Ruby+Classes]
+  # {Enumerable}[https://docs.ruby-lang.org/en/master/Enumerable.html#module-Enumerable-label-Enumerable+in+Ruby+Classes]
   # +enum+.
   #
   # The result is suitable for use as form data
@@ -536,7 +536,7 @@ module URI
   # each +key+/+value+ pair is converted to one or more fields:
   #
   # - If +value+ is
-  #   {Array-convertible}[rdoc-ref:implicit_conversion.rdoc@Array-Convertible+Objects],
+  #   {Array-convertible}[https://docs.ruby-lang.org/en/master/implicit_conversion_rdoc.html#label-Array-Convertible+Objects],
   #   each element +ele+ in +value+ is paired with +key+ to form a field:
   #
   #     name = URI.encode_www_form_component(key, enc)
@@ -594,7 +594,7 @@ module URI
   # each subarray is a name/value pair (both are strings).
   # Each returned string has encoding +enc+,
   # and has had invalid characters removed via
-  # {String#scrub}[rdoc-ref:String#scrub].
+  # {String#scrub}[https://docs.ruby-lang.org/en/master/String.html#method-i-scrub].
   #
   # A simple example:
   #

@@ -943,12 +943,7 @@ class Gem::Installer
   end
 
   def build_jobs
-    @build_jobs ||= begin
-                      require "etc"
-                      Etc.nprocessors + 1
-                    rescue LoadError
-                      1
-                    end
+    @build_jobs ||= Etc.nprocessors + 1
   end
 
   def rb_config

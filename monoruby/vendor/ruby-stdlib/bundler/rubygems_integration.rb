@@ -432,7 +432,7 @@ module Bundler
     end
 
     def find_bundler(version)
-      find_name("bundler").find {|s| s.version.to_s == version.to_s }
+      find_name("bundler").find {|s| s.version.to_s == version }
     end
 
     def find_name(name)

@@ -1066,22 +1066,7 @@ module Bundler
 
           deps << dep if !replacement_source || lockfile_source.include?(replacement_source) || new_deps.include?(dep)
         else
-          parent_dep = @dependencies.find do |d|
-            next unless d.source && d.source != lockfile_source
-            next if d.source.is_a?(Source::Gemspec)
-
-            parent_locked_specs = @originally_locked_specs[d.name]
-
-            parent_locked_specs.any? do |parent_spec|
-              parent_spec.runtime_dependencies.any? {|rd| rd.name == s.name }
-            end
-          end
-
-          if parent_dep && parent_dep.source.is_a?(Source::Path) && parent_dep.source.specs[s]&.any?
-            replacement_source = parent_dep.source
-          else
-            replacement_source = sources.get(lockfile_source)
-          end
+          replacement_source = sources.get(lockfile_source)
         end
 
         # Replace the locked dependency's source with the equivalent source from the Gemfile

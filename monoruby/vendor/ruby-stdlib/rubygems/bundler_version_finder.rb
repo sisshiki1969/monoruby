@@ -10,8 +10,6 @@ module Gem::BundlerVersionFinder
     v ||= bundle_update_bundler_version
     return if v == true
 
-    v ||= bundle_config_version
-
     v ||= lockfile_version
     return unless v
 
@@ -51,7 +49,21 @@ module Gem::BundlerVersionFinder
   private_class_method :lockfile_version
 
   def self.lockfile_contents
-    gemfile = gemfile_path
+    gemfile = ENV["BUNDLE_GEMFILE"]
+    gemfile = nil if gemfile&.empty?
+
+    unless gemfile
+      begin
+        Gem::Util.traverse_parents(Dir.pwd) do |directory|
+          next unless gemfile = Gem::GEM_DEP_FILES.find {|f| File.file?(f) }
+
+          gemfile = File.join directory, gemfile
+          break
+        end
+      rescue Errno::ENOENT
+        return
+      end
+    end
 
     return unless gemfile
 
@@ -70,24 +82,19 @@ module Gem::BundlerVersionFinder
   private_class_method :lockfile_contents
 
   def self.bundle_config_version
-    version = nil
+    config_file = bundler_config_file
+    return unless config_file && File.file?(config_file)
 
-    [bundler_local_config_file, bundler_global_config_file].each do |config_file|
-      next unless config_file && File.file?(config_file)
+    contents = File.read(config_file)
+    contents =~ /^BUNDLE_VERSION:\s*["']?([^"'\s]+)["']?\s*$/
 
-      contents = File.read(config_file)
-      contents =~ /^BUNDLE_VERSION:\s*["']?([^"'\s]+)["']?\s*$/
-
-      version = $1
-      break if version
-    end
-
-    version
+    $1
   end
   private_class_method :bundle_config_version
 
-  def self.bundler_global_config_file
-    # see Bundler::Settings#global_config_file
+  def self.bundler_config_file
+    # see Bundler::Settings#global_config_file and local_config_file
+    # global
     if ENV["BUNDLE_CONFIG"] && !ENV["BUNDLE_CONFIG"].empty?
       ENV["BUNDLE_CONFIG"]
     elsif ENV["BUNDLE_USER_CONFIG"] && !ENV["BUNDLE_USER_CONFIG"].empty?
@@ -96,36 +103,10 @@ module Gem::BundlerVersionFinder
       ENV["BUNDLE_USER_HOME"] + "config"
     elsif Gem.user_home && !Gem.user_home.empty?
       Gem.user_home + ".bundle/config"
+    else
+      # local
+      "config"
     end
   end
-  private_class_method :bundler_global_config_file
-
-  def self.bundler_local_config_file
-    gemfile = gemfile_path
-    return unless gemfile
-
-    File.join(File.dirname(gemfile), ".bundle", "config")
-  end
-  private_class_method :bundler_local_config_file
-
-  def self.gemfile_path
-    gemfile = ENV["BUNDLE_GEMFILE"]
-    gemfile = nil if gemfile&.empty?
-
-    unless gemfile
-      begin
-        Gem::Util.traverse_parents(Dir.pwd) do |directory|
-          next unless gemfile = Gem::GEM_DEP_FILES.find {|f| File.file?(f) }
-
-          gemfile = File.join directory, gemfile
-          break
-        end
-      rescue Errno::ENOENT
-        return
-      end
-    end
-
-    gemfile
-  end
-  private_class_method :gemfile_path
+  private_class_method :bundler_config_file
 end
