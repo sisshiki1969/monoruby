@@ -4543,7 +4543,7 @@ mod tests {
 
     #[test]
     fn kernel() {
-        run_test_no_result_check("sleep 1");
+        run_test_no_result_check("sleep 0.05");
         run_tests(&["system 'ls'", "system 'ls', '-a'"]);
         run_test_error("abort 1");
         run_test_no_result_check("exit");
