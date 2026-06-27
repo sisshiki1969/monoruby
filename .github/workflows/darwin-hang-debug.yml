@@ -1,32 +1,41 @@
 name: darwin hang debug
 
-# Manual-only diagnostic for the intermittent arm64 hang that only reproduces
-# on the macOS GitHub-hosted runner (not on native Apple Silicon). The #768 run
-# localized it: the runner dies *during* `cargo nextest` (the stress-spill-pool
-# + gc-stress test suite), with the suite slowing to a crawl before death — the
-# signature of memory exhaustion (OOM), not a single CPU spin.
+# Manual-only diagnostic for the intermittent arm64 hang that only reproduces on
+# the macOS GitHub-hosted runner. The runner dies of memory exhaustion (OOM) —
+# "lost communication" — before any stack can be captured, so the goal here is to
+# cap memory *per test process* and catch the culprit BEFORE the runner dies.
 #
-# This focused run therefore exercises *only* nextest, in a loop, with:
-#   * a background memory logger (monoruby RSS + system free pages every 15s),
-#     streamed live so the climb is visible even if the runner OOM-dies; and
-#   * a `hangdebug` nextest profile that terminates and NAMES any single test
-#     stuck > ~4.5 min (so a true hang is caught by name; an OOM, which won't
-#     trip a per-test timeout, shows up in the memory log instead).
-# `test_threads` lets you re-run with reduced parallelism: if a lower thread
-# count stops the OOM, the cause is cumulative parallel memory pressure on the
-# constrained runner (fix: cap nextest threads on the darwin job); if it still
-# dies, a single test is exploding memory (named by the RSS spike + position).
+# macOS does not reliably enforce `ulimit -v` (RLIMIT_AS), so the portable
+# mechanism is a background MEMORY WATCHDOG: it polls every monoruby process's
+# RSS and, when one exceeds RSS_LIMIT_KB (or the parallel sum exceeds
+# SUM_LIMIT_KB), it records that process's command line (= the nextest test name
+# / benchmark / spec it is running), `sample`s its stack, and kills it. nextest
+# then reports that test as failed-by-signal (named), and bin/test's phase
+# markers say which phase — so the memory culprit is identified instead of the
+# whole runner OOM-dying. `mem_limit_kb` additionally tries `ulimit -v` (effective
+# on Linux, usually a no-op on macOS; default off to avoid tripping monoruby's
+# large virtual reservations).
 #
-# Not wired to push/PR, so it never runs automatically.
+# Runs the full bin/test in a loop (the configuration that actually reproduced),
+# so the hang is caught whatever phase it strikes. Not wired to push/PR.
 on:
   workflow_dispatch:
     inputs:
       iterations:
-        description: "Max nextest iterations before giving up"
-        default: "5"
+        description: "Max bin/test iterations before giving up"
+        default: "8"
       test_threads:
-        description: "nextest --test-threads (blank = nextest default parallelism)"
+        description: "nextest test threads (blank = default parallelism)"
         default: ""
+      rss_limit_kb:
+        description: "Per-process monoruby RSS cap (KB) — kill+sample above this"
+        default: "4000000"
+      sum_limit_kb:
+        description: "Summed monoruby RSS cap (KB) — catch cumulative pressure"
+        default: "5000000"
+      mem_limit_kb:
+        description: "ulimit -v per process (KB); 0 = off (macOS usually ignores it)"
+        default: "0"
 
 jobs:
   darwin-hang-debug:
@@ -34,6 +43,7 @@ jobs:
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
+      SKIP_COV: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -42,6 +52,8 @@ jobs:
           ruby-version: "4.0.1"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
+      - name: Install ruby-bench gem dependencies
+        run: gem install erubi --no-document
       - name: Install libffi + pkg-config
         run: |
           brew install libffi pkg-config
@@ -50,46 +62,86 @@ jobs:
         with:
           toolchain: nightly
       - uses: taiki-e/install-action@nextest
-      - name: Pre-build test binaries
-        run: cargo nextest run --no-run --features stress-spill-pool,gc-stress
-      - name: Diagnose nextest hang (RSS log + per-test terminate)
+      - name: Clone optcarrot
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec and mspec (pinned)
         env:
-          TEST_THREADS: ${{ github.event.inputs.test_threads }}
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
+        run: |
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
+      - name: Clone ruby-bench
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+      - name: Pre-build test + benchmark binaries
+        run: |
+          cargo nextest run --no-run --features stress-spill-pool,gc-stress
+          cargo build --bin monoruby --features stress-spill-pool,gc-stress
+      - name: Loop bin/test under a memory watchdog (find the OOM culprit)
+        env:
           ITERATIONS: ${{ github.event.inputs.iterations }}
+          TEST_THREADS: ${{ github.event.inputs.test_threads }}
+          RSS_LIMIT_KB: ${{ github.event.inputs.rss_limit_kb }}
+          SUM_LIMIT_KB: ${{ github.event.inputs.sum_limit_kb }}
+          MEM_LIMIT_KB: ${{ github.event.inputs.mem_limit_kb }}
         run: |
           set -u
-          # nextest profile that terminates (and names) any test still running
-          # after 3 × 90s = 4.5 min. A genuine single-test hang is reported by
-          # name; an OOM won't trip this (no one test is slow) — see the mem log.
-          mkdir -p .config
-          cat > .config/nextest.toml <<'EOF'
-          [profile.hangdebug]
-          slow-timeout = { period = "90s", terminate-after = 3, grace-period = "10s" }
-          EOF
 
-          # Background memory logger. Streams live (every 15s) so an OOM climb is
-          # visible in the log even when the runner later loses communication.
-          ( while true; do
-              sum=$(ps -Ao rss,comm | awk '$2 ~ /monoruby/ {s+=$1} END{print s+0}')
-              top=$(ps -Ao rss,comm | awk '$2 ~ /monoruby/ && $1>m {m=$1} END{print m+0}')
-              n=$(ps -Ao comm | grep -c '[m]onoruby' || true)
-              free=$(vm_stat | awk '/Pages free/{gsub(/\./,"",$3); print $3}')
-              echo "[mem $(date -u +%H:%M:%S)] monoruby_procs=$n sum_rss_kb=$sum top_rss_kb=$top sys_free_pages=$free"
-              sleep 15
-            done ) &
-          MEMLOG=$!
-          trap 'kill "$MEMLOG" 2>/dev/null || true' EXIT
+          if [ "${MEM_LIMIT_KB}" -gt 0 ] 2>/dev/null; then
+            ulimit -v "${MEM_LIMIT_KB}" 2>/dev/null \
+              && echo "ulimit -v set to ${MEM_LIMIT_KB} KB" \
+              || echo "ulimit -v not enforceable here (expected on macOS)"
+          fi
+          echo "effective ulimit -v: $(ulimit -v) | per-proc RSS cap=${RSS_LIMIT_KB}KB sum cap=${SUM_LIMIT_KB}KB"
 
-          threads_flag=""
-          [ -n "${TEST_THREADS}" ] && threads_flag="--test-threads=${TEST_THREADS}"
+          # Background memory watchdog. Matches monoruby processes by executable
+          # basename (so cargo/rustc/build-script are ignored), not path.
+          watchdog() {
+            pass=0
+            while true; do
+              snap=$(ps -Ao pid,rss,comm \
+                | awk 'NR>1 { n=split($3,a,"/"); b=a[n]; if (b ~ /^monoruby/) print $1, $2 }')
+              if [ -n "$snap" ]; then
+                sum=$(echo "$snap" | awk '{s+=$2} END{print s+0}')
+                set -- $(echo "$snap" | awk '{if($2>m){m=$2;p=$1}} END{print p+0, m+0}')
+                toppid=$1; toprss=$2
+                if [ "${toprss:-0}" -gt "${RSS_LIMIT_KB}" ] || [ "${sum:-0}" -gt "${SUM_LIMIT_KB}" ]; then
+                  echo "==================== MEMORY WATCHDOG fired @ $(date -u +%H:%M:%S) ===================="
+                  echo "sum_rss_kb=$sum top_pid=$toppid top_rss_kb=$toprss (caps: per-proc=${RSS_LIMIT_KB} sum=${SUM_LIMIT_KB})"
+                  echo "---- all monoruby processes (pid rss_kb command) ----"
+                  ps -Ao pid,rss,command | awk 'NR>1 { n=split($3,a,"/"); b=a[n]; if (b ~ /^monoruby/) print }'
+                  echo "---- CULPRIT command line (pid $toppid) ----"
+                  ps -p "$toppid" -o command= 2>/dev/null || true
+                  echo "---- sample pid $toppid (2s) ----"
+                  /usr/bin/sample "$toppid" 2 2>&1 | sed -n '1,160p' || true
+                  echo "---- killing pid $toppid ----"
+                  kill -9 "$toppid" 2>/dev/null || true
+                fi
+                pass=$((pass+1))
+                if [ $((pass % 6)) -eq 0 ]; then
+                  echo "[mem $(date -u +%H:%M:%S)] monoruby_sum_rss_kb=$sum top_rss_kb=${toprss:-0}"
+                fi
+              fi
+              sleep 4
+            done
+          }
+          watchdog &
+          WATCH=$!
+          trap 'kill "$WATCH" 2>/dev/null || true' EXIT
+
+          [ -n "${TEST_THREADS}" ] && export NEXTEST_TEST_THREADS="${TEST_THREADS}"
 
           for i in $(seq 1 "${ITERATIONS}"); do
-            echo "==================== nextest iteration $i / ${ITERATIONS} (threads='${TEST_THREADS:-auto}') ===================="
-            if ! cargo nextest run --profile hangdebug \
-                   --features stress-spill-pool,gc-stress \
-                   $threads_flag --no-fail-fast; then
-              echo "nextest iteration $i failed or a hung test was terminated — see the result + mem log above"
+            echo "==================== bin/test iteration $i / ${ITERATIONS} ===================="
+            if ! bin/test; then
+              echo "bin/test iteration $i failed — the memory watchdog likely killed the culprit."
+              echo "Look above for: the MEMORY WATCHDOG block (command line + sample), the last"
+              echo "[phase ...] marker (which phase), and the nextest failure summary (test name)."
               exit 1
             fi
           done
-          echo "no hang reproduced in ${ITERATIONS} nextest iterations (threads='${TEST_THREADS:-auto}')"
+          echo "no hang reproduced in ${ITERATIONS} bin/test iterations"
