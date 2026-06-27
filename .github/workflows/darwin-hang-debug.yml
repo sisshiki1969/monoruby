@@ -1,21 +1,32 @@
 name: darwin hang debug
 
-# Manual-only diagnostic for the intermittent arm64 `bin/test` hang that only
-# reproduces on the macOS GitHub-hosted runner (not on native Apple Silicon).
-# It loops `bin/test` with CI_HANG_DEBUG=1 until an iteration hangs: a per-run
-# watchdog then `sample`s and `lldb`-backtraces the stuck `monoruby` process
-# (printing where it is spinning — JIT region / GC / VM / I/O) and kills it, so
-# the failing run ends with the stack as its last output. Not wired to push/PR,
-# so it never runs automatically and burns no macOS minutes unless dispatched.
+# Manual-only diagnostic for the intermittent arm64 hang that only reproduces
+# on the macOS GitHub-hosted runner (not on native Apple Silicon). The #768 run
+# localized it: the runner dies *during* `cargo nextest` (the stress-spill-pool
+# + gc-stress test suite), with the suite slowing to a crawl before death — the
+# signature of memory exhaustion (OOM), not a single CPU spin.
+#
+# This focused run therefore exercises *only* nextest, in a loop, with:
+#   * a background memory logger (monoruby RSS + system free pages every 15s),
+#     streamed live so the climb is visible even if the runner OOM-dies; and
+#   * a `hangdebug` nextest profile that terminates and NAMES any single test
+#     stuck > ~4.5 min (so a true hang is caught by name; an OOM, which won't
+#     trip a per-test timeout, shows up in the memory log instead).
+# `test_threads` lets you re-run with reduced parallelism: if a lower thread
+# count stops the OOM, the cause is cumulative parallel memory pressure on the
+# constrained runner (fix: cap nextest threads on the darwin job); if it still
+# dies, a single test is exploding memory (named by the RSS spike + position).
+#
+# Not wired to push/PR, so it never runs automatically.
 on:
   workflow_dispatch:
     inputs:
       iterations:
-        description: "Max bin/test iterations before giving up"
+        description: "Max nextest iterations before giving up"
         default: "5"
-      hang_deadline:
-        description: "Per-iteration hang watchdog deadline (seconds; normal run ~11 min)"
-        default: "1200"
+      test_threads:
+        description: "nextest --test-threads (blank = nextest default parallelism)"
+        default: ""
 
 jobs:
   darwin-hang-debug:
@@ -23,9 +34,6 @@ jobs:
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
-      SKIP_COV: "1"
-      CI_HANG_DEBUG: "1"
-      HANG_DEADLINE: ${{ github.event.inputs.hang_deadline }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -34,50 +42,54 @@ jobs:
           ruby-version: "4.0.1"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
-      - name: Install ruby-bench gem dependencies
-        run: gem install erubi --no-document
       - name: Install libffi + pkg-config
         run: |
           brew install libffi pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
-      # Allow `lldb` to attach to our own processes non-interactively (the
-      # watchdog's `sample` works without this; this just makes the lldb
-      # backtrace best-effort succeed too).
-      - name: Enable developer mode for lldb attach
-        run: sudo DevToolsSecurity -enable || true
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
       - uses: taiki-e/install-action@nextest
-      - name: Clone optcarrot
-        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
-      - name: Clone ruby/spec and mspec (pinned)
+      - name: Pre-build test binaries
+        run: cargo nextest run --no-run --features stress-spill-pool,gc-stress
+      - name: Diagnose nextest hang (RSS log + per-test terminate)
         env:
-          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
-          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
+          TEST_THREADS: ${{ github.event.inputs.test_threads }}
+          ITERATIONS: ${{ github.event.inputs.iterations }}
         run: |
-          git init ../spec
-          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
-          git -C ../spec checkout FETCH_HEAD
-          git init ../mspec
-          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
-          git -C ../mspec checkout FETCH_HEAD
-      - name: Clone ruby-bench
-        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
-      # Compile up front so each looped bin/test iteration is run-only — the
-      # per-iteration hang watchdog then measures execution time, not build time.
-      - name: Pre-build test + benchmark binaries
-        run: |
-          cargo nextest run --no-run --features stress-spill-pool,gc-stress
-          cargo build --bin monoruby --features stress-spill-pool,gc-stress
-      - name: Loop bin/test until a hang is caught
-        run: |
-          n="${{ github.event.inputs.iterations }}"
-          for i in $(seq 1 "$n"); do
-            echo "==================== iteration $i / $n ===================="
-            if ! bin/test; then
-              echo "iteration $i hung or failed — see the watchdog stack dump above"
+          set -u
+          # nextest profile that terminates (and names) any test still running
+          # after 3 × 90s = 4.5 min. A genuine single-test hang is reported by
+          # name; an OOM won't trip this (no one test is slow) — see the mem log.
+          mkdir -p .config
+          cat > .config/nextest.toml <<'EOF'
+          [profile.hangdebug]
+          slow-timeout = { period = "90s", terminate-after = 3, grace-period = "10s" }
+          EOF
+
+          # Background memory logger. Streams live (every 15s) so an OOM climb is
+          # visible in the log even when the runner later loses communication.
+          ( while true; do
+              sum=$(ps -Ao rss,comm | awk '$2 ~ /monoruby/ {s+=$1} END{print s+0}')
+              top=$(ps -Ao rss,comm | awk '$2 ~ /monoruby/ && $1>m {m=$1} END{print m+0}')
+              n=$(ps -Ao comm | grep -c '[m]onoruby' || true)
+              free=$(vm_stat | awk '/Pages free/{gsub(/\./,"",$3); print $3}')
+              echo "[mem $(date -u +%H:%M:%S)] monoruby_procs=$n sum_rss_kb=$sum top_rss_kb=$top sys_free_pages=$free"
+              sleep 15
+            done ) &
+          MEMLOG=$!
+          trap 'kill "$MEMLOG" 2>/dev/null || true' EXIT
+
+          threads_flag=""
+          [ -n "${TEST_THREADS}" ] && threads_flag="--test-threads=${TEST_THREADS}"
+
+          for i in $(seq 1 "${ITERATIONS}"); do
+            echo "==================== nextest iteration $i / ${ITERATIONS} (threads='${TEST_THREADS:-auto}') ===================="
+            if ! cargo nextest run --profile hangdebug \
+                   --features stress-spill-pool,gc-stress \
+                   $threads_flag --no-fail-fast; then
+              echo "nextest iteration $i failed or a hung test was terminated — see the result + mem log above"
               exit 1
             fi
           done
-          echo "no hang reproduced in $n iterations"
+          echo "no hang reproduced in ${ITERATIONS} nextest iterations (threads='${TEST_THREADS:-auto}')"
