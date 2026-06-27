@@ -527,12 +527,13 @@ impl Globals {
         let pcg_version = env!("CARGO_PKG_VERSION");
 
         // The reported Ruby language level is baked in at compile time by
-        // build.rs (env `MONORUBY_RUBY_VERSION`, set from the build-host
-        // Ruby for differential-test parity). When no Ruby was available
-        // at build time we fall back to the language level monoruby
-        // targets, so the interpreter runs with zero runtime Ruby
-        // dependency instead of panicking on a missing cache file.
-        const DEFAULT_RUBY_VERSION: &str = "4.0.0";
+        // build.rs (env `MONORUBY_RUBY_VERSION`, read from the vendored
+        // stdlib snapshot's `.ruby-version` pin so it always matches the
+        // stdlib monoruby actually ships, host-independently). The fallback
+        // mirrors that pin for the rare case the marker is missing at build
+        // time, so the interpreter runs with zero runtime Ruby dependency
+        // instead of panicking on a missing cache file.
+        const DEFAULT_RUBY_VERSION: &str = "4.0.2";
         let ruby_version = option_env!("MONORUBY_RUBY_VERSION")
             .unwrap_or(DEFAULT_RUBY_VERSION)
             .trim()
