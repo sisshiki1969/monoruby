@@ -1105,7 +1105,12 @@ fn defined() {
             end
         "#,
     );
-    // Pure expressions — batch together
+    // Batched together. Each entry that originally ran in its own process
+    // (fresh global state) is given a unique name here, so they share one
+    // CRuby spawn without contaminating one another's `defined?` result.
+    // `defined?` does not evaluate its operand, so the `def`/`class`/
+    // backtick entries create nothing; the `class …; X.new.f` entries do
+    // run, hence the unique class names.
     run_tests(&[
         r#"defined? 10"#,
         r#"defined? 100000000000000000000000000000000000000000000000000000000"#,
@@ -1117,26 +1122,42 @@ fn defined() {
         r#"defined? a=z"#, r#"defined? a+=z"#,
         r#"defined? puts"#,
         r#"defined?(1+(2+3))"#, r#"defined? 1+(2+3)"#,
+        // definitions / commands (defined? does not evaluate them)
+        r#"defined? (def defmeth1;end)"#,
+        r#"defined? (def self.defmeth2;end)"#,
+        r#"defined? (class DefinedClsA;end)"#,
+        r#"defined? (class << obj F;end)"#,
+        r#"defined? `ls -a`"#,
+        // local variables
+        r#"(lset=10; defined? lset)"#,
+        r#"defined? lundef"#,
+        r#"(lstr=""; defined? 1+lstr)"#,
+        r#"defined? lundef_idx[1]"#,
+        r#"defined? (lundef_asgn[1]=5)"#,
+        r#"(larr=[]; defined? larr[1])"#,
+        r#"(larr2=[]; defined? (larr2[1]=5))"#,
+        // instance variables
+        r#"defined? @iv_unset"#,
+        r#"(@iv_set=10; defined? @iv_set)"#,
+        // global variables
+        r#"defined? $gv_unset"#,
+        r#"($gv_set=10; defined? $gv_set)"#,
+        // constants
+        r#"(KonstSet=10; defined? KonstSet)"#,
+        r#"defined? KonstUnset"#,
+        // instance variables via methods (unique class names)
+        r#"(class DefA1; def initialize; @x=1; end; def f; defined?(@x); end; def g; defined?(@y); end; end; [DefA1.new.f, DefA1.new.g])"#,
+        r#"(class DefA2; def f; @v=10; [defined?(@v), defined?(@w)]; end; end; DefA2.new.f)"#,
+        // global variables (array form)
+        r#"($gx=1; [defined?($gx), defined?($gy)])"#,
+        // methods
+        r#"(class DefA3; def foo; end; def f; defined?(foo); end; def g; defined?(bar); end; end; [DefA3.new.f, DefA3.new.g])"#,
+        // class variables (unique class names)
+        r#"(class DefA4; @@x=1; def f; defined?(@@x); end; end; DefA4.new.f)"#,
+        r#"(class DefA5; def f; defined?(@@x); end; end; DefA5.new.f)"#,
+        r#"(class DefA6; @@v=10; def f; defined?(@@v); end; def g; defined?(@@w); end; end; [DefA6.new.f, DefA6.new.g])"#,
+        r#"(class DefB7; @@b=1; end; class DefC7 < DefB7; def f; defined?(@@b); end; end; DefC7.new.f)"#,
     ]);
-    // Expressions with side effects or definitions — must run individually
-    run_test(r#"defined? (def f;end)"#);
-    run_test(r#"defined? (def self.f;end)"#);
-    run_test(r#"defined? (class F;end)"#);
-    run_test(r#"defined? (class << obj F;end)"#);
-    run_test(r#"defined? a[1]"#);
-    run_test(r#"defined? (a[1]=5)"#);
-    run_test(r#"defined? `ls -a`"#);
-    run_test(r#"a=10; defined? a"#);
-    run_test(r#"defined? a"#);
-    run_test(r#"a=""; defined? 1+a"#);
-    run_test(r#"defined? @a"#);
-    run_test(r#"@a=10; defined? @a"#);
-    run_test(r#"defined? $a"#);
-    run_test(r#"$a=10; defined? $a"#);
-    run_test(r#"C=10; defined? C"#);
-    run_test(r#"defined? C"#);
-    run_test(r#"a = []; defined? a[1]"#);
-    run_test(r#"a = []; defined? (a[1]=5)"#);
     run_test_with_prelude(
         r#"
             [ C.new.f, S.new.f ]
@@ -1155,32 +1176,8 @@ fn defined() {
             end
     "#,
     );
-    // instance variables
-    run_test(
-        r#"
-        class A
-          def initialize; @x = 1; end
-          def f; defined?(@x); end
-          def g; defined?(@y); end
-        end
-        [A.new.f, A.new.g]
-    "#,
-    );
-    run_test(
-        r#"
-        class A
-          def f; @v = 10; [defined?(@v), defined?(@w)]; end
-        end
-        A.new.f
-    "#,
-    );
-    // global variables
-    run_test(
-        r#"
-        $gx = 1
-        [defined?($gx), defined?($gy)]
-    "#,
-    );
+    // (instance-variable, global-variable, and class-variable cases are
+    // batched into the single `run_tests` above.)
     // constants
     run_test_with_prelude(
         r#"
@@ -1203,17 +1200,6 @@ fn defined() {
         end
     "#,
     );
-    // methods
-    run_test(
-        r#"
-        class A
-          def foo; end
-          def f; defined?(foo); end
-          def g; defined?(bar); end
-        end
-        [A.new.f, A.new.g]
-    "#,
-    );
     run_tests(&[
         r#"defined? $stdout"#, r#"defined? $0"#, r#"defined? $LOAD_PATH"#,
         r#"defined? Integer"#, r#"defined? String"#, r#"defined? NoSuchConstant"#,
@@ -1221,45 +1207,6 @@ fn defined() {
         r#"defined? [].map"#, r#"defined? [].no_such_method"#,
         r#"defined? 1.to_s"#,
     ]);
-    // class variables
-    run_test(
-        r#"
-        class A
-          @@x = 1
-          def f; defined?(@@x); end
-        end
-        A.new.f
-    "#,
-    );
-    run_test(
-        r#"
-        class A
-          def f; defined?(@@x); end
-        end
-        A.new.f
-    "#,
-    );
-    run_test(
-        r#"
-        class A
-          @@v = 10
-          def f; defined?(@@v); end
-          def g; defined?(@@w); end
-        end
-        [A.new.f, A.new.g]
-    "#,
-    );
-    run_test(
-        r#"
-        class B
-          @@b = 1
-        end
-        class C < B
-          def f; defined?(@@b); end
-        end
-        C.new.f
-    "#,
-    );
 }
 
 #[test]
