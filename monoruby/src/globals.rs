@@ -24,6 +24,37 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
+/// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
+///
+/// This is also the name of the arch-specific subdirectory inside the
+/// vendored stdlib snapshot: CRuby keys `rbconfig.rb` and
+/// `rbconfig/sizeof.rb` under `<rubylibdir>/<arch>/`, and
+/// `bin/vendor-ruby-stdlib` preserves that layout, so the value here must
+/// match the directory that was actually vendored.
+///
+/// When a host CRuby was present at build time, `build.rs` bakes its exact
+/// `RUBY_PLATFORM` into `MONORUBY_RUBY_PLATFORM` (crucially including the
+/// macOS Darwin major version, e.g. `arm64-darwin23`). Otherwise we fall
+/// back to a `cfg!`-derived default. Centralising it here keeps the
+/// `$LOAD_PATH` arch-dir prepend, the `require` stub lookup, and the
+/// `RUBY_PLATFORM` constant from drifting apart (previously every site
+/// hard-coded `x86_64-linux`, which was wrong on aarch64 / macOS).
+pub(crate) fn ruby_platform() -> &'static str {
+    const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        "arm64-darwin"
+    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
+        "x86_64-darwin"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+        "aarch64-linux"
+    } else {
+        "x86_64-linux"
+    };
+    option_env!("MONORUBY_RUBY_PLATFORM")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_PLATFORM)
+}
+
 pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
@@ -479,9 +510,10 @@ impl Globals {
         // CRuby ships some stdlib files (e.g. `rbconfig/sizeof.rb`) under a
         // platform-specific subdirectory and adds that subdir to `$LOAD_PATH`
         // alongside the generic one; mirror that here so a bare
-        // `require "rbconfig/sizeof"` resolves to the x86_64-linux stub.
+        // `require "rbconfig/sizeof"` resolves to the arch-specific stub
+        // (`ruby_platform()` — the same string vendored as the subdir name).
         let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
-        let monoruby_arch_lib = monoruby_lib.join("x86_64-linux");
+        let monoruby_arch_lib = monoruby_lib.join(ruby_platform());
         globals.extend_load_path(
             [&monoruby_lib, &monoruby_arch_lib]
                 .into_iter()
@@ -521,20 +553,7 @@ impl Globals {
         // feeds into `RbConfig::CONFIG["arch"]` so rubygems finds each
         // gem's built C-extension directory. The cfg!-derived default is
         // only the fallback when no Ruby was available at build time.
-        const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos"))
-        {
-            "arm64-darwin"
-        } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
-            "x86_64-darwin"
-        } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
-            "aarch64-linux"
-        } else {
-            "x86_64-linux"
-        };
-        let platform = option_env!("MONORUBY_RUBY_PLATFORM")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_PLATFORM);
+        let platform = ruby_platform();
         let mut ruby_description =
             Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
         let mut ruby_engine = Value::string_from_str("ruby");

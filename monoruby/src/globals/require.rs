@@ -134,7 +134,7 @@ impl Globals {
         // vendored snapshot keeps resolving through `$LOAD_PATH` (where it
         // is merely first), letting host activation shadow it consistently.
         let stub_root = dirs::home_dir().unwrap().join(".monoruby").join("stub");
-        for dir in [stub_root.clone(), stub_root.join("x86_64-linux")] {
+        for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
             if let Some(p) = probe(&dir, file_name) {
                 return Some(p);
             }
