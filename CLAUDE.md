@@ -332,21 +332,45 @@ External crates (fetched from git):
 
 ### Build Script (`build.rs`)
 
-`monoruby/build.rs` runs at **every `cargo build`** and performs two jobs:
+`monoruby/build.rs` runs at **every `cargo build`** and is **host-Ruby
+independent**: it does not need a `ruby` on `PATH` to produce a correct,
+reproducible build. It performs two jobs:
 
-1. **Capture CRuby metadata** — Executes the system `ruby` binary to query `$LOAD_PATH` and `RUBY_VERSION`, writing the results to:
-   - `~/.monoruby/library_path` — newline-separated list of CRuby's stdlib directories
-   - `~/.monoruby/ruby_version` — CRuby's version string (e.g. `3.4.1`)
+1. **Bake the reported Ruby version** — Reads `monoruby/vendor/ruby-stdlib/.ruby-version`
+   (the pin marker written by `bin/vendor-ruby-stdlib`, currently `4.0.2`)
+   and exposes it as the compile-time env var `MONORUBY_RUBY_VERSION`, which
+   the runtime reports as `RUBY_VERSION`. This is read from the vendored
+   snapshot — **not** from a host `ruby` — so the version monoruby reports
+   always matches the stdlib it actually ships, regardless of build host.
+   - The host `$LOAD_PATH` and `Gem.paths.path` are **no longer** captured at
+     build time. Host-installed (non-default) gem discovery is handled at run
+     time by `src/ruby_probe.rs`, which invokes a host `ruby` once (if a
+     suitable one is present) and caches `~/.monoruby/{library_path,gem_path}`.
+   - The **only** remaining build-time host-`ruby` use is a *best-effort*
+     `RUBY_PLATFORM` probe, kept solely to recover the macOS Darwin major
+     version (e.g. `arm64-darwin23`) that rubygems keys built-extension dirs
+     on. Absent a host ruby, the runtime falls back to a `cfg!`-derived
+     platform (`globals::ruby_platform`), so the build never requires `ruby`.
 
-   At runtime, monoruby reads these files to set `$LOAD_PATH` and `RUBY_VERSION` so that `require` resolves to CRuby's standard library. If `ruby` is not in `PATH`, a warning is printed and the files are not written.
+2. **Install the vendored stdlib + Ruby stubs** — Recursively copies into
+   `~/.monoruby/`:
+   - `monoruby/vendor/ruby-stdlib/` → `~/.monoruby/lib/` — the checked-in
+     CRuby stdlib + default-gem snapshot (no host CRuby needed).
+   - `monoruby/builtins/` → `~/.monoruby/builtins/` — Ruby files loaded at
+     interpreter start (e.g. `startup.rb`, `enumerable.rb`, `array.rb`).
+   - `monoruby/stdlib/` and `monoruby/gem/` → `~/.monoruby/lib/` **and**
+     `~/.monoruby/stub/` — monoruby's own host-independent replacements for
+     C-extension-backed libraries, laid down last so they win name clashes;
+     the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
 
-2. **Install Ruby library stubs** — Recursively copies two source directories into `~/.monoruby/`:
-   - `monoruby/startup/` → `~/.monoruby/` — Ruby files that are loaded automatically at interpreter start (e.g. `startup.rb`, `enumerable.rb`, `comparable.rb`, `integer.rb`, `range.rb`, …)
-   - `monoruby/builtins/` → `~/.monoruby/builtins/` — additional built-in Ruby files (e.g. `array.rb`, `builtins.rb`)
+   These files implement parts of the Ruby standard library in Ruby rather
+   than Rust.
 
-   These files implement parts of the Ruby standard library in Ruby rather than Rust.
-
-> **Note**: Because `build.rs` has no `cargo:rerun-if-changed` directive for the startup files (the line is commented out), changes to files in `startup/` or `builtins/` will **not** automatically trigger a rebuild. Run `touch monoruby/build.rs` or `cargo build` after editing them to force re-installation.
+> **Note**: `build.rs` declares `cargo:rerun-if-changed` for each source tree
+> (and the `.ruby-version` pin and a `~/.monoruby/.build-stamp` self-heal
+> file), so edits to `builtins/`, `stdlib/`, `gem/`, or the vendored snapshot
+> reinstall on the next build, and deleting `~/.monoruby` re-triggers the
+> install.
 
 ### Building
 
