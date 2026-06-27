@@ -9,12 +9,12 @@ impl Codegen {
     /// - rdi: &RValue
     ///
     /// #### out
-    /// - r15: Value
+    /// - dst: Value
     ///
     /// #### destroy
     /// - rdi, rsi, rdx
     ///
-    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, self_: bool) {
+    pub(super) fn load_ivar_heap(&mut self, ivarid: IvarId, is_object_ty: bool, self_: bool, dst: GP) {
         let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
             ivar - OBJECT_INLINE_IVAR as u32
@@ -31,11 +31,11 @@ impl Codegen {
         }
         monoasm! { &mut self.jit,
             movq rdi, [rdx + (MONOVEC_PTR)]; // ptr
-            movq r15, [rdi + (idx as i32 * 8)];
-            testq r15, r15;
+            movq R(dst as _), [rdi + (idx as i32 * 8)];
+            testq R(dst as _), R(dst as _);
             jne  exit;
         nil:
-            movq r15, (NIL_VALUE);
+            movq R(dst as _), (NIL_VALUE);
         exit:
         }
     }

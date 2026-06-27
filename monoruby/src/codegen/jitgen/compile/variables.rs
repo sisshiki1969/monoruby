@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::state::Guarded;
 
 impl<'a> JitContext<'a> {
     pub(super) fn load_ivar(
@@ -10,21 +11,26 @@ impl<'a> JitContext<'a> {
         ivarid: IvarId,
     ) {
         assert!(!self_class.is_always_frozen());
-        state.discard(dst);
-        state.writeback_acc(ir);
+        // Allocate a pool register and load the ivar value straight into it (a
+        // resident), so a following integer op consumes it without a stack
+        // round-trip. `alloc_gp_for` clears `dst`'s stale link and spills an
+        // evicted victim; the load writes only `gp` (its scratch is rdi/rsi/rdx,
+        // none of them pool registers), so other residents survive.
+        let gp = state.alloc_gp_for(ir, dst, Guarded::Value);
         ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
-            ir.push(AsmInst::LoadIVarInline { ivarid });
+            ir.push(AsmInst::LoadIVarInline { ivarid, dst: gp });
         } else {
             ir.push(AsmInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 self_: true,
+                dst: gp,
             });
             self.set_ivar_heap_accessed();
         };
-        state.def_reg2acc(ir, GP::R15, dst);
+        state.bind_gp_resident(gp, dst);
     }
 
     pub(super) fn store_ivar(

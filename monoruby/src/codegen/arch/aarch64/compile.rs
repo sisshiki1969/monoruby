@@ -360,57 +360,22 @@ impl Codegen {
     /// overflow of the tagged arithmetic == fixnum overflow, so we branch to
     /// `deopt` on the V flag. Result is left in `lhs`'s register, mirroring x86
     /// `integer_binop`. Mul/Div/etc. not yet ported (bail).
-    fn a64_integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: &OpMode,
-        kind: BinOpK,
-        deopt: &DestLabel,
-    ) -> bool {
+    fn a64_integer_binop(&mut self, lhs: GP, rhs: GP, kind: BinOpK, deopt: &DestLabel) -> bool {
         let l = lhs.a64().0;
         let r = rhs.a64().0;
         match kind {
             BinOpK::Add => {
-                match mode {
-                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
-                        sub x(l), x(l), #(1u32);
-                        adds x(l), x(l), x(r);
-                    ),
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        let imm = Value::i32(*i as i32).id().wrapping_sub(1);
-                        monoasm_arm64!(&mut self.jit,
-                            mov x9, (imm);
-                            adds x(l), x(l), x9;
-                        );
-                    }
-                }
+                monoasm_arm64!(&mut self.jit,
+                    sub x(l), x(l), #(1u32);
+                    adds x(l), x(l), x(r);
+                );
                 self.jit.bcond_label(monoasm::Cond::Vs, deopt);
             }
-            BinOpK::Sub => match mode {
-                OpMode::RR(..) => {
-                    monoasm_arm64!(&mut self.jit, subs x(l), x(l), x(r););
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
-                }
-                OpMode::RI(_, rhs_i) => {
-                    let imm = Value::i32(*rhs_i as i32).id().wrapping_sub(1);
-                    monoasm_arm64!(&mut self.jit,
-                        mov x9, (imm);
-                        subs x(l), x(l), x9;
-                    );
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                }
-                OpMode::IR(lhs_i, _) => {
-                    let imm = Value::i32(*lhs_i as i32).id();
-                    monoasm_arm64!(&mut self.jit,
-                        mov x(l), (imm);
-                        subs x(l), x(l), x(r);
-                    );
-                    self.jit.bcond_label(monoasm::Cond::Vs, deopt);
-                    monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
-                }
-            },
+            BinOpK::Sub => {
+                monoasm_arm64!(&mut self.jit, subs x(l), x(l), x(r););
+                self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+                monoasm_arm64!(&mut self.jit, add x(l), x(l), #(1u32););
+            }
             // Mul: compute `2a * b` (matching x86's `imul` on the half-untagged
             // lhs). aarch64 has no `smulh`, so detect overflow with a checking
             // `sdiv`: if `2a != 0` and `(2a*b)/(2a) != b` the product wrapped.
@@ -419,19 +384,10 @@ impl Codegen {
             // high half (`smulh`) must equal the sign-extension of the low half
             // (`low >> 63`); a mismatch means the product wrapped.
             BinOpK::Mul => {
-                match mode {
-                    OpMode::RR(..) => monoasm_arm64!(&mut self.jit,
-                        asr x(r), x(r), #(1u32);   // b (untagged)
-                        sub x(l), x(l), #(1u32);   // 2a
-                    ),
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        let imm = *i as i64 as u64; // raw multiplier
-                        monoasm_arm64!(&mut self.jit,
-                            mov x(r), (imm);
-                            sub x(l), x(l), #(1u32);
-                        );
-                    }
-                }
+                monoasm_arm64!(&mut self.jit,
+                    asr x(r), x(r), #(1u32);   // b (untagged)
+                    sub x(l), x(l), #(1u32);   // 2a
+                );
                 monoasm_arm64!(&mut self.jit, mul x9, x(l), x(r);); // low 64
                 monoasm_arm64!(&mut self.jit, smulh x10, x(l), x(r););
                 monoasm_arm64!(&mut self.jit,
@@ -466,7 +422,22 @@ impl Codegen {
                     add x(rax), x(rax), #(1u32); // 2q+1 (tagged)
                 );
             }
-            // Rem/bit-ops are compiled as method calls, never IntegerBinOp
+            // Bitwise ops on tagged fixnums need no overflow check and never
+            // clobber `rhs`; the result lands in `lhs` like Add/Sub. `&`/`|` keep
+            // the LSB tag; `^` clears it, so re-tag with `+1`.
+            BinOpK::BitOr => {
+                monoasm_arm64!(&mut self.jit, orr x(l), x(l), x(r););
+            }
+            BinOpK::BitAnd => {
+                monoasm_arm64!(&mut self.jit, and x(l), x(l), x(r););
+            }
+            BinOpK::BitXor => {
+                monoasm_arm64!(&mut self.jit,
+                    eor x(l), x(l), x(r);
+                    add x(l), x(l), #(1u32);
+                );
+            }
+            // Rem/Exp/Shl/Shr are compiled as method calls, never IntegerBinOp
             // (mirrors x86 `integer_binop`'s `_ => unreachable!()`).
             _ => unreachable!(),
         }
@@ -740,23 +711,10 @@ impl Codegen {
 
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
-    fn a64_cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
+    fn a64_cmp_integer(&mut self, lhs: GP, rhs: GP) {
         let l = lhs.a64().0;
-        match mode {
-            OpMode::RR(..) => {
-                let r = rhs.a64().0;
-                monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
-            }
-            OpMode::RI(_, i) => {
-                let imm = Value::i32(*i as i32).id();
-                monoasm_arm64!(&mut self.jit, mov x9, (imm); cmp x(l), x9;);
-            }
-            OpMode::IR(i, _) => {
-                let r = rhs.a64().0;
-                let imm = Value::i32(*i as i32).id();
-                monoasm_arm64!(&mut self.jit, mov x(l), (imm); cmp x(l), x(r););
-            }
-        }
+        let r = rhs.a64().0;
+        monoasm_arm64!(&mut self.jit, cmp x(l), x(r););
     }
 
     /// After `a64_cmp_integer`, materialize a Ruby boolean in rax (x0):
@@ -1574,9 +1532,12 @@ impl Codegen {
                 self.jit.bind_label(exit);
             }
             // [lfp - slot] <- src (legalized like `Load`).
+            // aarch64 already addresses every slot via the LFP, so `Slot` and
+            // `LfpSlot` lower identically here (the distinction only matters on
+            // x86, where ordinary `Slot` is rbp-relative).
             LInst::Store {
                 src,
-                mem: LMem::Slot(slot),
+                mem: LMem::Slot(slot) | LMem::LfpSlot(slot),
             } => {
                 let lfp = GP::R14.a64().0;
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -1800,12 +1761,11 @@ impl Codegen {
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {
                 kind,
-                mode,
                 lhs,
                 rhs,
                 deopt,
             } => {
-                self.a64_integer_binop(lhs, rhs, &mode, kind, &deopt);
+                self.a64_integer_binop(lhs, rhs, kind, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
@@ -2685,11 +2645,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
         kind: CmpKind,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
     ) -> bool {
-        self.a64_cmp_integer(&mode, lhs, rhs);
+        self.a64_cmp_integer(lhs, rhs);
         self.a64_flag_to_bool(kind);
         true
     }
@@ -2837,8 +2796,13 @@ impl Codegen {
         // exit (which undoes any loop sp-bump, writes back live values, and
         // re-enters the VM). x19-x23 are AAPCS64 callee-saved so the C call
         // preserves them, and the deopt does the value write-back; the
-        // caller-saved d2-d7 pool is saved around the call because that
-        // write-back reads it (d8-d15 are callee-saved).
+        // caller-saved d2-d7 FP pool *and* the caller-saved GP pool (x5-x8 =
+        // R8-R11) are saved around the call because that write-back reads both
+        // (d8-d15 / x19-x28 are callee-saved). Omitting the x5-x8 save let the
+        // recompile call clobber a GP resident (e.g. a `def_rax2gp` call result
+        // parked in x5) so the following deopt write-back spilled garbage to its
+        // stack home — `require "set"`/`"bigdecimal"` corruption; cf. the twin
+        // save in `a64_gen_exec_gc`.
         let counter = Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (counter);
@@ -2851,13 +2815,15 @@ impl Codegen {
             str w11, [x9];
             cbnz w11, deopt;                 // not yet exhausted -> just deopt
             // counter hit 0: recompile once, then deopt.
-            sub sp, sp, #(48);
+            sub sp, sp, #(80);
             str d2, [sp, #(0)];
             str d3, [sp, #(8)];
             str d4, [sp, #(16)];
             str d5, [sp, #(24)];
             str d6, [sp, #(32)];
             str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];         // GP pool (R8-R11), read by the deopt write-back
+            stp x7, x8, [sp, #(64)];
             mov x0, x19;                     // vm (Executor)
             mov x1, x20;                     // globals
             mov x2, x22;                     // lfp
@@ -2888,7 +2854,9 @@ impl Codegen {
             ldr d5, [sp, #(24)];
             ldr d6, [sp, #(32)];
             ldr d7, [sp, #(40)];
-            add sp, sp, #(48);
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
         );
         // Check the compiler's return value: the recompiler caught a panic, set
         // a Ruby `FatalError`, and returned None (x0 = 0). Branch to the error
@@ -2914,13 +2882,15 @@ impl Codegen {
     fn a64_call_recompile_specialized(&mut self, global_idx: usize, reason: RecompileReason) {
         let f = crate::codegen::compiler::jit_recompile_specialized as *const () as u64;
         monoasm_arm64!(&mut self.jit,
-            sub sp, sp, #(48);
+            sub sp, sp, #(80);
             str d2, [sp, #(0)];
             str d3, [sp, #(8)];
             str d4, [sp, #(16)];
             str d5, [sp, #(24)];
             str d6, [sp, #(32)];
             str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];      // GP pool (R8-R11), read by the deopt write-back
+            stp x7, x8, [sp, #(64)];
             mov x0, x20;                  // globals
             mov x1, (global_idx as u64);  // specialized_info index
             mov x2, (reason as u64);      // RecompileReason
@@ -2934,7 +2904,9 @@ impl Codegen {
             ldr d5, [sp, #(24)];
             ldr d6, [sp, #(32)];
             ldr d7, [sp, #(40)];
-            add sp, sp, #(48);
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
         );
     }
 
@@ -3184,6 +3156,7 @@ impl Codegen {
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     ) -> bool {
         let ivar = ivarid.get() as u32;
         let idx = if is_object_ty {
@@ -3193,7 +3166,7 @@ impl Codegen {
         };
         let off = idx * 8;
         let rdi = GP::Rdi.a64().0;
-        let r15 = GP::R15.a64().0;
+        let dst = dst.a64().0;
         let nil = self.jit.label();
         let exit = self.jit.label();
         monoasm_arm64!(&mut self.jit,
@@ -3210,11 +3183,11 @@ impl Codegen {
             self.jit.bcond_label(monoasm::Cond::Le, &nil);   // len <= idx -> nil
         }
         monoasm_arm64!(&mut self.jit, ldr x9, [x9, #(MONOVEC_PTR as u32)];); // data ptr
-        self.a64_field_load(r15, 9, off);                    // value
+        self.a64_field_load(dst, 9, off);                    // value
         monoasm_arm64!(&mut self.jit,
-            cbnz x(r15), exit;                               // set -> exit
+            cbnz x(dst), exit;                               // set -> exit
         nil:
-            mov x(r15), (NIL_VALUE);
+            mov x(dst), (NIL_VALUE);
         exit:
         );
         true

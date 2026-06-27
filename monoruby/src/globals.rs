@@ -40,6 +40,7 @@ pub(crate) type InlineGen = dyn Fn(
 /// registration goes through the same path on both arches, but un-ported
 /// generators register this instead of arch-specific codegen (see the
 /// `inline_gen!` macro). x86 never uses it.
+#[allow(dead_code)] // aarch64-only; dead on x86.
 pub(crate) fn noinline_gen(
     _: &mut jitgen::AbstractState,
     _: &mut jitgen::asmir::AsmIr,

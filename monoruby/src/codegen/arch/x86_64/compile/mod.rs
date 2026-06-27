@@ -44,6 +44,7 @@ impl Codegen {
             | AsmInst::Label(..)
             | AsmInst::RegMove(..)
             | AsmInst::RegToStack(..)
+            | AsmInst::RegToLfpStack(..)
             | AsmInst::StackToReg(..)
             | AsmInst::LitToReg(..)
             | AsmInst::LitToStack(..)
@@ -81,9 +82,9 @@ impl Codegen {
             | AsmInst::FprToStack(..)
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
-            | AsmInst::IntegerBinOp { .. }
-            | AsmInst::IntegerCmp { .. }
-            | AsmInst::IntegerCmpBr { .. }
+            | AsmInst::IntegerBinOpReg { .. }
+            | AsmInst::IntegerCmpReg { .. }
+            | AsmInst::IntegerCmpBrReg { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
@@ -400,7 +401,7 @@ impl Codegen {
                 exit:
                 );
             }
-            // [lfp - slot] <- src
+            // [rbp - slot] <- src (native-frame relative)
             LInst::Store {
                 src,
                 mem: LMem::Slot(slot),
@@ -408,6 +409,16 @@ impl Codegen {
                 let r = src as u64;
                 monoasm!( &mut self.jit,
                     movq [rbp - (rbp_local(slot))], R(r);
+                );
+            }
+            // [r14 - slot] <- src (LFP relative; follows a heap-moved frame)
+            LInst::Store {
+                src,
+                mem: LMem::LfpSlot(slot),
+            } => {
+                let r = src as u64;
+                monoasm!( &mut self.jit,
+                    movq [r14 - (conv(slot))], R(r);
                 );
             }
             // [base + disp] <- src (object field; no immediate-range limit on x86)
@@ -560,12 +571,11 @@ impl Codegen {
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {
                 kind,
-                mode,
                 lhs,
                 rhs,
                 deopt,
             } => {
-                self.integer_binop(lhs, rhs, &mode, kind, &deopt);
+                self.integer_binop(lhs, rhs, kind, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
@@ -1371,11 +1381,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_integer_cmp(
         &mut self,
         kind: CmpKind,
-        mode: OpMode,
         lhs: GP,
         rhs: GP,
     ) -> bool {
-        self.integer_cmp(kind, mode, lhs, rhs);
+        self.integer_cmp(kind, lhs, rhs);
         true
     }
 
@@ -1541,15 +1550,16 @@ impl Codegen {
         true
     }
 
-    /// Load a heap-spilled instance variable into the accumulator, substituting
+    /// Load a heap-spilled instance variable into `dst`, substituting
     /// nil for an out-of-range (non-self) or unset slot.
     pub(in crate::codegen::jitgen) fn emit_load_ivar_heap(
         &mut self,
         ivarid: IvarId,
         is_object_ty: bool,
         self_: bool,
+        dst: GP,
     ) -> bool {
-        self.load_ivar_heap(ivarid, is_object_ty, self_);
+        self.load_ivar_heap(ivarid, is_object_ty, self_, dst);
         true
     }
 

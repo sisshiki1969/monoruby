@@ -1423,6 +1423,7 @@ pub(super) extern "C" fn err_redo(vm: &mut Executor) {
     vm.set_error(MonorubyErr::redo());
 }
 
+#[allow(dead_code)] // extern "C" helper, currently unreferenced.
 pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
 }

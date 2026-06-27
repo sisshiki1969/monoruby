@@ -102,19 +102,15 @@ const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 10;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
-/// §9 9d allocatable GP pool: the caller-saved scratch registers that are *not*
-/// used by the fixed VM convention (acc/lfp/pc/globals/executor) or the C-ABI /
-/// inline-builtin convention (rdi/rax/rsi/rdx/rcx). The 9d allocator colours
-/// `VReg::Alloc` ids into these (or a frame spill slot); because they are
-/// caller-saved, any live across a C-ABI call is spilled/reloaded around it.
-///
-/// Arch-specific. x86-64 uses `r8`–`r11`. aarch64's pool is **empty**: the
-/// `GP` names `R8`–`R11` map to `x5`–`x8` via `GP::a64`, which overlap the
-/// aarch64 call-arg scratch, so no GP register is allocatable there and every
-/// value lives in its frame home (the R15 accumulator having been retired).
-#[cfg(target_arch = "x86_64")]
-pub(in crate::codegen) const GP_ALLOC_POOL: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11];
-#[cfg(target_arch = "aarch64")]
+/// §9 9d allocatable GP pool. **Empty on both arches**: GP-pool residence
+/// (`LinkMode::G`) has been abolished, so no slot is ever coloured into a
+/// physical GP register — every general-purpose value lives in its frame home
+/// (`LinkMode::S`) and floats keep their separate `FPReg` file. The pool used
+/// to be x86-64 `r8`–`r11` (aarch64 was always empty, its `R8`–`R11`/`x5`–`x8`
+/// overlapping the call-arg scratch); it carried a call result across a
+/// capturing frame heap-move via the deopt write-back, which is now done
+/// frame-relative through `AsmInst::RegToLfpStack` instead. Kept as a `&[GP]`
+/// so the (now always-`None`) `find_vacant` plumbing degrades to a no-op.
 pub(in crate::codegen) const GP_ALLOC_POOL: &[GP] = &[];
 
 ///
@@ -661,7 +657,7 @@ pub struct Codegen {
     /// (`gen_asm`) collects the whole body into one ordered stream and drains it
     /// (the seam the future GP physical-allocation pass slots into). `None`
     /// during the drain and everywhere else — emission is immediate.
-    pub(crate) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
+    pub(in crate::codegen) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
     #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
     pub(crate) jit_compile_time: std::time::Duration,
 }

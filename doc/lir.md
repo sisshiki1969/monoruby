@@ -564,10 +564,10 @@ Notes:
   registers are caller-saved, so a Fixnum left resident there would otherwise be
   clobbered by the helper's C call (e.g. `String#clear`'s `bytesize` in `r8`,
   clobbered by the `""` literal's `value_deep_copy`). The asmir builders that take
-  `&AbstractFrame` (immutable, so they cannot flush) get an explicit `flush_pool`
+  `&AbstractFrame` (immutable, so they cannot flush) get an explicit `flush_gp`
   in their handler instead.
 - Branch-merge reconciliation needs no special pool handling: pool residents are
-  flushed (→ `S`) before any branch (the compile-loop `flush_pool` and the
+  flushed (→ `S`) before any branch (the compile-loop `flush_gp` and the
   back-edge analysis G→S demotion), so a merge never sees a `G(_, Alloc)` slot.
 
 ### 9d outcome: GP register residency does not pay; the untagged-Fixnum direction does

@@ -53,6 +53,11 @@ impl Codegen {
                 src: r,
                 mem: LMem::Slot(slot),
             }),
+            // [lfp - slot] <- reg (LFP-relative; follows a heap-moved frame)
+            AsmInst::RegToLfpStack(r, slot) => self.encode_linst(LInst::Store {
+                src: r,
+                mem: LMem::LfpSlot(slot),
+            }),
             // reg <- [slot]
             AsmInst::StackToReg(slot, r) => self.encode_linst(LInst::Load {
                 dst: r.into(),
@@ -253,68 +258,76 @@ impl Codegen {
             AsmInst::FprRestore(using_fpr, cont) => {
                 self.encode_linst(LInst::FprRestore { using_fpr, cont })
             }
-            // Integer / float arithmetic fast paths. Each backend resolves the
-            // same operands and dispatches to its own emission primitive
-            // (aarch64 bails on an unsupported BinOpK, hence the bool results).
-            AsmInst::IntegerBinOp {
+            // Register-form binop. `Add`/`Sub`/`Mul` compute in place in their
+            // `lhs`, so move `lhs` into `dst` first when they differ, then run
+            // the shared `IntegerBinOp` on `dst` (overflow -> deopt). `Div` reads
+            // `lhs` (preserved) and clobbers `rhs`, producing the quotient in
+            // `rax`; copy it to `dst` afterwards.
+            AsmInst::IntegerBinOpReg {
                 kind,
+                dst,
                 lhs,
                 rhs,
-                mode,
                 deopt,
             } => {
                 let deopt = labels[deopt].clone();
-                self.encode_linst(LInst::IntegerBinOp {
-                    kind,
-                    mode,
-                    lhs,
-                    rhs,
-                    deopt,
-                });
-            }
-            AsmInst::IntegerCmp {
-                mode,
-                kind,
-                lhs,
-                rhs,
-            } => self.encode_linst(LInst::IntegerCmp { kind, mode, lhs, rhs }),
-            // Fused integer compare + conditional branch, lowered to LIR here
-            // (arch-neutral) and encoded per-arch. The compare sets flags; the
-            // branch is a signed conditional jump with the BrKind inversion
-            // folded into the condition.
-            AsmInst::IntegerCmpBr {
-                mode,
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                branch_dest,
-            } => {
-                let target = frame.resolve_label(&mut self.jit, branch_dest);
-                match mode {
-                    OpMode::RR(..) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
-                        rhs: rhs.into(),
-                    }),
-                    OpMode::RI(_, i) => self.encode_linst(LInst::Cmp {
-                        lhs: lhs.into(),
-                        rhs: LOperand::Imm(Value::i32(i as i32).id() as i64),
-                    }),
-                    // imm on the left: materialize it into lhs, then compare
-                    // reg-reg (mirrors `cmp_integer`'s IR path, which clobbers
-                    // lhs).
-                    OpMode::IR(i, _) => {
-                        self.encode_linst(LInst::LoadImm {
-                            dst: lhs.into(),
-                            imm: Value::i32(i as i32).id(),
-                        });
-                        self.encode_linst(LInst::Cmp {
-                            lhs: lhs.into(),
-                            rhs: rhs.into(),
+                if matches!(kind, BinOpK::Div) {
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs,
+                        rhs,
+                        deopt,
+                    });
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: GP::Rax.into(),
+                    });
+                } else {
+                    if dst != lhs {
+                        self.encode_linst(LInst::Mov {
+                            dst: dst.into(),
+                            src: lhs.into(),
                         });
                     }
+                    self.encode_linst(LInst::IntegerBinOp {
+                        kind,
+                        lhs: dst,
+                        rhs,
+                        deopt,
+                    });
                 }
-                // TEq compares like Eq for integers; BrIfNot takes the inverse.
+            }
+            // Register-form comparison. Operands are already in GP registers and
+            // fixnum-guarded, so just compare (result in rax) and store the
+            // boolean to `dst`'s slot.
+            AsmInst::IntegerCmpReg {
+                kind,
+                dst,
+                lhs,
+                rhs,
+            } => {
+                self.encode_linst(LInst::IntegerCmp { kind, lhs, rhs });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: GP::Rax,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
+            // Register-form compare+branch. Operands are already in GP registers
+            // and fixnum-guarded; compare and branch per `kind`/`brkind`.
+            AsmInst::IntegerCmpBrReg {
+                kind,
+                brkind,
+                branch_dest,
+                lhs,
+                rhs,
+            } => {
+                let target = frame.resolve_label(&mut self.jit, branch_dest);
+                self.encode_linst(LInst::Cmp {
+                    lhs: lhs.into(),
+                    rhs: rhs.into(),
+                });
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {
                     cond = cond.invert();
@@ -513,18 +526,18 @@ impl Codegen {
             // Inline instance-variable / struct-member access on the receiver in
             // rdi (no Box deref). aarch64 bails if the field offset exceeds the
             // 12-bit scaled load/store immediate.
-            // Inline ivar load: `r15 <- self.@ivar` at a fixed field offset on
+            // Inline ivar load: `dst <- self.@ivar` at a fixed field offset on
             // the receiver (rdi); an unset slot reads as 0 and becomes nil.
-            AsmInst::LoadIVarInline { ivarid } => {
+            AsmInst::LoadIVarInline { ivarid, dst } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Load {
-                    dst: GP::R15.into(),
+                    dst: dst.into(),
                     mem: LMem::Field {
                         base: GP::Rdi.into(),
                         disp,
                     },
                 });
-                self.encode_linst(LInst::NilIfZero { reg: GP::R15 });
+                self.encode_linst(LInst::NilIfZero { reg: dst });
             }
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
@@ -730,10 +743,12 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => self.encode_linst(LInst::LoadIVarHeap {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             }),
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an fpr pool register is live (no fpr save yet).
@@ -1105,11 +1120,6 @@ impl Codegen {
     /// home *is* its slot). The ① fixpoint's loop-head liveness / loop-carried
     /// metadata is threaded in here when that step lands (the §9c wiring).
     pub(in crate::codegen::jitgen) fn allocate_gp(&self, body: Vec<LInst>) -> Vec<LInst> {
-        #[cfg(feature = "gp-alloc-lir")]
-        {
-            return crate::codegen::jitgen::gp_alloc::allocate(body);
-        }
-        #[cfg(not(feature = "gp-alloc-lir"))]
         body
     }
 
@@ -1170,8 +1180,9 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 self_,
+                dst,
             } => {
-                self.emit_load_ivar_heap(ivarid, is_object_ty, self_);
+                self.emit_load_ivar_heap(ivarid, is_object_ty, self_, dst);
             }
             LInst::StoreIVarHeap {
                 src,
@@ -1292,8 +1303,8 @@ impl Codegen {
             LInst::ExecGc { write_back, error, base } => {
                 self.emit_exec_gc(write_back, &error, base);
             }
-            LInst::IntegerCmp { kind, mode, lhs, rhs } => {
-                self.emit_integer_cmp(kind, mode, lhs, rhs);
+            LInst::IntegerCmp { kind, lhs, rhs } => {
+                self.emit_integer_cmp(kind, lhs, rhs);
             }
             LInst::Ret => {
                 self.emit_ret();

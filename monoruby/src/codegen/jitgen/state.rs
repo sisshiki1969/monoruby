@@ -7,9 +7,8 @@ mod slot;
 
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
-pub(super) use read_slot::{DeoptPoint, TransferIR};
+pub(super) use read_slot::DeoptPoint;
 use slot::SfGuarded;
-use slot::{FpXfer, Spill};
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]
@@ -180,6 +179,10 @@ impl AbstractFrame {
         self.next_sp = slot;
     }
 
+    pub(in crate::codegen::jitgen) fn next_sp(&self) -> SlotId {
+        self.next_sp
+    }
+
     pub(super) fn no_capture_guard(&self) -> bool {
         self.invariants.no_capture_guard
     }
@@ -232,6 +235,89 @@ impl AbstractFrame {
         self.def_reg2acc(ir, GP::Rax, dst);
     }
 
+    /// Define `dst` from the call result in rax, for a call that may capture
+    /// (heap-move) this frame. The result is stored to `dst`'s home via the
+    /// **LFP (r14)** rather than parked in a GP-pool register or written
+    /// rbp-relative: if the callee captured the frame (e.g. turned a block into
+    /// a Proc), the live frame afterwards is the heap copy that the LFP points
+    /// at, and an rbp-relative store would land on the abandoned stack frame —
+    /// losing the result (the capture-deopt re-homes only register-resident
+    /// slots, so an `S` slot stored rbp-relative is never re-homed). Skipping
+    /// the pool keeps this correct with an empty `GP_ALLOC_POOL` too.
+    pub(crate) fn def_rax2acc_capturing(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: impl Into<Option<SlotId>>,
+    ) {
+        if let Some(dst) = dst.into() {
+            ir.reg2lfp_stack(GP::Rax, dst);
+            self.def_S_guarded(dst, slot::Guarded::Value);
+        }
+    }
+
+    /// Define `dst` from a call/yield result in rax by parking it in a GP-pool
+    /// register (making it a resident) instead of writing it to its stack home.
+    /// A following integer op can then consume it straight out of the register.
+    ///
+    /// The result is a general `Value` of unknown class (`dst` is set to
+    /// `Guarded::Value`), so the first integer op to consume it re-guards
+    /// (`gp_ensure` keys off `is_fixnum(slot)`). It is bound **dirty**, so a
+    /// deopt / GC safepoint re-homes it (`dirty_residents`) and the next
+    /// `flush_gp` spills it. Only sound when the frame is *not* capturable — a
+    /// capturing call must use `def_rax2acc_capturing` (LFP-relative store) and
+    /// leaves no register resident.
+    pub(crate) fn def_rax2gp(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+        if let Some(dst) = dst.into() {
+            let gp = self.alloc_gp_for(ir, dst, slot::Guarded::Value);
+            ir.reg_move(GP::Rax, gp);
+            self.bind_gp_resident(gp, dst);
+        }
+    }
+
+    /// Allocate a pool GP register to receive a freshly-produced general `Value`
+    /// for `dst`: clear `dst`'s stale link (refining it to `guarded`), evict and
+    /// spill a victim resident if the pool is full, and return the (still
+    /// **unbound**) register. The caller emits the value-producing instruction
+    /// into it and then calls [`Self::bind_gp_resident`] — binding only after the
+    /// value is in the register keeps a victim spill from clobbering it and
+    /// matches the binop-result ordering.
+    pub(in crate::codegen::jitgen) fn alloc_gp_for(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        guarded: slot::Guarded,
+    ) -> GP {
+        self.def_S_guarded(dst, guarded);
+        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        gp
+    }
+
+    /// Bind `gp` as the live (dirty) resident of `dst` after the value has been
+    /// produced in it. `dst`'s abstract type (`Guarded`) records whether it is a
+    /// known fixnum, so the first integer op to consume a general-`Value` resident
+    /// re-guards (`gp_ensure` keys off `is_fixnum(slot)`).
+    pub(in crate::codegen::jitgen) fn bind_gp_resident(&mut self, gp: GP, dst: SlotId) {
+        self.gp_regfile.bind(gp, dst, /* dirty */ true);
+    }
+
+    /// Define `dst` from a concrete (non-immediate) literal by loading it
+    /// straight into a GP-pool register (a resident) rather than through rax to
+    /// the stack home. The literal is a heap value (frozen String/Array/…), so
+    /// the resident is `fixnum = false`; it carries its concrete guarded type.
+    /// The slot is `LinkMode::S`, so it is re-homed at a deopt / GC safepoint
+    /// purely as a **dirty** resident (`dirty_residents` spills the register to
+    /// the stack home, where GC then scans the heap pointer), and spilled at the
+    /// next `flush_gp` — exactly as the old `def_reg2acc_concrete_value` path
+    /// left the pointer physically in the stack slot.
+    pub(crate) fn def_lit2gp(&mut self, ir: &mut AsmIr, dst: SlotId, v: Value) {
+        let gp = self.alloc_gp_for(ir, dst, Guarded::from_concrete_value(v));
+        ir.lit2reg(v, gp);
+        self.bind_gp_resident(gp, dst);
+    }
+
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {
         self.def_reg2acc_guarded(ir, src, dst, slot::Guarded::Value)
     }
@@ -273,15 +359,9 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            // §9 9d-B accumulator register file: put the result into a free pool
-            // register (x86 `r8`–`r11`; aarch64's pool is empty so this never
-            // fires there). Any value type may go to the pool (it is GC-rooted
-            // at every safepoint). With the R15 accumulator retired, a value
-            // that gets no pool register is stored straight to its stack home.
-            if let Some(vreg) = self.try_def_G_pool(dst, guarded) {
-                ir.reg_move(src, vreg.phys());
-                return;
-            }
+            // GP-pool residence (`LinkMode::G`) is abolished: with the R15
+            // accumulator retired and no allocatable GP pool, a defined value
+            // is always stored straight to its stack home (`LinkMode::S`).
             ir.reg2stack(src, dst);
             self.def_S_guarded(dst, guarded);
         }
@@ -359,6 +439,22 @@ impl AbstractFrame {
     /// Write back the given slots according to their current state.
     pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
         slot.iter().for_each(|r| self.write_back_slot(ir, *r));
+    }
+
+    /// Flush the per-block local GP register file (the local GP allocator): spill every
+    /// dirty resident to its stack home and clear the file. Called up front by
+    /// every non-`IntegerBinOp` instruction — only that op is GP-aware so far —
+    /// and at block boundaries, so the rest of codegen always observes a slot in
+    /// its canonical stack home. A no-op when the file is empty (the default
+    /// build never populates it, and even with the feature on most instructions
+    /// see an empty file), so the emitted code is unchanged there.
+    pub(in crate::codegen::jitgen) fn flush_gp(&mut self, ir: &mut AsmIr) {
+        if self.gp_regfile.is_empty() {
+            return;
+        }
+        for (reg, slot) in self.gp_regfile.take_dirty_spills() {
+            ir.reg2stack(reg, slot);
+        }
     }
 
     ///

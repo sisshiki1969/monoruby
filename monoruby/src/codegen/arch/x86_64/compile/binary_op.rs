@@ -15,35 +15,18 @@ use super::*;
 /// - stack
 ///
 impl Codegen {
-    pub(super) fn integer_binop(
-        &mut self,
-        lhs: GP,
-        rhs: GP,
-        mode: &OpMode,
-        kind: BinOpK,
-        deopt: &DestLabel,
-    ) {
+    pub(super) fn integer_binop(&mut self, lhs: GP, rhs: GP, kind: BinOpK, deopt: &DestLabel) {
         let lhs_r = lhs as u64;
         let rhs_r = rhs as u64;
         assert_eq!(0, self.jit.get_page());
         match kind {
             BinOpK::Add => {
                 let overflow = self.jit.label();
-                match mode {
-                    OpMode::RR(_, _) => {
-                        monoasm!( &mut self.jit,
-                            subq R(lhs_r), 1;
-                            addq R(lhs_r), R(rhs_r);
-                            jo overflow;
-                        );
-                    }
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        monoasm!( &mut self.jit,
-                            addq  R(lhs_r), (Value::i32(*i as i32).id() - 1);
-                            jo overflow;
-                        );
-                    }
-                }
+                monoasm!( &mut self.jit,
+                    subq R(lhs_r), 1;
+                    addq R(lhs_r), R(rhs_r);
+                    jo overflow;
+                );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
@@ -54,19 +37,8 @@ impl Codegen {
             }
             BinOpK::Mul => {
                 let overflow = self.jit.label();
-                match mode {
-                    OpMode::RR(_, _) => {
-                        monoasm!( &mut self.jit,
-                            sarq R(rhs_r), 1;
-                        );
-                    }
-                    OpMode::RI(_, i) | OpMode::IR(i, _) => {
-                        monoasm!( &mut self.jit,
-                            movq R(rhs_r), (*i as i64);
-                        );
-                    }
-                }
                 monoasm!( &mut self.jit,
+                    sarq R(rhs_r), 1;
                     subq R(lhs_r), 1;
                     imul R(lhs_r), R(rhs_r);
                     jo overflow;
@@ -82,29 +54,11 @@ impl Codegen {
             }
             BinOpK::Sub => {
                 let overflow = self.jit.label();
-                match mode {
-                    OpMode::RR(_, _) => {
-                        monoasm!( &mut self.jit,
-                            subq R(lhs_r), R(rhs_r);
-                            jo overflow;
-                            addq R(lhs_r), 1;
-                        );
-                    }
-                    OpMode::RI(_, rhs) => {
-                        monoasm!( &mut self.jit,
-                            subq R(lhs_r), (Value::i32(*rhs as i32).id() - 1);
-                            jo overflow;
-                        );
-                    }
-                    OpMode::IR(lhs, _) => {
-                        monoasm!( &mut self.jit,
-                            movq R(lhs_r), (Value::i32(*lhs as i32).id());
-                            subq R(lhs_r), R(rhs_r);
-                            jo overflow;
-                            addq R(lhs_r), 1;
-                        );
-                    }
-                }
+                monoasm!( &mut self.jit,
+                    subq R(lhs_r), R(rhs_r);
+                    jo overflow;
+                    addq R(lhs_r), 1;
+                );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 overflow:
@@ -151,13 +105,23 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             }
-            BinOpK::Rem
-            | BinOpK::Exp
-            | BinOpK::BitOr
-            | BinOpK::BitAnd
-            | BinOpK::BitXor
-            | BinOpK::Shl
-            | BinOpK::Shr => unreachable!(),
+            // Bitwise ops on tagged fixnums need no overflow check and never
+            // clobber `rhs`; the result lands in `lhs` like Add/Sub. `&`/`|` keep
+            // the LSB tag (`(2a+1)&(2b+1) = 2(a&b)+1`); `^` clears it, so re-tag
+            // with `+1`.
+            BinOpK::BitOr => {
+                monoasm!( &mut self.jit, orq R(lhs_r), R(rhs_r); );
+            }
+            BinOpK::BitAnd => {
+                monoasm!( &mut self.jit, andq R(lhs_r), R(rhs_r); );
+            }
+            BinOpK::BitXor => {
+                monoasm!( &mut self.jit,
+                    xorq R(lhs_r), R(rhs_r);
+                    addq R(lhs_r), 1;
+                );
+            }
+            BinOpK::Rem | BinOpK::Exp | BinOpK::Shl | BinOpK::Shr => unreachable!(),
         }
     }
 
@@ -501,11 +465,11 @@ impl Codegen {
 
     cmp_main!(eq, ne, lt, le, gt, ge);
 
-    pub(super) fn integer_cmp(&mut self, kind: CmpKind, mode: OpMode, lhs: GP, rhs: GP) {
+    pub(super) fn integer_cmp(&mut self, kind: CmpKind, lhs: GP, rhs: GP) {
         monoasm! { &mut self.jit,
             xorq rax, rax;
         };
-        self.cmp_integer(&mode, lhs, rhs);
+        self.cmp_integer(lhs, rhs);
         self.flag_to_bool(kind);
     }
 
@@ -639,25 +603,10 @@ impl Codegen {
     ///
     /// - rdi
     ///
-    pub(super) fn cmp_integer(&mut self, mode: &OpMode, lhs: GP, rhs: GP) {
-        match mode {
-            OpMode::RR(..) => {
-                monoasm!( &mut self.jit,
-                    cmpq R(lhs as u64), R(rhs as u64);
-                );
-            }
-            OpMode::RI(_, r) => {
-                monoasm!( &mut self.jit,
-                    cmpq R(lhs as u64), (Value::i32(*r as i32).id());
-                );
-            }
-            OpMode::IR(l, _) => {
-                monoasm!( &mut self.jit,
-                    movq R(lhs as u64), (Value::i32(*l as i32).id());
-                    cmpq R(lhs as u64), R(rhs as u64);
-                );
-            }
-        }
+    pub(super) fn cmp_integer(&mut self, lhs: GP, rhs: GP) {
+        monoasm!( &mut self.jit,
+            cmpq R(lhs as u64), R(rhs as u64);
+        );
     }
 }
 
