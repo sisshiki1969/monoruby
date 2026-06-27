@@ -74,10 +74,32 @@ fn main() {
     // result is a reproducible, host-independent build: `cargo build`
     // succeeds identically whether or not a host Ruby is present.
 
+    // Top-level state dir. Holds version-independent, host-derived state
+    // shared across builds: the runtime probe cache (`library_path` /
+    // `gem_path`, written at run time) and human-facing breadcrumbs.
     let lib_path = dirs::home_dir().unwrap().join(".monoruby");
 
-    let lib_dir = lib_path.join("lib");
-    let builtins_dir = lib_path.join("builtins");
+    // The installed stdlib/builtins/stub trees go into a *per-version*
+    // subdirectory so concurrent builds, multiple checkouts, and version
+    // upgrades never clobber a single shared tree (the previous layout had
+    // every build `rm -rf` and repopulate `~/.monoruby/{lib,builtins,stub}`
+    // in place, which races a concurrently-running monoruby and lets a
+    // stale checkout's binary read another's files). The absolute path is
+    // baked into the binary as `MONORUBY_INSTALL_ROOT` and read back at run
+    // time (see `globals::install_root`).
+    let install_root = lib_path.join(format!("v{}", env!("CARGO_PKG_VERSION")));
+    println!(
+        "cargo:rustc-env=MONORUBY_INSTALL_ROOT={}",
+        install_root.display()
+    );
+
+    // The install is staged in a private directory and swapped into place at
+    // the end, so a concurrently-running monoruby observes either the old
+    // complete tree or the new one — never a half-copied directory. The pid
+    // keeps concurrent builders' staging dirs distinct.
+    let staging = lib_path.join(format!(".staging-{}", std::process::id()));
+    let staging_lib = staging.join("lib");
+    let staging_builtins = staging.join("builtins");
     // `stub` holds *only* monoruby's own C-extension replacement stubs
     // (the `stdlib/` and `gem/` trees). The require resolver
     // (`search_lib`) pins this directory ahead of `$LOAD_PATH` so those
@@ -85,7 +107,7 @@ fn main() {
     // unshifts its lib dir to the front of `$LOAD_PATH`. It deliberately
     // excludes the vendored CRuby snapshot (bundler / rubygems), whose
     // code version must stay in lockstep with the activated gem spec.
-    let stub_dir = lib_path.join("stub");
+    let staging_stub = staging.join("stub");
     // Order matters: the checked-in CRuby stdlib snapshot is laid down
     // first, then monoruby's own builtins/stdlib/gem stubs overwrite any
     // name clash so monoruby's host-independent implementations of
@@ -95,12 +117,12 @@ fn main() {
     // `stdlib/` and `gem/` trees are additionally laid down into `stub`
     // (the pinned resolution root; see `search_lib`).
     let sources = [
-        (PathBuf::from("vendor/ruby-stdlib"), lib_dir.clone()),
-        (PathBuf::from("builtins"), builtins_dir.clone()),
-        (PathBuf::from("stdlib"), lib_dir.clone()),
-        (PathBuf::from("gem"), lib_dir.clone()),
-        (PathBuf::from("stdlib"), stub_dir.clone()),
-        (PathBuf::from("gem"), stub_dir.clone()),
+        (PathBuf::from("vendor/ruby-stdlib"), staging_lib.clone()),
+        (PathBuf::from("builtins"), staging_builtins.clone()),
+        (PathBuf::from("stdlib"), staging_lib.clone()),
+        (PathBuf::from("gem"), staging_lib.clone()),
+        (PathBuf::from("stdlib"), staging_stub.clone()),
+        (PathBuf::from("gem"), staging_stub.clone()),
     ];
 
     // Re-run when the installed sources change so edits to the vendored
@@ -113,22 +135,20 @@ fn main() {
     // lockstep with the stdlib that actually ships.
     let ruby_version_file = PathBuf::from("vendor/ruby-stdlib/.ruby-version");
     println!("cargo:rerun-if-changed={}", ruby_version_file.display());
-    // Self-heal: track a stamp file we write into ~/.monoruby. If the
-    // user deletes ~/.monoruby, the stamp disappears, Cargo sees a
-    // tracked input change and re-runs this script, repopulating the
-    // directory. Without this, a plain `cargo build` after `rm -rf
-    // ~/.monoruby` would NOT recreate it (the build script is cached).
-    let stamp = lib_path.join(".build-stamp");
+    // Self-heal: track the install root's stamp file. If the user deletes
+    // the install root (or all of ~/.monoruby), the stamp disappears, Cargo
+    // sees a tracked input change and re-runs this script, repopulating it.
+    let stamp = install_root.join(".build-stamp");
     println!("cargo:rerun-if-changed={}", stamp.display());
 
-    if !lib_path.exists() {
-        fs::create_dir(&lib_path).unwrap();
+    fs::create_dir_all(&lib_path).unwrap();
+    // Start from a clean staging tree (a stale one may linger if a previous
+    // build with the same pid crashed mid-install).
+    if staging.exists() {
+        fs::remove_dir_all(&staging).unwrap();
     }
-    for p in [&lib_dir, &builtins_dir, &stub_dir] {
-        if p.exists() {
-            fs::remove_dir_all(p).unwrap();
-        }
-        fs::create_dir(p).unwrap();
+    for dir in [&staging_lib, &staging_builtins, &staging_stub] {
+        fs::create_dir_all(dir).unwrap();
     }
 
     // Bake the reported Ruby language level from the vendored snapshot's
@@ -187,15 +207,34 @@ fn main() {
         copy_dir_all(src, dst).unwrap();
     }
 
-    // Write the stamp last so its presence means a complete install.
-    // Its path is tracked above via cargo:rerun-if-changed, so deleting
-    // ~/.monoruby makes the next build re-run this script.
+    // Swap the fully-staged tree into the versioned install root. `rename`
+    // is atomic within a filesystem, so a concurrent reader sees either the
+    // prior complete tree or the new one. Remove any prior tree first
+    // (rename onto a non-empty dir fails); if that races another builder
+    // installing the same versioned tree, tolerate the "already present"
+    // outcome rather than panicking.
+    if install_root.exists() {
+        let _ = fs::remove_dir_all(&install_root);
+    }
+    if fs::rename(&staging, &install_root).is_err() {
+        // Either a concurrent builder won the swap, or staging and the
+        // install root straddle filesystems. Fall back to a copy only if no
+        // complete tree is present, then drop staging.
+        if !install_root.join(".build-stamp").exists() {
+            let _ = copy_dir_all(&staging, &install_root);
+        }
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    // Write the stamp last so its presence means a complete install. Its
+    // path is tracked above via cargo:rerun-if-changed, so deleting the
+    // install root makes the next build re-run this script.
     fs::write(&stamp, env!("CARGO_PKG_VERSION")).unwrap();
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
     if !fs::exists(dst)? {
-        fs::create_dir(dst)?;
+        fs::create_dir_all(dst)?;
     }
     for entry in fs::read_dir(src)? {
         let entry = entry?;

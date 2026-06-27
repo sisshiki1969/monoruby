@@ -133,7 +133,7 @@ impl Globals {
         // the host spec stays activated, splitting the two. So the
         // vendored snapshot keeps resolving through `$LOAD_PATH` (where it
         // is merely first), letting host activation shadow it consistently.
-        let stub_root = dirs::home_dir().unwrap().join(".monoruby").join("stub");
+        let stub_root = install_root().join("stub");
         for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
             if let Some(p) = probe(&dir, file_name) {
                 return Some(p);
@@ -182,7 +182,7 @@ impl Globals {
             return Ok(None);
         }
         let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
-            let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
+            let monoruby_lib = install_root().join("lib");
             let relative = self
                 .load_path
                 .as_array()

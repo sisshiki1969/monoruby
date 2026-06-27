@@ -352,25 +352,34 @@ reproducible build. It performs two jobs:
      on. Absent a host ruby, the runtime falls back to a `cfg!`-derived
      platform (`globals::ruby_platform`), so the build never requires `ruby`.
 
-2. **Install the vendored stdlib + Ruby stubs** — Recursively copies into
-   `~/.monoruby/`:
-   - `monoruby/vendor/ruby-stdlib/` → `~/.monoruby/lib/` — the checked-in
+2. **Install the vendored stdlib + Ruby stubs** — Recursively copies into a
+   *per-version* install root `~/.monoruby/v<CARGO_PKG_VERSION>/` (e.g.
+   `~/.monoruby/v0.3.0/`), whose absolute path is baked into the binary as
+   `MONORUBY_INSTALL_ROOT` and read back at run time via
+   `globals::install_root()`:
+   - `monoruby/vendor/ruby-stdlib/` → `<root>/lib/` — the checked-in
      CRuby stdlib + default-gem snapshot (no host CRuby needed).
-   - `monoruby/builtins/` → `~/.monoruby/builtins/` — Ruby files loaded at
+   - `monoruby/builtins/` → `<root>/builtins/` — Ruby files loaded at
      interpreter start (e.g. `startup.rb`, `enumerable.rb`, `array.rb`).
-   - `monoruby/stdlib/` and `monoruby/gem/` → `~/.monoruby/lib/` **and**
-     `~/.monoruby/stub/` — monoruby's own host-independent replacements for
+   - `monoruby/stdlib/` and `monoruby/gem/` → `<root>/lib/` **and**
+     `<root>/stub/` — monoruby's own host-independent replacements for
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
 
    These files implement parts of the Ruby standard library in Ruby rather
-   than Rust.
+   than Rust. Per-version namespacing keeps concurrent builds and multiple
+   checkouts from clobbering one shared tree; the install is staged in a
+   private directory and swapped into place with an atomic rename so a
+   running monoruby never sees a half-populated tree. The host-derived,
+   version-independent runtime caches (`~/.monoruby/{library_path,gem_path}`,
+   written at run time by `ruby_probe.rs`) and the human-facing breadcrumbs
+   stay at the top level of `~/.monoruby/`.
 
 > **Note**: `build.rs` declares `cargo:rerun-if-changed` for each source tree
-> (and the `.ruby-version` pin and a `~/.monoruby/.build-stamp` self-heal
+> (and the `.ruby-version` pin and the install root's `.build-stamp` self-heal
 > file), so edits to `builtins/`, `stdlib/`, `gem/`, or the vendored snapshot
-> reinstall on the next build, and deleting `~/.monoruby` re-triggers the
-> install.
+> reinstall on the next build, and deleting the install root (or all of
+> `~/.monoruby`) re-triggers the install.
 
 ### Building
 
@@ -565,8 +574,8 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
 2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
-3. **Ruby in PATH**: Tests compare output against a system `ruby` binary (3.4.1). Ensure Ruby is installed and the binary is accessible.
+3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
-5. **Library path**: `build.rs` writes `~/.monoruby/library_path` and `~/.monoruby/ruby_version` by running the system `ruby` binary at build time. At runtime, monoruby reads these files to configure `$LOAD_PATH` and `RUBY_VERSION`. If `ruby` was absent at build time, these files will be missing and a warning is printed at startup.
+5. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
 6. **gc-stress in tests**: The `bin/test` script builds with `--features gc-stress` to catch GC bugs; this makes the binary much slower than a normal debug build.
 7. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.

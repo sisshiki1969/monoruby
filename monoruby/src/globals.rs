@@ -39,6 +39,18 @@ pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| 
 /// `$LOAD_PATH` arch-dir prepend, the `require` stub lookup, and the
 /// `RUBY_PLATFORM` constant from drifting apart (previously every site
 /// hard-coded `x86_64-linux`, which was wrong on aarch64 / macOS).
+/// Absolute path to this build's installed library tree
+/// (`~/.monoruby/v<version>`), baked in by `build.rs` as
+/// `MONORUBY_INSTALL_ROOT`. It contains `lib/` (vendored stdlib + stubs),
+/// `builtins/` (Ruby files loaded at startup), and `stub/` (the pinned
+/// C-extension replacement root). Namespacing by version keeps concurrent
+/// builds and multiple checkouts from clobbering one shared tree. The
+/// host-derived runtime caches (`library_path` / `gem_path`) live at the
+/// top-level `~/.monoruby/` instead, since they are version-independent.
+pub(crate) fn install_root() -> PathBuf {
+    PathBuf::from(env!("MONORUBY_INSTALL_ROOT"))
+}
+
 pub(crate) fn ruby_platform() -> &'static str {
     const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
         "arm64-darwin"
@@ -512,7 +524,7 @@ impl Globals {
         // alongside the generic one; mirror that here so a bare
         // `require "rbconfig/sizeof"` resolves to the arch-specific stub
         // (`ruby_platform()` — the same string vendored as the subdir name).
-        let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
+        let monoruby_lib = install_root().join("lib");
         let monoruby_arch_lib = monoruby_lib.join(ruby_platform());
         globals.extend_load_path(
             [&monoruby_lib, &monoruby_arch_lib]
