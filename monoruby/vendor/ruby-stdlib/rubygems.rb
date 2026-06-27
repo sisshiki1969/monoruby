@@ -9,7 +9,7 @@
 require "rbconfig"
 
 module Gem
-  VERSION = "4.0.6"
+  VERSION = "4.0.3"
 end
 
 require_relative "rubygems/defaults"
@@ -192,12 +192,11 @@ module Gem
     begin
       spec.activate
     rescue Gem::LoadError => e # this could fail due to gem dep collisions, go lax
-      spec = Gem::Specification.find_unloaded_by_path(path)
-      spec ||= Gem::Specification.find_by_name(spec.name)
-      if spec.nil?
+      spec_by_name = Gem::Specification.find_by_name(spec.name)
+      if spec_by_name.nil?
         raise e
       else
-        spec.activate
+        spec_by_name.activate
       end
     end
 
