@@ -20,8 +20,8 @@ use std::process::Command;
 /// Minimum host Ruby version accepted by the runtime probe.
 /// Mirrors `build.rs::MIN_RUBY_VERSION`: older Rubies ship gems
 /// whose `required_ruby_version` checks fail against monoruby's
-/// reported `RUBY_VERSION = "4.0.0"`, and their default-gem set
-/// drifts from the vendored stdlib snapshot.
+/// reported `RUBY_VERSION` (the vendored 4.0.x pin), and their
+/// default-gem set drifts from the vendored stdlib snapshot.
 const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
 
 fn ruby_version_ok(ruby_cmd: &str) -> bool {

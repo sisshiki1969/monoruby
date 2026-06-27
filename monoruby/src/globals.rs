@@ -24,6 +24,49 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
+/// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
+///
+/// This is also the name of the arch-specific subdirectory inside the
+/// vendored stdlib snapshot: CRuby keys `rbconfig.rb` and
+/// `rbconfig/sizeof.rb` under `<rubylibdir>/<arch>/`, and
+/// `bin/vendor-ruby-stdlib` preserves that layout, so the value here must
+/// match the directory that was actually vendored.
+///
+/// When a host CRuby was present at build time, `build.rs` bakes its exact
+/// `RUBY_PLATFORM` into `MONORUBY_RUBY_PLATFORM` (crucially including the
+/// macOS Darwin major version, e.g. `arm64-darwin23`). Otherwise we fall
+/// back to a `cfg!`-derived default. Centralising it here keeps the
+/// `$LOAD_PATH` arch-dir prepend, the `require` stub lookup, and the
+/// `RUBY_PLATFORM` constant from drifting apart (previously every site
+/// hard-coded `x86_64-linux`, which was wrong on aarch64 / macOS).
+/// Absolute path to this build's installed library tree
+/// (`~/.monoruby/v<version>`), baked in by `build.rs` as
+/// `MONORUBY_INSTALL_ROOT`. It contains `lib/` (vendored stdlib + stubs),
+/// `builtins/` (Ruby files loaded at startup), and `stub/` (the pinned
+/// C-extension replacement root). Namespacing by version keeps concurrent
+/// builds and multiple checkouts from clobbering one shared tree. The
+/// host-derived runtime caches (`library_path` / `gem_path`) live at the
+/// top-level `~/.monoruby/` instead, since they are version-independent.
+pub(crate) fn install_root() -> PathBuf {
+    PathBuf::from(env!("MONORUBY_INSTALL_ROOT"))
+}
+
+pub(crate) fn ruby_platform() -> &'static str {
+    const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        "arm64-darwin"
+    } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
+        "x86_64-darwin"
+    } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+        "aarch64-linux"
+    } else {
+        "x86_64-linux"
+    };
+    option_env!("MONORUBY_RUBY_PLATFORM")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_PLATFORM)
+}
+
 pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
@@ -479,9 +522,10 @@ impl Globals {
         // CRuby ships some stdlib files (e.g. `rbconfig/sizeof.rb`) under a
         // platform-specific subdirectory and adds that subdir to `$LOAD_PATH`
         // alongside the generic one; mirror that here so a bare
-        // `require "rbconfig/sizeof"` resolves to the x86_64-linux stub.
-        let monoruby_lib = dirs::home_dir().unwrap().join(".monoruby").join("lib");
-        let monoruby_arch_lib = monoruby_lib.join("x86_64-linux");
+        // `require "rbconfig/sizeof"` resolves to the arch-specific stub
+        // (`ruby_platform()` — the same string vendored as the subdir name).
+        let monoruby_lib = install_root().join("lib");
+        let monoruby_arch_lib = monoruby_lib.join(ruby_platform());
         globals.extend_load_path(
             [&monoruby_lib, &monoruby_arch_lib]
                 .into_iter()
@@ -495,12 +539,13 @@ impl Globals {
         let pcg_version = env!("CARGO_PKG_VERSION");
 
         // The reported Ruby language level is baked in at compile time by
-        // build.rs (env `MONORUBY_RUBY_VERSION`, set from the build-host
-        // Ruby for differential-test parity). When no Ruby was available
-        // at build time we fall back to the language level monoruby
-        // targets, so the interpreter runs with zero runtime Ruby
-        // dependency instead of panicking on a missing cache file.
-        const DEFAULT_RUBY_VERSION: &str = "4.0.0";
+        // build.rs (env `MONORUBY_RUBY_VERSION`, read from the vendored
+        // stdlib snapshot's `.ruby-version` pin so it always matches the
+        // stdlib monoruby actually ships, host-independently). The fallback
+        // mirrors that pin for the rare case the marker is missing at build
+        // time, so the interpreter runs with zero runtime Ruby dependency
+        // instead of panicking on a missing cache file.
+        const DEFAULT_RUBY_VERSION: &str = "4.0.2";
         let ruby_version = option_env!("MONORUBY_RUBY_VERSION")
             .unwrap_or(DEFAULT_RUBY_VERSION)
             .trim()
@@ -521,20 +566,7 @@ impl Globals {
         // feeds into `RbConfig::CONFIG["arch"]` so rubygems finds each
         // gem's built C-extension directory. The cfg!-derived default is
         // only the fallback when no Ruby was available at build time.
-        const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos"))
-        {
-            "arm64-darwin"
-        } else if cfg!(all(target_arch = "x86_64", target_os = "macos")) {
-            "x86_64-darwin"
-        } else if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
-            "aarch64-linux"
-        } else {
-            "x86_64-linux"
-        };
-        let platform = option_env!("MONORUBY_RUBY_PLATFORM")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_PLATFORM);
+        let platform = ruby_platform();
         let mut ruby_description =
             Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
         let mut ruby_engine = Value::string_from_str("ruby");

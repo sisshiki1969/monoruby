@@ -16,7 +16,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.1"
+          ruby-version: "4.0.2"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly
@@ -91,7 +91,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.1"
+          ruby-version: "4.0.2"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
       - name: Install ruby-bench gem dependencies

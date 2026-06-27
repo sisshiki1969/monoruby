@@ -246,11 +246,7 @@ impl Executor {
         // core without the full stdlib. No effect unless MONORUBY_SKIP_STARTUP
         // is set in the environment.
         if std::env::var_os("MONORUBY_SKIP_STARTUP").is_none() {
-            let path = dirs::home_dir()
-                .unwrap()
-                .join(".monoruby")
-                .join("builtins")
-                .join("startup.rb");
+            let path = install_root().join("builtins").join("startup.rb");
             executor.require(globals, &path, false)?;
             if !globals.no_gems {
                 executor.load_gems(globals);
@@ -611,9 +607,10 @@ impl Executor {
             if !is_relative
                 && CODEGEN.with(|codegen| codegen.borrow().startup_flag)
                 && file_name.to_str().is_some_and(|s| !s.contains('/'))
-                && canonicalized_path
+                && (canonicalized_path
                     .to_str()
-                    .is_some_and(|s| s.contains("/gems/") || s.contains("/.monoruby/stub/"))
+                    .is_some_and(|s| s.contains("/gems/"))
+                    || canonicalized_path.starts_with(install_root().join("stub")))
                 && let Some(gem) = globals
                     .store
                     .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Gem"))
