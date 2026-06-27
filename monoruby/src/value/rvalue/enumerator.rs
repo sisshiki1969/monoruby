@@ -10,6 +10,11 @@ pub struct EnumeratorInner {
     internal: Option<Fiber>,
     pub proc: Proc,
     pub args: Box<Vec<Value>>,
+    /// Keyword arguments captured at enumerator-creation time, replayed
+    /// when the enumerator re-invokes `method` (e.g. `chomp:` for
+    /// `String#each_line`). `None` when the source method took no
+    /// keywords. See issue #742.
+    pub kw_args: Option<Hashmap>,
     buffer: Option<Array>,
     /// Optional size associated with the Enumerator:
     ///   - `None`                → unknown / fall back to method-name dispatch
@@ -26,6 +31,9 @@ impl alloc::GC<RValue> for EnumeratorInner {
         }
         self.proc.mark(alloc);
         self.args.iter().for_each(|v| v.mark(alloc));
+        if let Some(kw) = self.kw_args {
+            kw.mark(alloc);
+        }
         if let Some(buf) = self.buffer {
             buf.mark(alloc)
         }
@@ -41,6 +49,7 @@ impl EnumeratorInner {
         method: IdentId,
         proc: Proc,
         args: Vec<Value>,
+        kw_args: Option<Hashmap>,
         size: Option<Value>,
     ) -> Self {
         Self {
@@ -49,6 +58,7 @@ impl EnumeratorInner {
             internal: None,
             proc,
             args: Box::new(args),
+            kw_args,
             buffer: None,
             size,
         }

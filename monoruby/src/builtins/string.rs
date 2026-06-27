@@ -4518,7 +4518,17 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         if let Some(rs) = lfp.try_arg(0) {
             args.push(rs);
         }
-        vm.generate_enumerator(IdentId::get_id("each_line"), receiver, args, pc)
+        // Forward the `chomp:` keyword so the enumerator path matches the
+        // block form; the bare positional `args` channel can't carry it
+        // (issue #742).
+        let kw_args = if let Some(chomp) = lfp.try_arg(1) {
+            let mut map = HashmapInner::default();
+            map.insert(Value::symbol(IdentId::get_id("chomp")), chomp, vm, globals)?;
+            Some(Value::hash_from_inner(map).as_hash())
+        } else {
+            None
+        };
+        vm.generate_enumerator_with_kw(IdentId::get_id("each_line"), receiver, args, kw_args, pc)
     }
 }
 
@@ -10392,6 +10402,15 @@ mod tests {
             r##""hello\nworld\n\n\nand\nuniverse\n\n\n\n\n".lines("")"##,
             // Block form returns self for each_line
             r##"a = []; "a\nb".each_line {|s| a << s }; a"##,
+            // Enumerator (no-block) path must preserve the `chomp:` keyword
+            // (issue #742): it was previously dropped, leaving trailing
+            // separators on each yielded line.
+            r##""foo\nbar\nbaz\n".each_line(chomp: true).to_a"##,
+            r##""foo\nbar\nbaz\n".each_line.to_a"##,
+            r##""a-b-c-".each_line("-", chomp: true).to_a"##,
+            r##""a-b-c-".each_line("-").to_a"##,
+            r##"e = "foo\nbar\n".each_line(chomp: true); [e.next, e.next]"##,
+            r##""hello \r\nworld\r\n".each_line(chomp: true).to_a"##,
         ]);
         run_test_error(r##""hello".lines(:sym)"##);
         run_test_error(r##""hello".lines(false)"##);
