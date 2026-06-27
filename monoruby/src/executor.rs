@@ -2444,7 +2444,7 @@ impl Executor {
         args: Vec<Value>,
         pc: BytecodePtr,
     ) -> Result<Value> {
-        self.generate_enumerator_with_size(method, obj, args, pc, None)
+        self.generate_enumerator_inner(method, obj, args, None, pc, None)
     }
 
     pub(crate) fn generate_enumerator_with_size(
@@ -2455,9 +2455,36 @@ impl Executor {
         pc: BytecodePtr,
         size: Option<Value>,
     ) -> Result<Value> {
+        self.generate_enumerator_inner(method, obj, args, None, pc, size)
+    }
+
+    /// Like [`Self::generate_enumerator`], but also captures the keyword
+    /// arguments the source method received, so they are replayed when the
+    /// enumerator re-invokes the method (e.g. `String#each_line(chomp: true)`
+    /// called without a block). See issue #742.
+    pub(crate) fn generate_enumerator_with_kw(
+        &mut self,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        kw_args: Option<Hashmap>,
+        pc: BytecodePtr,
+    ) -> Result<Value> {
+        self.generate_enumerator_inner(method, obj, args, kw_args, pc, None)
+    }
+
+    fn generate_enumerator_inner(
+        &mut self,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        kw_args: Option<Hashmap>,
+        pc: BytecodePtr,
+        size: Option<Value>,
+    ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
-        let e = Value::new_enumerator(obj, method, proc, args, size);
+        let e = Value::new_enumerator(obj, method, proc, args, kw_args, size);
         Ok(e)
     }
 }

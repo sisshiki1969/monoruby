@@ -390,13 +390,14 @@ pub(crate) fn enum_yielder(
     let receiver = e.obj;
     let method = e.method;
     let args = &*e.args;
+    let kw_args = e.kw_args;
     vm.invoke_method_inner(
         globals,
         method,
         receiver,
         args,
         Some(BlockHandler::from_current(YIELDER_FUNCID)),
-        None,
+        kw_args,
     )
 }
 

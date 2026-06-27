@@ -412,11 +412,12 @@ impl ObjKind {
         method: IdentId,
         proc: Proc,
         args: Vec<Value>,
+        kw_args: Option<Hashmap>,
         size: Option<Value>,
     ) -> Self {
         Self {
             enumerator: ManuallyDrop::new(Box::new(EnumeratorInner::new(
-                obj, method, proc, args, size,
+                obj, method, proc, args, kw_args, size,
             ))),
         }
     }
@@ -1905,11 +1906,12 @@ impl RValue {
         method: IdentId,
         proc: Proc,
         args: Vec<Value>,
+        kw_args: Option<Hashmap>,
         size: Option<Value>,
     ) -> Self {
         RValue {
             header: Header::new(ENUMERATOR_CLASS, ObjTy::ENUMERATOR),
-            kind: ObjKind::enumerator(obj, method, proc, args, size),
+            kind: ObjKind::enumerator(obj, method, proc, args, kw_args, size),
             var_table: None,
         }
     }
