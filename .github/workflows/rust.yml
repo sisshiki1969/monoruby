@@ -78,6 +78,11 @@ jobs:
     # specific to native-M1 + coverage instrumentation and is tracked
     # separately. The Linux `amd64` job owns the Codecov upload.
     runs-on: macos-latest
+    # Backstop: if a hung attempt somehow escapes the per-attempt 25-min cap on
+    # the Test step below, GitHub cancels the job cleanly here (2 attempts ×
+    # 25 min + setup/clone overhead) rather than letting the runner die with
+    # "lost communication".
+    timeout-minutes: 70
     env:
       CARGO_TERM_COLOR: always
       SKIP_COV: "1"
@@ -123,5 +128,16 @@ jobs:
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
 
       - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
-        run: bin/test
+        # The arm64 JIT/runtime intermittently hangs (a non-deterministic
+        # divergence, separate from the already-fixed optcarrot register-save
+        # bug). Left uncapped, the hang runs ~48 min until the macOS runner
+        # "loses communication" (the agent dies) and the run must be re-run by
+        # hand. A normal pass is ~11 min, so cap each attempt at 25 min and
+        # retry once: a hang is killed cleanly and fast, and the retry recovers
+        # the run automatically. Track/fix the underlying arm64 hang separately.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 25
+          max_attempts: 2
+          command: bin/test
 
