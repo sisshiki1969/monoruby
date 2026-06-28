@@ -140,6 +140,41 @@ impl Globals {
             }
         }
 
+        // `bundler` (and everything under `bundler/`) must resolve to the
+        // *host* copy whenever one is installed, never the vendored snapshot
+        // in `~/.monoruby/lib`. The vendored bundler is only a no-host
+        // fallback; its version rarely matches an installed host gemspec, so
+        // once it loads, `Bundler.setup`'s
+        // `Gem.bin_path("bundler", "bundle", Bundler::VERSION)` raises
+        // `GemNotFoundException`. Normally host gem *activation* unshifts the
+        // host bundler ahead of the vendored dir, but rubygems' require
+        // fast-path skips activation when there are no unresolved deps — e.g.
+        // yjit-bench's `--harness=harness-warmup` does `require "benchmark"`
+        // before `require "bundler"`, emptying unresolved deps — and the
+        // vendored copy, first on `$LOAD_PATH`, then wins. Pin host
+        // precedence here so the outcome no longer depends on activation
+        // order. When the host has no bundler the normal loop below still
+        // falls back to the vendored copy.
+        let is_bundler = {
+            let s = file_name.to_string_lossy();
+            s == "bundler" || s.starts_with("bundler/")
+        };
+        if is_bundler {
+            let vendored_lib = install_root().join("lib");
+            for lib in self.load_path.as_array().iter() {
+                let Some(lib) = lib.is_str() else {
+                    continue;
+                };
+                let path = std::path::Path::new(lib);
+                if path.starts_with(&vendored_lib) {
+                    continue;
+                }
+                if let Some(p) = probe(path, file_name) {
+                    return Some(p);
+                }
+            }
+        }
+
         for lib in self.load_path.as_array().iter() {
             let lib = match lib.is_str() {
                 Some(s) => s,
