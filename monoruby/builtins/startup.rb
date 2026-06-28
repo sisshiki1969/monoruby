@@ -47,6 +47,28 @@ end
 # and stashes the result in two env vars; we just read and apply.
 host_rubylibprefix = ENV['MONORUBY_HOST_RUBYLIBPREFIX']
 ruby_api_version   = ENV['MONORUBY_HOST_RUBY_API_VERSION']
+host_configured = host_rubylibprefix && !host_rubylibprefix.empty? &&
+                  ruby_api_version && !ruby_api_version.empty?
+
+# Without a configured host CRuby (no GEM_PATH at startup, or a consumer
+# such as `Bundler.setup` cleared it), the vendored rbconfig.rb's
+# `rubylibprefix` still points at the *build* host's prefix (e.g.
+# `/opt/rbenv/versions/ruby-4.0.2-custom/lib/ruby`), which exists on no
+# other machine. `Gem.default_dir` (== `<rubylibprefix>/gems/<ruby_version>`)
+# would then be that bogus path and `Gem::Specification` enumeration would
+# silently come up empty. Fall back to a prefix derived from monoruby's own
+# install root — this file lives at `<root>/builtins/startup.rb` — so the
+# value is at least a real, local path rather than a snapshot-build-machine
+# one. (No gems live there in the no-host case, which is fine: enumeration
+# is legitimately empty instead of pointed at a nonexistent directory.)
+unless host_configured
+  install_root = (File.dirname(File.dirname(File.realpath(__FILE__))) rescue nil)
+  if install_root && !install_root.empty?
+    host_rubylibprefix = "#{install_root}/lib/ruby"
+    ruby_api_version   = RbConfig::CONFIG['ruby_version']
+  end
+end
+
 if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby_api_version.empty?
   RbConfig::CONFIG['rubylibprefix']  = host_rubylibprefix
   RbConfig::CONFIG['rubylibdir']     = "#{host_rubylibprefix}/#{ruby_api_version}"
@@ -63,8 +85,9 @@ if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby
   # When we are resolving against a host CRuby's gems, report "yes" so the
   # api version matches and those gems resolve. monoruby still can't run
   # their native .so, but require.rs pins its own pure-Ruby stubs ahead of
-  # $LOAD_PATH for the libraries it replaces, so they load the stub.
-  RbConfig::CONFIG['ENABLE_SHARED']  = 'yes'
+  # $LOAD_PATH for the libraries it replaces, so they load the stub. Only
+  # meaningful for the host case; leave the vendored value otherwise.
+  RbConfig::CONFIG['ENABLE_SHARED']  = 'yes' if host_configured
 end
 
 # The vendored rbconfig.rb hard-codes `target_os` / `target_cpu` to
