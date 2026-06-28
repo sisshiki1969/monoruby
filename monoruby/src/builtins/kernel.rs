@@ -188,7 +188,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
-    globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 1, false);
+    globals.define_builtin_func_with(kernel_class, "caller", caller, 0, 2, false);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
     globals.define_builtin_func(kernel_class, "__check_stack", check_stack, 0);
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
@@ -838,22 +838,54 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Kernel.#caller
 ///
 /// - caller(start = 1) -> [String] | nil
-/// - [NOT SUPPORTED] caller(start, length) -> [String] | nil
-/// - [NOT SUPPORTED] caller(range) -> [String] | nil
+/// - caller(start, length) -> [String] | nil
+/// - caller(range) -> [String] | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/caller.html]
 #[monoruby_builtin]
 fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
-    let level = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int_i64(vm, globals)? as usize + 1
-    } else {
-        2
+    // Resolve the arguments into the first frame to report (`level` — the
+    // number of cfp frames to skip, which includes this builtin's own
+    // frame, hence the `+ 1`) and an optional cap on how many frames to
+    // return (`length`):
+    //   caller            -> start 1, no cap
+    //   caller(start)     -> start, no cap
+    //   caller(start, n)  -> start, at most n frames
+    //   caller(range)     -> a (possibly beginless / endless) range of frames
+    let (level, length): (usize, Option<usize>) = match lfp.try_arg(0) {
+        None => (2, None),
+        Some(arg0) => {
+            if let Some(range) = arg0.is_range() {
+                // Beginless range starts at the immediate caller (0).
+                let start = range.start().try_fixnum().unwrap_or(0).max(0) as usize;
+                // Endless range has no cap; otherwise the count is
+                // end - start (one more when the end is inclusive).
+                let length = range.end().try_fixnum().map(|end| {
+                    let end = if range.exclude_end() { end } else { end + 1 };
+                    (end - start as i64).max(0) as usize
+                });
+                (start + 1, length)
+            } else {
+                let start = arg0.coerce_to_int_i64(vm, globals)?.max(0) as usize;
+                let length = match lfp.try_arg(1) {
+                    Some(arg1) => Some(arg1.coerce_to_int_i64(vm, globals)?.max(0) as usize),
+                    None => None,
+                };
+                (start + 1, length)
+            }
+        }
     };
     for i in 0..16 {
         let prev_cfp = cfp.prev();
         if i >= level {
+            // Stop once `length` frames have been collected.
+            if let Some(len) = length
+                && v.len() >= len
+            {
+                break;
+            }
             let func_id = cfp.lfp().func_id();
             if let Some(iseq) = globals.store[func_id].is_iseq() {
                 let loc = globals.store[iseq].get_location();
@@ -4038,6 +4070,30 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn caller_start_length_and_range() {
+        // `caller(start, length)` and `caller(range)`. Assert via sizes and
+        // booleans so the result is independent of file paths / the toplevel
+        // frame label (which differ between the monoruby and CRuby harnesses).
+        run_test(
+            r#"
+            def lvl3
+              [
+                caller(1, 1).size,    # immediate caller only
+                caller(1, 0).size,    # capped to zero
+                caller(2, 1).size,    # one frame, two up
+                caller(1..1).size,    # inclusive range, one frame
+                caller(1...3).size,   # exclusive range, two frames
+                caller(1, 1) == caller(1..1),
+              ]
+            end
+            def lvl2; lvl3; end
+            def lvl1; lvl2; end
+            lvl1
+            "#,
+        );
+    }
 
     #[test]
     fn super_from_redefined_builtin_716() {
